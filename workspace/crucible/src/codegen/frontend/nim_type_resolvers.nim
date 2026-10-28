@@ -61,8 +61,8 @@ func mangleOperatorName*(s: string): string =
   ## Callee names use this mapping: an operator is not a legal identifier
   ## in any target language, and distinct operator overloads over the same
   ## operand types keep distinct callee names.
-  result = newStringOfCap(s.len)
-  if result.len > 0 and s[0] in Digits:
+  result = newStringOfCap(s.len + 1)
+  if s.len > 0 and s[0] in Digits:
     result.add "X"
   template special(word: string) =
     if result.len > 0 and result[^1] != '_':

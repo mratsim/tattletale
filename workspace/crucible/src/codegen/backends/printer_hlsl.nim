@@ -895,7 +895,7 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
         "{\n" & bodyTxt & "\n" & spaces(ctx.indent * 2) & '}'
       if lExit.len > 0:
         i.inc  # exit label, consumed
-    elif s.kind == sVar and s.init == nil and
+    elif s.kind == sVar and s.space == caThread and s.init == nil and
         s.declType.kind in {ctBool, ctInt, ctUint, ctFloat} and
         i + 1 < stmts.len and stmts[i + 1].kind == sIte and
         stmts[i + 1].thenBody.len == 1 and stmts[i + 1].elseBody.len == 1 and
@@ -905,7 +905,8 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
         not exprHasCall(stmts[i + 1].thenBody[0].rhs) and
         not exprHasCall(stmts[i + 1].elseBody[0].rhs):
       # a hoisted if-expression temp with one assignment per variant prints
-      # as the conditional expression the source wrote
+      # as the conditional expression the source wrote, and the space check
+      # (`caThread`) keeps printStmt's storage-class refusals in reach
       ctx.indent.inc
       let condTxt = ctx.printExpr(stmts[i + 1].cond)
       let thenTxt = ctx.printExpr(stmts[i + 1].thenBody[0].rhs)

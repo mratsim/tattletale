@@ -115,6 +115,21 @@ proc buildDeviceLocalModule(): CirModule =
   kern.isKernel = true
   moduleD("fixture_devlocal", @[], @[kern])
 
+proc buildSmemSelectModule(): CirModule =
+  ## A threadgroup-space scalar assigned from both `ite` branches.
+  ## The select coalescing must not bypass the storage-class refusal.
+  let f32 = tFloat(32)
+  let kern = procD("kern_smem_select", @[], tVoid(), @[
+    varD("c", tBool(), nil),
+    varD("shared", f32, nil, caThreadgroup),
+    iteS(sym("c", tBool()),
+      @[asgnS(sym("shared", f32), fltLit(1.0, f32))],
+      @[asgnS(sym("shared", f32), fltLit(2.0, f32))]),
+    retS(),
+  ])
+  kern.isKernel = true
+  moduleD("fixture_smem_select", @[], @[kern])
+
 proc buildAsmModule(): CirModule =
   let kern = procD("kern_asm", @[], tVoid(), @[
     CirStmt(kind: sAsm, asmParts: @["mov x0, x1"], asmOperands: @[]),
@@ -182,6 +197,7 @@ const
   twoErr = printHlslModule(buildTwoKernelsModule()).err
   smemErr = printHlslModule(buildSmemModule()).err
   devLocalErr = printHlslModule(buildDeviceLocalModule()).err
+  smemSelectErr = printHlslModule(buildSmemSelectModule()).err
   asmErr = printHlslModule(buildAsmModule()).err
   int64Err = printHlslModule(buildInt64Module()).err
   numwgErr = printHlslModule(buildNumWorkgroupsModule()).err
@@ -239,6 +255,9 @@ suite "HLSL printer fixtures":
 
   test "loud refusal: threadgroup-space local":
     check smemErr.contains("threadgroup space")
+
+  test "loud refusal: threadgroup-space local through the select coalescing":
+    check smemSelectErr.contains("threadgroup space")
 
   test "loud refusal: device-space local":
     check devLocalErr.contains("device space")

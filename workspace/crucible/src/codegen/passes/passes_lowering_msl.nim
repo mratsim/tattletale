@@ -20,19 +20,17 @@
 ##   function reads the constants of the kernels it serves
 ## - `mslRewriteSmemLocals`: a kernel's top-level `{.smem.}` local stays
 ##   in-body, Metal allocates the kernel-scope `threadgroup` storage,
-##   no launch-time staging
-## - a device function's top-level `{.smem.}` local drops: the inline splice
-##   already merged the callee's body into the calling kernel
-## - an initializer on a `{.smem.}` local is discarded
+##   no launch-time staging and any initializer on a kept local is discarded
+## - a device function's top-level `{.smem.}` local refuses, only a kernel owns threadgroup storage
+##   and the inline splice already merged an inline callee's body into the calling kernel
 ##
 ## Refusal homes:
 ## - a const_mem local without an initializer refuses in the pass, the printer
 ##   keeps a nil-init shape guard on the relocated declarations
-## - an initializer on a relocated smem local is discarded, a device-function
-##   smem local drops without a parameter, both reproduce the printer shapes
-##   that the extraction replaces
+## - a device-function smem local surviving the inline splice refuses
+##   in the pass, dead-local elimination already deleted the unread ones
 ## - a const_mem local surviving outside the relocation refuses at the printer,
-##   a surviving smem local drops, the Metal compiler rejects the dangling read
+##   a smem initializer surviving the pass is discarded at the printer
 
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -54,7 +52,7 @@ func registerMslLoweringPasses*(reg: var PassRegistry) =
     run = mslHoistProgramScopeConstants
   )
   reg.register("mslRewriteSmemLocals", pkTransform, phaseMain,
-    "Keeps kernel smem locals in-body as threadgroup storage, drops device-fn smem locals",
+    "Keeps kernel smem locals in-body as threadgroup storage, refuses a device function's smem local",
     run = mslRewriteSmemLocals
   )
 
@@ -75,7 +73,7 @@ proc mslHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Smem locals to threadgroup parameters
+# Smem locals to kernel-scope threadgroup storage
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mslRewriteSmemLocals(m: CirModule): string =
@@ -84,13 +82,12 @@ proc mslRewriteSmemLocals(m: CirModule): string =
   ## - a kernel keeps the local in its body: the printer emits kernel-scope
   ##   `threadgroup` storage Metal allocates per threadgroup,
   ##   no launch-time staging and no parameter
-  ## - a device function loses the declaration without gaining a parameter:
-  ##   the inline splice already merged the callee's body into the calling kernel,
-  ##   which owns the arena
+  ## - a device function's smem local refuses, only a kernel owns threadgroup storage
+  ##   and the inline splice already merged an inline callee's body into the calling kernel
   ## - an initializer on a `{.smem.}` local is discarded
   ##
-  ## - the rewrite covers top-level body locals only, a nested one refuses
-  ##   at the printer
+  ## - the rewrite covers top-level body locals only, a nested one keeps
+  ##   its declaration and prints in place
   ## - the pass runs after the reserved-word rename: the kept locals carry
   ##   the renamed names their body already references
   for fn in m.procs:
@@ -102,7 +99,9 @@ proc mslRewriteSmemLocals(m: CirModule): string =
           s.init = nil
           i.inc
         else:
-          fn.body.delete i
+          return "at " & fn.name & ": smem local " & s.name &
+            " in a device function, only a kernel allocates" &
+            " threadgroup storage"
       else:
         i.inc
   return ""

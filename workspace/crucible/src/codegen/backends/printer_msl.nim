@@ -14,11 +14,12 @@
 ## - coordinate builtins: attributed `uint3`/`uint` params, no slot
 ##
 ## Other emission rules:
-## - `{.smem.}` kernel locals stay in-body: the MSL lowering pass keeps them.
-##   The printer emits the kernel-scope `threadgroup` storage Metal allocates per threadgroup
+## - `{.smem.}` locals: a kernel's top-level local stays in-body as kernel-scope
+##   `threadgroup` storage (Metal allocates it per threadgroup),
+##   any initializer is discarded, a local outside a kernel body drops,
+##   a device function still owning a smem local refuses in the pass
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
-##   program-scope `constant` output, a const_mem survivor refuses at the printer,
-##   a smem local outside a kernel body drops, Metal rejects the dangling read
+##   program-scope `constant` output, a const_mem survivor refuses at the printer
 ## - `jmp` to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
 ## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
 ##   through except the numeric conversions, which resolve to the MSL native call text
@@ -383,12 +384,10 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   case s.kind
   of sVar:
     if s.space == caThreadgroup:
-      # kernel-scope threadgroup storage: the MSL lowering pass keeps the kernel's
-      # top-level locals here, deeper survivors drop
-      result = pad & "threadgroup " & spellMslType(s.declType, s.name, false)
-      if s.init != nil:
-        result &= " = " & ctx.printExpr(s.init)
-      result &= ";"
+      # kernel-scope threadgroup storage: the MSL lowering pass keeps only
+      # a kernel's top-level smem locals here, an inline device function's
+      # smem local merges into the calling kernel, any initializer is discarded
+      result = pad & "threadgroup " & spellMslType(s.declType, s.name, false) & ";"
       return
     if s.space == caConstant:
       # MSL lowering pass relocates const_mem locals at every scope,

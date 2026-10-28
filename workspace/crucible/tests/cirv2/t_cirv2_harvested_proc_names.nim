@@ -20,6 +20,7 @@ import std/strutils
 import std/macros
 import
   workspace/crucible/src/builtins/builtins_pragmas,
+  workspace/crucible/src/codegen/frontend/nim_type_resolvers,
   workspace/crucible/src/codegen/frontend/nim_to_crucible,
   workspace/crucible/tests/cirv2/cirv2_lower_macros
 
@@ -105,6 +106,12 @@ static:
     "accumulateProduct body must multiply: " & productBody
   doAssert "(mul (f +32)" notin sumBody
   doAssert "(add (f +32)" notin productBody
+
+static:
+  # a target identifier cannot start with a digit: the operator mangling
+  # prefixes `X` so a digit-leading callee name stays a legal identifier
+  doAssert mangleOperatorName("9lives") == "X9lives",
+    "digit-leading name must gain the `X` prefix, got: " & mangleOperatorName("9lives")
 
 static:
   # both operator callees harvest their own proc: `++` and `--` erase to one signature.

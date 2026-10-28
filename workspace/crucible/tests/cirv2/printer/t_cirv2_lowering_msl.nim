@@ -15,9 +15,14 @@
 ##
 ## Without the MSL lowering pass the emission fixtures fail, the bare pipeline tests check the raw output the pass replaces.
 ##
-## No refusal lives in the pass, today's smem handling discards an initializer
-## on a kept local and drops a device-function smem local without any parameter.
-## Device-function output has a dedicated same-text test.
+## A device function cannot own threadgroup storage:
+##
+## - an uncalled one deletes at the inline splice's reachability filter
+## - a called one's unread smem local dies at dead-local elimination
+## - a called one still reading its smem local refuses in the pass, Metal
+##   allocates threadgroup storage to kernels only
+##
+## An initializer on a `{.smem.}` local is discarded at the pass and at the printer.
 ##
 ## - Run: `nim c -r --outdir:build/tests tests/cirv2/printer/t_cirv2_lowering_msl.nim`
 
@@ -121,8 +126,9 @@ proc buildSmemBuiltinModule(): CirModule =
   moduleD("lower_smembuiltin", @[coordTy], @[kern])
 
 proc buildDeviceSmemModule(): CirModule =
-  ## device function: a top-level smem local, both pipelines drop it without
-  ## appending a parameter
+  ## a kernel calls a non-inline device function whose top-level smem local
+  ## the body reads: Metal has no threadgroup storage for a device function.
+  ## The pass refuses the dangling read.
   let f32 = tFloat(32)
   let i32 = tInt(32)
   let aptrD = tAptr(caDevice, f32)
@@ -133,7 +139,60 @@ proc buildDeviceSmemModule(): CirModule =
       atE(sym("scratch", scratchTy), intLit(0, i32))),
     retS(),
   ])
-  moduleD("lower_devsmem", @[], @[helper])
+  let kern = procD("kern_devsmem", @[param("dst", aptrD)], tVoid(), @[
+    callS(sym("helper_scratch", tProcT(@[aptrD], tVoid())), @[sym("dst", aptrD)]),
+    retS(),
+  ])
+  kern.isKernel = true
+  moduleD("lower_devsmem", @[], @[helper, kern])
+
+proc buildDeviceSmemQuietModule(): CirModule =
+  ## a kernel calls a device function whose top-level smem local the body
+  ## never reads: dead-local elimination deletes the unread declaration
+  ## before the MSL pass runs
+  let f32 = tFloat(32)
+  let i32 = tInt(32)
+  let aptrD = tAptr(caDevice, f32)
+  let helper = procD("helper_quiet", @[param("dst", aptrD)], tVoid(), @[
+    varD("scratch", tArray(4, f32), nil, caThreadgroup),
+    asgnS(patE(sym("dst", aptrD), intLit(0, i32)), fltLit(1.0, f32)),
+    retS(),
+  ])
+  let kern = procD("kern_devquiet", @[param("dst", aptrD)], tVoid(), @[
+    callS(sym("helper_quiet", tProcT(@[aptrD], tVoid())), @[sym("dst", aptrD)]),
+    retS(),
+  ])
+  kern.isKernel = true
+  moduleD("lower_devsmem_quiet", @[], @[helper, kern])
+
+proc buildDeviceSmemDeadModule(): CirModule =
+  ## a device function nothing calls: the inline splice's reachability filter
+  ## deletes the proc before the MSL pass runs, its smem local never reaches the pass
+  let f32 = tFloat(32)
+  let i32 = tInt(32)
+  let aptrD = tAptr(caDevice, f32)
+  let scratchTy = tArray(4, f32)
+  let helper = procD("helper_dead", @[param("dst", aptrD)], tVoid(), @[
+    varD("scratch", scratchTy, nil, caThreadgroup),
+    asgnS(patE(sym("dst", aptrD), intLit(0, i32)),
+      atE(sym("scratch", scratchTy), intLit(0, i32))),
+    retS(),
+  ])
+  moduleD("lower_devsmem_dead", @[], @[helper])
+
+proc buildSmemInitModule(): CirModule =
+  ## kernel: a smem scalar with an initializer that the pass discards
+  let f32 = tFloat(32)
+  let i32 = tInt(32)
+  let aptrD = tAptr(caDevice, f32)
+  let kern = procD("kern_smem_init", @[
+    param("dst", aptrD)], tVoid(), @[
+    varD("scale", f32, fltLit(3.0, f32), caThreadgroup),
+    asgnS(patE(sym("dst", aptrD), intLit(0, i32)), sym("scale", f32)),
+    retS(),
+  ])
+  kern.isKernel = true
+  moduleD("lower_smem_init", @[], @[kern])
 
 proc emitPipe(build: proc(): CirModule): tuple[src: string, err: string] =
   ## VM pipeline run for one fixture module, the entry point for the consts.
@@ -155,7 +214,10 @@ const
   smemPipe = emitPipe(buildSmemModule)
   smemBuiltinPipe = emitPipe(buildSmemBuiltinModule)
   deviceSmemPipe = emitPipe(buildDeviceSmemModule)
-  deviceSmemBare = emitBare(buildDeviceSmemModule)
+  deviceQuietPipe = emitPipe(buildDeviceSmemQuietModule)
+  deviceDeadPipe = emitPipe(buildDeviceSmemDeadModule)
+  smemInitPipe = emitPipe(buildSmemInitModule)
+  smemInitBare = emitBare(buildSmemInitModule)
   bareSmemSrc = emitBare(buildSmemModule)
   smemVerified = emitVerified(buildSmemModule)
 
@@ -184,12 +246,35 @@ suite "MSL lowering fixtures":
     # smem declaration prints in the body, not in the signature
     check "threadgroup uint scratch[4];" in smemBuiltinPipe.src
 
-  test "device function smem handling matches the bare printer":
-    ## Pass output on a device function: the smem declaration drops and no
-    ## parameter is appended, the same text the bare printer produces.
-    check deviceSmemPipe.err == ""
-    check deviceSmemPipe.src == deviceSmemBare
-    check "threadgroup" notin deviceSmemPipe.src
+  test "a called device function's unread smem local emits no threadgroup storage":
+    ## Dead-local elimination deletes the unread declaration before the pass runs,
+    ## no parameter is appended and no threadgroup storage prints.
+    check deviceQuietPipe.err == ""
+    check "helper_quiet" in deviceQuietPipe.src
+    check "threadgroup" notin deviceQuietPipe.src
+
+  test "a called device function still reading its smem local refuses":
+    ## Metal has no threadgroup storage to bind the read to, so the pass
+    ## refuses the dangling read.
+    check deviceSmemPipe.err.contains("helper_scratch")
+    check deviceSmemPipe.err.contains("scratch")
+    check deviceSmemPipe.src == ""
+
+  test "an uncalled device function deletes before the MSL pass runs":
+    ## A device function nothing calls deletes at the inline splice's reachability filter,
+    ## its smem local never reaches the pass.
+    check deviceDeadPipe.err == ""
+    check "helper_dead" notin deviceDeadPipe.src
+    check "threadgroup" notin deviceDeadPipe.src
+
+  test "an initializer on a smem local is discarded":
+    ## A kept kernel local loses its initializer in the pass and the printer
+    ## prints no initializer for threadgroup storage, both pipelines.
+    check smemInitPipe.err == ""
+    check "threadgroup float scale;" in smemInitPipe.src
+    check "3.0f" notin smemInitPipe.src
+    check "threadgroup float scale;" in smemInitBare
+    check "3.0f" notin smemInitBare
 
   test "bare pipeline prints the smem local, the pass only discards its initializer":
     ## Control for the transform: without the pass the printer alone already
