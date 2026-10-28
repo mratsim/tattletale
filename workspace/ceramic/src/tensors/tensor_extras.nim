@@ -14,19 +14,20 @@ import workspace/ceramic/src/tensors/tensor_datatypes
 macro transposedSelect*(layout: Layout, dim0, dim1: static int): untyped =
   let dimCount = layout.rank()
   doAssert dim0 >= 0 and dim0 < dimCount and dim1 >= 0 and dim1 < dimCount,
-    "transpose: mode out of range"
+    "transpose: dimension out of range"
   var call = bindSym"selectDimensions".newCall(layout)
   for i in 0 ..< dimCount:
     call.add newLit(if i == dim0: dim1 elif i == dim1: dim0 else: i)
   result = call
 
 template transpose*(t: AnyTensor, dim0, dim1: static int): auto =
-  ## Swaps modes `dim0` and `dim1`, PyTorch's `Tensor.transpose`, zero-copy:
+  ## Swaps dimensions `dim0` and `dim1`, zero-copy:
   ## - the shape and stride entries at the two positions exchange
   ## - the memory is untouched and the result reads the same data
   ##
-  ## Example: V stored (S, Dv) row-major, its MMA B operand addressed (N, K) = (Dv, S):
-  ##   vV = V(batch, kvHead, _, _).transpose(1, 0)  # (Dv, S) over the same data
+  ## Example: V stores one row of Dv elements per sequence step with the rows
+  ## contiguous in memory. transpose(1, 0) reads the same memory with the dimensions exchanged.
+  ##   vV = V(batch, kvHead, _, _).transpose(1, 0)  # the shape is (Dv, S)
   make_view(t.data, transposedSelect(t.getLayout(), dim0, dim1))
 
 proc checkPermutation(Is: openArray[int]) {.compileTime.} =
@@ -36,11 +37,11 @@ proc checkPermutation(Is: openArray[int]) {.compileTime.} =
       if n == m:
         inc count
     doAssert count == 1,
-      "permute: mode " & $m & " appears " & $count & " times, a permutation lists every mode once"
+      "permute: dimension " & $m & " appears " & $count & " times, a permutation lists every dimension once"
 
 macro permute*(t: AnyTensor, Is: varargs[int]{lit|`const`}): auto =
-  ## Reorders the view's modes by index, PyTorch's `Tensor.permute`, zero-copy:
-  ## mode `i` of the result reads the input's mode `Is[i]`.
+  ## Reorders the view's dimensions by index, zero-copy:
+  ## dimension `i` of the result reads the input's dimension `Is[i]`.
   var idxs = newSeq[int](Is.len)
   for i, n in Is:
     idxs[i] = n.intVal.int
@@ -49,7 +50,7 @@ macro permute*(t: AnyTensor, Is: varargs[int]{lit|`const`}): auto =
   result = newStmtList()
   result.add bindSym"doAssert".newCall(
     bindSym"==".newCall(newLit(Is.len), rankCall),
-    newLit("permute: expects one index per mode, got " & $Is.len))
+    newLit("permute: expects one index per dimension, got " & $Is.len))
   var call = bindSym"selectDimensions".newCall((newDotExpr(t, bindSym"getLayout")).newCall())
   for n in Is:
     call.add n

@@ -636,7 +636,7 @@ proc runMakeTensorLikeTests =
 # ═════════════════════════════════════════════════════════════════════════════
 
 proc runTransposeTests =
-  # rank-2 swap: the modes exchange, the data is untouched
+  # rank-2 swap: the dimensions exchange, the data is untouched
   block:
     var buf = newSeq[float32](6)
     for i in 0 ..< 6:
@@ -650,7 +650,7 @@ proc runTransposeTests =
       for b in 0 ..< 3:
         doAssert tT[(b, a)] == t[(a, b)]
 
-  # rank-3 transpose(0, 2): all three modes kept, positions 0 and 2 swap
+  # rank-3 transpose(0, 2): all three dimensions kept, positions 0 and 2 swap
   block:
     var buf = newSeq[float32](24)
     for i in 0 ..< 24:
@@ -665,7 +665,7 @@ proc runTransposeTests =
         for c in 0 ..< 2:
           doAssert tT[(a, b, c)] == t[(c, b, a)]
 
-  # transpose(i, i) is the identity, not a duplicated mode
+  # transpose(i, i) is the identity, not a duplicated dimension
   block:
     var buf = newSeq[float32](24)
     for i in 0 ..< 24:
@@ -677,7 +677,7 @@ proc runTransposeTests =
     doAssert tT[(1, 2, 3)] == t[(1, 2, 3)]
 
 proc runPermuteTests =
-  # permute(2, 0, 1) rotates the modes
+  # permute(2, 0, 1) rotates the dimensions
   # every element reads back through the permutation
   block:
     var buf = newSeq[float32](24)
