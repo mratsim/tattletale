@@ -29,16 +29,22 @@ template transpose*(t: AnyTensor, dim0, dim1: static int): auto =
   ##   vV = V(batch, kvHead, _, _).transpose(1, 0)  # (Dv, S) over the same data
   make_view(t.data, transposedSelect(t.getLayout(), dim0, dim1))
 
-macro permute*(t: AnyTensor, Is: varargs[int]{lit|`const`}): auto =
-  ## Reorders the view's modes by index, PyTorch's `Tensor.permute`, zero-copy:
-  ## mode `i` of the result reads the input's mode `Is[i]`.
+proc checkPermutation(Is: openArray[int]) {.compileTime.} =
   for m in 0 ..< Is.len:
     var count = 0
     for n in Is:
-      if n.intVal.int == m:
+      if n == m:
         inc count
     doAssert count == 1,
       "permute: mode " & $m & " appears " & $count & " times, a permutation lists every mode once"
+
+macro permute*(t: AnyTensor, Is: varargs[int]{lit|`const`}): auto =
+  ## Reorders the view's modes by index, PyTorch's `Tensor.permute`, zero-copy:
+  ## mode `i` of the result reads the input's mode `Is[i]`.
+  var idxs = newSeq[int](Is.len)
+  for i, n in Is:
+    idxs[i] = n.intVal.int
+  idxs.checkPermutation()
   let rankCall = (newDotExpr(t, bindSym"getLayout")).newCall().newDotExpr(bindSym"rank").newCall()
   result = newStmtList()
   result.add bindSym"doAssert".newCall(
