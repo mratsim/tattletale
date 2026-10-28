@@ -24,17 +24,19 @@ Python side: `bench_scaled_dot_product_attention_mlx.py`, `mx.fast.scaled_dot_pr
 Effective flops count only the key tiles a query tile visits, the model
 `bench_scaled_dot_product_attention_metal.nim` reports:
 
-- kv tile grid: ceil(S / NT), MT = NT = 32
-- causal: query tile q visits min((q*MT + MT - 1) / NT + 1, kvTiles) tiles
+- kv tile grid: ceil(S / NT), tile shape per dtype: f32 (MT, NT) = (32, 16),
+  bf16 (16, 32)
+- causal: the kernel's bottom-right band with offset = S - L. A query tile
+  at qBase = q*MT + (S - L) visits max(0, min(kvTiles, ceil((qBase + MT) / NT))) tiles
 - full: every query tile visits kvTiles
 - per visited tile: QK costs 2*MT*NT*Dk, PV costs 2*MT*NT*Dv, totals scale
   by Hq * B, GQA head sharing does not discount per-head query work
 
 ## Causal alignment for L < S
 
-- the kernel contract is hi(q) = min(S, q + offset + 1) with offset 0
-  (top-left band), a query row of length L touches keys 0 .. L-1 at most
-- causal cases slice k and v to the first min(S, L) keys on the MLX side,
-  the Nim kernel never reads the masked-out key tiles
-- the "causal" mask string in MLX is lower-right aligned, on the sliced
-  square shapes the two alignments agree
+- the kernel contract is hi(q) = min(S, q + offset + 1) with offset = S - L
+  (bottom-right band), so a query row touches keys up to q + S - L
+- both benches time full S keys with the bottom-right band, the same op
+- the "causal" mask string in MLX is lower-right aligned for L != S.
+  check_math verifies the installed MLX against the explicit lower-right
+  mask and fails loudly if that ever changes

@@ -58,6 +58,11 @@ def causal_top_left_mask(l, s):
     return mx.arange(l)[:, None] >= mx.arange(s)[None, :]
 
 
+def causal_bottom_right_mask(l, s):
+    # the Nim kernel's band: offset = s - l, hi(q) = min(s, q + offset + 1)
+    return mx.arange(l)[:, None] + (s - l) >= mx.arange(s)[None, :]
+
+
 def ref_sdpa(q, k, v, scale, mask):
     # explicit math over GQA-expanded heads, the correctness anchor
     reps = q.shape[1] // k.shape[1]
@@ -78,33 +83,37 @@ def check_math():
     err = mx.abs(fused - want).max().item()
     tol = 5e-2 if DTYPE == mx.bfloat16 else 1e-4
     assert err < tol, f"square causal mismatch, max err {err}"
-    # L < S: sliced fused path against the full top-left masked math
+    # L < S: the full-S lower-right op the benches time. This also verifies
+    # the installed MLX aligns "causal" lower-right for L != S; an older or
+    # different alignment fails loudly here instead of skewing parity numbers
     q, k, v = make((1, 4, 8, 32)), make((1, 2, 32, 32)), make((1, 2, 32, 32))
-    fused = mx.fast.scaled_dot_product_attention(
-        q, k[:, :, :8], v[:, :, :8], scale=scale, mask="causal")
-    want = ref_sdpa(q, k, v, scale, causal_top_left_mask(8, 32))
+    fused = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask="causal")
+    want = ref_sdpa(q, k, v, scale, causal_bottom_right_mask(8, 32))
     err = mx.abs(fused - want).max().item()
-    assert err < tol, f"L<S causal mismatch, max err {err}"
+    assert err < tol, (
+        f"L<S causal mismatch, max err {err} - the installed MLX 'causal' "
+        "mask may not be lower-right aligned for L != S, Metal/MLX parity is invalid")
 
 
-def visited_tiles(q_tiles, seq_len, causal):
-    # key tiles visited across the query-tile grid, the Nim model
-    kv_tiles = -(-seq_len // NT)
+def visited_tiles(q_tiles, l, s, causal):
+    # key tiles visited across the query-tile grid, the Nim kernel's band
+    # (q_base = q_tile*MT + (s - l), bottom-right)
+    kv_tiles = -(-s // NT)
     total = 0
     for q_tile in range(q_tiles):
         if causal:
-            diag_tile = (q_tile * MT + MT - 1) // NT
-            total += min(diag_tile + 1, kv_tiles)
+            q_base = q_tile * MT + (s - l)
+            total += max(0, min(kv_tiles, -(-(q_base + MT) // NT)))
         else:
             total += kv_tiles
     return total
 
 
 def run_case(l, s, causal, iters):
-    s_eff = min(s, l) if causal else s
+    # full S keys, the same op the Metal bench times (bottom-right band)
     q = make((B, HQ, l, DK))
-    k = make((B, HKV, s_eff, DK))
-    v = make((B, HKV, s_eff, DV))
+    k = make((B, HKV, s, DK))
+    v = make((B, HKV, s, DV))
     scale = 1.0 / math.sqrt(DK)
     mask = "causal" if causal else None
 
@@ -120,7 +129,7 @@ def run_case(l, s, causal, iters):
             mx.eval([call() for _ in range(BATCH)])
         timings.append(time.perf_counter() - t0)
     med = sorted(timings)[1] / (rounds * BATCH)
-    flops = visited_tiles(-(-l // MT), s, causal) * HQ * B * 2 * MT * NT * (DK + DV)
+    flops = visited_tiles(-(-l // MT), l, s, causal) * HQ * B * 2 * MT * NT * (DK + DV)
     tflops = flops / med / 1e12
     print(f"L={l:>5} S={s:>5} causal={str(causal):>5}  median {med * 1e6:>10.1f} us  effective {tflops:>6.2f} TFLOP/s")
 

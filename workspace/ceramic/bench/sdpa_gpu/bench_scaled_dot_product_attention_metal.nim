@@ -7,8 +7,8 @@
 
 # Benchmark: scaled dot product attention on Metal, effective TFLOP/s.
 #
-# Effective flops count only the key tiles a query tile visits:
-# - the causal band visits min(ceil((qTile+1)*MT, NT), kvTiles) tiles
+# Effective flops count only the key tiles a query tile visits: the kernel's band, qBase = qTile*MT + (S - L) bottom-right (k_tile_sdpa):
+# - causal: a query tile at qBase visits max(0, min(kvTiles, ceil((qBase+MT)/NT))) tiles
 # - the full sweep visits kvTiles
 # - per visited tile: QK costs 2*MT*NT*Dk, PV 2*MT*NT*Dv
 #
@@ -57,20 +57,20 @@ proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
   for i in 0 ..< tv.size():
     tv(i) = to(float32(i mod 7) * 0.25'f32 + 0.5'f32, T)
 
-proc visitedTiles(qTiles, seqLen: int, Causal: static bool, MT, NT: static int): int =
-  ## Total key tiles visited across the query-tile grid
-  let kvTiles = seqLen.ceil_div(NT)
+proc visitedTiles(qTiles, L, S: int, Causal: static bool, MT, NT: static int): int =
+  ## Total key tiles visited across the query-tile grid, the kernel's band
+  let kvTiles = S.ceil_div(NT)
   for qTile in 0 ..< qTiles:
     when Causal:
-      let diagTile = (qTile * MT + MT - 1) div NT
-      result += min(diagTile + 1, kvTiles)
+      let qBase = qTile * MT + (S - L)
+      result += max(0, min(kvTiles, (qBase + MT).ceil_div(NT)))
     else:
       result += kvTiles
 
-func computeAttnFlops(qTiles, seqLen, Hq, B: int, Causal: static bool, MT, NT, Dk, Dv: static int): float64 =
+func computeAttnFlops(qTiles, L, S, Hq, B: int, Causal: static bool, MT, NT, Dk, Dv: static int): float64 =
   ## Effective flops: only the key tiles a query tile visits.
   ## Per visited tile QK costs 2*MT*NT*Dk and PV 2*MT*NT*Dv, over all Hq*B heads
-  float64(visitedTiles(qTiles, seqLen, Causal, MT, NT)) *
+  float64(visitedTiles(qTiles, L, S, Causal, MT, NT)) *
     float64(Hq * B) * 2.0 * MT * NT * (Dk + Dv)
 
 proc runCase(engine: MetalEngine, L, S: int, Causal: static bool, iters: int) =
@@ -133,7 +133,7 @@ proc runCase(engine: MetalEngine, L, S: int, Causal: static bool, iters: int) =
   sort(timings)
   let
     med = timings[1].float64 / 1e9
-    flops = computeAttnFlops(qTiles, S, Hq, B, Causal, MT, NT, Dk, Dv)
+    flops = computeAttnFlops(qTiles, L, S, Hq, B, Causal, MT, NT, Dk, Dv)
     tflops = flops / med / 1e12
   writeLine(stdout, &"L={L:>5} S={S:>5} causal={Causal:>5}  median {med * 1e6:>10.1f} us  effective {tflops:>6.2f} TFLOP/s")
 
