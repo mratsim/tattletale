@@ -38,7 +38,8 @@ proc simd_shuffle*[T](value: T, lane: int): T {.builtin.} = discard
   ## index `lane` and returns it on every lane of the subgroup.
   ##
   ## Contract:
-  ## - `lane` need not be uniform across the subgroup on any backend.
+  ## - `lane` need not be uniform across the subgroup, except on HLSL
+  ##   where `WaveReadLaneAt` requires a dynamically uniform lane.
   ## - `lane` must name an existing lane: an index outside the subgroup
   ##   is undefined (MSL, OpenCL, WGSL) or poison (SPIR-V).
   ## - Keep `lane` in `[0, subgroupSize)` so every lane reads a defined value.

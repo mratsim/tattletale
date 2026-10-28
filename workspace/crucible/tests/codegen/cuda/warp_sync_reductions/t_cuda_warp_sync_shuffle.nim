@@ -32,7 +32,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = newEngine(runCuda)
       engine.ingest(broadcastCuda)
       let oDev = engine.allocDevice(uint32, LaneWidth)
-      engine.launchKernel("broadcastLane0", oDev, ())
+      engine.launchKernel<<(grid: (1, 1), blk: (LaneWidth, 1))>>("broadcastLane0", oDev, ())
       var res: array[LaneWidth, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, LaneWidth)
       for lane in 0 ..< LaneWidth:
@@ -42,7 +42,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       var engine = newEngine(runCuda)
       engine.ingest(butterflyCuda)
       let oDev = engine.allocDevice(uint32, LaneWidth)
-      engine.launchKernel("butterflyXor1", oDev, ())
+      engine.launchKernel<<(grid: (1, 1), blk: (LaneWidth, 1))>>("butterflyXor1", oDev, ())
       var res: array[LaneWidth, uint32]
       engine.copyToHostFromDevice(addr res[0], oDev, LaneWidth)
       for lane in 0 ..< LaneWidth:
