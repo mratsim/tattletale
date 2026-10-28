@@ -124,23 +124,11 @@ template `===`*[U: tuple](a: int; b: U): bool =
 
 template `!==`*(a, b: auto): bool = not (a === b)
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Int[N] arithmetic
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
-func sign*(x: int): int {.inline.} =
-  if x > 0: 1 elif x < 0: -1 else: 0
-
-func sign*(x: static int): static int {.inline.} =
-  ## Static overload, folds at compile time.
-  if x > 0: 1 elif x < 0: -1 else: 0
-
-template sign*[V: static int](x: Int[V]): auto =
-  const S =
-    if V > 0: 1
-    elif V < 0: -1
-    else: 0
-  Int[S]()
+template sign*[V: static int](x: Int[V]): auto = Int[sign(V)]()
 
 template abs*[V: static int](x: Int[V]): auto = Int[abs(V)]()
 
