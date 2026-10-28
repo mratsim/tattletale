@@ -7,15 +7,15 @@
 
 ## GPU builtin vocabulary available inside kernel bodies, the stable surface downstream users bind against.
 ##
-## | Section      | Symbols                                                                                    |
-## | ------------ | ------------------------------------------------------------------------------------------ |
-## | Launch       | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`                                       |
-## | Scalar types | `float16`, `bfloat16`, `fp8e4m3`, `fp8e5m2`, `toFp16`, `toFp32`, `asFp16`, `asU16`         |
-## | Coordinates  | `ivec3`                                                                                    |
-## | Math         | `exp2`, `rsqrt`                                                                            |
-## | Atomics      | `atomicFetchAdd`                                                                           |
-## | Pragmas      | `global`, `workgroup`, `device`, `forceinline`, `smem`, `const_mem`, `builtin`, `cudaName` |
-## | Comp. magic  | `CompileTarget`, `ccGetBackend`                                                            |
+## | Section      | Symbols                                                                                                                                |
+## | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+## | Launch       | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`                                                                                   |
+## | Scalar types | `float16`, `bfloat16`, `fp8e4m3`, `fp8e5m2`, `toFp16`, `toFp32`, `toBf16`, `toBf32`, `toFp8e4m3`, `toFp8e5m2`, `asFp16`, `asU16`, `to` |
+## | Coordinates  | `ivec3`                                                                                                                                |
+## | Math         | `exp2`, `rsqrt`                                                                                                                        |
+## | Atomics      | `atomicFetchAdd`                                                                                                                       |
+## | Pragmas      | `global`, `workgroup`, `device`, `forceinline`, `smem`, `const_mem`, `builtin`, `cudaName`                                             |
+## | Comp. magic  | `CompileTarget`, `ccGetBackend`                                                                                                        |
 ##
 ## | Metal Shading language (MSL)     | CUDA                                                                         | OpenCL                                                                                                        | Vulkan (GLSL)             | WGSL                                                   |
 ## | -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------ |
@@ -48,7 +48,10 @@ export builtins_functions.exp2, builtins_functions.rsqrt
 export builtins_gpu_types.float16, builtins_gpu_types.bfloat16,
        builtins_gpu_types.fp8e4m3, builtins_gpu_types.fp8e5m2,
        builtins_gpu_types.toFp16, builtins_gpu_types.toFp32,
-       builtins_gpu_types.asFp16, builtins_gpu_types.asU16
+       builtins_gpu_types.toBf16, builtins_gpu_types.toBf32,
+       builtins_gpu_types.toFp8e4m3, builtins_gpu_types.toFp8e5m2,
+       builtins_gpu_types.asFp16, builtins_gpu_types.asU16,
+       builtins_gpu_types.to
 
 export builtins_warp_sync_reductions.reduceAdd, builtins_warp_sync_reductions.reduceMax
 

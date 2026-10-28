@@ -191,8 +191,9 @@ proc asgnS*(lhs, rhs: CirExpr): CirStmt =
 proc iteS*(cond: CirExpr, thenBody: seq[CirStmt], elseBody: seq[CirStmt] = @[]): CirStmt =
   CirStmt(kind: sIte, cond: cond, thenBody: thenBody, elseBody: elseBody)
 
-proc loopS*(loopBody: seq[CirStmt]): CirStmt =
-  CirStmt(kind: sLoop, loopBody: loopBody)
+proc loopS*(loopBody: seq[CirStmt], unroll = false): CirStmt =
+  ## `unroll` marks a `{.unroll.}`-hinted loop: every printer emits a full-unroll directive in front of it.
+  CirStmt(kind: sLoop, loopBody: loopBody, unroll: unroll)
 
 proc rng*(lo, hi: int64): CirRange =
   CirRange(lo: lo, hi: hi)

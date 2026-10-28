@@ -280,6 +280,10 @@ type
       thenBody*, elseBody*: seq[CirStmt]
     of sLoop:
       loopBody*: seq[CirStmt]
+      unroll*: bool
+      ## `{.unroll.}` statement in the loop body: every printer emits a full-unroll directive in front of the loop.
+      ## - Metal: `#pragma clang loop unroll(full)`
+      ## - OpenCL: `#pragma unroll`
     of sCase:
       selector*: CirExpr
       branches*: seq[CirCaseBranch]

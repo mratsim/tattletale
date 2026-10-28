@@ -171,6 +171,7 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.elseBody = cloneStmts(s.elseBody)
     of sLoop:
       c.loopBody = cloneStmts(s.loopBody)
+      c.unroll = s.unroll
     of sLab:
       c.labName = s.labName
     of sJmp:

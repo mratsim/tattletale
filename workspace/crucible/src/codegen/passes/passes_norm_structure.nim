@@ -263,7 +263,7 @@ proc structurize(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt] =
       sub.contL = contL
       let body = sub.structurizeList(s.loopBody)
       ctx.err = sub.err
-      result.add CirStmt(kind: sLoop, loopBody: body)
+      result.add CirStmt(kind: sLoop, loopBody: body, unroll: s.unroll)
       result.add stmts[i + 1]  # exit label, the printer's break target
       i += 2
     else:

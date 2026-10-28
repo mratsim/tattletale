@@ -19,7 +19,8 @@
 ##   program-scope `constant` output, a const_mem survivor refuses at the printer,
 ##   a surviving smem local drops, the Metal compiler rejects the dangling read
 ## - `jmp` to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
-## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass through
+## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
+##   through except the numeric conversions, which resolve to the MSL native call text
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -62,6 +63,25 @@ proc spellMslSpace(space: CirAddrSpace): string =
 
 proc spellMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
   ## Forward declaration, arrays recurse into themselves.
+
+## `{.builtin.}` numeric conversions resolve to the MSL native call text:
+## each entry is a format string whose `$1` stands for the call's argument list.
+## The CIRv2 lattice has no fp16 or bf16 kind: `float16` and `bfloat16` are `distinct uint16` types holding raw bits in `ushort` storage.
+## Value-producing conversions move the bit pattern, not the numeric value:
+## - `toFp16(x)` prints `as_type<ushort>(half(x))`
+## - `toBf16(x)` prints `as_type<ushort>((bfloat)(x))`
+## - `toFp32`/`toBf32` reinterpret the stored bits back through
+##   `as_type<half>`/`as_type<bfloat>` before the `float` widening
+## - `asFp16`/`asU16` are identities on that storage
+## fp8 conversions have no MSL native: the `{.builtin.}` name passes through and refuses at Metal compile time.
+const MslConversionBuiltinNames: Table[string, string] = {
+  "toFp16": "as_type<ushort>(half($1))",
+  "toFp32": "float(as_type<half>($1))",
+  "toBf16": "as_type<ushort>((bfloat)($1))",
+  "toBf32": "float(as_type<bfloat>($1))",
+  "asFp16": "$1",
+  "asU16": "$1",
+}.toTable()
 
 proc spellMslScalar(t: CirType): string =
   ## MSL name of a non-array leaf type, "" when the caller composes the name.
@@ -298,6 +318,9 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         # device address space implies the scope, relaxed order
         return "atomic_fetch_add_explicit((volatile device atomic_float*)" &
           "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
+      if e.callee.builtin and MslConversionBuiltinNames.hasKey(e.callee.name):
+        return MslConversionBuiltinNames.getOrDefault(e.callee.name) %
+          args.join(", ")
     return calleeName & "(" & args.join(", ") & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -418,7 +441,11 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
       ctx.indent.inc
       let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
       ctx.indent.dec
-      txt = spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
+      let directive = if s.unroll:
+        spaces(ctx.indent * 2) & "#pragma clang loop unroll(full)\n"
+      else:
+        ""
+      txt = directive & spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
         spaces(ctx.indent * 2) & '}'
       if lExit.len > 0:
         i.inc  # exit label, consumed

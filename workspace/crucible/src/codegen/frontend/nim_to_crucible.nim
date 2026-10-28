@@ -1247,12 +1247,35 @@ proc lowerIfStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     return @[]
   return ctx.lowerIfForm(branches, elseBody, nil)
 
+func isUnrollPragma(n: NimNode): bool =
+  ## True for the statement pragma `{.unroll.}`.
+  if n.kind != nnkPragma:
+    return false
+  for p in n:
+    if p.kind in {nnkIdent, nnkSym} and p.strVal == "unroll":
+      return true
+  return false
+
+func bodyMarksUnroll(body: NimNode): bool =
+  ## True when the loop body states `{.unroll.}` directly: the pragma is
+  ## one statement of the body's own statement list.
+  ## V1 semantics:
+  ## - any position inside the body marks the loop
+  ## - a pragma nested inside an inner loop's body marks that inner loop
+  if body.kind != nnkStmtList:
+    return false
+  for stmt in body:
+    if isUnrollPragma(stmt):
+      return true
+  return false
+
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `while` loop lowers to a conditionless `loop` with a leading guard
   ## and the exit label after the loop (final_ir.md rule 2).
   if ctx.failing():
     return @[]
   let exitL = ctx.freshLabel("lx")
+  let unroll = bodyMarksUnroll(n[1])
   let body = ctx.lowerStmt(n[1])
   if ctx.failing():
     return @[]
@@ -1263,7 +1286,7 @@ proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     guard = ctx.genCond(n[0], "", exitL, "")
     if ctx.failing():
       return @[]
-  result = @[loopS(guard & body), labS(exitL)]
+  result = @[loopS(guard & body, unroll), labS(exitL)]
 
 proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `for` over a literal range or `countup`:
@@ -1360,6 +1383,7 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   let savedContinue = ctx.continueUsed
   ctx.continueUsed = false
   ctx.loopStack.add((exitL: exitL, contL: contL))
+  let unroll = bodyMarksUnroll(n[^1])
   # start/stop/step hoists queued so far belong to the preamble, the body's own hoists drain per statement inside it
   let startHoists = ctx.drainHoisted()
   let body = ctx.lowerStmtBody(n[^1])
@@ -1383,7 +1407,8 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   preamble.add(asgnS(varSym, startV))
   if not stepIsConst:
     preamble.add(assumeS(ltE(intLit(0, tInt(32)), stepV)))
-  result = startHoists & preamble & @[loopS(bodyHoists & guard & body & incr), labS(exitL)]
+  result = startHoists & preamble & @[
+    loopS(bodyHoists & guard & body & incr, unroll), labS(exitL)]
 
 proc lowerReturn(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `return`: the value binds to its destination, then the `ret`.
