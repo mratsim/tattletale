@@ -28,6 +28,10 @@ proc runTest() =
     "`spirv:` macro emitted no words or lost the magic number"
 
   var engine = newEngine(runVulkan)
+  # Requires subgroups covering the full workgroup: a second 16-lane subgroup
+  # would broadcast its own lane-zero value and fail the 1000 expectation.
+  # MoltenVK runs fixed 32-lane subgroups and zeroes the queryable subgroup properties, so the test cannot check the size.
+  # Xor-1 pairing stays inside a power-of-two subgroup, lane xor 1 never leaves it.
 
   block broadcast:
     engine.ingest(broadcastSpv)
