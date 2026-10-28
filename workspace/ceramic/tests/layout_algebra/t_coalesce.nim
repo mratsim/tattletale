@@ -1,5 +1,6 @@
 # Run: nim c -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip workspace/ceramic/tests/layout_algebra/t_coalesce.nim
 
+import workspace/math
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_constructors

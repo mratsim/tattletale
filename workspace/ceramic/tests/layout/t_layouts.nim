@@ -924,9 +924,9 @@ proc runUpcastDowncastTests =
     ## upcast nested layout
     let a = make_layout(((2, 4), 8), ((1, 2), 4))
     let b = a.upcast(2)
-    # leaf (2,1): ceil_div(2, ceil_div(2,1))=1, ceil_div(1,2)=1  → (1,1)
-    # leaf (4,2): ceil_div(4, ceil_div(2,2))=4, ceil_div(2,2)=1  → (4,1)
-    # leaf (8,4): ceil_div(8, ceil_div(2,4))=8, ceil_div(4,2)=2  → (8,2)
+    # leaf (2,1): (1, 1) from ceil_div(2, ceil_div(2, 1)) = 1 and ceil_div(1, 2) = 1
+    # leaf (4,2): (4, 1) from ceil_div(4, ceil_div(2, 2)) = 4 and ceil_div(2, 2) = 1
+    # leaf (8,4): (8, 2) from ceil_div(8, ceil_div(2, 4)) = 8 and ceil_div(4, 2) = 2
     doAssert b.shape === ((1, 4), 8), "shape: " & $b.shape
     doAssert b.stride === ((1, 1), 2), "stride: " & $b.stride
   block:

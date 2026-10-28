@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
+import workspace/math
 import ./int_tuples_datatypes
 
 const DynamicSentinel* = low(int)
@@ -67,17 +68,26 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
       # int semantics Nim applies during type resolution
       let a = t[1].intVal.int
       let b = t[2].intVal.int
-      if b == 0: DynamicSentinel else: a.ceil_div(b)
+      if b == 0:
+        DynamicSentinel
+      else:
+        math.ceil_div(a, b)
     elif t[0].eqIdent("round_multiple_up") and t.len == 3 and
         t[1].kind in {nnkIntLit, nnkUIntLit} and t[2].kind in {nnkIntLit, nnkUIntLit}:
       let a = t[1].intVal.int
       let b = t[2].intVal.int
-      if b == 0: DynamicSentinel else: a.round_multiple_up(b)
+      if b == 0:
+        DynamicSentinel
+      else:
+        math.round_multiple_up(a, b)
     elif t[0].eqIdent("round_multiple_down") and t.len == 3 and
         t[1].kind in {nnkIntLit, nnkUIntLit} and t[2].kind in {nnkIntLit, nnkUIntLit}:
       let a = t[1].intVal.int
       let b = t[2].intVal.int
-      if b == 0: DynamicSentinel else: a.round_multiple_down(b)
+      if b == 0:
+        DynamicSentinel
+      else:
+        math.round_multiple_down(a, b)
     else:
       DynamicSentinel
   of nnkObjConstr:

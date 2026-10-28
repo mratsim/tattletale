@@ -9,3 +9,12 @@
 
 const Log2e* = 1.44269504089'f32
   ## log₂(e), converts exp to exp2: exp(x) = exp2(x · log₂e).
+
+func ceil_div*(a, b: int): int {.inline.} =
+  (a + b - 1) div b
+
+func round_multiple_up*(a, b: int): int {.inline.} =
+  ceil_div(a, b) * b
+
+func round_multiple_down*(a, b: int): int {.inline.} =
+  (a div b) * b

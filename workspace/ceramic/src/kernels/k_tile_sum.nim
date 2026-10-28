@@ -12,6 +12,7 @@
 ##   src with the axis size 1
 
 import workspace/ceramic/src/tile_algebra
+import workspace/math
 
 proc sum*(dst, src: distinct TensorView) {.inline.} =
   ## Computes sum at dst[0]

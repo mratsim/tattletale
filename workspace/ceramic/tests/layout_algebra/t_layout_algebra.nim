@@ -11,6 +11,7 @@
 
 {.experimental: "callOperator".}
 
+import workspace/math
 import std/algorithm
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra

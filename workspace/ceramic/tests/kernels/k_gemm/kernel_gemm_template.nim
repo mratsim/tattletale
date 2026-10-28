@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/[math, random, times]
+import workspace/math
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_streams

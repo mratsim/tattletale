@@ -34,7 +34,6 @@ export tensors.TensorOwned, tensors.TensorView, tensors.size,
        tensors.`[]`, tensors.`[]=`
 export int_tuples.Int, int_tuples.`+`, int_tuples.`-`, int_tuples.`*`,
        int_tuples.`div`, int_tuples.`mod`, int_tuples.`==`,
-       int_tuples.round_multiple_down, int_tuples.round_multiple_up,
        int_tuples.toInt, int_tuples.flatten, int_tuples.tupleStream,
        int_tuples.items
 export layout_algebra.Layout, layout_algebra.make_layout, layout_algebra.cosize,

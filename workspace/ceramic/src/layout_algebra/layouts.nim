@@ -7,6 +7,7 @@
 
 import std/macros
 import workspace/ceramic/src/int_tuples
+import workspace/math
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/macros/replace_nodes
 import ./layouts_datatypes

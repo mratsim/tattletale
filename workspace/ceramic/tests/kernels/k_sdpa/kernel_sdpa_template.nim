@@ -10,6 +10,7 @@
 ## Only the runner monomorphizes per dtype, head dim and masking combo, all in one compile.
 
 import std/[os, math]
+import workspace/math
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra

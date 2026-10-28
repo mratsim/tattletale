@@ -7,6 +7,7 @@
 
 
 import std/macros, std/typetraits, std/math
+import workspace/math
 import workspace/ceramic/src/macros/static_for
 
 # ═══════════════════════════════════════════════════════════════
@@ -126,31 +127,6 @@ template `!==`*(a, b: auto): bool = not (a === b)
 # ═══════════════════════════════════════════════════════════════
 #  Int[N] arithmetic
 # ═══════════════════════════════════════════════════════════════
-
-func ceil_div*(a, b: int): int {.inline.} =
-  (a + b - 1) div b
-
-func ceil_div*(a, b: static int): static int {.inline.} =
-  ## Static overload, both arguments fold at compile time.
-  (a + b - 1) div b
-
-func round_multiple_up*(a, b: int): int {.inline.} =
-  ## Rounds a up to the next multiple of b.
-  ceil_div(a, b) * b
-
-func round_multiple_up*(a, b: static int): static int {.inline.} =
-  ## Rounds a up to the next multiple of b.
-  ## Static overload, both arguments fold at compile time.
-  ceil_div(a, b) * b
-
-func round_multiple_down*(a, b: int): int {.inline.} =
-  ## Rounds a down to the previous multiple of b.
-  (a div b) * b
-
-func round_multiple_down*(a, b: static int): static int {.inline.} =
-  ## Rounds a down to the previous multiple of b.
-  ## Static overload, both arguments fold at compile time.
-  (a div b) * b
 
 func sign*(x: int): int {.inline.} =
   if x > 0: 1 elif x < 0: -1 else: 0
