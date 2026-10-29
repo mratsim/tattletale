@@ -122,7 +122,7 @@ Internally the compiler runs on CIRv2, its backend-neutral intermediate represen
 
 - Metal kernel compilation is about 2.2x faster than on the previous IR.
   Runtime parity with the previous IR is measured on the benchmarks at bf16: GEMM 4.5s vs 10.0s, SDPA 10.4s vs 23.3s.
-- `{.smem.}` kernel locals become in-body threadgroup storage on Metal and `{.unroll.}` is honored end to end.
+- On Metal, `{.smem.}` becomes in-body threadgroup storage, and `{.unroll.}` is honored end to end (non-Metal printers are a known gap).
 - The `cuda:` target refuses at compile time on CIRv2 (no CUDA printer yet).
 - A classified set of existing-suite tests still fails on CIRv2, mostly non-Metal printer parity and type-lowering gaps.
 
