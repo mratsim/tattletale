@@ -177,14 +177,18 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
   ## over every stride leaf, integer strides and coordinate strides,
   ## each codomain axis filled independently.
   ##
-  ## - one entry per stride leaf, the leaf's own node carries the kind:
-  ##   an integer stride or an E(scale, axis) coordinate stride,
-  ##   coordinate strides need static shapes
-  ## - `bound` sets the fill limit, one value per axis or a scalar
-  ##   for a single-axis result
-  ## - the result covers the addresses the input misses, in order, without overlap, size-1 modes removed by coalesce
-  ## - without `bound` the integer axes fill up to the input's size,
-  ##   coordinate axes stay as they are
+  ## Args:
+  ## - one entry per stride leaf: the leaf's stride node `strideNode`,
+  ##   its stride type `strideTy` and the leaf's shape node
+  ## - a coordinate stride's node is its `E(scale, axis)` atom
+  ## - `bound` sets the fill limit: one value per axis, or a scalar
+  ##   when the result covers one axis
+  ##
+  ## Returns:
+  ##     a layout that covers every address the input misses,
+  ##     without overlap and in order. A default bound fills each
+  ##     integer axis up to the input's size. Coordinate axes stay unchanged.
+  ##     Coalesce removes size-1 modes.
   var sorted = leaves
   sorted.sort(proc(a, b: tuple[axis, strideVal, shapeVal: int, strideNode, strideTy, shapeNode: NimNode]): int =
     cmp((a.axis, a.strideVal == DynamicSentinel, a.strideVal),
@@ -193,24 +197,16 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
   for l in sorted:
     if l.axis notin axes:
       axes.add l.axis
-  var covVal = newSeq[int](axes.len)
-  var covScalar = newSeq[NimNode](axes.len)
-  var covStride = newSeq[NimNode](axes.len)
-  var covStrideTy = newSeq[NimNode](axes.len)
-  var covStatic = newSeq[bool](axes.len)
-  var covProdStatic = newSeq[bool](axes.len)   # the last leaf's stride*shape folds
-  var covProd = newSeq[int](axes.len)          # that product's value
+  var span = newSeq[NimNode](axes.len)       # covered span, `stride * shape`
+  var spanStride = newSeq[NimNode](axes.len) # covered span's stride
   var atomAxis = newSeq[bool](axes.len)
   for l in sorted:
     if isCoordStride(l.strideTy):
       atomAxis[axes.find(l.axis)] = true
   for i in 0 ..< axes.len:
-    covVal[i] = 1
-    covScalar[i] = IntCT(1)
-    covStride[i] = IntCT(1)
-    covStrideTy[i] = intTy(1)
-    covStatic[i] = true
-  var axisModes: seq[seq[tuple[gap, gapTy, stride, strideTy: NimNode]]]
+    span[i] = IntCT(1)
+    spanStride[i] = IntCT(1)
+  var axisModes: seq[seq[tuple[gap, stride: NimNode]]]
   axisModes.setLen(axes.len)
   var b = 1
   for l in sorted:
@@ -219,40 +215,16 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
       # dimension covers a single offset, neither opens a gap
       continue
     let k = axes.find(l.axis)
-    if not isCoordStride(l.strideTy) and
-        l.strideVal != DynamicSentinel and covStatic[k] and l.strideVal < covVal[k]:
+    let gap = l.strideNode div span[k]
+    let gapVal = gap.getStaticInt()
+    if gapVal != DynamicSentinel and gapVal < 1:
       error "complement: non-injective layout, stride " & $l.strideVal &
-        " overlaps the covered span " & $covVal[k]
-    let covDiv = if covStatic[k]: IntCT(covVal[k]) else: covScalar[k]
-    let covDivN = if covStatic[k]: newLit(covVal[k]) else: covDiv
-    if isCoordStride(l.strideTy):
-      let gap = l.strideVal div covVal[k]
-      if gap == 0:
-        error "complement: coordinate strides collide, scale " & $l.strideVal &
-          " inside the covered span " & $covVal[k] & " on axis " & $l.axis
-      if gap > 1:
-        axisModes[k].add (IntCT(gap), intTy(gap), covStride[k], covStrideTy[k])
-    else:
+        " overlaps the covered span " & $span[k].getStaticInt() & " on axis " & $l.axis
+    if gapVal == DynamicSentinel or gapVal > 1:
       # a gap of 1 covers no hole, the mode drops
-      let gapVal = if l.strideVal != DynamicSentinel and covStatic[k]:
-                     l.strideVal div covVal[k]
-                   else: DynamicSentinel
-      if gapVal == DynamicSentinel or gapVal > 1:
-        let gapExpr = l.strideNode div covDivN
-        axisModes[k].add (gapExpr, nnkCall.newTree(ident"typeof", gapExpr), covStride[k], covStrideTy[k])
-    if l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel and covStatic[k]:
-      covVal[k] = l.strideVal * l.shapeVal
-      covScalar[k] = IntCT(covVal[k])
-      covStride[k] = l.strideNode * IntCT(l.shapeVal)
-      covStrideTy[k] = nnkCall.newTree(ident"typeof", covStride[k])
-    else:
-      covStatic[k] = false
-      covProdStatic[k] = l.strideVal != DynamicSentinel and
-        l.shapeVal != DynamicSentinel
-      covProd[k] = if covProdStatic[k]: l.strideVal * l.shapeVal else: 0
-      covScalar[k] = l.strideNode * l.shapeNode
-      covStride[k] = l.strideNode * l.shapeNode
-      covStrideTy[k] = nnkCall.newTree(ident"typeof", covStride[k])
+      axisModes[k].add (gap, spanStride[k])
+    span[k] = l.strideNode * l.shapeNode
+    spanStride[k] = l.strideNode * l.shapeNode
     if defaultBound and l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel:
       b += (l.shapeVal - 1) * abs(l.strideVal)
 
@@ -276,30 +248,21 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
   var builder = TupleBuilderFlat.new(2)
   for k in 0 ..< axes.len:
     for m in axisModes[k]:
-      builder.append((m.gap, m.gapTy), (m.stride, m.strideTy))
+      builder.append((m.gap, nil), (m.stride, nil))
     # the free complement extends integer axes to the layout's cosize, atom axes stay unextended
     let boundNode = if defaultBound:
                       IntCT(if atomAxis[k]: 1 else: b)
                     else:
                       boundLeafs[k].leaf
+    # a rem mode drops when the quotient folds to 1 and gap modes exist
     let boundVal = boundNode.getStaticInt()
-    if boundVal != DynamicSentinel and covStatic[k]:
-      # static operands fold the quotient to its value here,
-      # a rem of 1 covers nothing the gap modes miss and drops
-      let cd = (boundVal + covVal[k] - 1) div covVal[k]
-      if cd != 1 or axisModes[k].len == 0:
-        builder.append((IntCT(cd), intTy(cd)), (covStride[k], covStrideTy[k]))
-    else:
-      # the dynamic rem folds when both operands carry static types,
-      # a rem of 1 covers no hole the gap modes miss and drops
-      let bVal = boundNode.getStaticInt()
-      if bVal != DynamicSentinel and covProdStatic[k]:
-        let cd = (bVal + covProd[k] - 1) div covProd[k]
-        if cd != 1 or axisModes[k].len == 0:
-          builder.append((IntCT(cd), intTy(cd)), (covStride[k], covStrideTy[k]))
-      else:
-        let cdExpr = bindSym"ceil_div".newCall(boundNode, covScalar[k])
-        builder.appendTyped((cdExpr, nil), (covStride[k], covStrideTy[k]))
+    let spanVal = span[k].getStaticInt()
+    let cd = if boundVal != DynamicSentinel and spanVal != DynamicSentinel:
+               boundVal.ceil_div(spanVal)
+             else:
+               DynamicSentinel
+    if cd != 1 or axisModes[k].len == 0:
+      builder.append((boundNode.ceil_div(span[k]), nil), (spanStride[k], nil))
 
   # a lone mode is a scalar, the complement's single-mode results
   # (full coverage) spell shape/stride directly

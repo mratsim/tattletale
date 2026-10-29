@@ -48,8 +48,11 @@ func isStaticOne*(t: NimNode): bool {.compileTime.} =
   (t.kind == nnkIntLit and t.intVal == 1)
 
 func getStaticInt*(t: NimNode): int {.compileTime.} =
-  ## Static Int value of a node, DynamicSentinel when the node carries
-  ## no static Int (not a literal, not an Int[V] type or construction).
+  ## Static Int value of a node.
+  ## - the result is DynamicSentinel when the node lacks a static Int:
+  ##   not a literal, not an `Int[V]` type or construction
+  ##
+  ## TODO: duplicating Nim constant-folding via Int overload is unwanted.
   case t.kind
   of nnkIntLit, nnkUIntLit:
     int(t.intVal)
@@ -57,18 +60,17 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
     # evalOnceAs caching, `const q = X; X`, the trailing value is static
     t[^1].getStaticInt()
   of nnkCall, nnkBracketExpr:
-    # the typed-delegate path hands out typeDesc[Int[V]] wrappers
+    # typeDesc[Int[V]] wrappers: the typed-delegate path produces these
     if t[0].eqIdent("typeDesc"):
       t[1].getStaticInt()
     elif t[0].eqIdent("Int"):
       t[1].getStaticInt()
-    elif t[0].eqIdent("ceil_div") and t.len == 3 and
-        t[1].kind in {nnkIntLit, nnkUIntLit} and t[2].kind in {nnkIntLit, nnkUIntLit}:
-      # domain arithmetic folds at compile time, matching the static
-      # int semantics Nim applies during type resolution
-      let a = t[1].intVal.int
-      let b = t[2].intVal.int
-      if b == 0:
+    elif t[0].eqIdent("ceil_div") and t.len == 3:
+      # A `ceil_div` call over two static operands folds to its value.
+      # Nim applies the same folding to static ints during type resolution.
+      let a = t[1].getStaticInt()
+      let b = t[2].getStaticInt()
+      if a == DynamicSentinel or b == DynamicSentinel or b == 0:
         DynamicSentinel
       else:
         math.ceil_div(a, b)
@@ -90,8 +92,34 @@ func getStaticInt*(t: NimNode): int {.compileTime.} =
         math.round_multiple_down(a, b)
     else:
       DynamicSentinel
+  of nnkInfix:
+    # Algebra emission produces natural arithmetic such as `Int[a] div Int[b]`,
+    # folded here one operator per step, before Nim semchecks the expression.
+    let a = t[1].getStaticInt()
+    let b = t[2].getStaticInt()
+    if a == DynamicSentinel or b == DynamicSentinel:
+      return DynamicSentinel
+    case $t[0]
+    of "+":
+      a + b
+    of "-":
+      a - b
+    of "*":
+      a * b
+    of "div":
+      if b != 0:
+        a div b
+      else:
+        DynamicSentinel
+    of "mod":
+      if b != 0:
+        a mod b
+      else:
+        DynamicSentinel
+    else:
+      DynamicSentinel
   of nnkObjConstr:
-    if t[0][0].eqIdent("Int"):
+    if t[0].kind == nnkBracketExpr and t[0][0].eqIdent("Int"):
       t[0].getStaticInt()
     else:
       DynamicSentinel
