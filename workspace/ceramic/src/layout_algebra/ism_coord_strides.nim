@@ -333,12 +333,10 @@ proc isCoordStride*(leafTy: NimNode): bool =
     return false
   var t = leafTy
   if t.kind == nnkSym:
-    let impl = t.getImpl
-    if impl.kind == nnkTypeDef and impl[2].kind == nnkBracketExpr and
-        impl[2][0].kind == nnkSym and impl[2][0].strVal == "typeDesc":
-      t = impl[2][1]
-    else:
-      return false
+    t = t.getTypeInst
+  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and
+      t[0].strVal == "typeDesc":
+    t = t[1]
   return t.kind == nnkBracketExpr and t[0].kind == nnkSym and
     t[0].strVal == "CoordStride"
 
