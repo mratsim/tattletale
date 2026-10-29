@@ -1756,7 +1756,17 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   var incr: seq[CirStmt] = @[]
   if contUsed:
     incr.add(labS(contL))
-  incr.add(asgnS(varSym, addE(varType, varSym, stepT)))
+  if stepIsConst:
+    incr.add(asgnS(varSym, addE(varType, varSym, stepT)))
+  else:
+    # loop-variant step expressions lower inside the loop,
+    # they re-evaluate at the continue point.
+    # A step frozen at entry counts wrong iterations.
+    let stepNow = ctx.lowerExpr(unwrapConv(stepNode))
+    if ctx.failing():
+      return @[]
+    let stepNowT = operandLiteralTypedAs(stepNow, varType)
+    incr.add(ctx.drainHoisted() & @[asgnS(varSym, addE(varType, varSym, stepNowT))])
   var preamble = ctx.drainHoisted()
   preamble.add(varD(varName, varType))
   preamble.add(asgnS(varSym, startT))

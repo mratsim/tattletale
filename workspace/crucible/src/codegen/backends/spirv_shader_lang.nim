@@ -548,6 +548,8 @@ proc constId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
 
 proc scalarBits(t: CirType): int =
   ## Bit width of a scalar type, 0 for widthless kinds.
+  if t == nil:
+    return 0
   if t.kind in {ctInt, ctUint, ctFloat}:
     t.bits
   else:
@@ -555,6 +557,9 @@ proc scalarBits(t: CirType): int =
 
 proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32 =
   ## Scalar conversion opcode between two value types.
+  if source == nil or to == nil:
+    ctx.failSpv("scalar conversion with a missing operand type")
+    return 0
   if source.kind == to.kind and scalarBits(source) == scalarBits(to):
     return v
   let fFloat = source.kind == ctFloat
@@ -589,8 +594,8 @@ proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32 =
     return ctx.builder.freshInst(OpConvertFToU, @[ctx.scalarId(to), v])
   if fFloat and tFloat:
     return ctx.builder.freshInst(OpFConvert, @[ctx.scalarId(to), v])
-  ctx.failSpv("no scalar conversion " & $source.kind & $source.bits & " -> " &
-    $to.kind & $to.bits)
+  ctx.failSpv("no scalar conversion " & $source.kind & $scalarBits(source) &
+    " -> " & $to.kind & $scalarBits(to))
   0
 
 proc memberIndex(t: CirType, name: string): int =
@@ -621,7 +626,9 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     result = e.opType
   of eBitNot, eNeg: result = e.unType
-  of eEq, eNeq, eLt, eLe: result = e.cmpType
+  of eEq, eNeq, eLt, eLe:
+    # a comparison is a value of bool, cmpType names the operand type
+    result = CirType(kind: ctBool)
   of eNot: result = CirType(kind: ctBool)
   of eAnd, eOr: result = CirType(kind: ctBool)
   of eCast, eConv: result = e.castType
@@ -668,6 +675,17 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
   of eCall:
     if e.callee.kind == eSym and ctx.fnTypes.hasKey(e.callee.name):
       result = ctx.fnTypes[e.callee.name]
+    elif e.callee.kind == eSym and e.callee.name == "atomicFetchAdd" and
+        e.args.len == 2 and e.args[0].kind == eAddr:
+      # an atomic add yields the addressed element, its first argument
+      # names the address
+      let pat = e.args[0].addrOperand
+      if pat.kind == ePat:
+        let t = ctx.resolveExprType(fn, pat.patBase)
+        if t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil:
+          result = t.pElem
+          return
+      ctx.failSpv("atomicFetchAdd address is not the address of an element")
     elif e.callee.kind == eSym and e.args.len > 0:
       # a builtin call, the result type is the first argument's type
       result = ctx.resolveExprType(fn, e.args[0])
@@ -1127,6 +1145,22 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let scopeSub = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeSubgroup))
     return ctx.builder.freshInst(OpGroupNonUniformFAdd,
       @[ctx.tyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
+  if e.callee.kind == eSym and e.callee.builtin and
+      e.callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
+    doAssert e.args.len == 2, "simd_shuffle takes a value and a lane index"
+    let v = ctx.emitExpr(fn, e.args[0])
+    let lane = ctx.emitExpr(fn, e.args[1])
+    let resTy = ctx.resolveExprType(fn, e.args[0])
+    if resTy == nil or resTy.kind notin {ctInt, ctUint, ctFloat, ctBool}:
+      ctx.failSpv("simd_shuffle lowers scalars only")
+      return 0
+    # Invocation Id and Mask take the unsigned width the grammar demands
+    let laneU = ctx.convertValue(lane, ctx.resolveExprType(fn, e.args[1]), cirUint32())
+    ctx.caps.incl capGroupNonUniformShuffle
+    let scopeSub = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeSubgroup))
+    let op = if e.callee.name == "simd_shuffle": OpGroupNonUniformShuffle
+             else: OpGroupNonUniformShuffleXor
+    return ctx.builder.freshInst(op, @[ctx.tyId(spvScalar(resTy)), scopeSub, v, laneU])
   if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
     doAssert e.args.len == 2, "atomicFetchAdd takes a pointer and a value"
     if e.args[0].kind != eAddr or e.args[0].addrOperand.kind != ePat:
@@ -1372,7 +1406,10 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       # into a fresh temp the caller stores (the frontend lowers both shapes)
       if s.callCallee.kind == eSym and ctx.fnTypes.hasKey(s.callCallee.name) and
           ctx.fnTypes[s.callCallee.name].kind == ctVoid:
-        discard ctx.emitCallValue(fn, s.callCallee)
+        var callE = CirExpr(kind: eCall)
+        callE.callee = s.callCallee
+        callE.args = s.callArgs
+        discard ctx.emitCallValue(fn, callE)
       else:
         ctx.failSpv("statement call " & s.callCallee.name &
           " without a destination binding")

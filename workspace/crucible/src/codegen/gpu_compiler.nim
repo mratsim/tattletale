@@ -43,6 +43,8 @@ import ./passes/passes_lowering_opencl
 import ./passes/passes_validations
 import ./passes/passes_low_reserved
 import ./backends/backends_api
+import ./ir/cirv2_pretty
+import ./passes/passes_lowering_spirv
 from ./backends/hlsl_lang import HlslFlavor, fvD3D12, fvVulkan
 
 macro codegenMetal(body: typed): string =
@@ -159,6 +161,7 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   reg.registerNormalizationPasses()
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
+  reg.registerSpirvLoweringPasses()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:

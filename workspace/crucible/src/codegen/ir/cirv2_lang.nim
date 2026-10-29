@@ -457,9 +457,10 @@ proc getExprType*(e: CirExpr): CirType =
     result = e.nilType
   of eTrue, eFalse:
     result = CirType(kind: ctBool)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor,
-     eBitNot, eNeg:
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     result = e.opType
+  of eBitNot, eNeg:
+    result = e.unType
   of eEq, eNeq, eLt, eLe, eNot, eAnd, eOr:
     result = CirType(kind: ctBool)
   of eCast, eConv:

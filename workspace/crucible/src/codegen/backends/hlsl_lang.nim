@@ -323,6 +323,17 @@ proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
       graph.scanStoredStmts(fn, s.loopBody)
     of sScope:
       graph.scanStoredStmts(fn, s.scopeBody)
+    of sEmit:
+      # a store can hide in an emit: the verbatim text names the buffer,
+      # every parameter the text mentions counts as stored (v1's write-scan)
+      var emitText = ""
+      for part in s.emitParts:
+        emitText.add part
+      for op in s.emitOperands:
+        emitText.add op.name
+      for p in fn.params:
+        if p.typ.kind in {ctPtr, ctAptr} and emitText.contains(p.name):
+          graph.stored.incl(fn.name & "/" & p.name)
     of sCall:
       # a store can hide in a call-bound destination expression
       let root = exprRootSym(s.callCallee)
@@ -336,7 +347,7 @@ proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
           for p in fn.params:
             if p.name == ar.name:
               graph.stored.incl(fn.name & "/" & p.name)
-    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
+    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm:
       discard
 
 proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
@@ -711,6 +722,13 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       if e.callee.atomicsBuiltin != abkNone:
         ctx.fail("atomic builtins have no emission in this backend")
         return ""
+      if e.callee.builtin and e.callee.name == "simd_shuffle":
+        # simd_shuffle maps to WaveReadLaneAt, a dynamically uniform
+        # lane index is required by the intrinsic
+        return "WaveReadLaneAt(" & args.join(", ") & ")"
+      if e.callee.builtin and e.callee.name == "simd_shuffle_xor":
+        ctx.fail("simd_shuffle_xor has no wave-intrinsic spelling, no HLSL intrinsic exchanges with a lane-index xor")
+        return ""
     return calleeName & "(" & args.join(", ") & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -865,13 +883,14 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     ctx.fail("inline assembly has no HLSL form")
     result = ""
   of sEmit:
-    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
-    # no terminator appended, the text supplies its own terminators
+    # `{.emit.}` raw source: operand expressions rendered and spliced
+    # into the verbatim text, a push-block scalar qualifies as `push.name`.
+    # No terminator is appended, the text ends where it ends.
     var text = ""
     for i, part in s.emitParts:
       text.add(part)
       if i < s.emitOperands.len:
-        text.add(s.emitOperands[i].name)
+        text.add(ctx.printExpr(s.emitOperands[i]))
     result = pad & text
   of sCase:
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
