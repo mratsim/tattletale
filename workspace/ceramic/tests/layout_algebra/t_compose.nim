@@ -473,9 +473,6 @@ proc runComposeTilerTests =
     let c = compose(make_layout((32, 8), (1, dS)), (16, 4))
     check c.shape, (16, 4), (Int[16], Int[4])
     check c.stride, (1, dS), (Int[1], Int[2])
-  # the scalar fast path pairs (N, the layout's stride leaf) per mode.
-  # no compose call is emitted, static leaves keep Int markers,
-  # even under a runtime shape leaf
   block:
     let dN = 4
     let c = compose(make_layout((dN, 8), (1, 4)), (2, 2))
@@ -499,8 +496,6 @@ proc runComposeTilerTests =
   # a sub-tuple tiler element on a scalar dimension is a rank error
   static:
     doAssert not compiles(compose(make_layout((4, 8), (1, 4)), (2, (2, 2))))
-  # a symbol-bound layout reads its modes off the destructured parts,
-  # the tiler path emits bracket reads, static fields stay Int-typed
   block:
     let sb = make_layout((4, 8), (1, 4))
     let c1 = compose(sb, (16, 2))
@@ -579,6 +574,13 @@ proc runComposeSymbolZeroTests =
     check c.shape, 4, Int[4]
     check c.stride, 0, Int[0]
     assertCompositionProperty(make_layout(4, 1), b)
+  block:
+    # a stride-zero tiler maps every coordinate to offset 0
+    let b = make_layout(4, 0)
+    let c = compose(make_layout((4, 3), (1, 3)), b)
+    check c.shape, 4, Int[4]
+    check c.stride, 0, Int[0]
+    assertCompositionProperty(make_layout((4, 3), (1, 3)), b)
   block:
     let b = make_layout(1, 0)
     let c = compose(make_layout(4, 1), b)
@@ -696,12 +698,17 @@ proc runComposeSymbolTilerTests =
   # an un-inlined tuple producer is evaluated once, its tuple type
   # decides the tiler path
   block:
-    proc prodTup(a, b: int): (int, int) = (a, b)
+    var prodCount = 0
+    proc prodTup(a, b: int): (int, int) =
+      inc prodCount
+      (a, b)
     let a = 2
     let b = 3
     let c = compose(make_layout((4, 8), (1, 4)), prodTup(a, b))
     check c.shape, (2, 3), (int, int)
     check c.stride, (1, 4), (Int[1], Int[4])
+    doAssert prodCount == 1, "tiler producer evaluated " & $prodCount &
+      " times, the evalOnceAs alias must serve every leaf"
   echo "  symbol tiler: 3 cases OK"
 
 # ── coordinate strides ────────────────────────────────────────

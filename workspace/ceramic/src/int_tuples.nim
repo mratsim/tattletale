@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros, std/typetraits
+import workspace/ceramic/src/integer_semi_modules as ism
 import workspace/ceramic/src/int_tuples/int_tuples_datatypes
 import workspace/ceramic/src/int_tuples/int_tuples_compiletime
 import workspace/ceramic/src/int_tuples/int_tuples_folds
@@ -14,9 +15,11 @@ import workspace/ceramic/src/int_tuples/int_tuples_transforms
 import workspace/ceramic/src/int_tuples/int_tuples_zips
 import workspace/ceramic/src/int_tuples/int_tuples_streams
 import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
+import workspace/ceramic/src/macros/eval_once_as as eval_once
 
-export int_tuples_datatypes
+export ism
 export int_tuples_compiletime
+export eval_once
 export int_tuples_folds
 export int_tuples_maps
 export int_tuples_transforms

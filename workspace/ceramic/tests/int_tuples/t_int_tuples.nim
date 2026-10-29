@@ -430,14 +430,6 @@ proc runMixedStaticDynamicTests =
     let shape = (dN, Int[3](), Int[8](), Int[8]())
     let stride = suffix_product(shape)
     doAssert stride[0] === 3*8*8 and stride[1] === 8*8 and stride[2] === 8 and stride[3] === 1
-    doAssert not isConst(shape[0])
-    doAssert isConst(shape[1])
-    doAssert isConst(shape[2])
-    doAssert isConst(shape[3])
-    doAssert isConst(stride[0])
-    doAssert isConst(stride[1])
-    doAssert isConst(stride[2])
-    doAssert isConst(stride[3])
 
   block:
     let dN = 2

@@ -7,6 +7,7 @@
 
 import std/[math, macros]
 import workspace/ceramic/src/int_tuples/int_tuples_compiletime
+import workspace/ceramic/src/integer_semi_modules
 import ./tiles
 import ./tile_foreach
 

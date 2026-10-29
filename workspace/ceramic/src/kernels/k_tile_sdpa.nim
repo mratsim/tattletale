@@ -30,7 +30,7 @@ import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/hardware/h_mma_registry
 import workspace/ceramic/src/hardware/h_mma_properties
-import workspace/math_consts
+import workspace/math
 import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 import workspace/ceramic/src/kernels/k_layout_gemm
 

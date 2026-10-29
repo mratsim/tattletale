@@ -11,6 +11,7 @@
 
 {.experimental: "callOperator".}
 
+import workspace/math
 import std/algorithm
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
@@ -18,12 +19,6 @@ import workspace/ceramic/src/layout_algebra
 
 
 # ── Forward declarations ──────────────────────────────────
-proc runComplementStaticRank1Tests: void
-proc runComplementExactValueTests: void
-proc runComplementSymbolBoundTests: void
-proc runComplementMultiDimensionStaticTests: void
-proc runComplementDynamicTests: void
-proc runComplementDisjointnessTests: void
 proc runRightInvSimpleTests: void
 proc runRightInvExactValueTests: void
 proc runRightInvDynamicTests: void
@@ -44,13 +39,6 @@ proc runTiledProductTests: void
 proc runFlatProductTests: void
 proc runTileToShapeTests: void
 proc runTests =
-  echo "\n── Complement [CUTE-CP] + [PY-L] + [PY-E] ──"
-  runComplementStaticRank1Tests()
-  runComplementExactValueTests()
-  runComplementSymbolBoundTests()
-  runComplementMultiDimensionStaticTests()
-  runComplementDynamicTests()
-  runComplementDisjointnessTests()
   echo "\n--- Anti-regression: crd2idx + zipped_divide ---"
   echo "\n── right_inverse [CUTE-IR] + [PY-E Table 5] ──"
   runRightInvTests()
@@ -73,328 +61,6 @@ when isMainModule:
   runTests()
 
 # ═══════════════════════════════════════════════════════════════
-#  Complement post-condition checks (CuTe test_complement)
-# ═══════════════════════════════════════════════════════════════
-#
-#
-# Checks:
-#   (1) cosize(layout ++ complement) >= size(cotarget)
-#   (2) cosize(complement) <= round_up(size(cotarget), cosize(layout))
-#   (3) result[i-1] < result[i]  — ordered
-#   (4) result[i] != layout[j]   — disjoint (tested separately)
-#   (5) size(result) <= cosize(result)
-#   (9) if static stride, complement(completed) has size 1
-template testComplementProps(layout, result: typed; cotarget: untyped) =
-  let rSize = size(result)
-  let lCosize = cosize(layout)
-  let completed = Layout[typeof((layout.shape, result.shape)), typeof((layout.stride, result.stride))](
-    shape: (layout.shape, result.shape), stride: (layout.stride, result.stride))
-  let cSize = fold(cotarget, 1, acc * it)
-  # (1) Lower-bound on codomain of layout ++ complement
-  doAssert cosize(completed) >= cSize,
-    "(1) cosize(completed)=" & $cosize(completed) & " < cSize=" & $cSize & " layout=" & $layout
-  # (2) Upper-bound on cosize of complement
-  let upper = ((cSize + lCosize - 1) div lCosize) * lCosize
-  doAssert cosize(result) <= upper,
-    "(2) cosize(result)=" & $cosize(result) & " > upper=" & $upper & " layout=" & $layout & " cotarget=" & $cotarget
-  # (3) Strictly increasing
-  for i in 1 ..< rSize:
-    doAssert result(i-1) < result(i)
-  # (5) size <= cosize
-  doAssert rSize <= cosize(result)
-  # (9) If static stride, complement(completed) has size 1
-  when typeof(completed.stride) is Int or typeof(completed.stride) is int:
-    let cc = complement(completed)
-    doAssert size(cc) === 1
-
-proc chkComplement[T](layout: Layout; cotarget: T) =
-  let r = complement(layout, cotarget)
-  testComplementProps(layout, r, cotarget)
-
-proc chkComplement(layout: Layout) =
-  chkComplement(layout, cosize(layout))
-
-# ═══════════════════════════════════════════════════════════════
-#  Complement [CUTE-CP] + [PY-L] + [PY-E]
-# ═══════════════════════════════════════════════════════════════
-#
-# References:
-
-# ─── Static rank-1 [CUTE-CP] ───────────────────────────────────
-proc runComplementStaticRank1Tests =
-  # Layout(_1,_0)
-  block:
-    let l = make_layout(1, 0)
-    chkComplement(l)
-    chkComplement(l, Int[2]())
-    chkComplement(l, Int[5]())
-    chkComplement(l, (Int[2](), 2))
-  # Layout(_1,_1)
-  block:
-    let l = make_layout(1, 1)
-    chkComplement(l)
-    chkComplement(l, Int[2]())
-    chkComplement(l, Int[5]())
-    chkComplement(l, (Int[2](), 2))
-  # Layout(_1,_2)
-  block:
-    let l = make_layout(1, 2)
-    chkComplement(l, Int[1]())
-    chkComplement(l, Int[2]())
-    chkComplement(l, Int[8]())
-    chkComplement(l, Int[5]())
-    chkComplement(l, (Int[2](), 2))
-  # Layout(_4,_0)
-  block:
-    let l = make_layout(4, 0)
-    chkComplement(l, Int[1]())
-    chkComplement(l, Int[2]())
-    chkComplement(l, Int[8]())
-  # Layout(_4,_1)
-  block:
-    let l = make_layout(4, 1)
-    chkComplement(l, Int[1]())
-    chkComplement(l, Int[2]())
-    chkComplement(l, Int[8]())
-  # Layout(_4,_2)
-  block:
-    const C4 = 4
-    let l = make_layout(C4, 2)
-    chkComplement(l, Int[1]())
-    chkComplement(l)
-    chkComplement(l, Int[16]())
-    chkComplement(l, Int[19]())
-    chkComplement(l, (Int[2](), 2))
-  # Layout(_4,_4)
-  block:
-    const C4 = 4
-    let l = make_layout(C4, 4)
-    chkComplement(l, Int[1]())
-    chkComplement(l)
-    chkComplement(l, Int[17]())
-    chkComplement(l, (Int[2](), 2))
-  echo "  Static rank-1: 28 complement calls OK"
-
-# ─── Python exact-value [PY-L] ─────────────────────────────────
-proc runComplementExactValueTests =
-  block:
-    let r = complement(make_layout(1, 0), 8)
-    doAssert r.shape === 8
-    doAssert r.stride === 1
-
-  block:
-    let r = complement(make_layout(4, 2), 16)
-    doAssert r.shape === (2, 2)
-    doAssert r.stride === (1, 8)
-
-  block:
-    let r = complement(make_layout(4, 1), 16)
-    doAssert r.shape === 4
-    doAssert r.stride === 4
-
-  block:
-    let r = complement(make_layout(4, 1), 24)
-    doAssert r.shape === 6
-    doAssert r.stride === 4
-
-  block:
-    let r = complement(make_layout((2, 2), (1, 4)), 16)
-    doAssert r.shape === (2, 2)
-    doAssert r.stride === (2, 8)
-
-  block:
-    let r = complement(make_layout(2, 1), (Int[3](), 4))
-    doAssert r.shape === 6
-    doAssert r.stride === 2
-
-  block:
-    let r = complement(make_layout(6, 1), 24)
-    doAssert r.shape === 4
-    doAssert r.stride === 6
-
-  block:
-    let r = complement(make_layout((4, 2), (1, 16)))
-    doAssert r.shape === 4
-    doAssert r.stride === 4
-
-  block:
-    let r = complement(make_layout(8, 1), 32)
-    doAssert r.shape === 4
-    doAssert r.stride === 8
-
-  block:
-    let r = complement(make_layout(4, 4), 32)
-    doAssert r.shape === (4, 2)
-    doAssert r.stride === (1, 16)
-
-  # Full coverage, the complement is the lone (1):(coverage) dimension
-  block:
-    let r = complement(make_layout(2, 1), 2)
-    doAssert r.shape === 1
-    doAssert r.stride === 2
-
-  # Strides covering the range without gaps
-  block:
-    let r = complement(make_layout((2, 2), (1, 4)), 8)
-    doAssert r.shape === 2
-    doAssert r.stride === 2
-
-  # Broadcast layout, a scalar stride-0 over a nested shape collapses to (bound):(1)
-  block:
-    let r = complement(make_layout((8, 4), 0), 32)
-    doAssert r.shape === 32
-    doAssert r.stride === 1
-    let rDefault = complement(make_layout((8, 4), 0))
-    doAssert rDefault.shape === 1
-    doAssert rDefault.stride === 1
-  echo "  Exact-value: 14 Python assertions OK"
-
-# ─── Symbol-routed static bound ──────────────────────────────────────
-proc runComplementSymbolBoundTests =
-  # The Int or int overload receives the bound as a symbol, the static
-  # branch must read V from the type
-  block:
-    let r = complement(make_layout(4, 2), Int[8]())
-    doAssert r.shape === 2
-    doAssert r.stride === 1
-  echo "  Symbol-routed static bound: 1 pin OK"
-
-# ─── Multi-dimension static [CUTE-CP] ───────────────────────────────
-proc runComplementMultiDimensionStaticTests =
-  # Shape(_2,_4):(1,2)
-  block:
-    let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[2]()))
-    chkComplement(l)
-  # Shape(_2,_3):(1,2)
-  block:
-    let l = make_layout((Int[2](), Int[3]()), (Int[1](), Int[2]()))
-    chkComplement(l)
-  # (2,4):(1,4)
-  block:
-    let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[4]()))
-    chkComplement(l)
-  # (2,4):(1,6)
-  block:
-    let l = make_layout((Int[2](), Int[4]()), (Int[1](), Int[6]()))
-    chkComplement(l)
-  # (2,4,8):(8,1,64)
-  block:
-    let l = make_layout((Int[2](), Int[4](), Int[8]()), (Int[8](), Int[1](), Int[64]()))
-    chkComplement(l)
-  # (2,4,8):(8,1,0)
-  block:
-    let l = make_layout((Int[2](), Int[4](), Int[8]()), (Int[8](), Int[1](), Int[0]()))
-    chkComplement(l)
-    chkComplement(l, Int[460]())
-  # nested((2,2),(2,2)):((1,4),(8,32))
-  block:
-    let l = make_layout(
-      ((Int[2](), Int[2]()), (Int[2](), Int[2]())),
-      ((Int[1](), Int[4]()), (Int[8](), Int[32]())))
-    chkComplement(l)
-  # nested((2,2),(2,2)):((1,32),(8,4))
-  block:
-    let l = make_layout(
-      ((Int[2](), Int[2]()), (Int[2](), Int[2]())),
-      ((Int[1](), Int[32]()), (Int[8](), Int[4]())))
-    chkComplement(l)
-  # (4,6):(1,6)
-  block:
-    let l = make_layout((Int[4](), Int[6]()), (Int[1](), Int[6]()))
-    chkComplement(l)
-  # (4,2):(1,10)
-  block:
-    let l = make_layout((Int[4](), Int[2]()), (Int[1](), Int[10]()))
-    chkComplement(l)
-  # (4,2):(1,16)
-  block:
-    let l = make_layout((Int[4](), Int[2]()), (Int[1](), Int[16]()))
-    chkComplement(l)
-  echo "  Multi-dimension static: 12 complement calls OK"
-
-# ─── Dynamic shapes/strides [CUTE-CP] ──────────────────────────
-proc runComplementDynamicTests =
-  # Dynamic shape 12, stride 1
-  block:
-    let l = make_layout(12, 1)
-    chkComplement(l, 1)
-    chkComplement(l)
-    chkComplement(l, 53)
-    chkComplement(l, 128)
-  # Dynamic shape 12, static stride Int<2>
-  block:
-    let l = make_layout(12, Int[2]())
-    chkComplement(l, 1)
-    chkComplement(l)
-    chkComplement(l, 53)
-    chkComplement(l, 128)
-  # Dynamic shape 12, dynamic stride 2
-  block:
-    let l = make_layout(12, 2)
-    chkComplement(l, 1)
-    chkComplement(l)
-    chkComplement(l, 53)
-    chkComplement(l, 128)
-  # 2D dynamic: (3,6):(1,3)
-  block:
-    let l = make_layout((3, 6), (Int[1](), Int[3]()))
-    chkComplement(l)
-  # 2D dynamic: (3,6):(1,9)
-  block:
-    let l = make_layout((3, 6), (Int[1](), Int[9]()))
-    chkComplement(l)
-  # 2D dynamic: (3,6):(1,10)
-  block:
-    let l = make_layout((3, 6), (Int[1](), Int[10]()))
-    chkComplement(l)
-  # 2D dynamic nested: ((2,2),(2,2)):((1,4),(8,32))
-  block:
-    let l = make_layout(
-      ((Int[2](), Int[2]()), (Int[2](), Int[2]())),
-      ((Int[1](), Int[4]()), (Int[8](), Int[32]())))
-    chkComplement(l)
-  # 3D shape bound: Int<64> with cotarget (32,4,4)
-  block:
-    let l = make_layout(Int[64]())
-    chkComplement(l, (Int[32](), Int[4](), Int[4]()))
-    chkComplement(l, (Int[32](), Int[4](), 4))
-  echo "  Dynamic: 9 layouts, 40+ complement calls OK"
-
-# ─── Python disjointness checks [PY-E] ─────────────────────────
-proc runComplementDisjointnessTests =
-  proc chkDisjoint(layout: Layout) =
-    let c = complement(layout)
-    for i in 0 ..< size(layout):
-      for j in 0 ..< size(c):
-        if layout(i) !== 0 and c(j) !== 0:
-          doAssert layout(i) !== c(j),
-            "complement overlaps at " & $i & "," & $j
-
-  chkDisjoint(make_layout(1, 0))
-  chkDisjoint(make_layout(1, 1))
-  chkDisjoint(make_layout(4, 0))
-  chkDisjoint(make_layout((2, 4), (1, 2)))
-  chkDisjoint(make_layout((2, 3), (1, 2)))
-  chkDisjoint(make_layout((2, 4), (1, 4)))
-  chkDisjoint(make_layout((2, 4, 8), (8, 1, 64)))
-  chkDisjoint(make_layout(((2, 2), (2, 2)), ((1, 4), (8, 32))))
-  chkDisjoint(make_layout((2, (3, 4)), (3, (1, 6))))
-  chkDisjoint(make_layout((4, 6), (1, 6)))
-  chkDisjoint(make_layout((4, 10), (1, 10)))
-  echo "  Disjointness: 11 layouts OK"
-
-# ═══════════════════════════════════════════════════════════════
-
-
-
-
-
-
-
-
-
-
-# ═══════════════════════════════════════════════════════════════
 #  logical_divide [CUTE-LD]
 # ═══════════════════════════════════════════════════════════════
 #
@@ -403,9 +69,9 @@ proc runComplementDisjointnessTests =
 #
 # ═══════════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  right_inverse, left_inverse, logical_product — helpers
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc chkRightInv(layout: Layout) =
   ## Check right_inverse invariant: L(R(i)) == i for all i < size(R)

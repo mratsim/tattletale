@@ -7,6 +7,7 @@
 
 import std/macros, std/typetraits
 import ./int_tuples_datatypes
+import workspace/ceramic/src/integer_semi_modules
 import ./int_tuples_maps {.all.}
 
 # ═══════════════════════════════════════════════════════════════

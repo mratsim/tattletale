@@ -7,6 +7,7 @@
 
 import std/macros
 import ./int_tuples_compiletime
+import workspace/ceramic/src/integer_semi_modules
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Tuple streams / iterators

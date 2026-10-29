@@ -333,12 +333,10 @@ proc isCoordStride*(leafTy: NimNode): bool =
     return false
   var t = leafTy
   if t.kind == nnkSym:
-    let impl = t.getImpl
-    if impl.kind == nnkTypeDef and impl[2].kind == nnkBracketExpr and
-        impl[2][0].kind == nnkSym and impl[2][0].strVal == "typeDesc":
-      t = impl[2][1]
-    else:
-      return false
+    t = t.getTypeInst
+  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and
+      t[0].strVal == "typeDesc":
+    t = t[1]
   return t.kind == nnkBracketExpr and t[0].kind == nnkSym and
     t[0].strVal == "CoordStride"
 
@@ -348,7 +346,9 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
     return CoordStrideDescriptor(kind: caNone)
   var t = leafTy
   if t.kind == nnkSym:
-    t = t.getImpl[2][1]
+    t = t.getTypeInst
+  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "typeDesc":
+    t = t[1]
   let coeffs = t[1]
   var
     nzCount = 0
@@ -370,6 +370,22 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
     CoordStrideDescriptor(kind: caSingle, path: nzPath, scale: nzValue, coeffs: coeffs)
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
+
+func proj*(leafTy: NimNode): tuple[path: seq[int], scale: int] {.compileTime.} =
+  ## Extract from a stride leaf the part its own position implies.
+  ## An atom yields its basis path and scale.
+  ## Returns:
+  ## - an integer leaf: the rank-zero identity, an empty path,
+  ##   the scale is its static value
+  ## - a single-term atom: its basis path and scale
+  ## Precondition:
+  ## - a multi-term atom raises
+  if not isCoordStride(leafTy):
+    return (@[], leafTy.getStaticInt())
+  let d = getCoordStrideDescriptor(leafTy)
+  if d.kind == caMulti:
+    error "proj: multi-term coordinate strides are not supported"
+  (d.path, d.scale)
 
 macro `<`*[A: CoordStride, B: CoordStride](a: A, b: B): bool =
   ## Colex order over coordinate strides, ascending on (axis, scale),

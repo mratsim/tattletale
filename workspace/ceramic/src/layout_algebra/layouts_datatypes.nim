@@ -78,7 +78,7 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
   if layoutAst.kind in {nnkCall, nnkCommand, nnkBracketExpr}:
     # Deferred call in case the call hasn't been semchecked yet,
     # e.g. a `t[0]` element read of a symbol-bound tiler
-    let alias = ident("destructuredLayout")
+    let alias = genSym(nskTemplate, "destructuredLayout")
     resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
     result.shape = alias.newDotExpr(ident"shape")
     result.strides = alias.newDotExpr(ident"stride")
@@ -103,7 +103,7 @@ func destructureLayout*(resultStmt: var NimNode, layoutAst: NimNode): tuple[shap
         inner.kind in {nnkCall, nnkCommand}:
       # A layout-valued call, or a value typed through
       # a `typeof(make_layout(...))` alias symbol.
-      let alias = ident("destructuredLayout")
+      let alias = genSym(nskTemplate, "destructuredLayout")
       resultStmt.add bindSym"evalOnceAs".newCall(alias, layoutAst)
       result.shape = alias.newDotExpr(ident"shape")
       result.strides = alias.newDotExpr(ident"stride")

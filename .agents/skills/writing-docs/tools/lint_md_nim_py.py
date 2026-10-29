@@ -4275,9 +4275,9 @@ LAYOUT_DOT_RE = re.compile(
     r"newDotExpr\s*\(\s*[^,()]+,\s*(?:ident|newIdentNode)\s*\(\s*\"(?:shape|stride)\"\s*\)")
 EQIDENT_LAYOUT_RE = re.compile(r"eqIdent\s*\(\s*\"Layout\"\s*\)")
 BINDSYM_ARITH_RE = re.compile(
-    r"(?:bindSym|bindsym|ident|newIdentNode)\s*\(\s*[\"']"
+    r"(?:bindSym|bindsym|ident|newIdentNode)\s*(?:\(\s*)?[\"']"
     r"(?:[+\-*/%<>]|==|!=|<=|>=|and|or|not|xor|div|mod|in|notin|min|max|abs|sign|ceil_div)"
-    r"[\"']\s*\)")
+    r"[\"']\s*(?:\))?")
 COMPILES_PROBE_RE = re.compile(
     r"(?:not\s*\(\s*|when\s+|\=\s*)compiles\s*\(")
 
