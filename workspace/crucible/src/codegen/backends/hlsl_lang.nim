@@ -591,7 +591,11 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return base.name & "[" & idx & "]"
     let bt = getExprType(base)
     if bt != nil and bt.kind == ctArray:
-      return ctx.printExpr(base) & "[" & idx & "]"
+      var baseTxt = ctx.printExpr(base)
+      if base.kind in {eCast, eConv}:
+        # a cast binds looser than the subscript: parenthesize the base
+        baseTxt = "(" & baseTxt & ")"
+      return baseTxt & "[" & idx & "]"
     ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
       " base is outside the HLSL subset")
     return ""

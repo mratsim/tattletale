@@ -352,11 +352,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     let base = (if e.kind == eAt: e.atBase else: e.patBase)
     let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
     let bt = getExprType(base)
+    var baseTxt = ctx.printExpr(base)
+    if base.kind in {eCast, eConv}:
+      # a cast binds looser than the subscript: parenthesize the base
+      baseTxt = "(" & baseTxt & ")"
     if bt != nil and bt.kind in {ctPtr, ctAptr} and
         not (bt.kind == ctAptr and bt.space == caDevice):
       # a pointer local indexes through an explicit dereference
-      return "(*" & ctx.printExpr(base) & ")[" & idx & "]"
-    return ctx.printExpr(base) & "[" & idx & "]"
+      return "(*" & baseTxt & ")[" & idx & "]"
+    return baseTxt & "[" & idx & "]"
   of eDeref:
     return "(*" & ctx.printExpr(e.derefOperand) & ")"
   of eDot:

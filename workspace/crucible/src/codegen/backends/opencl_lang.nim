@@ -326,7 +326,11 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eAt, ePat:
     let base = (if e.kind == eAt: e.atBase else: e.patBase)
     let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
-    return ctx.printExpr(base) & "[" & idx & "]"
+    var baseTxt = ctx.printExpr(base)
+    if base.kind in {eCast, eConv}:
+      # a cast binds looser than the subscript: parenthesize the base
+      baseTxt = "(" & baseTxt & ")"
+    return baseTxt & "[" & idx & "]"
   of eDeref:
     return "(*" & ctx.printExpr(e.derefOperand) & ")"
   of eDot:

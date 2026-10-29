@@ -267,10 +267,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ctx.printBuiltinRef(e.name, true)
     return e.name
   of eAt:
-    let base = ctx.printExpr(e.atBase)
+    var base = ctx.printExpr(e.atBase)
+    if e.atBase.kind in {eCast, eConv}:
+      # a cast binds looser than the subscript: parenthesize the base
+      base = "(" & base & ")"
     return base & '[' & ctx.printExpr(e.atIndex) & ']'
   of ePat:
-    let base = ctx.printExpr(e.patBase)
+    var base = ctx.printExpr(e.patBase)
+    if e.patBase.kind in {eCast, eConv}:
+      base = "(" & base & ")"
     return base & '[' & ctx.printExpr(e.patIndex) & ']'
   of eDot:
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:

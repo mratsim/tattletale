@@ -177,8 +177,17 @@ func evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
     r.fail("compile-time value expected, got node kind " & $n.kind)
     result = 0
 
-proc deriveStructFields(r: var CirTypeResolver, impl: NimNode): seq[CirField] =
+func fieldSpaceAt(valueSpaces: Table[string, CirAddrSpace], name: string): CirAddrSpace =
+  ## Pointer space a construction proves for the field `name`, `caDevice` when the construction names no space for it.
+  valueSpaces.getOrDefault(name, caDevice)
+
+proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
+    valueSpaces: Table[string, CirAddrSpace] = initTable[string, CirAddrSpace]()): seq[CirField] =
   ## Field list of an object or tuple implementation node.
+  ##
+  ## `valueSpaces` maps a field name to the pointer space its construction
+  ## value proves: a pointer field instantiates under that space.
+  ## Every other field resolves under `caDevice`.
   case impl.kind
   of nnkObjectTy:
     if impl.len > 2 and impl[2].kind == nnkRecList:
@@ -191,7 +200,8 @@ proc deriveStructFields(r: var CirTypeResolver, impl: NimNode): seq[CirField] =
           return @[]
         for j in 0 ..< ch.len - 2:
           result.add(fld(sanitizeIdent(ch[j].strVal),
-            r.resolveCirType(ch[ch.len - 2])))
+            r.resolveCirType(ch[ch.len - 2],
+              fieldSpaceAt(valueSpaces, sanitizeIdent(ch[j].strVal)))))
         if r.err.len > 0:
           return @[]
   of nnkTupleTy, nnkTupleConstr:
@@ -200,17 +210,21 @@ proc deriveStructFields(r: var CirTypeResolver, impl: NimNode): seq[CirField] =
       of nnkIdentDefs:
         for j in 0 ..< ch.len - 2:
           result.add(fld(sanitizeIdent(ch[j].strVal),
-            r.resolveCirType(ch[ch.len - 2])))
+            r.resolveCirType(ch[ch.len - 2],
+              fieldSpaceAt(valueSpaces, sanitizeIdent(ch[j].strVal)))))
       of nnkSym:
-        result.add(fld("F" & $i, r.resolveCirType(ch)))
+        result.add(fld("F" & $i, r.resolveCirType(ch,
+          fieldSpaceAt(valueSpaces, "F" & $i))))
       else:
-        result.add(fld("F" & $i, r.resolveCirType(ch.getTypeInst())))
+        result.add(fld("F" & $i, r.resolveCirType(ch.getTypeInst(),
+          fieldSpaceAt(valueSpaces, "F" & $i))))
       if r.err.len > 0:
         return @[]
   of nnkBracketExpr:
     # `tuple[A, B]` is the bracket form of an anonymous tuple type
     for i in 1 ..< impl.len:
-      result.add(fld("F" & $(i - 1), r.resolveCirType(impl[i].getTypeInst())))
+      result.add(fld("F" & $(i - 1), r.resolveCirType(impl[i].getTypeInst(),
+        fieldSpaceAt(valueSpaces, "F" & $(i - 1)))))
   else:
     r.fail("struct fields: unexpected type implementation " & $impl.kind)
     return @[]
@@ -290,7 +304,8 @@ func typeIdentityHash*(s: string): uint64 =
     h = 1
   result = h
 
-proc resolveStructType(r: var CirTypeResolver, n: NimNode): CirType =
+proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
+    valueSpaces: Table[string, CirAddrSpace] = initTable[string, CirAddrSpace]()): CirType =
   ## Nominal struct translation for an object, tuple, or generic instantiation
   ## type node, deduplicated by canonical type identity.
   ##
@@ -307,11 +322,17 @@ proc resolveStructType(r: var CirTypeResolver, n: NimNode): CirType =
   ## - an alias and the instantiation it names carry different ids
   ## - distinct instantiations of one generic can share one id
   let canon = followAliasHead(canonicalTypeNode(n))
-  let cacheKey = canon.repr
+  # one instantiation per pointer-space combination over the fields:
+  # threadgroup-pointer constructions instantiate a struct that is separate
+  # from the device instantiation
+  var cacheKey = canon.repr
+  for name, spc in valueSpaces:
+    if spc != caDevice:
+      cacheKey &= "/" & name & "=" & $spc
   if r.cache.hasKey(cacheKey):
     return r.cache[cacheKey]
   let impl = n.getTypeImpl()
-  let fields = r.deriveStructFields(impl)
+  let fields = r.deriveStructFields(impl, valueSpaces)
   if r.err.len > 0:
     return nil
   let name = deriveStructName(canon) & "_" &

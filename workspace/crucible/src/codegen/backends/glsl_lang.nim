@@ -401,11 +401,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     let base = (if e.kind == eAt: e.atBase else: e.patBase)
     let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
     let bt = getExprType(base)
+    var baseTxt = ctx.printExpr(base)
+    if base.kind in {eCast, eConv}:
+      # a cast binds looser than the subscript: parenthesize the base
+      baseTxt = "(" & baseTxt & ")"
     if bt != nil and bt.kind == ctAptr:
       ctx.requireRefBlock(bt.pElem)
-      return ctx.printExpr(base) & ".x[" & idx & "]"
+      return baseTxt & ".x[" & idx & "]"
     if bt != nil and bt.kind == ctArray:
-      return ctx.printExpr(base) & "[" & idx & "]"
+      return baseTxt & "[" & idx & "]"
     if bt != nil and bt.kind == ctPtr:
       ctx.fail("index through a pointer, the GLSL lowering pass dissolves" &
         " pointer locals")

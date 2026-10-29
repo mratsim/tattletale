@@ -44,6 +44,7 @@ type
     procKeys: Table[string, bool]
     ## Harvested proc names, dedups instantiations and guards recursion.
     scopes: seq[Table[string, CirExpr]]
+    localSpaces: seq[Table[string, CirAddrSpace]]
     ## Nim symbol name to CIRv2 symbol, innermost scope last.
     nameCounts: Table[string, int]
     labels: int
@@ -89,9 +90,11 @@ proc freshLabel(ctx: var FrontendCtx, prefix: string): string =
 
 proc pushScope(ctx: var FrontendCtx) =
   ctx.scopes.add(initTable[string, CirExpr]())
+  ctx.localSpaces.add(initTable[string, CirAddrSpace]())
 
 proc popScope(ctx: var FrontendCtx) =
   ctx.scopes.del(ctx.scopes.high)
+  ctx.localSpaces.del(ctx.localSpaces.high)
 
 func getLocalKey(n: NimNode): string =
   ## Lookup key of a Nim local in the scope tables: the symbol's `repr`.
@@ -104,14 +107,25 @@ func getLocalKey(n: NimNode): string =
   else:
     result = n.repr
 
-proc declareLocal(ctx: var FrontendCtx, nimName: string, sym: CirExpr) =
+proc declareLocal(ctx: var FrontendCtx, nimName: string, sym: CirExpr, spc = caThread) =
   ## Registers a local under an already-computed key in the innermost scope.
   ## Used for frontend-internal temporaries and for `result`.
   ctx.scopes[^1][nimName] = sym
+  ctx.localSpaces[^1][nimName] = spc
 
-proc declareLocal(ctx: var FrontendCtx, n: NimNode, sym: CirExpr) =
+proc declareLocal(ctx: var FrontendCtx, n: NimNode, sym: CirExpr, spc = caThread) =
   ## Registers a local under its symbol key in the innermost scope.
-  ctx.scopes[^1][getLocalKey(n)] = sym
+  let key = getLocalKey(n)
+  ctx.scopes[^1][key] = sym
+  ctx.localSpaces[^1][key] = spc
+
+func localSpace(ctx: FrontendCtx, name: string): CirAddrSpace =
+  ## Memory class a declared local lives in, `caThread` when unannotated
+  ## (`smem` locals are threadgroup, `const_mem` locals constant).
+  for i in countdown(ctx.localSpaces.high, 0):
+    if ctx.localSpaces[i].hasKey(name):
+      return ctx.localSpaces[i][name]
+  result = caThread
 
 proc resolveLocal(ctx: FrontendCtx, nimName: string): CirExpr =
   ## Looks a local up from the innermost scope outward, nil when unknown.
@@ -236,6 +250,48 @@ proc operandLiteralTypedAs(e: CirExpr, opType: CirType): CirExpr =
       e
   else:
     e
+
+func provenanceSpace(e: CirExpr): CirAddrSpace =
+  ## Address space of the storage an expression's pointer provenance names:
+  ## the innermost pointer type along the access chain.
+  ##
+  ## - provenance survives value casts and integer arithmetic over cast pointers
+  ## - `caDevice` reads as no provenance
+  result = caDevice
+  case e.kind
+  of eSym:
+    let t = e.typ
+    if t != nil and t.kind in {ctPtr, ctAptr}:
+      result = t.space
+  of eDeref, eAt, ePat:
+    # element reads live where the base's storage lives
+    let base = case e.kind
+      of eDeref: e.derefOperand
+      of eAt: e.atBase
+      else: e.patBase
+    if base != nil:
+      result = provenanceSpace(base)
+  of eDot:
+    let t = getExprType(e)
+    if t != nil and t.kind in {ctPtr, ctAptr}:
+      result = t.space
+    elif e.dotBase != nil:
+      result = provenanceSpace(e.dotBase)
+  of eCast, eConv:
+    let t = e.castType
+    if t != nil and t.kind in {ctPtr, ctAptr}:
+      result = t.space
+    elif e.castOperand != nil:
+      result = provenanceSpace(e.castOperand)
+  of eAddr:
+    if e.addrType != nil and e.addrType.kind in {ctPtr, ctAptr}:
+      result = e.addrType.space
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    result = provenanceSpace(e.left)
+    if result == caDevice:
+      result = provenanceSpace(e.right)
+  else:
+    discard
 
 proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
   ## Forward declaration, expressions and statements recurse into each other.
@@ -416,6 +472,17 @@ proc isCompileTimeFormal(t: NimNode): bool =
     return true
   return false
 
+func isGenericProc(node: NimNode): bool =
+  ## True for a generic proc or an instantiation of one, whose params sit
+  ## in an `nnkBracket` at `impl[5]`.
+  let impl = node.getImpl()
+  if impl.kind notin [nnkProcDef, nnkFuncDef]:
+    return false
+  if impl[2].kind == nnkGenericParams:
+    return true
+  result = impl.len > 5 and impl[5].kind == nnkBracket and
+    impl[5].len > 1 and impl[5][1].kind == nnkGenericParams
+
 proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
   ## Stable per-callee-instantiation name: the sanitized proc name plus
   ## a base58 hash over the callee's identity.
@@ -463,7 +530,13 @@ proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
     ""
   else:
     impl.lineInfo
-  var h = hash(sigRepr & "\x1f" & callee.strVal & "\x1f" & calleeSite)
+  # an instantiated signature alone cannot separate instantiations: Nim's
+  # `signatureHash` erases the bound static formals, the body hash of a generic
+  # instantiation includes them. Plain text of both goes into the hash.
+  var sigKey = callee.repr & "_" & callee.signatureHash()
+  if callee.symKind in {nskProc, nskFunc} and isGenericProc(callee):
+    sigKey &= "_" & callee.symBodyHash()
+  var h = hash(sigKey & "\x1f" & sigRepr & "\x1f" & callee.strVal & "\x1f" & calleeSite)
   h = !$h
   var x = uint64(h) and 0xFFFFFFFFFFFFFFFF'u64
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -493,7 +566,11 @@ proc lowerCallArgs(ctx: var FrontendCtx, callee: NimNode, call: NimNode): seq[Ci
     let arg = ctx.lowerExpr(call[argIdx])
     if ctx.failing():
       return @[]
-    result.add(arg)
+    # a literal argument re-types to the formal, the conversion is exact
+    let ftyp = ctx.resolver.resolveCirType(ftype)
+    if ctx.failing():
+      return @[]
+    result.add(operandLiteralTypedAs(arg, ftyp))
   if argIdx + 1 < call.len:
     ctx.fail("call has more arguments than the callee has parameters")
     return @[]
@@ -895,7 +972,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return fltLit(inner.floatVal, typ)
     return ctx.lowerExpr(inner)
   of nnkHiddenSubConv, nnkConv:
-    let typ = if n[0].kind == nnkEmpty:
+    var typ = if n[0].kind == nnkEmpty:
       ctx.resolver.resolveCirType(n.getTypeInst())
     else:
       ctx.resolver.resolveCirType(n[0])
@@ -910,14 +987,27 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return operand
     if operand.kind in {eIntLit, eFloatLit}:
       # a literal conversion is exact: the literal re-types to the cast's target,
-      # no runtime conversion node materializes
+      # no runtime conversion node materializes.
+      # An int literal converting to a float type becomes that float literal.
+      if typ.kind == ctFloat and operand.kind == eIntLit:
+        return fltLit(operand.value.float, typ)
       return retypedLiteral(operand, typ)
+    if typ.kind in {ctPtr, ctAptr}:
+      # a pointer conversion keeps its operand's storage space, the target type names the pointee
+      typ = typ.withSpace(provenanceSpace(operand))
     return convE(typ, operand)
   of nnkCast:
-    let typ = ctx.resolver.resolveCirType(n[0])
+    var typ = ctx.resolver.resolveCirType(n[0])
     if ctx.failing():
       return nil
-    return castE(typ, ctx.lowerExpr(n[1]))
+    let operand = ctx.lowerExpr(n[1])
+    if ctx.failing():
+      return nil
+    if typ.kind in {ctPtr, ctAptr}:
+      # a pointer cast keeps its operand's storage space: the target type
+      # names the pointee, the space derives from the value's provenance
+      typ = typ.withSpace(provenanceSpace(operand))
+    return castE(typ, operand)
   of nnkHiddenDeref, nnkDerefExpr:
     let base = ctx.lowerExpr(n[0])
     if ctx.failing():
@@ -942,10 +1032,13 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     while true:
       case walk.kind
       of ePat, eAt:
-        let ct = getExprType(if walk.kind == ePat: walk.patBase else: walk.atBase)
+        let next = if walk.kind == ePat: walk.patBase else: walk.atBase
+        let ct = getExprType(next)
         if ct != nil and ct.kind in {ctPtr, ctAptr}:
           space = ct.space
-        break
+          break
+        # an array or struct base: the storage is the base's
+        walk = next
       of eDeref:
         let ct = getExprType(walk.derefOperand)
         if ct != nil and ct.kind in {ctPtr, ctAptr}:
@@ -953,6 +1046,10 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         break
       of eDot:
         walk = walk.dotBase
+      of eSym:
+        # a local base lives where its declaration puts it: `{.smem.}` locals are threadgroup storage, unannotated locals are registers
+        space = ctx.localSpace(walk.name)
+        break
       else:
         break
     return addrE(tPtr(space, bt), base)
@@ -1049,16 +1146,20 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
-    let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
-      return nil
     var fields: seq[CirKv] = @[]
+    var valueSpaces = initTable[string, CirAddrSpace]()
     for i in 1 ..< n.len:
       n[i].expectKind(nnkExprColonExpr)
       let v = ctx.lowerExpr(n[i][1])
       if ctx.failing():
         return nil
-      fields.add(kv(sanitizeIdent(n[i][0].strVal), v))
+      let fieldName = sanitizeIdent(n[i][0].strVal)
+      # a pointer-typed field instantiates under the space its value proves
+      valueSpaces[fieldName] = provenanceSpace(v)
+      fields.add(kv(fieldName, v))
+    let typ = ctx.resolver.resolveStructType(n.getTypeInst(), valueSpaces)
+    if ctx.failing():
+      return nil
     return oconstrE(typ, fields)
   of nnkExprColonExpr:
     # a named field outside a constructor: the name is compile-time
@@ -1469,10 +1570,14 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   let stopV = ctx.lowerExpr(unwrapConv(stopNode))
   if ctx.failing():
     return @[]
+  # bounds and step re-type to the loop variable. A literal conversion is exact,
+  # comparisons and increment then use one operand type
+  let startT = operandLiteralTypedAs(startV, varType)
+  let stopT = operandLiteralTypedAs(stopV, varType)
   var stepV: CirExpr = nil
   var stepIsConst = true
   if stepNode.isNil:
-    stepV = intLit(1, tInt(32))
+    stepV = intLit(1, varType)
   else:
     let unwrapped = unwrapConv(stepNode)
     if unwrapped.kind in nnkIntLit .. nnkUInt64Lit:
@@ -1486,6 +1591,7 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       stepV = ctx.lowerExpr(unwrapped)
   if ctx.failing():
     return @[]
+  let stepT = operandLiteralTypedAs(stepV, varType)
   ctx.declareLocal(vars, sym(varName, varType))
   let exitL = ctx.freshLabel("lx")
   let contL = ctx.freshLabel("lc")
@@ -1504,19 +1610,19 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   if ctx.failing():
     return @[]
   let cmp = if inclusive:
-    leE(varSym, stopV)
+    leE(varSym, stopT)
   else:
-    ltE(varSym, stopV)
+    ltE(varSym, stopT)
   let guard = iteS(cmp, @[], @[jmpS(exitL)])
   var incr: seq[CirStmt] = @[]
   if contUsed:
     incr.add(labS(contL))
-  incr.add(asgnS(varSym, addE(varType, varSym, stepV)))
+  incr.add(asgnS(varSym, addE(varType, varSym, stepT)))
   var preamble = ctx.drainHoisted()
   preamble.add(varD(varName, varType))
-  preamble.add(asgnS(varSym, startV))
+  preamble.add(asgnS(varSym, startT))
   if not stepIsConst:
-    preamble.add(assumeS(ltE(intLit(0, tInt(32)), stepV)))
+    preamble.add(assumeS(ltE(intLit(0, varType), stepT)))
   result = startHoists & preamble & @[
     loopS(bodyHoists & guard & body & incr, unroll), labS(exitL)]
 
@@ -1676,9 +1782,13 @@ proc lowerLetSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         value = ctx.lowerExpr(initNode)
         if ctx.failing():
           return @[]
+        if value.kind == eOconstr and typ != nil and typ.kind == ctStruct and
+            value.ocType.kind == ctStruct:
+          # a construction instantiates the struct it builds, the declaration adopts the instantiation with its provenance-derived fields
+          typ = value.ocType
       let hoists = ctx.drainHoisted()
       let cirName = ctx.uniqueName(nimName)
-      ctx.declareLocal(nameNode, sym(cirName, typ))
+      ctx.declareLocal(nameNode, sym(cirName, typ), spc)
       if value.isNil:
         result.add(hoists & @[varD(cirName, typ, nil, spc)])
       elif value.kind == eCall:
@@ -1798,7 +1908,9 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     let rhs = ctx.lowerExpr(n[1])
     if ctx.failing():
       return @[]
-    return ctx.drainHoisted() & @[asgnS(lhs, rhs)]
+    # a literal rhs re-types to the destination, the conversion is exact
+    let rhsT = operandLiteralTypedAs(rhs, getExprType(lhs))
+    return ctx.drainHoisted() & @[asgnS(lhs, rhsT)]
   of nnkInfix:
     # compound assignment reaches the statement position as an infix:
     # lattice-scalar operands take the primitive arithmetic, any other `op=`

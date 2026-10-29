@@ -386,6 +386,15 @@ proc atomicsBuiltinKind*(name: string): AtomicsBuiltinKind =
   ## Returns the atomic builtin kind of a canonical name, `abkNone` otherwise.
   AtomicsBuiltinKindByName.getOrDefault(name, abkNone)
 
+proc withSpace*(t: CirType, space: CirAddrSpace): CirType =
+  ## Returns a copy of pointer type `t` re-spaced to `space`, the pointee shared.
+  ## Types are cache-shared refs, a caller never re-spaces in place, the copy is the per-site instance.
+  doAssert t != nil and t.kind in {ctPtr, ctAptr}
+  result = CirType(kind: t.kind)
+  result.space = space
+  result.pElem = t.pElem
+  result.origin = t.origin
+
 proc sameType*(a, b: CirType): bool =
   ## Returns true when `a` and `b` are equal on the closed type lattice.
   ##
