@@ -17,7 +17,7 @@
 ##   renaming pass with `CudaReserved` as data: the four execution-space
 ##   qualifiers the CUDA-C++ emitter writes
 ## - call-site materialization of non-lvalue by-reference arguments:
-##   a negative finding, the frontend lowers every `var T` call argument
+##   audited as absent, the frontend lowers every `var T` call argument
 ##   into an address-of over the lvalue, and Nim sem rejects a computed
 ##   value for a `var T` parameter before anything reaches CIRv2
 ## - by-value array-parameter decay to `const T name[]` is printer-side:
