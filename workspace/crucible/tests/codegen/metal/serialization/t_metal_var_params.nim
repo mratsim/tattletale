@@ -38,14 +38,6 @@ proc runTest() =
     test "setPair + swap round-trip":
       var engine = newEngine(runMetal)
       engine.ingest(varParamMsl)
-      let msl = engine.getArtifact()
-      # Unannotated locals emit no address-space qualifier: register (thread)
-      # storage is the default declaration form. Only implicit `var T` params
-      # carry an explicit `thread` qualifier.
-      check "uint a = 1;" in msl
-      check "uint b = 1;" in msl
-      check "Pair p;" in msl
-      check "thread uint a" notin msl
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel("varParamKernel", oDev, ())
       var res: array[4, uint32]

@@ -247,9 +247,23 @@ proc spellMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
     return "simd_max(" & args.join(", ") & ")"
   of rbkNone: discard
   if callee.atomicsBuiltin == abkAtomicFetchAdd:
-    # device float atomics: the pointer casts to the atomic type
-    # device address space implies the scope, relaxed order
-    return "atomic_fetch_add_explicit((volatile device atomic_float*)" &
+    # pointer casts to the atomic pointee type, relaxed order only,
+    # fp32 needs Metal 3+, device address space implies the scope
+    var atomicTy = ""
+    let p0 = if callee.typ != nil and callee.typ.kind == ctProc and
+        callee.typ.params.len > 0: callee.typ.params[0]
+    else: nil
+    if p0 != nil and p0.kind in {ctPtr, ctAptr} and p0.pElem != nil:
+      let pointee = p0.pElem
+      if pointee.kind == ctFloat and pointee.bits == 32:
+        atomicTy = "atomic_float"
+      elif pointee.kind == ctInt and pointee.bits == 32:
+        atomicTy = "atomic_int"
+      elif pointee.kind == ctUint and pointee.bits == 32:
+        atomicTy = "atomic_uint"
+    if atomicTy.len == 0:
+      error("atomic_fetch_add over a pointee without an MSL atomic type")
+    return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
       "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
   if callee.builtin and MslConversionBuiltinNames.hasKey(callee.name):
     return MslConversionBuiltinNames.getOrDefault(callee.name) % args.join(", ")
