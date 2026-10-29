@@ -190,6 +190,10 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.asmParts = s.asmParts
       for op in s.asmOperands:
         c.asmOperands.add cloneExpr(op)
+    of sEmit:
+      c.emitParts = s.emitParts
+      for op in s.emitOperands:
+        c.emitOperands.add cloneExpr(op)
     of sDiscard, sCase:
       discard
     result.add c

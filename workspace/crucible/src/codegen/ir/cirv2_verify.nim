@@ -575,6 +575,14 @@ proc verifyStmt(ctx: var VerifyCtx, s: CirStmt, path: string, chain: ScopeChain)
       if op.kind != eSym or op.typ == nil:
         ctx.fail(path, "asm", "operand " & $i & " is not a typed symbol")
         return
+  of sEmit:
+    if s.emitParts.len != s.emitOperands.len + 1:
+      ctx.fail(path, "emit", "template pieces and operands do not interleave")
+      return
+    for i, op in s.emitOperands:
+      if op.kind != eSym or op.typ == nil:
+        ctx.fail(path, "emit", "operand " & $i & " is not a typed symbol")
+        return
 
 proc verifyStmtList(ctx: var VerifyCtx, body: seq[CirStmt], path: string, chain: ScopeChain) =
   for i, s in body:

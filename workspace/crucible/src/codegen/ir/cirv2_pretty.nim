@@ -206,6 +206,13 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
       if i < s.asmOperands.len:
         text.add(" " & renderExpr(s.asmOperands[i]))
     b.add(text & ")")
+  of sEmit:
+    var text = "(emit"
+    for i, part in s.emitParts:
+      text.add(" \"" & part & "\"")
+      if i < s.emitOperands.len:
+        text.add(" " & renderExpr(s.emitOperands[i]))
+    b.add(text & ")")
 
 proc renderProc*(fn: CirProc): string =
   ## Renders one proc, one node per line.

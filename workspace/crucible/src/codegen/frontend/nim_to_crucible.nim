@@ -323,6 +323,36 @@ func zeroValue(t: CirType): CirExpr =
   of ctVoid, ctVector, ctProc:
     result = nil
 
+proc lowerEmitArg(ctx: var FrontendCtx, emitArg: NimNode): CirStmt =
+  ## One `{.emit.}` argument, lowered to an `sEmit` statement.
+  ##
+  ## - a plain string literal emits verbatim
+  ## - an argument list alternates literal runs with spliced expressions,
+  ##   Nim hands backticked identifiers in the string over as symbols
+  ## - a compound expression splices through a fresh temp: the hoisted
+  ##   assignment computes the value, the text references the temp's name
+  if emitArg.kind in {nnkStrLit, nnkRStrLit, nnkTripleStrLit}:
+    return emitS(@[emitArg.strVal], @[])
+  var parts: seq[string] = @[""]
+  var operands: seq[CirExpr] = @[]
+  for part in emitArg:
+    case part.kind
+    of nnkStrLit, nnkRStrLit, nnkTripleStrLit:
+      parts[^1].add(part.strVal)
+    else:
+      let e = ctx.lowerExpr(part)
+      if ctx.failing():
+        return nil
+      var op = e
+      if e.kind != eSym:
+        let tmpName = ctx.uniqueName("emit_tmp")
+        op = sym(tmpName, getExprType(e))
+        ctx.hoisted.add(asgnS(op, e))
+        ctx.declareLocal(tmpName, op)
+      parts.add("")
+      operands.add(op)
+  result = emitS(parts, operands)
+
 proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
   ## Forward declaration, expressions and statements recurse into each other.
 
@@ -2088,12 +2118,21 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       discard ctx.resolver.resolveCirType(typeDef[0])
     return @[]
   of nnkPragma:
+    var emitArgs: seq[NimNode] = @[]
     for p in n:
       if p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 2 and
-          p[0].strVal == "emit":
-        ctx.fail("emit pragma: raw source emission is outside the supported set")
+          p[0].kind in {nnkIdent, nnkSym} and p[0].strVal == "emit":
+        emitArgs.add(p[1])
+    if emitArgs.len == 0:
+      # a non-emit statement pragma is a compile-time annotation, nothing emits
+      return @[]
+    var emitted: seq[CirStmt] = @[]
+    for emitArg in emitArgs:
+      let s = ctx.lowerEmitArg(emitArg)
+      if ctx.failing():
         return @[]
-    return @[]
+      emitted.add(ctx.drainHoisted() & @[s])
+    return emitted
   of nnkTemplateDef, nnkMacroDef, nnkIteratorDef:
     # a definition left in a typed body is a compile-time artifact:
     # templates and macros execute at expansion, iterators inline into

@@ -1376,7 +1376,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       else:
         ctx.failSpv("statement call " & s.callCallee.name &
           " without a destination binding")
-    of sCase, sAsm:
+    of sCase, sAsm, sEmit:
       ctx.failSpv("statement construct " & $s.kind &
         " outside the SPIR-V subset, it must lower earlier")
 

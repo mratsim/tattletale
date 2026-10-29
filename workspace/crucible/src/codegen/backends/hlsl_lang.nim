@@ -302,7 +302,7 @@ proc directCalls(ss: seq[CirStmt], outp: var seq[CirExpr]) =
       directCalls(s.loopBody, outp)
     of sScope:
       directCalls(s.scopeBody, outp)
-    of sJmp, sLab, sAssume, sDiscard, sCase, sAsm:
+    of sJmp, sLab, sAssume, sDiscard, sCase, sAsm, sEmit:
       discard
 
 proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
@@ -336,7 +336,7 @@ proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
           for p in fn.params:
             if p.name == ar.name:
               graph.stored.incl(fn.name & "/" & p.name)
-    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm:
+    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
       discard
 
 proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
@@ -367,7 +367,7 @@ proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
       graph.scanCallStmts(fn, s.loopBody)
     of sScope:
       graph.scanCallStmts(fn, s.scopeBody)
-    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm:
+    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
       discard
 
 proc classifyRwBuffers(graph: var CallGraph) =
@@ -864,6 +864,15 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sAsm:
     ctx.fail("inline assembly has no HLSL form")
     result = ""
+  of sEmit:
+    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
+    # no terminator appended, the text supplies its own terminators
+    var text = ""
+    for i, part in s.emitParts:
+      text.add(part)
+      if i < s.emitOperands.len:
+        text.add(s.emitOperands[i].name)
+    result = pad & text
   of sCase:
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
     result = ""
@@ -1115,7 +1124,7 @@ proc scanStmtStructRefs(ctx: var PrintCtx, ss: seq[CirStmt], refs: var HashSet[s
       for a in s.callArgs:
         if a.kind == eOconstr:
           ctx.registerStructRefs(a.ocType, refs)
-    of sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm:
+    of sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
       discard
 
 proc spellStructDecls(ctx: var PrintCtx, refs: var HashSet[string],

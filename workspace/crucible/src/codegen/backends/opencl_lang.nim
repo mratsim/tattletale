@@ -238,7 +238,7 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
       scanExpr(s.assumeCond, f)
     of sJmp, sLab, sDiscard:
       discard
-    of sCase, sAsm:
+    of sCase, sAsm, sEmit:
       discard
 
 proc scanModule(m: CirModule, f: var ModuleFeatures) =
@@ -591,6 +591,15 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sAsm:
     ctx.fail("inline assembly has no OpenCL C form")
     result = ""
+  of sEmit:
+    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
+    # no terminator appended, the text supplies its own terminators
+    var text = ""
+    for i, part in s.emitParts:
+      text.add(part)
+      if i < s.emitOperands.len:
+        text.add(s.emitOperands[i].name)
+    result = pad & text
   of sCase:
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
     result = ""

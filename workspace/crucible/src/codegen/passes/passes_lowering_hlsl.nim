@@ -116,7 +116,7 @@ proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
       for a in s.callArgs:
         if findNumWorkgroupsExpr(a, coordTy):
           return true
-    of sJmp, sLab, sCase, sAsm:
+    of sJmp, sLab, sCase, sAsm, sEmit:
       discard
   return false
 
@@ -161,7 +161,7 @@ proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
       rewriteNumWorkgroupsExpr(s.callCallee, coordTy)
       for a in s.callArgs:
         rewriteNumWorkgroupsExpr(a, coordTy)
-    of sJmp, sLab, sCase, sAsm:
+    of sJmp, sLab, sCase, sAsm, sEmit:
       discard
 
 proc materializeNumWorkgroups(m: CirModule): string =
@@ -498,7 +498,7 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
     s.callCallee = tmp.callee
     s.callArgs = tmp.args
     return err
-  of sJmp, sLab, sCase, sAsm:
+  of sJmp, sLab, sCase, sAsm, sEmit:
     return ""
 
 proc rewriteDissolveStmts(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string =

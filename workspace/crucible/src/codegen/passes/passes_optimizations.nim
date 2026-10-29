@@ -161,6 +161,9 @@ proc foldIdentitiesStmts(ss: var seq[CirStmt]) =
     of sAsm:
       for op in s.asmOperands.mitems:
         foldIdentitiesExpr(op)
+    of sEmit:
+      for op in s.emitOperands.mitems:
+        foldIdentitiesExpr(op)
     of sLab, sJmp:
       discard
 
@@ -219,6 +222,10 @@ proc collectLocalReads(stmts: seq[CirStmt], reads: var HashSet[string]) =
     of sAsm:
       # an asm operand reads its symbol, the dead-local pass must keep it
       for op in s.asmOperands:
+        collectLocalReads(op, reads)
+    of sEmit:
+      # an emit operand reads its symbol. The dead-local pass must keep it.
+      for op in s.emitOperands:
         collectLocalReads(op, reads)
     else:
       discard

@@ -231,6 +231,14 @@ proc asmS*(asmParts: seq[string], asmOperands: seq[CirExpr]): CirStmt =
   ## The target printer splices the operands' names.
   CirStmt(kind: sAsm, asmParts: asmParts, asmOperands: asmOperands)
 
+proc emitS*(emitParts: seq[string], emitOperands: seq[CirExpr]): CirStmt =
+  ## One `{.emit.}` statement: verbatim target-source text alternating with symbol operands.
+  ##
+  ## Contract:
+  ## - the target printer splices the operands' names and appends no terminator
+  ## - the emitted text supplies its terminators
+  CirStmt(kind: sEmit, emitParts: emitParts, emitOperands: emitOperands)
+
 # Proc / module constructors
 
 proc param*(name: string, typ: CirType): CirParam =

@@ -227,7 +227,7 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
     of sRet:
       if s.retVal != nil:
         scanType(getExprType(s.retVal), f)
-    of sCall, sJmp, sLab, sDiscard, sAssume, sCase, sAsm:
+    of sCall, sJmp, sLab, sDiscard, sAssume, sCase, sAsm, sEmit:
       discard
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -601,6 +601,15 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sAsm:
     ctx.fail("inline assembly has no WGSL form")
     result = ""
+  of sEmit:
+    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
+    # no terminator appended, the text supplies its own terminators
+    var text = ""
+    for i, part in s.emitParts:
+      text.add(part)
+      if i < s.emitOperands.len:
+        text.add(s.emitOperands[i].name)
+    result = pad & text
   of sCase:
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
     result = ""

@@ -235,7 +235,7 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
     s.callCallee = tmp.callee
     s.callArgs = tmp.args
     return err
-  of sJmp, sLab, sCase, sAsm:
+  of sJmp, sLab, sCase, sAsm, sEmit:
     return ""
 
 proc rewriteDissolveStmts(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string =

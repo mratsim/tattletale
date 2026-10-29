@@ -241,8 +241,10 @@ type
     body*: seq[CirStmt]
 
   CirStmtKind* = enum
-    ## Statement vocabulary, Leng names. Free-text `{.emit.}` injection is deliberately absent.
-    ## Inline assembly is first-class (`sAsm`): a verbatim template spliced with named symbol operands.
+    ## Statement vocabulary, Leng names. Inline assembly is first-class (`sAsm`):
+    ## a verbatim template spliced with named symbol operands.
+    ## `{.emit.}` lowers to the same shape. It injects raw target-source text
+    ## with operand symbols spliced by name.
     sVar
     sConst
     sAsgn
@@ -257,6 +259,7 @@ type
     sDiscard
     sCall
     sAsm
+    sEmit
 
   CirStmt* = ref object
     ## A CIRv2 statement.
@@ -308,6 +311,13 @@ type
       ## Verbatim template text, one element more than `asmOperands` has.
       ## Piece `asmParts[i]` precedes operand `asmOperands[i]`.
       asmOperands*: seq[CirExpr]
+      ## Spliced operands, each a typed CIRv2 symbol.
+    of sEmit:
+      emitParts*: seq[string]
+      ## Verbatim target-source text, one element more than `emitOperands` has.
+      ## Piece `emitParts[i]` precedes operand `emitOperands[i]`. The text owns
+      ## its own terminators. The printer appends no `;`.
+      emitOperands*: seq[CirExpr]
       ## Spliced operands, each a typed CIRv2 symbol.
 
   CirParam* = object

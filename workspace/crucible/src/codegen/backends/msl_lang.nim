@@ -492,6 +492,15 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
       if i < s.asmOperands.len:
         text.add(s.asmOperands[i].name)
     result = pad & text
+  of sEmit:
+    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
+    # no terminator appended, the text supplies its own terminators
+    var text = ""
+    for i, part in s.emitParts:
+      text.add(part)
+      if i < s.emitOperands.len:
+        text.add(s.emitOperands[i].name)
+    result = pad & text
   of sCase:
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
 
