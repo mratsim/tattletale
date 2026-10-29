@@ -380,13 +380,26 @@ macro `<`*[A: CoordStride, B: CoordStride](a: A, b: B): bool =
     "CoordStride <: only single-term atoms order"
   return newLit((da.path[^1], da.scale) < (db.path[^1], db.scale))
 
+macro `div`*[V: static int, A: CoordStride](a: A, k: Int[V]): untyped =
+  let da = a.getTypeInst().getCoordStrideDescriptor()
+  doAssert da.kind == caSingle, "div over a multi-term atom"
+  IntCT(da.scale div V)
+
+macro ceil_div*[A: CoordStride](a: untyped, b: A): untyped =
+  let da = b.getTypeInst().getCoordStrideDescriptor()
+  doAssert da.kind == caSingle, "ceil_div over a multi-term atom"
+  if a.kind == nnkIntLit:
+    IntCT(a.intVal.int.ceil_div(da.scale))
+  else:
+    nnkCall.newTree(bindSym"ceil_div", a, newLit(da.scale))
+
 macro `div`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
   ## Scale ratio of same-axis atoms, floor division of the scales
   let da = a.getTypeInst.getCoordStrideDescriptor()
   let db = b.getTypeInst.getCoordStrideDescriptor()
   if da.kind != caSingle or db.kind != caSingle or da.path != db.path:
     error("CoordStride div: only atoms on the same axis", b)
-  newLit(da.scale div db.scale)
+  IntCT(da.scale div db.scale)
 
 proc csScaledEq(a, b: NimNode, s: int): bool =
   ## Elementwise b == s*a over (possibly nested) int-literal tuples,
