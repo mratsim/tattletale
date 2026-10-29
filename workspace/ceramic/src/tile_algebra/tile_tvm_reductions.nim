@@ -7,6 +7,7 @@
 
 import std/[macros, typetraits]
 import workspace/crucible
+import workspace/ceramic/src/integer_semi_modules
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/int_tuples/int_tuples_compiletime
 import workspace/ceramic/src/layout_algebra

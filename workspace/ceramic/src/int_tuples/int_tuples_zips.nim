@@ -10,6 +10,7 @@ import ./int_tuples_compiletime
 import ./int_tuples_datatypes
 import ./int_tuples_streams
 import ./int_tuples_transforms
+import workspace/ceramic/src/integer_semi_modules
 import workspace/ceramic/src/macros/replace_nodes
 
 # ═══════════════════════════════════════════════════════════════

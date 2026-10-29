@@ -3886,8 +3886,7 @@ FLOORDIV_RE = re.compile(
 TOINT_ANY_RE = re.compile(r"\btoInt\s*\(")
 BLESSED_TOINT_FILE = ("ceramic/src/int_tuples/"
                       "int_tuples_unsanctioned_helpers.nim")
-BLESSED_RANK_FILE = ("ceramic/src/int_tuples/"
-                     "int_tuples_datatypes.nim")
+BLESSED_RANK_FILE = "ceramic/src/integer_semi_modules.nim"
 
 
 def _t_suffix_banned(name):
@@ -3969,7 +3968,7 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
 
     Contract:
 
-    - int_tuples_datatypes.nim hosts the blessed rank overloads and keeps
+    - integer_semi_modules.nim hosts the blessed rank overloads and keeps
       its exemption, every other tupleLen call site routes through rank
     - rank call sites read as method calls (x.rank()), bare rank(...),
       rank(typeof(...)), typeof(...).rank, and bare .rank carry one finding

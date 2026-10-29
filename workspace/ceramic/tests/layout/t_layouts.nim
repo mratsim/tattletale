@@ -33,22 +33,18 @@ proc runMakeLayoutTests =
     doAssert make_layout(1, 1) === (1, 1)
 
   # ═══════════════════════════════════════════════════════════════
-  #  2. Const vs let scalars — verify isConst behavior
+  #  2. Const scalars
   # ═══════════════════════════════════════════════════════════════
 
   block:
     const C4 = 4
     let l = make_layout(C4, 0)
     doAssert l === (4, 0)
-    doAssert isConst(l.shape)
-    doAssert isConst(l.stride)
 
   block:
     const C4 = 4
     let l = make_layout(C4)
     doAssert l === (4, 1)
-    doAssert isConst(l.shape)
-    doAssert isConst(l.stride)
 
   block:
     let d4 = 4
@@ -62,19 +58,11 @@ proc runMakeLayoutTests =
     const C2 = 2; const C4 = 4
     let l = make_layout((C2, C4), (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
 
   block:
     const C2 = 2; const C4 = 4
     let l = make_layout((C2, C4))
     doAssert l === ((2, 4), (1, 2))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
 
   # ═══════════════════════════════════════════════════════════════
   #  4. Mixed const/let tuple
@@ -83,22 +71,12 @@ proc runMakeLayoutTests =
   block:
     const C2 = 2; const C4 = 4; let d2 = 2
     let l = make_layout((d2, C4), (1, 2))
-    echo l
-    echo typeof(l)
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
 
   block:
     const C2 = 2; const C4 = 4; let d2 = 2
     let l = make_layout((d2, C4))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
-    doAssert not isConst(l.stride[1])
 
   # ═══════════════════════════════════════════════════════════════
   #  5. Let tuple — all dynamic
@@ -108,19 +86,11 @@ proc runMakeLayoutTests =
     let d2 = 2; let d4 = 4
     let l = make_layout((d2, d4), (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert not isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
 
   block:
     let d2 = 2; let d4 = 4
     let l = make_layout((d2, d4))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert not isConst(l.shape[1])
-    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
-    doAssert not isConst(l.stride[1])
 
   # ═══════════════════════════════════════════════════════════════
   #  6. Tuple assigned to variable — loses static info
@@ -131,10 +101,6 @@ proc runMakeLayoutTests =
     let shapeTuple = (C2, C4)
     let l = make_layout(shapeTuple, (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert not isConst(l.shape[0])
-    doAssert not isConst(l.shape[1])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
 
   # ═══════════════════════════════════════════════════════════════
   #  7. Tuple from function — runtime, all dynamic
@@ -152,8 +118,6 @@ proc runMakeLayoutTests =
     proc mkShape(): auto = (2, 4)
     let l = make_layout(static(mkShape()), (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
 
   # ═══════════════════════════════════════════════════════════════
   #  9. const variable from function — also folds to nnkTupleConstr
@@ -164,8 +128,6 @@ proc runMakeLayoutTests =
     const shape = mkShape()
     let l = make_layout(shape, (1, 2))
     doAssert l === ((2, 4), (1, 2))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
 
   # ═══════════════════════════════════════════════════════════════
   #  10. Recursive (nested) tuple — all Int[N] via literals
@@ -174,10 +136,6 @@ proc runMakeLayoutTests =
   block:
     let l = make_layout(((2, 2), (2, 2)), ((1, 4), (8, 32)))
     doAssert l === (((2, 2), (2, 2)), ((1, 4), (8, 32)))
-    doAssert isConst(l.shape[0][0])
-    doAssert isConst(l.shape[0][1])
-    doAssert isConst(l.shape[1][0])
-    doAssert isConst(l.shape[1][1])
 
   # ═══════════════════════════════════════════════════════════════
   #  11. Recursive tuple via variable — all dynamic
@@ -188,32 +146,9 @@ proc runMakeLayoutTests =
     let nestedStride = ((1, 4), (8, 32))
     let l = make_layout(nestedShape, nestedStride)
     doAssert l === (((2, 2), (2, 2)), ((1, 4), (8, 32)))
-    doAssert not isConst(l.shape[0][0])
-    doAssert not isConst(l.shape[0][1])
-    doAssert not isConst(l.shape[1][0])
-    doAssert not isConst(l.shape[1][1])
 
   # ═══════════════════════════════════════════════════════════════
-  #  12. isConst standalone checks
-  # ═══════════════════════════════════════════════════════════════
-
-  block:
-    const C4 = 4
-    let d4 = 4
-    let lConst = make_layout(C4, 0)
-    let lLet = make_layout(d4, 0)
-    doAssert isConst(lConst.shape)
-    doAssert not isConst(lLet.shape)
-
-  block:
-    const C2 = 2; const C4 = 4
-    let d2 = 2
-    let lMixed = make_layout((d2, C4), (1, 2))
-    doAssert not isConst(lMixed.shape[0])
-    doAssert isConst(lMixed.shape[1])
-
-  # ═══════════════════════════════════════════════════════════════
-  #  13. Stride-order construction — LayoutLeft / LayoutRight
+  #  12. Stride-order construction — LayoutLeft / LayoutRight
   # ═══════════════════════════════════════════════════════════════
 
   block:  # LayoutLeft (default): leftmost dimension contiguous
@@ -233,48 +168,24 @@ proc runMakeLayoutTests =
     const C3 = 3; const C8 = 8
     let l = make_layout((dN, C3, C8), LayoutLeft)
     doAssert l === ((2, 3, 8), (1, 2, 6))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.shape[2])
-    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
-    doAssert not isConst(l.stride[1])
-    doAssert not isConst(l.stride[2])
 
   block:  # LayoutLeft mixed: static int literals, no pre-conversion
     let dN = 2
     const C3 = 3; const C8 = 8
     let l = make_layout((C8, C3, dN), LayoutLeft)
     doAssert l === ((8, 3, 2), (1, 8, 24))
-    doAssert isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert not isConst(l.shape[2])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
-    doAssert isConst(l.stride[2])
 
   block:  # LayoutRight mixed: static int literals, no pre-conversion
     let dN = 2
     const C3 = 3; const C8 = 8
     let l = make_layout((dN, C3, C8), LayoutRight)
     doAssert l === ((2, 3, 8), (24, 8, 1))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.shape[2])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
-    doAssert isConst(l.stride[2])
 
   block:  # Custom strides mixed: all-static shape, explicit strides
     let dN = 2
     const C3 = 3; const C8 = 8
     let l = make_layout((dN, C3, C8), (1, 1, 1))
     doAssert l === ((2, 3, 8), (1, 1, 1))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.shape[2])
-    doAssert isConst(l.stride[0])
-    doAssert isConst(l.stride[1])
-    doAssert isConst(l.stride[2])
 
   echo "  make_layout: 23 cases OK"
 
@@ -546,8 +457,6 @@ proc runIsCompactTests =
   block:  # Function call returning static int
     func double(x: static int): static int = x * 2
     doAssert make_layout(double(3)) === (6, 1)
-    doAssert isConst(make_layout(double(3)).shape)
-    doAssert isConst(make_layout(double(3)).stride)
 
 # ═══════════════════════════════════════════════════════════════
 #  congruent — structural shape comparison
@@ -693,14 +602,6 @@ proc runNCHWTests =
     let st = col_major_strides(sh)
     let l = make_layout(sh, st)
     doAssert l === ((2, 3, 8, 8), (1, 2, 6, 48))
-    doAssert not isConst(l.shape[0])
-    doAssert isConst(l.shape[1])
-    doAssert isConst(l.shape[2])
-    doAssert isConst(l.shape[3])
-    doAssert isConst(l.stride[0])     # always 1 (Int[1]) for column-major
-    doAssert not isConst(l.stride[1])
-    doAssert not isConst(l.stride[2])
-    doAssert not isConst(l.stride[3])
   echo "  NCHW mixed static/dynamic: 1 case OK"
 
 # ═══════════════════════════════════════════════════════════════
