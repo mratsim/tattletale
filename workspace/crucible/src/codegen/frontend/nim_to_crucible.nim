@@ -293,6 +293,36 @@ func provenanceSpace(e: CirExpr): CirAddrSpace =
   else:
     discard
 
+func zeroValue(t: CirType): CirExpr =
+  ## Zero value of a lattice type:
+  ##
+  ## - 0 for numerics, false for bool, nil for pointers
+  ## - element-wise zeros for arrays, all-zero fields for structs
+  ##
+  ## An omitted object-constructor field initializes to this, v1's rule,
+  ## an empty initializer list is never valid C.
+  case t.kind
+  of ctInt, ctUint:
+    result = intLit(0, t)
+  of ctFloat:
+    result = fltLit(0.0, t)
+  of ctBool:
+    result = falseE()
+  of ctPtr, ctAptr:
+    result = nilE(t)
+  of ctArray:
+    var elems: seq[CirExpr] = @[]
+    for i in 0 ..< t.aN:
+      elems.add(zeroValue(t.aElem))
+    result = aconstrE(t, elems)
+  of ctStruct:
+    var fields: seq[CirKv] = @[]
+    for f in t.fields:
+      fields.add(kv(f.name, zeroValue(f.typ)))
+    result = oconstrE(t, fields)
+  of ctVoid, ctVector, ctProc:
+    result = nil
+
 proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
   ## Forward declaration, expressions and statements recurse into each other.
 
@@ -674,6 +704,26 @@ proc lowerMagicPrimitive(ctx: var FrontendCtx, callee: NimNode, call: NimNode, m
   else:
     return nil
 
+proc numericBuiltinCall(ctx: var FrontendCtx, calleeSym: NimNode, call: NimNode): CirExpr =
+  ## Lowers a `min`/`max`/`abs` call as a builtin call, no body harvest.
+  ## The printers use the per-type native name, v1's contract:
+  ## `fmax`/`fmin`/`fabs` on OpenCL floats. Nil for any other callee.
+  if calleeSym.strVal notin ["min", "max", "abs"]:
+    return nil
+  let fnType = ctx.resolveCalleeProcType(calleeSym)
+  if ctx.failing():
+    return nil
+  let args = ctx.lowerCallArgs(calleeSym, call)
+  if ctx.failing():
+    return nil
+  let tmpName = ctx.uniqueName("tmp")
+  let ret = fnType.ret
+  ctx.hoisted.add(varD(tmpName, ret))
+  ctx.hoisted.add(asgnS(sym(tmpName, ret),
+    callE(sym(calleeSym.strVal, fnType, true), args)))
+  ctx.declareLocal(tmpName, sym(tmpName, ret))
+  return sym(tmpName, ret)
+
 proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirExpr =
   ## A value-producing call binds to a fresh temp: the `asgn` RHS hoists
   ## in front of the enclosing statement. Returns the temp symbol.
@@ -696,6 +746,11 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
   let calleeSym = ctx.resolveCallCallee(callee, call)
   if ctx.failing():
     return nil
+  let numeric = ctx.numericBuiltinCall(calleeSym, call)
+  if ctx.failing():
+    return nil
+  if numeric != nil:
+    return numeric
   let cirName = ctx.computeInstProcName(calleeSym)
   # a bodiless magic took the primitive path above
   # every other callee harvests, a magic with a Nim body (like `max`) lowers through it
@@ -1160,6 +1215,18 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let typ = ctx.resolver.resolveStructType(n.getTypeInst(), valueSpaces)
     if ctx.failing():
       return nil
+    # omitted fields zero-initialize, an empty initializer list is invalid C
+    if fields.len < typ.fields.len:
+      var ordered: seq[CirKv] = @[]
+      for f in typ.fields:
+        var value: CirExpr = nil
+        for kvf in fields:
+          if kvf.name == f.name:
+            value = kvf.value
+            break
+        ordered.add(if value != nil: kv(f.name, value)
+                    else: kv(f.name, zeroValue(f.typ)))
+      fields = ordered
     return oconstrE(typ, fields)
   of nnkExprColonExpr:
     # a named field outside a constructor: the name is compile-time
@@ -1886,6 +1953,11 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       let calleeSym = ctx.resolveCallCallee(callee, n[1])
       if ctx.failing():
         return @[]
+      let numeric = ctx.numericBuiltinCall(calleeSym, n[1])
+      if ctx.failing():
+        return @[]
+      if numeric != nil:
+        return ctx.drainHoisted() & @[asgnS(lhs, numeric)]
       let fnType = ctx.resolveCalleeProcType(calleeSym)
       if ctx.failing():
         return @[]

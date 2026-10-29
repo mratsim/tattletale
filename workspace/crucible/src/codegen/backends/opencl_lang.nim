@@ -311,8 +311,8 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     return ""
   case e.kind
   of eNil:
-    ctx.fail("nil literal is outside the OpenCL subset")
-    return ""
+    # a null pointer prints as the plain 0, valid OpenCL C
+    return "0"
   of eTrue, eFalse, eIntLit, eFloatLit:
     return spellOpenclLit(e)
   of eSym:
@@ -396,7 +396,10 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(kvv.value)
     result.add "}"
   of eAconstr:
-    result = "(" & spellOpenclTypeBare(e.acType) & "){"
+    # an array member initializer takes plain braces, OpenCL C has no array
+    # compound-literal cast. Every other type casts: `(Type){...}`
+    let bare = spellOpenclTypeBare(e.acType)
+    result = if bare.len > 0: "(" & bare & "){" else: "{"
     for i, el in e.elems:
       if i > 0:
         result.add ", "
@@ -417,6 +420,25 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       of rbkReduceMax:
         return "sub_group_reduce_max(" & args.join(", ") & ")"
       of rbkNone: discard
+    if e.callee.kind == eSym and e.callee.builtin:
+      case e.callee.name
+      of "simd_shuffle":
+        # `sub_group_shuffle` takes the subgroup-relative index as `uint`, cast
+        return "sub_group_shuffle(" & args[0] & ", (uint)(" & args[1] & "))"
+      of "simd_shuffle_xor":
+        # `sub_group_shuffle_xor` takes the xor mask as `uint`, cast
+        return "sub_group_shuffle_xor(" & args[0] & ", (uint)(" & args[1] & "))"
+      else: discard
+    if e.callee.kind == eSym and e.callee.builtin and
+        e.callee.name in ["min", "max", "abs"] and e.args.len > 0:
+      # float operands take the f-prefixed OpenCL names, integer operands keep the plain names (v1's per-type mapping)
+      let at = getExprType(e.args[0])
+      if at != nil and at.kind == ctFloat:
+        let mapped = case e.callee.name
+          of "max": "fmax"
+          of "min": "fmin"
+          else: "fabs"
+        return mapped & "(" & args.join(", ") & ")"
     if e.callee.kind == eSym and e.callee.atomicsBuiltin == abkAtomicFetchAdd:
       let pt = atomicOperandPtr(e.args[0])
       if pt == nil or pt.pElem == nil:
