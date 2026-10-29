@@ -363,14 +363,14 @@ macro stridedFold(sh, st, n, m: typed): untyped =
     if not pendingS.isNil:
       let modeShape = quote do: min(`pendingS`.ceil_div(`q`), `remaining`)
       let modeStride = quote do: `q` * `pendingD`
-      builder.appendTyped((modeShape, nil), (modeStride, nil))
+      builder.append(modeShape, modeStride)
       q = quote do: `q`.ceil_div(`pendingS`)
       remaining = quote do: `remaining` div `modeShape`
     pendingS = shapeEv.leaf
     pendingD = strideEv.leaf
   let lastShape = quote do: `remaining`
   let lastStride = quote do: `q` * `pendingD`
-  builder.appendTyped((lastShape, nil), (lastStride, nil))
+  builder.append(lastShape, lastStride)
   result.add builder.emitLayout()
 
 
@@ -396,6 +396,10 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   ##
   ## Divisibility is the caller's responsibility, it is not checked.
   result = newStmtList()
+  if bStride.getTypeOf().getStaticInt() == 0:
+    # a zero stride maps every coordinate to offset 0
+    result.add make_layout(bShape, IntCT(0))
+    return
   var nVal = bShape.getTypeOf().getStaticInt()
   if nVal == 1:
     # A' evaluated at one point, evaluation is coalesce-invariant
@@ -408,6 +412,8 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   for termEv in bStride.basisReprStream():
     if termEv.kind != kLeaf:
       continue
+    # a zero coefficient contributes nothing, the node read covers
+    # int-literal CoordStride coeffs
     if termEv.leaf.getStaticInt() == 0:
       continue
     let pSh = pathSelect(aShape, termEv.path)
@@ -455,12 +461,82 @@ macro composeImpl(aShape, aStride: typed, bShape, bStride: tuple): untyped =
     let modeAst = getAst(composeModeDelegate(`aShape`, `aStride`, bModeShape, bModeStride))
     modeStmts.add quote do:
       let `alias` = `modeAst`
-    builder.appendTyped((alias.newDotExpr(ident"shape"), nil), (alias.newDotExpr(ident"stride"), nil))
+    builder.append(alias.newDotExpr(ident"shape"), alias.newDotExpr(ident"stride"))
   let ctor = builder.emitLayout()
   result.add quote do:
     block:
       `modeStmts`
       `ctor`
+
+macro composeImpl[A, B: Layout](a: A, tiler: B): untyped =
+  ## Composition with a Layout tiler. Both sides destructure.
+  ## The shape kind routes to the term loop or right-distributivity.
+  result = newStmtList()
+  let (aShape, aStride) = result.destructureLayout(a)
+  let (bShape, bStride) = result.destructureLayout(tiler)
+  template composeModeDelegate(aSh, aSt, bSh, bSt: typed): untyped =
+    composeImpl(aSh, aSt, bSh, bSt)
+  result.add getAst(composeModeDelegate(aShape, aStride, bShape, bStride))
+
+macro composeImpl[A: Layout, B: tuple](a: A, tiler: B): untyped =
+  ## Composition with a tuple tiler. Distribution is mode-wise:
+  ## element i composes against layout mode i, the modes concatenate.
+  ##
+  ## - a keep mark passes the mode through
+  ## - a scalar element becomes (B):(1) in the mode's domain
+  ## - a Layout element composes as-is
+  ##
+  ## Each element dispatches to composeImpl, the modes concatenate.
+  ##
+  ## An un-inlined tuple producer is evaluated once, its value read
+  ## through an alias. Per-mode structure comes from the layout type,
+  ## destructured parts stay untyped until a nested typed call
+  ## semchecks their members.
+  result = newStmtList()
+  var tilerEval = tiler
+  let tilerTy = tiler.getTypeOf()
+  if tiler.kind notin {nnkTupleConstr, nnkPar, nnkSym, nnkBracketExpr, nnkDotExpr}:
+    let tilerAlias = ident("tilerEval")
+    result.add bindSym"evalOnceAs".newCall(tilerAlias, tiler)
+    tilerEval = tilerAlias
+  let (aShape, aStride) = result.destructureLayout(a)
+  let (aShapeTy, aStrideTy) = layoutTypeArgs(a)
+  let aShapeIsTuple = aShapeTy.isTupleTy()
+  let aStrideIsTuple = aStrideTy.isTupleTy()
+  template composeModeDelegate(aSh, aSt, bSh, bSt: typed): untyped =
+    composeImpl(aSh, aSt, bSh, bSt)
+
+  var builder = TupleBuilderFlat.new(2)
+  var ti = 0
+  for tEv in tiler.tupleDimsStream(tilerTy):
+    if ti >= (if aShapeIsTuple: aShapeTy.len else: 1):
+      error("tiler has more modes than the layout", tEv.leaf)
+    let tLeaf = tEv.leaf
+    let tLeafTy = tEv.leafTy
+    let isKeep = tLeaf.kind in {nnkSym, nnkIdent} and $tLeaf == "_"
+    if not isKeep and not isLayoutTy(tLeafTy) and tLeafTy.isTupleTy():
+      error("nested tiler entries are not supported", tLeaf)
+    let aSh = if aShapeIsTuple: aShape.getTupleIndex(ti) else: aShape
+    let aSt = if aStrideIsTuple: aStride.getTupleIndex(ti) else: aStride
+    if isKeep:
+      # pass-through: the element is the mode itself
+      builder.append(aSh, aSt)
+    else:
+      # a scalar element is (B):(1) in the mode's domain
+      # a Layout entry composes as-is, both dispatch to composeImpl
+      let (bSh, bSt) = if tLeafTy.isLayoutTy():
+        result.destructureLayout(tLeaf)
+      else:
+        if not isScalarTy(tLeafTy) and tLeaf.kind notin {nnkIntLit .. nnkUInt64Lit}:
+          error("tiler leaf is neither an int, an Int nor a Layout", tLeaf)
+        (tLeaf, IntCT(1))
+      let modeAst = getAst(composeModeDelegate(aSh, aSt, bSh, bSt))
+      let alias = genSym(nskLet, "composeTilerMode")
+      result.add quote do:
+        let `alias` = `modeAst`
+      builder.append(alias.newDotExpr(ident"shape"), alias.newDotExpr(ident"stride"))
+    inc ti
+  result.add builder.emitLayout(emitScalarForSize1 = false)
 
 macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
   ## Layout composition, `A o B`.
@@ -494,105 +570,9 @@ macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
   ##    (6, 2):(8, 2) ∘ (4, 3):(3, 1) → ((2, 2), 3):((24, 2), 8)
 
   result = newStmtList()
-  let (aShape, aStride) = result.destructureLayout(a)
-  # an un-inlined tuple producer (template call, mapped expression)
-  # is evaluated once, the leaf walk reads the value through the alias
-  var tilerEval = tiler
-  # the type is read off the original tiler, the alias ident below
-  # carries no type at macro expansion time
-  let tilerTy = tiler.getTypeOf()
-  if tilerTy.isTupleTy() and
-      tiler.kind notin {nnkTupleConstr, nnkPar, nnkSym, nnkBracketExpr, nnkDotExpr}:
-    let tilerAlias = ident("tilerEval")
-    result.add bindSym"evalOnceAs".newCall(tilerAlias, tiler)
-    tilerEval = tilerAlias
-  template composeDelegate(aSh, aSt, bSh, bSt: typed): untyped =
-    composeImpl(aSh, aSt, bSh, bSt)
-
-  if not tilerTy.isTupleTy():
-    # a layout tiler: destructured and handed to composeImpl as-is
-    let (bShape, bStride) = result.destructureLayout(tiler)
-    result.add getAst(composeDelegate(aShape, aStride, bShape, bStride))
-    return
-
-  proc isKeepMark(tLeaf, tLeafTy: NimNode): bool {.compileTime.} =
-    (tLeaf.kind in {nnkSym, nnkIdent} and $tLeaf == "_") or tLeafTy.hasType"X"
-
-  # the per-mode structure comes from the layout's shape type,
-  # mode values are read off the destructured parts mode by mode
-  let aTy = a.getTypeInst()
-  var aShapeTy, aStrideTy: NimNode
-  if aTy.kind == nnkBracketExpr and aTy.len == 3 and
-      aTy[0].sameType(bindSym"Layout"):
-    aShapeTy = aTy[1]
-    aStrideTy = aTy[2]
-  else:
-    # an alias-typed layout, the resolved object impl carries
-    # concrete field types
-    doAssert a.getTypeImpl()[2].kind == nnkRecList,
-      "compose: cannot recover the layout's mode types from " & aTy.repr
-    pickShapeStride(a.getTypeImpl()[2], aShapeTy, aStrideTy)
-
-  var tilerLeaves: seq[NimNode]
-  var tilerLeafTys: seq[NimNode]
-  for tEv in tilerEval.tupleDimsStream(tilerTy):
-    let tLeaf = tEv.leaf
-    let tLeafTy = tEv.leafTy
-    if not isKeepMark(tLeaf, tLeafTy) and not isLayoutTy(tLeafTy) and
-        tLeafTy.isTupleTy():
-      error("nested tiler entries are not supported", tLeaf)
-    tilerLeaves.add tLeaf
-    tilerLeafTys.add tLeafTy
-
-  var builder = TupleBuilderFlat.new(2)
-  var ti = 0
-
-  proc tilerMode(stmts: var NimNode, tLeaf, tLeafTy, aShLeaf, aShLeafTy, aStLeaf, aStLeafTy: NimNode) =
-    if isKeepMark(tLeaf, tLeafTy):
-      builder.append((aShLeaf, aShLeafTy), (aStLeaf, aStLeafTy))
-    elif not isLayoutTy(tLeafTy) and not isScalarTy(tLeafTy) and
-        tLeaf.kind notin {nnkIntLit .. nnkUInt64Lit}:
-      error("tiler leaf is neither an int, an Int nor a Layout", tLeaf)
-    elif isLayoutTy(tLeafTy) or aStLeafTy.isTupleTy():
-      # a Layout entry, or a scalar entry on a nested mode: the entry
-      # is (B):(1) in the mode's domain, the composed mode pair lands
-      # in the layout's flat domain
-      let (bSh, bSt) = if isLayoutTy(tLeafTy):
-        stmts.destructureLayout(tLeaf)
-      else:
-        (tLeaf, IntCT(1))
-      let modeAlias = ident("composedTilerMode" & $ti)
-      stmts.add bindSym"evalOnceAs".newCall(modeAlias,
-        getAst(composeDelegate(aShLeaf, aStLeaf, bSh, bSt)))
-      let (modeSh, modeSt) = stmts.destructureLayout(modeAlias)
-      # the composed mode's member types resolve when the emitted
-      # Layout constructor sems, they are spelled as typeof here
-      let modeShTy = quote do: typeof(`modeSh`)
-      let modeStTy = quote do: typeof(`modeSt`)
-      builder.append((modeSh, modeShTy), (modeSt, modeStTy))
-    else:
-      # a scalar tiler element composes (B):(1), a static int B is
-      # lifted to Int[B] like make_layout does
-      if tLeafTy == nil and tLeaf.kind in {nnkIntLit .. nnkUInt64Lit}:
-        builder.append((IntCT(tLeaf.intVal), intTy(tLeaf.intVal)),
-                       (aStLeaf, aStLeafTy))
-      else:
-        builder.appendTyped((tLeaf, tLeafTy), (aStLeaf, aStLeafTy))
-
-  let aShapeIsTuple = aShapeTy.isTupleTy()
-  let aStrideIsTuple = aStrideTy.isTupleTy()
-  for (shEv, stEv) in aShapeTy.tupleDimsStream().zip(aStrideTy.tupleDimsStream()):
-    if ti >= tilerLeaves.len:
-      break
-    result.tilerMode(tilerLeaves[ti], tilerLeafTys[ti],
-      (if aShapeIsTuple: aShape.getTupleIndex(ti) else: aShape),
-      shEv.leaf,
-      (if aStrideIsTuple: aStride.getTupleIndex(ti) else: aStride),
-      stEv.leafTy)
-    inc ti
-  if ti < tilerLeaves.len:
-    error("tiler has more modes than the layout", tilerLeaves[ti])
-  result.add builder.emitLayout(emitScalarForSize1 = false)
+  template composeDelegate(al, tEv: typed): untyped =
+    composeImpl(al, tEv)
+  result.add getAst(composeDelegate(a, tiler))
 
 # ═══════════════════════════════════════════════════════════════
 #  logical_product
