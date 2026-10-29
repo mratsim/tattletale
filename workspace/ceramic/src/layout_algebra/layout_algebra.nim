@@ -272,8 +272,8 @@ macro complement*(layout: Layout): untyped =
   ## Skip semantics:
   ## - a stride-0 dimension maps every coordinate to offset 0,
   ##   a size-1 dimension covers a single offset, neither opens a gap
-## - the minimal complement's terminal is 1 per codomain axis.
-## A cotarget ceil-chains against the axis's covered span
+  ## - the minimal complement's terminal is 1 per codomain axis.
+  ## A cotarget ceil-chains against the axis's covered span
   ##
   ##    offsets  ════ layout ════▶  its offsets, every second slot
   ##    offsets  ──── complement ─▶  the free slots, gap-filled in order
@@ -493,7 +493,7 @@ macro composeImpl[A: Layout, B: tuple](a: A, tiler: B): untyped =
     composeImpl(aSh, aSt, bSh, bSt)
   var builder = TupleBuilderFlat.new(2)
   var ti = 0
-  for tEv in tiler.tupleDimsStream(tilerTy):
+  for tEv in tilerEval.tupleDimsStream(tilerTy):
     if ti >= (if aShapeTy.isTupleTy(): aShapeTy.len else: 1):
       error("tiler has more modes than the layout", tEv.leaf)
     let tLeaf = tEv.leaf

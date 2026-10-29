@@ -698,12 +698,17 @@ proc runComposeSymbolTilerTests =
   # an un-inlined tuple producer is evaluated once, its tuple type
   # decides the tiler path
   block:
-    proc prodTup(a, b: int): (int, int) = (a, b)
+    var prodCount = 0
+    proc prodTup(a, b: int): (int, int) =
+      inc prodCount
+      (a, b)
     let a = 2
     let b = 3
     let c = compose(make_layout((4, 8), (1, 4)), prodTup(a, b))
     check c.shape, (2, 3), (int, int)
     check c.stride, (1, 4), (Int[1], Int[4])
+    doAssert prodCount == 1, "tiler producer evaluated " & $prodCount &
+      " times, the evalOnceAs alias must serve every leaf"
   echo "  symbol tiler: 3 cases OK"
 
 # ── coordinate strides ────────────────────────────────────────

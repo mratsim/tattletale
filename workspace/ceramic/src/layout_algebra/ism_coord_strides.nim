@@ -346,7 +346,9 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
     return CoordStrideDescriptor(kind: caNone)
   var t = leafTy
   if t.kind == nnkSym:
-    t = t.getImpl[2][1]
+    t = t.getTypeInst
+  if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "typeDesc":
+    t = t[1]
   let coeffs = t[1]
   var
     nzCount = 0
