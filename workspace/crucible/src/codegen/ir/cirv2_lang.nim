@@ -534,3 +534,8 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
       result.add a
   of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSym, eSizeof:
     result = @[]
+
+func isLvalue*(e: CirExpr): bool =
+  ## An expression that names storage: a symbol, a dereference, an index,
+  ## a pointer index, or a field access. `addr` and assignment take lvalues.
+  e.kind in {eSym, eDeref, eAt, ePat, eDot}

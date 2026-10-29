@@ -149,13 +149,22 @@ proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
   of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof:
     discard
 
-proc addrWrapByrefArgs(e: CirExpr) =
+proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int) =
   ## Wraps a call argument in an address when the formal travels as a hidden
   ## pointer and the argument is still the struct value.
+  ##
+  ## A non-lvalue argument (a call result, a constructor) copies first into
+  ## a fresh local: `&` of a temporary is invalid C, the copy is an lvalue.
+  ##
+  ## - the hoisted declarations run in front of the statement
+  ## - nested calls hoist first, every reference reads a computed temp
   if e.isNil:
     return
   case e.kind
   of eCall:
+    for a in e.args.mitems:
+      addrWrapByrefArgs(a, pre, tmpCount)
+    addrWrapByrefArgs(e.callee, pre, tmpCount)
     let fnTy = e.callee.typ
     if fnTy != nil and fnTy.kind == ctProc:
       for i in 0 ..< e.args.len:
@@ -166,82 +175,101 @@ proc addrWrapByrefArgs(e: CirExpr) =
             formal.pElem != nil and formal.pElem.kind == ctStruct:
           let at = getExprType(e.args[i])
           if at != nil and at.kind == ctStruct:
-            e.args[i] = addrE(formal, e.args[i])
-    for a in e.args.mitems:
-      addrWrapByrefArgs(a)
-    addrWrapByrefArgs(e.callee)
+            if isLvalue(e.args[i]):
+              e.args[i] = addrE(formal, e.args[i])
+            else:
+              inc tmpCount
+              let tmpName = "byref_tmp" & $tmpCount
+              let tmp = sym(tmpName, at)
+              pre.add(varD(tmpName, at))
+              pre.add(asgnS(tmp, e.args[i]))
+              e.args[i] = addrE(formal, tmp)
   of eDeref:
-    addrWrapByrefArgs(e.derefOperand)
+    addrWrapByrefArgs(e.derefOperand, pre, tmpCount)
   of eAt:
-    addrWrapByrefArgs(e.atBase)
-    addrWrapByrefArgs(e.atIndex)
+    addrWrapByrefArgs(e.atBase, pre, tmpCount)
+    addrWrapByrefArgs(e.atIndex, pre, tmpCount)
   of ePat:
-    addrWrapByrefArgs(e.patBase)
-    addrWrapByrefArgs(e.patIndex)
+    addrWrapByrefArgs(e.patBase, pre, tmpCount)
+    addrWrapByrefArgs(e.patIndex, pre, tmpCount)
   of eDot:
-    addrWrapByrefArgs(e.dotBase)
+    addrWrapByrefArgs(e.dotBase, pre, tmpCount)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    addrWrapByrefArgs(e.left)
-    addrWrapByrefArgs(e.right)
+    addrWrapByrefArgs(e.left, pre, tmpCount)
+    addrWrapByrefArgs(e.right, pre, tmpCount)
   of eBitNot, eNeg:
-    addrWrapByrefArgs(e.unOperand)
+    addrWrapByrefArgs(e.unOperand, pre, tmpCount)
   of eEq, eNeq, eLt, eLe:
-    addrWrapByrefArgs(e.a)
-    addrWrapByrefArgs(e.b)
+    addrWrapByrefArgs(e.a, pre, tmpCount)
+    addrWrapByrefArgs(e.b, pre, tmpCount)
   of eNot:
-    addrWrapByrefArgs(e.notOperand)
+    addrWrapByrefArgs(e.notOperand, pre, tmpCount)
   of eAnd, eOr:
-    addrWrapByrefArgs(e.andLeft)
-    addrWrapByrefArgs(e.andRight)
+    addrWrapByrefArgs(e.andLeft, pre, tmpCount)
+    addrWrapByrefArgs(e.andRight, pre, tmpCount)
   of eCast, eConv:
-    addrWrapByrefArgs(e.castOperand)
+    addrWrapByrefArgs(e.castOperand, pre, tmpCount)
   of eAddr:
-    addrWrapByrefArgs(e.addrOperand)
+    addrWrapByrefArgs(e.addrOperand, pre, tmpCount)
   of eOconstr:
     for kvf in e.kvFields.mitems:
-      addrWrapByrefArgs(kvf.value)
+      addrWrapByrefArgs(kvf.value, pre, tmpCount)
   of eAconstr:
     for el in e.elems.mitems:
-      addrWrapByrefArgs(el)
+      addrWrapByrefArgs(el, pre, tmpCount)
   of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof, eSym:
     discard
 
-proc addrWrapByrefStmts(stmts: seq[CirStmt]) =
+proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int)
+  ## Forward declaration: nested statement lists recurse into each other.
+
+proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int) =
+  ## Applies the call-site address wrap over one statement.
+  case s.kind
+  of sAsgn:
+    addrWrapByrefArgs(s.rhs, pre, tmpCount)
+  of sIte:
+    addrWrapByrefArgs(s.cond, pre, tmpCount)
+    addrWrapByrefStmts(s.thenBody, tmpCount)
+    addrWrapByrefStmts(s.elseBody, tmpCount)
+  of sLoop:
+    addrWrapByrefStmts(s.loopBody, tmpCount)
+  of sCase:
+    addrWrapByrefArgs(s.selector, pre, tmpCount)
+    for br in s.branches.mitems:
+      addrWrapByrefStmts(br.body, tmpCount)
+    addrWrapByrefStmts(s.caseElse, tmpCount)
+  of sScope:
+    addrWrapByrefStmts(s.scopeBody, tmpCount)
+  of sAssume:
+    addrWrapByrefArgs(s.assumeCond, pre, tmpCount)
+  of sRet:
+    addrWrapByrefArgs(s.retVal, pre, tmpCount)
+  of sDiscard:
+    addrWrapByrefArgs(s.discardVal, pre, tmpCount)
+  of sCall:
+    let callE = CirExpr(kind: eCall)
+    callE.callee = s.callCallee
+    callE.args = s.callArgs
+    addrWrapByrefArgs(callE, pre, tmpCount)
+    s.callCallee = callE.callee
+    s.callArgs = callE.args
+  of sVar, sConst:
+    addrWrapByrefArgs(s.init, pre, tmpCount)
+  of sLab, sJmp, sAsm, sEmit:
+    discard
+
+proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int) =
   ## Applies the call-site address wrap over every statement of a body.
-  for s in stmts:
-    case s.kind
-    of sAsgn:
-      addrWrapByrefArgs(s.rhs)
-    of sIte:
-      addrWrapByrefArgs(s.cond)
-      addrWrapByrefStmts(s.thenBody)
-      addrWrapByrefStmts(s.elseBody)
-    of sLoop:
-      addrWrapByrefStmts(s.loopBody)
-    of sCase:
-      addrWrapByrefArgs(s.selector)
-      for br in s.branches:
-        addrWrapByrefStmts(br.body)
-      addrWrapByrefStmts(s.caseElse)
-    of sScope:
-      addrWrapByrefStmts(s.scopeBody)
-    of sAssume:
-      addrWrapByrefArgs(s.assumeCond)
-    of sRet:
-      addrWrapByrefArgs(s.retVal)
-    of sDiscard:
-      addrWrapByrefArgs(s.discardVal)
-    of sCall:
-      let callE = CirExpr(kind: eCall)
-      callE.callee = s.callCallee
-      callE.args = s.callArgs
-      addrWrapByrefArgs(callE)
-      s.callCallee = callE.callee
-      s.callArgs = callE.args
-    of sVar, sConst:
-      addrWrapByrefArgs(s.init)
-    of sLab, sJmp, sAsm, sEmit:
-      discard
+  ## A hoisted temp declaration inserts in front of its statement.
+  var i = 0
+  while i < stmts.len:
+    var pre: seq[CirStmt] = @[]
+    addrWrapByrefStmt(stmts[i], pre, tmpCount)
+    for h in pre:
+      stmts.insert(h, i)
+      i.inc
+    i.inc
 
 proc openclLowerByrefParams(m: CirModule): string =
   ## Rewrites a large struct (24 bytes or more) passed by value to a device
@@ -276,7 +304,8 @@ proc openclLowerByrefParams(m: CirModule): string =
       ps
   for fn in m.procs:
     retargetProcTypeStmts(fn.body, newFormals)
-    addrWrapByrefStmts(fn.body)
+    var tmpCount = 0
+    addrWrapByrefStmts(fn.body, tmpCount)
   return ""
 
 proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =

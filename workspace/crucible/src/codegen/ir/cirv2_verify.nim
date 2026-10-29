@@ -87,8 +87,17 @@ proc sameOrFails(ctx: var VerifyCtx, a, b: CirType, path: string, construct: str
     ctx.fail(path, construct,
       detail & ": got " & spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
 
-proc isLvalue(e: CirExpr): bool =
-  e.kind in {eSym, eDeref, eAt, ePat, eDot}
+proc callArgReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
+  ## Call-argument check under v1's birth-space rule: a pointer argument
+  ## may hold another address space than the formal states, the call site
+  ## re-spaces to the formal's space. The pointee type must match exactly.
+  if sameType(a, b):
+    return
+  if a.kind == b.kind and a.kind in {ctPtr, ctAptr} and sameType(a.pElem, b.pElem):
+    return
+  ctx.fail(path, "call",
+    "argument type differs from the parameter type: got " &
+    spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
 
 proc litFitsBits(ctx: var VerifyCtx, v: int64, t: CirType, path: string) =
   ## Zero-tolerance literal range check against the named type's bits.
@@ -349,8 +358,7 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
       let t = checkOperand(ctx, arg, path & ".arg[" & $i & "]", "call argument")
       if ctx.err.len > 0:
         return nil
-      sameOrFails(ctx, t, calleeType.params[i], path & ".arg[" & $i & "]",
-        "call", "argument type differs from the parameter type")
+      callArgReSpace(ctx, t, calleeType.params[i], path & ".arg[" & $i & "]")
       discard ctx.verifyExpr(arg, path & ".arg[" & $i & "]", false)
     result = calleeType.ret
 
@@ -377,8 +385,7 @@ proc verifyCallArgs(ctx: var VerifyCtx, callee: CirExpr, args: seq[CirExpr], pat
     let t = checkOperand(ctx, arg, path & ".arg[" & $i & "]", "call argument")
     if ctx.err.len > 0:
       return
-    sameOrFails(ctx, t, calleeType.params[i], path & ".arg[" & $i & "]",
-      "call", "argument type differs from the parameter type")
+    callArgReSpace(ctx, t, calleeType.params[i], path & ".arg[" & $i & "]")
     discard ctx.verifyExpr(arg, path & ".arg[" & $i & "]", false)
 
 proc isComparisonShaped(e: CirExpr): bool =

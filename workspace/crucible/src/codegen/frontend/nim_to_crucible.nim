@@ -1906,6 +1906,13 @@ proc lowerLetSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
             value.ocType.kind == ctStruct:
           # a construction instantiates the struct it builds, the declaration adopts the instantiation with its provenance-derived fields
           typ = value.ocType
+        elif typ != nil and typ.kind in {ctPtr, ctAptr} and
+            getExprType(value) != nil and getExprType(value).kind == typ.kind and
+            getExprType(value).space != typ.space:
+          # a pointer cast keeps the operand's address space:
+          # - the declaration adopts the value's space
+          # - `let q = cast[ptr T](addr scratch[0])` is a threadgroup pointer
+          typ = getExprType(value)
       let hoists = ctx.drainHoisted()
       let cirName = ctx.uniqueName(nimName)
       ctx.declareLocal(nameNode, sym(cirName, typ), spc)

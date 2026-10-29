@@ -378,8 +378,13 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eNeg:
     return "(-" & ctx.printExpr(e.unOperand) & ")"
   of eCast, eConv:
-    return "(" & spellOpenclTypeBare(e.castType) & ")" &
-      ctx.printExpr(e.castOperand)
+    # a pointer cast includes the address space: the C compiler rejects
+    # a silent change of the pointee's space
+    let target = if e.castType.kind in {ctPtr, ctAptr}:
+        spellOpenclPtrField(e.castType, "").strip()
+      else:
+        spellOpenclTypeBare(e.castType)
+    return "(" & target & ")" & ctx.printExpr(e.castOperand)
   of eSizeof:
     return "sizeof(" & spellOpenclTypeBare(e.ofType) & ")"
   of eAddr:
@@ -484,6 +489,7 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
 
 proc spellLocalDecl(s: CirStmt): string =
   ## Declaration text of one local, the array form appends the length to the name, the init stays with the caller.
+  ## Pointer types include the address-space qualifier in their own text, the caller adds no storage prefix (OpenCL rejects a doubled qualifier).
   if s.declType.kind == ctArray:
     result = spellOpenclArrayDecl(s.declType, s.name)
   elif s.declType.kind in {ctPtr, ctAptr}:
@@ -502,7 +508,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
       if not ctx.inKernel:
         ctx.fail("smem local " & s.name & " in a device function, __local is kernel storage")
         return ""
-      var decl = "__local " & spellLocalDecl(s)
+      var decl = (if s.declType.kind in {ctPtr, ctAptr}: "" else: "__local ") &
+        spellLocalDecl(s)
       result = pad & decl
       if s.init != nil:
         result &= " = " & ctx.printExpr(s.init)
@@ -517,7 +524,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
       ctx.fail("local " & s.name & " in device space, OpenCL locals are private or local")
       return ""
     else:
-      var decl = "__private " & spellLocalDecl(s)
+      var decl = (if s.declType.kind in {ctPtr, ctAptr}: "" else: "__private ") &
+        spellLocalDecl(s)
       result = pad & decl
       if s.init != nil:
         if s.declType.kind == ctArray and s.init.kind == eAconstr:

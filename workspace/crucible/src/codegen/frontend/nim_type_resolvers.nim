@@ -448,7 +448,15 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
   of ntyPtr:
     let pointee = n[0]
     if pointee.typeKind == ntyUncheckedArray:
-      result = tAptr(ptrSpace, r.resolveCirType(pointee[1], ptrSpace))
+      # a typed `ptr UncheckedArray[T]` pointee varies:
+      # - a direct bracket `UncheckedArray[T]`
+      # - a call node `UncheckedArray(T)` from a template instantiation
+      # Resolve the element type as the instantiation's type argument.
+      var inst = pointee.getTypeInst()
+      if inst.kind != nnkBracketExpr:
+        inst = inst.getTypeImpl()
+      inst.expectKind(nnkBracketExpr)
+      result = tAptr(ptrSpace, r.resolveCirType(inst[1], ptrSpace))
     else:
       result = tPtr(ptrSpace, r.resolveCirType(pointee, ptrSpace))
   of ntyVar:
