@@ -170,8 +170,8 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
   ## - `sh`, `st`: the layout's shape and stride expressions
   ## - `bound`: the cotarget's node, one value per axis,
   ##   a single-axis layout enters the tuple as its product
-  ## - `bound`: nil gives the minimal complement, every terminal
-  ##   at 1, a cotarget leaf ceils per slot against the span
+  ## - `bound`: `IntCT(1)` gives the minimal complement, every
+  ##   terminal at 1, a cotarget leaf ceils per slot against the span
   ##
   ## Returns:
   ##     a layout that covers every address the input misses,
@@ -210,7 +210,8 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
     let c = lex(a.path, b.path)
     if c != 0: c else: cmp(a.scale, b.scale))
 
-  # Bound leaves: one per slot, the leftovers rest compact-major
+  # Cotarget leaves: one per codomain axis, the extras multiply
+  # into the last axis's terminal
   var boundLeafs: seq[NimNode] = @[]
   for bEv in bound.tupleStream():
     if bEv.kind == kLeaf:
@@ -236,24 +237,19 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
     slots[si].spanVal = p.scale * p.shapeVal
     slots[si].spanNode = p.stride * IntCT(p.shapeVal)
 
-  # Terminals: one per slot, the minimal complement's are 1.
-  # Cotarget leaves bind one per codomain axis,
-  # a tuple over fewer slots chains into the last slot as its product
-  if bound.kind == nnkNilLit:
-    for s in slots:
-      builder.append((IntCT(1), nil), (s.spanNode, nil))
-  else:
-    if boundLeafs.len < slots.len:
-      error "complement: the cotarget binds one leaf per codomain axis"
-    if boundLeafs.len > slots.len:
-      var rest = IntCT(1)
-      for j in slots.len - 1 ..< boundLeafs.len:
-        rest = rest * boundLeafs[j]
-      boundLeafs[slots.len - 1] = rest
-      boundLeafs.setLen(slots.len)
-    for i, s in slots:
-      builder.append((boundLeafs[i].ceil_div(IntCT(s.spanVal)), nil),
-                     (s.spanNode, nil))
+  # A tuple bound over fewer slots chains its product into the last slot.
+  # Minimal complement passes 1, missing leaves fill with 1.
+  if boundLeafs.len > slots.len:
+    var rest = IntCT(1)
+    for j in slots.len - 1 ..< boundLeafs.len:
+      rest = rest * boundLeafs[j]
+    boundLeafs[slots.len - 1] = rest
+    boundLeafs.setLen(slots.len)
+  # Terminals: one per slot, each bound leaf ceils against the covered span
+  for i, s in slots:
+    let leaf = if i < boundLeafs.len: boundLeafs[i] else: IntCT(1)
+    builder.append((leaf.ceil_div(IntCT(s.spanVal)), nil),
+                   (s.spanNode, nil))
 
   return bindSym"coalesceImpl".newCall(builder.emit(0), builder.emit(1),
                                        newLit(dropTrailing))
@@ -292,7 +288,7 @@ macro complement*(layout: Layout): untyped =
   ##    (2, 2):(1, 4) with 16   → (2, 2):(2, 8)
   let (sh, st) = result.destructureLayout(layout)
   # minimal complement: every terminal is 1
-  result = complementGenericFold(sh, st, nil, false)
+  result = complementGenericFold(sh, st, IntCT(1), false)
 
 macro complement*(layout: Layout, cosizeBound: typed): untyped =
   ## Complement extended to a cotarget: an `Int`, a runtime `int`,
