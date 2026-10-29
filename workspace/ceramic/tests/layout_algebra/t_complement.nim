@@ -226,46 +226,9 @@ proc runMultiDimensionStaticTests =
     check r.shape, (2, 1), (Int[2], Int[1])
     check r.stride, (4, 100), (Int[4], Int[100])
 
-# ── runtime shapes and strides ────────────────────────────────
-proc runRuntimeTests =
-  block:
-    let d12 = 12
-    let r = complement(make_layout(d12, 1))
-    check r.shape, 1, int
-    check r.stride, 12, int
-  block:
-    let d12 = 12
-    let r = complement(make_layout(d12, 1), 53)
-    check r.shape, 5, int
-    check r.stride, 12, int
-  block:
-    let d12 = 12
-    let r = complement(make_layout(d12, 1), 128)
-    check r.shape, 11, int
-    check r.stride, 12, int
-  block:
-    let d12 = 12
-    let r = complement(make_layout(d12, 2))
-    check r.shape, (2, 1), (Int[2], int)
-    check r.stride, (1, 24), (Int[1], int)
-  block:
-    let d12 = 12
-    let r = complement(make_layout(d12, 2))
-    check r.shape, (2, 1), (Int[2], int)
-    check r.stride, (1, 24), (Int[1], int)
-  # Non-injective input: with a runtime shape the compile-time check
-  # cannot fire and the result is meaningless, injectivity is trusted
-  when false:
-    block:
-      let d12 = 12
-      let r = complement(make_layout((d12, 2), (1, 2)))
-      check r.shape, 0, int
-      check r.stride, 12, int
-
 proc runTests =
   runRank1StaticTests()
   runMultiDimensionStaticTests()
-  runRuntimeTests()
 
 runTests()
 echo "ALL TESTS PASSED"

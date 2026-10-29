@@ -192,8 +192,7 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
   ##     Coalesce removes size-1 modes.
   var ordered = leaves
   ordered.sort(proc(a, b: tuple[axis, strideVal, shapeVal: int, strideNode, strideTy, shapeNode: NimNode, atomAxis: bool]): int =
-    cmp((a.axis, a.strideVal == DynamicSentinel, a.strideVal),
-        (b.axis, b.strideVal == DynamicSentinel, b.strideVal)))
+    cmp((a.axis, a.strideVal), (b.axis, b.strideVal)))
 
   # bound: a scalar cotarget fills the linear axis, a tuple product
   # does the same for an integer codomain, a tuple cotarget
@@ -248,21 +247,17 @@ proc complementGenericFold(leaves: seq[tuple[axis, strideVal, shapeVal: int,
       spanStrideNode = IntCT(1)
     # a stride-0 leaf maps every coordinate to offset 0, a size-1 dimension
     # covers one offset, neither opens a gap
-    if l.strideVal != DynamicSentinel and (l.strideVal == 0 or l.shapeVal == 1):
+    if l.strideVal == 0 or l.shapeVal == 1:
       continue
-    if l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel and
-        spanVal != DynamicSentinel and l.strideVal < spanVal:
+    if l.strideVal < spanVal:
       error "complement: non-injective layout, stride " & $l.strideVal &
         " overlaps the covered span " & $spanVal & " on axis " & $l.axis
     # every gap appends, size-1 gaps die in coalesce
     builder.append((l.strideNode div spanNode, nil), (spanStrideNode, nil))
-    spanVal = if l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel:
-                l.strideVal * l.shapeVal
-              else:
-                DynamicSentinel
+    spanVal = l.strideVal * l.shapeVal
     spanNode = l.strideNode * l.shapeNode
     spanStrideNode = spanNode
-    if defaultBound and l.strideVal != DynamicSentinel and l.shapeVal != DynamicSentinel:
+    if defaultBound:
       b += (l.shapeVal - 1) * abs(l.strideVal)
   if curAxis != -1:
     flushRem()
@@ -287,6 +282,12 @@ macro complementImpl(sh, st: typed, bound: typed, defaultBound, dropTrailing: st
   for i in 0 ..< shDims.len:
     let j = if stDims.len == 1: 0 else: i
     let desc = getCoordStrideDescriptor(stTys[j])
+    # an integer leaf's stride must be static, a coordinate leaf's
+    # scale is static in its descriptor
+    if desc.kind == caNone and stDims[j].stride == DynamicSentinel:
+      error "complement: dynamic strides are not supported"
+    if shDims[i].shape == DynamicSentinel:
+      error "complement: dynamic shapes are not supported"
     case desc.kind
     of caMulti:
       error "complement: multi-term coordinate strides not supported"
