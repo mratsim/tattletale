@@ -343,77 +343,28 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
 #
 #  qᵢ = M div pᵢ, 1 when the running prefix exhausts M
 
-template stridedDiv*[S, B, P: int or Int](s: S, M: B, prefix: P): auto =
-  ## Mode shape of A' / M, qᵢ = M div pᵢ, 1 when exhausted
-  ##
-  ## Returns:
-  ##     shapeᵢ = 1              if qᵢ mod sᵢ == 0, the mode is consumed whole
-  ##            = sᵢ div qᵢ      if qᵢ > 0 and sᵢ mod qᵢ == 0, clean partial division
-  ##            = sᵢ             otherwise, the remainder is trimmed by % N
-  when S is Int and B is Int and P is Int:
-    const q = M div prefix + int(M div prefix === 0)
-    when q mod s === 0:
-      Int[1]()
-    elif q >= 1 and s mod q === 0:
-      Int[(s div q).toInt()]()
-    else:
-      Int[s.toInt()]()
-  else:
-    let m = M.toInt()
-    let p = prefix.toInt()
-    let q = m div p + int(m div p == 0)
-    let sv = s.toInt()
-    if q mod sv == 0: 1
-    elif q >= 1 and sv mod q == 0: sv div q
-    else: sv
-
-template stridedMod*[S, B, P: int or Int](s: S, N: B, prefix: P): auto =
-  ## Strided % N, mode shapeᵢ = min(sᵢ, max(1, N div pᵢ))
-  when S is Int and B is Int and P is Int:
-    const m = max(1, N div prefix)
-    when s < m:
-      Int[s.toInt()]()
-    else:
-      Int[m.toInt()]()
-  else:
-    let sv = s.toInt()
-    let n = N.toInt()
-    let p = prefix.toInt()
-    min(sv, max(1, n div p))
-
-template stridedMod*[B, P: int or Int](N: B, prefix: P): auto =
-  ## Last-mode quotient: max(1, N div p_last), truncation decays to size-1 modes
-  when B is Int and P is Int:
-    Int[max(1, N div prefix).toInt()]()
-  else:
-    let n = N.toInt()
-    let p = prefix.toInt()
-    max(1, n div p)
-
-macro stridedDiv(strided: Layout, M: typed): untyped =
-  ## A' / M, the layout of every d-th element of A'
-  ##
-  ## Every mode follows the same rule, with `pᵢ` the running shape-prefix product:
-  ##
-  ##     qᵢ = M div pᵢ, 1 when exhausted (the mode passes through)
-  ##     strideᵢ = qᵢ * dᵢ
-  ##     shapeᵢ = 1              if qᵢ mod sᵢ == 0, the mode is consumed whole
-  ##            = sᵢ div qᵢ      if qᵢ > 0 and sᵢ mod qᵢ == 0, clean partial division
-  ##            = sᵢ             otherwise, the remainder is trimmed by % N
+macro stridedFold(strided: Layout, n, m: typed): untyped =
   result = newStmtList()
   let (sh, st) = result.destructureLayout(strided)
 
   var builder = TupleBuilderFlat.new(2)
-  var prefix = IntCT(1)
+  var q = m
+  var remaining = quote do: `n` div Int[1]()
+  var pendingS, pendingD: NimNode
   for (shapeEv, strideEv) in sh.tupleDimsStream().zip(st.tupleDimsStream()):
-    builder.onLeaves(shapeEv):
-      let shapeDim = shapeEv.leaf
-      let strideDim = strideEv.leaf
-      let divShape = quote do: stridedDiv(`shapeDim`, `M`, `prefix`)
-      let divStride = quote do: (`M` div `prefix` + int(`M` div `prefix` === 0)) * `strideDim`
-      builder.appendTyped((divShape, nil), (divStride, nil))
-      prefix = quote do: `prefix` * `shapeDim`
+    if not pendingS.isNil:
+      let modeShape = quote do: min(`pendingS`.ceil_div(`q`), `remaining`)
+      let modeStride = quote do: `q` * `pendingD`
+      builder.appendTyped((modeShape, nil), (modeStride, nil))
+      q = quote do: `q`.ceil_div(`pendingS`)
+      remaining = quote do: `remaining` div `modeShape`
+    pendingS = shapeEv.leaf
+    pendingD = strideEv.leaf
+  let lastShape = quote do: `remaining`
+  let lastStride = quote do: `q` * `pendingD`
+  builder.appendTyped((lastShape, nil), (lastStride, nil))
   result.add builder.emitLayout()
+
 
 macro stridedMod(strided: Layout, N: typed): untyped =
   ## Strided % N on the first N elements of Strided
@@ -435,7 +386,7 @@ macro stridedMod(strided: Layout, N: typed): untyped =
     if not pendingShape.isNil:
       # each mode's mod call gets its own block scope, the template's
       # static-branch bodies share gensyms across instantiations
-      let modShape = quote do: (block: stridedMod(`pendingShape`, `N`, `prefix`))
+      let modShape = quote do: min(`pendingShape`, max(1, `N` div `prefix`))
       # the member types resolve at type resolution of the constructor,
       # spelled as typeof so the modded shape and its type slot agree
       builder.append((modShape, quote do: typeof(`modShape`)),
@@ -447,7 +398,7 @@ macro stridedMod(strided: Layout, N: typed): untyped =
     pendingStrideTy = strideEv.leafTy
   if not pendingShape.isNil:
     # the last mode carries the running quotient, its shape ignores s
-    let lastMod = quote do: (block: stridedMod(`N`, `prefix`))
+    let lastMod = quote do: max(1, `N` div `prefix`)
     builder.appendTyped((lastMod, nil), (pendingStride, pendingStrideTy))
   result.add builder.emitLayout()
 
@@ -515,7 +466,7 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
         aSt = aStride
       var shapeAst, strideAst: NimNode = nil
       template termDelegate(aSh, aSt, m, n: typed): untyped =
-        stridedMod(stridedDiv(make_layout(aSh, aSt), m), n)
+        stridedFold(make_layout(aSh, aSt), n, m)
       var termIndex = 0
       var termStream = bStride.basisReprStream()
       for termEv in termStream:
