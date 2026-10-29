@@ -371,6 +371,22 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
 
+func proj*(leafTy: NimNode): tuple[path: seq[int], scale: int] {.compileTime.} =
+  ## Extract from a stride leaf the part its own position implies.
+  ## An atom yields its basis path and scale.
+  ## Returns:
+  ## - an integer leaf: the rank-zero identity, an empty path,
+  ##   the scale is its static value
+  ## - a single-term atom: its basis path and scale
+  ## Precondition:
+  ## - a multi-term atom raises
+  if not isCoordStride(leafTy):
+    return (@[], leafTy.getStaticInt())
+  let d = getCoordStrideDescriptor(leafTy)
+  if d.kind == caMulti:
+    error "proj: multi-term coordinate strides are not supported"
+  (d.path, d.scale)
+
 macro `<`*[A: CoordStride, B: CoordStride](a: A, b: B): bool =
   ## Colex order over coordinate strides, ascending on (axis, scale),
   ## the key order of the complement's stride sort
@@ -379,27 +395,6 @@ macro `<`*[A: CoordStride, B: CoordStride](a: A, b: B): bool =
   doAssert da.kind == caSingle and db.kind == caSingle,
     "CoordStride <: only single-term atoms order"
   return newLit((da.path[^1], da.scale) < (db.path[^1], db.scale))
-
-macro `div`*[V: static int, A: CoordStride](a: A, k: Int[V]): untyped =
-  let da = a.getTypeInst().getCoordStrideDescriptor()
-  doAssert da.kind == caSingle, "div over a multi-term atom"
-  IntCT(da.scale div V)
-
-macro ceil_div*[A: CoordStride](a: untyped, b: A): untyped =
-  let da = b.getTypeInst().getCoordStrideDescriptor()
-  doAssert da.kind == caSingle, "ceil_div over a multi-term atom"
-  if a.kind == nnkIntLit:
-    IntCT(a.intVal.int.ceil_div(da.scale))
-  else:
-    nnkCall.newTree(bindSym"ceil_div", a, newLit(da.scale))
-
-macro `div`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
-  ## Scale ratio of same-axis atoms, floor division of the scales
-  let da = a.getTypeInst.getCoordStrideDescriptor()
-  let db = b.getTypeInst.getCoordStrideDescriptor()
-  if da.kind != caSingle or db.kind != caSingle or da.path != db.path:
-    error("CoordStride div: only atoms on the same axis", b)
-  IntCT(da.scale div db.scale)
 
 proc csScaledEq(a, b: NimNode, s: int): bool =
   ## Elementwise b == s*a over (possibly nested) int-literal tuples,

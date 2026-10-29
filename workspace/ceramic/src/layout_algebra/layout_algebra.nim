@@ -60,7 +60,7 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #     the size is unchanged and every input integer maps to the
 #     same output integer
 
-macro coalesceImpl(sh, st: typed, ax: typed = nil, dropTrailing: static bool = false, profile: static bool = false): untyped =
+macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
   ## Merges adjacent dimensions as long as there are no gaps between their elements.
   var builder = TupleBuilderFlat.new(2)
   var span = 0                 # the open chain's shape product, 0 = no open chain
@@ -80,36 +80,13 @@ macro coalesceImpl(sh, st: typed, ax: typed = nil, dropTrailing: static bool = f
       builder.append((IntCT(span), intTy(span)),
         (bindSym"E".newCall(t[1]), nnkBracketExpr.newTree(bindSym"CoordStride", t[1])))
 
-  template flushAxis =
-    if not headTy.isNil:
-      appendChain()
-      span = 0
-      headTy = nil
-    if not pending.isNil and pending.kind != nnkEmpty:
-      if not dropTrailing or builder.count == 0:
-        builder.append((IntCT(1), intTy(1)),
-          (if pendingVal != DynamicSentinel: (IntCT(pendingVal), intTy(pendingVal))
-           else: (pending, pendingTy)))
-    pending = newEmptyNode()
-    pendingVal = DynamicSentinel
-
   var shS = sh.tupleStream()
   var stS = st.tupleStream()
-  var axS = if ax.kind == nnkNilLit: TupleStream() else: ax.tupleStream()
-  var lastAxis = -1
   while not shS.done():
     let shapeEv = shS.next()
     let strideEv = stS.next()
-    let axEv = if ax.kind == nnkNilLit: TupleStreamEvent() else: axS.next()
     if shapeEv.kind != kLeaf:
       continue
-    if profile and axEv.kind == kLeaf:
-      # axis values are the profile: a change starts the next
-      # axis's modes, chains never merge across them
-      let axisVal = axEv.leaf.intVal.int
-      if axisVal != lastAxis:
-        flushAxis()
-        lastAxis = axisVal
     let shapeVal = shapeEv.leafTy.getStaticInt()
     let strideVal = strideEv.leafTy.getStaticInt()
     let headVal = if headTy.isNil: DynamicSentinel else: headTy.getStaticInt()
@@ -199,10 +176,11 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, hasBound, dropTraili
   ## Returns:
   ##     a layout that covers every address the input misses,
   ##     without overlap and in order. The gaps append flat,
-  ##     slot 2 stores each mode's axis as the profile,
   ##     coalesce decides per axis and flattens the result.
-  var pairs: seq[tuple[stride, strideTy: NimNode, shapeVal: int]] = @[]
-  var lastStride, lastStrideTy: NimNode
+  var pairs: seq[tuple[stride: NimNode, path: seq[int], scale,
+                       shapeVal: int]] = @[]
+  var lastStride: NimNode
+  var lastStrideTy: NimNode
   var z = st.tupleStream().zipLongest(sh.tupleStream())
   while not z.done():
     let (stEv, shEv) = z.next()
@@ -213,88 +191,84 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, hasBound, dropTraili
     if stEv.kind == kLeaf and stEv.leaf != nil:
       lastStride = stEv.leaf
       lastStrideTy = stEv.leafTy
-    let desc = getCoordStrideDescriptor(lastStrideTy)
-    if desc.kind == caNone and lastStrideTy.getStaticInt() == DynamicSentinel:
+    # proj reads each leaf once, a multi-term atom raises in proj
+    let (path, scale) = proj(lastStrideTy)
+    if scale == DynamicSentinel:
       error "complement: dynamic strides are not supported"
     let shapeVal = shEv.leafTy.getStaticInt()
     if shapeVal == DynamicSentinel:
       error "complement: dynamic shapes are not supported"
-    if desc.kind == caMulti:
-      error "complement: multi-term coordinate strides not supported"
-    pairs.add (lastStride, lastStrideTy, shapeVal)
+    pairs.add (lastStride, path, scale, shapeVal)
 
-  # sort by (axis, stride value), the atoms' scale is the value
-  pairs.sort(proc(a, b: tuple[stride, strideTy: NimNode, shapeVal: int]): int =
-    template key(ty: NimNode): tuple[axis, val: int] =
-      let d = getCoordStrideDescriptor(ty)
-      if d.kind == caSingle: (d.path[^1], d.scale) else: (0, ty.getStaticInt())
-    cmp(key(a.strideTy), key(b.strideTy)))
+  pairs.sort(proc(a, b: tuple[stride: NimNode, path: seq[int], scale,
+                              shapeVal: int]): int =
+    template lex(x, y: seq[int]): int =
+      for i in 0 ..< min(x.len, y.len):
+        if x[i] != y[i]:
+          return cmp(x[i], y[i])
+      cmp(x.len, y.len)
+    let c = lex(a.path, b.path)
+    if c != 0: c else: cmp(a.scale, b.scale))
 
-  var axisCount = 0
-  var lastAxis = -1
-  for p in pairs:
-    let d = getCoordStrideDescriptor(p.strideTy)
-    let axis = if d.kind == caSingle: d.path[^1] else: 0
-    if axis != lastAxis:
-      inc axisCount
-      lastAxis = axis
-
-  # a bound binds one value per axis, a tuple on a single-axis
-  # layout enters as its product, PyCuTe extend_complement's chain
+  # bound leaves: one per slot, leftovers chain into the last slot,
+  # PyCuTe extend_complement's shapeR chain
   var boundLeafs: seq[NimNode] = @[]
   if hasBound:
-    if axisCount == 1:
-      boundLeafs.add bindSym"product".newCall(bound)
-    else:
-      for bEv in bound.tupleStream():
-        if bEv.kind == kLeaf:
-          boundLeafs.add bEv.leaf
+    for bEv in bound.tupleStream():
+      if bEv.kind == kLeaf:
+        boundLeafs.add bEv.leaf
 
-  var builder = TupleBuilderFlat.new(3)
-  var curAxis = -1          # axes are nonnegative, -1 opens the first axis
+  var builder = TupleBuilderFlat.new(2)
+  var curPath: seq[int]
+  var firstSlot = true
   var spanVal = 1
   var spanNode = IntCT(1)
   var axisIndex = 0
 
-  template flushRem() {.dirty.} =
-    # each terminal appends unconditionally, a cotarget ceil-chains
-    # against the covered span, the minimal complement's is 1
-    let terminal = if axisIndex < boundLeafs.len:
-                     boundLeafs[axisIndex].ceil_div(spanNode)
-                   else:
-                     IntCT(1)
-    builder.append((terminal, nil), (spanNode, nil), (newLit(curAxis), nil))
-    inc axisIndex
+  template flushRem(final: bool) {.dirty.} =
+    # terminal per slot: the bound leaf ceils against the covered span,
+    # leftover bound leaves chain into the last slot as one product.
+    # minimal complement terminal is 1
+    if axisIndex >= boundLeafs.len:
+      builder.append((IntCT(1), nil), (spanNode, nil))
+    else:
+      var sizeC = IntCT(spanVal)
+      var shape = IntCT(1)
+      let stop = if final: boundLeafs.len else: min(axisIndex + 1,
+                                                    boundLeafs.len)
+      while axisIndex < stop:
+        shape = bindSym"*".newCall(shape,
+                                   boundLeafs[axisIndex].ceil_div(sizeC))
+        sizeC = sizeC.ceil_div(boundLeafs[axisIndex])
+        inc axisIndex
+      builder.append((shape, nil), (spanNode, nil))
     spanVal = 1
     spanNode = IntCT(1)
 
   for p in pairs:
-    let desc = getCoordStrideDescriptor(p.strideTy)
-    let axis = if desc.kind == caSingle: desc.path[^1] else: 0
-    let strideVal = if desc.kind == caSingle: desc.scale
-                    else: p.strideTy.getStaticInt()
-    if axis != curAxis:
-      if curAxis != -1:
-        flushRem()
-      curAxis = axis
+    let strideVal = p.scale
+    if firstSlot or p.path != curPath:
+      if not firstSlot:
+        flushRem(false)
+      curPath = p.path
+      firstSlot = false
     # a stride-0 leaf maps every coordinate to offset 0,
     # a size-1 dimension covers one offset, neither opens a gap
     if strideVal == 0 or p.shapeVal == 1:
       continue
     if strideVal < spanVal:
       error "complement: non-injective layout, stride " & $strideVal &
-        " overlaps the covered span " & $spanVal & " on axis " & $axis
-    # every gap appends, size-1 gaps die in coalesce
-    builder.append((p.stride div spanNode, nil), (spanNode, nil),
-                   (newLit(axis), nil))
+        " overlaps the covered span " & $spanVal & " on slot " & $p.path
+    # every gap appends and size-1 gaps die in coalesce.
+    # A gap shape is a number, a span stride is the leaf's node scaled
+    builder.append((IntCT(strideVal div spanVal), nil), (spanNode, nil))
     spanVal = strideVal * p.shapeVal
     spanNode = p.stride * IntCT(p.shapeVal)
-  if curAxis != -1:
-    flushRem()
+  if not firstSlot:
+    flushRem(true)
 
   return bindSym"coalesceImpl".newCall(builder.emit(0), builder.emit(1),
-                                       builder.emit(2), newLit(dropTrailing),
-                                       newLit(true))
+                                       newLit(dropTrailing))
 
 macro complement*(layout: Layout): untyped =
   ## Layout complement, the codomain gap filler.
