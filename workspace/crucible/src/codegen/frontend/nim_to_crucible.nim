@@ -46,6 +46,11 @@ type
     scopes: seq[Table[string, CirExpr]]
     localSpaces: seq[Table[string, CirAddrSpace]]
     ## Nim symbol name to CIRv2 symbol, innermost scope last.
+    moduleScope: Table[string, CirExpr]
+    moduleSpaces: Table[string, CirAddrSpace]
+    ## Program-scope declarations, visible from every proc body. A fresh proc's scope tables seed from these.
+    moduleGlobals: seq[CirStmt]
+    ## Program-scope declarations in encounter order, `m.globals` of the module.
     nameCounts: Table[string, int]
     labels: int
     loopStack: seq[tuple[exitL, contL: string]]
@@ -353,8 +358,26 @@ proc lowerEmitArg(ctx: var FrontendCtx, emitArg: NimNode): CirStmt =
       operands.add(op)
   result = emitS(parts, operands)
 
+proc resolveTypeSection(ctx: var FrontendCtx, n: NimNode) =
+  ## Registers the section's concrete type definitions with the resolver.
+  ##
+  ## - a generic type definition registers nothing at declaration time
+  ## - instantiations resolve at the use sites (`Tile[2, 3](...)`)
+  ## - the generic head (`ntyGenericBody`) has no runtime representation
+  for typeDef in n:
+    typeDef.expectKind(nnkTypeDef)
+    let head = typeDef[0]
+    if head.kind == nnkPragmaExpr:
+      # a pragma-wrapped type name keeps the type node under the pragma
+      discard ctx.resolver.resolveCirType(head[0])
+    elif head.kind == nnkBracketExpr or head.typeKind == ntyGenericBody:
+      continue
+    else:
+      discard ctx.resolver.resolveCirType(head)
+
 proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
   ## Forward declaration, expressions and statements recurse into each other.
+
 
 proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
   ## Forward declaration, the statement walk proper.
@@ -2113,9 +2136,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.fail("when statement: resolve statically before lowering")
     return @[]
   of nnkTypeSection:
-    for typeDef in n:
-      typeDef.expectKind(nnkTypeDef)
-      discard ctx.resolver.resolveCirType(typeDef[0])
+    ctx.resolveTypeSection(n)
     return @[]
   of nnkPragma:
     var emitArgs: seq[NimNode] = @[]
@@ -2238,10 +2259,15 @@ proc applyProcPragmas(fn: NimNode, p: CirProc) =
               prag
           if dims.kind in {nnkPar, nnkTupleConstr, nnkBracket}:
             for d in 0 ..< 3:
+              # a missing trailing dimension defaults to 1: workgroup: (4, 2) is the (4, 2, 1) launch shape, 0 is not a legal GLSL/WGSL dimension
               if d < dims.len:
                 p.workgroup[d] = dims[d].intVal.int
+              else:
+                p.workgroup[d] = 1
           elif dims.kind in nnkIntLit .. nnkUInt64Lit:
             p.workgroup[0] = dims.intVal.int
+            p.workgroup[1] = 1
+            p.workgroup[2] = 1
         else:
           discard
     else:
@@ -2267,7 +2293,8 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let savedCont = ctx.continueUsed
   ctx.fnName = sanitizeIdent($fn[0])
   ctx.nameCounts = initTable[string, int]()
-  ctx.scopes = @[]
+  ctx.scopes = @[ctx.moduleScope]
+  ctx.localSpaces = @[ctx.moduleSpaces]
   ctx.loopStack = @[]
   ctx.continueUsed = false
   ctx.retType = ctx.resolver.resolveCirType(formals[0])
@@ -2321,7 +2348,8 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   ctx.hoisted = @[]
   ctx.fnName = cirName
   ctx.nameCounts = initTable[string, int]()
-  ctx.scopes = @[]
+  ctx.scopes = @[ctx.moduleScope]
+  ctx.localSpaces = @[ctx.moduleSpaces]
   ctx.loopStack = @[]
   ctx.continueUsed = false
   ctx.retType = ctx.resolver.resolveCirType(formals[0])
@@ -2350,6 +2378,39 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
 # Entry points
 # ═══════════════════════════════════════════════════════════════════════
 
+proc lowerTopLevelDecls(ctx: var FrontendCtx, n: NimNode) =
+  ## A top-level `var`/`const` section: program-scope storage.
+  ##
+  ## - the pragma list picks the memory class: `smem` threadgroup, `const_mem` constant, unannotated is program-scope constant
+  ## - the declaration registers in the module scope, every proc body reads it
+  ## - kernels must appear after the declarations they read, program order
+  for def in n:
+    let nameN = def[0]
+    let bareName = if nameN.kind == nnkPragmaExpr: nameN[0] else: nameN
+    let name = bareName.repr
+    let space =
+      block:
+        var spc = ctx.resolveLocalSpace(nameN)
+        if spc == caThread:
+          # program scope has no per-thread storage, unannotated is constant
+          spc = caConstant
+        spc
+    let valN = def[2]
+    let typN = if def[1].kind == nnkEmpty: valN.getTypeInst() else: def[1]
+    let t = ctx.resolver.resolveCirType(typN, space)
+    if ctx.failing():
+      return
+    var init: CirExpr = nil
+    if valN.kind != nnkEmpty:
+      init = ctx.lowerExpr(valN)
+      if ctx.failing():
+        return
+    let g = varD(name, t, init, space)
+    ctx.moduleGlobals.add(g)
+    let symE = sym(name, t)
+    ctx.moduleScope[name] = symE
+    ctx.moduleSpaces[name] = space
+
 proc lowerModule(ctx: var FrontendCtx, bodyIn: NimNode) =
   ## Lowers the typed macro body: a block of kernel proc defs, or the single `{.global.}` wrapper proc of a launchDeviceFn call.
   var body = bodyIn
@@ -2376,9 +2437,9 @@ proc lowerModule(ctx: var FrontendCtx, bodyIn: NimNode) =
     of nnkProcDef, nnkFuncDef:
       discard ctx.lowerProcDef(c)
     of nnkTypeSection:
-      for typeDef in c:
-        typeDef.expectKind(nnkTypeDef)
-        discard ctx.resolver.resolveCirType(typeDef[0])
+      ctx.resolveTypeSection(c)
+    of nnkVarSection, nnkConstSection:
+      ctx.lowerTopLevelDecls(c)
     of nnkCommentStmt:
       discard
     else:
@@ -2396,6 +2457,7 @@ proc lowerCirv2Unverified*(body: NimNode): tuple[m: CirModule, err: string] =
   ctx.pushScope()
   ctx.lowerModule(body)
   let m = moduleD("kernel", ctx.resolver.structs, ctx.procs)
+  m.globals = ctx.moduleGlobals
   return (m, ctx.resolver.err)
 
 proc tryLowerCirv2*(body: NimNode): tuple[m: CirModule, err: string] =

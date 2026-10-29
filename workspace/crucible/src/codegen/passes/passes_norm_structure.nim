@@ -291,6 +291,8 @@ proc structureModule(m: CirModule): tuple[m: CirModule, err: string] =
   ## - the error is "" for a clean module
   ## - otherwise the first refusal of the walk over the procs
   result = (CirModule(name: m.name, types: m.types), "")
+  # program-scope declarations pass through, the printers emit them in encounter order
+  result.m.globals = m.globals
   for fn in m.procs:
     let (sfn, err) = structureProc(fn)
     if err.len > 0:

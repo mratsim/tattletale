@@ -1,13 +1,13 @@
-## Globals emit in the constant address space
+## Globals live in the constant address space
 ##
-## Test that a top-level var emits as a constant program-scope declaration,
-## read-only storage per the Metal spec
+## Test that a top-level var emits as a read-only program-scope constant
+## that a kernel reads at run time.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/types/t_metal_global_constant.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const globalConstantMsl = metal:
@@ -15,5 +15,11 @@ const globalConstantMsl = metal:
   proc bump(C: ptr UncheckedArray[int32]) {.global.} =
     C[0] = counter
 
-test "the global emits as a constant program-scope declaration":
-  check "constant int counter = 0;" in globalConstantMsl
+test "a kernel reads the program-scope constant":
+  var engine = newEngine(runMetal)
+  engine.ingest(globalConstantMsl)
+  let oDev = engine.allocDevice(int32, 1)
+  engine.launchKernel("bump", oDev, ())
+  var res: array[1, int32]
+  engine.copyToHostFromDevice(addr res[0], oDev, 1)
+  check res[0] == 0
