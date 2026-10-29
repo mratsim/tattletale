@@ -450,23 +450,14 @@ macro composeImpl(aShape, aStride: typed, bShape, bStride: tuple): untyped =
   result = newStmtList()
   template composeModeDelegate(aSh, aSt, bSh, bSt: typed): untyped =
     composeImpl(aSh, aSt, bSh, bSt)
-  var modeStmts = newStmtList()
   var builder = TupleBuilderFlat.new(2)
-  var modeIdx = 0
   for (shEv, stEv) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
-    let bModeShape = shEv.leaf
-    let bModeStride = stEv.leaf
-    let alias = genSym(nskLet, "composeMode" & $modeIdx)
-    inc modeIdx
-    let modeAst = getAst(composeModeDelegate(`aShape`, `aStride`, bModeShape, bModeStride))
-    modeStmts.add quote do:
+    let alias = genSym(nskLet, "composeMode")
+    let modeAst = getAst(composeModeDelegate(`aShape`, `aStride`, shEv.leaf, stEv.leaf))
+    result.add quote do:
       let `alias` = `modeAst`
     builder.append(alias.newDotExpr(ident"shape"), alias.newDotExpr(ident"stride"))
-  let ctor = builder.emitLayout()
-  result.add quote do:
-    block:
-      `modeStmts`
-      `ctor`
+  result.add builder.emitLayout()
 
 macro composeImpl[A, B: Layout](a: A, tiler: B): untyped =
   ## Composition with a Layout tiler. Both sides destructure.
@@ -496,29 +487,22 @@ macro composeImpl[A: Layout, B: tuple](a: A, tiler: B): untyped =
   var tilerEval = tiler
   let tilerTy = tiler.getTypeOf()
   if tiler.kind notin {nnkTupleConstr, nnkPar, nnkSym, nnkBracketExpr, nnkDotExpr}:
-    let tilerAlias = ident("tilerEval")
-    result.add bindSym"evalOnceAs".newCall(tilerAlias, tiler)
-    tilerEval = tilerAlias
+    result.add bindSym"evalOnceAs".newCall(ident"tilerEval", tiler)
+    tilerEval = ident"tilerEval"
   let (aShape, aStride) = result.destructureLayout(a)
   let (aShapeTy, aStrideTy) = layoutTypeArgs(a)
-  let aShapeIsTuple = aShapeTy.isTupleTy()
-  let aStrideIsTuple = aStrideTy.isTupleTy()
   template composeModeDelegate(aSh, aSt, bSh, bSt: typed): untyped =
     composeImpl(aSh, aSt, bSh, bSt)
-
   var builder = TupleBuilderFlat.new(2)
   var ti = 0
   for tEv in tiler.tupleDimsStream(tilerTy):
-    if ti >= (if aShapeIsTuple: aShapeTy.len else: 1):
+    if ti >= (if aShapeTy.isTupleTy(): aShapeTy.len else: 1):
       error("tiler has more modes than the layout", tEv.leaf)
     let tLeaf = tEv.leaf
     let tLeafTy = tEv.leafTy
-    let isKeep = tLeaf.kind in {nnkSym, nnkIdent} and $tLeaf == "_"
-    if not isKeep and not isLayoutTy(tLeafTy) and tLeafTy.isTupleTy():
-      error("nested tiler entries are not supported", tLeaf)
-    let aSh = if aShapeIsTuple: aShape.getTupleIndex(ti) else: aShape
-    let aSt = if aStrideIsTuple: aStride.getTupleIndex(ti) else: aStride
-    if isKeep:
+    let aSh = if aShapeTy.isTupleTy(): aShape.getTupleIndex(ti) else: aShape
+    let aSt = if aStrideTy.isTupleTy(): aStride.getTupleIndex(ti) else: aStride
+    if tLeaf.kind in {nnkSym, nnkIdent} and $tLeaf == "_":
       # pass-through: the element is the mode itself
       builder.append(aSh, aSt)
     else:
@@ -530,8 +514,8 @@ macro composeImpl[A: Layout, B: tuple](a: A, tiler: B): untyped =
         if not isScalarTy(tLeafTy) and tLeaf.kind notin {nnkIntLit .. nnkUInt64Lit}:
           error("tiler leaf is neither an int, an Int nor a Layout", tLeaf)
         (tLeaf, IntCT(1))
-      let modeAst = getAst(composeModeDelegate(aSh, aSt, bSh, bSt))
       let alias = genSym(nskLet, "composeTilerMode")
+      let modeAst = getAst(composeModeDelegate(aSh, aSt, bSh, bSt))
       result.add quote do:
         let `alias` = `modeAst`
       builder.append(alias.newDotExpr(ident"shape"), alias.newDotExpr(ident"stride"))
