@@ -6,267 +6,248 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[macros, sequtils, tables]
+## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, GLSL, WebGPU, Metal.
+##
+## Public API, one import: `import workspace/crucible`.
+## The curated surface lives in `src/crucible_public_api.nim`, the GPU builtin vocabulary
+## in `src/crucible_gpu_builtins.nim`, both re-exported here in full.
+## Everything not exported there is internal, only compiler tests reach into the internals.
+##
+## Pipeline:
+## - the `metal:`-family macros lower the typed body to CIRv2
+## - the pass registry runs in stage order: legalize -> normalize -> optimize -> lower -> validate
+## - `backends_api` dispatches the final module to the `*_lang` printer
+##
+## Modules: `src/codegen/frontend/nim_to_crucible`, the pass stages under
+## `src/codegen/passes/`, the printers under `src/codegen/backends/*_lang`.
 
-import ./ir/ast_datatypes
-import ./ir/ast_type_constructors
-import ./backends/backends_api
-import ./passes/passes_lowering
-import ./passes/passes_low_pointers
-import ./passes/passes_low_views
-import ./passes/passes_low_array_assign
-import ./passes/passes_legal_if_expr
-import ./passes/passes_legal_block_expr
-import ./passes/passes_lowering_cuda
-import ./passes/passes_lowering_wgsl
-import ./passes/passes_lowering_opencl
-import ./passes/passes_lowering_glsl
-import ./passes/passes_lowering_spirv
-import ./passes/passes_validations_glsl
-import ./passes/passes_lowering_hlsl
-from ./backends/hlsl_lang import HlslFlavor, fvD3D12
-import ./passes/passes_lowering_msl
-import ./frontend/nim_to_crucible
-import ./backends/lang_utils
-import workspace/crucible/vendor/wgpu
-import ./passes/pass_datatypes
-import ./passes/pass_registry
-import ./passes/passes_legalizations
-import ./passes/passes_validations
-import ./passes/passes_optimizations
-import ./passes/passes_lowering
-import ./passes/passes_normalizations
+import std/macros
 
-import ../builtins/builtins # all the builtins for the backend to make the Nim compiler happy
+import ../builtins/builtins
 export builtins
 import ../builtins/builtins_compilermagic
 export builtins_compilermagic
 
-proc farmTopLevel(ctx: var GpuContext, ast: GpuAst, kernel: string, varBlock: var GpuAst) =
-  ## Registers top-level procs in allFnTab, global fns in fnTab,
-  ## top-level vars in `varBlock`. A non-empty `kernel` narrows fnTab to that kernel.
-  case ast.kind
-  of gpuProc:
-    ctx.allFnTab[ast.pName] = ast
-    if ast.isGlobal() and (kernel.len == 0 or ast.pName.ident() == kernel):
-      ctx.fnTab[ast.pName] = ast
-  of gpuBlock:
-    for ch in ast:
-      ctx.farmTopLevel(ch, kernel, varBlock)
-  of gpuVar, gpuConstexpr:
-    varBlock.statements.add ast
-  of gpuTypeDef, gpuAlias:
-    error "Unexpected type def / alias def found. These should be in `ctx.types` now: " & $ast
-  else:
-    discard
+import ./ir/ast_datatypes
+import ./frontend/nim_to_crucible
+import ./passes/pass_registry
+import ./passes/passes_legalizations
+import ./passes/passes_normalizations
+import ./passes/passes_optimizations
+import ./passes/passes_lowering
+import ./passes/passes_lowering_hlsl
+import ./passes/passes_lowering_glsl
+import ./passes/passes_lowering_wgsl
+import ./passes/passes_lowering_msl
+import ./passes/passes_lowering_opencl
+import ./passes/passes_validations
+import ./passes/passes_low_reserved
+import ./backends/backends_api
+from ./backends/hlsl_lang import HlslFlavor, fvD3D12, fvVulkan
 
-proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
-  ## Farms the AST into ctx (fnTab, allFnTab, globalBlocks) ahead of runPasses.
-  ## typesFirst: C-family block layout plus callee harvest, WGSL the reverse
-  ## and no harvest (its callees inline).
-  for k, v in pairs(ctx.genericInsts):
-    ctx.allFnTab[k] = v
-  var varBlock = GpuAst(kind: gpuBlock)
-  ctx.farmTopLevel(ast, "", varBlock)
-  when typesFirst:
-    for k, typ in ctx.types:
-      ctx.globalBlocks.add typ
-    # program-scope storage is read-only on the C-family targets:
-    # - Metal requires the constant space at program scope
-    # - CUDA writes __constant__, OpenCL writes constant
-    # - WGSL module-scope vars are per-invocation private and keep their own semantics
-    for stmt in varBlock.statements.mitems:
-      if stmt.kind == gpuVar and stmt.addressSpace == asRMEM:
-        stmt.addressSpace = asConstant
-        stmt.vType = stmt.vType.withAddressSpace(asConstant)
-        stmt.vName.symbol.typ = stmt.vType
-    ctx.globalBlocks.add varBlock
-  else:
-    ctx.globalBlocks.add varBlock
-    var typBlock = GpuAst(kind: gpuBlock)
-    for k, typ in ctx.types:
-      typBlock.statements.add typ
-    ctx.globalBlocks.add typBlock
-
-func registerCommonPasses*(reg: var PassRegistry) =
-  ## Registers passes common to all backends, through optimization.
-  ## The backend bundles own lowering. Post-validation runs after them.
-  reg.registerValidationPrePasses()
+macro codegenMetal(body: typed): string =
+  ## Compiles a `metal:` block body into Metal Shading Language (MSL) code:
+  ## CIRv2 lowering, the pass registry in stage order, then the MSL printer.
+  ## A refusal or a verifier violation anywhere in the chain is a compile-time
+  ## error naming the construct.
+  let (m, lerr) = lowerCirv2Unverified(body)
+  if lerr.len > 0:
+    error(lerr)
+  # stage order, v1's pipeline: legalize -> normalize -> optimize -> lower
+  var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
   reg.registerOptimizationPasses()
-
-macro toCrucibleAst*(body: typed): GpuAst =
-  ## Converts GPU code to IR (GpuAst) without running any passes.
-  var ctx = GpuContext()
-  var typeReg = TypeRegistry(types: ctx.types)
-  var gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  # Clear scope tables before newLit (can't serialize seq/Symbol refs)
-  # Scope syms are stored on GpuContext, not gpuBlock, so no walk needed.
-  newLit(gpuAst)
-
-macro codegenCuda(body: typed): string =
-  ## Compiles a `cuda:` block body into CUDA code.
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  reg.registerCudaLoweringPasses()
+  reg.registerSharedLoweringPasses()
+  # per-target reserved-word renaming, before printing
+  reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
+  reg.registerMslLoweringPasses()
   reg.registerValidationPostPasses()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = true)
-  runPasses(ctx, reg)
-  result = newLit(ctx.codegenCuda())
-
-macro cuda*(body: untyped): string =
-  ## Converts the body of this macro into CUDA code.
-  # The untyped -> typed macro delegation dance
-  # allows delaying compileTime const resolution
-  # until after crucibleCompileTarget is updated
-  crucibleCompileTarget = ctCuda
-  result = newCall(bindSym"codegenCuda", body)
-
-macro codegenOpenCL(body: typed): string =
-  ## Compiles an `opencl:` block body into OpenCL C code.
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  reg.registerOpenclLoweringPasses()
-  reg.registerValidationPostPasses()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = true)
-  runPasses(ctx, reg)
-  result = newLit(ctx.codegenOpenCL())
-
-macro opencl*(body: untyped): string =
-  ## Converts the body of this macro into OpenCL C code.
-  # The untyped -> typed macro delegation dance
-  # allows delaying compileTime const resolution
-  # until after crucibleCompileTarget is updated
-  crucibleCompileTarget = ctOpenCL
-  result = newCall(bindSym"codegenOpenCL", body)
-
-macro codegenGLSL(body: typed): string =
-  ## Compiles a `glsl:` block body into GLSL compute shader code.
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  reg.registerGlslLoweringPasses()
-  reg.registerValidationPostPasses()
-  reg.registerGlslValidationPasses()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = true)
-  runPasses(ctx, reg)
-  let src = ctx.codegenGLSL()
-  result = newLit(src)
-
-macro glsl*(body: untyped): string =
-  ## Converts the body of this macro into GLSL compute shader code.
-  # The untyped -> typed macro delegation dance
-  # allows delaying compileTime const resolution
-  # until after crucibleCompileTarget is updated
-  crucibleCompileTarget = ctGlsl
-  result = newCall(bindSym"codegenGLSL", body)
-
-macro codegenSpirvShader(body: typed): seq[uint32] =
-  ## Compiles a `spirv:` block body into binary SPIR-V words (Vulkan environment).
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  reg.registerSpirvLoweringPasses()
-  reg.registerValidationPostPasses()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = true)
-  runPasses(ctx, reg)
-  result = newLit(ctx.codegenSpirvShader())
-
-macro spirv*(body: untyped): seq[uint32] =
-  ## Converts the body of this macro into binary SPIR-V words (Vulkan environment).
-  # The untyped -> typed macro delegation dance
-  # allows delaying compileTime const resolution
-  # until after crucibleCompileTarget is updated
-  crucibleCompileTarget = ctSpirvShader
-  result = newCall(bindSym"codegenSpirvShader", body)
-
-macro codegenWebGpu(body: typed): string =
-  ## Compiles a `webgpu:` block body into WebGPU WGSL code.
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  reg.registerWgslLoweringPasses()
-  reg.registerValidationPostPasses()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = false)
-  runPasses(ctx, reg)
-  result = newLit(ctx.codegenWebGpu())
-
-macro webgpu*(body: untyped): string =
-  ## Converts the body of this macro into WebGPU WGSL code.
-  # The untyped -> typed macro delegation dance
-  # allows delaying compileTime const resolution
-  # until after crucibleCompileTarget is updated
-  crucibleCompileTarget = ctWebGPU
-  result = newCall(bindSym"codegenWebGpu", body)
-
-macro codegenMetal(body: typed): string =
-  ## Compiles a `metal:` block body into Metal Shading Language (MSL) code.
-  var ctx = GpuContext()
-  var reg = PassRegistry.new()
-  reg.registerCommonPasses()
-  reg.registerMetalLoweringPasses()
-  reg.registerValidationPostPasses()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = true)
-  runPasses(ctx, reg)
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  var ctx = GpuContext(module: m)
   result = newLit(ctx.codegenMetal())
 
 macro metal*(body: untyped): string =
   ## Converts the body of this macro into Metal Shading Language (MSL) code.
-  # The untyped -> typed macro delegation dance
-  # allows delaying compileTime const resolution
-  # until after crucibleCompileTarget is updated
+  # untyped -> typed macro delegation: compileTime const resolution
+  # delays until after crucibleCompileTarget is updated
   crucibleCompileTarget = ctMetal
   result = newCall(bindSym"codegenMetal", body)
 
-macro codegenHlsl(flavor: static HlslFlavor, body: typed): string =
-  ## Compiles an `hlsl:` block body into HLSL compute shader code.
-  var ctx = GpuContext()
+macro codegenCuda(body: typed): string =
+  ## Compiles a `cuda:` block body into CUDA code.
+  error("cuda: the CUDA printer is not re-homed onto CIRv2 yet, " &
+    "the Metal printer (src/codegen/backends/msl_lang.nim) is the reference")
+
+macro cuda*(body: untyped): string =
+  ## Converts the body of this macro into CUDA code.
+  crucibleCompileTarget = ctCuda
+  result = newCall(bindSym"codegenCuda", body)
+
+macro codegenOpenCL(body: typed): string =
+  ## Compiles an `opencl:` block body into OpenCL C code: CIRv2 lowering,
+  ## the pass registry in stage order, then the OpenCL printer.
+  ## Refusals and verifier violations in the chain are compile-time
+  ## errors naming the construct.
+  let (m, lerr) = lowerCirv2Unverified(body)
+  if lerr.len > 0:
+    error(lerr)
   var reg = PassRegistry.new()
-  reg.registerCommonPasses()
+  reg.registerLegalizationPasses()
+  reg.registerNormalizationPasses()
+  reg.registerOptimizationPasses()
+  reg.registerSharedLoweringPasses()
+  # per-target reserved-word renaming, before printing
+  reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
+  reg.registerOpenclLoweringPasses()
+  reg.registerValidationPostPasses()
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  var ctx = GpuContext(module: m)
+  result = newLit(ctx.codegenOpenCL())
+
+macro opencl*(body: untyped): string =
+  ## Converts the body of this macro into OpenCL C code.
+  crucibleCompileTarget = ctOpenCL
+  result = newCall(bindSym"codegenOpenCL", body)
+
+macro codegenGLSL(body: typed): string =
+  ## Compiles a `glsl:` block body into GLSL compute shader code:
+  ## CIRv2 lowering, the pass registry in stage order, then the GLSL printer.
+  ## A refusal or a verifier violation anywhere in the chain is a compile-time
+  ## error naming the construct.
+  let (m, lerr) = lowerCirv2Unverified(body)
+  if lerr.len > 0:
+    error(lerr)
+  var reg = PassRegistry.new()
+  reg.registerLegalizationPasses()
+  reg.registerNormalizationPasses()
+  reg.registerOptimizationPasses()
+  reg.registerSharedLoweringPasses()
+  # per-target reserved-word renaming runs before printing, the GLSL lowering
+  # passes register after the rename so the relocated program-scope
+  # declarations use the renamed names their body already references
+  reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
+  reg.registerGlslLoweringPasses()
+  reg.registerValidationPostPasses()
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  var ctx = GpuContext(module: m)
+  result = newLit(ctx.codegenGLSL())
+
+macro glsl*(body: untyped): string =
+  ## Converts the body of this macro into GLSL compute shader code.
+  crucibleCompileTarget = ctGlsl
+  result = newCall(bindSym"codegenGLSL", body)
+
+macro codegenSpirvShader(body: typed): seq[uint32] =
+  ## Compiles a `spirv:` block body into binary SPIR-V words for the Vulkan
+  ## environment through CIRv2 lowering, the pass registry in stage order,
+  ## then the SPIR-V encoder.
+  ##
+  ## Any refusal or verifier violation in the chain is a compile-time error
+  ## naming the construct.
+  let (m, lerr) = lowerCirv2Unverified(body)
+  if lerr.len > 0:
+    error(lerr)
+  var reg = PassRegistry.new()
+  reg.registerLegalizationPasses()
+  reg.registerNormalizationPasses()
+  reg.registerOptimizationPasses()
+  reg.registerSharedLoweringPasses()
+  reg.registerValidationPostPasses()
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  var ctx = GpuContext(module: m)
+  result = newLit(ctx.codegenSpirvShader())
+
+macro spirv*(body: untyped): seq[uint32] =
+  ## Converts the body of this macro into binary SPIR-V words (Vulkan environment).
+  crucibleCompileTarget = ctSpirvShader
+  result = newCall(bindSym"codegenSpirvShader", body)
+
+macro codegenWebGpu(body: typed): string =
+  ## Compiles a `webgpu:` block body into WebGPU WGSL code: CIRv2 lowering,
+  ## the pass registry in stage order, then the WGSL printer.
+  ## A refusal or a verifier violation anywhere in the chain is a compile-time
+  ## error naming the construct.
+  let (m, lerr) = lowerCirv2Unverified(body)
+  if lerr.len > 0:
+    error(lerr)
+  var reg = PassRegistry.new()
+  reg.registerLegalizationPasses()
+  reg.registerNormalizationPasses()
+  reg.registerOptimizationPasses()
+  reg.registerSharedLoweringPasses()
+  # per-target reserved-word renaming, before printing
+  # WGSL reserves the double-underscore identifier head, every `__`-prefixed name gains a `wgsl_` prefix
+  reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
+  reg.registerWgslLoweringPasses()
+  reg.registerValidationPostPasses()
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  var ctx = GpuContext(module: m)
+  result = newLit(ctx.codegenWebGpu())
+
+macro webgpu*(body: untyped): string =
+  ## Converts the body of this macro into WebGPU WGSL code.
+  crucibleCompileTarget = ctWebGPU
+  result = newCall(bindSym"codegenWebGpu", body)
+
+macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
+  ## Compiles an `hlsl:` block body into HLSL compute shader code.
+  ##
+  ## - CIRv2 lowering, the pass registry in stage order with the HLSL
+  ##   per-target lowering passes, then the HLSL printer for `flavor`
+  ## - a refusal or a verifier violation in the chain is a compile-time
+  ##   error naming the construct
+  let (m, lerr) = lowerCirv2Unverified(body)
+  if lerr.len > 0:
+    error(lerr)
+  var reg = PassRegistry.new()
+  reg.registerLegalizationPasses()
+  reg.registerNormalizationPasses()
+  reg.registerOptimizationPasses()
+  reg.registerSharedLoweringPasses()
   reg.registerHlslLoweringPasses()
   reg.registerValidationPostPasses()
-  var typeReg = TypeRegistry(types: ctx.types)
-  let gpuAst = ctx.toCrucibleAst(typeReg, body)
-  ctx.types = typeReg.types
-  ctx.ingestTopLevel(gpuAst, typesFirst = true)
-  runPasses(ctx, reg)
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  var ctx = GpuContext(module: m)
   result = newLit(ctx.codegenHlsl(flavor))
 
-macro hlsl*(flavor: static HlslFlavor = fvD3D12, body: untyped): string =
-  ## Converts the body of this macro into HLSL compute shader code,
-  ## resource binding per `flavor`, D3D12-native by default.
+macro hlsl*(flavor: untyped, body: untyped): string =
+  ## Converts the body of this macro into HLSL compute shader code.
   ##
-  # The untyped -> typed macro delegation dance
-  # allows delaying compileTime const resolution
-  # until after crucibleCompileTarget is updated
+  ## - resource binding per `flavor`, D3D12-native by default,
+  ##   fvVulkan emits the zero-descriptor flavor for the engine's address route
+  ## - `flavor` stays untyped so overload resolution never sems the body,
+  ##   a typed parameter would evaluate it outside any DSL block
+  var name = ""
+  if flavor.kind in {nnkIdent, nnkSym}:
+    name = flavor.strVal
+  elif flavor.kind == nnkDotExpr:
+    name = flavor[1].strVal
+  var flav = fvD3D12
+  case name
+  of "fvD3D12":
+    discard
+  of "fvVulkan":
+    flav = fvVulkan
+  else:
+    error("hlsl: unknown flavor `" & name & "`, expected fvD3D12 or fvVulkan")
   crucibleCompileTarget = ctHlsl
-  # `flavor` is a static macro param, it reads as the value inside the body
-  result = newCall(bindSym"codegenHlsl", newLit(flavor), body)
+  result = newCall(bindSym"codegenHlsl", body, newLit(flav))
 
 macro hlsl*(body: untyped): string =
   ## Converts the body of this macro into HLSL compute shader code,
   ## D3D12-native resource binding.
   crucibleCompileTarget = ctHlsl
-  result = newCall(bindSym"codegenHlsl", newLit(fvD3D12), body)
+  result = newCall(bindSym"codegenHlsl", body)

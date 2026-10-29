@@ -5,542 +5,885 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, strformat, strutils, sugar, sequtils, sets, tables, options]
+## WebGPU WGSL printer: a structured CIRv2 module rendered as WGSL source,
+## table-driven over the closed type lattice.
+##
+## Kernel parameter bindings, one `@group(0) @binding(i)` per parameter in host `store` packing order, output first:
+## - device buffers declare `var<storage, read_write> name: array<T>;`, the engine binds them writable
+## - scalars and value structs declare `var<storage, read> name: T;`, packed into the 256-byte-aligned scratch buffer
+## - a bool scalar declares `u32` (bool is not host-shareable), the WGSL lowering pass rewrites the body reads to `name != 0u`
+## - the kernel signature takes only `@builtin(...)` coordinate parameters, first-use order
+##
+## Addressing, memory classes, jumps:
+## - a pointer local or pointer-holding struct local refuses, the WGSL lowering pass dissolves the shapes into pointees and leaf symbols
+## - a smem/const_mem kernel local relocates into `CirModule.globals`, the WGSL lowering pass owns the relocation
+## - struct declarations emit for the referenced value structs only, a referenced pointer-holding struct refuses
+## - jmp to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
 
+import ../ir/cirv2_lang
+import ../frontend/nim_to_crucible
+import ../passes/pass_helpers
+import std/[macros, sets, strutils]
 import ../ir/ast_datatypes
-import ../ir/ast_type_resolvers
 
-import ./lang_utils
+type
+  PrintCtx = object
+    fnName: string
+    ## First refusal of the walk, "" while clean.
+    err: string
+    indent: int
+    inKernel: bool
+    ## False inside a device function, a device function reading a coordinate builtin refuses.
+    paramNames: HashSet[string]
+    ## Parameter names of the proc in flight, a pointer-typed parameter prints
+    ## as-is (WGSL device functions take real pointer parameters).
+    ## Only pointer locals refuse as values.
+    builtins: OrderedSet[CoordBuiltinKind]
+    ## Canonical coordinate builtin names the kernel body references, first-use order.
+    neededStructs: HashSet[string]
+    ## Struct type names referenced by the emitted declarations and expressions.
 
+proc failing(ctx: PrintCtx): bool =
+  ctx.err.len > 0
 
-proc gpuTypeToString*(t: GpuType,
-                      ident: string = "",
-                      allowArrayToPtr = false,
-                      allowEmptyIdent = false,
-                      addrSpace: AddressSpace = asRMEM): string
+proc fail(ctx: var PrintCtx, detail: string) =
+  ## Records the first refusal, naming the proc.
+  if ctx.err.len == 0:
+    ctx.err = "cirv2 printer wgsl: at " & ctx.fnName & ": " & detail
 
+# ═══════════════════════════════════════════════════════════════════════
+# Types
+# ═══════════════════════════════════════════════════════════════════════
 
-
-proc addrSpaceToWgsl(space: AddressSpace): string =
-  ## WGSL keyword for `ptr<space, T>` types.
-  case space
-  of asDevice: "storage"
-  of asConstant: "uniform"
-  of asSMEM: "workgroup"
-  of asRMEM: "function"
-
-proc constructPtrSignature(addrSpace: AddressSpace, idTyp: GpuType, ptrStr, typStr: string): string =
-  ## Constructs the `ptr<addressSpace, typStr, [read / read_write]>` string, which only includes
-  ## the RW string if the address space is `storage`
-  let rw = if idTyp.kind != gtVoid: idTyp.mutable else: false # symbol is a pointer -> mutable (can be implicit via `var T`)
-  let rwStr = if rw: "read_write" else: "read"
-  let space = addrSpaceToWgsl(addrSpace)
-  if addrSpace == asDevice:
-    result = &"{ptrStr}<{space}, {typStr}, {rwStr}>"
-  else:
-    result = &"{ptrStr}<{space}, {typStr}>"
-
-proc gpuTypeToString*(t: GpuTypeKind): string =
-  case t
-  of gtBool: "bool"
-  of gtUint32: "u32"
-  of gtInt32: "i32"
-  of gtFloat32: "f32"
-  of gtFloat16: "f16"
-  of gtVoid: ""
-  of gtSize_t: "u32" ##: Acceptable mapping?
-  of gtPtr: "ptr" ## XXX: needs address space and target type, `ptr<address_space, target_type>`
-  of gtUncheckedArray: "array"
-  of gtObject: "struct"
-  of gtUint8, gtUint16, gtUint64, gtInt16, gtInt64, gtFloat64, gtVoidPtr, gtString:
-    error "The type " & $t & " does not exist on the WebGPU target."
-  of gtStatic: "i32"
-  else:
-    error "Invalid type : " & $t
-
-proc gpuTypeToString*(t: GpuType, ident: string = "", allowArrayToPtr = false,
-                           allowEmptyIdent = false,
-                           addrSpace: AddressSpace = asRMEM
-                    ): string =
-  var skipIdent = false
+proc spellWgslScalar(ctx: var PrintCtx, t: CirType): string =
+  ## WGSL name of a non-array leaf type, "" when the caller composes the name.
+  ## A struct name registers the struct for reference-driven emission.
   case t.kind
-  of gtPtr:
-    # Let `foo` be the symbol `id`. If for example we generate code for `addr(foo)`, the type
-    # `t` will be `ptr typeof(foo)`. The type of the symbol `id` though is static.
-    # Thus, can use `id's` type to determine if we need mutability or not. If `id` was a
-    # pointer, `mutable` will be true and `false` otherwise.
-    # If code called with default `id`, type will be nil
-    let ptrStr = gpuTypeToString(t.kind)
-    let typStr = gpuTypeToString(t.to, allowEmptyIdent = true)
-    let idTyp = if t.to.kind == gtPtr: t.to else: t
-    result = constructPtrSignature(addrSpace, idTyp, ptrStr, typStr)
-  of gtArray:
-    # empty idents happen in e.g. function return types or casts
-    if ident.len == 0 and not allowEmptyIdent: # and not allowArrayToPtr:
-      #error("Invalid call, got an array type but don't have an identifier: " & $t)
-
-      when nimvm:
-        error("Invalid call, got an array type but don't have an identifier: " & $t)
-      else:
-        raise newException(ValueError, "Invalid call, got an array type but don't have an identifier: " & $t)
-
-    let identPrefix = if ident.len > 0: ident & ": " else: ""
-    let typ = gpuTypeToString(t.aTyp, allowEmptyIdent = true)
-    if t.aLen == 0:
-      result = &"{identPrefix}array<{typ}>"
+  of ctVoid:
+    result = "void"
+  of ctBool:
+    result = "bool"
+  of ctInt:
+    case t.bits
+    of 32:
+      result = "i32"
+    of 64:
+      result = "i64"
     else:
-      result = &"{identPrefix}array<{typ}, {t.aLen}>"
-    skipIdent = true
-  of gtGenericInst:
-    # NOTE: WGSL does not support actual custom generic types. And as we only anyway deal with generic instantiations
-    # we simply turn e.g. `foo[float32, uint32]` into `foo_f32_u32`.
-    result = t.gName
-    if t.gArgs.len == 1:
-      result.add gpuTypeToShortString(t.gArgs[0])
-    elif t.gArgs.len > 1:
-      # 2+ args collapse to a short hash
-      result.add mangledHashName("", $hash(t))
-  of gtObject: result = t.name
-  of gtUncheckedArray:     result = gpuTypeToString(t.kind) & '<' & gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) & '>'
-  of gtStatic: result = "i32"
-  else:        result = gpuTypeToString(t.kind)
+      ctx.fail($t.bits & "-bit integers have no WGSL type, only 32 and 64")
+      result = ""
+  of ctUint:
+    case t.bits
+    of 32:
+      result = "u32"
+    of 64:
+      result = "u64"
+    else:
+      ctx.fail($t.bits & "-bit integers have no WGSL type, only 32 and 64")
+      result = ""
+  of ctFloat:
+    case t.bits
+    of 16:
+      result = "f16"
+    of 32:
+      result = "f32"
+    of 64:
+      result = "f64"
+    else:
+      result = ""
+  of ctVector:
+    let elem = ctx.spellWgslScalar(t.vElem)
+    if elem.len > 0:
+      result = "vec" & $t.vN & "<" & elem & ">"
+  of ctStruct:
+    ctx.neededStructs.incl(t.name)
+    result = t.name
+  of ctPtr, ctAptr, ctArray, ctProc:
+    result = ""
 
-  if ident.len > 0 and not skipIdent:
-    result = ident & ": " & result
-
-proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
-  ## Returns the correct function with its return type
-  if typ.kind == gtPtr and typ.to.kind == gtArray:
-    ## TODO!
-    # crazy stuff. Syntax to return a pointer to a statically sized array:
-    # `Foo (*fnName(fnArgs))[ArrayLen]`
-    # where the return type is actually:
-    # `Foo (*)[ArrayLen]` (which already is hideous)
-    let arrayTyp = typ.to.aTyp
-    let innerTyp = gpuTypeToString(arrayTyp, allowEmptyIdent = true)
-    let innerLen = $typ.to.aLen
-    ## XXX: wrong
-    result = &"{innerTyp} (*{fn}({fnArgs}))[{innerLen}]"
+proc spellWgslTypeBare(ctx: var PrintCtx, t: CirType): string =
+  ## WGSL name of `t` with no identifier, the form of casts and constructors.
+  case t.kind
+  of ctArray:
+    let elem = ctx.spellWgslTypeBare(t.aElem)
+    if t.aN == 0:
+      result = "array<" & elem & ">"
+    else:
+      result = "array<" & elem & ", " & $t.aN & ">"
   else:
-    result = &"{fn}({fnArgs})"
-    let typ = gpuTypeToString(typ, allowEmptyIdent = true)
-    if typ.len > 0:
-      result.add &" -> {typ}"
-proc determineIdent(arg: GpuAst): GpuAst =
-  ## Tries to determine the underlying ident that is contained in this node.
-  ## The issue is the argument to a `gpuCall` can be a complicated expression.
-  ## Depending on the node it may be possible to extract a simple identifier,
-  ## e.g. for `addr(foo)` (`gpuAddr` of `gpuIdent` node) we can get the ident.
-  ## If this fails, we return a `gpuDiscard` node.
+    result = ctx.spellWgslScalar(t)
+
+proc spellWgslPtrType(ctx: var PrintCtx, t: CirType): string =
+  ## WGSL pointer type of a `ptr` local or device-function parameter,
+  ## the address space leads, storage pointers declare the access mode.
+  let elem = ctx.spellWgslTypeBare(t.pElem)
+  case t.space
+  of caThread:
+    result = "ptr<function, " & elem & ">"
+  of caThreadgroup:
+    result = "ptr<workgroup, " & elem & ">"
+  of caDevice:
+    if t.kind == ctAptr:
+      ctx.fail("device array pointer type has no WGSL form, the binding is the array itself")
+      return ""
+    result = "ptr<storage, " & elem & ", read_write>"
+  of caConstant:
+    ctx.fail("pointer to constant space, WGSL consts have no address")
+    return ""
+
+# ═══════════════════════════════════════════════════════════════════════
+# Byte size (WGSL has no sizeof)
+# ═══════════════════════════════════════════════════════════════════════
+
+proc roundUpMultiple(v, multiple: int): int =
+  (v + multiple - 1) div multiple * multiple
+
+proc scalarByteSize(t: CirType): int =
+  ## Byte size of a scalar, 4 for bool (the launch ABI width), 0 for widthless kinds.
+  case t.kind
+  of ctBool: 4
+  of ctInt, ctUint, ctFloat: t.bits div 8
+  else: 0
+
+proc wgslByteSize(t: CirType): int
+  ## Forward declaration, struct size recurses into members.
+
+proc wgslAlign(t: CirType): int =
+  ## Byte alignment of a type, the launch ABI packing rules.
+  case t.kind
+  of ctStruct:
+    var align = 1
+    for f in t.fields:
+      align = max(align, wgslAlign(f.typ))
+    align
+  of ctArray: wgslAlign(t.aElem)
+  of ctVector: max(scalarByteSize(t.vElem), 1)
+  of ctPtr, ctAptr: 8
+  else: max(scalarByteSize(t), 1)
+
+proc wgslByteSize(t: CirType): int =
+  ## Byte size of a type, the `eSizeof` value, matching the host packing:
+  ## each struct member aligned to its own width, the struct size rounded to
+  ## the widest member, an array sized as whole copies of its element.
+  case t.kind
+  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
+    scalarByteSize(t)
+  of ctVector:
+    scalarByteSize(t.vElem) * t.vN
+  of ctArray:
+    wgslByteSize(t.aElem) * t.aN
+  of ctStruct:
+    var off = 0
+    var align = 1
+    for f in t.fields:
+      let fa = wgslAlign(f.typ)
+      off = roundUpMultiple(off, fa) + wgslByteSize(f.typ)
+      align = max(align, fa)
+    roundUpMultiple(off, align)
+  of ctPtr, ctAptr: 8
+  of ctProc: 0
+
+# ═══════════════════════════════════════════════════════════════════════
+# Module feature scan
+# ═══════════════════════════════════════════════════════════════════════
+
+type
+  ModuleFeatures = object
+    fp16: bool
+
+proc scanType(t: CirType, f: var ModuleFeatures) =
+  if t.isNil:
+    return
+  case t.kind
+  of ctFloat:
+    if t.bits == 16:
+      f.fp16 = true
+  of ctVector: scanType(t.vElem, f)
+  of ctArray: scanType(t.aElem, f)
+  of ctPtr, ctAptr: scanType(t.pElem, f)
+  of ctStruct:
+    for fl in t.fields:
+      scanType(fl.typ, f)
+  of ctVoid, ctBool, ctInt, ctUint, ctProc:
+    discard
+
+proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      scanType(s.declType, f)
+      if s.init != nil:
+        scanType(getExprType(s.init), f)
+    of sAsgn:
+      scanType(getExprType(s.lhs), f)
+      scanType(getExprType(s.rhs), f)
+    of sIte:
+      scanStmts(s.thenBody, f)
+      scanStmts(s.elseBody, f)
+    of sLoop:
+      scanStmts(s.loopBody, f)
+    of sScope:
+      scanStmts(s.scopeBody, f)
+    of sRet:
+      if s.retVal != nil:
+        scanType(getExprType(s.retVal), f)
+    of sCall, sJmp, sLab, sDiscard, sAssume, sCase, sAsm:
+      discard
+
+# ═══════════════════════════════════════════════════════════════════════
+# Coordinate builtins
+# ═══════════════════════════════════════════════════════════════════════
+
+type WgslBuiltinParam = tuple[attribute, param, wgslType: string]
+  ## Coordinate builtin kind -> WGSL `@builtin(...)` kernel parameter.
+  ## - `attribute`: the WGSL builtin attribute.
+  ## - `param`: the identifier the kernel body reads.
+  ## - `wgslType`: the WGSL type (scalar for the flat thread index).
+
+proc wgslBuiltinParam(kind: CoordBuiltinKind): WgslBuiltinParam =
+  ## Returns the WGSL parameter of a canonical coordinate builtin kind, an empty tuple when none exists.
+  ## `threads_per_threadgroup` is absent, WGSL exposes the threadgroup size
+  ## only as the `@workgroup_size` entry-point attribute, a read refuses.
+  case kind
+  of cbkThreadPositionInGrid:
+    ("global_invocation_id", "global_id", "vec3<u32>")
+  of cbkThreadgroupPositionInGrid:
+    ("workgroup_id", "workgroup_id", "vec3<u32>")
+  of cbkThreadPositionInThreadgroup:
+    ("local_invocation_id", "local_invocation_id", "vec3<u32>")
+  of cbkThreadgroupsPerGrid:
+    ("num_workgroups", "num_workgroups", "vec3<u32>")
+  of cbkThreadIndexInThreadgroup:
+    ("local_invocation_index", "local_invocation_index", "u32")
+  of cbkNone, cbkThreadsPerThreadgroup:
+    ("", "", "")
+
+proc wgslCoordComponent(kind: CoordBuiltinKind, field: string): string =
+  ## WGSL read of one canonical coordinate builtin component, "" for a non-component field.
+  case field
+  of "x", "y", "z":
+    let p = wgslBuiltinParam(kind)
+    if p.attribute.len > 0:
+      result = "i32(" & p.param & "." & field & ")"
+  else:
+    result = ""
+
+proc wgslWholeVector(kind: CoordBuiltinKind): string =
+  ## WGSL read of a canonical coordinate builtin whole, the i32 vector
+  ## composed from the u32 parameter components.
+  let p = wgslBuiltinParam(kind)
+  result = "vec3<i32>(i32(" & p.param & ".x), i32(" & p.param & ".y), i32(" &
+    p.param & ".z))"
+
+# ═══════════════════════════════════════════════════════════════════════
+# Expressions
+# ═══════════════════════════════════════════════════════════════════════
+
+proc printExpr(ctx: var PrintCtx, e: CirExpr): string
+  ## Forward declaration, expressions recurse into themselves.
+
+proc spellWgslLit(e: CirExpr): string =
+  ## WGSL token of a literal, typed by its literal type.
+  ## Bare literals are abstract in WGSL and work in any typed context,
+  ## u32 gains the `u` suffix, f16 the `h` suffix.
+  case e.kind
+  of eIntLit:
+    case e.litType.kind
+    of ctUint:
+      if e.litType.bits == 32:
+        result = $e.value & "u"
+      else:
+        result = $e.value
+    else:
+      result = $e.value
+  of eFloatLit:
+    case e.fLitType.bits
+    of 16: result = $e.fValue & "h"
+    else: result = $e.fValue
+  of eTrue: result = "true"
+  of eFalse: result = "false"
+  else: result = "<wgsl: not a literal>"
+
+proc spellVectorComponent(name: string): string =
+  ## WGSL component letter of a CIRv2 vector component name (`F0`..`F3`).
+  case name
+  of "F0": "x"
+  of "F1": "y"
+  of "F2": "z"
+  of "F3": "w"
+  else: ""
+
+proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
+  if ctx.failing():
+    return ""
+  case e.kind
+  of eNil:
+    ctx.fail("nil literal is outside the WGSL subset")
+    return ""
+  of eTrue, eFalse, eIntLit, eFloatLit:
+    return spellWgslLit(e)
+  of eSym:
+    if e.typ != nil and e.typ.kind == ctPtr and e.name notin ctx.paramNames:
+      ctx.fail("pointer local " & e.name & " used as a value, WGSL has no" &
+        " pointer values, the WGSL lowering pass dissolves pointer locals")
+      return ""
+    if e.typ != nil and e.typ.kind == ctStruct and e.typ.containsPtrDeep and
+        e.name notin ctx.paramNames:
+      ctx.fail("struct local " & e.name &
+        " used whole, WGSL has no pointer struct members, the WGSL lowering" &
+        " pass dissolves it into its fields")
+      return ""
+    if e.coordBuiltin != cbkNone:
+      if not ctx.inKernel:
+        ctx.fail("coordinate builtin " & e.name &
+          " in a device function, WGSL builtins are entry-point parameters")
+        return ""
+      if e.coordBuiltin == cbkThreadsPerThreadgroup:
+        ctx.fail("threads_per_threadgroup has no WGSL builtin: WGSL has only" &
+          " the @workgroup_size attribute, the threadgroup size is not" &
+          " addressable from WGSL")
+        return ""
+      ctx.builtins.incl(e.coordBuiltin)
+      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+        return "i32(" & wgslBuiltinParam(e.coordBuiltin).param & ")"
+      return wgslWholeVector(e.coordBuiltin)
+    return e.name
+  of eAt, ePat:
+    let base = (if e.kind == eAt: e.atBase else: e.patBase)
+    let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
+    let bt = getExprType(base)
+    if bt != nil and bt.kind in {ctPtr, ctAptr} and
+        not (bt.kind == ctAptr and bt.space == caDevice):
+      # a pointer local indexes through an explicit dereference
+      return "(*" & ctx.printExpr(base) & ")[" & idx & "]"
+    return ctx.printExpr(base) & "[" & idx & "]"
+  of eDeref:
+    return "(*" & ctx.printExpr(e.derefOperand) & ")"
+  of eDot:
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+      if not ctx.inKernel:
+        ctx.fail("coordinate builtin " & e.dotBase.name &
+          " in a device function, WGSL builtins are entry-point parameters")
+        return ""
+      let mapped = wgslCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
+      if mapped.len == 0:
+        if e.dotBase.coordBuiltin == cbkThreadsPerThreadgroup:
+          ctx.fail("threads_per_threadgroup has no WGSL builtin: WGSL has only" &
+            " the @workgroup_size attribute, the threadgroup size is not" &
+            " addressable from WGSL")
+        else:
+          ctx.fail("no coordinate component " & e.fieldName)
+        return ""
+      ctx.builtins.incl(e.dotBase.coordBuiltin)
+      return mapped
+    let bt = getExprType(e.dotBase)
+    if bt != nil and bt.kind == ctVector:
+      let comp = spellVectorComponent(e.fieldName)
+      if comp.len == 0:
+        ctx.fail("no vector component " & e.fieldName)
+        return ""
+      return ctx.printExpr(e.dotBase) & "." & comp
+    return ctx.printExpr(e.dotBase) & "." & e.fieldName
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    let op = case e.kind
+      of eAdd: "+"
+      of eSub: "-"
+      of eMul: "*"
+      of eDiv: "/"
+      of eMod: "%"
+      of eShl: "<<"
+      of eShr: ">>"
+      of eBitAnd: "&"
+      of eBitOr: "|"
+      else: "^"
+    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
+  of eEq, eNeq, eLt, eLe:
+    let op = case e.kind
+      of eEq: "=="
+      of eNeq: "!="
+      of eLt: "<"
+      else: "<="
+    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
+  of eNot:
+    return "(!" & ctx.printExpr(e.notOperand) & ")"
+  of eAnd, eOr:
+    let op = if e.kind == eAnd: "&&" else: "||"
+    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
+  of eBitNot:
+    return "(~" & ctx.printExpr(e.unOperand) & ")"
+  of eNeg:
+    return "(-" & ctx.printExpr(e.unOperand) & ")"
+  of eCast:
+    return "bitcast<" & ctx.spellWgslTypeBare(e.castType) & ">(" &
+      ctx.printExpr(e.castOperand) & ")"
+  of eConv:
+    if e.castType.kind == ctBool:
+      ctx.fail("conversion to bool, WGSL has no bool constructor, compare" &
+        " against zero")
+      return ""
+    let bt = getExprType(e.castOperand)
+    if bt != nil and bt.kind == ctBool:
+      ctx.fail("conversion from bool, WGSL has no bool-to-numeric conversion")
+      return ""
+    return ctx.spellWgslTypeBare(e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
+  of eSizeof:
+    return $wgslByteSize(e.ofType)
+  of eAddr:
+    return "(&" & ctx.printExpr(e.addrOperand) & ")"
+  of eOconstr:
+    if e.kvFields.len == 0:
+      # a zero-field struct, the padding member zero-initializes
+      return ctx.spellWgslTypeBare(e.ocType) & "(0u)"
+    result = ctx.spellWgslTypeBare(e.ocType) & "("
+    for i, kvv in e.kvFields:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(kvv.value)
+    result.add ")"
+  of eAconstr:
+    result = ctx.spellWgslTypeBare(e.acType) & "("
+    for i, el in e.elems:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(el)
+    result.add ")"
+  of eCall:
+    let calleeName =
+      if e.callee.kind == eSym: e.callee.name
+      else: ctx.printExpr(e.callee)
+    var args: seq[string]
+    for a in e.args:
+      args.add ctx.printExpr(a)
+    if e.callee.kind == eSym:
+      # builtin vocabulary dispatches on the typed kinds, never on names,
+      # `rsqrt` stays a name case, a math intrinsic outside the four categories
+      case e.callee.reductionBuiltin
+      of rbkReduceAdd:
+        return "subgroupAdd(" & args.join(", ") & ")"
+      of rbkReduceMax:
+        return "subgroupMax(" & args.join(", ") & ")"
+      of rbkNone: discard
+      if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
+        # WGSL atomics cover i32/u32 on atomic<T> storage types only,
+        # f32 atomics do not exist, and the atomic<T> retype of the binding
+        # is a declaration-site change the printer does not make
+        ctx.fail("atomicFetchAdd has no WGSL form, WGSL atomics cover i32/u32" &
+          " pointees through atomic<T> storage types only")
+        return ""
+      if e.callee.synchroBuiltin != sbkNone:
+        ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
+        return ""
+    case calleeName
+    of "rsqrt":
+      return "inverseSqrt(" & args.join(", ") & ")"
+    else:
+      return calleeName & "(" & args.join(", ") & ")"
+
+# ═══════════════════════════════════════════════════════════════════════
+# Statements
+# ═══════════════════════════════════════════════════════════════════════
+
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
+  ## Forward declaration, the loop context (break/continue labels) is a parameter.
+
+proc spellLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
+  ## Declaration text of one local, the init stays with the caller.
+  ## A pointer-typed local refuses earlier, the WGSL lowering pass dissolves it.
+  case s.declType.kind
+  of ctArray:
+    result = s.name & ": " & ctx.spellWgslTypeBare(s.declType)
+  else:
+    result = s.name & ": " & ctx.spellWgslTypeBare(s.declType)
+
+proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
+  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
+  if ctx.failing():
+    return ""
+  let pad = spaces(ctx.indent * 2)
+  case s.kind
+  of sVar:
+    if s.space == caThreadgroup:
+      # WGSL lowering pass hoists threadgroup locals to `CirModule.globals`,
+      # a survivor here was never relocated
+      ctx.fail("local " & s.name & " in threadgroup space, the WGSL lowering" &
+        " pass hoists threadgroup locals to program scope")
+      return ""
+    elif s.space == caConstant:
+      ctx.fail("local " & s.name & " in constant space, the WGSL lowering" &
+        " pass hoists const_mem locals to program scope")
+      return ""
+    elif s.space == caDevice:
+      ctx.fail("local " & s.name & " in device space, WGSL locals are" &
+        " function or workgroup")
+      return ""
+    elif s.declType.kind in {ctPtr, ctAptr}:
+      ctx.fail("pointer local " & s.name & ", WGSL has no pointer values," &
+        " the WGSL lowering pass dissolves pointer locals")
+      return ""
+    elif s.declType.kind == ctStruct and s.declType.containsPtrDeep:
+      ctx.fail("struct local " & s.name & ", WGSL has no pointer struct" &
+        " members, the WGSL lowering pass dissolves pointer locals")
+      return ""
+    else:
+      result = pad & "var " & ctx.spellLocalDecl(s)
+      if s.init != nil:
+        result &= " = " & ctx.printExpr(s.init)
+      result &= ";"
+  of sConst:
+    result = pad & "let " & s.name & ": " &
+      ctx.spellWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
+  of sAsgn:
+    if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr and
+        s.lhs.name notin ctx.paramNames:
+      ctx.fail("pointer local " & s.lhs.name & " rebound, WGSL has no" &
+        " pointer values, the WGSL lowering pass dissolves pointer locals")
+      return ""
+    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+  of sIte:
+    let cond = ctx.printExpr(s.cond)
+    ctx.indent.inc
+    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
+    ctx.indent.dec
+    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
+    if s.elseBody.len > 0:
+      ctx.indent.inc
+      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
+      ctx.indent.dec
+      result &= " else {\n" & elseTxt & '\n' & pad & '}'
+  of sLoop:
+    # loops print through printStmts, which derives the loop's own labels
+    result = ""
+  of sLab:
+    # an exit label after a loop is the break target marker, dropped
+    result = ""
+  of sJmp:
+    if s.jmpTarget == exitL and exitL.len > 0:
+      result = pad & "break;"
+    elif s.jmpTarget == contL and contL.len > 0:
+      result = pad & "continue;"
+    else:
+      ctx.fail("unstructured jump to " & s.jmpTarget)
+      result = ""
+  of sScope:
+    result = pad & "{\n"
+    ctx.indent.inc
+    result &= ctx.printStmts(s.scopeBody, exitL, contL)
+    ctx.indent.dec
+    result &= '\n' & pad & '}'
+  of sAssume:
+    # a loop-bound hint, WGSL has no assume construct
+    result = ""
+  of sRet:
+    if s.retVal != nil:
+      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
+    else:
+      result = pad & "return;"
+  of sDiscard:
+    result = ""
+  of sCall:
+    var parts: seq[string]
+    parts.add ctx.printExpr(s.callCallee)
+    for a in s.callArgs:
+      parts.add ctx.printExpr(a)
+    if s.callCallee.kind == eSym and
+        s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+      result = pad & "workgroupBarrier();"
+    elif s.callCallee.kind == eSym and
+        s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+      # WGSL has no combined barrier: the workgroup fence, then the storage fence
+      result = pad & "workgroupBarrier();\n" & pad & "storageBarrier();"
+    else:
+      result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
+  of sAsm:
+    ctx.fail("inline assembly has no WGSL form")
+    result = ""
+  of sCase:
+    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+    result = ""
+
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
+  ## Prints one statement list. Plain statements take the caller's loop context,
+  ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
+  var lines: seq[string]
+  var i = 0
+  while i < stmts.len:
+    let s = stmts[i]
+    var txt: string
+    if s.kind == sLoop:
+      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
+        stmts[i + 1].labName
+      else:
+        ""
+      var lCont = ""
+      for t in s.loopBody:
+        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
+          lCont = t.labName
+      ctx.indent.inc
+      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
+      ctx.indent.dec
+      txt = spaces(ctx.indent * 2) & "loop {\n" & bodyTxt & "\n" &
+        spaces(ctx.indent * 2) & '}'
+      if lExit.len > 0:
+        i.inc  # exit label, consumed
+    else:
+      txt = ctx.printStmt(s, exitL, contL)
+    if txt.len > 0:
+      lines.add txt
+    i.inc
+  return lines.join("\n")
+
+# ═══════════════════════════════════════════════════════════════════════
+# Procs and modules
+# ═══════════════════════════════════════════════════════════════════════
+
+proc printFn(ctx: var PrintCtx, fn: CirProc): string =
+  ## One device function: signature, body, closing brace.
+  ctx.fnName = fn.name
+  ctx.inKernel = false
+  ctx.indent = 0
+  ctx.paramNames = HashSet[string]()
+  for p in fn.params:
+    ctx.paramNames.incl p.name
+  let bodyTxt = ctx.printStmts(fn.body, "", "")
+  if ctx.failing():
+    return ""
+  var params: seq[string]
+  for p in fn.params:
+    case p.typ.kind
+    of ctAptr:
+      ctx.fail("device pointer parameter " & p.name & " in device function " &
+        fn.name & ", WGSL device functions take no buffer pointers, the" &
+        " call sites have no pointer spelling for a storage binding")
+      return ""
+    of ctPtr:
+      params.add p.name & ": " & ctx.spellWgslPtrType(p.typ)
+    else:
+      params.add p.name & ": " & ctx.spellWgslTypeBare(p.typ)
+  let ret = ctx.spellWgslTypeBare(fn.ret)
+  let sig = "fn " & fn.name & "(" & params.join(", ") & ")"
+  let arrow = if ret.len > 0: " -> " & ret else: ""
+  return sig & arrow & " {\n" & bodyTxt & '\n' & "}"
+
+proc registerTypeStructs(ctx: var PrintCtx, t: CirType) =
+  ## Registers the struct names reachable from `t`, the reference-driven struct
+  ## emission works from the parameter and declaration types.
+  if t.isNil:
+    return
+  case t.kind
+  of ctStruct:
+    ctx.neededStructs.incl(t.name)
+    for f in t.fields:
+      ctx.registerTypeStructs(f.typ)
+  of ctArray:
+    ctx.registerTypeStructs(t.aElem)
+  of ctVector:
+    ctx.registerTypeStructs(t.vElem)
+  of ctPtr, ctAptr:
+    ctx.registerTypeStructs(t.pElem)
+  else:
+    discard
+
+proc spellBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
+  ## `@group(0) @binding(i)` declaration of one kernel parameter in host `store` packing order:
+  ## - device buffers bind writable storage, `var<storage, read_write>`
+  ## - scalars and value structs bind read-only storage, packed in the engine scratch buffer
+  let attr = "@group(0) @binding(" & $i & ") "
+  case p.typ.kind
+  of ctAptr:
+    if p.typ.space != caDevice:
+      ctx.fail("kernel parameter " & p.name & " in " & $p.typ.space &
+        " space, the WebGPU engine binds device buffers only")
+      return ""
+    result = attr & "var<storage, read_write> " & p.name & ": array<" &
+      ctx.spellWgslTypeBare(p.typ.pElem) & ">;"
+  of ctPtr:
+    ctx.fail("kernel parameter " & p.name &
+      " of pointer type, the engine binds device buffers and values")
+    return ""
+  of ctArray:
+    ctx.fail("kernel parameter " & p.name &
+      " of array type, the engine packs the value, the parameter is a struct or a scalar")
+    return ""
+  of ctStruct:
+    for f in p.typ.fields:
+      let ft = (if f.typ.kind == ctVector: f.typ.vElem else: f.typ)
+      if f.typ.kind == ctVector:
+        ctx.fail("kernel parameter " & p.name & " field " & f.name &
+          " is a vector, the WGSL storage layout of vectors (16-byte alignment" &
+          " for 3-component vectors) does not match the host packing")
+        return ""
+      if ft.kind == ctBool:
+        ctx.fail("kernel parameter " & p.name & " field " & f.name &
+          " is a bool, bool is not host-shareable in WGSL storage")
+        return ""
+    if p.typ.containsPtrDeep:
+      ctx.fail("kernel parameter " & p.name &
+        " holds a pointer, the parameter explosion removes those before printing")
+      return ""
+    result = attr & "var<storage, read> " & p.name & ": " &
+      ctx.spellWgslTypeBare(p.typ) & ";"
+  of ctBool:
+    result = attr & "var<storage, read> " & p.name & ": u32;"
+  else:
+    result = attr & "var<storage, read> " & p.name & ": " &
+      ctx.spellWgslTypeBare(p.typ) & ";"
+
+proc spellWgslStruct(ctx: var PrintCtx, t: CirType): string =
+  ## One struct declaration, WGSL requires at least one member.
+  if t.containsPtrDeep:
+    ctx.fail("struct " & t.name &
+      " holds a pointer, WGSL has no pointer struct members")
+    return ""
+  result = "struct " & t.name & " {\n"
+  if t.fields.len == 0:
+    result &= "  _padding: u32,\n"
+  else:
+    for f in t.fields:
+      var field = f.name & ": " & ctx.spellWgslTypeBare(f.typ)
+      if f.typ.kind == ctArray:
+        field = f.name & ": " & ctx.spellWgslTypeBare(f.typ)
+      result &= "  " & field & ",\n"
+  result &= '}'
+
+proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
+  ## Emits the full WGSL module, one `@group(0) @binding(i)` per kernel parameter:
+  ## - `enable f16` when any type in the module uses f16
+  ## - the referenced struct declarations
+  ## - the hoisted module-scope `var<workgroup>` and `const` declarations
+  ## - the device functions, then the `@compute` kernel with its builtin parameters
   ##
-  ## TODO: Think about if it ever makes sense to extract the ident underlying
-  ## e.g. `deref` and use _that_ to determine mutability & address space.
-  template dfl(): untyped = GpuAst(kind: gpuDiscard)
-  case arg.kind
-  of gpuIdent: arg
-  of gpuAddr: arg.aOf.determineIdent()
-  of gpuDeref: arg.dOf.determineIdent()
-  of gpuCall: dfl()
-  of gpuIndex: arg.iArr.determineIdent()
-  of gpuDot: arg.dParent.determineIdent()
-  of gpuLit: dfl()
-  of gpuBinOp: dfl()
-  of gpuBlock: arg.statements[^1].determineIdent()
-  of gpuPrefix: dfl()
-  of gpuConv: dfl()
-  of gpuCast: arg.cExpr.determineIdent() # ident of the thing we cast
-  of gpuObjConstr: dfl()  # constructor expressions have no single ident
-  of gpuMaterialize: arg.mExpr.determineIdent()
-  else:
-    error "Not implemented to determine ident from node: " & $arg
+  ## Returns "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>")
+  var kernels: seq[CirProc]
+  for fn in m.procs:
+    if fn.isKernel:
+      kernels.add fn
+  if kernels.len != 1:
+    ctx.fail("exactly one kernel per module, found " & $kernels.len)
+    return ("", ctx.err)
+  let kernel = kernels[0]
+  # a pointer-typed kernel parameter would refuse at the binding, and until that refusal the body's symbol reads print as-is
+  for p in kernel.params:
+    ctx.paramNames.incl p.name
 
-proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
+  for p in kernel.params:
+    ctx.registerTypeStructs(p.typ)
+  # relocated const_mem declarations, struct-typed ones included
+  for s in m.globals:
+    if s.kind in {sVar, sConst}:
+      ctx.registerTypeStructs(s.declType)
 
+  var features = ModuleFeatures()
+  for t in m.types:
+    scanType(t, features)
+  for fn in m.procs:
+    scanType(fn.ret, features)
+    for p in fn.params:
+      scanType(p.typ, features)
+    scanStmts(fn.body, features)
+  scanStmts(m.globals, features)
+  if features.fp16:
+    result.src = "enable f16;\n\n"
 
+  # device functions first, their bodies register the structs they reference
+  var fns: seq[CirProc]
+  for fn in m.procs:
+    if not fn.isKernel:
+      fns.add fn
+  var fnTxts: seq[string]
+  for fn in fns:
+    let txt = ctx.printFn(fn)
+    if ctx.failing():
+      return ("", ctx.err)
+    fnTxts.add txt
 
-proc genLit*(ast: GpuAst): string =
-  ## Lower a literal node for the WGSL backend.
-  ## Bare literals (no suffix) are abstract in WGSL and work in any typed context.
-  ## Type constructors like `u32(x)` or suffixes like `lf` are used for non-default types.
-  if ast.lType.kind == gtString:
-    result = '"' & ast.lValue & '"'
-  elif ast.lValue == "DEFAULT":
-    result = ""
-  else:
-    case ast.lType.kind
-    of gtUint32: result = ast.lValue & "u"
-    of gtFloat16: result = ast.lValue & "h"
-    of gtFloat64: result = ast.lValue & "lf"
-    of gtInt16, gtUint16, gtUint8, gtBool:
-      result = gpuTypeToString(ast.lType, allowEmptyIdent = true) & '(' & ast.lValue & ')'
-    else:
-      result = ast.lValue
+  # kernel body: the signature consumes the builtin set it references
+  ctx.fnName = kernel.name
+  ctx.inKernel = true
+  ctx.indent = 0
+  let bodyTxt = ctx.printStmts(kernel.body, "", "")
+  if ctx.failing():
+    return ("", ctx.err)
+  var builtinArgs: seq[string]
+  for kind in ctx.builtins:
+    let p = wgslBuiltinParam(kind)
+    builtinArgs.add "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
+  let wg = (if kernel.workgroup == [0, 0, 0]: [64, 1, 1] else: kernel.workgroup)
+  let kernelSig = "@compute @workgroup_size(" & $wg[0] & ", " & $wg[1] & ", " &
+    $wg[2] & ")\nfn " & kernel.name & "(" & builtinArgs.join(", ") & ")"
 
-type WgslBuiltinParam = tuple[canonical, builtin, param, wgslType: string]
-  ## Canonical coordinate builtin -> WGSL `@builtin(...)` kernel param.
-  ## - `canonical`: the MSL-vocabulary coordinate name.
-  ## - `builtin`: the WGSL builtin attribute.
-  ## - `param`: the name the kernel body binds it to.
-  ## - `wgslType`: the WGSL type (scalar for the flat index).
-
-const WgslBuiltinParams: array[5, WgslBuiltinParam] = [
-  ("thread_position_in_grid",        "global_invocation_id",  "global_id",             "vec3<u32>"),
-  ("threadgroup_position_in_grid",   "workgroup_id",          "workgroup_id",          "vec3<u32>"),
-  ("thread_position_in_threadgroup", "local_invocation_id",   "local_invocation_id",   "vec3<u32>"),
-  ("threadgroups_per_grid",          "num_workgroups",        "num_workgroups",        "vec3<u32>"),
-  ("thread_index_in_threadgroup",    "local_invocation_index","local_invocation_index","u32"),
-]
-  ## The five real WGSL builtins. `threads_per_threadgroup` is deliberately
-  ## absent: WGSL has no `workgroup_size` builtin
-  ## (only the `@workgroup_size` attribute exists), so it has no WGSL
-  ## emission and is rejected at the ident site.
-
-proc wgslBuiltinParam(canonical: string): WgslBuiltinParam =
-  ## The WGSL param for a canonical coordinate builtin, or an empty tuple when
-  ## the canonical has no WGSL builtin.
-  for p in WgslBuiltinParams:
-    if p.canonical == canonical:
-      return p
-
-proc wgslBuiltinParamName(canonical: string): string =
-  ## Unknown names pass through unchanged.
-  let p = wgslBuiltinParam(canonical)
-  if p.canonical.len > 0: p.param else: canonical
-
-proc collectWgslBuiltins(n: GpuAst, builtins: var seq[string]) =
-  ## Records the coordinate builtins the body references:
-  ## - first-use order, deduped
-  ## - only builtins with a real WGSL `@builtin` param
-  ## - the `gpuCall` name is excluded from the walk
-  case n.kind
-  of gpuIdent:
-    if n.symbol != nil and n.symbol.coordBuiltin != gbkNone:
-      let name = n.ident()
-      if wgslBuiltinParam(name).canonical.len > 0 and name notin builtins:
-        builtins.add name
-  else:
-    for ch in n:
-      collectWgslBuiltins(ch, builtins)
-
-proc genWebGpu*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
-  let indentStr = "  ".repeat(indent)
-  case ast.kind
-  of gpuDiscard: return
-  of gpuProc:
-    let attrs = collect:
-      for att in ast.pAttributes:
-        $att
-
-    var params: seq[string]
-    for p in ast.pParams:
-      params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false, addrSpace = p.addressSpace)
-    var fnArgs = params.join(", ")
-    if $attGlobal in attrs:
-      doAssert fnArgs.len == 0, "Global function `" & $ast.pName.ident() & "` still has arguments!"
-      # Inject one `@builtin(...)` param per canonical coordinate the kernel
-      # body references, in first-use order. Only real WGSL builtins exist:
-      # there is no `workgroup_size` builtin, so `threads_per_threadgroup`
-      # is never injected and is rejected at the ident site.
-      var builtins: seq[string]
-      collectWgslBuiltins(ast.pBody, builtins)
-      var builtinArgs: seq[string]
-      for name in builtins:
-        let p = wgslBuiltinParam(name)
-        builtinArgs.add "@builtin(" & p.builtin & ") " & p.param & ": " & p.wgslType
-      fnArgs = builtinArgs.join(", ")
-    let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
-
-    result = indentStr & "fn " & fnSig & " {\n"
-
-    result &= ctx.genWebGpu(ast.pBody, indent + 1)
-    result &= '\n' & indentStr & '}'
-
-  of gpuBlock:
-    result = ""
-    if ast.blockLabel.len > 0:
-      result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
-    for i, el in ast.statements:
-      when defined(debugPasses):
-        echo "[print] stmt kind=", el.kind, " selfTerm=", el.isSelfTerminating(), " skipSem=", ctx.skipSemicolon
-      result.add ctx.genWebGpu(el, indent)
-      if not el.isSelfTerminating() and not ctx.skipSemicolon: # nested blocks and emits carry their own terminators
-        result.add ';'
-      if i < ast.statements.high:
-        result.add '\n'
-    if ast.blockLabel.len > 0:
-      result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
-
-  of gpuVar:
-    let letOrVar = if ast.vMutable: "var" else: "let"
-    var addrSpaceAttr = ""
-    case ast.addressSpace
-    of asSMEM: addrSpaceAttr = "<workgroup>"
-    of asRMEM, asDevice, asConstant: discard
-    # the pointer type carries the space it accesses
-    let vSpace = ast.vType.addressSpace
-    result = &"{indentStr}{letOrVar}{addrSpaceAttr} {gpuTypeToString(ast.vType, ast.vName.ident(), addrSpace = vSpace)}"
-    # If there is an initialization, the type might require a memcpy
-    doAssert not ast.vInit.isNil, "Variable initialization is nil. Should not happen."
-    if ast.vInit.kind != gpuDiscard and not ast.vRequiresMemcpy:
-      result &= " = " & ctx.genWebGpu(ast.vInit)
-    elif ast.vInit.kind != gpuDiscard:
-      when nimvm:
-        error("Types that require memcpy not supported on WGSL. Probably a better solution.")
+  # module-scope workgroup and const declarations relocated into
+  # `m.globals` by the WGSL lowering pass, in encounter order
+  var hoisted: seq[string]
+  for s in m.globals:
+    if s.kind == sVar and s.space == caThreadgroup:
+      if s.init != nil:
+        ctx.fail("smem local " & s.name &
+          " with an initializer, WGSL workgroup variables are zero-initialized")
       else:
-        raise newException(ValueError, "Types that require memcpy not supported on WGSL. Probably a better solution.")
-
-  of gpuAssign:
-    if ast.aRequiresMemcpy:
-      when nimvm:
-        error("Types that require memcpy not supported on WGSL. Probably a better solution.")
+        hoisted.add "var<workgroup> " & s.name & ": " &
+          ctx.spellWgslTypeBare(s.declType) & ";"
+    elif s.kind == sVar and s.space == caConstant:
+      if s.init == nil:
+        ctx.fail("const_mem local " & s.name & " without an initializer")
       else:
-        raise newException(ValueError, "Types that require memcpy not supported on WGSL. Probably a better solution.")
-    else:
-      result = indentStr & ctx.genWebGpu(ast.aLeft) & ' ' & ast.aOp & ' ' &
-               ctx.genWebGpu(ast.aRight)
+        hoisted.add "const " & s.name & ": " &
+          ctx.spellWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
+  if ctx.failing():
+    return ("", ctx.err)
 
-  of gpuIf:
-    template genCond(c: GpuAst): untyped =
-      # Compile time `bool` is turned into int literals 0 and 1 in typed AST
-      (if c.kind == gpuLit and c.lType.kind == gtInt32 and c.lValue == "1": "true"
-       elif c.kind == gpuLit and c.lType.kind == gtInt32 and c.lValue == "0": "false"
-       else: ctx.genWebGpu(c))
-    # skip semicolon in the condition. Otherwise can lead to problematic code
-    ctx.withoutSemicolon:
-      result = indentStr & "if (" & genCond(ast.ifCond) & ") {\n"
-    result &= ctx.genWebGpu(ast.ifThen, indent + 1) & '\n'
-    result &= indentStr & '}'
-    for el in ast.ifElifs:
-      ctx.withoutSemicolon:
-        result &= " else if (" & genCond(el.cond) & ") {\n"
-      result &= ctx.genWebGpu(el.body, indent + 1) & '\n'
-      result &= indentStr & '}'
-    if ast.ifElse.kind != gpuDiscard:
-      result &= " else {\n"
-      result &= ctx.genWebGpu(ast.ifElse, indent + 1) & '\n'
-      result &= indentStr & '}'
+  # struct declarations for the referenced value structs, the closure over
+  # their struct-typed members included, pointer-holding structs refuse
+  var toEmit = ctx.neededStructs
+  var changed = true
+  while changed:
+    changed = false
+    for t in m.types:
+      if t.kind == ctStruct and t.name in toEmit:
+        for f in t.fields:
+          var ft = f.typ
+          while ft != nil and ft.kind in {ctArray}:
+            ft = ft.aElem
+          if ft != nil and ft.kind == ctStruct and ft.name notin toEmit:
+            toEmit.incl(ft.name)
+            changed = true
+  for t in m.types:
+    if t.kind != ctStruct:
+      continue
+    if t.name notin toEmit:
+      continue
+    result.src &= ctx.spellWgslStruct(t) & "\n\n"
+  if ctx.failing():
+    return ("", ctx.err)
 
-  of gpuTernary:
-    # WGSL has no ternary ?: operator, but supports select(f, t, cond).
-    # select returns t when cond is true, f when cond is false.
-    result = "select(" & ctx.genWebGpu(ast.tElse) & ", " &
-        ctx.genWebGpu(ast.tThen) & ", " &
-        ctx.genWebGpu(ast.tCond) & ")"
+  # kernel parameter bindings, one per parameter in order
+  var bindings: seq[string]
+  for i, p in kernel.params:
+    let b = ctx.spellBinding(p, i)
+    if ctx.failing():
+      return ("", ctx.err)
+    bindings.add b
+  for b in bindings:
+    result.src &= b & "\n"
+  if bindings.len > 0:
+    result.src &= "\n"
 
-  of gpuFor:
-    let i = ast.fVar.ident()
-    let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    if ast.fUnroll:
-      # no unroll directive exists in WGSL, surface the drop in the artifact
-      result = indentStr & "// {.unroll.} requested but not honored on WebGPU\n"
-    result &= indentStr & "for(var " & i & ": i32 = " &
-             ctx.genWebGpu(ast.fStart) & "; " &
-             i & cmp & ctx.genWebGpu(ast.fEnd) & "; " &
-             i & " = " & i & " + " & (if ast.fStep == nil: "1" else: ctx.genWebGpu(ast.fStep)) & ") {\n"
-    result &= ctx.genWebGpu(ast.fBody, indent + 1) & '\n'
-    result &= indentStr & '}'
-  of gpuWhile:
-    ctx.withoutSemicolon:
-      result = indentStr & "while (" & ctx.genWebGpu(ast.wCond) & "){\n"
-    result &= ctx.genWebGpu(ast.wBody, indent + 1) & '\n'
-    result &= indentStr & '}'
+  for d in hoisted:
+    result.src &= d & "\n"
+  if hoisted.len > 0:
+    result.src &= "\n"
 
-  of gpuDot:
-    if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
-       ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
-      # A component use takes the bare builtin param, the whole-value
-      # construction may name an ivec3 alias this shader never declared
-      result = "i32(" & wgslBuiltinParamName(ast.dParent.ident()) & '.' &
-               ctx.genWebGpu(ast.dField) & ')'
-    else:
-      let fieldName = if ast.dField.kind == gpuIdent: ast.dField.ident()
-                      else: ctx.genWebGpu(ast.dField)
-      result = ctx.genWebGpu(ast.dParent) & '.' & fieldName
-
-  of gpuIndex:
-    result = ctx.genWebGpu(ast.iArr) & '[' & ctx.genWebGpu(ast.iIndex) & ']'
-
-  of gpuCall:
-    case ast.cName.symbol.synchroBuiltin
-    of gbkThreadgroupBarrier:
-      result = indentStr & "workgroupBarrier()"
-    of gbkThreadgroupBarrierDevice:
-      # WGSL has no combined barrier: workgroupBarrier(), then storageBarrier()
-      result = indentStr & "workgroupBarrier();" & "\n" & indentStr &
-               "storageBarrier()"
-    of gbkNone:
-      case ast.cName.symbol.reductionBuiltin
-      of gbkReduceAdd:
-        ctx.withoutSemicolon:
-          result = indentStr & "subgroupAdd(" & ctx.genWebGpu(ast.cArgs[0]) & ')'
-      of gbkReduceMax:
-        ctx.withoutSemicolon:
-          result = indentStr & "subgroupMax(" & ctx.genWebGpu(ast.cArgs[0]) & ')'
-      of gbkNone:
-        case ast.cName.symbol.shuffleBuiltin
-        of gbkSimdShuffle:
-          # `subgroupShuffle` takes the subgroup-relative source index as `u32`, cast.
-          ctx.withoutSemicolon:
-            result = indentStr & "subgroupShuffle(" & ctx.genWebGpu(ast.cArgs[0]) & ", u32(" & ctx.genWebGpu(ast.cArgs[1]) & "))"
-        of gbkSimdShuffleXor:
-          # `subgroupShuffleXor` takes the xor mask as `u32`, cast.
-          ctx.withoutSemicolon:
-            result = indentStr & "subgroupShuffleXor(" & ctx.genWebGpu(ast.cArgs[0]) & ", u32(" & ctx.genWebGpu(ast.cArgs[1]) & "))"
-        of gbkNone:
-          ctx.withoutSemicolon:
-            result = indentStr & ctx.getFnName(bkWebGPU, ast) & '(' &
-                     ast.cArgs.mapIt(ctx.genWebGpu(it)).join(", ") & ')'
+  for txt in fnTxts:
+    result.src &= txt & "\n\n"
+  result.src &= kernelSig & " {\n" & bodyTxt & '\n' & "}\n"
+  return (result.src, "")
 
 
-
-  of gpuBinOp:
-    ctx.withoutSemicolon:
-      let l = ctx.genWebGpu(ast.bLeft)
-      let r = ctx.genWebGpu(ast.bRight)
-      result = indentStr & '(' & l & ' ' &
-               ctx.genWebGpu(ast.bOp) & ' ' &
-               r & ')'
-
-  of gpuIdent:
-    if ast.symbol != nil:
-      case ast.symbol.coordBuiltin
-      of gbkNone:
-        # A local shadowing a canonical name, or a call-shaped builtin
-        # (printf, cvtaGenericToShared): emit verbatim.
-        result = ast.ident()
-      of gbkThreadsPerThreadgroup:
-        error "`threads_per_threadgroup` has no WGSL builtin: WGSL has " &
-          "only the `@workgroup_size` attribute, never a `workgroup_size` " &
-          "builtin, so the threadgroup size is not addressable from WGSL."
-      of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
-         gbkThreadgroupsPerGrid, gbkThreadPositionInThreadgroup:
-        # u32 @builtin coords, whole-value use casts to the canonical ivec3
-        let n = wgslBuiltinParamName(ast.ident())
-        result = "ivec3(i32(" & n & ".x), i32(" & n & ".y), i32(" & n & ".z))"
-      of gbkThreadIndexInThreadgroup:
-        # `local_invocation_index` is u32 in WGSL, cast to the int domain.
-        result = "i32(" & wgslBuiltinParamName(ast.ident()) & ')'
-    else:
-      result = ast.ident()
-
-  of gpuLit:
-      result = genLit(ast)
-  of gpuArrayLit:
-    result = "array("
-    for i, el in ast.aValues:
-      result.add gpuTypeToString(ast.aLitType) & '(' & ctx.genWebGpu(el) & ')'
-      if i < ast.aValues.high:
-        result.add ", "
-    result.add ')'
-
-  of gpuReturn:
-    result = indentStr & "return " & ctx.genWebGpu(ast.rValue)
-
-  of gpuPrefix:
-    result = ast.pOp & ctx.genWebGpu(ast.pVal)
-
-  of gpuTypeDef:
-    result = "struct " & gpuTypeToString(ast.tTyp) & " {\n"
-    if ast.tFields.len == 0:
-      # WGSL requires at least one member in a struct.
-      result.add "  _padding: u32,\n"
-    else:
-      for el in ast.tFields:
-        result.add "  " & gpuTypeToString(el.typ, el.name) & ",\n"
-    result.add '}'
-
-  of gpuAlias:
-    # Aliases emit like structs, WGSL wants `;` after a type alias,
-    # not after a struct
-    result = "alias " & gpuTypeToString(ast.aTyp) & " = " & ctx.genWebGpu(ast.aTo) & ';'
-
-  of gpuObjConstr:
-    result = gpuTypeToString(ast.ocType) & '('
-    for i, el in ast.ocFields:
-      if el.value.kind == gpuLit and el.value.lValue == "DEFAULT":
-        let typStr = gpuTypeToString(el.typ, allowEmptyIdent = true)
-        result.add typStr & "()"
-      else:
-        result.add ctx.genWebGpu(el.value)
-      if i < ast.ocFields.len - 1:
-        result.add ", "
-    result.add ')'
-
-  of gpuInlineAsm:
-    error "Inline assembly not supported on the WebGPU target."
-
-  of gpuEmit:
-    # Self-terminating raw text: the gpuBlock loop appends no `;`
-    # (the emitted text owns its own terminators).
-    result = genEmitStmt(ctx, ast,
-      proc(c: var GpuContext; n: GpuAst): string = c.genWebGpu(n, 0))
-
-  of gpuComment:
-    result = indentStr & "/* " & ast.comment & " */"
-
-  of gpuConv:
-    result = gpuTypeToString(ast.convTo, allowEmptyIdent = true) & '(' & ctx.genWebGpu(ast.convExpr) & ')'
-
-  of gpuCast:
-    result = "bitcast<" & gpuTypeToString(ast.cTo, allowEmptyIdent = true) & ">(" & ctx.genWebGpu(ast.cExpr) & ')'
-
-  of gpuAddr:
-    result = "(&" & ctx.genWebGpu(ast.aOf) & ')'
-
-  of gpuDeref:
-    result = "(*" & ctx.genWebGpu(ast.dOf) & ')'
-
-  of gpuConstexpr:
-    result = indentStr & "const " & ctx.genWebGpu(ast.cIdent) & ": " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & " = " & ctx.genWebGpu(ast.cValue)
-  of gpuMaterialize:
-    error "gpuMaterialize should not reach WGSL backend — passByRef is not used"
 
 proc codegen*(ctx: var GpuContext): string =
-  # NOTE: WGSL does not require forward declarations / does not care about
-  # the order in which functions are defined
-
-  var needsF16 = false
-  for fnIdent, fn in ctx.fnTab:
-    if fn.pRetType.containsKind(gtFloat16):
-      needsF16 = true
-    for p in fn.pParams:
-      if p.typ.containsKind(gtFloat16):
-        needsF16 = true
-  for id, g in ctx.globals:
-    if g.typ.containsKind(gtFloat16):
-      needsF16 = true
-  if needsF16:
-    result.add "enable f16;\n\n"
-  # No `enable subgroups` emission: native wgpu runs the subgroup builtins
-  # without the directive when the device requests the subgroups feature
-  # (gfx-rs/wgpu#8202, #5555). The directive is not implemented in Naga
-  # and would fail shader-module creation.
-
-  var bindingCounter = 0
-  proc genGlobal(p: GpuParam): string =
-    let rw = if p.flavor == kVar: "read_write" else: "read"
-    result = &"@group(0) @binding({bindingCounter}) var<storage, " & rw & "> "
-    result.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false, addrSpace = p.addressSpace) & ";\n"
-    inc bindingCounter
-
-  # deduped by param name
-  var emitted: seq[string]
-  for id, g in ctx.globals:
-    if g.ident.ident() notin emitted:
-      emitted.add g.ident.ident()
-      result.add genGlobal(g)
-  result.add '\n'
-
-  for blk in ctx.globalBlocks:
-    result.add ctx.genWebGpu(blk) & "\n\n"
-
-  # Workgroup size from the `{.workgroup: (X, Y, Z).}` annotation.
-  # Default 64×1×1.
-  for fnIdent, fn in ctx.fnTab:
-    if fn.isGlobal():
-      let wg = fn.pWorkgroupSize
-      let wx = if wg.x > 0: wg.x else: 64
-      let wy = if wg.y > 0: wg.y else: 1
-      let wz = if wg.z > 0: wg.z else: 1
-      result.add "@compute @workgroup_size(" & $wx & ", " & $wy & ", " & $wz & ")\n"
-    result.add ctx.genWebGpu(fn) & "\n\n"
+  ## Prints the module in `ctx` as WGSL source, the `backends_api` entry point.
+  ## A printer refusal is a compile error naming the construct.
+  let (src, err) = printWgslModule(ctx.module)
+  if err.len > 0:
+    error(err)
+  result = src

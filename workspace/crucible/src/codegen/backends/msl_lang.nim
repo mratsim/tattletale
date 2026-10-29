@@ -5,556 +5,635 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Metal Shading Language (MSL) printer for the `bkMetal` backend.
+## Metal Shading Language (MSL) printer: a structured CIRv2 module to MSL source,
+## table-driven over the closed type lattice.
+##
+## Emission contract, one buffer slot per kernel parameter in order:
+## - pointers: `device T* name [[buffer(n)]]`
+## - scalars: unattributed `constant T& name`, Metal auto-assigns the free slot
+## - coordinate builtins: attributed `uint3`/`uint` params, no slot
+##
+## Other emission rules:
+## - `{.smem.}` locals: a kernel's top-level local stays in-body as kernel-scope
+##   `threadgroup` storage (Metal allocates it per threadgroup),
+##   any initializer is discarded, a local outside a kernel body drops,
+##   a device function still owning a smem local refuses in the pass
+## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
+##   program-scope `constant` output, a const_mem survivor refuses at the printer
+## - `jmp` to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
+## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
+##   through except the numeric conversions, which resolve to the MSL native call text
 
-import std / [macros, strformat, strutils, sequtils, tables]
-
+import ../ir/cirv2_lang
+import ../frontend/nim_to_crucible
+import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
-import ../ir/ast_type_resolvers
-import ./lang_utils
 
-proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): string
+type
+  PrintError* = object
+    ## Refusal of the printer, names the proc and the cause.
+    procName*: string
+    msg*: string
 
-proc getInnerArrayType(t: GpuType): string =
-  ## Returns the name of the innermost type for a nested array.
+  PrintCtx = object
+    fnName: string
+    ## First refusal of the walk, "" while clean.
+    err: string
+    indent: int
+    ## Per-kernel state.
+    builtins: OrderedSet[string]
+    ## Canonical builtin names the kernel body references, first-use order.
+
+proc failing(ctx: PrintCtx): bool =
+  ctx.err.len > 0
+
+proc fail(ctx: var PrintCtx, detail: string) =
+  ## Records the first refusal, naming the proc.
+  if ctx.err.len == 0:
+    ctx.err = "cirv2 printer msl: at " & ctx.fnName & ": " & detail
+
+# ═══════════════════════════════════════════════════════════════════════
+# Types
+# ═══════════════════════════════════════════════════════════════════════
+
+proc spellMslSpace(space: CirAddrSpace): string =
+  ## MSL address-space qualifier of a memory class.
+  case space
+  of caThread: "thread"
+  of caThreadgroup: "threadgroup"
+  of caConstant: "constant"
+  of caDevice: "device"
+
+proc spellMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
+  ## Forward declaration, arrays recurse into themselves.
+
+## `{.builtin.}` numeric conversions resolve to the MSL native call text:
+## each entry is a format string whose `$1` stands for the call's argument list.
+## The CIRv2 lattice has no fp16 or bf16 kind: `float16` and `bfloat16` are `distinct uint16` types holding raw bits in `ushort` storage.
+## Value-producing conversions move the bit pattern, not the numeric value:
+## - `toFp16(x)` prints `as_type<ushort>(half(x))`
+## - `toBf16(x)` prints `as_type<ushort>((bfloat)(x))`
+## - `toFp32`/`toBf32` reinterpret the stored bits back through
+##   `as_type<half>`/`as_type<bfloat>` before the `float` widening
+## - `asFp16`/`asU16` are identities on that storage
+## fp8 conversions have no MSL native: the `{.builtin.}` name passes through and refuses at Metal compile time.
+const MslConversionBuiltinNames: Table[string, string] = {
+  "toFp16": "as_type<ushort>(half($1))",
+  "toFp32": "float(as_type<half>($1))",
+  "toBf16": "as_type<ushort>((bfloat)($1))",
+  "toBf32": "float(as_type<bfloat>($1))",
+  "asFp16": "$1",
+  "asU16": "$1",
+}.toTable()
+
+proc spellMslScalar(t: CirType): string =
+  ## MSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
-  of gtArray:
-    result = getInnerArrayType(t.aTyp)
-  else:
-    result = gpuTypeToString(t)
-
-proc gpuTypeToString*(t: GpuTypeKind): string =
-  ## MSL name of a scalar type kind (`long`/`ulong` for 64-bit, fp64 rejected loudly).
-  case t
-  of gtBool: "bool"
-  of gtUint8: "uchar"
-  of gtUint16: "ushort"
-  of gtUint32: "uint"
-  of gtUint64: "ulong"
-  of gtInt16: "short"
-  of gtInt32: "int"
-  of gtInt64: "long"
-  of gtFloat32: "float"
-  of gtFloat16: "half"
-  of gtBf16: "bfloat"
-  of gtFloat64:
-    error "Metal has no fp64 kernel type, MSL rejects `double`, rework the kernel on fp32/fp16"
-  of gtVoid: "void"
-  of gtSize_t: "size_t"
-  of gtPtr: "*"
-  of gtVoidPtr: "void*"
-  of gtObject: "struct"
-  of gtString: "const char*"
-  of gtUncheckedArray: "" # `UncheckedArray` by itself is nothing in MSL
-  of gtStatic: "int"
-  else:
-    error "Invalid type : " & $t
-
-proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): string =
-  ## MSL name of `t`, with `ident` appended for array types, which require an identifier in the emitted declaration.
-  ## `allowEmptyIdent` permits the identifier to be omitted (function return types and casts).
-  ## Without it, an array type with an empty `ident` raises.
-  var skipIdent = false
-  case t.kind
-  of gtPtr:
-    let inner = if t.to.kind == gtUncheckedArray: t.to.uaTo else: t.to
-    if inner.kind == gtArray: # ptr to array type
-      # Need to pass `*` for the pointer into the identifier.
-      # `state: var array[4, BigInt]` must become `BigInt (*state)[4]`.
-      # So we pass `theIdent = (*<ident>)` and generate the type
-      # for the internal array type, which yields `BigInt <theIdent>[4]`.
-      let ptrStar = gpuTypeToString(t.kind)
-      result = gpuTypeToString(inner, '(' & ptrStar & ident & ')')
-      skipIdent = true
+  of ctVoid:
+    result = "void"
+  of ctBool:
+    result = "bool"
+  of ctInt:
+    case t.bits
+    of 8:
+      result = "char"
+    of 16:
+      result = "short"
+    of 32:
+      result = "int"
+    of 64:
+      result = "long"
     else:
-      let typ = gpuTypeToString(inner, allowEmptyIdent = allowEmptyIdent)
-      let ptrStar = gpuTypeToString(t.kind)
-      result = typ & ptrStar
-  of gtArray:
-    # empty idents happen in e.g. function return types or casts
-    if ident.len == 0 and not allowEmptyIdent:
-      when nimvm:
-        error("Invalid call, got an array type but don't have an identifier: " & $t)
-      else:
-        raise newException(ValueError, "Invalid call, got an array type but don't have an identifier: " & $t)
-    case t.aTyp.kind
-    of gtArray: # nested array
-      let typ = getInnerArrayType(t)
-      let lengths = getInnerArrayLengths(t) # get lengths as `[X][Y][Z]...`
-      result = typ & ' ' & ident & lengths
+      result = ""
+  of ctUint:
+    case t.bits
+    of 8:
+      result = "uchar"
+    of 16:
+      result = "ushort"
+    of 32:
+      result = "uint"
+    of 64:
+      result = "ulong"
     else:
-      # NOTE: Nested arrays don't have an inner identifier!
-      if t.aLen == 0: # Zero-length arrays emit as flexible arrays (no length suffix).
-        result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & "[]"
-      else:
-        result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
-    skipIdent = true
-  of gtGenericInst:
-    # NOTE: `foo[float32, uint32]` becomes `foo_f32_u32`,
-    # short generic-arg names (uint32, int64), not C names (unsigned int, long long)
-    result = t.gName
-    if t.gArgs.len == 1:
-      result.add gpuTypeToShortString(t.gArgs[0])
-    elif t.gArgs.len > 1:
-      # 2+ args collapse to a short hash
-      result.add mangledHashName("", $hash(t))
-  of gtObject:
+      result = ""
+  of ctFloat:
+    case t.bits
+    of 16:
+      result = "half"
+    of 32:
+      result = "float"
+    else:
+      result = ""
+  of ctVector:
+    result = spellMslScalar(t.vElem)
+    if result.len > 0:
+      result.add $t.vN
+  of ctPtr, ctAptr:
+    result = spellMslScalar(t.pElem) & "*"
+  of ctStruct:
     result = t.name
-  of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent) ## unchecked array just T?
-  of gtStatic: result = "int"
-  else:        result = gpuTypeToString(t.kind)
+  of ctArray, ctProc:
+    result = ""
 
-  if ident.len > 0 and not skipIdent: # still need to add ident
-    result.add ' ' & ident
 
-proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
-  ## Function declaration with its return type. Pointers to statically sized arrays
-  ## use the `(*fn(args))[N]` form. Everything else is a plain `RetType fn(args)`.
-  if typ.kind == gtPtr and typ.to.kind == gtArray:
-    # Syntax to return a pointer to a statically sized array:
-    # `Foo (*fnName(fnArgs))[ArrayLen]`
-    # where the return type is actually:
-    # `Foo (*)[ArrayLen]`
-    let arrayTyp = typ.to.aTyp
-    let innerTyp = gpuTypeToString(arrayTyp, allowEmptyIdent = true)
-    let innerLen = $typ.to.aLen
-    result = &"{innerTyp} (*{fn}({fnArgs}))[{innerLen}]"
-  else:
-    result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
-
-proc genLit*(ast: GpuAst): string =
-  ## Lower a literal node for the MSL backend.
-  if ast.lType.kind == gtString:
-    result = '"' & ast.lValue & '"'
-  elif ast.lValue == "DEFAULT":
-    result = "{}"
-  elif ast.lValue == "NULL":
-    result = "nullptr"
-  else:
-    case ast.lType.kind
-    of gtFloat32, gtFloat64:
-      # ±Inf and NaN fold into literals whose text form is "inf"/"-inf"/"nan",
-      # no such MSL token exists. INFINITY and NAN are the float-typed MSL macros
-      # for the special values.
-      case ast.lValue
-      of "inf":  result = "INFINITY"
-      of "-inf": result = "-INFINITY"
-      of "nan", "-nan": result = "NAN"
-      else:
-        if ast.lType.kind == gtFloat64:
-          error "Metal has no fp64 kernel type, MSL rejects `double` literals, rework the kernel on fp32/fp16"
-        else:
-          result = ast.lValue & "f"
-    of gtFloat16: result = ast.lValue & "h"
-    of gtBf16:    result = "bfloat(" & ast.lValue & ')'
-    of gtUint32: result = ast.lValue & "U"
-    of gtUint64: result = ast.lValue & "ULL"
-    of gtInt64:  result = ast.lValue & "LL"
-    of gtInt16, gtUint16, gtUint8, gtBool:
-      result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
+proc spellMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
+  ## MSL name of `t` with `ident` appended. Arrays take the identifier into
+  ## the declarator (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
+  ## `allowEmptyIdent` permits no identifier (return types, casts), an array without one otherwise refuses.
+  case t.kind
+  of ctArray:
+    if ident.len == 0 and not allowEmptyIdent:
+      return "<msl: array needs an identifier>"
+    if t.aElem.kind == ctArray:
+      result = spellMslType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
+        allowEmptyIdent)
     else:
-      result = ast.lValue
+      result = spellMslType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
+  else:
+    result = spellMslScalar(t)
+    if ident.len > 0:
+      result.add ' ' & ident
 
-proc genKernelParams(ctx: var GpuContext, fn: GpuAst): string =
-  ## Emits the kernel's MSL parameter list. The argument table is one slot
-  ## sequence in parameter order:
-  ## - pointers: `device T* name [[buffer(n)]]`, n is the parameter's slot
-  ## - scalars: `constant T& name`, unattributed, auto-assigned the free slot
-  ##   in declaration order, set inline via setBytes
-  ## - coordinate builtins emit `uint3 name [[name]]`, no binding and no slot
-  ##   `materializeIndexBuiltinParams` appends them
+proc spellMslPtr(t: CirType, ident: string): string =
+  ## MSL name of a pointer or array pointer with its address space:
+  ## `device float* p`, pointer-to-array `device float (*p)[N]`.
+  let inner = t.pElem
+  if inner.kind == ctArray:
+    result = spellMslSpace(t.space) & ' ' & spellMslType(inner, "(*" & ident & ")", true)
+  else:
+    result = spellMslSpace(t.space) & ' ' & spellMslScalar(inner) & "* " & ident
+
+# ═══════════════════════════════════════════════════════════════════════
+# Expressions
+# ═══════════════════════════════════════════════════════════════════════
+
+proc printExpr(ctx: var PrintCtx, e: CirExpr): string
+  ## Forward declaration, expressions recurse into themselves.
+
+proc spellMslLit(e: CirExpr): string =
+  ## MSL token of a literal, typed by its literal type.
+  case e.kind
+  of eIntLit:
+    case e.litType.kind
+    of ctUint:
+      case e.litType.bits
+      of 64: result = $e.value & "ULL"
+      of 32: result = $e.value & "U"
+      else: result = "(" & spellMslScalar(e.litType) & ")" & $e.value
+    of ctInt:
+      case e.litType.bits
+      of 64: result = $e.value & "LL"
+      of 32: result = $e.value
+      else: result = "(" & spellMslScalar(e.litType) & ")" & $e.value
+    else:
+      result = $e.value
+  of eFloatLit:
+    # MSL has no `inf`/`nan` tokens and Nim's `$` renders `inf`/`nan`.
+    # Emission text is the <math.h> macros the MSL compiler accepts.
+    # Literal width converts at the use site.
+    case e.fValue.classify
+    of fcInf:
+      result = "INFINITY"
+    of fcNegInf:
+      result = "-INFINITY"
+    of fcNan:
+      result = "NAN"
+    else:
+      case e.fLitType.bits
+      of 16: result = $e.fValue & "h"
+      of 32: result = $e.fValue & "f"
+      else: result = $e.fValue
+  of eNil: result = "nullptr"
+  of eTrue: result = "true"
+  of eFalse: result = "false"
+  else: result = "<msl: not a literal>"
+
+
+proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
+  ## MSL token of a builtin reference, the attributed parameter name.
+  ##
+  ## - whole-value use of a vector builtin: an `int3` constructor,
+  ##   the attribute params are `uint3`, the canonical Nim type is int
+  ## - component use: a cast to `int`
+  ## - the flat thread index: a scalar `uint`, whole value is the bare name
+  ##   (uint converts to int implicitly)
+  ctx.builtins.incl(name)
+  if whole and name != "thread_index_in_threadgroup":
+    return "int3((int)" & name & ".x, (int)" & name & ".y, (int)" & name & ".z)"
+  return name
+
+proc spellMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
+  ## Returns the MSL text of a builtin call, "" when `callee` is not a builtin.
+  ##
+  ## Shared by expression- and statement-position calls: the statement path
+  ## bypasses `printExpr`, so a barrier printed as a bare name would lose
+  ## its memory flags, text MSL refuses to compile.
+  ##
+  ## `args` contains the already-printed argument texts.
+  if callee.kind != eSym:
+    return ""
+  # builtin vocabulary dispatches on the typed kinds, never on names
+  case callee.synchroBuiltin
+  of sbkThreadgroupBarrier:
+    return "threadgroup_barrier(mem_flags::mem_threadgroup)"
+  of sbkThreadgroupBarrierDevice:
+    return "threadgroup_barrier(mem_flags::mem_device)"
+  of sbkNone: discard
+  case callee.reductionBuiltin
+  of rbkReduceAdd:
+    return "simd_sum(" & args.join(", ") & ")"
+  of rbkReduceMax:
+    return "simd_max(" & args.join(", ") & ")"
+  of rbkNone: discard
+  if callee.atomicsBuiltin == abkAtomicFetchAdd:
+    # device float atomics: the pointer casts to the atomic type
+    # device address space implies the scope, relaxed order
+    return "atomic_fetch_add_explicit((volatile device atomic_float*)" &
+      "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
+  if callee.builtin and MslConversionBuiltinNames.hasKey(callee.name):
+    return MslConversionBuiltinNames.getOrDefault(callee.name) % args.join(", ")
+  return ""
+
+
+proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
+  if ctx.failing():
+    return ""
+  case e.kind
+  of eNil, eTrue, eFalse, eIntLit, eFloatLit:
+    return spellMslLit(e)
+  of eSym:
+    if e.coordBuiltin != cbkNone:
+      return ctx.printBuiltinRef(e.name, true)
+    return e.name
+  of eAt:
+    let base = ctx.printExpr(e.atBase)
+    return base & '[' & ctx.printExpr(e.atIndex) & ']'
+  of ePat:
+    let base = ctx.printExpr(e.patBase)
+    return base & '[' & ctx.printExpr(e.patIndex) & ']'
+  of eDot:
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+      # a component of an unsigned MSL builtin, cast to the canonical int
+      ctx.builtins.incl(e.dotBase.name)
+      return "(int)(" & e.dotBase.name & '.' & e.fieldName & ")"
+    let base = ctx.printExpr(e.dotBase)
+    if e.dotBase.kind == eDeref:
+      return "(" & base & ")." & e.fieldName
+    return base & '.' & e.fieldName
+  of eDeref:
+    return "(*" & ctx.printExpr(e.derefOperand) & ")"
+  of eAddr:
+    return "(&" & ctx.printExpr(e.addrOperand) & ")"
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    let op = case e.kind
+      of eAdd: "+"
+      of eSub: "-"
+      of eMul: "*"
+      of eDiv: "/"
+      of eMod: "%"
+      of eShl: "<<"
+      of eShr: ">>"
+      of eBitAnd: "&"
+      of eBitOr: "|"
+      else: "^"
+    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
+  of eEq, eNeq, eLt, eLe:
+    let op = case e.kind
+      of eEq: "=="
+      of eNeq: "!="
+      of eLt: "<"
+      else: "<="
+    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
+  of eNot:
+    return "(!" & ctx.printExpr(e.notOperand) & ")"
+  of eAnd, eOr:
+    # pure bool operators over side-effect-free operands: the frontend materializes
+    # value-position short-circuits into temps and the remainder prints directly
+    let op = if e.kind == eAnd: "&&" else: "||"
+    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
+  of eBitNot:
+    return "(~" & ctx.printExpr(e.unOperand) & ")"
+  of eNeg:
+    return "(-" & ctx.printExpr(e.unOperand) & ")"
+  of eConv:
+    # a numeric conversion prints as the C-style cast
+    let t = e.castType
+    var castTyp = spellMslType(t, "", true)
+    if t.kind in {ctPtr, ctAptr}:
+      castTyp = spellMslSpace(t.space) & ' ' & castTyp
+    return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
+  of eCast:
+    # A same-size scalar `cast` reinterprets the bits: the SPIR-V printer
+    # emits OpBitcast and the MSL text is `as_type<T>`. A C-style cast
+    # converts numerically instead: 0xFF7FFFFF read as float32 gives
+    # +4.29e9 and the same bits reinterpreted give -FLT_MAX.
+    #
+    # Pointer and machine-word casts keep the C-style text.
+    # as_type accepts neither pointers nor width changes.
+    let t = e.castType
+    let src = getExprType(e.castOperand)
+    if t.kind in {ctInt, ctUint, ctFloat} and src != nil and
+        src.kind in {ctInt, ctUint, ctFloat} and
+        t.bits in {8, 16, 32, 64} and src.bits == t.bits:
+      return "as_type<" & spellMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
+    var castTyp = spellMslType(t, "", true)
+    if t.kind in {ctPtr, ctAptr}:
+      castTyp = spellMslSpace(t.space) & ' ' & castTyp
+    return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
+  of eSizeof:
+    return "sizeof(" & spellMslType(e.ofType, "", true) & ")"
+  of eOconstr:
+    result = spellMslType(e.ocType, "", true) & "{"
+    for i, kv in e.kvFields:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(kv.value)
+    result.add "}"
+  of eAconstr:
+    result = "{"
+    for i, el in e.elems:
+      if i > 0:
+        result.add ", "
+      result.add "(" & spellMslType(e.acType.aElem, "", true) & ")" &
+        ctx.printExpr(el)
+    result.add "}"
+  of eCall:
+    let calleeName =
+      if e.callee.kind == eSym: e.callee.name
+      else: ctx.printExpr(e.callee)
+    var args: seq[string]
+    for a in e.args:
+      args.add ctx.printExpr(a)
+    let builtinTxt = spellMslBuiltinCall(e.callee, args)
+    if builtinTxt.len > 0:
+      return builtinTxt
+    return calleeName & "(" & args.join(", ") & ")"
+
+# ═══════════════════════════════════════════════════════════════════════
+# Statements
+# ═══════════════════════════════════════════════════════════════════════
+
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
+  ## Forward declaration, the loop context (break/continue labels) is a parameter.
+
+proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
+  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
+  if ctx.failing():
+    return ""
+  let pad = spaces(ctx.indent * 2)
+  case s.kind
+  of sVar:
+    if s.space == caThreadgroup:
+      # kernel-scope threadgroup storage: the MSL lowering pass keeps only
+      # a kernel's top-level smem locals here, an inline device function's
+      # smem local merges into the calling kernel, any initializer is discarded
+      result = pad & "threadgroup " & spellMslType(s.declType, s.name, false) & ";"
+      return
+    if s.space == caConstant:
+      # MSL lowering pass relocates const_mem locals at every scope,
+      # a survivor here was never relocated
+      ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
+        " pass hoists const_mem locals to program scope")
+      return ""
+    var decl = spellMslType(s.declType, s.name, false)
+    if s.declType.kind in {ctPtr, ctAptr}:
+      decl = spellMslPtr(s.declType, s.name)
+    result = pad & decl
+    if s.init != nil:
+      result &= " = " & ctx.printExpr(s.init)
+    result &= ";"
+  of sConst:
+    if s.declType.kind == ctArray:
+      result = pad & "constexpr " &
+        spellMslType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
+    else:
+      result = pad & "constexpr " & spellMslScalar(s.declType) & ' ' & s.name &
+        " = " & ctx.printExpr(s.init) & ";"
+  of sAsgn:
+    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+  of sIte:
+    let cond = ctx.printExpr(s.cond)
+    ctx.indent.inc
+    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
+    ctx.indent.dec
+    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
+    if s.elseBody.len > 0:
+      ctx.indent.inc
+      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
+      ctx.indent.dec
+      result &= " else {\n" & elseTxt & '\n' & pad & '}'
+  of sLoop:
+    # loops print through printStmts, which derives the loop's own labels
+    result = ""
+  of sLab:
+    # an exit label after a loop is the break target marker, dropped
+    result = ""
+  of sJmp:
+    if s.jmpTarget == exitL and exitL.len > 0:
+      result = pad & "break;"
+    elif s.jmpTarget == contL and contL.len > 0:
+      result = pad & "continue;"
+    else:
+      ctx.fail("unstructured jump to " & s.jmpTarget)
+      result = ""
+  of sScope:
+    result = pad & "{\n"
+    ctx.indent.inc
+    result &= ctx.printStmts(s.scopeBody, exitL, contL)
+    ctx.indent.dec
+    result &= '\n' & pad & '}'
+  of sAssume:
+    # a loop-bound hint, MSL has no assume construct
+    result = ""
+  of sRet:
+    if s.retVal != nil:
+      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
+    else:
+      result = pad & "return;"
+  of sDiscard:
+    result = ""
+  of sCall:
+    let calleeName =
+      if s.callCallee.kind == eSym: s.callCallee.name
+      else: ctx.printExpr(s.callCallee)
+    var args: seq[string]
+    for a in s.callArgs:
+      args.add ctx.printExpr(a)
+    let builtinTxt = spellMslBuiltinCall(s.callCallee, args)
+    if builtinTxt.len > 0:
+      result = pad & builtinTxt & ";"
+    else:
+      result = pad & calleeName & "(" & args.join(", ") & ");"
+  of sAsm:
+    # inline assembly: the verbatim template spliced with the CIRv2 names
+    var text = ""
+    for i, part in s.asmParts:
+      text.add(part)
+      if i < s.asmOperands.len:
+        text.add(s.asmOperands[i].name)
+    result = pad & text
+  of sCase:
+    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
+  ## Prints one statement list. Plain statements take the caller's loop context,
+  ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
+  var lines: seq[string]
+  var i = 0
+  while i < stmts.len:
+    let s = stmts[i]
+    var txt: string
+    if s.kind == sLoop:
+      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
+        stmts[i + 1].labName
+      else:
+        ""
+      var lCont = ""
+      for t in s.loopBody:
+        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
+          lCont = t.labName
+      ctx.indent.inc
+      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
+      ctx.indent.dec
+      let directive = if s.unroll:
+        spaces(ctx.indent * 2) & "#pragma clang loop unroll(full)\n"
+      else:
+        ""
+      txt = directive & spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
+        spaces(ctx.indent * 2) & '}'
+      if lExit.len > 0:
+        i.inc  # exit label, consumed
+    else:
+      txt = ctx.printStmt(s, exitL, contL)
+    if txt.len > 0:
+      lines.add txt
+    i.inc
+  return lines.join("\n")
+
+# ═══════════════════════════════════════════════════════════════════════
+# Procs and modules
+# ═══════════════════════════════════════════════════════════════════════
+
+proc spellMslSmemParam(p: CirParam): string =
+  ## MSL parameter of a relocated smem local: threadgroup storage by pointer
+  ## for an array local (`threadgroup T* name`), by reference otherwise
+  ## (`threadgroup T& name`).
+  ##
+  ## No binding, no buffer slot, the appended parameters trail the regular
+  ## parameters of the kernel signature.
+  let inner = p.typ.pElem
+  if inner.kind == ctArray:
+    return "threadgroup " & spellMslType(inner.aElem, "", true) & "* " & p.name
+  return "threadgroup " & spellMslScalar(inner) & "& " & p.name
+
+proc spellBuiltinParam(name: string): string =
+  ## Attributed MSL parameter of a canonical builtin reference:
+  ## `uint3 name [[name]]` for the coordinate vectors, a scalar `uint` for the flat thread index.
+  ## No binding, no buffer slot.
+  if name == "thread_index_in_threadgroup":
+    return "uint " & name & " [[" & name & "]]"
+  return "uint3 " & name & " [[" & name & "]]"
+
+proc printProc(ctx: var PrintCtx, fn: CirProc): string =
+  ## One proc or kernel: signature, body, closing brace. The body prints first,
+  ## the kernel signature consumes the builtin set the body references.
+  ctx.fnName = fn.name
+  ctx.builtins = initOrderedSet[string]()
+  ctx.indent = 0
+  let bodyTxt = ctx.printStmts(fn.body, "", "")
+  if ctx.failing():
+    return ""
+  let name = if fn.cudaName.len > 0: fn.cudaName else: fn.name
   var params: seq[string]
   var slot = 0
-  for p in fn.pParams:
-    let name = p.ident.ident()
-    if p.ident.symbol.coordBuiltin != gbkNone:
-      # The vector coordinate builtins are `uint3` attribute params.
-      # The flat thread index `gbkThreadIndexInThreadgroup` is a scalar `uint` builtin.
-      let attrType = if p.ident.symbol.coordBuiltin == gbkThreadIndexInThreadgroup:
-        "uint" else: "uint3"
-      params.add attrType & " " & name & " [[" & name & "]]"
-      continue
-    if p.typ.kind == gtPtr:
-      var inner = p.typ.to
-      if inner.kind == gtUncheckedArray:
-        inner = inner.uaTo
-      var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-      params.add "device " & elem & "* " & name & " [[buffer(" & $slot & ")]]"
-    else:
-      var elem = gpuTypeToString(p.typ, allowEmptyIdent = true)
-      if p.typ.kind == gtBool:
-        elem = "int"
-      params.add "constant " & elem & "& " & name
-    inc slot
-  result = params.join(", ")
-
-proc addrSpaceToMsl(space: AddressSpace): string =
-  case space
-  of asDevice: "device"
-  of asConstant: "constant"
-  of asSMEM: "threadgroup"
-  of asRMEM: "thread"
-
-proc genDeviceParam(ctx: var GpuContext, p: GpuParam): string =
-  ## Pointer params carry an explicit MSL address space.
-  ## `thread` names the caller's locals, `device` names kernel buffers,
-  ## `threadgroup` names `{.smem.}` arenas.
-  let name = p.ident.ident()
-  if p.typ.kind == gtPtr:
-    var inner = p.typ.to
-    if inner.kind == gtUncheckedArray:
-      inner = inner.uaTo
-    if inner.kind == gtArray:
-      inner = inner.aTyp
-    var elem = gpuTypeToString(inner, allowEmptyIdent = true)
-    if p.addressSpace == asSMEM:
-      let op = if p.typ.to.kind in {gtObject, gtGenericInst}: "&" else: "*"
-      result = "threadgroup " & elem & op & ' ' & name
-    else:
-      # the pointer type carries the space it accesses
-      let space = addrSpaceToMsl(p.typ.addressSpace)
-      result = space & ' ' & elem & "* " & name
-  else:
-    # By-value array params decay to pointers in MSL. They are read-only
-    # (a plain `array[T]` param), so emit `const`: the call site passes
-    # const lvalue arrays, and a non-const `T*` would reject them.
-    if p.typ.kind == gtArray:
-      result = "const " & gpuTypeToString(p.typ, name)
-    else:
-      result = gpuTypeToString(p.typ, name)
-
-proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
-proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string
-
-proc genMetalImpl(ctx: var GpuContext, ast: GpuAst, indent: int): string =
-  ## Generates the MSL for one AST node.
-  let indentStr = "  ".repeat(indent)
-  case ast.kind
-  of gpuDiscard: return # nothing to emit
-  of gpuProc:
-    let isKernel = attGlobal in ast.pAttributes
-    # Parameters
-    var params: seq[string]
-    if isKernel:
-      params.add ctx.genKernelParams(ast)
-    else:
-      for p in ast.pParams:
-        if p.passByRef:
-          # Reference params carry the space of their argument: the caller's
-          # threadgroup arena or the calling thread's memory.
-          let space = if p.addressSpace == asSMEM: "threadgroup " else: "thread const "
-          params.add space & gpuTypeToString(p.typ, allowEmptyIdent = true) & "& " & p.ident.ident()
-        else:
-          params.add ctx.genDeviceParam(p)
-    let fnArgs = params.join(", ")
-    let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
-
-    # `kernel` marks the compute entry point. `inline` is a hint
-    # for device functions. Plain `device` functions need no qualifier in MSL.
-    let prefix =
-      if isKernel: "kernel "
-      elif attForceInline in ast.pAttributes: "inline "
-      else: ""
-    result = indentStr & prefix & fnSig
-    if ast.forwardDeclare:
-      result.add ';'
-    else:
-      result.add "{\n"
-      result &= ctx.genMetalImpl(ast.pBody, indent + 1)
-      result &= '\n' & indentStr & '}'
-
-  of gpuBlock:
-    result = ""
-    if ast.blockLabel.len > 0:
-      result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
-    for i, el in ast.statements:
-      let code = ctx.genMetalImpl(el, indent + (if ast.blockLabel.len > 0: 1 else: 0))
-      if code.len == 0:
-        continue # skip gpuDiscard and empty statements
-      result.add code
-      if not el.isSelfTerminating() and not ctx.skipSemicolon:
-        result.add ';'
-      if i < ast.statements.high:
-        result.add '\n'
-    if ast.blockLabel.len > 0:
-      result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
-
-  of gpuVar:
-    let vName = ast.vName.ident()
-    var attrs = ""
-    if ast.addressSpace != asRMEM:
-      attrs.add addrSpaceToMsl(ast.addressSpace) & ' '
-    var typ = gpuTypeToString(ast.vType, vName)
-    if ast.vType.kind == gtPtr and ast.addressSpace == asRMEM:
-      # the pointer type carries the space it accesses
-      typ = addrSpaceToMsl(ast.vType.addressSpace) & ' ' & typ
-    result = indentStr & attrs & typ
-    if ast.vInit.kind != gpuDiscard:
-      result &= " = " & ctx.genMetalImpl(ast.vInit, 0)
-  of gpuAssign:
-    result = indentStr & ctx.genMetalImpl(ast.aLeft, 0) & ' ' & ast.aOp & ' ' &
-             ctx.genMetalImpl(ast.aRight, 0)
-  of gpuIf:
-    # skip semicolon in the condition. Otherwise can lead to problematic code
-    ctx.withoutSemicolon: # skip semicolon for if bodies
-      result = indentStr & "if (" & ctx.genMetalImpl(ast.ifCond, 0) & ") {\n"
-    result &= ctx.genMetalImpl(ast.ifThen, indent + 1) & '\n'
-    result &= indentStr & '}'
-    for el in ast.ifElifs:
-      ctx.withoutSemicolon:
-        result &= " else if (" & ctx.genMetalImpl(el.cond, 0) & ") {\n"
-      result &= ctx.genMetalImpl(el.body, indent + 1) & '\n'
-      result &= indentStr & '}'
-    if ast.ifElse.kind != gpuDiscard:
-      result &= " else {\n"
-      result &= ctx.genMetalImpl(ast.ifElse, indent + 1) & '\n'
-      result &= indentStr & '}'
-
-  of gpuTernary:
-    ctx.withoutSemicolon:
-      result = '(' & ctx.genMetalImpl(ast.tCond, 0) & " ? " &
-               ctx.genMetalImpl(ast.tThen, 0) & " : " &
-               ctx.genMetalImpl(ast.tElse, 0) & ')'
-
-  of gpuFor:
-    let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = ""
-    if ast.fUnroll:
-      result &= indentStr & "#pragma clang loop unroll(full)\n"
-    result &= indentStr & "for(int " & ast.fVar.ident() & " = " &
-             ctx.genMetalImpl(ast.fStart, 0) & "; " &
-             ast.fVar.ident() & cmp & ctx.genMetalImpl(ast.fEnd, 0) & "; " &
-             ast.fVar.ident() & " += " & ctx.genMetalImpl(ast.fStep, 0) & ") {\n"
-    result &= ctx.genMetalImpl(ast.fBody, indent + 1) & '\n'
-    result &= indentStr & '}'
-  of gpuWhile:
-    ctx.withoutSemicolon:
-      result = indentStr & "while (" & ctx.genMetalImpl(ast.wCond, 0) & "){\n"
-    result &= ctx.genMetalImpl(ast.wBody, indent + 1) & '\n'
-    result &= indentStr & '}'
-
-  of gpuDot:
-    if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
-       ast.dParent.symbol.coordBuiltin != gbkNone and ast.dField.kind == gpuIdent:
-      # Component of an unsigned MSL builtin, cast to standard Nim `int` from default uint.
-      result = "(int)(" & ctx.genMetalImpl(ast.dParent, 0) & '.' & ctx.genMetalImpl(ast.dField, 0) & ')'
-    else:
-      result = ctx.genMetalImpl(ast.dParent, 0) & '.' &
-               ctx.genMetalImpl(ast.dField, 0)
-
-  of gpuIndex:
-    let base = ctx.genMetalImpl(ast.iArr, 0)
-    let wrapped = if ast.iArr.kind in {gpuCast, gpuConv}: '(' & base & ')' else: base
-    result = wrapped & '[' & ctx.genMetalImpl(ast.iIndex, 0) & ']'
-
-  of gpuCall:
-    case ast.cName.symbol.synchroBuiltin
-    of gbkThreadgroupBarrier:
-      # Every backend lowers the barrier to an alias template that instantiates
-      # to the canonical call, so only this kind reaches the IR.
-      # MSL takes the barrier with its memory flags.
-      result = indentStr & "threadgroup_barrier(mem_flags::mem_threadgroup)"
-    of gbkThreadgroupBarrierDevice:
-      # mem_device orders device-memory accesses, `mem_threadgroup` does not.
-      result = indentStr & "threadgroup_barrier(mem_flags::mem_device)"
-    of gbkNone:
-      case ast.cName.symbol.reductionBuiltin
-      of gbkReduceAdd:
-        result = indentStr & "simd_sum(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ')'
-      of gbkReduceMax:
-        result = indentStr & "simd_max(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ')'
-      of gbkNone:
-        case ast.cName.symbol.shuffleBuiltin
-        of gbkSimdShuffle:
-          # Metal's simd_shuffle takes a `ushort` lane id, the int argument casts to it
-          result = indentStr & "simd_shuffle(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ", (ushort)(" & ctx.genMetalImpl(ast.cArgs[1], 0) & "))"
-        of gbkSimdShuffleXor:
-          # MSL takes the xor mask as `ushort`, the canonical Nim type is int, cast.
-          result = indentStr & "simd_shuffle_xor(" & ctx.genMetalImpl(ast.cArgs[0], 0) & ", (ushort)(" & ctx.genMetalImpl(ast.cArgs[1], 0) & "))"
-        of gbkNone:
-          case ast.cName.symbol.atomicsBuiltin
-          of gbkAtomicFetchAdd:
-            # cast to the `atomic_*` pointee, relaxed order only, fp32 needs Metal 3+
-            let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
-                           of gtFloat32: "atomic_float"
-                           of gtInt32: "atomic_int"
-                           of gtUint32: "atomic_uint"
-                           else: error "Metal atomicFetchAdd: unsupported pointee type"
-            result = indentStr & "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
-                     ctx.genMetalImpl(ast.cArgs[0], 0) & ", " &
-                     ctx.genMetalImpl(ast.cArgs[1], 0) & ", memory_order_relaxed)"
-          of gbkNone:
-            var args: seq[string]
-            for a in ast.cArgs:
-              args.add ctx.genMetalImpl(a, 0)
-            result = indentStr & ctx.getFnName(bkMetal, ast) & '(' & args.join(", ") & ')'
-
-  of gpuBinOp:
-    ctx.withoutSemicolon:
-      let l = ctx.genMetalImpl(ast.bLeft, 0)
-      let r = ctx.genMetalImpl(ast.bRight, 0)
-      result = indentStr & '(' & l & ' ' &
-               ctx.genMetalImpl(ast.bOp, 0) & ' ' &
-               r & ')'
-
-  of gpuIdent:
-    # Identity naming: the source-level builtin names are the MSL attribute names,
-    # so a builtin-marked identifier emits verbatim and binds to the attribute
-    # param `genKernelParams` emits for a kernel, or to the plain param a device
-    # function receives for the same builtin.
-    # Unmarked identifiers never get a param, so an undeclared name stays a loud MSL error.
-    case ast.symbol.coordBuiltin
-    of gbkThreadIndexInThreadgroup:
-      # Scalar MSL attribute param is uint,
-      # the canonical Nim type is int, the printer casts.
-      result = "(int)" & ast.ident()
-    of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
-       gbkThreadPositionInThreadgroup, gbkThreadsPerThreadgroup, gbkThreadgroupsPerGrid:
-      # Whole-value use: MSL attr params are uint3 and the canonical Nim type is
-      # int3 (distinct C++ struct types, no implicit conversion), construct.
-      let n = ast.ident()
-      result = "int3((int)" & n & ".x, (int)" & n & ".y, (int)" & n & ".z)"
-    of gbkNone:
-      result = ast.ident()
-
-  of gpuLit:
-      result = genLit(ast)
-
-  of gpuArrayLit:
-    result = "{"
-    for i, el in ast.aValues:
-      result.add '(' & gpuTypeToString(ast.aLitType) & ')' & ctx.genMetalImpl(el, 0)
-      if i < ast.aValues.high:
-        result.add ", "
-    result.add '}'
-
-  of gpuReturn:
-    result = indentStr & "return " & ctx.genMetalImpl(ast.rValue, 0)
-
-  of gpuPrefix:
-    result = ast.pOp & ctx.genMetalImpl(ast.pVal, 0)
-
-  of gpuTypeDef:
-    result.add "struct " & gpuTypeToString(ast.tTyp) & "{\n"
-    if ast.tFields.len == 0:
-      # MSL requires at least one field in a struct.
-      result.add "  char _;\n"
-    else:
-      for el in ast.tFields:
-        # MSL has no string type, gtString fields drop at emission (no runtime strings reach MSL)
-        if el.typ.kind == gtString:
-          continue
-        # MSL requires an explicit address-space qualifier on pointer-typed fields,
-        # the field's own type carries the space
-        if el.typ.kind == gtPtr:
-          result.add "  " & addrSpaceToMsl(el.typ.addressSpace) & ' ' &
-                     gpuTypeToString(el.typ, el.name) & ";\n"
-        else:
-          result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
-    result.add '}'
-
-  of gpuAlias:
-    # Aliases come from `ctx.types`, MSL emits them as C++11 `using`
-    result = "using " & gpuTypeToString(ast.aTyp) & " = " &
-             ctx.genMetalImpl(ast.aTo, 0) & ';'
-
-  of gpuObjConstr:
-    # Braced init list: `TypeName{val1, val2, ...}` is a functional-style cast, a valid C++
-    # expression usable with member access (gpuDot). A bare `{val}` braced-init-list
-    # is not an expression.
-    result = gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "{"
-    for i, el in ast.ocFields:
-      if el.value.kind == gpuDiscard:
-        result.add "{}"
+  if fn.isKernel:
+    for p in fn.params:
+      if p.typ.kind == ctPtr and p.typ.space == caThreadgroup:
+        # a relocated smem local, no buffer slot
+        params.add spellMslSmemParam(p)
+        continue
+      case p.typ.kind
+      of ctAptr, ctPtr:
+        let inner = p.typ.pElem
+        params.add "device " & spellMslType(inner, "", true) & "* " & p.name &
+          " [[buffer(" & $slot & ")]]"
       else:
-        result.add ctx.genMetalImpl(el.value, 0)
-      if i < ast.ocFields.len - 1:
-        result.add ", "
-    result.add '}'
-
-  of gpuInlineAsm:
-    # Raw MSL statement, the gpuBlock loop appends the `;` terminator.
-    # CUDA/OpenCL/Vulkan wrap the body in `asm(...)`, MSL has no such wrapper,
-    # the simdgroup intrinsics are plain statements.
-    result = indentStr & genAsmStmt(ast).strip
-
-  of gpuEmit:
-    # Self-terminating raw text: the gpuBlock loop appends no `;`
-    # (the emitted text owns its own terminators).
-    result = genEmitStmt(ctx, ast,
-      proc(c: var GpuContext, n: GpuAst): string = c.genMetalImpl(n, 0))
-
-  of gpuComment:
-    result = indentStr & "/* " & ast.comment & " */"
-
-  of gpuConv:
-    var castTyp = gpuTypeToString(ast.convTo, allowEmptyIdent = true)
-    # Pointer-typed casts need an explicit address-space qualifier,
-    # the cast target's type carries the space
-    if ast.convTo.kind == gtPtr:
-      castTyp = addrSpaceToMsl(ast.convTo.addressSpace) & ' ' & castTyp
-    result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.convExpr, 0)
-  of gpuCast:
-    var castTyp = gpuTypeToString(ast.cTo, allowEmptyIdent = true)
-    if ast.cTo.kind == gtPtr:
-      castTyp = addrSpaceToMsl(ast.cTo.addressSpace) & ' ' & castTyp
-    result = '(' & castTyp & ')' & ctx.genMetalImpl(ast.cExpr, 0)
-
-  of gpuAddr:
-    result = "(&" & ctx.genMetalImpl(ast.aOf, 0) & ')'
-
-  of gpuDeref:
-    result = "(*" & ctx.genMetalImpl(ast.dOf, 0) & ')'
-
-  of gpuConstexpr:
-    ## Emits a C++14 `constexpr` variable, MSL supports them. Array types need
-    ## the length in the type, hence the two emission shapes.
-    let cInit =
-      if ast.cValue.kind == gpuDiscard: "{}"
-      else: ctx.genMetalImpl(ast.cValue, 0)
-    if ast.cType.kind == gtArray:
-      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, ctx.genMetalImpl(ast.cIdent, 0)) & " = " & cInit
-    else:
-      result = indentStr & "constexpr " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' &
-               ctx.genMetalImpl(ast.cIdent, 0) & " = " & cInit
-  of gpuMaterialize:
-    result = ctx.genMetalImpl(ast.mExpr, 0) # C++ const& binds implicitly to temporaries
-
+        var elem = spellMslScalar(p.typ)
+        if p.typ.kind == ctBool:
+          elem = "int"
+        params.add "constant " & elem & "& " & p.name
+      inc slot
+    for b in ctx.builtins:
+      # coordinate builtins are attributed params, no binding, no slot
+      params.add spellBuiltinParam(b)
   else:
-    error "Unhandled node kind in genMetal: " & ast.repr
+    for p in fn.params:
+      case p.typ.kind
+      of ctAptr, ctPtr:
+        params.add spellMslPtr(p.typ, p.name)
+      else:
+        params.add spellMslType(p.typ, p.name, true)
+  let ret = spellMslType(fn.ret, "", true)
+  let prefix = if fn.isKernel: "kernel "
+    elif fn.forceInline: "inline "
+    else: ""
+  let sig = prefix & ret & ' ' & name & '(' & params.join(", ") & ")"
+  return sig & " {\n" & bodyTxt & '\n' & "}"
 
-proc genMetal*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
-  ## MSL code for `ast`, used by `codegen` for top-level nodes.
-  ctx.genMetalImpl(ast, indent)
+proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
+  ## Emits the full MSL translation unit: metal headers, struct declarations, program-scope constants,
+  ## device-function forward declarations, then every function body.
+  ##
+  ## Returns "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>")
+  var src = "#include <metal_stdlib>\n"
+  src &= "#include <metal_atomic>\n"
+  src &= "using namespace metal;\n\n"
+  for t in m.types:
+    if t.kind != ctStruct:
+      ctx.fail("module type " & t.name & " is not a struct")
+      break
+    src &= "struct " & t.name & " {\n"
+    if t.fields.len == 0:
+      src &= "  char _;\n"
+    for f in t.fields:
+      var field = spellMslType(f.typ, f.name, false)
+      if f.typ.kind in {ctPtr, ctAptr}:
+        field = spellMslPtr(f.typ, f.name)
+      src &= "  " & field & ";\n"
+    src &= "};\n\n"
+  # program-scope `constant` declarations relocated into `m.globals` by the MSL lowering pass,
+  # in encounter order
+  var hoisted: seq[string]
+  for s in m.globals:
+    if s.kind == sVar and s.space == caConstant:
+      if s.init == nil:
+        ctx.fail("const_mem local " & s.name & " without an initializer")
+      else:
+        var decl = spellMslType(s.declType, s.name, false)
+        if s.declType.kind in {ctPtr, ctAptr}:
+          decl = spellMslPtr(s.declType, s.name)
+        hoisted.add "constant " & decl & " = " & ctx.printExpr(s.init) & ";"
+  for d in hoisted:
+    src &= d & "\n"
+  if hoisted.len > 0:
+    src &= "\n"
+  if ctx.failing():
+    return ("", ctx.err)
+  for fn in m.procs:
+    let txt = ctx.printProc(fn)
+    if ctx.err.len > 0:
+      break
+    src &= txt & "\n\n"
+  result = (src, ctx.err)
+
+
 
 proc codegen*(ctx: var GpuContext): string =
-  ## Emits the full MSL translation unit:
-  ## - the `metal_stdlib` header
-  ## - the global blocks (types, global variables)
-  ## - forward declarations for device functions, then every function body.
-  # Resolve the value-level address spaces from the var pragmas and struct
-  # pointer fields before any emission needs them.
-  result.add "#include <metal_stdlib>\n"
-  result.add "#include <metal_atomic>\n"
-  result.add "using namespace metal;\n\n"
-
-  # 1. generate code for the global blocks (types, global vars etc).
-  #    Empty blocks (e.g. a kernel source with no globals) emit nothing.
-  for blk in ctx.globalBlocks:
-    let code = ctx.genMetal(blk)
-    if code.len > 0:
-      result.add code & ";\n\n"
-
-  # 2. Forward declarations for the device functions, a kernel may precede its callees.
-  #    Kernels need no forward declaration, no shader code calls a kernel.
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns:
-    if attGlobal in fn.pAttributes:
-      continue
-    let fnC = fn.clone()
-    fnC.forwardDeclare = true
-    result.add ctx.genMetal(fnC) & '\n'
-  result.add "\n\n"
-
-  for fnIdent, fn in ctx.fnTab.pairs:
-    result.add ctx.genMetal(fn) & "\n\n"
+  ## Prints the module in `ctx` as Metal Shading Language (MSL) source, the `backends_api` entry point.
+  ## A printer refusal is a compile error naming the construct.
+  let (src, err) = printMslModule(ctx.module)
+  if err.len > 0:
+    error(err)
+  result = src

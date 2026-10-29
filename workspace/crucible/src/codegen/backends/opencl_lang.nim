@@ -5,554 +5,772 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std / [macros, strformat, strutils, sugar, sequtils, tables]
+## OpenCL C printer: a structured CIRv2 module rendered as OpenCL C source,
+## table-driven over the closed type lattice.
+##
+## Emission contract:
+## - one `{.global.}` kernel per module, the device functions it calls emitted alongside
+## - the kernel signature is `__kernel void <name>(...)`: one parameter per kernel parameter, the host `store` packing order
+## - device pointers render as `__global T* restrict` parameters, element access `p[index]`
+## - `eSizeof` prints C `sizeof`, OpenCL C is C99
+##
+## Addressing, memory classes, jumps:
+## - a `ptr` local is a plain C pointer, `(&x)` addresses a local, `(*p)` dereferences
+## - `{.smem.}` locals declare `__local` in the kernel body
+## - jmp to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
+##
+## Storage relocation:
+## - `{.const_mem.}` locals relocate into `CirModule.globals` through the OpenCL lowering pass, program-scope `__constant` output
+## - a `{.const_mem.}` local surviving outside the relocation refuses, OpenCL C has no function-scope constant storage
 
+import ../ir/cirv2_lang
+import ../frontend/nim_to_crucible
+import std/[macros, strutils, sequtils, sets, tables]
 import ../ir/ast_datatypes
-import ../ir/ast_type_resolvers
-import ./lang_utils
 
-proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmptyIdent = false): string
+type
+  PrintCtx = object
+    fnName: string
+    ## First refusal of the walk, "" while clean.
+    err: string
+    indent: int
+    inKernel: bool
+    ## False inside a device function: `__local` and `__constant` locals are
+    ## kernel-only storage, a device function declaring one refuses.
 
-proc getInnerArrayType(t: GpuType): string =
-  case t.kind
-  of gtArray:
-    result = getInnerArrayType(t.aTyp)
-  else:
-    result = gpuTypeToString(t)
+proc failing(ctx: PrintCtx): bool =
+  ctx.err.len > 0
+
+proc fail(ctx: var PrintCtx, detail: string) =
+  ## Records the first refusal, naming the proc.
+  if ctx.err.len == 0:
+    ctx.err = "cirv2 printer opencl: at " & ctx.fnName & ": " & detail
 
 # ═══════════════════════════════════════════════════════════════════════
-# Type mapping – OpenCL C types
+# Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc gpuTypeToString*(t: GpuTypeKind): string =
-  case t
-  of gtBool: "int"            # OpenCL C has no bool, use int
-  of gtUint8: "uchar"
-  of gtUint16: "ushort"
-  of gtUint32: "uint"
-  of gtUint64: "ulong"
-  of gtInt16: "short"
-  of gtInt32: "int"
-  of gtInt64: "long"
-  of gtFloat32: "float"
-  of gtFloat64: "double"
-  of gtFloat16: "half"
-  of gtVoid: "void"
-  of gtSize_t: "size_t"
-  of gtPtr: "*"
-  of gtVoidPtr: "void*"
-  of gtObject: "struct"
-  of gtString: "const char*"
-  of gtUncheckedArray: ""       # UncheckedArray used as buffer pointer
-  of gtStatic: "int"
-  else:
-    error "Invalid type : " & $t
-
-proc gpuTypeToString*(t: GpuType, ident = "", allowArrayToPtr = false, allowEmptyIdent = false): string =
-  var skipIdent = false
+proc spellOpenclScalar(t: CirType): string =
+  ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
-  of gtPtr:
-    let inner = if t.to.kind == gtUncheckedArray: t.to.uaTo else: t.to
-    if inner.kind == gtArray:
-      let ptrStar = gpuTypeToString(t.kind)
-      result = gpuTypeToString(inner, '(' & ptrStar & ident & ')')
-      skipIdent = true
+  of ctVoid:
+    result = "void"
+  of ctBool:
+    # OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
+    result = "int"
+  of ctInt:
+    case t.bits
+    of 8:
+      result = "char"
+    of 16:
+      result = "short"
+    of 32:
+      result = "int"
+    of 64:
+      result = "long"
     else:
-      let typ = gpuTypeToString(inner, allowEmptyIdent = allowEmptyIdent)
-      let ptrStar = gpuTypeToString(t.kind)
-      let space = case t.addressSpace
-                  of asDevice: "__global "
-                  of asSMEM: "__local "
-                  of asConstant: "__constant "
-                  of asRMEM: ""
-      result = space & typ & ptrStar
-  of gtArray:
-    if ident.len == 0 and not allowEmptyIdent:
-      when nimvm:
-        error("Invalid call, got an array type but don't have an identifier: " & $t)
-      else:
-        raise newException(ValueError, "Invalid call, got an array type but don't have an identifier: " & $t)
-    case t.aTyp.kind
-    of gtArray: # nested array
-      let typ = getInnerArrayType(t)
-      let lengths = getInnerArrayLengths(t)
-      result = typ & ' ' & ident & lengths
+      result = ""
+  of ctUint:
+    case t.bits
+    of 8:
+      result = "uchar"
+    of 16:
+      result = "ushort"
+    of 32:
+      result = "uint"
+    of 64:
+      result = "ulong"
     else:
-      if t.aLen == 0:
-        result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & "[]"
-      else:
-        result = gpuTypeToString(t.aTyp, allowEmptyIdent = allowEmptyIdent) & ' ' & ident & '[' & $t.aLen & ']'
-    skipIdent = true
-  of gtGenericInst:
-    result = "struct " & t.gName
-    if t.gArgs.len == 1:
-      result.add gpuTypeToShortString(t.gArgs[0])
-    elif t.gArgs.len > 1:
-      # 2+ args collapse to a short hash
-      result.add mangledHashName("", $hash(t))
-  of gtObject: result = "struct " & t.name
-  of gtUncheckedArray:     result = gpuTypeToString(t.uaTo, allowEmptyIdent = allowEmptyIdent)
-  of gtStatic: result = "int"
-  else:        result = gpuTypeToString(t.kind)
+      result = ""
+  of ctFloat:
+    case t.bits
+    of 16:
+      result = "half"
+    of 32:
+      result = "float"
+    of 64:
+      result = "double"
+    else:
+      result = ""
+  of ctVector:
+    let elem = spellOpenclScalar(t.vElem)
+    if elem.len > 0:
+      result = elem & $t.vN
+  of ctStruct:
+    result = t.name
+  of ctPtr, ctAptr, ctArray, ctProc:
+    result = ""
 
-  if ident.len > 0 and not skipIdent:
-    result.add ' ' & ident
-
-proc genFunctionType*(typ: GpuType, fn: string, fnArgs: string): string =
-  if typ.kind == gtPtr and typ.to.kind == gtArray:
-    let arrayTyp = typ.to.aTyp
-    let innerTyp = gpuTypeToString(arrayTyp, allowEmptyIdent = true)
-    let innerLen = $typ.to.aLen
-    result = &"{innerTyp} (*{fn}({fnArgs}))[{innerLen}]"
+proc spellOpenclTypeBare(t: CirType): string =
+  ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
+  case t.kind
+  of ctPtr, ctAptr:
+    result = spellOpenclTypeBare(t.pElem) & "*"
   else:
-    result = &"{gpuTypeToString(typ, allowEmptyIdent = true)} {fn}({fnArgs})"
+    result = spellOpenclScalar(t)
 
+proc spellOpenclArrayDecl(t: CirType, ident: string): string =
+  ## OpenCL C declaration of an array local or field, the length moves
+  ## behind the identifier (`float ident[4]`).
+  spellOpenclScalar(t.aElem) & ' ' & ident & "[" & $t.aN & "]"
 
-proc containsFloat64(t: GpuType): bool =
-  case t.kind
-  of gtPtr:
-    result = t.to.containsFloat64()
-  of gtArray:
-    result = t.aTyp.containsFloat64()
-  of gtUncheckedArray:
-    result = t.uaTo.containsFloat64()
-  of gtFloat64: result = true
-  else: result = false
-
-proc containsFloat16(t: GpuType): bool =
-  case t.kind
-  of gtPtr:
-    result = t.to.containsFloat16()
-  of gtArray:
-    result = t.aTyp.containsFloat16()
-  of gtUncheckedArray:
-    result = t.uaTo.containsFloat16()
-  of gtFloat16: result = true
-  else: result = false
-
+proc spellOpenclPtrField(t: CirType, ident: string): string =
+  ## OpenCL C declaration of a pointer field or local, the address space qualifier leads.
+  ## `restrict` is a function-parameter qualifier, struct fields and locals drop it.
+  let qualifier = case t.space
+    of caDevice: "__global "
+    of caThreadgroup: "__local "
+    of caConstant: "__constant "
+    of caThread: ""
+  result = qualifier & spellOpenclTypeBare(t) & ' ' & ident
 
 # ═══════════════════════════════════════════════════════════════════════
-# Printing
+# Module feature scan (extensions)
 # ═══════════════════════════════════════════════════════════════════════
 
-proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string
+type
+  ModuleFeatures = object
+    fp64, fp16: bool
+    subgroup: bool
+    atomicFloat: bool
 
-# ── genOpenCL ─────────────────────────────────────────────────────────
 
-proc genLit*(ast: GpuAst): string =
-  if ast.lType.kind == gtString:
-    result = '"' & ast.lValue & '"'
-  elif ast.lValue == "DEFAULT":
-    # A missing object-constructor field, e.g. a nil smem pointer
-    # filled in later by preflight. C99 rejects `{}` on a scalar,
-    # `0` zero-initializes scalars, pointers and aggregates.
-    result = "0"
-  else:
-    case ast.lType.kind
-    of gtFloat32: result = ast.lValue & "f"
-    of gtUint32: result = ast.lValue & "U"
-    of gtUint64: result = ast.lValue & "ULL"
-    of gtInt64:  result = ast.lValue & "LL"
-    of gtInt16, gtUint16, gtUint8, gtBool:
-      result = '(' & gpuTypeToString(ast.lType, allowEmptyIdent = true) & ')' & ast.lValue
-    else:
-      result = ast.lValue
-
-proc openclCoordFieldAccess(kind: GpuCoordBuiltinKind, field: string): string =
-  ## Canonical coordinate field access to its `get_*(d)` call,
-  ## the dimension as a literal. "" for kinds without a mapping.
-  let d =
-    case field
+proc openclCoordComponent(kind: CoordBuiltinKind, field: string): string =
+  ## OpenCL C call of one canonical coordinate builtin component, the dimension as a literal.
+  ## "" when the field is not a component.
+  let d = case field
     of "x": "0"
     of "y": "1"
     of "z": "2"
-    else: return ""
+    else: ""
+  if d.len == 0:
+    return ""
   case kind
-  of gbkThreadPositionInGrid: "(int)get_global_id(" & d & ")"
-  of gbkThreadgroupPositionInGrid: "(int)get_group_id(" & d & ")"
-  of gbkThreadPositionInThreadgroup: "(int)get_local_id(" & d & ")"
-  of gbkThreadsPerThreadgroup: "(int)get_local_size(" & d & ")"
-  of gbkThreadgroupsPerGrid: "(int)get_num_groups(" & d & ")"
-  of gbkThreadIndexInThreadgroup, gbkNone: ""
+  of cbkThreadPositionInGrid: "(int)get_global_id(" & d & ")"
+  of cbkThreadgroupPositionInGrid: "(int)get_group_id(" & d & ")"
+  of cbkThreadPositionInThreadgroup: "(int)get_local_id(" & d & ")"
+  of cbkThreadsPerThreadgroup: "(int)get_local_size(" & d & ")"
+  of cbkThreadgroupsPerGrid: "(int)get_num_groups(" & d & ")"
+  of cbkNone, cbkThreadIndexInThreadgroup: ""
 
-proc openclCoordIdent(kind: GpuCoordBuiltinKind, name: string): string =
-  ## Canonical scalar coordinate builtin referenced whole, in OpenCL C.
-  case kind
-  of gbkThreadIndexInThreadgroup:
-    # x-major flat thread index, parenthesized so a trailing `* k`
-    # cannot mis-associate into `+ get_local_id(0) * k`.
-    # OpenCL index builtins are
-    # size_t, the canonical Nim type is int, the printer casts.
-    "(int)(get_local_id(2)*get_local_size(0)*get_local_size(1) + get_local_id(1)*get_local_size(0) + get_local_id(0))"
-  of gbkThreadPositionInGrid, gbkThreadgroupPositionInGrid,
-     gbkThreadPositionInThreadgroup, gbkThreadsPerThreadgroup,
-     gbkThreadgroupsPerGrid:
-    # Whole-value vector coordinates have no OpenCL C form.
-    # Their names are emitted verbatim, zero in-tree uses.
-    name
-  of gbkNone:
-    # Unreachable-by-construction: ident sites emit gbkNone verbatim, so this branch never fires.
-    error "coordinate site with no coordinate builtin kind: " & name
+## x-major flat thread index, parenthesized so a trailing `* k` cannot
+## mis-associate into `+ get_local_id(0) * k`. OpenCL index builtins are
+## size_t, the canonical Nim type is int, the printer casts.
+const OpenclFlatThreadIndex =
+  "(int)(get_local_id(2)*get_local_size(0)*get_local_size(1) + " &
+  "get_local_id(1)*get_local_size(0) + get_local_id(0))"
 
-proc genOpenCL*(ctx: var GpuContext, ast: GpuAst, indent = 0): string =
-  let indentStr = "  ".repeat(indent)
-  case ast.kind
-  of gpuDiscard: return
+proc atomicOperandPtr(e: CirExpr): CirType =
+  ## Pointer type of an atomicFetchAdd address operand.
+  ## The base of an element access, else the operand itself when it is
+  ## already a pointer. Nil when the operand names no pointer.
+  if e.kind == ePat:
+    let t = getExprType(e.patBase)
+    if t != nil and t.kind in {ctPtr, ctAptr}:
+      return t
+  let t = getExprType(e)
+  if t != nil and t.kind in {ctPtr, ctAptr}:
+    return t
 
-  of gpuProc:
-    let attrs = collect:
-      for att in ast.pAttributes:
-        $att
+proc scanType(t: CirType, f: var ModuleFeatures) =
+  if t.isNil:
+    return
+  case t.kind
+  of ctFloat:
+    if t.bits == 64:
+      f.fp64 = true
+    if t.bits == 16:
+      f.fp16 = true
+  of ctVector: scanType(t.vElem, f)
+  of ctArray: scanType(t.aElem, f)
+  of ctPtr, ctAptr: scanType(t.pElem, f)
+  of ctStruct:
+    for fl in t.fields:
+      scanType(fl.typ, f)
+  of ctVoid, ctBool, ctInt, ctUint, ctProc:
+    discard
 
-    let isKernel = attGlobal in ast.pAttributes
-    var params: seq[string]
-    for p in ast.pParams:
-      if p.passByRef and not isKernel:
-        # const Type* _p_name — pointer to const for large structs (no C++ references)
-        # Note: lowerByrefParamsImpl already renamed the param to _p_
-        params.add "const " & gpuTypeToString(p.typ, allowEmptyIdent = true) & "* " & p.ident.ident()
-      elif p.addressSpace == asSMEM:
-        # __local T*, shared memory
-        let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-        params.add &"__local {inner}* {p.ident.ident()}"
-      elif p.typ.kind == gtPtr and p.typ.addressSpace == asDevice:
-        # __global T* restrict: explicit `ptr T` params
-        # bind device buffers, in kernel signatures and device functions alike.
-        # the qualifier reads the pointer type's space, an implicit `var T`
-        # pointer param takes the plain form below
-        let inner = gpuTypeToString(p.typ.to, allowEmptyIdent = true)
-        params.add &"__global {inner}* restrict {p.ident.ident()}"
-      else:
-        # By-value array params decay to pointers. They are read-only
-        # (a plain `array[T]` param), so emit `const`: the call site
-        # passes const lvalue arrays, and a non-const `T*` rejects them.
-        if p.typ.kind == gtArray:
-          params.add "const " & gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
-        else:
-          params.add gpuTypeToString(p.typ, p.ident.ident(), allowEmptyIdent = false)
-    let fnArgs = params.join(", ")
-    let fnSig = genFunctionType(ast.pRetType, ast.pName.ident(), fnArgs)
-
-    if isKernel:
-      # Global kernel entry point → `__kernel void kernelName(...)`
-      result = indentStr & "__kernel void " & ast.pName.ident() & '(' & fnArgs & ')'
-    else:
-      # Device function → `static inline retType fnName(...)`
-      result = indentStr & "static inline " & fnSig
-
-    if ast.forwardDeclare:
-      result.add ';'
-    else:
-      result.add " {\n"
-      # Local copies for byref params are emitted as gpuVar nodes in the body
-      # by lowerByrefParamsImpl, no additional codegen needed here
-      result &= ctx.genOpenCL(ast.pBody, indent + 1)
-      result &= '\n' & indentStr & '}'
-
-  of gpuBlock:
-    result = ""
-    if ast.blockLabel.len > 0:
-      result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
-    for i, el in ast.statements:
-      result.add ctx.genOpenCL(el, indent)
-      if not el.isSelfTerminating() and not ctx.skipSemicolon:
-        result.add ';'
-      if i < ast.statements.high:
-        result.add '\n'
-    if ast.blockLabel.len > 0:
-      result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
-
-
-  of gpuVar:
-    # a pointer declaration self-qualifies, a variable-level prefix would
-    # qualify the pointed-to type twice
-    var typeStr: string
-    if ast.vType.kind == gtPtr:
-      typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
-    else:
-      case ast.addressSpace
-      of asSMEM:
-        typeStr = "__local " & gpuTypeToString(ast.vType, ast.vName.ident())
-      of asRMEM:
-        typeStr = "__private " & gpuTypeToString(ast.vType, ast.vName.ident())
-      of asConstant:
-        typeStr = "__constant " & gpuTypeToString(ast.vType, ast.vName.ident())
-      of asDevice:
-        typeStr = gpuTypeToString(ast.vType, ast.vName.ident())
-
-    result = indentStr & typeStr
-    if ast.vInit.kind != gpuDiscard:
-      result &= " = " & ctx.genOpenCL(ast.vInit)
-
-  of gpuAssign:
-    result = indentStr & ctx.genOpenCL(ast.aLeft) & ' ' & ast.aOp & ' ' &
-             ctx.genOpenCL(ast.aRight)
-  of gpuIf:
-    ctx.withoutSemicolon:
-      result = indentStr & "if (" & ctx.genOpenCL(ast.ifCond) & ") {\n"
-    result &= ctx.genOpenCL(ast.ifThen, indent + 1) & '\n'
-    result &= indentStr & '}'
-    for el in ast.ifElifs:
-      ctx.withoutSemicolon:
-        result &= " else if (" & ctx.genOpenCL(el.cond) & ") {\n"
-      result &= ctx.genOpenCL(el.body, indent + 1) & '\n'
-      result &= indentStr & '}'
-    if ast.ifElse.kind != gpuDiscard:
-      result &= " else {\n"
-      result &= ctx.genOpenCL(ast.ifElse, indent + 1) & '\n'
-      result &= indentStr & '}'
-
-  of gpuTernary:
-    ctx.withoutSemicolon:
-      result = '(' & ctx.genOpenCL(ast.tCond) & " ? " &
-               ctx.genOpenCL(ast.tThen) & " : " &
-               ctx.genOpenCL(ast.tElse) & ')'
-
-  of gpuFor:
-    let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
-    result = ""
-    if ast.fUnroll:
-      result &= indentStr & "#pragma unroll\n"
-    result &= indentStr & "for(int " & ast.fVar.ident() & " = " &
-             ctx.genOpenCL(ast.fStart) & "; " &
-             ast.fVar.ident() & cmp & ctx.genOpenCL(ast.fEnd) & "; " &
-             ast.fVar.ident() & " += " & ctx.genOpenCL(ast.fStep) & ") {\n"
-    result &= ctx.genOpenCL(ast.fBody, indent + 1) & '\n'
-    result &= indentStr & '}'
-
-  of gpuWhile:
-    ctx.withoutSemicolon:
-      result = indentStr & "while (" & ctx.genOpenCL(ast.wCond) & "){\n"
-    result &= ctx.genOpenCL(ast.wBody, indent + 1) & '\n'
-    result &= indentStr & '}'
-
-  of gpuDot:
-    if ast.dParent.kind == gpuIdent and ast.dParent.symbol != nil and
-       ast.dParent.symbol.coordBuiltin != gbkNone and
-       ast.dField.kind == gpuIdent:
-      let mapped = openclCoordFieldAccess(ast.dParent.symbol.coordBuiltin, ast.dField.ident())
-      if mapped.len > 0:
-        result = mapped
-      else:
-        result = ctx.genOpenCL(ast.dParent) & '.' & ctx.genOpenCL(ast.dField)
-    else:
-      result = ctx.genOpenCL(ast.dParent) & '.' & ctx.genOpenCL(ast.dField)
-
-  of gpuIndex:
-    result = ctx.genOpenCL(ast.iArr) & '[' & ctx.genOpenCL(ast.iIndex) & ']'
-
-  of gpuCall:
-    case ast.cName.symbol.synchroBuiltin
-    of gbkThreadgroupBarrier:
-      # Every backend name of the barrier is an alias template that semantic analysis
-      # expands to the canonical call, so only this kind reaches the IR.
-      # OpenCL C: `barrier(CLK_LOCAL_MEM_FENCE)`.
-      result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE)"
-    of gbkThreadgroupBarrierDevice:
-      # Global fence bit orders device-address-space accesses.
-      result = indentStr & "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)"
-    of gbkNone:
-      case ast.cName.symbol.reductionBuiltin
-      of gbkReduceAdd:
-        result = indentStr & "sub_group_reduce_add(" & ctx.genOpenCL(ast.cArgs[0]) & ')'
-      of gbkReduceMax:
-        result = indentStr & "sub_group_reduce_max(" & ctx.genOpenCL(ast.cArgs[0]) & ')'
-      of gbkNone:
-        case ast.cName.symbol.shuffleBuiltin
-        of gbkSimdShuffle:
-          # `sub_group_shuffle` takes the subgroup-relative index as `uint`, cast.
-          result = indentStr & "sub_group_shuffle(" & ctx.genOpenCL(ast.cArgs[0]) & ", (uint)(" & ctx.genOpenCL(ast.cArgs[1]) & "))"
-        of gbkSimdShuffleXor:
-          # `sub_group_shuffle_xor` takes the xor mask as `uint`, cast.
-          result = indentStr & "sub_group_shuffle_xor(" & ctx.genOpenCL(ast.cArgs[0]) & ", (uint)(" & ctx.genOpenCL(ast.cArgs[1]) & "))"
-        of gbkNone:
-          case ast.cName.symbol.atomicsBuiltin
-          of gbkAtomicFetchAdd:
-            # fp atomics need cl_ext_float_atomics (module scope), int atomic_fetch_add is OpenCL 2.0 core
-            let atomicTy = case getPointeeKind(ctx.getOperandType(ast.cArgs[0]))
-                           of gtFloat32: "atomic_float"
-                           of gtInt32: "atomic_int"
-                           of gtUint32: "atomic_uint"
-                           else: error "OpenCL atomicFetchAdd: unsupported pointee type"
-            result = indentStr & "atomic_fetch_add((volatile __global " & atomicTy & "*)" &
-                     ctx.genOpenCL(ast.cArgs[0]) & ", " &
-                     ctx.genOpenCL(ast.cArgs[1]) & ')'
-          of gbkNone:
-            var clArgs: seq[string]
-            for arg in ast.cArgs:
-              clArgs.add ctx.genOpenCL(arg)
-            result = indentStr & ctx.getFnName(bkOpenCL, ast) & '(' & clArgs.join(", ") & ')'
-
-
-  of gpuBinOp:
-    ctx.withoutSemicolon:
-      let l = ctx.genOpenCL(ast.bLeft)
-      let r = ctx.genOpenCL(ast.bRight)
-      result = indentStr & '(' & l & ' ' &
-               ctx.genOpenCL(ast.bOp) & ' ' &
-               r & ')'
-
-  of gpuIdent:
-    if ast.symbol != nil:
-      case ast.symbol.coordBuiltin
-      of gbkNone:
-        # A local shadowing a canonical name, or a call-shaped builtin
-        # (printf, cvtaGenericToShared): emit verbatim.
-        result = ast.ident()
-      else:
-        result = openclCoordIdent(ast.symbol.coordBuiltin, ast.ident())
-    else:
-      result = ast.ident()
-
-  of gpuLit:
-      result = genLit(ast)
-
-  of gpuArrayLit:
-    result = "{"
-    for i, el in ast.aValues:
-      result.add '(' & gpuTypeToString(ast.aLitType) & ')' & ctx.genOpenCL(el)
-      if i < ast.aValues.high:
-        result.add ", "
-    result.add '}'
-
-  of gpuReturn:
-    result = indentStr & "return " & ctx.genOpenCL(ast.rValue)
-
-  of gpuPrefix:
-    result = ast.pOp & ctx.genOpenCL(ast.pVal)
-
-  of gpuTypeDef:
-    result = gpuTypeToString(ast.tTyp) & " {\n"
-    if ast.tFields.len == 0:
-      # OpenCL C requires at least one field in a struct.
-      result.add "  char _;\n"
-    else:
-      for el in ast.tFields:
-        result.add "  " & gpuTypeToString(el.typ, el.name) & ";\n"
-    result.add '}'
-
-  of gpuObjConstr:
-    # C99 compound literal `(type){init}`, a bare braced-init-list
-    # cannot be used with member access.
-    result = "(" & gpuTypeToString(ast.ocType, allowEmptyIdent = true) & "){"
-    if ast.ocFields.len == 0:
-      # Empty struct, e.g. EpiIdentity/EpiReLU: C99 rejects `{}`,
-      # `{0}` zero-initializes the single member.
-      result.add "0"
-    else:
-      for i, el in ast.ocFields:
-        if el.value.kind == gpuDiscard or
-           (el.value.kind == gpuLit and el.value.lValue == "DEFAULT"):
-          # Missing constructor field, e.g. a nil smem pointer filled
-          # in later by preflight. C99 forbids `{}` for scalars.
-          # A bare `0` would be absorbed by a leading array member,
-          # hence aggregates are braced.
-          if el.typ.kind in {gtArray, gtObject, gtGenericInst}:
-            result.add "{0}"
-          else:
-            result.add "0"
-        else:
-          result.add ctx.genOpenCL(el.value)
-        if i < ast.ocFields.len - 1:
-          result.add ", "
-    result.add "}"
-  of gpuInlineAsm:
-    result = indentStr & "asm(" & genAsmStmt(ast).strip & ");"
-
-  of gpuEmit:
-    # Self-terminating raw text: the gpuBlock loop appends no `;`
-    # (the emitted text owns its own terminators).
-    result = genEmitStmt(ctx, ast,
-      proc(c: var GpuContext, n: GpuAst): string = c.genOpenCL(n, 0))
-
-  of gpuComment:
-    result = indentStr & "/* " & ast.comment & " */"
-
-  of gpuConv:
-    result = '(' & gpuTypeToString(ast.convTo, allowEmptyIdent = true) & ')' & ctx.genOpenCL(ast.convExpr)
-
-  of gpuCast:
-    result = '(' & gpuTypeToString(ast.cTo, allowEmptyIdent = true) & ')' & ctx.genOpenCL(ast.cExpr)
-
-  of gpuAddr:
-    result = "(&" & ctx.genOpenCL(ast.aOf) & ')'
-
-  of gpuDeref:
-    result = "(*" & ctx.genOpenCL(ast.dOf) & ')'
-
-  of gpuConstexpr:
-    if ast.cType.kind == gtArray:
-      result = indentStr & "const " & gpuTypeToString(ast.cType, ctx.genOpenCL(ast.cIdent)) & " = " & ctx.genOpenCL(ast.cValue)
-    else:
-      result = indentStr & "const " & gpuTypeToString(ast.cType, allowEmptyIdent = true) & ' ' & ctx.genOpenCL(ast.cIdent) & " = " & ctx.genOpenCL(ast.cValue)
-  of gpuMaterialize:
-    let typ = gpuTypeToString(ast.mType, allowEmptyIdent = true)
-    result = "&(" & typ & "){" & ctx.genOpenCL(ast.mExpr) & "}"
-
+proc scanExpr(e: CirExpr, f: var ModuleFeatures) =
+  if e.isNil:
+    return
+  case e.kind
+  of eCall:
+    if e.callee.kind == eSym:
+      if e.callee.reductionBuiltin in {rbkReduceAdd, rbkReduceMax}:
+        f.subgroup = true
+      if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
+        let pt = atomicOperandPtr(e.args[0])
+        if pt != nil and pt.pElem != nil and pt.pElem.kind == ctFloat and
+            pt.pElem.bits == 32:
+          f.atomicFloat = true
   else:
-    echo "Unhandled node kind in genOpenCL: ", ast.kind
-    error "Unhandled node kind in genOpenCL: " & ast.repr
+    discard
+  for c in getExprChildren(e):
+    scanExpr(c, f)
+  scanType(getExprType(e), f)
+
+proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      scanType(s.declType, f)
+      if s.init != nil:
+        scanExpr(s.init, f)
+    of sAsgn:
+      scanExpr(s.lhs, f)
+      scanExpr(s.rhs, f)
+    of sIte:
+      scanExpr(s.cond, f)
+      scanStmts(s.thenBody, f)
+      scanStmts(s.elseBody, f)
+    of sLoop:
+      scanStmts(s.loopBody, f)
+    of sScope:
+      scanStmts(s.scopeBody, f)
+    of sRet:
+      if s.retVal != nil:
+        scanExpr(s.retVal, f)
+    of sCall:
+      scanExpr(s.callCallee, f)
+      for a in s.callArgs:
+        scanExpr(a, f)
+    of sAssume:
+      scanExpr(s.assumeCond, f)
+    of sJmp, sLab, sDiscard:
+      discard
+    of sCase, sAsm:
+      discard
+
+proc scanModule(m: CirModule, f: var ModuleFeatures) =
+  for t in m.types:
+    scanType(t, f)
+  scanStmts(m.globals, f)
+  for fn in m.procs:
+    scanType(fn.ret, f)
+    for p in fn.params:
+      scanType(p.typ, f)
+    scanStmts(fn.body, f)
+
+proc spellExtensions(f: ModuleFeatures): string =
+  ## OpenCL C extension pragma block, one line per feature in use.
+  if f.fp64:
+    result.add "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"
+  if f.fp16:
+    result.add "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n"
+  if f.atomicFloat:
+    result.add "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n"
+  if f.subgroup:
+    result.add "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n"
+  result.add "\n"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Top-level codegen
+# Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc usesFloatAtomic(ctx: GpuContext, n: GpuAst): bool =
-  ## True when the AST contains an fp `atomicFetchAdd` call
-  if n.kind == gpuCall and n.cName.symbol != nil and
-     n.cName.symbol.atomicsBuiltin == gbkAtomicFetchAdd and
-     getPointeeKind(ctx.getOperandType(n.cArgs[0])) == gtFloat32:
-    return true
-  for ch in n:
-    if ctx.usesFloatAtomic(ch):
-      return true
+proc printExpr(ctx: var PrintCtx, e: CirExpr): string
+  ## Forward declaration, expressions recurse into themselves.
 
-proc usesSubgroupReduce(ctx: GpuContext, n: GpuAst): bool =
-  if n.kind == gpuCall and n.cName.symbol != nil and
-     n.cName.symbol.reductionBuiltin != gbkNone:
-    return true
-  for ch in n:
-    if ctx.usesSubgroupReduce(ch):
-      return true
+proc spellOpenclLit(e: CirExpr): string =
+  ## OpenCL C token of a literal, typed by its literal type.
+  ## C suffixes mark the 32-bit and 64-bit widths, a cast forms the narrow widths.
+  case e.kind
+  of eIntLit:
+    case e.litType.kind
+    of ctUint:
+      case e.litType.bits
+      of 64: result = $e.value & "ULL"
+      of 32: result = $e.value & "U"
+      else: result = "(" & spellOpenclScalar(e.litType) & ")" & $e.value
+    of ctInt:
+      case e.litType.bits
+      of 64: result = $e.value & "LL"
+      of 32: result = $e.value
+      else: result = "(" & spellOpenclScalar(e.litType) & ")" & $e.value
+    else:
+      result = $e.value
+  of eFloatLit:
+    case e.fLitType.bits
+    of 16: result = "(half)" & $e.fValue
+    of 32: result = $e.fValue & "f"
+    else: result = $e.fValue
+  of eTrue: result = "true"
+  of eFalse: result = "false"
+  else: result = "<opencl: not a literal>"
+
+proc spellVectorComponent(name: string): string =
+  ## OpenCL C component letter of a CIRv2 vector component name (`F0`..`F3`).
+  case name
+  of "F0": "x"
+  of "F1": "y"
+  of "F2": "z"
+  of "F3": "w"
+  else: ""
+
+proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
+  if ctx.failing():
+    return ""
+  case e.kind
+  of eNil:
+    ctx.fail("nil literal is outside the OpenCL subset")
+    return ""
+  of eTrue, eFalse, eIntLit, eFloatLit:
+    return spellOpenclLit(e)
+  of eSym:
+    if e.coordBuiltin != cbkNone:
+      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+        return OpenclFlatThreadIndex
+      ctx.fail("whole-vector coordinate read " & e.name &
+        ", OpenCL C has no vector form, read the components")
+      return ""
+    return e.name
+  of eAt, ePat:
+    let base = (if e.kind == eAt: e.atBase else: e.patBase)
+    let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
+    return ctx.printExpr(base) & "[" & idx & "]"
+  of eDeref:
+    return "(*" & ctx.printExpr(e.derefOperand) & ")"
+  of eDot:
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+      let mapped = openclCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
+      if mapped.len == 0:
+        ctx.fail("no coordinate component " & e.fieldName)
+        return ""
+      return mapped
+    let bt = getExprType(e.dotBase)
+    if bt != nil and bt.kind == ctVector:
+      let comp = spellVectorComponent(e.fieldName)
+      if comp.len == 0:
+        ctx.fail("no vector component " & e.fieldName)
+        return ""
+      return ctx.printExpr(e.dotBase) & "." & comp
+    return ctx.printExpr(e.dotBase) & "." & e.fieldName
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    let op = case e.kind
+      of eAdd: "+"
+      of eSub: "-"
+      of eMul: "*"
+      of eDiv: "/"
+      of eMod: "%"
+      of eShl: "<<"
+      of eShr: ">>"
+      of eBitAnd: "&"
+      of eBitOr: "|"
+      else: "^"
+    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
+  of eEq, eNeq, eLt, eLe:
+    let op = case e.kind
+      of eEq: "=="
+      of eNeq: "!="
+      of eLt: "<"
+      else: "<="
+    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
+  of eNot:
+    return "(!" & ctx.printExpr(e.notOperand) & ")"
+  of eAnd, eOr:
+    let op = if e.kind == eAnd: "&&" else: "||"
+    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
+  of eBitNot:
+    return "(~" & ctx.printExpr(e.unOperand) & ")"
+  of eNeg:
+    return "(-" & ctx.printExpr(e.unOperand) & ")"
+  of eCast, eConv:
+    return "(" & spellOpenclTypeBare(e.castType) & ")" &
+      ctx.printExpr(e.castOperand)
+  of eSizeof:
+    return "sizeof(" & spellOpenclTypeBare(e.ofType) & ")"
+  of eAddr:
+    return "(&" & ctx.printExpr(e.addrOperand) & ")"
+  of eOconstr:
+    # C99 compound literal, a bare braced init list cannot be member-accessed
+    if e.kvFields.len == 0:
+      # a zero-field struct, the padding member zero-initializes
+      return "(" & spellOpenclTypeBare(e.ocType) & "){0}"
+    result = "(" & spellOpenclTypeBare(e.ocType) & "){"
+    for i, kvv in e.kvFields:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(kvv.value)
+    result.add "}"
+  of eAconstr:
+    result = "(" & spellOpenclTypeBare(e.acType) & "){"
+    for i, el in e.elems:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(el)
+    result.add "}"
+  of eCall:
+    let calleeName =
+      if e.callee.kind == eSym: e.callee.name
+      else: ctx.printExpr(e.callee)
+    var args: seq[string]
+    for a in e.args:
+      args.add ctx.printExpr(a)
+    if e.callee.kind == eSym:
+      # builtin vocabulary dispatches on the typed kinds, never on names
+      case e.callee.reductionBuiltin
+      of rbkReduceAdd:
+        return "sub_group_reduce_add(" & args.join(", ") & ")"
+      of rbkReduceMax:
+        return "sub_group_reduce_max(" & args.join(", ") & ")"
+      of rbkNone: discard
+    if e.callee.kind == eSym and e.callee.atomicsBuiltin == abkAtomicFetchAdd:
+      let pt = atomicOperandPtr(e.args[0])
+      if pt == nil or pt.pElem == nil:
+        ctx.fail("atomicFetchAdd on an operand with no pointee type")
+        return ""
+      let qualifier = case pt.space
+        of caDevice: "__global"
+        of caThreadgroup: "__local"
+        of caConstant: "__constant"
+        of caThread:
+          ctx.fail("atomicFetchAdd on thread-private storage")
+          return ""
+      let atomicTy = case pt.pElem.kind
+        of ctFloat:
+          if pt.pElem.bits == 32: "atomic_float"
+          else: ""
+        of ctInt:
+          if pt.pElem.bits == 32: "atomic_int"
+          else: ""
+        of ctUint:
+          if pt.pElem.bits == 32: "atomic_uint"
+          else: ""
+        else: ""
+      if atomicTy.len == 0:
+        ctx.fail("atomicFetchAdd on " & spellOpenclScalar(pt.pElem) &
+          ", only 32-bit int/uint/float pointees")
+        return ""
+      # atomic_fetch_add acts on `atomic_*` pointees: cast the raw
+      # qualified pointer at the call site
+      return "atomic_fetch_add((volatile " & qualifier & " " & atomicTy & "*)" &
+        ctx.printExpr(e.args[0]) & ", " & ctx.printExpr(e.args[1]) & ")"
+    if e.callee.kind == eSym and e.callee.synchroBuiltin != sbkNone:
+      ctx.fail("barrier is a statement, a value-position barrier is outside the OpenCL subset")
+      return ""
+    return calleeName & "(" & args.join(", ") & ")"
+
+# ═══════════════════════════════════════════════════════════════════════
+# Statements
+# ═══════════════════════════════════════════════════════════════════════
+
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
+  ## Forward declaration, the loop context (break/continue labels) is a parameter.
+
+proc spellLocalDecl(s: CirStmt): string =
+  ## Declaration text of one local, the array form appends the length to the name, the init stays with the caller.
+  if s.declType.kind == ctArray:
+    result = spellOpenclArrayDecl(s.declType, s.name)
+  elif s.declType.kind in {ctPtr, ctAptr}:
+    result = spellOpenclPtrField(s.declType, s.name)
+  else:
+    result = spellOpenclTypeBare(s.declType) & ' ' & s.name
+
+proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
+  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
+  if ctx.failing():
+    return ""
+  let pad = spaces(ctx.indent * 2)
+  case s.kind
+  of sVar:
+    if s.space == caThreadgroup:
+      if not ctx.inKernel:
+        ctx.fail("smem local " & s.name & " in a device function, __local is kernel storage")
+        return ""
+      var decl = "__local " & spellLocalDecl(s)
+      result = pad & decl
+      if s.init != nil:
+        result &= " = " & ctx.printExpr(s.init)
+      result &= ";"
+    elif s.space == caConstant:
+      # OpenCL lowering pass relocates const_mem locals at every scope,
+      # a survivor here was never relocated
+      ctx.fail("local " & s.name & " in constant space, the OpenCL lowering" &
+        " pass hoists const_mem locals to program scope")
+      return ""
+    elif s.space == caDevice:
+      ctx.fail("local " & s.name & " in device space, OpenCL locals are private or local")
+      return ""
+    else:
+      var decl = "__private " & spellLocalDecl(s)
+      result = pad & decl
+      if s.init != nil:
+        if s.declType.kind == ctArray and s.init.kind == eAconstr:
+          var elems: seq[string]
+          for el in s.init.elems:
+            elems.add ctx.printExpr(el)
+          result &= " = {" & elems.join(", ") & "}"
+        else:
+          result &= " = " & ctx.printExpr(s.init)
+      result &= ";"
+  of sConst:
+    result = pad & "const " & spellOpenclTypeBare(s.declType) & ' ' &
+      s.name & " = " & ctx.printExpr(s.init) & ";"
+  of sAsgn:
+    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+  of sIte:
+    let cond = ctx.printExpr(s.cond)
+    ctx.indent.inc
+    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
+    ctx.indent.dec
+    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
+    if s.elseBody.len > 0:
+      ctx.indent.inc
+      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
+      ctx.indent.dec
+      result &= " else {\n" & elseTxt & '\n' & pad & '}'
+  of sLoop:
+    # loops print through printStmts, which derives the loop's own labels
+    result = ""
+  of sLab:
+    # an exit label after a loop is the break target marker, dropped
+    result = ""
+  of sJmp:
+    if s.jmpTarget == exitL and exitL.len > 0:
+      result = pad & "break;"
+    elif s.jmpTarget == contL and contL.len > 0:
+      result = pad & "continue;"
+    else:
+      ctx.fail("unstructured jump to " & s.jmpTarget)
+      result = ""
+  of sScope:
+    result = pad & "{\n"
+    ctx.indent.inc
+    result &= ctx.printStmts(s.scopeBody, exitL, contL)
+    ctx.indent.dec
+    result &= '\n' & pad & '}'
+  of sAssume:
+    # a loop-bound hint, OpenCL C has no assume construct
+    result = ""
+  of sRet:
+    if s.retVal != nil:
+      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
+    else:
+      result = pad & "return;"
+  of sDiscard:
+    result = ""
+  of sCall:
+    var parts: seq[string]
+    parts.add ctx.printExpr(s.callCallee)
+    for a in s.callArgs:
+      parts.add ctx.printExpr(a)
+    if s.callCallee.kind == eSym and
+        s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+      result = pad & "barrier(CLK_LOCAL_MEM_FENCE);"
+    elif s.callCallee.kind == eSym and
+        s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+      # global fence bit orders device-address-space accesses
+      result = pad & "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);"
+    else:
+      result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
+  of sAsm:
+    ctx.fail("inline assembly has no OpenCL C form")
+    result = ""
+  of sCase:
+    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+    result = ""
+
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
+  ## Prints one statement list. Plain statements take the caller's loop context,
+  ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
+  var lines: seq[string]
+  var i = 0
+  while i < stmts.len:
+    let s = stmts[i]
+    var txt: string
+    if s.kind == sLoop:
+      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
+        stmts[i + 1].labName
+      else:
+        ""
+      var lCont = ""
+      for t in s.loopBody:
+        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
+          lCont = t.labName
+      ctx.indent.inc
+      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
+      ctx.indent.dec
+      let directive = if s.unroll:
+        spaces(ctx.indent * 2) & "#pragma unroll\n"
+      else:
+        ""
+      txt = directive & spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
+        spaces(ctx.indent * 2) & '}'
+      if lExit.len > 0:
+        i.inc  # exit label, consumed
+    else:
+      txt = ctx.printStmt(s, exitL, contL)
+    if txt.len > 0:
+      lines.add txt
+    i.inc
+  return lines.join("\n")
+
+# ═══════════════════════════════════════════════════════════════════════
+# Procs and modules
+# ═══════════════════════════════════════════════════════════════════════
+
+proc spellParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
+  ## Parameter declaration of one kernel or device-function parameter.
+  ## A raw `ptr` parameter is legal C between device functions, a kernel refuses it.
+  ## The engine binds device buffers and values, never raw pointers.
+  case p.typ.kind
+  of ctAptr:
+    let inner = spellOpenclScalar(p.typ.pElem)
+    case p.typ.space
+    of caDevice:
+      result = "__global " & inner & "* restrict " & p.name
+    of caThreadgroup:
+      result = "__local " & inner & "* " & p.name
+    of caConstant:
+      result = "__constant " & inner & "* " & p.name
+    of caThread:
+      result = inner & "* " & p.name
+  of ctPtr:
+    if isKernel:
+      ctx.fail("kernel parameter " & p.name &
+        " of pointer type, the engine binds device buffers and values")
+      return ""
+    result = spellOpenclTypeBare(p.typ) & ' ' & p.name
+  of ctArray:
+    ctx.fail("array parameter " & p.name &
+      ", OpenCL C array parameters decay to pointers, the engine packs the value")
+    return ""
+  else:
+    result = spellOpenclTypeBare(p.typ) & ' ' & p.name
+
+proc printFn(ctx: var PrintCtx, fn: CirProc): string =
+  ## One device function: signature, body, closing brace.
+  ctx.fnName = fn.name
+  ctx.inKernel = false
+  ctx.indent = 0
+  var params: seq[string]
+  for p in fn.params:
+    params.add ctx.spellParam(p, false)
+  if ctx.failing():
+    return ""
+  let bodyTxt = ctx.printStmts(fn.body, "", "")
+  if ctx.failing():
+    return ""
+  let sig = "static inline " & spellOpenclTypeBare(fn.ret) & ' ' &
+    fn.name & '(' & params.join(", ") & ")"
+  return sig & " {\n" & bodyTxt & '\n' & "}"
+
+proc spellConstDecl(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope `__constant` declaration of a const_mem local.
+  if s.declType.kind == ctArray:
+    result = "__constant " & spellOpenclArrayDecl(s.declType, s.name)
+    if s.init != nil and s.init.kind == eAconstr:
+      var elems: seq[string]
+      for el in s.init.elems:
+        elems.add ctx.printExpr(el)
+      result &= " = {" & elems.join(", ") & "}"
+      return
+  else:
+    result = "__constant " & spellOpenclTypeBare(s.declType) & ' ' & s.name
+  result &= " = " & ctx.printExpr(s.init) & ";"
+
+proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
+  ## Emits the full OpenCL C translation unit: extension pragmas, struct typedefs,
+  ## program-scope `__constant` declarations, the device functions,
+  ## and the kernel.
+  ##
+  ## Returns "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>")
+  var kernels: seq[CirProc]
+  for fn in m.procs:
+    if fn.isKernel:
+      kernels.add fn
+  if kernels.len != 1:
+    ctx.fail("exactly one kernel per module, found " & $kernels.len)
+    return ("", ctx.err)
+  let kernel = kernels[0]
+
+  var features = ModuleFeatures()
+  scanModule(m, features)
+  result.src = spellExtensions(features)
+
+  for t in m.types:
+    if t.kind != ctStruct:
+      ctx.fail("module type " & t.name & " is not a struct")
+      break
+    result.src &= "typedef struct {\n"
+    if t.fields.len == 0:
+      # OpenCL C requires at least one field in a struct
+      result.src &= "  char _padding_;\n"
+    for f in t.fields:
+      var field: string
+      if f.typ.kind == ctArray:
+        field = spellOpenclArrayDecl(f.typ, f.name)
+      elif f.typ.kind in {ctAptr, ctPtr}:
+        if f.typ.kind == ctAptr and f.typ.space != caDevice:
+          ctx.fail("struct field " & t.name & "." & f.name &
+            " in " & $f.typ.space & " space, only device pointers nest in structs")
+          field = ""
+        else:
+          field = spellOpenclPtrField(f.typ, f.name)
+      else:
+        field = spellOpenclTypeBare(f.typ) & ' ' & f.name
+      result.src &= "  " & field & ";\n"
+    result.src &= "} " & t.name & ";\n\n"
+  if ctx.failing():
+    return ("", ctx.err)
+
+  # program-scope `__constant` declarations from `m.globals`, relocated there by the OpenCL lowering pass in encounter order
+  var hoisted: seq[string]
+  for s in m.globals:
+    if s.kind == sVar and s.space == caConstant:
+      if s.init == nil:
+        ctx.fail("const_mem local " & s.name & " without an initializer")
+      else:
+        hoisted.add ctx.spellConstDecl(s)
+  for d in hoisted:
+    result.src &= d & "\n"
+  if hoisted.len > 0:
+    result.src &= "\n"
+  if ctx.failing():
+    return ("", ctx.err)
+
+  # forward declarations, then device function definitions, then the kernel
+  var fns: seq[CirProc]
+  for fn in m.procs:
+    if not fn.isKernel:
+      fns.add fn
+  for fn in fns:
+    ctx.fnName = fn.name
+    var params: seq[string]
+    for p in fn.params:
+      params.add ctx.spellParam(p, false)
+    if ctx.failing():
+      return ("", ctx.err)
+    result.src &= "static inline " & spellOpenclTypeBare(fn.ret) & ' ' &
+      fn.name & '(' & params.join(", ") & ");\n"
+  if fns.len > 0:
+    result.src &= "\n"
+  for fn in fns:
+    result.src &= ctx.printFn(fn) & "\n\n"
+  if ctx.failing():
+    return ("", ctx.err)
+
+  ctx.fnName = kernel.name
+  ctx.inKernel = true
+  ctx.indent = 0
+  var params: seq[string]
+  for p in kernel.params:
+    params.add ctx.spellParam(p, true)
+  if ctx.failing():
+    return ("", ctx.err)
+  let bodyTxt = ctx.printStmts(kernel.body, "", "")
+  if ctx.failing():
+    return ("", ctx.err)
+  result.src &= "__kernel void " & kernel.name & '(' &
+    params.join(", ") & ") {\n" & bodyTxt & '\n' & "}\n"
+  return (result.src, "")
+
+
 
 proc codegen*(ctx: var GpuContext): string =
-  var needsFp64 = false
-  var needsFp16 = false
-  var needsFloatAtomic = false
-  var needsSubgroup = false
-  for fnIdent, fn in ctx.fnTab:
-    if fn.pRetType.kind == gtFloat64:
-      needsFp64 = true
-    if fn.pRetType.kind == gtFloat16:
-      needsFp16 = true
-    for p in fn.pParams:
-      if p.typ.containsFloat64():
-        needsFp64 = true
-      if p.typ.containsFloat16():
-        needsFp16 = true
-    if ctx.usesFloatAtomic(fn.pBody):
-      needsFloatAtomic = true
-    if ctx.usesSubgroupReduce(fn.pBody):
-      needsSubgroup = true
-
-  if needsFp64:
-    result = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n\n"
-  if needsFp16:
-    result = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n\n"
-  if needsFloatAtomic:
-    result.add "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n\n"
-  if needsSubgroup:
-    result.add "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n\n"
-
-  for blk in ctx.globalBlocks:
-    result.add ctx.genOpenCL(blk) & ";\n\n"
-
-  let fns = toSeq(ctx.fnTab.pairs)
-  for (fnIdent, fn) in fns:
-    let fnC = fn.clone()
-    fnC.forwardDeclare = true
-    result.add ctx.genOpenCL(fnC) & '\n'
-  result.add "\n\n"
-
-  for fnIdent, fn in ctx.fnTab:
-    result.add ctx.genOpenCL(fn) & "\n\n"
+  ## Prints the module in `ctx` as OpenCL C source, the `backends_api` entry point.
+  ## A printer refusal is a compile error naming the construct.
+  let (src, err) = printOpenclModule(ctx.module)
+  if err.len > 0:
+    error(err)
+  result = src
