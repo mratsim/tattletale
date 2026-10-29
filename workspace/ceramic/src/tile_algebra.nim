@@ -12,6 +12,8 @@ import
   workspace/crucible/src/crucible_gpu_builtins,
   workspace/ceramic/src/tensors,
   workspace/ceramic/src/int_tuples,
+  workspace/ceramic/src/integer_semi_modules,
+  workspace/ceramic/src/layout_algebra/ism_coord_strides,
   workspace/ceramic/src/layout_algebra,
   workspace/ceramic/src/hardware/h_mma_configgen,
   workspace/ceramic/src/hardware/h_mma_properties,
@@ -35,13 +37,15 @@ export tensors.TensorOwned, tensors.TensorView, tensors.size,
 export int_tuples.Int, int_tuples.`+`, int_tuples.`-`, int_tuples.`*`,
        int_tuples.`div`, int_tuples.`mod`, int_tuples.`==`,
        int_tuples.toInt, int_tuples.flatten, int_tuples.tupleStream,
-       int_tuples.items
+       int_tuples.items, int_tuples.abs
+export ism_coord_strides.`*`, ism_coord_strides.`+`,
+       integer_semi_modules.ceil_div
 export layout_algebra.Layout, layout_algebra.make_layout, layout_algebra.cosize,
        layout_algebra.crd2idx, layout_algebra.idx2crd,
        layout_algebra.logical_divide, layout_algebra.diceAxes,
        layout_algebra.sliceAxes
 export tensors.atAxisIndex, tensors.diceAxes, tensors.sliceAxes,
-       tensors.getLayout
+       tensors.getLayout, tensors.`()`
 export h_mma_configgen, h_mma_properties
 export crucible_gpu_builtins.atomicFetchAdd
 export crucible_gpu_builtins.reduceAdd
