@@ -21,6 +21,8 @@ import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/tests/kernels/k_sdpa/sdpa_fixtures
 import workspace/ceramic/src/kernels/k_tile_sdpa
 
+export tile_algebra, layout_algebra, tensors, int_tuples
+
 export tile_algebra
 export k_tile_sdpa
 
