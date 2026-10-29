@@ -759,10 +759,9 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   for fn in m.procs:
     if fn.isKernel:
       kernels.add fn
-  if kernels.len != 1:
-    ctx.fail("exactly one kernel per module, found " & $kernels.len)
+  if kernels.len == 0:
+    ctx.fail("no kernel in the module")
     return ("", ctx.err)
-  let kernel = kernels[0]
 
   # ref-block pre-pass: registers the blocks the declarations below use
   for t in m.types:
@@ -799,8 +798,9 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
       result.src &= "  " & field & ";\n"
     result.src &= "};\n\n"
 
-  if kernel.params.len > 0:
-    result.src &= "layout(push_constant, std430) uniform KernelParams {\n"
+  # one push block for the whole module: the union of every kernel's parameters, same-name parameters dedup by their declaration text
+  var pushDecls: seq[string]
+  for kernel in kernels:
     for p in kernel.params:
       var decl: string
       case p.typ.kind
@@ -816,10 +816,15 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
         decl = ""
       else:
         decl = spellGlslTypeBare(p.typ) & ' ' & p.name
-      result.src &= "  " & decl & ";\n"
-    result.src &= "};\n\n"
+      if decl notin pushDecls:
+        pushDecls.add decl
   if ctx.failing():
     return ("", ctx.err)
+  if pushDecls.len > 0:
+    result.src &= "layout(push_constant, std430) uniform KernelParams {\n"
+    for decl in pushDecls:
+      result.src &= "  " & decl & ";\n"
+    result.src &= "};\n\n"
 
   # program-scope `shared` and `const` declarations relocated into
   # `m.globals` by the GLSL lowering pass, in encounter order
@@ -867,15 +872,18 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   if ctx.failing():
     return ("", ctx.err)
 
-  let wg = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1] else: kernel.workgroup)
-  result.src &= "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
-    $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
-  ctx.fnName = kernel.name
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(kernel.body, "", "")
-  if ctx.failing():
-    return ("", ctx.err)
-  result.src &= "void " & kernel.name & "() {\n" & bodyTxt & '\n' & "}\n"
+  # every kernel of the module, in encounter order, one local_size layout
+  # qualifier per kernel, the engine launches each entry point by name
+  for kernel in kernels:
+    let wg = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1] else: kernel.workgroup)
+    result.src &= "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
+      $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
+    ctx.fnName = kernel.name
+    ctx.indent = 0
+    let bodyTxt = ctx.printStmts(kernel.body, "", "")
+    if ctx.failing():
+      return ("", ctx.err)
+    result.src &= "void " & kernel.name & "() {\n" & bodyTxt & '\n' & "}\n\n"
   return (result.src, "")
 
 

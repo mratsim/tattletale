@@ -714,10 +714,9 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   for fn in m.procs:
     if fn.isKernel:
       kernels.add fn
-  if kernels.len != 1:
-    ctx.fail("exactly one kernel per module, found " & $kernels.len)
+  if kernels.len == 0:
+    ctx.fail("no kernel in the module")
     return ("", ctx.err)
-  let kernel = kernels[0]
 
   var features = ModuleFeatures()
   scanModule(m, features)
@@ -785,19 +784,21 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   if ctx.failing():
     return ("", ctx.err)
 
-  ctx.fnName = kernel.name
-  ctx.inKernel = true
-  ctx.indent = 0
-  var params: seq[string]
-  for p in kernel.params:
-    params.add ctx.spellParam(p, true)
-  if ctx.failing():
-    return ("", ctx.err)
-  let bodyTxt = ctx.printStmts(kernel.body, "", "")
-  if ctx.failing():
-    return ("", ctx.err)
-  result.src &= "__kernel void " & kernel.name & '(' &
-    params.join(", ") & ") {\n" & bodyTxt & '\n' & "}\n"
+  # every kernel of the module, in encounter order: one OpenCL program per module, the engine launches each kernel by name
+  for kernel in kernels:
+    ctx.fnName = kernel.name
+    ctx.inKernel = true
+    ctx.indent = 0
+    var params: seq[string]
+    for p in kernel.params:
+      params.add ctx.spellParam(p, true)
+    if ctx.failing():
+      return ("", ctx.err)
+    let bodyTxt = ctx.printStmts(kernel.body, "", "")
+    if ctx.failing():
+      return ("", ctx.err)
+    result.src &= "__kernel void " & kernel.name & '(' &
+      params.join(", ") & ") {\n" & bodyTxt & '\n' & "}\n"
   return (result.src, "")
 
 
