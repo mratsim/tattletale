@@ -161,6 +161,17 @@ macro coalesce*(layout: Layout): untyped =
 #  complement
 # ═══════════════════════════════════════════════════════════════
 
+proc slotAt*(slots: var seq[tuple[path: seq[int], cur: int, curNode, leaf: NimNode]], basis: seq[int], leaf: NimNode): int =
+  ## Slot position: the record's position the basis path implies.
+  ## Returns:
+  ##     the record's index, the record created on first address
+  ##     with its span seeded at 1 and its terminal leaf at `leaf`
+  for k in 0 ..< slots.len:
+    if slots[k].path == basis:
+      return k
+  slots.add (basis, 1, IntCT(1), leaf)
+  slots.len - 1
+
 proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool): NimNode {.compileTime.} =
   ## Fills the gaps a layout leaves uncovered in its address range.
   ##
@@ -207,11 +218,16 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
       boundLeafs.add bEv.leaf
 
   var builder = TupleBuilderFlat.new(2)
-  # Slot records: one per distinct basis path, proj routes by the atom's path
-  var slots: seq[tuple[path: seq[int], cur: int, curNode: NimNode]]
+  # Slot records: one per distinct basis path, slotAt routes by the atom's path
+  var slots: seq[tuple[path: seq[int], cur: int, curNode, leaf: NimNode]]
 
   for p in pairs:
-    let si = proj(slots, p.path)
+    # a fresh slot's index is the leaf it consumes
+    let si = slots.slotAt(p.path, (
+      if slots.len < boundLeafs.len:
+        boundLeafs[slots.len]
+      else:
+        IntCT(1)))
     # a stride-0 leaf maps every coordinate to offset 0,
     # a size-1 dimension covers one offset, neither opens a gap
     if p.scale == 0 or p.shapeVal == 1:
@@ -221,27 +237,20 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
         " overlaps the covered span " & $slots[si].cur & " on slot " & $p.path
     # every gap appends and size-1 gaps die in coalesce.
     # A gap shape is a number, a span stride is the leaf's node scaled
-    builder.append((IntCT(p.scale div slots[si].cur), nil),
-                   (slots[si].curNode, nil))
+    builder.append((IntCT(p.scale div slots[si].cur), nil), (slots[si].curNode, nil))
     slots[si].cur = p.scale * p.shapeVal
     slots[si].curNode = p.stride * IntCT(p.shapeVal)
 
-  # A tuple bound over fewer slots chains its product into the last slot.
-  # Minimal complement passes 1, missing leaves fill with 1.
-  if boundLeafs.len > slots.len:
-    var rest = IntCT(1)
-    for j in slots.len - 1 ..< boundLeafs.len:
-      rest = rest * boundLeafs[j]
-    boundLeafs[slots.len - 1] = rest
-    boundLeafs.setLen(slots.len)
+  # leftover leaves multiply into the last slot's terminal leaf
+  var remaining = IntCT(1)
+  for k in slots.len ..< boundLeafs.len:
+    remaining = remaining * boundLeafs[k]
+  slots[^1].leaf = slots[^1].leaf * remaining
   # Terminals: one per slot, each bound leaf ceils against the covered span
-  for i, s in slots:
-    let leaf = if i < boundLeafs.len: boundLeafs[i] else: IntCT(1)
-    builder.append((leaf.ceil_div(IntCT(s.cur)), nil),
-                   (s.curNode, nil))
+  for s in slots:
+    builder.append((s.leaf.ceil_div(IntCT(s.cur)), nil), (s.curNode, nil))
 
-  return bindSym"coalesceImpl".newCall(builder.emit(0), builder.emit(1),
-                                       newLit(dropTrailing))
+  return bindSym"coalesceImpl".newCall(builder.emit(0), builder.emit(1), newLit(dropTrailing))
 
 macro complement*(layout: Layout): untyped =
   ## Layout complement, the codomain gap filler.
