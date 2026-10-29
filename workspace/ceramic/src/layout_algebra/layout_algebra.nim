@@ -237,8 +237,7 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, hasBound, dropTraili
       let stop = if final: boundLeafs.len else: min(axisIndex + 1,
                                                     boundLeafs.len)
       while axisIndex < stop:
-        shape = bindSym"*".newCall(shape,
-                                   boundLeafs[axisIndex].ceil_div(sizeC))
+        shape = shape * boundLeafs[axisIndex].ceil_div(sizeC)
         sizeC = sizeC.ceil_div(boundLeafs[axisIndex])
         inc axisIndex
       builder.append((shape, nil), (spanNode, nil))

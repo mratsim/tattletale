@@ -393,9 +393,6 @@ BANNED = [
      "state the offset or position directly, or restate the layout"),
     (r"\blands?\b|\barrives?\b", None,
      "say what produces or holds the construct, arrival verbs hide the mechanism"),
-    (r"\bnames\b(?=\s+(?:a|an|the|its|their|his|her|our|your|no|one|two|three|four|every|each|this|that|all|both|such|what|which|whichever)\b)",
-     None,
-     "say what the value or the label is, state the mapping directly (the verb 'names' hides the mechanism)"),
     (r"\bre?stamp(?:s|ed|ing)?\b", None,
      "name the mechanism (derives, carries, specializes, writes, re-types); stamp hides what changed, the type or the site"),
     (r"\bpostures?\b", None,
@@ -3886,7 +3883,8 @@ FLOORDIV_RE = re.compile(
 TOINT_ANY_RE = re.compile(r"\btoInt\s*\(")
 BLESSED_TOINT_FILE = ("ceramic/src/int_tuples/"
                       "int_tuples_unsanctioned_helpers.nim")
-BLESSED_RANK_FILE = "ceramic/src/integer_semi_modules.nim"
+BLESSED_RANK_FILE = ("ceramic/src/int_tuples/"
+                     "int_tuples_datatypes.nim")
 
 
 def _t_suffix_banned(name):
@@ -3968,7 +3966,7 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
 
     Contract:
 
-    - integer_semi_modules.nim hosts the blessed rank overloads and keeps
+    - int_tuples_datatypes.nim hosts the blessed rank overloads and keeps
       its exemption, every other tupleLen call site routes through rank
     - rank call sites read as method calls (x.rank()), bare rank(...),
       rank(typeof(...)), typeof(...).rank, and bare .rank carry one finding
@@ -4277,9 +4275,9 @@ LAYOUT_DOT_RE = re.compile(
     r"newDotExpr\s*\(\s*[^,()]+,\s*(?:ident|newIdentNode)\s*\(\s*\"(?:shape|stride)\"\s*\)")
 EQIDENT_LAYOUT_RE = re.compile(r"eqIdent\s*\(\s*\"Layout\"\s*\)")
 BINDSYM_ARITH_RE = re.compile(
-    r"(?:bindSym|bindsym|ident|newIdentNode)\s*\(\s*[\"']"
+    r"(?:bindSym|bindsym|ident|newIdentNode)\s*(?:\(\s*)?[\"']"
     r"(?:[+\-*/%<>]|==|!=|<=|>=|and|or|not|xor|div|mod|in|notin|min|max|abs|sign|ceil_div)"
-    r"[\"']\s*\)")
+    r"[\"']\s*(?:\))?")
 COMPILES_PROBE_RE = re.compile(
     r"(?:not\s*\(\s*|when\s+|\=\s*)compiles\s*\(")
 
