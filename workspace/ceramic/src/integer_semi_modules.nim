@@ -21,9 +21,14 @@ import std/macros, std/typetraits
 import workspace/math
 import workspace/ceramic/src/macros/static_for
 
+export math.ceil_div, math.round_multiple_up, math.round_multiple_down, math.sign
+
 # ═══════════════════════════════════════════════════════════════════════
 #  NimNode emission, natural arithmetic over AST nodes
 # ═══════════════════════════════════════════════════════════════════════
+#
+# Emitted idents stay unresolved and resolve against the overloads
+# at the use site, a bound symbol locks the NimNode overload
 
 func `*`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"*", a, b)
@@ -41,22 +46,22 @@ func `mod`*(a, b: NimNode): NimNode {.compileTime.} =
   nnkInfix.newTree(ident"mod", a, b)
 
 func abs*(a: NimNode): NimNode {.compileTime.} =
-  bindSym"abs".newCall(a)
+  ident"abs".newCall(a)
 
 func min*(a, b: NimNode): NimNode {.compileTime.} =
-  bindSym"min".newCall(a, b)
+  ident"min".newCall(a, b)
 
 func max*(a, b: NimNode): NimNode {.compileTime.} =
-  bindSym"max".newCall(a, b)
+  ident"max".newCall(a, b)
 
 func ceil_div*(a, b: NimNode): NimNode {.compileTime.} =
-  bindSym"ceil_div".newCall(a, b)
+  ident"ceil_div".newCall(a, b)
 
 func round_multiple_up*(a, b: NimNode): NimNode {.compileTime.} =
-  bindSym"round_multiple_up".newCall(a, b)
+  ident"round_multiple_up".newCall(a, b)
 
 func sign*(a: NimNode): NimNode {.compileTime.} =
-  bindSym"sign".newCall(a)
+  ident"sign".newCall(a)
 
 
 const DynamicSentinel* = low(int)

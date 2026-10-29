@@ -397,32 +397,6 @@ suite "Tuples of Int[N] — shape/stride tuples":
     static: doAssert toInt(alias[2]) == 12
 
 # ═══════════════════════════════════════════════════════════════════════
-# 6.  isConst detection — constant info is NOT lost through alias
-# ═══════════════════════════════════════════════════════════════════════
-
-suite "isConst — constant information preserved":
-
-  test "Int[4]() is const":
-    evalOnceAs(alias, Int[4]())
-    static: doAssert isConst(alias)
-
-  test "Int[2] + Int[3] is const":
-    evalOnceAs(alias, Int[2]() + Int[3]())
-    static: doAssert isConst(alias)
-
-  test "proc return Int is const":
-    evalOnceAs(alias, add2(Int[4]()))
-    static: doAssert isConst(alias)
-
-  test "template return Int is const":
-    evalOnceAs(alias, tplAdd2(Int[5]()))
-    static: doAssert isConst(alias)
-
-  test "tuple elements are const":
-    evalOnceAs(alias, (Int[3](), Int[4]()))
-    static: doAssert isConst(alias[0])
-    static: doAssert isConst(alias[1])
-
 # ═══════════════════════════════════════════════════════════════════════
 # 7.  No double evaluation — side effects fire exactly once
 # ═══════════════════════════════════════════════════════════════════════

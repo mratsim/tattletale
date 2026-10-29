@@ -380,6 +380,14 @@ macro `<`*[A: CoordStride, B: CoordStride](a: A, b: B): bool =
     "CoordStride <: only single-term atoms order"
   return newLit((da.path[^1], da.scale) < (db.path[^1], db.scale))
 
+macro `div`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
+  ## Scale ratio of same-axis atoms, floor division of the scales
+  let da = a.getTypeInst.getCoordStrideDescriptor()
+  let db = b.getTypeInst.getCoordStrideDescriptor()
+  if da.kind != caSingle or db.kind != caSingle or da.path != db.path:
+    error("CoordStride div: only atoms on the same axis", b)
+  newLit(da.scale div db.scale)
+
 proc csScaledEq(a, b: NimNode, s: int): bool =
   ## Elementwise b == s*a over (possibly nested) int-literal tuples,
   ## false on any structural mismatch.

@@ -113,8 +113,8 @@ proc runRank1StaticTests =
     check r.stride, (1, 8), (Int[1], Int[8])
   block:
     let r = complement(make_layout(4, 2), (2, 2))
-    check r.shape, (2, 1), (Int[2], Int[1])
-    check r.stride, (1, 8), (Int[1], Int[8])
+    check r.shape, 2, Int[2]
+    check r.stride, 1, Int[1]
   # Layout(_4,_4), full coverage
   block:
     let r = complement(make_layout(4, 4))
@@ -134,8 +134,8 @@ proc runRank1StaticTests =
     check r.stride, (1, 16), (Int[1], Int[16])
   block:
     let r = complement(make_layout(4, 4), (2, 2))
-    check r.shape, (4, 1), (Int[4], Int[1])
-    check r.stride, (1, 16), (Int[1], Int[16])
+    check r.shape, 4, Int[4]
+    check r.stride, 1, Int[1]
   # other rank-1 fills
   block:
     let r = complement(make_layout(6, 1), 24)
