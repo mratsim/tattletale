@@ -371,6 +371,17 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
 
+proc proj*(slots: var seq[tuple[path: seq[int], spanVal: int, spanNode: NimNode]], basis: seq[int]): int =
+  ## Slot position: the record's position the basis path implies.
+  ## Returns:
+  ##     the record's index, the record created on first address
+  ##     with its span seeded at 1
+  for k in 0 ..< slots.len:
+    if slots[k].path == basis:
+      return k
+  slots.add (basis, 1, IntCT(1))
+  slots.len - 1
+
 func proj*(leafTy: NimNode): tuple[path: seq[int], scale: int] {.compileTime.} =
   ## Extract from a stride leaf the part its own position implies.
   ## An atom yields its basis path and scale.
