@@ -371,7 +371,7 @@ proc getCoordStrideDescriptor*(leafTy: NimNode): CoordStrideDescriptor =
   else:
     CoordStrideDescriptor(kind: caMulti, coeffs: coeffs)
 
-proc proj*(slots: var seq[tuple[path: seq[int], spanVal: int, spanNode: NimNode]], basis: seq[int]): int =
+proc proj*(slots: var seq[tuple[path: seq[int], cur: int, curNode: NimNode]], basis: seq[int]): int =
   ## Slot position: the record's position the basis path implies.
   ## Returns:
   ##     the record's index, the record created on first address

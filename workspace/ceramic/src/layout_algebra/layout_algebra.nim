@@ -162,21 +162,15 @@ macro coalesce*(layout: Layout): untyped =
 # ═══════════════════════════════════════════════════════════════
 
 proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool): NimNode {.compileTime.} =
-  ## Fills the gaps a layout leaves uncovered in its address range,
-  ## over every stride leaf, integer strides and coordinate strides,
-  ## each axis filled independently.
+  ## Fills the gaps a layout leaves uncovered in its address range.
   ##
   ## Args:
   ## - `sh`, `st`: the layout's shape and stride expressions
-  ## - `bound`: the cotarget's node, one value per axis,
-  ##   a single-axis layout enters the tuple as its product
-  ## - `bound`: `IntCT(1)` gives the minimal complement, every
-  ##   terminal at 1, a cotarget leaf ceils per slot against the span
-  ##
+  ## - `bound`: the cotarget, one value per axis, `IntCT(1)`
+  ##   for the minimal complement
   ## Returns:
-  ##     a layout that covers every address the input misses,
-  ##     without overlap and in order. The gaps append flat,
-  ##     coalesce decides per axis and flattens the result.
+  ##     a layout covering every address the input misses,
+  ##     gaps append flat, coalesce decides per axis
   var pairs: seq[tuple[stride: NimNode, path: seq[int], scale,
                        shapeVal: int]] = @[]
   var lastStride: NimNode
@@ -202,12 +196,7 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
 
   pairs.sort(proc(a, b: tuple[stride: NimNode, path: seq[int], scale,
                               shapeVal: int]): int =
-    template lex(x, y: seq[int]): int =
-      for i in 0 ..< min(x.len, y.len):
-        if x[i] != y[i]:
-          return cmp(x[i], y[i])
-      cmp(x.len, y.len)
-    let c = lex(a.path, b.path)
+    let c = cmp(a.path, b.path)
     if c != 0: c else: cmp(a.scale, b.scale))
 
   # Cotarget leaves: one per codomain axis, the extras multiply
@@ -219,7 +208,7 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
 
   var builder = TupleBuilderFlat.new(2)
   # Slot records: one per distinct basis path, proj routes by the atom's path
-  var slots: seq[tuple[path: seq[int], spanVal: int, spanNode: NimNode]]
+  var slots: seq[tuple[path: seq[int], cur: int, curNode: NimNode]]
 
   for p in pairs:
     let si = proj(slots, p.path)
@@ -227,15 +216,15 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
     # a size-1 dimension covers one offset, neither opens a gap
     if p.scale == 0 or p.shapeVal == 1:
       continue
-    if p.scale < slots[si].spanVal:
+    if p.scale < slots[si].cur:
       error "complement: non-injective layout, stride " & $p.scale &
-        " overlaps the covered span " & $slots[si].spanVal & " on slot " & $p.path
+        " overlaps the covered span " & $slots[si].cur & " on slot " & $p.path
     # every gap appends and size-1 gaps die in coalesce.
     # A gap shape is a number, a span stride is the leaf's node scaled
-    builder.append((IntCT(p.scale div slots[si].spanVal), nil),
-                   (slots[si].spanNode, nil))
-    slots[si].spanVal = p.scale * p.shapeVal
-    slots[si].spanNode = p.stride * IntCT(p.shapeVal)
+    builder.append((IntCT(p.scale div slots[si].cur), nil),
+                   (slots[si].curNode, nil))
+    slots[si].cur = p.scale * p.shapeVal
+    slots[si].curNode = p.stride * IntCT(p.shapeVal)
 
   # A tuple bound over fewer slots chains its product into the last slot.
   # Minimal complement passes 1, missing leaves fill with 1.
@@ -248,8 +237,8 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
   # Terminals: one per slot, each bound leaf ceils against the covered span
   for i, s in slots:
     let leaf = if i < boundLeafs.len: boundLeafs[i] else: IntCT(1)
-    builder.append((leaf.ceil_div(IntCT(s.spanVal)), nil),
-                   (s.spanNode, nil))
+    builder.append((leaf.ceil_div(IntCT(s.cur)), nil),
+                   (s.curNode, nil))
 
   return bindSym"coalesceImpl".newCall(builder.emit(0), builder.emit(1),
                                        newLit(dropTrailing))

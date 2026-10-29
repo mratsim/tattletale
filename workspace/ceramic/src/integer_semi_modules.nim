@@ -245,6 +245,13 @@ func intTy*(val: int): NimNode {.compileTime.} =
   ## Int[val] bracket for the compile-time value `val`
   IntCT(val)[0]
 
+func cmp*(x, y: seq[int]): int =
+  ## Lexicographic sequence order
+  for i in 0 ..< min(x.len, y.len):
+    if x[i] != y[i]:
+      return system.cmp(x[i], y[i])
+  system.cmp(x.len, y.len)
+
 func divmod*(a, b: int): (int, int) {.compileTime.} =
   ## Quotient and remainder of `a` divided by `b`.
   (a div b, a mod b)
