@@ -385,92 +385,83 @@ proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =
     else:
       break
 
+template foldDelegate(aSh, aSt, n, m: typed): untyped =
+  stridedFold(make_layout(aSh, aSt), n, m)
+
 macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
-  ## Composition, `A ∘ B`, on destructured parts.
+  ## Composition with a scalar B = N:M.
   ##
-  ## Scalar B = N:M dispatches:
-  ## - M == 0: N:0, the LHS is never touched
   ## - N == 1: 1:A'(M), A' evaluated at one point
-  ## - otherwise: Strided = A' / M, Kept = Strided % N, coalesced
+  ## - otherwise: the term loop, one walk per stride term scaled,
+  ##   the strides sum, one coalesce
   ##
   ## Divisibility is the caller's responsibility, it is not checked.
   result = newStmtList()
-  var mVal = bStride.getTypeOf().getStaticInt()
-  if mVal == 0:
-    result.add make_layout(bShape, IntCT(0))
+  var nVal = bShape.getTypeOf().getStaticInt()
+  if nVal == 1:
+    # A' evaluated at one point, evaluation is coalesce-invariant
+    result.add make_layout(IntCT(1),
+      bindSym"crd2idx".newCall(make_layout(aShape, aStride), bStride))
     return
-  if bShape.getTypeOf().isTupleTy():
-    var modeStmts = newStmtList()
-    var builder = TupleBuilderFlat.new(2)
-    var modeIdx = 0
-    for (shEv, stEv) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
-      let bModeShape = shEv.leaf
-      let bModeStride = stEv.leaf
-      let alias = genSym(nskLet, "composeMode" & $modeIdx)
-      inc modeIdx
-      modeStmts.add quote do:
-        let `alias` = composeImpl(`aShape`, `aStride`, `bModeShape`, `bModeStride`)
-      builder.appendTyped((alias.newDotExpr(ident"shape"), nil), (alias.newDotExpr(ident"stride"), nil))
-    let ctor = builder.emitLayout()
-    result.add quote do:
-      block:
-        `modeStmts`
-        `ctor`
-  else:
-    var nVal = bShape.getTypeOf().getStaticInt()
-    if nVal == 1:
-      # A' evaluated at one point, evaluation is coalesce-invariant
-      result.add make_layout(IntCT(1),
-        bindSym"crd2idx".newCall(make_layout(aShape, aStride), bStride))
+  let stmts = newStmtList()
+  var shapeAst, strideAst: NimNode = nil
+  var termIndex = 0
+  for termEv in bStride.basisReprStream():
+    if termEv.kind != kLeaf:
+      continue
+    if termEv.leaf.getStaticInt() == 0:
+      continue
+    let pSh = pathSelect(aShape, termEv.path)
+    let pSt = pathSelect(aStride, termEv.path)
+    # projected parts coalesce once per term
+    let ap = ident("aPrime" & $termIndex)
+    inc termIndex
+    stmts.add quote do:
+      evalOnceAs(`ap`, coalesceImpl(`pSh`, `pSt`))
+    let (aSh, aSt) = result.destructureLayout(ap)
+    let termAst = getAst(foldDelegate(aSh, aSt, bShape, termEv.leaf))
+    let alias = genSym(nskLet, "composeTerm")
+    stmts.add quote do:
+      let `alias` = `termAst`
+    let (termShape, termStride) = result.destructureLayout(alias)
+    if shapeAst.isNil:
+      shapeAst = termShape
+      strideAst = termStride
     else:
-      let stmts = newStmtList()
-      template foldDelegate(aSh, aSt, n, m: typed): untyped =
-        stridedFold(make_layout(aSh, aSt), n, m)
-      let d = bStride.getTypeOf().getCoordStrideDescriptor()
-      if d.kind == caSingle:
-        ## the projected LHS recurses at the scale
-        template projectedDelegate(aSh, aSt, bSh, m: typed): untyped =
-          composeImpl(aSh, aSt, bSh, m)
-        stmts.add getAst(projectedDelegate(
-          pathSelect(aShape, d.path), pathSelect(aStride, d.path),
-          bShape, IntCT(d.scale)))
-      elif d.kind == caMulti:
-        # multi-term atoms sum over the verbatim LHS, projected per term
-        var shapeAst, strideAst: NimNode = nil
-        for termEv in bStride.basisReprStream():
-          if termEv.kind != kLeaf:
-            continue
-          if termEv.leaf.kind in {nnkIntLit .. nnkInt64Lit} and termEv.leaf.intVal == 0:
-            continue
-          let termAst = getAst(foldDelegate(
-            pathSelect(aShape, termEv.path), pathSelect(aStride, termEv.path),
-            bShape, termEv.leaf))
-          let alias = genSym(nskLet, "composeTerm")
-          stmts.add quote do:
-            let `alias` = `termAst`
-          let (termShape, termStride) = result.destructureLayout(alias)
-          if shapeAst.isNil:
-            shapeAst = termShape
-            strideAst = termStride
-          else:
-            strideAst = strideAst + termStride
-        if strideAst.isNil:
-          # every coefficient is zero, the LHS stays untouched
-          stmts.add make_layout(bShape, IntCT(0))
-        else:
-          stmts.add quote do:
-            coalesce(make_layout(`shapeAst`, `strideAst`))
-      else:
-        # an int tiler stride: the LHS coalesces once, one fold
-        stmts.add quote do:
-          evalOnceAs(aPrime, coalesceImpl(`aShape`, `aStride`))
-        let (aSh, aSt) = result.destructureLayout(ident"aPrime")
-        let foldAst = getAst(foldDelegate(aSh, aSt, bShape, bStride))
-        stmts.add quote do:
-          coalesce(`foldAst`)
-      result.add quote do:
-        block:
-          `stmts`
+      strideAst = strideAst + termStride
+  if strideAst.isNil:
+    # every coefficient is zero, the LHS stays untouched
+    stmts.add make_layout(bShape, IntCT(0))
+  else:
+    stmts.add quote do:
+      coalesce(make_layout(`shapeAst`, `strideAst`))
+  result.add quote do:
+    block:
+      `stmts`
+
+macro composeImpl(aShape, aStride: typed, bShape, bStride: tuple): untyped =
+  ## Composition on destructured parts, B a tuple of modes:
+  ## left-distributivity, each mode composes separately.
+  result = newStmtList()
+  template composeModeDelegate(aSh, aSt, bSh, bSt: typed): untyped =
+    composeImpl(aSh, aSt, bSh, bSt)
+  var modeStmts = newStmtList()
+  var builder = TupleBuilderFlat.new(2)
+  var modeIdx = 0
+  for (shEv, stEv) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
+    let bModeShape = shEv.leaf
+    let bModeStride = stEv.leaf
+    let alias = genSym(nskLet, "composeMode" & $modeIdx)
+    inc modeIdx
+    let modeAst = getAst(composeModeDelegate(`aShape`, `aStride`, bModeShape, bModeStride))
+    modeStmts.add quote do:
+      let `alias` = `modeAst`
+    builder.appendTyped((alias.newDotExpr(ident"shape"), nil), (alias.newDotExpr(ident"stride"), nil))
+  let ctor = builder.emitLayout()
+  result.add quote do:
+    block:
+      `modeStmts`
+      `ctor`
 
 macro compose*[A: Layout, B: Layout or tuple](a: A, tiler: B): untyped =
   ## Layout composition, `A o B`.
