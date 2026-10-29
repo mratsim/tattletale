@@ -211,6 +211,25 @@ proc renameStmts(ctx: InlineCtx, stmts: var seq[CirStmt], renames: Table[string,
 
 proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirExpr): seq[CirStmt]
 
+proc argsMatchParams(callee: CirProc, args: seq[CirExpr]): bool =
+  ## True when every argument binds to its formal under the re-space rule:
+  ## same lattice type, a pointer formal accepts another-space pointer
+  ## with the same pointee.
+  ##
+  ## A mismatch keeps the call, the spliced body indexes through the formal's
+  ## shape while an array argument reads through whatever node kind the pointer formal compiled against.
+  if args.len != callee.params.len:
+    return false
+  for i, p in callee.params:
+    let at = getExprType(args[i])
+    if at == nil or sameType(at, p.typ):
+      continue
+    if p.typ.kind == at.kind and p.typ.kind in {ctPtr, ctAptr} and
+        sameType(p.typ.pElem, at.pElem):
+      continue
+    return false
+  return true
+
 proc inlineCallsIn(ctx: InlineCtx, stmts: var seq[CirStmt], procsByName: Table[string, CirProc], depth: int): bool =
   ## Splices one inline call per invocation, returns true when one was spliced.
   ## The caller iterates to a fixpoint.
@@ -224,7 +243,11 @@ proc inlineCallsIn(ctx: InlineCtx, stmts: var seq[CirStmt], procsByName: Table[s
       if s[].rhs != nil and s[].rhs.kind == eCall and
           s[].rhs.callee.kind == eSym and procsByName.hasKey(s[].rhs.callee.name):
         let callee = procsByName[s[].rhs.callee.name]
-        if not callee.forceInline and not readsCoordBuiltin(callee.body):
+        let mustSplice = callee.forceInline or readsCoordBuiltin(callee.body)
+        if not mustSplice:
+          continue
+        if not readsCoordBuiltin(callee.body) and
+            not argsMatchParams(callee, s[].rhs.args):
           continue
         let dest = s[].lhs
         let spliced = ctx.spliceCall(callee, s[].rhs.args, dest)
@@ -237,7 +260,11 @@ proc inlineCallsIn(ctx: InlineCtx, stmts: var seq[CirStmt], procsByName: Table[s
     of sCall:
       if s[].callCallee.kind == eSym and procsByName.hasKey(s[].callCallee.name):
         let callee = procsByName[s[].callCallee.name]
-        if not callee.forceInline and not readsCoordBuiltin(callee.body):
+        let mustSplice = callee.forceInline or readsCoordBuiltin(callee.body)
+        if not mustSplice:
+          continue
+        if not readsCoordBuiltin(callee.body) and
+            not argsMatchParams(callee, s[].callArgs):
           continue
         let spliced = ctx.spliceCall(callee, s[].callArgs, nil)
         if ctx.failing():

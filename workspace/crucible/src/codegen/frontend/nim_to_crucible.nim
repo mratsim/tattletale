@@ -553,6 +553,10 @@ proc isCompileTimeFormal(t: NimNode): bool =
       return true
   if t.kind in {nnkIdent, nnkSym} and t.strVal == "typedesc":
     return true
+  if t.kind in {nnkObjConstr, nnkTupleConstr}:
+    # a bound static record or tuple formal instantiates to its value,
+    # such an argument is compile-time only like any bound static
+    return true
   if t.kind == nnkBracketExpr and t.len > 0 and t[0].strVal == "typeDesc":
     # an instantiated `typeDesc[T]` formal of a generic callee
     return true
@@ -742,11 +746,11 @@ proc lowerMagicPrimitive(ctx: var FrontendCtx, callee: NimNode, call: NimNode, m
   ## Only bodiless magics route here: a magic with a Nim body (like `max`)
   ## harvests through the ordinary proc path.
   case magic
-  of "AddI", "AddF32", "AddF64",
-     "SubI", "SubF32", "SubF64",
-     "MulI", "MulF32", "MulF64",
-     "DivI", "DivF32", "DivF64",
-     "ModI", "ShlI", "ShrI":
+  of "AddI", "AddU", "AddF32", "AddF64",
+     "SubI", "SubU", "SubF32", "SubF64",
+     "MulI", "MulU", "MulF32", "MulF64",
+     "DivI", "DivU", "DivF32", "DivF64",
+     "ModI", "ModU", "ShlI", "ShrI":
     let args = ctx.lowerCallArgs(callee, call)
     if ctx.failing():
       return nil
@@ -759,15 +763,15 @@ proc lowerMagicPrimitive(ctx: var FrontendCtx, callee: NimNode, call: NimNode, m
       return nil
     let rhs = operandLiteralTypedAs(args[1], opType)
     case magic
-    of "AddI", "AddF32", "AddF64":
+    of "AddI", "AddU", "AddF32", "AddF64":
       return addE(opType, args[0], rhs)
-    of "SubI", "SubF32", "SubF64":
+    of "SubI", "SubU", "SubF32", "SubF64":
       return subE(opType, args[0], rhs)
-    of "MulI", "MulF32", "MulF64":
+    of "MulI", "MulU", "MulF32", "MulF64":
       return mulE(opType, args[0], rhs)
-    of "DivI", "DivF32", "DivF64":
+    of "DivI", "DivU", "DivF32", "DivF64":
       return divE(opType, args[0], rhs)
-    of "ModI":
+    of "ModI", "ModU":
       return modE(opType, args[0], rhs)
     of "ShlI":
       return shlE(opType, args[0], rhs)
@@ -1062,6 +1066,13 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## Hoisted statements (fresh temps, unnested call bindings) sit in front of the enclosing statement.
   if ctx.failing():
     return nil
+  if n.kind == nnkNilLit:
+    # a nil literal: the literal node reports isNil too, this case runs
+    # before the missing-node check
+    let typ = ctx.resolver.resolveCirType(n.getTypeInst())
+    if ctx.failing():
+      return nil
+    return nilE(typ)
   if n.isNil:
     ctx.fail("missing expression")
     return nil
@@ -1081,11 +1092,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if ctx.failing():
       return nil
     return fltLit(n.floatVal, typ)
-  of nnkNilLit:
-    let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
-      return nil
-    return nilE(typ)
   of nnkHiddenStdConv:
     # int/int32 share one lattice width, the standard conversion is the identity.
     # A float literal sems at its default width and converts to the context's
@@ -1205,14 +1211,14 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     of ctArray:
       return atE(loweredBase, idx)
     of ctPtr:
-      # a var parameter of array type names the array through a pointer
-      # index selects one element of the array that pointer names
+      # a var parameter of array type names the array through a pointer:
+      # deref names that array, the index selects one element
       let pointee = bt.pElem
       if pointee.isNil or pointee.kind != ctArray:
         ctx.fail("indexing over a pointer to " & $(pointee.kind) &
           " is outside the supported set")
         return nil
-      return patE(derefE(loweredBase), idx)
+      return atE(derefE(loweredBase), idx)
     of ctStruct:
       # tuple-style `[i]` access over a named struct: the field of that index
       if idx.kind != eIntLit:
@@ -1277,6 +1283,10 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     var valueSpaces = initTable[string, CirAddrSpace]()
     for i in 1 ..< n.len:
       n[i].expectKind(nnkExprColonExpr)
+      if n[i][1].kind == nnkEmpty:
+        # a nil field value sems to an Empty node, the omitted-field zero
+        # fill below supplies the typed nil
+        continue
       let v = ctx.lowerExpr(n[i][1])
       if ctx.failing():
         return nil
@@ -2215,6 +2225,9 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   of nnkTryStmt, nnkRaiseStmt:
     ctx.fail($n.kind & ": exceptions are outside the supported set")
     return @[]
+  of nnkBindStmt, nnkMixinStmt:
+    # symbol-binding directives, Nim resolves them at sem time, no trace remains in the lowered code
+    return @[]
   else:
     ctx.fail("statement construct not supported: " & $n.kind & " " & n.repr)
     return @[]
@@ -2260,7 +2273,11 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
   ctx.popScope()
   if ctx.failing():
     return @[]
-  if ret.kind != ctVoid:
+  # a fall-through body takes the fallback return, an explicit trailing
+  # return already ends the proc
+  if result.len > 0 and result[^1].kind == sRet:
+    discard
+  elif ret.kind != ctVoid:
     result.add(retS(sym("result", ret)))
   else:
     result.add(retS(nil))
@@ -2351,11 +2368,13 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   if ctx.failing():
     return nil
   result = procD(fnName, params, fnRet, body)
-  if ctx.procKeys.hasKey(result.name):
+  # identity key includes the signature, true overloads register under one plain name, and only a genuine redefinition refuses
+  let defKey = calleeSigKey(fn[0])
+  if ctx.procKeys.hasKey(defKey):
     ctx.fail("duplicate proc name " & result.name)
     return nil
-  ctx.procKeys[result.name] = true
-  ctx.declaredProcs[calleeSigKey(fn[0])] = result.name
+  ctx.procKeys[defKey] = true
+  ctx.declaredProcs[defKey] = result.name
   applyProcPragmas(fn, result)
   ctx.procs.add(result)
 
@@ -2482,6 +2501,9 @@ proc lowerModule(ctx: var FrontendCtx, bodyIn: NimNode) =
     of nnkVarSection, nnkConstSection:
       ctx.lowerTopLevelDecls(c)
     of nnkCommentStmt:
+      discard
+    of nnkBindStmt, nnkMixinStmt:
+      # symbol-binding directives, Nim resolves them at sem time
       discard
     else:
       ctx.fail("top-level construct not supported: " & $c.kind & " " & c.repr)

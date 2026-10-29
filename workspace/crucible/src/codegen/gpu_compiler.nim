@@ -79,9 +79,24 @@ macro metal*(body: untyped): string =
   result = newCall(bindSym"codegenMetal", body)
 
 macro codegenCuda(body: typed): string =
-  ## Compiles a `cuda:` block body into CUDA code.
-  error("cuda: the CUDA printer is not re-homed onto CIRv2 yet, " &
-    "the Metal printer (src/codegen/backends/msl_lang.nim) is the reference")
+  ## Compiles a `cuda:` block body into CUDA C++ source: CIRv2 lowering,
+  ## the pass registry in stage order, then the CUDA printer.
+  ## Refusals and verifier violations in the chain are compile-time
+  ## errors naming the construct.
+  let (m, lerr) = lowerCirv2Unverified(body)
+  if lerr.len > 0:
+    error(lerr)
+  var reg = PassRegistry.new()
+  reg.registerLegalizationPasses()
+  reg.registerNormalizationPasses()
+  reg.registerOptimizationPasses()
+  reg.registerSharedLoweringPasses()
+  reg.registerValidationPostPasses()
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  var ctx = GpuContext(module: m)
+  result = newLit(ctx.codegenCuda())
 
 macro cuda*(body: untyped): string =
   ## Converts the body of this macro into CUDA code.

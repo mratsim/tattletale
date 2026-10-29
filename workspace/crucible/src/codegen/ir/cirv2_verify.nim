@@ -99,6 +99,18 @@ proc callArgReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
     "argument type differs from the parameter type: got " &
     spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
 
+proc retReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
+  ## Return-value check under v1's birth-space rule: a pointer return may carry
+  ## another address space than the proc return type states, the call site
+  ## re-spaces to the declared space. The pointee type must match exactly.
+  if sameType(a, b):
+    return
+  if a.kind == b.kind and a.kind in {ctPtr, ctAptr} and sameType(a.pElem, b.pElem):
+    return
+  ctx.fail(path, "ret",
+    "return type differs from the proc return type: got " &
+    spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
+
 proc litFitsBits(ctx: var VerifyCtx, v: int64, t: CirType, path: string) =
   ## Zero-tolerance literal range check against the named type's bits.
   if t.bits <= 0:
@@ -565,8 +577,7 @@ proc verifyStmt(ctx: var VerifyCtx, s: CirStmt, path: string, chain: ScopeChain)
     let t = checkOperand(ctx, s.retVal, path & ".value", "return value")
     if ctx.err.len > 0:
       return
-    sameOrFails(ctx, t, ctx.retType, path & ".value", "ret",
-      "return type differs from the proc return type")
+    retReSpace(ctx, t, ctx.retType, path & ".value")
     discard ctx.verifyExpr(s.retVal, path & ".value", false)
   of sDiscard:
     if s.discardVal != nil:

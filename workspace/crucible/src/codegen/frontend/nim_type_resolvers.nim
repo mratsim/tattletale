@@ -121,7 +121,7 @@ func deriveStructName*(n: NimNode): string =
   else:
     result = sanitizeIdent(n.repr)
 
-func evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
+proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   ## Returns the compile-time integer value of a typed node: a literal, a const symbol, or a static arithmetic expression over those.
   ## Example:
   ##   a node for `128'i32` or for `chunk * 4` over consts evaluates to 128 or the product
@@ -474,6 +474,10 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     if n.kind == nnkSym:
       arr = n.getTypeImpl()
     arr.expectKind(nnkBracketExpr)
+    if arr[1].kind == nnkIdent:
+      # a named const length: the implementation tree keeps the name, the instantiation tree gives the value
+      arr = arr.getTypeInst()
+      arr.expectKind(nnkBracketExpr)
     let len = r.evalConstInt(arr[1])
     if r.err.len > 0:
       return nil
