@@ -32,6 +32,7 @@ import std/tables
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
+import ./passes_low_kernel_params
 import ./pass_helpers
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -39,11 +40,15 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerOpenclLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the OpenCL per-target lowering pass:
+  ## Registers the OpenCL per-target lowering passes:
+  ##
+  ## - the struct-argument explosion runs here, the engine binds one buffer
+  ##   per pointer leaf in field order
   ## - `openclHoistProgramScopeConstants`, before printing
   ##
   ## Registration contract: the pass sits after the reserved-word rename,
   ## relocated declaration names match the renamed body references.
+  registerExplodeKernelStructs(reg)
   reg.register("openclHoistProgramScopeConstants", pkTransform, phaseMain,
     "Relocates const_mem locals into the module's program scope",
     run = openclHoistProgramScopeConstants

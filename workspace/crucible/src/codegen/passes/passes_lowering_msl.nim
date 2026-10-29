@@ -36,6 +36,7 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_low_kernel_params
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -43,10 +44,12 @@ import ./pass_helpers
 
 func registerMslLoweringPasses*(reg: var PassRegistry) =
   ## Registers the MSL per-target lowering passes:
+  ## - the kernel struct-argument explosion, the flat resource target
   ## - `mslHoistProgramScopeConstants` then `mslRewriteSmemLocals`, before printing
   ##
   ## Registration contract: the passes sit after the reserved-word rename,
   ## relocated declaration and appended parameter names match the renamed body references.
+  registerExplodeKernelStructs(reg)
   reg.register("mslHoistProgramScopeConstants", pkTransform, phaseMain,
     "Relocates const_mem locals into the module's program scope",
     run = mslHoistProgramScopeConstants

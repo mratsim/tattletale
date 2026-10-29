@@ -916,8 +916,12 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
       ctx.indent.inc
       let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
       ctx.indent.dec
-      txt = spaces(ctx.indent * 2) & "for (;;)\n" & spaces(ctx.indent * 2) &
-        "{\n" & bodyTxt & "\n" & spaces(ctx.indent * 2) & '}'
+      let directive = if s.unroll:
+        spaces(ctx.indent * 2) & "[unroll]\n"
+      else:
+        ""
+      txt = directive & spaces(ctx.indent * 2) & "for (;;)\n" &
+        spaces(ctx.indent * 2) & "{\n" & bodyTxt & "\n" & spaces(ctx.indent * 2) & '}'
       if lExit.len > 0:
         i.inc  # exit label, consumed
     elif s.kind == sVar and s.space == caThread and s.init == nil and

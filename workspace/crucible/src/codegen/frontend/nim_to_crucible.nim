@@ -43,6 +43,9 @@ type
     procs: seq[CirProc]
     procKeys: Table[string, bool]
     ## Harvested proc names, dedups instantiations and guards recursion.
+    declaredProcs: Table[string, string]
+    ## Nim signature key to the CIRv2 name of a proc the module already declares.
+    ## A call reuses that body.
     scopes: seq[Table[string, CirExpr]]
     localSpaces: seq[Table[string, CirAddrSpace]]
     ## Nim symbol name to CIRv2 symbol, innermost scope last.
@@ -566,6 +569,13 @@ func isGenericProc(node: NimNode): bool =
   result = impl.len > 5 and impl[5].kind == nnkBracket and
     impl[5].len > 1 and impl[5][1].kind == nnkGenericParams
 
+proc calleeSigKey(callee: NimNode): string =
+  ## Identity key of a callee symbol: the repr and the signature hash.
+  ## A generic adds the body hash (instantiations share one signature).
+  result = callee.repr & "_" & callee.signatureHash()
+  if callee.symKind in {nskProc, nskFunc} and isGenericProc(callee):
+    result &= "_" & callee.symBodyHash()
+
 proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
   ## Stable per-callee-instantiation name: the sanitized proc name plus
   ## a base58 hash over the callee's identity.
@@ -616,9 +626,7 @@ proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
   # an instantiated signature alone cannot separate instantiations: Nim's
   # `signatureHash` erases the bound static formals, the body hash of a generic
   # instantiation includes them. Plain text of both goes into the hash.
-  var sigKey = callee.repr & "_" & callee.signatureHash()
-  if callee.symKind in {nskProc, nskFunc} and isGenericProc(callee):
-    sigKey &= "_" & callee.symBodyHash()
+  let sigKey = calleeSigKey(callee)
   var h = hash(sigKey & "\x1f" & sigRepr & "\x1f" & callee.strVal & "\x1f" & calleeSite)
   h = !$h
   var x = uint64(h) and 0xFFFFFFFFFFFFFFFF'u64
@@ -630,6 +638,17 @@ proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
     suffix = alphabet[int(x mod 58)] & suffix
     x = x div 58
   result = base & "_" & suffix
+
+proc resolveCallCalleeName(ctx: var FrontendCtx, calleeSym: NimNode): tuple[name: string, known: bool] =
+  ## CIRv2 name of a call's callee.
+  ##
+  ## - a proc the module already declares reuses its body, one plain-named
+  ##   body per in-block definition
+  ## - anything else takes a fresh instantiation name and the caller harvests
+  let key = calleeSigKey(calleeSym)
+  if ctx.declaredProcs.hasKey(key):
+    return (ctx.declaredProcs[key], true)
+  return (ctx.computeInstProcName(calleeSym), false)
 
 proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string)
 
@@ -804,10 +823,10 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     return nil
   if numeric != nil:
     return numeric
-  let cirName = ctx.computeInstProcName(calleeSym)
+  let (cirName, known) = ctx.resolveCallCalleeName(calleeSym)
   # a bodiless magic took the primitive path above
   # every other callee harvests, a magic with a Nim body (like `max`) lowers through it
-  if not hasPragmaNim(calleeSym, "builtin"):
+  if not hasPragmaNim(calleeSym, "builtin") and not known:
     ctx.harvestProc(calleeSym, cirName)
     if ctx.failing():
       return nil
@@ -1800,7 +1819,7 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   let fnType = ctx.resolveCalleeProcType(calleeSym)
   if ctx.failing():
     return @[]
-  let cirName = ctx.computeInstProcName(calleeSym)
+  let (cirName, known) = ctx.resolveCallCalleeName(calleeSym)
   let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
   let calleeName = if calleeBuiltin: calleeSym.strVal
                    else: cirName
@@ -1810,7 +1829,7 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   if fnType.ret.kind != ctVoid:
     # a discardable non-void call in statement position: the value is
     # computed into a fresh temp and dropped
-    if not hasPragmaNim(calleeSym, "builtin"):
+    if not hasPragmaNim(calleeSym, "builtin") and not known:
       ctx.harvestProc(calleeSym, cirName)
       if ctx.failing():
         return @[]
@@ -1822,7 +1841,7 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.hoisted.add(asgnS(sym(tmpName, fnType.ret),
       callE(sym(calleeName, fnType, calleeBuiltin), args)))
     return ctx.drainHoisted()
-  if not hasPragmaNim(calleeSym, "builtin"):
+  if not hasPragmaNim(calleeSym, "builtin") and not known:
     ctx.harvestProc(calleeSym, cirName)
     if ctx.failing():
       return @[]
@@ -2021,8 +2040,8 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       let fnType = ctx.resolveCalleeProcType(calleeSym)
       if ctx.failing():
         return @[]
-      let cirName = ctx.computeInstProcName(calleeSym)
-      if not hasPragmaNim(calleeSym, "builtin"):
+      let (cirName, known) = ctx.resolveCallCalleeName(calleeSym)
+      if not hasPragmaNim(calleeSym, "builtin") and not known:
         ctx.harvestProc(calleeSym, cirName)
         if ctx.failing():
           return @[]
@@ -2326,6 +2345,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
     ctx.fail("duplicate proc name " & result.name)
     return nil
   ctx.procKeys[result.name] = true
+  ctx.declaredProcs[calleeSigKey(fn[0])] = result.name
   applyProcPragmas(fn, result)
   ctx.procs.add(result)
 

@@ -43,6 +43,7 @@ import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
+import ./passes_low_kernel_params
 import ./pass_helpers
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -51,6 +52,8 @@ import ./pass_helpers
 
 func registerWgslLoweringPasses*(reg: var PassRegistry) =
   ## Registers the WGSL per-target lowering passes:
+  ##
+  ## - WebGPU is a flat resource target, the struct-argument explosion runs here
   ## - `wgslDissolvePointerLocals`, `wgslRewriteBoolKernelParamReads`, `wgslHoistProgramScopeLocals`, in that order, before printing
   ##
   ## Registration contract: the passes sit after the reserved-word rename.

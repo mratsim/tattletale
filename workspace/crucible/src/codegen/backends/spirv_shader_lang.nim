@@ -1303,7 +1303,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.builder.opBranch(headerLbl)
       ctx.builder.opLabelAt(headerLbl)
       fn.terminated = false
-      ctx.builder.opLoopMerge(mergeLbl, contLbl, lcNone)
+      ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.unroll: lcUnroll else: lcNone)
       ctx.builder.opBranch(bodyLbl)
       ctx.builder.opLabelAt(bodyLbl)
       fn.terminated = false
