@@ -60,7 +60,7 @@ proc farmTopLevel(ctx: var GpuContext, ast: GpuAst, kernel: string, varBlock: va
   else:
     discard
 
-proc ingestTopLevel(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
+proc ingestTopLevel*(ctx: var GpuContext, ast: GpuAst, typesFirst: static bool) =
   ## Farms the AST into ctx (fnTab, allFnTab, globalBlocks) ahead of runPasses.
   ## typesFirst: C-family block layout plus callee harvest, WGSL the reverse
   ## and no harvest (its callees inline).
