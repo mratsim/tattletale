@@ -44,7 +44,7 @@ macro evalOnceAs*[V: static int](alias: untyped{nkIdent}, expression: Int[V]): u
     procType = nnkTemplateDef
   )
 
-macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
+macro evalOnceAs*(alias: untyped{nkIdent|nkSym}, expression: typed): untyped =
   ## Create an `alias` for `expression`
   ## - Returns: a template expanding to `expression`, evaluated once
   ##  ⚠  Every use inside a template body goes inside a `block:` scope.
@@ -62,7 +62,7 @@ macro evalOnceAs*(alias: untyped{nkIdent}, expression: typed): untyped =
   # - when is static: works and is what we use here, but it needs a macro
   #   for gensym of template symbols
   # - an isCompileTime() macro: fragile, misses many AST node kinds, getTypeInst() hard-errors on untyped nodes
-  let aName = genSym(nskTemplate, $alias)
+  let aName = if alias.kind == nnkSym: alias else: genSym(nskTemplate, $alias)
   result = newStmtList()
   result.add quote do:
     when `expression` is static:

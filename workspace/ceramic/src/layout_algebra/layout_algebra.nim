@@ -452,11 +452,9 @@ macro composeImpl(aShape, aStride: typed, bShape, bStride: tuple): untyped =
     composeImpl(aSh, aSt, bSh, bSt)
   var builder = TupleBuilderFlat.new(2)
   for (shEv, stEv) in bShape.tupleDimsStream().zip(bStride.tupleDimsStream()):
-    let alias = genSym(nskLet, "composeMode")
     let modeAst = getAst(composeModeDelegate(`aShape`, `aStride`, shEv.leaf, stEv.leaf))
-    result.add quote do:
-      let `alias` = `modeAst`
-    builder.append(alias.newDotExpr(ident"shape"), alias.newDotExpr(ident"stride"))
+    let (modeShape, modeStride) = result.destructureLayout(modeAst)
+    builder.append(modeShape, modeStride)
   result.add builder.emitLayout()
 
 macro composeImpl[A, B: Layout](a: A, tiler: B): untyped =
@@ -514,11 +512,9 @@ macro composeImpl[A: Layout, B: tuple](a: A, tiler: B): untyped =
         if not isScalarTy(tLeafTy) and tLeaf.kind notin {nnkIntLit .. nnkUInt64Lit}:
           error("tiler leaf is neither an int, an Int nor a Layout", tLeaf)
         (tLeaf, IntCT(1))
-      let alias = genSym(nskLet, "composeTilerMode")
       let modeAst = getAst(composeModeDelegate(aSh, aSt, bSh, bSt))
-      result.add quote do:
-        let `alias` = `modeAst`
-      builder.append(alias.newDotExpr(ident"shape"), alias.newDotExpr(ident"stride"))
+      let (modeShape, modeStride) = result.destructureLayout(modeAst)
+      builder.append(modeShape, modeStride)
     inc ti
   result.add builder.emitLayout(emitScalarForSize1 = false)
 
