@@ -352,9 +352,8 @@ macro complement*(layout: Layout, cosizeBound: typed): untyped =
 #
 #  qᵢ = M div pᵢ, 1 when the running prefix exhausts M
 
-macro stridedFold(strided: Layout, n, m: typed): untyped =
+macro stridedFold(sh, st, n, m: typed): untyped =
   result = newStmtList()
-  let (sh, st) = result.destructureLayout(strided)
 
   var builder = TupleBuilderFlat.new(2)
   var q = m
@@ -386,7 +385,7 @@ proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.} =
       break
 
 template foldDelegate(aSh, aSt, n, m: typed): untyped =
-  stridedFold(make_layout(aSh, aSt), n, m)
+  stridedFold(aSh, aSt, n, m)
 
 macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   ## Composition with a scalar B = N:M.
