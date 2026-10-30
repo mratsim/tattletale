@@ -2,7 +2,6 @@
 ##
 ## Test that `{.exportc: "my_custom_entry".}` renames the emitted WGSL entry and the kernel launches under it,
 ## and that a bare `{.exportc.}` kernel keeps its proc name and still launches.
-## wgpu-native aborts at engine teardown (SIGABRT) after every check passes.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -29,8 +28,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check "fn renamedKernel(" notin renamedWgsl
       check "fn bareKernel(" in bareWgsl
       check "fn my_custom_entry(" notin bareWgsl
-      # Engines and buffers release together at test end.
-      # All readbacks run before the wgpu-native teardown abort.
       var renamedEngine = newEngine(runWebGPU)
       renamedEngine.ingest(renamedWgsl)
       var bareEngine = newEngine(runWebGPU)

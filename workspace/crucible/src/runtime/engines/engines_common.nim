@@ -6,9 +6,9 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Shared leaf: the launch modules, the engines and the public API import it.
-## DeviceMem and the per-backend buffer release share this module, the type
-## and its allocator live in one scope like the stdlib's memalloc and seqs_v2,
-## the release procs are private and never re-exported.
+## DeviceMem and the per-backend buffer release share this module.
+## Type and allocator live in one scope, like the stdlib's memalloc and seqs_v2.
+## Each release proc is private and never re-exported.
 
 import workspace/crucible/src/codegen/ir/ast_datatypes
 export ast_datatypes.BackendKind
@@ -37,7 +37,9 @@ template dim3*(t: tuple[a, b, c: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int
 template dim3*(d: Dim3): Dim3 = d
 
 proc freeDeviceImpl(h: CUdeviceptr) {.inline.} =
-  check cuMemFree(h)
+  # cuMemFree rejects the zero handle a moved-from DeviceMem leaves behind
+  if culonglong(h) != 0:
+    check cuMemFree(h)
 
 proc freeDeviceImpl(h: OpenCLBuffer) {.inline.} =
   var h = h
@@ -48,7 +50,9 @@ proc freeDeviceImpl(h: VulkanBuffer) {.inline.} =
   h.dealloc()
 
 proc freeDeviceImpl(h: WGPUBuffer) {.inline.} =
-  wgpuBufferRelease(h)
+  # wgpuBufferRelease aborts the process on the nil handle a moved-from DeviceMem leaves behind
+  if not h.isNil:
+    wgpuBufferRelease(h)
 
 proc freeDeviceImpl(h: objc.ID) {.inline.} =
   if not objc.isNil(h):
