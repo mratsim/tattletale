@@ -12,11 +12,13 @@
 ## A device function cannot take the thread builtins as attributed parameters,
 ## so an `{.inline.}` proc that reads them splices into its caller. Per call site:
 ##
-## - complex arguments bind to fresh temps, simple ones substitute directly
+## - complex arguments bind to fresh temps, immutable ones substitute directly
 ## - the callee's locals and labels rename fresh, its `result` maps to the call's destination
-## - the trailing `ret` drops, the spliced lab/jmp chain joins the caller's structuring
+## - the trailing `ret` drops after moving a carried value into the call's destination
+## - the spliced lab/jmp chain then joins the caller's structuring
 ##
-## Refusals name the proc: an inline proc with an early `ret` has no single-entry splice.
+## Refusals name the proc: an inline proc with an early `ret`, or a `ret` that is
+## not the trailing statement, has no single-entry splice.
 
 import ../ir/cirv2_lang
 import std/[sets, tables, sequtils]
@@ -291,9 +293,10 @@ proc inlineCallsIn(ctx: InlineCtx, stmts: var seq[CirStmt], procsByName: Table[s
 proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirExpr): seq[CirStmt] =
   ## Builds the spliced body of one call:
   ##
-  ## - complex arguments bind to fresh temps first, the body reads the temp
+  ## - arguments bind to fresh temps unless immutable or a pointer formal
   ## - the callee's locals rename fresh, `result` maps to `dest`
-  ## - the trailing `ret` drops, an early `ret` refuses
+  ## - the trailing `ret` drops, its value moves into `dest` first
+  ## - an early `ret` refuses: a `ret` left mid-body would return from the caller
   # single exit: only the trailing ret may return
   var rets = 0
   proc countRets(ss: seq[CirStmt]) =
@@ -308,11 +311,23 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
         countRets(s.loopBody)
       of sScope:
         countRets(s.scopeBody)
+      of sCase:
+        for b in s.branches:
+          countRets(b.body)
+        countRets(s.caseElse)
       else:
         discard
   countRets(callee.body)
   if rets > 1:
     ctx.fail("inline proc " & callee.name & " has an early return")
+    return @[]
+  # a single `ret` is splicable only as the trailing statement: a `ret` left
+  # mid-body would return from the caller and skip the spliced call site
+  if rets == 1 and (callee.body.len == 0 or callee.body[^1].kind != sRet):
+    ctx.fail("inline proc " & callee.name & " has an early return")
+    return @[]
+  if dest.isNil and callee.ret.kind != ctVoid:
+    ctx.fail("inline proc " & callee.name & " returns a value with no call destination")
     return @[]
 
   ctx.splicedAway.incl(callee.name)
@@ -359,10 +374,17 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
   var body = cloneStmts(callee.body)
   # callee's own `result` declaration drops, the call's destination variable serves
   body = body.filterIt(not (it.kind in {sVar, sConst} and it.name == "result"))
+  # a bare `ret result` needs no move, every `result` write already renamed to dest
+  let retIsBareResult = body.len > 0 and body[^1].kind == sRet and
+    body[^1].retVal != nil and body[^1].retVal.kind == eSym and
+    body[^1].retVal.name == "result"
   ctx.renameStmts(body, renames, labels)
-  # trailing ret moves the value into dest, which the call site already owns
+  # trailing-ret handling: the value moves into dest, which the call site already owns
   if body.len > 0 and body[^1].kind == sRet:
+    let retVal = body[^1].retVal
     body.setLen(body.len - 1)
+    if retVal != nil and not retIsBareResult:
+      body.add asgnS(dest, retVal)
   return pre & body
 
 proc inlineProcs(m: CirModule): string =
