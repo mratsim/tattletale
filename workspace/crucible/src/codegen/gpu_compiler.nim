@@ -40,6 +40,7 @@ import ./passes/passes_lowering_glsl
 import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_msl
 import ./passes/passes_lowering_opencl
+import ./passes/layout_std430
 import ./passes/scan_features
 import ./passes/passes_validations
 import ./passes/passes_low_reserved
@@ -153,9 +154,10 @@ macro codegenGLSL(body: typed): string =
   # reference the renamed names that their body text already uses
   reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
   reg.registerGlslLoweringPasses()
-  # feature scan after the last transform: analysis results are valid only
-  # if no transform runs after them (the registry never invalidates)
+  # analysis passes after the last transform: analysis results are valid
+  # only if no transform runs after them (the registry never invalidates)
   reg.registerGlslFeatureScan()
+  reg.registerGlslLayoutPass()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
@@ -212,9 +214,10 @@ macro codegenWebGpu(body: typed): string =
   # WGSL reserves the double-underscore identifier head, every `__`-prefixed name gains a `wgsl_` prefix
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
   reg.registerWgslLoweringPasses()
-  # feature scan after the last transform: analysis results are valid only
-  # if no transform runs after them (the registry never invalidates)
+  # analysis passes after the last transform: analysis results are valid
+  # only if no transform runs after them (the registry never invalidates)
   reg.registerWgslFeatureScan()
+  reg.registerWgslLayoutPass()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:

@@ -366,6 +366,19 @@ type
     ## - the warp-reduction template list of the targets that emit one
     ##   template per kind
 
+  StructLayout* = object
+    ## Packed layout of one nominal struct type, computed under the launch packing rules.
+    ##
+    ## - each member starts at the first offset that satisfies the member
+    ##   alignment
+    ## - the struct size rounds up to the struct alignment
+    size*: int
+    ## Padded struct size in bytes. The value `eSizeof` reports.
+    align*: int
+    ## Strictest member alignment in bytes, at least 1.
+    memberOffsets*: seq[int]
+    ## Start offset of each member in declaration order.
+
   CirModule* = ref object
     ## One CIRv2 module: nominal type declarations plus the proc set.
     name*: string
@@ -383,6 +396,14 @@ type
     ## - valid only if no transform runs after the scan: the pass registry
     ##   has no invalidation
     ## - the printer reads it, it never rescans
+    layouts*: Table[string, StructLayout]
+    ## Packed layout of each nominal struct type, keyed by struct name,
+    ## filled by the target's layout analysis pass after its last transform.
+    ##
+    ## - valid only if no transform runs after the layout pass: the pass
+    ##   registry has no invalidation
+    ## - the printer reads the stored records, it never recomputes a struct
+    ##   layout
 
 ## Canonical name -> builtin-kind tables. The alias canonicalization pass reads
 ## them after it renames an alias to its canonical name. The cross-check against

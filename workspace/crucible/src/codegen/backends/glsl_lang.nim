@@ -12,7 +12,7 @@
 ## - one `{.global.}` kernel per module, the device functions it calls emitted alongside
 ## - kernel signature `void <name>()`: one push-constant block member per kernel parameter, in host `store` packing order
 ## - buffer pointers render as buffer-reference handles (`GL_EXT_buffer_reference`), element access `<handle>.x[index]`
-## - `eSizeof` computes the std430 byte size, GLSL has no `sizeof`
+## - `eSizeof` reports the packed byte size from the stored module layout records, GLSL has no `sizeof`
 ##
 ## Lowering-pass contract (`passes_lowering_glsl.nim` runs before printing):
 ## - `ptr` locals dissolve into their pointees (GLSL has no function-storage addressing), a surviving pointer local refuses, naming the pass
@@ -25,6 +25,7 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, tables]
 import ../ir/ast_datatypes
 import ./emit_common
+import ../passes/layout_std430
 
 type
   PrintCtx = object
@@ -34,6 +35,8 @@ type
     indent: int
     refBlocks: OrderedTable[string, string]
     ## Buffer-reference block declarations to emit, block name -> member text.
+    layouts: Table[string, StructLayout]
+    ## Stored struct layouts of the module, the layout pass filled them.
 
 const printerTarget = "glsl"
 
@@ -147,46 +150,6 @@ proc spellGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
     return ""
   ctx.requireRefBlock(t.pElem)
   result = refTypeName(t.pElem) & ' ' & ident
-
-# ═══════════════════════════════════════════════════════════════════════
-# std430 size (GLSL has no sizeof)
-# ═══════════════════════════════════════════════════════════════════════
-
-proc std430Align(t: CirType): int
-  ## Forward declaration, struct alignment recurses into members.
-
-proc std430Size(t: CirType): int =
-  ## std430 byte size of a type, the `eSizeof` value.
-  case t.kind
-  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    scalarByteSize(t)
-  of ctVector:
-    scalarByteSize(t.vElem) * t.vN
-  of ctArray:
-    std430Size(t.aElem) * t.aN
-  of ctStruct:
-    var off = 0
-    var align = 1
-    for f in t.fields:
-      let fa = std430Align(f.typ)
-      off = roundUpMultiple(off, fa) + std430Size(f.typ)
-      align = max(align, fa)
-    roundUpMultiple(off, align)
-  of ctPtr, ctAptr: 8
-  of ctProc: 0
-
-proc std430Align(t: CirType): int =
-  ## std430 byte alignment of a type.
-  case t.kind
-  of ctStruct:
-    var align = 1
-    for f in t.fields:
-      align = max(align, std430Align(f.typ))
-    align
-  of ctArray: std430Align(t.aElem)
-  of ctVector: max(scalarByteSize(t.vElem), 1)
-  of ctPtr, ctAptr: 8
-  else: max(scalarByteSize(t), 1)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
@@ -381,7 +344,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
     return spellGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
   of eSizeof:
-    return $std430Size(e.ofType)
+    return $typeByteSize(ctx.layouts, e.ofType, std430BoolWidth)
   of eAddr:
     # a buffer element's address is the indexed reference access
     if e.addrOperand.kind == ePat:
@@ -769,6 +732,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>")
+  ctx.layouts = m.layouts
   var kernels: seq[CirProc]
   for fn in m.procs:
     if fn.isKernel:

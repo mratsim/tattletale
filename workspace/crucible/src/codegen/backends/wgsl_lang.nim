@@ -23,9 +23,10 @@
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
-import std/[macros, sets, strutils]
+import std/[macros, sets, strutils, tables]
 import ../ir/ast_datatypes
 import ./emit_common
+import ../passes/layout_std430
 
 type
   PrintCtx = object
@@ -43,6 +44,8 @@ type
     ## Canonical coordinate builtin names the kernel body references, first-use order.
     neededStructs: HashSet[string]
     ## Struct type names referenced by the emitted declarations and expressions.
+    layouts: Table[string, StructLayout]
+    ## Stored struct layouts of the module, the layout pass filled them.
 
 const printerTarget = "wgsl"
 
@@ -125,48 +128,6 @@ proc spellWgslPtrType(ctx: var PrintCtx, t: CirType): string =
   of caConstant:
     ctx.fail("pointer to constant space, WGSL consts have no address")
     return ""
-
-# ═══════════════════════════════════════════════════════════════════════
-# Byte size (WGSL has no sizeof)
-# ═══════════════════════════════════════════════════════════════════════
-
-proc wgslByteSize(t: CirType): int
-  ## Forward declaration, struct size recurses into members.
-
-proc wgslAlign(t: CirType): int =
-  ## Byte alignment of a type, the launch ABI packing rules.
-  case t.kind
-  of ctStruct:
-    var align = 1
-    for f in t.fields:
-      align = max(align, wgslAlign(f.typ))
-    align
-  of ctArray: wgslAlign(t.aElem)
-  of ctVector: max(scalarByteSize(t.vElem, 4), 1)
-  of ctPtr, ctAptr: 8
-  else: max(scalarByteSize(t, 4), 1)
-
-proc wgslByteSize(t: CirType): int =
-  ## Byte size of a type, the `eSizeof` value, matching the host packing:
-  ## each struct member aligned to its own width, the struct size rounded to
-  ## the widest member, an array sized as whole copies of its element.
-  case t.kind
-  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    scalarByteSize(t, 4)
-  of ctVector:
-    scalarByteSize(t.vElem, 4) * t.vN
-  of ctArray:
-    wgslByteSize(t.aElem) * t.aN
-  of ctStruct:
-    var off = 0
-    var align = 1
-    for f in t.fields:
-      let fa = wgslAlign(f.typ)
-      off = roundUpMultiple(off, fa) + wgslByteSize(f.typ)
-      align = max(align, fa)
-    roundUpMultiple(off, align)
-  of ctPtr, ctAptr: 8
-  of ctProc: 0
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
@@ -369,7 +330,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ""
     return ctx.spellWgslTypeBare(e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
   of eSizeof:
-    return $wgslByteSize(e.ofType)
+    return $typeByteSize(ctx.layouts, e.ofType, launchAbiBoolWidth)
   of eAddr:
     return "(&" & ctx.printExpr(e.addrOperand) & ")"
   of eOconstr:
@@ -705,6 +666,7 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>")
+  ctx.layouts = m.layouts
   var kernels: seq[CirProc]
   for fn in m.procs:
     if fn.isKernel:
