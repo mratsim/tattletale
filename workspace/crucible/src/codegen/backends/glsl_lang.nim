@@ -827,8 +827,10 @@ proc registerExprRefBlocks(ctx: var PrintCtx, e: CirExpr) =
   of eEq, eNeq, eLt, eLe:
     ctx.registerExprRefBlocks(e.a)
     ctx.registerExprRefBlocks(e.b)
-  of eBitNot, eNeg, eNot:
+  of eBitNot, eNeg:
     ctx.registerExprRefBlocks(e.unOperand)
+  of eNot:
+    ctx.registerExprRefBlocks(e.notOperand)
   of eOconstr:
     for kvf in e.kvFields:
       ctx.registerExprRefBlocks(kvf.value)
