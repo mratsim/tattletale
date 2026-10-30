@@ -59,15 +59,17 @@ proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): se
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
-proc compileHlslToSpirvViaDxc(hlsl: string): seq[uint32] =
+proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): seq[uint32] =
   ## Compiles HLSL to SPIR-V via ``dxc``, the SPIR-V codegen backend, no DXIL leg.
+  ## `entryPoint` names the HLSL entry function, it becomes the OpEntryPoint
+  ## Name operand the Vulkan pipeline looks up.
   let dxc = findExe("dxc")
   if dxc.len == 0:
     failLoud("dxc not found on PATH, the Vulkan engine needs it to compile HLSL sources")
   let tmpDir = getKernelDir("vulkan")
   setFilePermissions(tmpDir, {fpUserExec, fpUserWrite, fpUserRead})
-  let srcPath = genTempPath("main_", ".hlsl", tmpDir)
-  let spvPath = genTempPath("main_", ".spv", tmpDir)
+  let srcPath = genTempPath(sanitizePath(entryPoint) & "_", ".hlsl", tmpDir)
+  let spvPath = genTempPath(sanitizePath(entryPoint) & "_", ".spv", tmpDir)
 
   writeFile(srcPath, hlsl)
   defer:
@@ -75,7 +77,7 @@ proc compileHlslToSpirvViaDxc(hlsl: string): seq[uint32] =
       removeFile(srcPath)
     if fileExists(spvPath):
       removeFile(spvPath)
-  let args = ["-T", "cs_6_4", "-E", "main", "-spirv", "-Fo", spvPath, srcPath]
+  let args = ["-T", "cs_6_4", "-E", entryPoint, "-spirv", "-Fo", spvPath, srcPath]
   let p = startProcess(dxc, args = args, options = {poStdErrToStdOut})
   let compOut = p.outputStream.readAll()
   let exitCode = p.waitForExit()

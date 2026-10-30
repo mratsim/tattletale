@@ -715,8 +715,11 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
     let p = wgslBuiltinParam(kind)
     builtinArgs.add "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
   let wg = (if kernel.workgroup == [0, 0, 0]: [64, 1, 1] else: kernel.workgroup)
+  # exportc renames a kernel entry for the host runtime lookup.
+  # A device function keeps the name its call sites reference.
+  let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
   let kernelSig = "@compute @workgroup_size(" & $wg[0] & ", " & $wg[1] & ", " &
-    $wg[2] & ")\nfn " & kernel.name & "(" & builtinArgs.join(", ") & ")"
+    $wg[2] & ")\nfn " & entryName & "(" & builtinArgs.join(", ") & ")"
 
   # module-scope workgroup and const declarations relocated into
   # `m.globals` by the WGSL lowering pass, in encounter order

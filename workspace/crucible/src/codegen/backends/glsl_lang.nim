@@ -857,7 +857,10 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     let bodyTxt = ctx.printStmts(kernel.body, "", "")
     if ctx.failing():
       return ("", ctx.err)
-    result.src &= "void " & kernel.name & "() {\n" & bodyTxt & '\n' & "}\n\n"
+    # exportc renames a kernel entry for the host runtime lookup.
+    # A device function keeps the name its call sites reference.
+    let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
+    result.src &= "void " & entryName & "() {\n" & bodyTxt & '\n' & "}\n\n"
   return (result.src, "")
 
 

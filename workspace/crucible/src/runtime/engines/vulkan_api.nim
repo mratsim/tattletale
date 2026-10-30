@@ -91,8 +91,8 @@ proc ingestGlsl(engine: VulkanEngine, glsl: string) =
   engine.isHlsl = false
 
 proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
-  engine.entryPoint = "main"
-  engine.spirv = compileHlslToSpirvViaDxc(hlsl)
+  engine.entryPoint = parseHlslEntryPoint(hlsl)
+  engine.spirv = compileHlslToSpirvViaDxc(hlsl, engine.entryPoint)
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
 
@@ -241,26 +241,36 @@ proc countKernels(glsl: string): int =
     inc result
     i = glsl.find(marker, i + marker.len)
 
-proc parseEntryPoint(glsl: string): string =
-  const preamble = "layout(local_size_x"
-  const marker = "void "
+proc firstFunctionName(src: string, preamble, marker: string): string =
+  ## Reads the function name at the first `marker` after `preamble`,
+  ## "main" when the marker is missing or the scan finds no identifier.
   var startPos = 0
-  let p = glsl.find(preamble)
+  let p = src.find(preamble)
   if p >= 0:
     startPos = p
-  let i = glsl.find(marker, startPos)
+  let i = src.find(marker, startPos)
   if i < 0:
     return "main"
   var j = i + marker.len
-  while j < glsl.len and glsl[j] in {' ', '\t', '\n', '\r'}:
+  while j < src.len and src[j] in {' ', '\t', '\n', '\r'}:
     inc j
   var name = ""
-  while j < glsl.len and glsl[j] in {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}:
-    name.add glsl[j]
+  while j < src.len and src[j] in {'a' .. 'z', 'A' .. 'Z', '0' .. '9', '_'}:
+    name.add src[j]
     inc j
   if name.len == 0:
     name = "main"
   name
+
+proc parseEntryPoint(glsl: string): string =
+  ## Reads the first entry function after the local-size layout: the kernel entry name
+  ## in the emitted GLSL source and in the compiled OpEntryPoint.
+  firstFunctionName(glsl, "layout(local_size_x", "void ")
+
+proc parseHlslEntryPoint(hlsl: string): string =
+  ## Reads the entry function after the `[numthreads(...)]` attribute: the kernel entry
+  ## name in the emitted HLSL source and in the compiled OpEntryPoint.
+  firstFunctionName(hlsl, "[numthreads(", "void ")
 
 proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
@@ -283,7 +293,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
   var spirv: seq[uint32]
   if engine.isHlsl:
     spirv = engine.spirv
-    entry = "main"
+    entry = engine.entryPoint
   elif kernel == engine.entryPoint:
     spirv = engine.spirv
   else:

@@ -10,7 +10,8 @@
 ## Two resource-binding flavors share one language body, the binding section differs.
 ##
 ## Emission contract:
-## - one `{.global.}` kernel per module, emitted as `main`,
+## - one `{.global.}` kernel per module, emitted as `main` unless
+##   `{.exportc: "name".}` renames the entry,
 ##   DXC compiles one entry point per invocation with `-E main`,
 ##   device functions alongside, forward-declared
 ##
@@ -1193,7 +1194,7 @@ proc spellMainInputs(ctx: PrintCtx): string =
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
   ## Emits the full HLSL translation unit: struct declarations, the binding section,
   ## the device function declarations and definitions, then `[numthreads]`,
-  ## then the kernel as `main`.
+  ## then the kernel entry: `main`, or the `{.exportc: "name".}` override.
   ##
   ## - fvD3D12: register resources and the `ConstantBuffer` push block
   ## - fvVulkan: the `[[vk::push_constant]]` struct with every member offset locked
@@ -1393,7 +1394,11 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   result.src &= "[numthreads(" & $ctx.workgroup[0] & ", " & $ctx.workgroup[1] &
     ", " & $ctx.workgroup[2] & ")]\n"
   let inputs = ctx.spellMainInputs()
-  result.src &= "void main(" & inputs & ")\n{\n" & bodyTxt & "\n}\n"
+  # exportc renames a kernel entry for the host runtime lookup. Vulkan ingest reads
+  # back the entry name from the emitted `[numthreads]` line and passes it to dxc.
+  # Device functions keep the name their call sites reference, a bare kernel stays `main`.
+  let entryName = if kernel.exportName.len > 0: kernel.exportName else: "main"
+  result.src &= "void " & entryName & "(" & inputs & ")\n{\n" & bodyTxt & "\n}\n"
   return (result.src, "")
 
 proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =

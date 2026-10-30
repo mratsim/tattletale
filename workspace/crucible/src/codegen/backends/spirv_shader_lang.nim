@@ -1555,7 +1555,11 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   ctx.flushExtensions()
   let lws = if kernel.workgroup == [0, 0, 0]: [256, 1, 1]
             else: kernel.workgroup
-  ctx.builder.emitEntryPoint(emGLCompute, result, kernel.name, ctx.interfaceVars)
+  # exportc renames a kernel entry for the host runtime lookup. Host launchers look up
+  # an OpEntryPoint Name operand, so the rename patches that operand. No OpName debug
+  # instruction is emitted for the entry, that operand is the whole rename.
+  let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
+  ctx.builder.emitEntryPoint(emGLCompute, result, entryName, ctx.interfaceVars)
   ctx.builder.emitExecutionMode(result, modeLocalSize,
     @[uint32(lws[0]), uint32(lws[1]), uint32(lws[2])])
   ctx.builder.emitMemoryModel(
