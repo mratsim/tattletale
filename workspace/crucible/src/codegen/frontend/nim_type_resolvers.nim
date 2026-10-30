@@ -39,7 +39,6 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
   ## Forward declaration, the field walkers recurse into field types.
 
 proc fail*(r: var CirTypeResolver, detail: string) =
-  ## Records the first refusal. Later refusals keep the first.
   if r.err.len == 0:
     r.err = "cirv2 frontend: " & detail
 

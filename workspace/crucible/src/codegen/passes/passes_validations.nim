@@ -24,6 +24,5 @@ func registerValidationPostPasses*(reg: var PassRegistry) =
     run = verifyPass)
 
 proc verifyPass(m: CirModule): string =
-  ## Registry adapter over `verifyMessage`.
   verifyMessage(m)
 

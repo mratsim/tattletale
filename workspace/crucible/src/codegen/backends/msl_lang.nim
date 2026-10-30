@@ -48,7 +48,6 @@ proc failing(ctx: PrintCtx): bool =
   ctx.err.len > 0
 
 proc fail(ctx: var PrintCtx, detail: string) =
-  ## Records the first refusal, naming the proc.
   if ctx.err.len == 0:
     ctx.err = "cirv2 printer msl: at " & ctx.fnName & ": " & detail
 

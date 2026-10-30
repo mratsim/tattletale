@@ -72,7 +72,7 @@ proc dissolveFail(fn: CirProc, detail: string): string =
   "at " & fn.name & ": " & detail
 
 proc toPlainSym(name: string, typ: CirType): CirExpr =
-  ## Plain symbol node without a builtin kind: the rewrite target of every dissolved read.
+  ## Every dissolved read rewrites to the symbol this proc returns.
   result = CirExpr(kind: eSym, name: name, typ: typ, builtin: false,
     coordBuiltin: cbkNone, synchroBuiltin: sbkNone,
     reductionBuiltin: rbkNone, atomicsBuiltin: abkNone)

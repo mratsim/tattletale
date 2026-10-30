@@ -48,8 +48,6 @@ func registerStructuring*(reg: var PassRegistry) =
     run = structurePass)
 
 proc structurePass(m: CirModule): string =
-  ## Registry adapter over `structureModule`.
-  ## Changes the module contents in place, returns the refusal string.
   let (structured, err) = structureModule(m)
   if err.len == 0:
     m[] = structured[]
@@ -69,7 +67,6 @@ proc failing(ctx: StructCtx): bool =
   ctx.err.len > 0
 
 proc fail(ctx: var StructCtx, msg: string) =
-  ## Records the first refusal, naming the proc.
   if ctx.err.len == 0:
     ctx.err = "cirv2 structure: at " & ctx.fnName & ": " & msg
 

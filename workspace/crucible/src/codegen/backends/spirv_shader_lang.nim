@@ -197,7 +197,6 @@ proc initSpvLangCtx(): SpvLangCtx =
   result.caps.incl capShader
 
 proc failSpv(ctx: var SpvLangCtx, what: string) =
-  ## Records the first refusal, later ones dropped.
   if ctx.err.len == 0:
     ctx.err = "SPIR-V backend does not support: " & what
 

@@ -288,7 +288,6 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
   ## - the callee's locals rename fresh, `result` maps to `dest`
   ## - the trailing `ret` drops, its value moves into `dest` first
   ## - an early `ret` refuses: a `ret` left mid-body would return from the caller
-  # single exit: only the trailing ret may return
   var rets = 0
   proc countRets(ss: seq[CirStmt]) =
     for s in ss:

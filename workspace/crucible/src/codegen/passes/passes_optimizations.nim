@@ -167,8 +167,6 @@ proc foldIdentitiesStmts(ss: var seq[CirStmt]) =
       discard
 
 proc foldArithmeticIdentities(m: CirModule): string =
-  ## Folds the arithmetic identities in every proc body and module global.
-  ## Returns "" always, the pass is unconditional.
   for fn in m.procs:
     foldIdentitiesStmts(fn.body)
   foldIdentitiesStmts(m.globals)
@@ -180,7 +178,6 @@ proc foldArithmeticIdentities(m: CirModule): string =
 
 proc eliminateDeadLocals(m: CirModule): string =
   ## Deletes every local bound to a constant that nothing reads, to a fixpoint.
-  ## Returns "" always, the pass is unconditional.
   while m.procs.anyIt(removeDeadLocals(it)):
     discard
   return ""

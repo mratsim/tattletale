@@ -64,7 +64,6 @@ proc failing(ctx: FrontendCtx): bool =
   ctx.resolver.err.len > 0
 
 proc fail(ctx: var FrontendCtx, detail: string) =
-  ## Records the first refusal, naming the construct and the proc.
   if ctx.resolver.err.len == 0:
     ctx.resolver.err = "cirv2 frontend: at " & ctx.fnName & ": " & detail
 

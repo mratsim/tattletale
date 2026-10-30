@@ -138,8 +138,5 @@ proc assignBuiltinKindsStmts(ss: var seq[CirStmt]) =
       discard
 
 proc builtinKindAssignment(m: CirModule): string =
-  ## Kind-assigns every builtin symbol from the canonical name tables,
-  ## one pass over every proc body. Returns "" always, the pass is unconditional.
   for fn in m.procs:
     fn.body.assignBuiltinKindsStmts()
-  result = ""

@@ -43,7 +43,6 @@ proc failing(ctx: PrintCtx): bool =
   ctx.err.len > 0
 
 proc fail(ctx: var PrintCtx, detail: string) =
-  ## Records the first refusal, naming the proc.
   if ctx.err.len == 0:
     ctx.err = "cirv2 printer opencl: at " & ctx.fnName & ": " & detail
 
@@ -429,12 +428,10 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     if e.callee.kind == eSym and e.callee.builtin:
       case e.callee.name
       of "simd_shuffle":
-        # `sub_group_shuffle` takes the subgroup-relative index as `uint`,
-        # a `(uint)` cast wraps the second argument
+        # `sub_group_shuffle` takes the subgroup-relative index as `uint`
         return "sub_group_shuffle(" & args[0] & ", (uint)(" & args[1] & "))"
       of "simd_shuffle_xor":
-        # `sub_group_shuffle_xor` takes the xor mask as `uint`,
-        # a `(uint)` cast wraps the second argument
+        # `sub_group_shuffle_xor` takes the xor mask as `uint`, not the Nim `int`
         return "sub_group_shuffle_xor(" & args[0] & ", (uint)(" & args[1] & "))"
       else: discard
     if e.callee.kind == eSym and e.callee.builtin and

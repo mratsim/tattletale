@@ -34,8 +34,6 @@ func registerExplodeKernelStructs*(reg: var PassRegistry) =
     run = explodePass)
 
 proc explodePass(m: CirModule): string =
-  ## Registry adapter: `explodeKernelStructs` changes the module in place
-  ## and returns its refusal string, which the registry run signature forwards.
   result = explodeKernelStructs(m)
 
 
