@@ -436,7 +436,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       else: discard
     if e.callee.kind == eSym and e.callee.builtin and
         e.callee.name in ["min", "max", "abs"] and e.args.len > 0:
-      # float operands take the f-prefixed OpenCL names, integer operands keep the plain names (v1's per-type mapping)
+      # float operands take the f-prefixed OpenCL names, integer operands keep the plain names
       let at = getExprType(e.args[0])
       if at != nil and at.kind == ctFloat:
         let mapped = case e.callee.name
