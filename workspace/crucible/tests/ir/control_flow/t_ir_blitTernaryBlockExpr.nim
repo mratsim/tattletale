@@ -1,10 +1,8 @@
-## blitBlockExprs on if-expression block branches
+## if-expression with a block-expression branch lowers through a result temp
 ##
-## Test that a block-expression branch of an if-expression lowers to a blit
-## scope block plus temp before codegen, with the ternary reading the temp.
-##
-## - `cuda:` macro compile is the check, no expression block survives to codegen
-## - The emitted ternary reads the blit temp, matching `((0U < x) ? _blit_0 : 7U)`
+## Test that a block-expression branch of an if-expression lowers through one
+## result temp: each branch assigns the temp and the statement reads it.
+## No inline block survives to codegen.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -25,12 +23,15 @@ const kernelCode = cuda:
       7'u32
 
 when isMainModule:
-  # The block-expression branch must be blitted into a scope before the ternary:
-  # the emitted ternary reads the blit temp, never an inline block.
-  doAssert "{ // _blit_" in kernelCode,
-    "block-expression branch must be hoisted into a blit scope:\n" & kernelCode
-  doAssert "? _blit_" in kernelCode,
-    "ternary must consume the blit temp, not the inline block:\n" & kernelCode
-  doAssert "((0U < x) ? _blit_0 : 7U)" in kernelCode,
-    "ternary value semantics (block value in the then-branch):\n" & kernelCode
-  echo "  OK — if-expr block branch blitted into scope + ternary temp"
+  # Each branch assigns the block or literal value to a shared result temp.
+  # Codegen then reads that temp, never an inline block.
+  # Execution equivalence on Metal: x=5 -> 12, x=1 -> 4, x=0 -> 7.
+  doAssert "unsigned int iftmp;" in kernelCode,
+    "if-expression lowers through one result temp:\n" & kernelCode
+  doAssert "iftmp = ((x + 1U) * 2U);" in kernelCode,
+    "then branch assigns the block-expression value to the temp:\n" & kernelCode
+  doAssert "iftmp = 7U;" in kernelCode,
+    "else branch assigns its literal to the temp:\n" & kernelCode
+  doAssert "C[1] = iftmp;" in kernelCode,
+    "the statement reads the temp, never an inline block:\n" & kernelCode
+  echo "  OK — if-expr block branch lowers through the iftmp result temp"
