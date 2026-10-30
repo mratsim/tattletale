@@ -324,7 +324,7 @@ proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
       graph.scanStoredStmts(fn, s.scopeBody)
     of sEmit:
       # a store can hide in an emit: the verbatim text names the buffer,
-      # every parameter the text mentions counts as stored (v1's write-scan)
+      # every parameter the text mentions counts as stored
       var emitText = ""
       for part in s.emitParts:
         emitText.add part
@@ -704,7 +704,8 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     for i, a in e.args:
       if ctx.flavor == fvD3D12 and a.kind == eSym and
           ctx.bufferParams.contains(a.name):
-        # a buffer resource passes by name, its identity flows from the call site
+        # a buffer resource passes by name, each call site supplies the resource
+        # bound to its own register
         args.add a.name
       else:
         args.add ctx.spellCallArg(e.callee, i, a)
