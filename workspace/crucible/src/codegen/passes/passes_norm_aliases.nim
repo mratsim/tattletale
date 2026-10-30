@@ -88,10 +88,6 @@ func registerBuiltinKindAssignment*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc assignBuiltinKinds(e: CirExpr) =
-  ## Assigns the four typed builtin kinds of one builtin-marked symbol.
-  ## Reads the canonical name tables, value reads and call callees alike.
-  ##
-  ## The printers resolve a `none` builtin's native name in their own tables.
   e.coordBuiltin = coordBuiltinKind(e.name)
   e.synchroBuiltin = synchroBuiltinKind(e.name)
   e.reductionBuiltin = reductionBuiltinKind(e.name)
@@ -147,11 +143,7 @@ proc assignBuiltinKindsStmts(ss: var seq[CirStmt]) =
 
 proc builtinKindAssignment(m: CirModule): string =
   ## Kind-assigns every builtin symbol from the canonical name tables,
-  ## one pass over every proc body.
-  ##
-  ## Returns "" when clean, the first refusal otherwise.
-  ##
-  ## Registered by `registerBuiltinKindAssignment`.
+  ## one pass over every proc body. Returns "" always, the pass is unconditional.
   for fn in m.procs:
     fn.body.assignBuiltinKindsStmts()
   result = ""
