@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## GLSL 450 (Vulkan compute) printer: a structured CIRv2 module
-## rendered as GLSL source, table-driven over the closed type lattice.
+## rendered as GLSL source, table-driven over the closed set of type kinds.
 ##
 ## Emission contract:
 ## - one `{.global.}` kernel per module, the device functions it calls emitted alongside

@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Metal Shading Language (MSL) printer: a structured CIRv2 module to MSL source,
-## table-driven over the closed type lattice.
+## table-driven over the closed set of type kinds.
 ##
 ## Emission contract, one buffer slot per kernel parameter in order:
 ## - pointers: `device T* name [[buffer(n)]]`
@@ -64,7 +64,7 @@ proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
 
 ## `{.builtin.}` numeric conversions resolve to the MSL native call text:
 ## each entry is a format string whose `$1` stands for the call's argument list.
-## The CIRv2 lattice has no fp16 or bf16 kind: `float16` and `bfloat16` are `distinct uint16` types holding raw bits in `ushort` storage.
+## CIRv2 has no fp16 or bf16 type kind: `float16` and `bfloat16` are `distinct uint16` types holding raw bits in `ushort` storage.
 ## Value-producing conversions move the bit pattern, not the numeric value:
 ## - `toFp16(x)` prints `as_type<ushort>(half(x))`
 ## - `toBf16(x)` prints `as_type<ushort>((bfloat)(x))`

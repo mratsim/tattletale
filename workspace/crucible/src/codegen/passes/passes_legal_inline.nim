@@ -205,7 +205,7 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
 
 proc argsMatchParams(callee: CirProc, args: seq[CirExpr]): bool =
   ## True when every argument binds to its formal under the re-space rule:
-  ## same lattice type, a pointer formal accepts another-space pointer
+  ## same type, a pointer formal accepts another-space pointer
   ## with the same pointee.
   ##
   ## The pass splices only on a full match. On a mismatch the call stays:

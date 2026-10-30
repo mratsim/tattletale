@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## HLSL printer: a structured CIRv2 module rendered as HLSL compute source for DXC,
-## table-driven over the closed type lattice.
+## table-driven over the closed set of type kinds.
 ## Two resource-binding flavors share one language body, the binding section differs.
 ##
 ## Emission contract:

@@ -58,7 +58,7 @@ type
     abkAtomicFetchAdd
 
   CirTypeKind* = enum
-    ## Closed type lattice, derived once at the frontend boundary and never
+    ## Closed set of type kinds, derived once at the frontend boundary and never
     ## re-derived by passes.
     ctVoid
     ctBool
@@ -482,7 +482,7 @@ proc withSpace*(t: CirType, space: CirAddrSpace): CirType =
   result.origin = t.origin
 
 proc sameType*(a, b: CirType): bool =
-  ## Returns true when `a` and `b` are equal on the closed type lattice.
+  ## Returns true when `a` and `b` are the same type.
   ##
   ## Contract:
   ## - nominal struct types compare by name only, a struct is compatible with itself

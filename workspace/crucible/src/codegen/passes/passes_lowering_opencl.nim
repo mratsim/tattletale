@@ -80,7 +80,7 @@ proc openclHoistProgramScopeConstants(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 func cirSizeBytes(t: CirType): int =
-  ## Byte size of a lattice type, the C layout:
+  ## Byte size of a CIRv2 type, the C layout:
   ## scalars from their bits, arrays elementwise, structs fieldwise,
   ## pointers one machine word.
   case t.kind

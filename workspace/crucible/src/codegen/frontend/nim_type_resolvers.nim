@@ -7,8 +7,8 @@
 
 ## Nim types to CirType: the frontend boundary translation.
 ##
-## Each Nim type is translated exactly once to the closed CirType lattice
-## (ADR 0001), cached by the type's `getTypeInst` representation.
+## Each Nim type is translated exactly once to a `CirType` over the closed
+## set of type kinds (ADR 0001), cached by the type's `getTypeInst` representation.
 ##
 ## Struct names derive from the canonical type identity:
 ##
@@ -551,7 +551,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
       return nil
     result = tArray(int(len), r.resolveCirType(arr[2], ptrSpace))
   of ntyEnum:
-    # enums lower as their 32-bit storage, no enum type in the lattice
+    # enums lower as their 32-bit storage, the type kinds have no enum entry
     result = tUint(32)
   of ntyDistinct:
     result = r.resolveCirType(n.getTypeImpl()[0], ptrSpace)

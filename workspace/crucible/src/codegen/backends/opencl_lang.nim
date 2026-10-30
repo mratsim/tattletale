@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## OpenCL C printer: a structured CIRv2 module rendered as OpenCL C source,
-## table-driven over the closed type lattice.
+## table-driven over the closed set of type kinds.
 ##
 ## Emission contract:
 ## - every kernel of the module prints, in encounter order: one OpenCL program per module,

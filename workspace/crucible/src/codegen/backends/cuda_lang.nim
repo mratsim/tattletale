@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## CUDA C++ printer: a structured CIRv2 module to NVRTC-compilable CUDA C++ source,
-## table-driven over the closed type lattice, structured like the MSL printer.
+## table-driven over the closed set of type kinds, structured like the MSL printer.
 ##
 ## Signature and storage contract:
 ##

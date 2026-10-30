@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## WebGPU WGSL printer: a structured CIRv2 module rendered as WGSL source,
-## table-driven over the closed type lattice.
+## table-driven over the closed set of type kinds.
 ##
 ## Kernel parameter bindings, one `@group(0) @binding(i)` per parameter in host `store` packing order, output first:
 ## - device buffers declare `var<storage, read_write> name: array<T>;`, the engine binds them writable

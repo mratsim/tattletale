@@ -15,7 +15,7 @@
 ## | Invariant    | Contract                                                                                 |
 ## | ------------ | ---------------------------------------------------------------------------------------- |
 ## | Types        | every operator, literal, cast, and constructor names its operand or result type          |
-## | Types        | the two `asgn` sides are same-lattice types                                              |
+## | Types        | the two `asgn` sides are equal types (`sameType`)                                        |
 ## | Types        | the `asgn` lhs is an lvalue                                                              |
 ## | Types        | a `!=` against the zero u32 literal compares a bool (the WGSL bool launch ABI)           |
 ## | Control flow | `jmp` is forward-only and scoped (target `lab` textually later, same or enclosing scope) |
@@ -72,7 +72,7 @@ proc checkOperand(ctx: var VerifyCtx, e: CirExpr, path: string, side: string): C
     ctx.fail(path, getConstructName(e.kind), side & " has no derivable type")
 
 proc emitTypeDbg(t: CirType): string =
-  ## Type text for a rejection message: the struct name when present, otherwise the lattice kind.
+  ## Type text for a rejection message: the struct name when present, otherwise the type kind.
   if t.isNil:
     return "nil"
   if t.kind == ctStruct:

@@ -296,7 +296,7 @@ func provenanceSpace(e: CirExpr): CirAddrSpace =
     discard
 
 func zeroValue(t: CirType): CirExpr =
-  ## Zero value of a lattice type:
+  ## Zero value of a CIRv2 type:
   ##
   ## - 0 for numerics, false for bool, nil for pointers
   ## - element-wise zeros for arrays, all-zero fields for structs
@@ -832,7 +832,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
 # ═══════════════════════════════════════════════════════════════════════
 
 proc isLatticeScalar(ctx: var FrontendCtx, n: NimNode): bool =
-  ## True when the expression's type resolves to a lattice scalar: bool, int, uint, float.
+  ## True when the expression's type resolves to a primitive scalar kind: bool, int, uint, float.
   ## The primitive arithmetic applies to those.
   ##
   ## An overloaded operand (a register tile, an element-wise `-.`/`*.` proc)
@@ -844,14 +844,14 @@ proc isLatticeScalar(ctx: var FrontendCtx, n: NimNode): bool =
 
 proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## Operators: arithmetic and bitwise directly, comparisons normalized to
-  ## the lattice's four kinds (`>` and `>=` swap operands), boolean
+  ## the four primitive comparison kinds (`>` and `>=` swap operands), boolean
   ## `and`/`or` materialize into a temp through `ite` statements.
   let op = n[0].strVal
   case op
   of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
     if not (ctx.isLatticeScalar(n[1]) and ctx.isLatticeScalar(n[2])):
-      # overloaded operator over non-scalar operands: the lattice resolution
-      # picks the proc, lowered here as the call it is.
+      # overloaded operator over non-primitive-scalar operands: the check fails,
+      # overload resolution picks the proc, lowered here as a call.
       # Example: `m_i - m_ij` over (MT x 1) tiles. Each operand lowers once,
       # inside the call, since this check runs before operand lowering.
       return ctx.lowerCallValue(n[0], n)
@@ -1068,7 +1068,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return fltLit(n.floatVal, typ)
   of nnkHiddenStdConv:
-    # int/int32 share one lattice width, the standard conversion is the identity.
+    # int/int32 share one bit width, the standard conversion is the identity.
     # A float literal sems at its default width and converts to the context's
     # float width here: a literal conversion is exact, the literal re-types
     # to the conversion's target
@@ -1970,7 +1970,7 @@ proc lowerConstSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     result.add(hoists & @[constD(cirName, typ, value)])
 
 proc isScalarCompoundAssign(ctx: var FrontendCtx, n: NimNode): bool =
-  ## True when a statement-position compound assign's operands are lattice
+  ## True when a statement-position compound assign's operands are primitive
   ## scalars and the primitive arithmetic applies: the left operand goes
   ## through its `var` pointer when the target is a var parameter.
   ##
@@ -2060,7 +2060,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     return ctx.drainHoisted() & @[asgnS(lhs, rhsT)]
   of nnkInfix:
     # compound assignment reaches the statement position as an infix:
-    # lattice-scalar operands take the primitive arithmetic, any other `op=`
+    # primitive-scalar operands take the primitive arithmetic, any other `op=`
     # (`qk -.= m_ij` over register tiles) resolves to its overloaded proc
     # and lowers as a var-target call in statement position
     let op = n[0].strVal
