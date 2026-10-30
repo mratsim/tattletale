@@ -11,7 +11,7 @@ import std/unittest
 import workspace/crucible
 
 const globalConstantMsl = metal:
-  var counter: int32 = 0
+  var counter: int32 = 42
   proc bump(C: ptr UncheckedArray[int32]) {.global.} =
     C[0] = counter
 
@@ -19,7 +19,11 @@ test "a kernel reads the program-scope constant":
   var engine = newEngine(runMetal)
   engine.ingest(globalConstantMsl)
   let oDev = engine.allocDevice(int32, 1)
+  # Setup: this host copy puts 0 in the destination, the kernel overwrites
+  # it with the counter value 42.
+  let zero: int32 = 0
+  engine.copyToDeviceFromHost(oDev, addr zero, 1)
   engine.launchKernel("bump", oDev, ())
   var res: array[1, int32]
   engine.copyToHostFromDevice(addr res[0], oDev, 1)
-  check res[0] == 0
+  check res[0] == 42
