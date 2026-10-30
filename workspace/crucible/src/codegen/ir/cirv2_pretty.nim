@@ -228,7 +228,7 @@ proc renderProc*(fn: CirProc): string =
   result = b.lines.join("\n") & "\n"
 
 proc renderModule*(m: CirModule): string =
-  ## Renders a whole module: nominal types, the program-scope globals
+  ## Renders a whole module: nominal types, then the program-scope globals
   ## when any were hoisted, then procs.
   result = "(module " & m.name & ")\n"
   for t in m.types:
