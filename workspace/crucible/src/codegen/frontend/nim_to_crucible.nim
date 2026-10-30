@@ -1279,18 +1279,23 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let typ = ctx.resolver.resolveStructType(n.getTypeInst(), valueSpaces)
     if ctx.failing():
       return nil
-    # omitted fields zero-initialize, an empty initializer list is invalid C
-    if fields.len < typ.fields.len:
-      var ordered: seq[CirKv] = @[]
-      for f in typ.fields:
-        var value: CirExpr = nil
-        for kvf in fields:
-          if kvf.name == f.name:
-            value = kvf.value
-            break
-        ordered.add(if value != nil: kv(f.name, value)
-                    else: kv(f.name, zeroValue(f.typ)))
-      fields = ordered
+    # Nim binds constructor values by name, the target syntax binds positionally:
+    # normalize every constructor to the type's declaration order, omitted fields zero-initialize,
+    # an empty initializer list is invalid C
+    var ordered: seq[CirKv] = @[]
+    for f in typ.fields:
+      var value: CirExpr = nil
+      for kvf in fields:
+        if kvf.name == f.name:
+          value = kvf.value
+          break
+      ordered.add(if value != nil: kv(f.name, value)
+                  else: kv(f.name, zeroValue(f.typ)))
+    if ordered.len != fields.len:
+      # a written field matching no declared field would drop silently
+      ctx.fail("constructor fields do not match the type's fields: " & n.repr)
+      return nil
+    fields = ordered
     return oconstrE(typ, fields)
   of nnkExprColonExpr:
     # a named field outside a constructor: the name is compile-time
