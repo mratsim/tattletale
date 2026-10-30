@@ -25,6 +25,7 @@ import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
 import std/[macros, sets, strutils]
 import ../ir/ast_datatypes
+import ./emit_common
 
 type
   PrintCtx = object
@@ -43,12 +44,7 @@ type
     neededStructs: HashSet[string]
     ## Struct type names referenced by the emitted declarations and expressions.
 
-proc failing(ctx: PrintCtx): bool =
-  ctx.err.len > 0
-
-proc fail(ctx: var PrintCtx, detail: string) =
-  if ctx.err.len == 0:
-    ctx.err = "cirv2 printer wgsl: at " & ctx.fnName & ": " & detail
+const printerTarget = "wgsl"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -134,16 +130,6 @@ proc spellWgslPtrType(ctx: var PrintCtx, t: CirType): string =
 # Byte size (WGSL has no sizeof)
 # ═══════════════════════════════════════════════════════════════════════
 
-proc roundUpMultiple(v, multiple: int): int =
-  (v + multiple - 1) div multiple * multiple
-
-proc scalarByteSize(t: CirType): int =
-  ## Byte size of a scalar, 4 for bool (the launch ABI width), 0 for widthless kinds.
-  case t.kind
-  of ctBool: 4
-  of ctInt, ctUint, ctFloat: t.bits div 8
-  else: 0
-
 proc wgslByteSize(t: CirType): int
   ## Forward declaration, struct size recurses into members.
 
@@ -156,9 +142,9 @@ proc wgslAlign(t: CirType): int =
       align = max(align, wgslAlign(f.typ))
     align
   of ctArray: wgslAlign(t.aElem)
-  of ctVector: max(scalarByteSize(t.vElem), 1)
+  of ctVector: max(scalarByteSize(t.vElem, 4), 1)
   of ctPtr, ctAptr: 8
-  else: max(scalarByteSize(t), 1)
+  else: max(scalarByteSize(t, 4), 1)
 
 proc wgslByteSize(t: CirType): int =
   ## Byte size of a type, the `eSizeof` value, matching the host packing:
@@ -166,9 +152,9 @@ proc wgslByteSize(t: CirType): int =
   ## the widest member, an array sized as whole copies of its element.
   case t.kind
   of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    scalarByteSize(t)
+    scalarByteSize(t, 4)
   of ctVector:
-    scalarByteSize(t.vElem) * t.vN
+    scalarByteSize(t.vElem, 4) * t.vN
   of ctArray:
     wgslByteSize(t.aElem) * t.aN
   of ctStruct:
@@ -895,7 +881,4 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as WGSL source, the `backends_api` entry point.
   ## A printer refusal is a compile error naming the construct.
-  let (src, err) = printWgslModule(ctx.module)
-  if err.len > 0:
-    error(err)
-  result = src
+  codegenModule(printWgslModule(ctx.module))

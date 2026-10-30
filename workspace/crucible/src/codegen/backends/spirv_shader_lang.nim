@@ -33,6 +33,7 @@ import std/[algorithm, sets, strutils, tables, macros]
 import ../ir/cirv2_lang
 import ./spirv_encoder {.all.}
 import ../ir/ast_datatypes
+import ./emit_common
 
 template spvRefuse(what: string) =
   error("SPIR-V backend does not support: " & what)
@@ -120,20 +121,9 @@ proc spvTyKey(t: SpvTy): string =
 #  std430 layout
 # ═══════════════════════════════════════════════════════════════════════
 
-proc roundUpMultiple(v, multiple: int): int =
-  doAssert multiple > 0
-  (v + multiple - 1) div multiple * multiple
-
 type SpvLayout = object
   size*: int
   align*: int
-
-proc scalarByteSize(t: CirType): int =
-  doAssert t.kind in {ctInt, ctUint, ctFloat, ctBool}
-  if t.kind == ctBool:
-    1
-  else:
-    t.bits div 8
 
 proc std430Layout(t: SpvTy): SpvLayout =
   case t.kind
@@ -481,9 +471,6 @@ type
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
 proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType
 
-proc failFn(ctx: var SpvFnCtx, what: string): string =
-  what
-
 proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
   ## Function-storage variables must all precede the entry block's first load.
   ## Every sVar declares here, the declaration site stores its value.
@@ -746,24 +733,6 @@ proc cmpInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
                     elif operandTy.kind == ctInt: OpSLessThanEqual
                     else: OpULessThanEqual)
   else: result = OpNop
-
-proc chainValueRoot(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: CirExpr): tuple[ptrId: uint32, isPush: bool] =
-  ## Pointer of an addressable dot-chain root.
-  ##
-  ## - a local or a Function-storage pointer param is addressable
-  ## - a hoisted param value is not, push constants are read-only and bound
-  ##   as whole values
-  case root.kind
-  of eSym:
-    if fn.locals.hasKey(root.name):
-      return (fn.locals[root.name], false)
-    if fn.addrParams.hasKey(root.name):
-      return (fn.addrParams[root.name], false)
-    ctx.failSpv("member chain root is not an addressable local: " & root.name)
-    (0, false)
-  else:
-    ctx.failSpv("member chain root node " & $root.kind)
-    (0, false)
 
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   ## One expression, the SPIR-V id of its value.
@@ -1626,7 +1595,4 @@ proc codegen*(ctx: var GpuContext): seq[uint32] =
   ## the `backends_api` entry point.
   ## An encoder refusal raises, the macro layer turns it into a compile error
   ## naming the construct.
-  let (words, err) = printSpirvModule(ctx.module)
-  if err.len > 0:
-    error(err)
-  result = words
+  codegenModule(printSpirvModule(ctx.module))

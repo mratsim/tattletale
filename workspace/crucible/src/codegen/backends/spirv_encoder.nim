@@ -594,9 +594,6 @@ func opAccessChain(b: var SpvBuilder, resultType, base: uint32, indices: openArr
     ops.add i
   b.freshInst(OpAccessChain, ops)
 
-func opIAdd(b: var SpvBuilder, resultType, operand1, operand2: uint32): uint32 =
-  b.freshInst(OpIAdd, @[resultType, operand1, operand2])
-
 func opConvertUToPtr(b: var SpvBuilder, resultType, source: uint32): uint32 =
   b.freshInst(OpConvertUToPtr, @[resultType, source])
 

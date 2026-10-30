@@ -28,6 +28,7 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables]
 import ../ir/ast_datatypes
+import ./emit_common
 
 type
   PrintCtx = object
@@ -39,12 +40,7 @@ type
     ## False inside a device function: `__local` and `__constant` locals are
     ## kernel-only storage, a device function declaring one refuses.
 
-proc failing(ctx: PrintCtx): bool =
-  ctx.err.len > 0
-
-proc fail(ctx: var PrintCtx, detail: string) =
-  if ctx.err.len == 0:
-    ctx.err = "cirv2 printer opencl: at " & ctx.fnName & ": " & detail
+const printerTarget = "opencl"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -296,15 +292,6 @@ proc spellOpenclLit(e: CirExpr): string =
   of eTrue: result = "true"
   of eFalse: result = "false"
   else: result = "<opencl: not a literal>"
-
-proc spellVectorComponent(name: string): string =
-  ## OpenCL C component letter of a CIRv2 vector component name (`F0`..`F3`).
-  case name
-  of "F0": "x"
-  of "F1": "y"
-  of "F2": "z"
-  of "F3": "w"
-  else: ""
 
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   if ctx.failing():
@@ -814,7 +801,4 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as OpenCL C source, the `backends_api` entry point.
   ## A printer refusal is a compile error naming the construct.
-  let (src, err) = printOpenclModule(ctx.module)
-  if err.len > 0:
-    error(err)
-  result = src
+  codegenModule(printOpenclModule(ctx.module))

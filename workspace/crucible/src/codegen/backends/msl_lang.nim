@@ -28,6 +28,7 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
+import ./emit_common
 
 type
   PrintError* = object
@@ -44,12 +45,7 @@ type
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
-proc failing(ctx: PrintCtx): bool =
-  ctx.err.len > 0
-
-proc fail(ctx: var PrintCtx, detail: string) =
-  if ctx.err.len == 0:
-    ctx.err = "cirv2 printer msl: at " & ctx.fnName & ": " & detail
+const printerTarget = "msl"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -659,7 +655,4 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as Metal Shading Language (MSL) source, the `backends_api` entry point.
   ## A printer refusal is a compile error naming the construct.
-  let (src, err) = printMslModule(ctx.module)
-  if err.len > 0:
-    error(err)
-  result = src
+  codegenModule(printMslModule(ctx.module))

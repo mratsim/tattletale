@@ -24,6 +24,7 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, tables]
 import ../ir/ast_datatypes
+import ./emit_common
 
 type
   PrintCtx = object
@@ -34,12 +35,7 @@ type
     refBlocks: OrderedTable[string, string]
     ## Buffer-reference block declarations to emit, block name -> member text.
 
-proc failing(ctx: PrintCtx): bool =
-  ctx.err.len > 0
-
-proc fail(ctx: var PrintCtx, detail: string) =
-  if ctx.err.len == 0:
-    ctx.err = "cirv2 printer glsl: at " & ctx.fnName & ": " & detail
+const printerTarget = "glsl"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -156,18 +152,8 @@ proc spellGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
 # std430 size (GLSL has no sizeof)
 # ═══════════════════════════════════════════════════════════════════════
 
-proc roundUpMultiple(v, multiple: int): int =
-  (v + multiple - 1) div multiple * multiple
-
 proc std430Align(t: CirType): int
   ## Forward declaration, struct alignment recurses into members.
-
-proc scalarByteSize(t: CirType): int =
-  ## Byte size of a scalar, 1 for bool, 0 for widthless kinds.
-  case t.kind
-  of ctBool: 1
-  of ctInt, ctUint, ctFloat: t.bits div 8
-  else: 0
 
 proc std430Size(t: CirType): int =
   ## std430 byte size of a type, the `eSizeof` value.
@@ -1018,7 +1004,4 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as GLSL source, the `backends_api` entry point.
   ## A printer refusal is a compile error naming the construct.
-  let (src, err) = printGlslModule(ctx.module)
-  if err.len > 0:
-    error(err)
-  result = src
+  codegenModule(printGlslModule(ctx.module))

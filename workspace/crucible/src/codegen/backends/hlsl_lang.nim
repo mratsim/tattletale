@@ -59,6 +59,8 @@ import ../ir/ast_datatypes
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
+import ./emit_common
+import ./emit_common
 
 type HlslFlavor* = enum
   ## Resource-binding flavor of the emitted HLSL.
@@ -99,18 +101,7 @@ type
     ## Module procs by name, by-reference call arguments read callee
     ## parameter types here.
 
-proc failing(ctx: PrintCtx): bool =
-  ctx.err.len > 0
-
-proc fail(ctx: var PrintCtx, detail: string) =
-  if ctx.err.len == 0:
-    ctx.err = "cirv2 printer hlsl: at " & ctx.fnName & ": " & detail
-
-proc toPlainSym(name: string, typ: CirType): CirExpr =
-  ## Plain symbol node without a builtin kind, the rewrite target of every dissolved read.
-  result = CirExpr(kind: eSym, name: name, typ: typ, builtin: false,
-    coordBuiltin: cbkNone, synchroBuiltin: sbkNone,
-    reductionBuiltin: rbkNone, atomicsBuiltin: abkNone)
+const printerTarget = "hlsl"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -180,12 +171,6 @@ proc spellHlslDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
     result = spellHlslScalar(ctx, t.aElem) & ' ' & ident & "[" & $t.aN & "]"
   else:
     result = spellHlslScalar(ctx, t) & ' ' & ident
-
-proc roundUpMultiple(v, multiple: int): int =
-  ## Smallest multiple of `multiple` that is >= `v`
-  if multiple <= 1:
-    return v
-  result = (v + multiple - 1) div multiple * multiple
 
 proc spellBpName(t: CirType): string =
   ## Typedef name of the `vk::BufferPointer` alias for one buffer element type
@@ -516,15 +501,6 @@ proc spellHlslLit(e: CirExpr): string =
   of eTrue: result = "true"
   of eFalse: result = "false"
   else: result = "<hlsl: not a literal>"
-
-proc spellVectorComponent(name: string): string =
-  ## HLSL component letter of a CIRv2 vector component name (`F0`..`F3`).
-  case name
-  of "F0": "x"
-  of "F1": "y"
-  of "F2": "z"
-  of "F3": "w"
-  else: ""
 
 proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string
   ## Forward declaration, nested constructions flatten recursively.
@@ -1423,7 +1399,4 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
 proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
   ## Prints the module in `ctx` as HLSL source for `flavor`, the `backends_api` entry point.
   ## A printer refusal is a compile error naming the construct.
-  let (src, err) = printHlslModule(ctx.module, flavor)
-  if err.len > 0:
-    error(err)
-  result = src
+  codegenModule(printHlslModule(ctx.module, flavor))
