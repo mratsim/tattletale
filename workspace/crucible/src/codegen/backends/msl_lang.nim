@@ -485,7 +485,6 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     else:
       result = pad & calleeName & "(" & args.join(", ") & ");"
   of sAsm:
-    # inline assembly: the verbatim template spliced with the CIRv2 names
     var text = ""
     for i, part in s.asmParts:
       text.add(part)
