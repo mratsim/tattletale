@@ -1,6 +1,6 @@
 ## Lowering stage over CIRv2: shared, target-independent lowering passes.
-## Printers are table-driven (backends/), there is no per-backend
-## lowering pass file yet.
+## Per-target transforms register from the passes_lowering_<target> files,
+## the printers in backends/ are table-driven.
 
 import ./pass_datatypes
 
