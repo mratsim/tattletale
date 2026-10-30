@@ -54,9 +54,11 @@ proc freeDeviceImpl(h: WGPUBuffer) {.inline.} =
   if not h.isNil:
     wgpuBufferRelease(h)
 
-proc freeDeviceImpl(h: objc.ID) {.inline.} =
-  if not objc.isNil(h):
-    objc.release(h)
+when defined(macosx):
+  # objc.ID buffers only exist on Metal, `release` is macOS-only in objc_abi
+  proc freeDeviceImpl(h: objc.ID) {.inline.} =
+    if not objc.isNil(h):
+      objc.release(h)
 
 type
   DeviceMem*[H, T] = object
