@@ -61,7 +61,6 @@ proc getConstructName(k: CirExprKind | CirStmtKind): string =
   toLowerAscii($k)[1 ..^ 1]
 
 proc fail(ctx: var VerifyCtx, path: string, construct: string, detail: string) =
-  ## Records the first rejection message. Later violations keep the first.
   if ctx.err.len == 0:
     ctx.err = construct & " at " & ctx.fnName & "/" & path & ": " & detail
 
@@ -83,7 +82,6 @@ proc spellTypeDbg(t: CirType): string =
   return $t.kind
 
 proc sameOrFails(ctx: var VerifyCtx, a, b: CirType, path: string, construct: string, detail: string) =
-  ## Rejects when the two types are not same-lattice equal.
   if not sameType(a, b):
     ctx.fail(path, construct,
       detail & ": got " & spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
@@ -617,7 +615,6 @@ proc checkProc(fn: CirProc): string =
   if fn.isNil:
     return "missing proc"
   var ctx = VerifyCtx(fnName: fn.name, retType: fn.ret)
-  ctx.nextScopeId = 0
   var chain: ScopeChain = @[ctx.freshScope]
   for pi, p in fn.params:
     if p.typ.isNil or p.typ.kind == ctVoid:
@@ -659,6 +656,9 @@ proc verify*(fn: CirProc) =
 proc verifyAfter*(passName: string, fn: CirProc) =
   ## Pass-wrapper sugar: verifies `fn` and prefixes every rejection with the "[pass <name>] " prefix.
   ## The violation then surfaces at the pass that created it.
+  ##
+  ## Examples:
+  ##   verifyAfter("norm_ssa", fn)
   let msg = verifyMessage(fn, passName)
   if msg.len > 0:
     error(msg)
@@ -678,10 +678,11 @@ proc verifyMessage*(m: CirModule): string =
     if msg.len > 0:
       return "cirv2 verify: " & m.name & "/proc[" & $i & "]: " & msg
   for i, g in m.globals:
-    # program-scope declarations hoisted by a lowering pass: the var/const shape contract, no proc context (no labels, no return)
+    # program-scope declarations hoisted by a lowering pass: the walk checks
+    # var/const shape without a proc context, so label and return bookkeeping
+    # does not apply
     var gctx = VerifyCtx(fnName: m.name & "/globals[" & $i & "]",
       retType: CirType(kind: ctVoid))
-    gctx.nextScopeId = 0
     let chain: ScopeChain = @[gctx.freshScope]
     gctx.verifyStmt(g, "body", chain)
     if gctx.err.len > 0:

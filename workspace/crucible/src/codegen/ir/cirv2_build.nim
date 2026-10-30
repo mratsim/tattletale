@@ -57,7 +57,7 @@ proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
   CirType(kind: ctProc, params: @params, ret: ret)
 
 proc withOrigin*(t: CirType, n: NimNode): CirType =
-  ## Attaches the origin NimNode to a freshly built type (macro-time use).
+  ## Macro-time only: the origin survives `withSpace` copies but never participates in `sameType`.
   t.origin = n
   t
 
@@ -66,10 +66,10 @@ proc withOrigin*(t: CirType, n: NimNode): CirType =
 proc sym*(name: string, typ: CirType, builtin = false,
           coordBuiltin = cbkNone, synchroBuiltin = sbkNone,
           reductionBuiltin = rbkNone, atomicsBuiltin = abkNone): CirExpr =
-  ## One symbol reference. `builtin` marks a `{.builtin.}` read:
+  ## One symbol reference. `builtin` marks a `{.builtin.}` read.
   ##
-  ## - see `CirExpr.builtin` for the marker's meaning
-  ## - the alias canonicalization pass assigns the typed builtin kinds from the canonical name tables
+  ## Contract:
+  ## - the canonicalization pass fills the typed builtin kinds from the name tables
   ## - the printers dispatch on the kinds
   CirExpr(kind: eSym, name: name, typ: typ, builtin: builtin,
     coordBuiltin: coordBuiltin, synchroBuiltin: synchroBuiltin,

@@ -398,7 +398,7 @@ proc atomicsBuiltinKind*(name: string): AtomicsBuiltinKind =
 
 proc withSpace*(t: CirType, space: CirAddrSpace): CirType =
   ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.
-  ## Types are cache-shared refs: a caller never re-spaces in place, so the copy is the per-site instance.
+  ## CirType values are shared refs: a caller never re-spaces in place, so the copy is the per-site instance.
   doAssert t != nil and t.kind in {ctPtr, ctAptr}
   result = CirType(kind: t.kind)
   result.space = space
@@ -489,13 +489,11 @@ proc getExprType*(e: CirExpr): CirType =
       if t != nil and t.kind == ctAptr:
         result = t.pElem
       elif t != nil and t.kind == ctArray:
-        # element access through a dereferenced pointer to array
-        # pattern selects one element of the array that the dereference yields
+        # A pat over a base that a deref of a pointer-to-array produced reads one element of that array.
         result = t.aElem
       elif t != nil and t.kind == ctPtr and t.pElem != nil and
           t.pElem.kind == ctArray:
-        # element access through a pointer to array
-        # pattern selects one element of the array that the pointer names
+        # A pat over a pointer-to-array base reads one element of the array that the pointer names.
         result = t.pElem.aElem
   of eDot:
     if e.dotBase != nil:

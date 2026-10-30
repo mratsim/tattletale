@@ -5,11 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Cirv2 debug renderer: one node per line, s-expression shaped, in the Leng vocabulary
+## Cirv2 debug renderer for tests and pass development:
+## one node per line, s-expression shaped, in the Leng vocabulary
 ## (`(add Type a b)`, `(i +32)`, `aptr`, `ite`, `lab`/`jmp`).
-##
-## This is a debugging aid for tests and pass development, not a printer contract.
-## No target syntax, no stability guarantee beyond the node vocabulary itself.
 
 import cirv2_lang
 import std/strutils
@@ -23,7 +21,6 @@ proc add(b: var RenderBuf, text: string) =
   b.lines.add(spaces(b.indent) & text)
 
 proc open(b: var RenderBuf, text: string) =
-  ## Opens a compound node. Children indent one level deeper, `close` emits the matching `)`.
   b.add(text)
   b.indent.inc
 
@@ -62,7 +59,7 @@ proc renderType(t: CirType): string =
     result.add(") " & renderType(t.ret) & ")")
 
 proc renderExpr(e: CirExpr): string =
-  ## One expression, Leng-shaped, single line.
+  ## Leng rendering of one expression.
   if e.isNil:
     return "<no-expr>"
   case e.kind
@@ -126,7 +123,7 @@ proc renderRange(r: CirRange): string =
     result = "(range " & $r.lo & " " & $r.hi & ")"
 
 proc renderStmt(b: var RenderBuf, s: CirStmt) =
-  ## One statement node per line, compound nodes indent their children.
+  ## Compound nodes indent their children, branch bodies print under their header.
   if s.isNil:
     b.add("<no-stmt>")
     return
@@ -215,7 +212,7 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
     b.add(text & ")")
 
 proc renderProc*(fn: CirProc): string =
-  ## Renders one proc, one node per line.
+  ## Leng rendering of one proc.
   var b = RenderBuf()
   var header = "(proc " & fn.name
   for p in fn.params:
