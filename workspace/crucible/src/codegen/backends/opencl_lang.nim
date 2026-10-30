@@ -290,6 +290,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eNeg:
     return "(-" & ctx.printExpr(e.unOperand) & ")"
   of eCast, eConv:
+    if e.kind == eCast:
+      # a bit reinterpretation needs OpenCL's as_ builtin: a C cast between
+      # float and integer types converts the value, it does not move bits
+      let src = getExprType(e.castOperand)
+      let t = e.castType
+      if t.kind in {ctFloat, ctInt, ctUint} and src != nil and
+          src.kind in {ctFloat, ctInt, ctUint} and src.bits == t.bits and
+          ((t.kind == ctFloat) != (src.kind == ctFloat)):
+        return "as_" & emitOpenclScalar(t) & "(" & ctx.printExpr(e.castOperand) & ")"
     # a pointer cast includes the address space: the C compiler rejects
     # a silent change of the pointee's space
     let target = if e.castType.kind in {ctPtr, ctAptr}:

@@ -24,6 +24,16 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "a subgroup call under discard selects the subgroup extension":
       check "#extension GL_KHR_shader_subgroup_basic : enable" in discardScanGlsl
 
+    test "the discarded reduction does not stop the store, the kernel runs on the device":
+      var engine = newEngine(runVulkan)
+      engine.ingest(discardScanGlsl)
+      let oDev = engine.allocDevice(float32, 32)
+      engine.launchKernel("discardScanKernel", oDev, ())
+      var res: array[32, float32]
+      engine.copyToHostFromDevice(addr res[0], oDev, 32)
+      for lane in 0 ..< 32:
+        check res[lane] == float32(lane)
+
 when isMainModule:
   runTest()
   echo "t_glsl_discard_call_scan: all checks passed"
