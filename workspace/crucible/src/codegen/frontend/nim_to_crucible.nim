@@ -56,13 +56,8 @@ type
     ## Program-scope declarations in encounter order, `m.globals` of the module.
     nameCounts: Table[string, int]
     labels: int
-    loopStack: seq[tuple[exitL, contL: string]]
     hoisted: seq[CirStmt]
     ## Statements hoisted in front of the statement being lowered.
-    continueUsed: bool
-    breakTargets: Table[string, string]
-    ## Labeled block name to exit label, for `break label`.
-    ## Empty: no labeled block is open.
 
 proc failing(ctx: FrontendCtx): bool =
   ## True while a refusal is recorded, the walk unwinds through this guard.
@@ -1625,15 +1620,8 @@ proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   if ctx.failing():
     return @[]
   let exitL = ctx.freshLabel("lx")
-  let contL = ctx.freshLabel("lc")
-  let savedContinue = ctx.continueUsed
-  ctx.continueUsed = false
-  ctx.loopStack.add((exitL: exitL, contL: contL))
   let unroll = bodyMarksUnroll(n[1])
   let body = ctx.lowerStmt(n[1])
-  let contUsed = ctx.continueUsed
-  ctx.loopStack.del(ctx.loopStack.high)
-  ctx.continueUsed = savedContinue
   if ctx.failing():
     return @[]
   var guard: seq[CirStmt] = @[]
@@ -1653,8 +1641,7 @@ proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     guard = ctx.genCond(n[0], "", exitL, "")
     if ctx.failing():
       return @[]
-  let bodyTail = if contUsed: @[labS(contL)] else: @[]
-  result = @[loopS(guard & body & bodyTail, unroll), labS(exitL)]
+  result = @[loopS(guard & body, unroll), labS(exitL)]
 
 proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `for` over a literal range or `countup`:
@@ -1751,29 +1738,20 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   let stepT = operandLiteralTypedAs(stepV, varType)
   ctx.declareLocal(vars, sym(varName, varType))
   let exitL = ctx.freshLabel("lx")
-  let contL = ctx.freshLabel("lc")
   let varSym = sym(varName, varType)
-  let savedContinue = ctx.continueUsed
-  ctx.continueUsed = false
-  ctx.loopStack.add((exitL: exitL, contL: contL))
   let unroll = bodyMarksUnroll(n[^1])
   # start/stop/step hoists queued so far belong to the preamble, the body's own hoists drain per statement inside it
   let startHoists = ctx.drainHoisted()
   let body = ctx.lowerStmtBody(n[^1])
-  let bodyHoists = ctx.drainHoisted()
-  let contUsed = ctx.continueUsed
-  ctx.loopStack.del(ctx.loopStack.high)
-  ctx.continueUsed = savedContinue
   if ctx.failing():
     return @[]
+  let bodyHoists = ctx.drainHoisted()
   let cmp = if inclusive:
     leE(varSym, stopT)
   else:
     ltE(varSym, stopT)
   let guard = iteS(cmp, @[], @[jmpS(exitL)])
   var incr: seq[CirStmt] = @[]
-  if contUsed:
-    incr.add(labS(contL))
   if stepIsConst:
     incr.add(asgnS(varSym, addE(varType, varSym, stepT)))
   else:
@@ -2343,14 +2321,10 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let savedCounts = ctx.nameCounts
   let savedScopes = ctx.scopes
   let savedSpaces = ctx.localSpaces
-  let savedLoops = ctx.loopStack
-  let savedCont = ctx.continueUsed
   ctx.fnName = sanitizeIdent($fn[0])
   ctx.nameCounts = initTable[string, int]()
   ctx.scopes = @[ctx.moduleScope]
   ctx.localSpaces = @[ctx.moduleSpaces]
-  ctx.loopStack = @[]
-  ctx.continueUsed = false
   ctx.retType = ctx.resolver.resolveCirType(formals[0])
   if ctx.failing():
     return nil
@@ -2363,8 +2337,6 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   ctx.nameCounts = savedCounts
   ctx.scopes = savedScopes
   ctx.localSpaces = savedSpaces
-  ctx.loopStack = savedLoops
-  ctx.continueUsed = savedCont
   if ctx.failing():
     return nil
   result = procD(fnName, params, fnRet, body)
@@ -2398,8 +2370,6 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   let savedCounts = ctx.nameCounts
   let savedScopes = ctx.scopes
   let savedSpaces = ctx.localSpaces
-  let savedLoops = ctx.loopStack
-  let savedCont = ctx.continueUsed
   let savedProcsLen = ctx.procs.len
   let savedHoisted = ctx.hoisted
   # callee lowers with its own hoist queue: the caller's pending hoists
@@ -2409,8 +2379,6 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   ctx.nameCounts = initTable[string, int]()
   ctx.scopes = @[ctx.moduleScope]
   ctx.localSpaces = @[ctx.moduleSpaces]
-  ctx.loopStack = @[]
-  ctx.continueUsed = false
   ctx.retType = ctx.resolver.resolveCirType(formals[0])
   if ctx.failing():
     return
@@ -2422,8 +2390,6 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   ctx.nameCounts = savedCounts
   ctx.scopes = savedScopes
   ctx.localSpaces = savedSpaces
-  ctx.loopStack = savedLoops
-  ctx.continueUsed = savedCont
   # callee's own pending hoists close its body, the caller's queue resumes
   let calleeHoists = ctx.drainHoisted()
   ctx.hoisted = savedHoisted
