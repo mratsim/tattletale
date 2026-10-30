@@ -211,6 +211,10 @@ proc collectLocalReads(stmts: seq[CirStmt], reads: var HashSet[string]) =
       collectLocalReads(s.loopBody, reads)
     of sScope:
       collectLocalReads(s.scopeBody, reads)
+    of sAssume:
+      collectLocalReads(s.assumeCond, reads)
+    of sDiscard:
+      collectLocalReads(s.discardVal, reads)
     of sRet:
       collectLocalReads(s.retVal, reads)
     of sCall:
