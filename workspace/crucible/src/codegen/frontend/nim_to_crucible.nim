@@ -756,14 +756,19 @@ proc lowerMagicPrimitive(ctx: var FrontendCtx, callee: NimNode, call: NimNode, m
     return nil
 
 proc numericBuiltinCall(ctx: var FrontendCtx, calleeSym: NimNode, call: NimNode): CirExpr =
-  ## Lowers a `min`/`max`/`abs` call as a builtin call, no body harvest.
-  ## The printers use the per-type native name, v1's contract:
-  ## `fmax`/`fmin`/`fabs` on OpenCL floats. Nil for any other callee.
+  ## Lowers a `min`/`max`/`abs` call over scalar operands as a builtin call, no body harvest:
+  ##
+  ## - the printers use the per-type native name, v1's contract:
+  ##   `fmax`/`fmin`/`fabs` on OpenCL floats
+  ## - a user proc sharing the name, a `max` over tiles, say, takes the ordinary harvest path: the targets have no builtin over aggregates
   if calleeSym.strVal notin ["min", "max", "abs"]:
     return nil
   let fnType = ctx.resolveCalleeProcType(calleeSym)
   if ctx.failing():
     return nil
+  for p in fnType.params:
+    if p.kind notin {ctBool, ctInt, ctUint, ctFloat}:
+      return nil
   let args = ctx.lowerCallArgs(calleeSym, call)
   if ctx.failing():
     return nil
