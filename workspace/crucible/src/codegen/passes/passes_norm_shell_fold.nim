@@ -39,11 +39,6 @@ func registerShellFolding*(reg: var PassRegistry) =
     run = foldConstantShells)
 
 type
-  FoldError* = object
-    ## Refusal of the fold pass, names the proc and the cause.
-    procName*: string
-    msg*: string
-
   FoldCtx = object
     fnName: string
     err: string
