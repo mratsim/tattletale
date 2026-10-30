@@ -102,9 +102,6 @@ func deriveStructName*(n: NimNode): string =
   ##
   ## Example:
   ##   TensorView[float32, Shape, Stride] -> "TensorView_float32_Shape_Stride"
-  ##
-  ## Example:
-  ##   TensorView[float32, Shape, Stride] -> "TensorView_float32_Shape_Stride"
   case n.kind
   of nnkSym, nnkIdent:
     result = sanitizeIdent(n.strVal)
@@ -112,7 +109,7 @@ func deriveStructName*(n: NimNode): string =
     result = deriveStructName(n[0])
     for i in 1 ..< n.len:
       if n[i].kind in nnkIntLit .. nnkUInt64Lit:
-        # v1 name compatibility: static integer arguments join without a separator, `FixMe[8]` derives `FixMe8`
+        # static integer arguments join without a separator: `FixMe[8]` derives `FixMe8`
         result.add(deriveStructName(n[i]))
       else:
         result.add("_" & deriveStructName(n[i]))
