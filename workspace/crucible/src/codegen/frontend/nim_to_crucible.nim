@@ -1276,16 +1276,21 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     # normalize every constructor to the type's declaration order, omitted fields zero-initialize,
     # an empty initializer list is invalid C
     var ordered: seq[CirKv] = @[]
+    var matched = 0
     for f in typ.fields:
       var value: CirExpr = nil
       for kvf in fields:
         if kvf.name == f.name:
           value = kvf.value
           break
-      ordered.add(if value != nil: kv(f.name, value)
-                  else: kv(f.name, zeroValue(f.typ)))
-    if ordered.len != fields.len:
-      # a written field matching no declared field would drop silently
+      if value != nil:
+        inc matched
+        ordered.add(kv(f.name, value))
+      else:
+        ordered.add(kv(f.name, zeroValue(f.typ)))
+    if matched != fields.len:
+      # a written field matching no declared field would drop silently,
+      # omitted fields are legal and zero-fill above
       ctx.fail("constructor fields do not match the type's fields: " & n.repr)
       return nil
     fields = ordered
