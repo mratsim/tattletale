@@ -31,7 +31,6 @@ const
 
 import std/[algorithm, sets, strutils, tables, macros]
 import ../ir/cirv2_lang
-import ../ir/cirv2_pretty  # TEMP trace
 import ./spirv_encoder {.all.}
 import ../ir/ast_datatypes
 
@@ -1603,8 +1602,6 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
   ## Exactly one `{.global.}` kernel per module, the device functions it
   ## calls emitted alongside.
   ## A refusal names the construct otherwise.
-  when defined(cirv2TraceCir):
-    writeFile("/tmp/cirv2dbg/cir_dump.txt", renderModule(m))
   var lang = initSpvLangCtx()
   var kernels: seq[CirProc]
   for fn in m.procs:

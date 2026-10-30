@@ -57,7 +57,6 @@ import std/[macros, sets, strutils, tables]
 import ../ir/ast_datatypes
 
 import ../ir/cirv2_lang
-import ../ir/cirv2_pretty
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
 
@@ -1209,8 +1208,6 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   ## - fvVulkan: the `[[vk::push_constant]]` struct with every member offset locked
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  when defined(cirv2TraceCir):
-    writeFile("/tmp/cirv2dbg/hlsl_cir_dump.txt", renderModule(m))
   var ctx = PrintCtx(fnName: "<module>", flavor: flavor)
   var procsByName: Table[string, CirProc]
   for fn in m.procs:
