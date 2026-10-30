@@ -61,7 +61,6 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
 import ./emit_common
-import ./emit_common
 
 type HlslFlavor* = enum
   ## Resource-binding flavor of the emitted HLSL.
