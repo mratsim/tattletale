@@ -42,11 +42,6 @@ func registerInlineSplice*(reg: var PassRegistry) =
     run = inlineProcs)
 
 type
-  InlineError* = object
-    ## Refusal of the inline pass, names the proc and the cause.
-    procName*: string
-    msg*: string
-
   InlineCtx = ref object
     fnName: string
     err: string
