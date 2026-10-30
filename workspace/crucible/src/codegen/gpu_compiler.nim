@@ -16,6 +16,7 @@
 ## Pipeline:
 ## - the `metal:`-family macros lower the typed body to CIRv2
 ## - the pass registry runs in stage order: legalize -> normalize -> optimize -> lower -> validate
+## - optimization runs before lowering: the temp fold assumes sym stores are pure rebinds, and lowering hoists program-scope storage
 ## - `backends_api` dispatches the final module to the `*_lang` printer
 ##
 ## Modules: `src/codegen/frontend/nim_to_crucible`, the pass stages under

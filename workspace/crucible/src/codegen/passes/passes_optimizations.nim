@@ -361,6 +361,10 @@ proc stmtsHaveSideEffects(ss: seq[CirStmt], procsByName: Table[string, CirProc],
     of sAsm, sEmit:
       return true
     of sAsgn:
+      # A sym assignment rebinds procedure-local storage, so the rhs alone decides.
+      # Sound only while optimization runs before lowering:
+      # lowering hoists {.smem.} and {.const_mem.} locals into program scope,
+      # where a sym store writes memory that other statements observe.
       if s.lhs.kind != eSym:
         return true
       if exprHasSideEffects(s.rhs, procsByName, visiting):
