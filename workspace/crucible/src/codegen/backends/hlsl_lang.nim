@@ -351,7 +351,8 @@ proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
 
 proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
   ## Records one edge per call argument rooted at a parameter symbol:
-  ## `caller/arg -> callee/paramI`.
+  ## `caller/arg -> callee/paramI`. Call sites match `directCalls`:
+  ## statement calls plus assignment, declaration and return right-hand sides.
   for s in ss:
     case s.kind
     of sCall:
@@ -370,6 +371,14 @@ proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
       if s.rhs != nil and s.rhs.kind == eCall:
         graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.rhs.callee,
           callArgs: s.rhs.args)])
+    of sVar, sConst:
+      if s.init != nil and s.init.kind == eCall:
+        graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.init.callee,
+          callArgs: s.init.args)])
+    of sRet:
+      if s.retVal != nil and s.retVal.kind == eCall:
+        graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.retVal.callee,
+          callArgs: s.retVal.args)])
     of sIte:
       graph.scanCallStmts(fn, s.thenBody)
       graph.scanCallStmts(fn, s.elseBody)
@@ -377,12 +386,15 @@ proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
       graph.scanCallStmts(fn, s.loopBody)
     of sScope:
       graph.scanCallStmts(fn, s.scopeBody)
-    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
+    of sJmp, sLab, sAssume, sDiscard, sCase, sAsm, sEmit:
       discard
 
 proc classifyRwBuffers(graph: var CallGraph) =
   ## Marks every buffer parameter stored through, directly or transitively
   ## over the argument-flow edges: a read-write fixpoint over the call graph.
+  ## Each edge propagates read-write both ways:
+  ## - a store through the callee's parameter writes the caller's buffer
+  ## - a stored caller buffer flows into the callee's parameter
   graph.reached = graph.stored
   var grew = true
   while grew:
@@ -392,6 +404,9 @@ proc classifyRwBuffers(graph: var CallGraph) =
       let dst = e.callee & "/" & e.param
       if src in graph.reached and dst notin graph.reached:
         graph.reached.incl(dst)
+        grew = true
+      if dst in graph.reached and src notin graph.reached:
+        graph.reached.incl(src)
         grew = true
 
 proc checkDeviceFnRecursion(ctx: var PrintCtx, graph: CallGraph) =
