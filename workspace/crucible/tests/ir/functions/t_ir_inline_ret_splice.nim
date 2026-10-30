@@ -34,7 +34,7 @@ static:
   valueFn.isKernel = true
   let addvFn = procD("addv", @[param("a", tInt(32)), param("b", tInt(32))],
     tInt(32), @[retS(addE(tInt(32), sym("a", tInt(32)), sym("b", tInt(32))))])
-  addvFn.forceInline = true
+  addvFn.inline = true
   let (valueOut, valueErr) = splice(moduleD("probe", @[], @[valueFn, addvFn]))
   doAssert valueErr.len == 0, "trailing ret(expr) must splice: " & valueErr
   # spliced body: the call with the body plus `asgn r, a + b`
@@ -56,6 +56,6 @@ static:
     retS(nil),
     asgnS(sym("r", tInt(32)), intLit(2, tInt(32))),
   ])
-  earlyFn.forceInline = true
+  earlyFn.inline = true
   let (midOut, midErr) = splice(moduleD("probe", @[], @[midFn, earlyFn]))
   doAssert midErr.len > 0, "a mid-body ret must refuse, got: " & $midOut.procs[0].body.len

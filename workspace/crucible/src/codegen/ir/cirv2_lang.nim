@@ -334,8 +334,9 @@ type
     body*: seq[CirStmt]
     isKernel*: bool
     ## `{.global.}` proc: a compute entry point. The printers emit the backend's kernel qualifier and its argument ABI for it.
-    forceInline*: bool
-    ## `{.forceinline.}` proc, an inlining hint at emission.
+    inline*: bool
+    ## `{.inline.}` proc: the inline-splice pass splices its call sites into
+    ## the callers before printing.
     exportName*: string
     ## `{.exportc: "name".}` override of the emitted entry-point name, "" when the proc's own name is used.
     workgroup*: array[3, int]

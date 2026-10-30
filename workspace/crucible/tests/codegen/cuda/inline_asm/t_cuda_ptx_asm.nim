@@ -5,15 +5,15 @@
 import workspace/crucible
 
 const kernelCode = cuda:
-  proc add_co(a, b: uint32): uint32 {.device, forceinline.} =
+  proc add_co(a, b: uint32): uint32 {.device, inline.} =
     var res: uint32
     asm "\"add.cc.u32 %0, %1, %2;\" : \"=r\"(res) : \"r\"(a), \"r\"(b)"
     return res
-  proc add_ci(a, b: uint32): uint32 {.device, forceinline.} =
+  proc add_ci(a, b: uint32): uint32 {.device, inline.} =
     var res: uint32
     asm "\"addc.u32 %0, %1, %2;\" : \"=r\"(res) : \"r\"(a), \"r\"(b)"
     return res
-  proc add_cio(a, b: uint32): uint32 {.device, forceinline.} =
+  proc add_cio(a, b: uint32): uint32 {.device, inline.} =
     var res: uint32
     asm "\"addc.cc.u32 %0, %1, %2;\" : \"=r\"(res) : \"r\"(a), \"r\"(b)"
     return res

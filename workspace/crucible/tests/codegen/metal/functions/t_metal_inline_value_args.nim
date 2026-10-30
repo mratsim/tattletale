@@ -1,4 +1,4 @@
-## Metal: forceinline device fn taking value arguments, including a struct.
+## Metal: inline device fn taking value arguments, including a struct.
 ##
 ## Test that the spliced call keeps plain value-argument passing correct:
 ## the caller's variables feed the call and stay unchanged after it.
@@ -16,7 +16,7 @@ type Pack = object
   tag: int32
 
 const valueArgsMsl = metal:
-  proc weight(a: int32, p: Pack): int32 {.device, forceinline.} =
+  proc weight(a: int32, p: Pack): int32 {.device, inline.} =
     return a * p.tag + int32(p.atom)
 
   proc scaleKernel(output: ptr UncheckedArray[int32]) {.global.} =
@@ -27,7 +27,7 @@ const valueArgsMsl = metal:
     output[2] = v.tag
 
 proc runTest() =
-  suite "Metal - forceinline value arguments pass by fresh temps":
+  suite "Metal - inline value arguments pass by fresh temps":
     test "the call reads the caller's values, the caller's variables keep theirs":
       var engine = newEngine(runMetal)
       engine.ingest(valueArgsMsl)

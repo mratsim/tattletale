@@ -2250,9 +2250,9 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
   else:
     result.add(retS(nil))
 
-proc applyProcPragmas(fn: NimNode, p: CirProc) =
+proc applyProcPragmas(ctx: var FrontendCtx, fn: NimNode, p: CirProc) =
   ## Reads the public pragma surface off a proc definition: `global` marks the compute entry point,
-  ## `forceinline` the inlining hint, `exportc` the entry-point name override,
+  ## `inline` the splice mark, `exportc` the entry-point name override,
   ## `workgroup(x, y, z)` the baked launch shape. Other pragmas are legal and dropped.
   for prag in fn.pragma:
     case prag.kind
@@ -2260,10 +2260,12 @@ proc applyProcPragmas(fn: NimNode, p: CirProc) =
       case prag.strVal
       of "global":
         p.isKernel = true
-      of "forceinline", "inline":
-        # both marks splice the body into its callers, a device function
+      of "inline":
+        # an inline mark splices the body into its callers, a device function
         # cannot take the thread builtins as attributed parameters
-        p.forceInline = true
+        p.inline = true
+      of "forceinline":
+        ctx.fail("forceinline was merged into inline; use inline")
       else:
         discard
     of nnkExprColonExpr, nnkCall, nnkCommand:
@@ -2339,7 +2341,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
     return nil
   ctx.procKeys[defKey] = true
   ctx.declaredProcs[defKey] = result.name
-  applyProcPragmas(fn, result)
+  applyProcPragmas(ctx, fn, result)
   ctx.procs.add(result)
 
 proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
@@ -2389,7 +2391,7 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
     ctx.procs.setLen(savedProcsLen)
     return
   let harvested = procD(cirName, params, fnRet, calleeHoists & body)
-  applyProcPragmas(impl, harvested)
+  applyProcPragmas(ctx, impl, harvested)
   ctx.procs.add(harvested)
 
 # ═══════════════════════════════════════════════════════════════════════

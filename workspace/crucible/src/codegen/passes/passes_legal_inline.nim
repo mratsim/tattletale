@@ -7,7 +7,7 @@
 
 {.experimental: "codeReordering".}
 
-## Legalization: splicing the `{.inline.}` and `{.forceinline.}` call sites.
+## Legalization: splicing the `{.inline.}` call sites.
 ##
 ## A device function cannot take the thread builtins as attributed parameters,
 ## so an `{.inline.}` proc that reads them splices into its caller. Per call site:
@@ -37,7 +37,7 @@ func registerInlineSplice*(reg: var PassRegistry) =
   ## - depends on the builtin kind assignment, the kernel-only-reads check
   ##   below keys on the typed coordinate kinds that pass assigns
   reg.register("inlineProcs", pkTransform, phaseEarly,
-    "Splices the inline and forceinline call sites, deletes the uncalled inline procs",
+    "Splices the inline call sites, deletes the uncalled inline procs",
     dependsOn = @["builtinKindAssignment"],
     run = inlineProcs)
 
@@ -236,7 +236,7 @@ proc inlineCallsIn(ctx: InlineCtx, stmts: var seq[CirStmt], procsByName: Table[s
       if s[].rhs != nil and s[].rhs.kind == eCall and
           s[].rhs.callee.kind == eSym and procsByName.hasKey(s[].rhs.callee.name):
         let callee = procsByName[s[].rhs.callee.name]
-        let mustSplice = callee.forceInline or readsCoordBuiltin(callee.body)
+        let mustSplice = callee.inline or readsCoordBuiltin(callee.body)
         if not mustSplice:
           continue
         if not readsCoordBuiltin(callee.body) and
@@ -253,7 +253,7 @@ proc inlineCallsIn(ctx: InlineCtx, stmts: var seq[CirStmt], procsByName: Table[s
     of sCall:
       if s[].callCallee.kind == eSym and procsByName.hasKey(s[].callCallee.name):
         let callee = procsByName[s[].callCallee.name]
-        let mustSplice = callee.forceInline or readsCoordBuiltin(callee.body)
+        let mustSplice = callee.inline or readsCoordBuiltin(callee.body)
         if not mustSplice:
           continue
         if not readsCoordBuiltin(callee.body) and
@@ -381,7 +381,7 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
   return pre & body
 
 proc inlineProcs(m: CirModule): string =
-  ## Splices every `{.inline.}`/`{.forceinline.}` call site to a fixpoint.
+  ## Splices every `{.inline.}` call site to a fixpoint.
   ## Deletes the inline procs nothing calls.
   ## Returns "" when clean, else the first refusal.
   ##
@@ -394,7 +394,7 @@ proc inlineProcs(m: CirModule): string =
   for round in 0 ..< maxRounds:
     var spliced = false
     for fn in m.procs:
-      if fn.forceInline and not fn.isKernel:
+      if fn.inline and not fn.isKernel:
         continue
       ctx.fnName = fn.name
       if ctx.inlineCallsIn(fn.body, byName, 0):

@@ -19,6 +19,14 @@ template workgroup*(size: untyped): untyped {.pragma.}
   ##   64×1×1 on WebGPU
 template device*() {.pragma.}
 template forceinline*() {.pragma.}
+  ## Refused inlining hint. A proc marked with it fails compilation:
+  ##
+  ## - refusal message: `forceinline was merged into inline; use inline`
+  ## - replacement: `{.inline.}`
+  ##
+  ## The template survives Nim semantic analysis.
+  ## The frontend sees the pragma and refuses it by name.
+  ## Dropping the template would make Nim reject the unknown pragma first and never name the fix.
 
 template builtin*() {.pragma.}
   ## Marks a function, type, or variable as a builtin provided by the

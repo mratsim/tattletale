@@ -29,7 +29,7 @@ static:
       addE(tInt(32), sym("x", tInt(32)), intLit(1, tInt(32)))),
     retS(sym("x", tInt(32))),
   ])
-  bumpFn.forceInline = true
+  bumpFn.inline = true
   let callerFn = procD("caller", @[], tInt(32), @[
     varD("v", tInt(32), intLit(5, tInt(32))),
     asgnS(sym("r", tInt(32)),

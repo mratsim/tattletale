@@ -298,7 +298,7 @@ proc structureProc(fn: CirProc): tuple[fn: CirProc, err: string] =
   ## refusal naming a shape the frontend does not generate.
   var ctx = StructCtx(fnName: fn.name)
   let outFn = CirProc(name: fn.name, params: fn.params, ret: fn.ret,
-    isKernel: fn.isKernel, forceInline: fn.forceInline,
+    isKernel: fn.isKernel, inline: fn.inline,
     exportName: fn.exportName, workgroup: fn.workgroup)
   outFn.body = ctx.structurizeList(fn.body)
   result = (outFn, ctx.err)

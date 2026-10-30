@@ -12,15 +12,15 @@
 ## in `src/crucible_gpu_builtins.nim`, both re-exported here in full.
 ## Everything not exported there is internal, only compiler tests reach into the internals.
 ##
-## | Section      | Symbols                                                                                   |
-## | ------------ | ----------------------------------------------------------------------------------------- |
-## | Launch       | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`                                      |
-## | Scalar types | `float16`, `bfloat16`, `fp8e4m3`, `fp8e5m2`, `toFp16`, `toFp32`, `asFp16`, `asU16`        |
-## | Coordinates  | `ivec3`                                                                                   |
-## | Math         | `exp2`, `rsqrt`                                                                           |
-## | Atomics      | `atomicFetchAdd`                                                                          |
-## | Pragmas      | `global`, `workgroup`, `device`, `forceinline`, `smem`, `const_mem`, `builtin`, `exportc` |
-## | Comp. magic  | `CompileTarget`, `ccGetBackend`                                                           |
+## | Section      | Symbols                                                                              |
+## | ------------ | ------------------------------------------------------------------------------------ |
+## | Launch       | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`                                 |
+## | Scalar types | `float16`, `bfloat16`, `fp8e4m3`, `fp8e5m2`, `toFp16`, `toFp32`, `asFp16`, `asU16`   |
+## | Coordinates  | `ivec3`                                                                              |
+## | Math         | `exp2`, `rsqrt`                                                                      |
+## | Atomics      | `atomicFetchAdd`                                                                     |
+## | Pragmas      | `global`, `workgroup`, `device`, `inline`, `smem`, `const_mem`, `builtin`, `exportc` |
+## | Comp. magic  | `CompileTarget`, `ccGetBackend`                                                      |
 ##
 ## | Metal Shading language (MSL)     | CUDA                                                                         | OpenCL                                                                                                        | Vulkan (GLSL)             | WGSL                                                   |
 ## | -------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------ |

@@ -600,7 +600,7 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
         params.add spellMslType(p.typ, p.name, true)
   let ret = spellMslType(fn.ret, "", true)
   let prefix = if fn.isKernel: "kernel "
-    elif fn.forceInline: "inline "
+    elif fn.inline: "inline "
     else: ""
   let sig = prefix & ret & ' ' & name & '(' & params.join(", ") & ")"
   return sig & " {\n" & bodyTxt & '\n' & "}"

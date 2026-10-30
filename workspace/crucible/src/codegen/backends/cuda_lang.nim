@@ -573,7 +573,7 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
     # extern "C" keeps the unmangled name that the host runtime looks up
     prefix = "extern \"C\" __global__ "
   else:
-    if fn.forceInline:
+    if fn.inline:
       prefix = "__forceinline__ "
     prefix &= "__device__ "
   let sig = prefix & ret & ' ' & name & '(' & params.join(", ") & ")"

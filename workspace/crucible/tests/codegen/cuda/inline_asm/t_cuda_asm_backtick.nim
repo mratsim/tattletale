@@ -5,14 +5,14 @@
 import workspace/crucible
 
 const kernelCode = cuda:
-  proc asmAdd(a, b: uint32): uint32 {.device, forceinline.} =
+  proc asmAdd(a, b: uint32): uint32 {.device, inline.} =
     ## Backtick identifiers reference the proc params / locals directly.
     ## The asm body is ONE string literal (constraints inside, escaped
     ## quotes); backticked names resolve to Sym nodes.
     var res: uint32
     asm "\"add.u32 %0, %1, %2;\" : \"=r\"(`res`) : \"r\"(`a`), \"r\"(`b`)"
     return res
-  proc asmMul(a, b: float32): float32 {.device, forceinline.} =
+  proc asmMul(a, b: float32): float32 {.device, inline.} =
     ## The gemm_mma operand shape: "=f" output, "r" inputs.
     var res: float32
     asm "\"mul.f32 %0, %1, %2;\" : \"=f\"(`res`) : \"f\"(`a`), \"f\"(`b`)"

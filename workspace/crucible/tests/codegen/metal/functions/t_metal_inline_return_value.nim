@@ -1,4 +1,4 @@
-## Metal: forceinline device fn ending in an explicit `return expr`.
+## Metal: inline device fn ending in an explicit `return expr`.
 ##
 ## Test that the spliced call destination receives the returned value.
 ##
@@ -11,7 +11,7 @@ import std/unittest
 import workspace/crucible
 
 const inlineRetMsl = metal:
-  proc addv(a, b: int32): int32 {.device, forceinline.} =
+  proc addv(a, b: int32): int32 {.device, inline.} =
     return a + b
 
   proc scaleKernel(output: ptr UncheckedArray[int32]) {.global.} =
@@ -20,7 +20,7 @@ const inlineRetMsl = metal:
     output[1] = r
 
 proc runTest() =
-  suite "Metal - forceinline call splices the returned value":
+  suite "Metal - inline call splices the returned value":
     test "the call destination receives the value of a trailing return expr":
       var engine = newEngine(runMetal)
       engine.ingest(inlineRetMsl)
