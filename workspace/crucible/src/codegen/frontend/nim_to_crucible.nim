@@ -929,8 +929,10 @@ proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
       let setTrue = asgnS(sym(tmpName, boolT), trueE())
       let setFalse = asgnS(sym(tmpName, boolT), falseE())
       if op == "xor":
-        let b = bVal
-        result = neqE(a, b)
+        # no short-circuit: both operands evaluate. The right operand's
+        # hoisted statements queue before the comparison reads them.
+        ctx.hoisted.add(bHoists)
+        result = neqE(a, bVal)
         return result
       if op == "and":
         ctx.hoisted.add(varD(tmpName, boolT, falseE()))
