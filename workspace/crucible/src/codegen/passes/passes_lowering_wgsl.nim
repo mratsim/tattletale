@@ -31,16 +31,18 @@
 ## - a `caDevice`-space local refuses at the printer, the pass does not touch
 ##   device-space locals (WGSL locals are function or workgroup)
 ## - a threadgroup/constant local surviving in a nested scope or device
-##   function refuses at the printer, the relocation covers only the locals
-##   the printer hoisted to module scope before the extraction
+##   function refuses at the printer, the relocation covers top-level
+##   kernel-body locals only
 ## - a smem local with an initializer or a const_mem local without one
 ##   refuses in the pass (WGSL workgroup variables are zero-initialized),
 ##   the printer keeps both shape guards on the relocated declarations
 ## - a pointer local read as a value or before its address-of binding,
 ##   a pointer local rebound to a second pointee, a dissolved struct local
 ##   used whole or read through an unbound field path
-##   refuse in the pass, the printer keeps only the type-based pointer-local
-##   refusals for shapes that reach it untouched
+##   refuse in the pass
+##
+## Shapes that reach the printer untouched keep only the type-based
+## pointer-local refusals there.
 
 import std/[sets, tables]
 import ../ir/cirv2_lang
@@ -183,8 +185,8 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string 
         " used as a value, WGSL has no pointer values")
     return ""
   of eDot:
-    # an exact bound path splices to its leaf symbol here, the printer had
-    # emitted the leaf at the same site before the extraction
+    # an exact bound path splices to its leaf symbol here, one node rewrite
+    # replaces the whole dotted read
     let root = structRoot(e)
     if root != nil and root.name in ctx.structLocals:
       let path = dottedPath(e)
@@ -347,7 +349,7 @@ proc dissolvePointerLocals(m: CirModule): string =
 
 proc rewriteBoolReadsExpr(e: CirExpr, boolParams: HashSet[string]) =
   ## Replaces every read of a bool kernel parameter in place with the `name != 0u` comparison,
-  ## the type-preserving bool form the printer emitted before the extraction.
+  ## the type-preserving bool form.
   ##
   ## Expressions are refs, the rewrite applies to every sharer.
   if e.isNil:
