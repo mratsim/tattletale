@@ -40,6 +40,7 @@ import ./passes/passes_lowering_hlsl
 import ./passes/passes_lowering_glsl
 import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_msl
+import ./passes/passes_lowering_cuda
 import ./passes/passes_lowering_opencl
 import ./passes/layout_std430
 import ./passes/callgraph_analysis
@@ -93,6 +94,7 @@ macro codegenCuda(body: typed): string =
   reg.registerNormalizationPasses()
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
+  reg.registerCudaLoweringPasses()
   # feature scan after the last transform: analysis results are valid only
   # if no transform runs after them (the registry never invalidates)
   reg.registerCudaFeatureScan()
