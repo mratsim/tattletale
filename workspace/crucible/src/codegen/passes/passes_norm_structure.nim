@@ -82,10 +82,12 @@ proc structurizeList(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt]
 
 proc structurizeBlock(ctx: var StructCtx, stmts: seq[CirStmt], lo, hi: int): seq[CirStmt] =
   ## Structurizes the slice `stmts[lo ..< hi]`.
-  ## The slice's own labels form its label table. Only the slice's trailing
-  ## `jmp` may target a label outside the slice: that jump is the block's exit.
-  ## Dropping it lets the caller's continuation take over.
-  ## Any other jump refuses loudly.
+  ##
+  ## - the slice's own labels form its label table
+  ## - only the slice's trailing `jmp` may target a label outside the slice,
+  ##   that jump is the block's exit, dropping it lets the caller's
+  ##   continuation take over
+  ## - any other jump refuses loudly
   if ctx.failing():
     return
   var sub = ctx
