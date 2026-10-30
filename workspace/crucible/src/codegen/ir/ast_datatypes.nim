@@ -51,5 +51,5 @@ type
     ## Flow:
     ## - the `metal:`-family macros build the module through the frontend
     ## - the pass registry runs over the module
-    ## - `backends_api.codegenX` prints `ctx.module`, never mutating it
+    ## - `backends_api.codegen` prints `ctx.module`, never mutating it
     module*: CirModule

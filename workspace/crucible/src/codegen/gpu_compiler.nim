@@ -70,7 +70,7 @@ macro codegenMetal(body: typed): string =
   if perr.len > 0:
     error(perr)
   var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegenMetal())
+  result = newLit(ctx.codegen(backendMetal))
 
 macro metal*(body: untyped): string =
   ## Converts the body of this macro into Metal Shading Language (MSL) code.
@@ -100,7 +100,7 @@ macro codegenCuda(body: typed): string =
   if perr.len > 0:
     error(perr)
   var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegenCuda())
+  result = newLit(ctx.codegen(backendCuda))
 
 macro cuda*(body: untyped): string =
   ## Converts the body of this macro into CUDA code.
@@ -130,7 +130,7 @@ macro codegenOpenCL(body: typed): string =
   if perr.len > 0:
     error(perr)
   var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegenOpenCL())
+  result = newLit(ctx.codegen(backendOpenCL))
 
 macro opencl*(body: untyped): string =
   ## Converts the body of this macro into OpenCL C code.
@@ -164,7 +164,7 @@ macro codegenGLSL(body: typed): string =
   if perr.len > 0:
     error(perr)
   var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegenGLSL())
+  result = newLit(ctx.codegen(backendGLSL))
 
 macro glsl*(body: untyped): string =
   ## Converts the body of this macro into GLSL compute shader code.
@@ -224,7 +224,7 @@ macro codegenWebGpu(body: typed): string =
   if perr.len > 0:
     error(perr)
   var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegenWebGpu())
+  result = newLit(ctx.codegen(backendWebGpu))
 
 macro webgpu*(body: untyped): string =
   ## Converts the body of this macro into WebGPU WGSL code.
@@ -256,7 +256,12 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   if perr.len > 0:
     error(perr)
   var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegenHlsl(flavor))
+  # a macro's static param is not a compile-time constant in the macro body,
+  # so each flavor binds to the `codegen` static param as a literal below
+  let printed = case flavor
+    of fvD3D12: ctx.codegen(backendHlsl, fvD3D12)
+    of fvVulkan: ctx.codegen(backendHlsl, fvVulkan)
+  result = newLit(printed)
 
 macro hlsl*(flavor: untyped, body: untyped): string =
   ## Converts the body of this macro into HLSL compute shader code.
