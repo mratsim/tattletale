@@ -82,24 +82,33 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
   of ctVoid, ctBool, ctProc:
     discard
 
+proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, profile: ScanProfile) =
+  ## Records the flags one call's callee selects. Both call shapes share this helper: an expression call nests
+  ## the callee symbol in an `eCall` node, a statement call stores it in `s.callCallee`. One printer routine prints both shapes.
+  ##
+  ## Requires: an `abkAtomicFetchAdd` callee takes one pointer argument.
+  if callee.kind != eSym:
+    return
+  if callee.reductionBuiltin in {rbkReduceAdd, rbkReduceMax}:
+    f.subgroup = true
+  if profile.shuffleNames and callee.builtin and
+      callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
+    f.subgroupShuffle = true
+  if callee.atomicsBuiltin == abkAtomicFetchAdd:
+    var pt = getExprType(args[0])
+    if profile.atomicFloatViaPattern and not pt.isFloat32Pointee() and
+        args[0].kind == ePat:
+      let bt = getExprType(args[0].patBase)
+      if bt.isFloat32Pointee():
+        pt = bt
+    if pt.isFloat32Pointee():
+      f.atomicFloat = true
+
 proc scanExpr(e: CirExpr, f: var ModuleFeatures, profile: ScanProfile) =
   if e.isNil:
     return
   if e.kind == eCall and e.callee.kind == eSym:
-    if e.callee.reductionBuiltin in {rbkReduceAdd, rbkReduceMax}:
-      f.subgroup = true
-    if profile.shuffleNames and e.callee.builtin and
-        e.callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
-      f.subgroupShuffle = true
-    if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-      var pt = getExprType(e.args[0])
-      if profile.atomicFloatViaPattern and not pt.isFloat32Pointee() and
-          e.args[0].kind == ePat:
-        let bt = getExprType(e.args[0].patBase)
-        if bt.isFloat32Pointee():
-          pt = bt
-      if pt.isFloat32Pointee():
-        f.atomicFloat = true
+    scanCallee(e.callee, e.args, f, profile)
   for c in getExprChildren(e):
     scanExpr(c, f, profile)
   scanType(getExprType(e), f, profile)
@@ -128,12 +137,14 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
       if s.retVal != nil:
         scanExpr(s.retVal, f, profile)
     of sCall:
-      scanExpr(s.callCallee, f, profile)
+      scanCallee(s.callCallee, s.callArgs, f, profile)
       for a in s.callArgs:
         scanExpr(a, f, profile)
+    of sDiscard:
+      scanExpr(s.discardVal, f, profile)
     of sAssume:
       scanExpr(s.assumeCond, f, profile)
-    of sJmp, sLab, sDiscard, sCase, sAsm, sEmit:
+    of sJmp, sLab, sCase, sAsm, sEmit:
       discard
 
 proc scanModuleFeatures(m: CirModule, f: var ModuleFeatures, profile: ScanProfile) =
@@ -209,6 +220,16 @@ proc wgslScanFeatures(m: CirModule): string {.nimcall.} =
 
 proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures)
 
+proc scanCudaCallee(callee: CirExpr, f: var ModuleFeatures) =
+  ## Records the reduction kind one call's callee needs. Both call shapes share this helper: an expression call
+  ## nests the callee symbol in an `eCall` node, a statement call stores it in `s.callCallee`. One printer routine prints both shapes.
+  if callee.kind == eSym:
+    case callee.reductionBuiltin
+    of rbkReduceAdd, rbkReduceMax:
+      f.reductions.incl callee.reductionBuiltin
+    of rbkNone:
+      discard
+
 proc cudaScanExpr(e: CirExpr, f: var ModuleFeatures) =
   ## Collects the reduction kinds one expression tree needs.
   ## Warp-reduction templates emit at module scope when a proc body
@@ -216,13 +237,7 @@ proc cudaScanExpr(e: CirExpr, f: var ModuleFeatures) =
   if e.isNil:
     return
   if e.kind == eCall and e.callee.kind == eSym:
-    case e.callee.reductionBuiltin
-    of rbkReduceAdd:
-      f.reductions.incl rbkReduceAdd
-    of rbkReduceMax:
-      f.reductions.incl rbkReduceMax
-    of rbkNone:
-      discard
+    scanCudaCallee(e.callee, f)
   for ch in getExprChildren(e):
     cudaScanExpr(ch, f)
 
@@ -249,6 +264,7 @@ proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
     of sDiscard:
       cudaScanExpr(s.discardVal, f)
     of sCall:
+      scanCudaCallee(s.callCallee, f)
       for a in s.callArgs:
         cudaScanExpr(a, f)
     of sJmp, sLab, sCase, sAsm, sEmit:
