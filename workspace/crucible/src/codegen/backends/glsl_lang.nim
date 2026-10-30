@@ -189,18 +189,8 @@ proc std430Align(t: CirType): int =
   else: max(scalarByteSize(t), 1)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Module feature scan (extensions)
+# Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
-
-type
-  ModuleFeatures = object
-    fp64, fp16, int8, int16, int64: bool
-    subgroup: bool
-    subgroupShuffle: bool
-    atomicFloat: bool
-    controlFlow: bool
-    ## an `{.unroll.}` loop, `[[unroll]]` needs GL_EXT_control_flow_attributes
-
 
 proc glslCoordName(kind: CoordBuiltinKind): string =
   ## GLSL name of a canonical coordinate builtin kind: all six are native
@@ -214,125 +204,34 @@ proc glslCoordName(kind: CoordBuiltinKind): string =
   of cbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
   of cbkNone: ""
 
-proc scanType(t: CirType, f: var ModuleFeatures) =
-  if t.isNil:
-    return
-  case t.kind
-  of ctFloat:
-    if t.bits == 64:
-      f.fp64 = true
-    if t.bits == 16:
-      f.fp16 = true
-  of ctInt, ctUint:
-    if t.bits == 8:
-      f.int8 = true
-    if t.bits == 16:
-      f.int16 = true
-    if t.bits == 64:
-      f.int64 = true
-  of ctVector: scanType(t.vElem, f)
-  of ctArray: scanType(t.aElem, f)
-  of ctPtr, ctAptr: scanType(t.pElem, f)
-  of ctStruct:
-    for fl in t.fields:
-      scanType(fl.typ, f)
-  of ctVoid, ctBool, ctProc:
-    discard
-
-proc scanExpr(e: CirExpr, f: var ModuleFeatures) =
-  if e.isNil:
-    return
-  case e.kind
-  of eCall:
-    if e.callee.kind == eSym:
-      if e.callee.reductionBuiltin in {rbkReduceAdd, rbkReduceMax}:
-        f.subgroup = true
-      if e.callee.builtin and e.callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
-        f.subgroupShuffle = true
-      if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-        let pt = getExprType(e.args[0])
-        if pt != nil and pt.kind in {ctPtr, ctAptr} and
-            pt.pElem != nil and pt.pElem.kind == ctFloat and pt.pElem.bits == 32:
-          f.atomicFloat = true
-  else:
-    discard
-  for c in getExprChildren(e):
-    scanExpr(c, f)
-  scanType(getExprType(e), f)
-
-proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      scanType(s.declType, f)
-      if s.init != nil:
-        scanExpr(s.init, f)
-    of sAsgn:
-      scanExpr(s.lhs, f)
-      scanExpr(s.rhs, f)
-    of sIte:
-      scanExpr(s.cond, f)
-      scanStmts(s.thenBody, f)
-      scanStmts(s.elseBody, f)
-    of sLoop:
-      if s.unroll:
-        f.controlFlow = true
-      scanStmts(s.loopBody, f)
-    of sScope:
-      scanStmts(s.scopeBody, f)
-    of sRet:
-      if s.retVal != nil:
-        scanExpr(s.retVal, f)
-    of sCall:
-      scanExpr(s.callCallee, f)
-      for a in s.callArgs:
-        scanExpr(a, f)
-    of sAssume:
-      scanExpr(s.assumeCond, f)
-    of sJmp, sLab, sDiscard:
-      discard
-    of sCase, sAsm, sEmit:
-      discard
-
-proc scanModule(m: CirModule, f: var ModuleFeatures) =
-  for t in m.types:
-    scanType(t, f)
-  # feature scan: the globals a lowering pass relocated out of the kernel
-  # body keep their declarations and initializers
-  scanStmts(m.globals, f)
-  for fn in m.procs:
-    scanType(fn.ret, f)
-    for p in fn.params:
-      scanType(p.typ, f)
-    scanStmts(fn.body, f)
-
-proc spellExtensions(f: ModuleFeatures): string =
-  ## GLSL extension block, `#version 450` first.
+proc spellExtensions(features: ModuleFeatures): string =
+  ## GLSL extension block from the stored module feature scan
+  ## (`CirModule.features`, filled by the feature-scan pass), `#version 450` first.
   result = "#version 450\n"
   result.add "#extension GL_EXT_buffer_reference : enable\n"
   result.add "#extension GL_EXT_buffer_reference2 : enable\n"
-  if f.controlFlow:
+  if features.controlFlow:
     result.add "#extension GL_EXT_control_flow_attributes : require\n"
-  if f.fp64:
+  if features.fp64:
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
-  if f.fp16:
+  if features.fp16:
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n"
     result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
-  if f.int64:
+  if features.int64:
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"
-  if f.int16:
+  if features.int16:
     result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable\n"
     result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
-  if f.int8:
+  if features.int8:
     result.add "#extension GL_EXT_shader_explicit_int8 : enable\n"
     result.add "#extension GL_EXT_shader_8bit_storage : enable\n"
-  if f.subgroup:
+  if features.subgroup:
     result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
     result.add "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"
-  if f.subgroupShuffle:
+  if features.subgroupShuffle:
     result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
     result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
-  if f.atomicFloat:
+  if features.atomicFloat:
     result.add "#extension GL_EXT_shader_atomic_float : enable\n"
   result.add "\n"
 
@@ -887,9 +786,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
         ctx.requireRefBlock(p.typ.pElem)
     ctx.registerStmtRefBlocks(fn.body)
 
-  var features = ModuleFeatures()
-  scanModule(m, features)
-  result.src = spellExtensions(features)
+  result.src = spellExtensions(m.features)
 
   for name, member in ctx.refBlocks:
     result.src &= "layout(buffer_reference, std430) buffer " & name &

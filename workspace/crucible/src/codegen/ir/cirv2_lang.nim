@@ -341,6 +341,31 @@ type
     workgroup*: array[3, int]
     ## `{.workgroup(x, y, z)}` baked launch shape for the targets that compile it into the shader (Vulkan, WebGPU), all 0 when absent.
 
+  ModuleFeatures* = object
+    ## Feature metadata of one module, input to every text target's extension block.
+    ##
+    ## - the feature-scan pass fills the record after the target's last
+    ##   transform
+    ## - each printer maps the flags it reads to its own extension block
+    ## - flags a printer does not read stay unset
+    fp64*, fp16*: bool
+    ## A 64-bit / 16-bit float value occurs in the module.
+    int8*, int16*, int64*: bool
+    ## An 8-, 16-, or 64-bit integer value occurs in the module.
+    subgroup*: bool
+    ## A subgroup reduction (`reduceAdd`/`reduceMax`) occurs in the module.
+    subgroupShuffle*: bool
+    ## A cross-lane shuffle (`simd_shuffle`/`simd_shuffle_xor`) occurs in the module.
+    atomicFloat*: bool
+    ## A floating-point `atomicFetchAdd` on 32-bit float storage occurs in the module.
+    controlFlow*: bool
+    ## A `{.unroll.}`-marked loop occurs in the module.
+    reductions*: set[ReductionBuiltinKind]
+    ## Subgroup reduction kinds in use.
+    ##
+    ## - the warp-reduction template list of the targets that emit one
+    ##   template per kind
+
   CirModule* = ref object
     ## One CIRv2 module: nominal type declarations plus the proc set.
     name*: string
@@ -351,6 +376,13 @@ type
     ## lowering pass: `var` statements of a threadgroup or constant memory class.
     ## Populated in kernel-body order, emitted before the proc set.
     ## Empty on every module a lowering pass has not touched.
+    features*: ModuleFeatures
+    ## Feature scan result of the target's feature-scan analysis pass,
+    ## filled after that target's last transform.
+    ##
+    ## - valid only if no transform runs after the scan: the pass registry
+    ##   has no invalidation
+    ## - the printer reads it, it never rescans
 
 ## Canonical name -> builtin-kind tables. The alias canonicalization pass reads
 ## them after it renames an alias to its canonical name. The cross-check against

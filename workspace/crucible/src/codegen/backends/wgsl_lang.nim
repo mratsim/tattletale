@@ -169,53 +169,6 @@ proc wgslByteSize(t: CirType): int =
   of ctProc: 0
 
 # ═══════════════════════════════════════════════════════════════════════
-# Module feature scan
-# ═══════════════════════════════════════════════════════════════════════
-
-type
-  ModuleFeatures = object
-    fp16: bool
-
-proc scanType(t: CirType, f: var ModuleFeatures) =
-  if t.isNil:
-    return
-  case t.kind
-  of ctFloat:
-    if t.bits == 16:
-      f.fp16 = true
-  of ctVector: scanType(t.vElem, f)
-  of ctArray: scanType(t.aElem, f)
-  of ctPtr, ctAptr: scanType(t.pElem, f)
-  of ctStruct:
-    for fl in t.fields:
-      scanType(fl.typ, f)
-  of ctVoid, ctBool, ctInt, ctUint, ctProc:
-    discard
-
-proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      scanType(s.declType, f)
-      if s.init != nil:
-        scanType(getExprType(s.init), f)
-    of sAsgn:
-      scanType(getExprType(s.lhs), f)
-      scanType(getExprType(s.rhs), f)
-    of sIte:
-      scanStmts(s.thenBody, f)
-      scanStmts(s.elseBody, f)
-    of sLoop:
-      scanStmts(s.loopBody, f)
-    of sScope:
-      scanStmts(s.scopeBody, f)
-    of sRet:
-      if s.retVal != nil:
-        scanType(getExprType(s.retVal), f)
-    of sCall, sJmp, sLab, sDiscard, sAssume, sCase, sAsm, sEmit:
-      discard
-
-# ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -771,16 +724,9 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
     if s.kind in {sVar, sConst}:
       ctx.registerTypeStructs(s.declType)
 
-  var features = ModuleFeatures()
-  for t in m.types:
-    scanType(t, features)
-  for fn in m.procs:
-    scanType(fn.ret, features)
-    for p in fn.params:
-      scanType(p.typ, features)
-    scanStmts(fn.body, features)
-  scanStmts(m.globals, features)
-  if features.fp16:
+  # `enable f16` from the stored module feature scan
+  # (`CirModule.features`, filled by the feature-scan pass)
+  if m.features.fp16:
     result.src = "enable f16;\n\n"
 
   # device functions first, their bodies register the structs they reference

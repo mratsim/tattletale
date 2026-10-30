@@ -121,15 +121,8 @@ proc spellOpenclPtrField(t: CirType, ident: string): string =
   result = qualifier & spellOpenclTypeBare(t) & ' ' & ident
 
 # ═══════════════════════════════════════════════════════════════════════
-# Module feature scan (extensions)
+# Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
-
-type
-  ModuleFeatures = object
-    fp64, fp16: bool
-    subgroup: bool
-    atomicFloat: bool
-
 
 proc openclCoordComponent(kind: CoordBuiltinKind, field: string): string =
   ## OpenCL C call of one canonical coordinate builtin component, the dimension as a literal.
@@ -168,94 +161,17 @@ proc atomicOperandPtr(e: CirExpr): CirType =
   if t != nil and t.kind in {ctPtr, ctAptr}:
     return t
 
-proc scanType(t: CirType, f: var ModuleFeatures) =
-  if t.isNil:
-    return
-  case t.kind
-  of ctFloat:
-    if t.bits == 64:
-      f.fp64 = true
-    if t.bits == 16:
-      f.fp16 = true
-  of ctVector: scanType(t.vElem, f)
-  of ctArray: scanType(t.aElem, f)
-  of ctPtr, ctAptr: scanType(t.pElem, f)
-  of ctStruct:
-    for fl in t.fields:
-      scanType(fl.typ, f)
-  of ctVoid, ctBool, ctInt, ctUint, ctProc:
-    discard
-
-proc scanExpr(e: CirExpr, f: var ModuleFeatures) =
-  if e.isNil:
-    return
-  case e.kind
-  of eCall:
-    if e.callee.kind == eSym:
-      if e.callee.reductionBuiltin in {rbkReduceAdd, rbkReduceMax}:
-        f.subgroup = true
-      if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-        let pt = atomicOperandPtr(e.args[0])
-        if pt != nil and pt.pElem != nil and pt.pElem.kind == ctFloat and
-            pt.pElem.bits == 32:
-          f.atomicFloat = true
-  else:
-    discard
-  for c in getExprChildren(e):
-    scanExpr(c, f)
-  scanType(getExprType(e), f)
-
-proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      scanType(s.declType, f)
-      if s.init != nil:
-        scanExpr(s.init, f)
-    of sAsgn:
-      scanExpr(s.lhs, f)
-      scanExpr(s.rhs, f)
-    of sIte:
-      scanExpr(s.cond, f)
-      scanStmts(s.thenBody, f)
-      scanStmts(s.elseBody, f)
-    of sLoop:
-      scanStmts(s.loopBody, f)
-    of sScope:
-      scanStmts(s.scopeBody, f)
-    of sRet:
-      if s.retVal != nil:
-        scanExpr(s.retVal, f)
-    of sCall:
-      scanExpr(s.callCallee, f)
-      for a in s.callArgs:
-        scanExpr(a, f)
-    of sAssume:
-      scanExpr(s.assumeCond, f)
-    of sJmp, sLab, sDiscard:
-      discard
-    of sCase, sAsm, sEmit:
-      discard
-
-proc scanModule(m: CirModule, f: var ModuleFeatures) =
-  for t in m.types:
-    scanType(t, f)
-  scanStmts(m.globals, f)
-  for fn in m.procs:
-    scanType(fn.ret, f)
-    for p in fn.params:
-      scanType(p.typ, f)
-    scanStmts(fn.body, f)
-
-proc spellExtensions(f: ModuleFeatures): string =
-  ## OpenCL C extension pragma block, one line per feature in use.
-  if f.fp64:
+proc spellExtensions(features: ModuleFeatures): string =
+  ## OpenCL C extension pragma block from the stored module feature scan
+  ## (`CirModule.features`, filled by the feature-scan pass), one line per
+  ## feature in use.
+  if features.fp64:
     result.add "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"
-  if f.fp16:
+  if features.fp16:
     result.add "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n"
-  if f.atomicFloat:
+  if features.atomicFloat:
     result.add "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n"
-  if f.subgroup:
+  if features.subgroup:
     result.add "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n"
   result.add "\n"
 
@@ -713,9 +629,7 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     ctx.fail("no kernel in the module")
     return ("", ctx.err)
 
-  var features = ModuleFeatures()
-  scanModule(m, features)
-  result.src = spellExtensions(features)
+  result.src = spellExtensions(m.features)
 
   for t in m.types:
     if t.kind != ctStruct:

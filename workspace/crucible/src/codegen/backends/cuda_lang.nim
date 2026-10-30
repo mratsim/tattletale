@@ -511,55 +511,6 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
     i.inc
   return lines.join("\n")
 
-# ═══════════════════════════════════════════════════════════════════════
-# Warp reductions
-# ═══════════════════════════════════════════════════════════════════════
-
-proc usesWarpReduceStmts(ss: seq[CirStmt], kinds: var set[ReductionBuiltinKind])
-
-proc usesWarpReduceExpr(e: CirExpr, kinds: var set[ReductionBuiltinKind]) =
-  ## Collects the warp-reduction kinds one statement tree needs, templates emit at module scope when a proc body references them.
-  if e.isNil:
-    return
-  if e.kind == eCall and e.callee.kind == eSym:
-    case e.callee.reductionBuiltin
-    of rbkReduceAdd:
-      kinds.incl rbkReduceAdd
-    of rbkReduceMax:
-      kinds.incl rbkReduceMax
-    of rbkNone:
-      discard
-  for ch in getExprChildren(e):
-    usesWarpReduceExpr(ch, kinds)
-
-proc usesWarpReduceStmts(ss: seq[CirStmt], kinds: var set[ReductionBuiltinKind]) =
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      usesWarpReduceExpr(s.init, kinds)
-    of sAsgn:
-      usesWarpReduceExpr(s.lhs, kinds)
-      usesWarpReduceExpr(s.rhs, kinds)
-    of sIte:
-      usesWarpReduceExpr(s.cond, kinds)
-      usesWarpReduceStmts(s.thenBody, kinds)
-      usesWarpReduceStmts(s.elseBody, kinds)
-    of sLoop:
-      usesWarpReduceStmts(s.loopBody, kinds)
-    of sScope:
-      usesWarpReduceStmts(s.scopeBody, kinds)
-    of sAssume:
-      usesWarpReduceExpr(s.assumeCond, kinds)
-    of sRet:
-      usesWarpReduceExpr(s.retVal, kinds)
-    of sDiscard:
-      usesWarpReduceExpr(s.discardVal, kinds)
-    of sCall:
-      for a in s.callArgs:
-        usesWarpReduceExpr(a, kinds)
-    of sJmp, sLab, sCase, sAsm, sEmit:
-      discard
-
 proc spellWarpReduceTemplate(kind: ReductionBuiltinKind): string =
   ## Butterfly warp-reduction template for one reduction kind: CUDA has no
   ## float warp-reduce intrinsic, the tree walks the xor mask 16/8/4/2/1.
@@ -654,9 +605,9 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
     src &= "__constant__ " & decl & ";\n"
   if m.globals.len > 0:
     src &= "\n"
-  var reduceKinds: set[ReductionBuiltinKind] = {}
-  for fn in m.procs:
-    usesWarpReduceStmts(fn.body, reduceKinds)
+  # warp-reduction template set from the stored module feature scan
+  # (`CirModule.features`, filled by the feature-scan pass)
+  let reduceKinds = m.features.reductions
   if rbkReduceAdd in reduceKinds:
     src &= spellWarpReduceTemplate(rbkReduceAdd)
   if rbkReduceMax in reduceKinds:
