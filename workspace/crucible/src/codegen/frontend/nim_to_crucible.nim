@@ -1445,13 +1445,16 @@ proc genCondBoolExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
 proc branchOn(ctx: var FrontendCtx, cond: CirExpr, trueL, falseL, fallL: string): seq[CirStmt] =
   ## Guarded transfer on a ready boolean expression:
   ## - jumps to `trueL`/`falseL`, one explicit `jmp` per taken side
-  ## - falls through (empty branch) to the other when that one is the textual follower
-  # an empty target name means fall-through into the next statement.
+  ## - an empty target name means fall-through, with no label to name
   # A named target always gets an explicit jump: the verifier's lab/jmp
-  # model has no fall-through into a lab
-  if fallL.len == 0 and trueL.len == 0:
+  # model has no fall-through into a lab.
+  # Both targets empty leaves no branch to take, that fails loudly.
+  if trueL.len == 0 and falseL.len == 0:
+    ctx.fail("branchOn: both branch targets are empty")
+    return
+  if trueL.len == 0:
     result.add(iteS(notE(cond), @[jmpS(falseL)], @[]))
-  elif fallL.len == 0 and falseL.len == 0:
+  elif falseL.len == 0:
     result.add(iteS(cond, @[jmpS(trueL)], @[]))
   else:
     result.add(iteS(cond, @[jmpS(trueL)], @[jmpS(falseL)]))
@@ -1459,7 +1462,7 @@ proc branchOn(ctx: var FrontendCtx, cond: CirExpr, trueL, falseL, fallL: string)
 proc genLeaf(ctx: var FrontendCtx, n: NimNode, trueL, falseL, fallL: string): seq[CirStmt] =
   ## Guarded transfer for a pure boolean leaf:
   ## - jumps to `trueL`/`falseL`, one explicit `jmp` per taken side
-  ## - falls through (empty branch) to the other when that one is the textual follower
+  ## - an empty target name means fall-through, with no label to name
   ## - the leaf's own hoisted statements (call bindings) prefix the guard
   let cond = ctx.lowerExpr(n)
   if ctx.failing():
@@ -1471,7 +1474,7 @@ proc genCond(ctx: var FrontendCtx, n: NimNode, trueL, falseL, fallL: string): se
   ## Compiles a condition against two targets over forward-only scoped
   ## `lab`/`jmp`:
   ## - jump to `trueL` when true, to `falseL` when false
-  ## - fall through when that target equals `fallL`
+  ## - an empty target name means fall-through, with no label to name
   ## - `and` chains on the false target, `or` on the true target, `not` swaps targets
   ## - each join is a fresh shared label, a nested boolean stays flat
   if ctx.failing():
@@ -1654,7 +1657,17 @@ proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   if ctx.failing():
     return @[]
   var guard: seq[CirStmt] = @[]
-  if n[0].kind == nnkSym and n[0].strVal == "true":
+  let condNode = unwrapConv(n[0])
+  if containsShortCircuit(condNode) and containsCall(condNode):
+    # a call-bearing and/or tree has no named target for the body entry
+    # its chain template expresses fall-through only per operand
+    # value lowering materializes the tree into one boolean temp
+    # guard lowering breaks on that temp
+    let condV = ctx.lowerExpr(condNode)
+    if ctx.failing():
+      return @[]
+    guard = ctx.drainHoisted() & @[iteS(notE(condV), @[jmpS(exitL)], @[])]
+  elif n[0].kind == nnkSym and n[0].strVal == "true":
     discard
   else:
     guard = ctx.genCond(n[0], "", exitL, "")
