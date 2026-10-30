@@ -47,3 +47,11 @@ static:
         st.rhs.kind == eAdd:
       vWritten = true
   doAssert not vWritten, "the caller's variable must not be written by the spliced body"
+  # Positive check: bump's self-add must reach the call position, written
+  # `argTemp = argTemp + 1` over one generated temp name
+  var selfAdd = false
+  for st in outM.procs[0].body:
+    if st.kind == sAsgn and st.lhs.kind == eSym and st.rhs.kind == eAdd and
+        st.rhs.left.kind == eSym and st.rhs.left.name == st.lhs.name:
+      selfAdd = true
+  doAssert selfAdd, "the spliced body must assign the incremented temp at the call position"
