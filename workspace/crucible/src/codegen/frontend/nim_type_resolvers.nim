@@ -12,8 +12,11 @@
 ##
 ## Struct names derive from the canonical type identity:
 ##
-## - readable base: the canonical generic instantiation's name
-## - suffix: a 7-character base58 hash of the canonical type text
+## - short base: the head type's name, a single scalar generic argument keeps
+##   its short form (`Meter[float32]` derives `Meter_f32`)
+## - two or more generic arguments and tuple member types fold into the hash
+## - suffix: a 7-character base58 hash of the canonical type text, unique per
+##   type identity
 ## - a type alias and the instantiation it names share one struct
 ## Widths use the crucible convention: Nim `int`/`uint` lower to 32 bits.
 ##
@@ -93,29 +96,61 @@ func mangleOperatorName*(s: string): string =
     else:
       special "X" & toHex(ord(c), 2)
 
+func scalarShortName(n: NimNode): string =
+  ## Short name of a builtin scalar type node used as a generic argument:
+  ## `float32` renders `f32`, Nim `int` renders `i32` per the crucible
+  ## convention that lowers Nim `int` to 32 bits.
+  ## Empty when `n` is not a builtin scalar.
+  case n.typeKind
+  of ntyBool: result = "bool"
+  of ntyInt8: result = "i8"
+  of ntyInt16: result = "i16"
+  of ntyInt, ntyInt32: result = "i32"
+  of ntyInt64: result = "i64"
+  of ntyUInt8: result = "u8"
+  of ntyUInt16: result = "u16"
+  of ntyUInt, ntyUInt32: result = "u32"
+  of ntyUInt64: result = "u64"
+  of ntyFloat32: result = "f32"
+  of ntyFloat, ntyFloat64: result = "f64"
+  else: result = ""
+
 func deriveStructName*(n: NimNode): string =
-  ## Returns the readable base of a struct name: a generic instantiation
-  ## contributes its base name and each argument's name.
+  ## Returns the short base of a struct name:
+  ## the head symbol's name, plus a short scalar name for one scalar argument.
   ##
-  ## `resolveStructType` appends the base58 hash of the canonical type text.
+  ## Uniqueness comes from the base58 hash that `resolveStructType` appends:
   ##
-  ## Example:
-  ##   TensorView[float32, Shape, Stride] -> "TensorView_float32_Shape_Stride"
+  ## - two or more generic arguments stay out of the name
+  ## - tuple member types stay out of the name
+  ##
+  ## Examples:
+  ##
+  ## - TensorView[float32, Shape, Stride] -> "TensorView"
+  ## - Meter[float32]                     -> "Meter_f32"
+  ## - FixMe[8]                           -> "FixMe8"
+  ## - tuple[a: int32, b: int32]          -> "Tuple"
   case n.kind
   of nnkSym, nnkIdent:
     result = sanitizeIdent(n.strVal)
+    if result != n.strVal:
+      # structural type text (`tuple[a: int, b: int]`) and gensym'd symbols
+      # collapse to a kind word, uniqueness comes from the hash
+      result = if n.kind == nnkSym and n.typeKind == ntyTuple: "Tuple" else: "Object"
   of nnkBracketExpr:
     result = deriveStructName(n[0])
-    for i in 1 ..< n.len:
-      if n[i].kind in nnkIntLit .. nnkUInt64Lit:
-        # static integer arguments join without a separator: `FixMe[8]` derives `FixMe8`
-        result.add(deriveStructName(n[i]))
-      else:
-        result.add("_" & deriveStructName(n[i]))
-  of nnkObjectTy, nnkTupleTy, nnkTupleConstr:
-    result = sanitizeIdent(n.repr)
+    if n.len == 2:
+      # a single argument contributes its short form, a static integer joins
+      # without a separator and any other argument stays out of the base
+      let short = scalarShortName(n[1])
+      if short.len > 0:
+        result.add("_" & short)
+      elif n[1].kind in nnkIntLit .. nnkUInt64Lit:
+        result.add($n[1].intVal)
+  of nnkTupleTy, nnkTupleConstr:
+    result = "Tuple"
   else:
-    result = sanitizeIdent(n.repr)
+    result = "Object"
 
 proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   ## Returns the compile-time integer value of a typed node: a literal, a const symbol, or a static arithmetic expression over those.
@@ -307,8 +342,8 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   ##
   ## Struct name:
   ##
-  ## - base: `deriveStructName` of the canonical type node
-  ## - suffix: base58 hash of the canonical type text
+  ## - base: the `deriveStructName` short base of the canonical type node
+  ## - suffix: a base58 hash of the canonical type text, unique per identity key
   ##
   ## An alias and the instantiation it names produce one struct, distinct instantiations produce distinct names.
   ##
