@@ -142,7 +142,9 @@ proc std430Layout(t: SpvTy): SpvLayout =
     SpvLayout(size: s, align: s)
   of stkVector:
     let e = std430Layout(t.vElem)
-    SpvLayout(size: e.size * t.vN, align: e.align)
+    # std430 base alignment: 1x/2x the component's for vec1/vec2, 4x for vec3/vec4
+    let alignMul = if t.vN <= 2: t.vN else: 4
+    SpvLayout(size: e.size * t.vN, align: alignMul * e.align)
   of stkArray:
     let e = std430Layout(t.elem)
     let stride = roundUpMultiple(e.size, e.align)
