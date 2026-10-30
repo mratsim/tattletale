@@ -1,8 +1,7 @@
 ## SPIR-V binary emission: bit and shift instruction opcodes
 ##
-## Test that a `spirv:` kernel using the integer bit and shift operators plus
-## the bool `not` emits the SPIR-V core-grammar opcodes and passes
-## `spirv-val --target-env vulkan1.4`:
+## Test that integer bit/shift operators and bool `not` emit the SPIR-V
+## core-grammar opcodes and pass `spirv-val --target-env vulkan1.4`:
 ##
 ## - OpShiftRightLogical 194, OpShiftRightArithmetic 195, OpShiftLeftLogical 196
 ## - OpBitwiseOr 197, OpBitwiseXor 198, OpBitwiseAnd 199, OpNot 200

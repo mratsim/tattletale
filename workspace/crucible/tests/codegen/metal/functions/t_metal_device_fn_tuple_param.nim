@@ -1,8 +1,7 @@
 ## Metal: device proc with a runtime tuple-typed parameter.
 ##
-## Test that a `metal:` kernel calls a device proc with a plain `(int, int)` tuple
-## parameter and both elements reach the body as runtime values:
-## a tuple-typed formal is not a bound static value.
+## Test that a device proc with a runtime `(int, int)` tuple parameter
+## receives both elements as runtime values.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \

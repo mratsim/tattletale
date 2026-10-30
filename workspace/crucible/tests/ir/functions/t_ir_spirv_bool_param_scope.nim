@@ -1,8 +1,7 @@
 ## Hand-built CIRv2: the SPIR-V bool retype pass scoping the kernel names.
 ##
-## Test that a device function with its own bool local named like a kernel
-## bool parameter keeps real bool storage: the kernel parameter name set
-## never leaks into a device function body.
+## Test that a device function's bool local keeps bool storage
+## when it shares a name with a kernel bool parameter.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

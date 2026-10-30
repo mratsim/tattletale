@@ -1,8 +1,7 @@
 ## Metal: a user-defined `max` over object values lowers as a harvested proc.
 ##
-## Test that a `metal:` kernel calling a device proc named `max` with object
-## arguments harvests the proc body, the call does not emit the MSL builtin
-## `max` over struct operands (no matching function).
+## Test that a device proc named `max` over object arguments
+## computes the elementwise maximum on the device.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
@@ -15,6 +14,8 @@ type V2 = object
   x: int32
   y: int32
 
+# Call-site contract: this body must harvest, the MSL builtin `max` has
+# no overload over struct operands and emitting it fails to compile.
 proc max(a, b: V2): V2 {.device.} =
   result.x = if a.x > b.x: a.x else: b.x
   result.y = if a.y > b.y: a.y else: b.y

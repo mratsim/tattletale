@@ -1,8 +1,7 @@
 ## Metal: object constructor fields bind by name, not by written order.
 ##
-## Test that a `metal:` kernel constructing an object with its named fields
-## out of declaration order assigns each value to the field it names:
-## `Pair(y: 2, x: 1)` reads x == 1 and y == 2.
+## Test that an object constructed with out-of-order named fields
+## binds each value to its named field.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \

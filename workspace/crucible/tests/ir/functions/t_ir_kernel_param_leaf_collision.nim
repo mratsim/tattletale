@@ -1,8 +1,7 @@
 ## Hand-built CIRv2: the kernel struct-argument explosion's leaf-name collisions.
 ##
-## Test that a leaf name colliding with a kernel parameter or a body local
-## refuses through the registry's refusal string, and that a clean struct
-## parameter still explodes into its leaves.
+## Test that an exploded struct-parameter leaf name colliding with a kernel
+## parameter or a body local refuses through the registry's refusal string.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -43,7 +42,8 @@ static:
   doAssert paramErr.contains("collides"),
     "a kernel parameter named like an exploded leaf must refuse, got: " & paramErr
 
-  # clean kernel: the struct parameter explodes and the body opens with the rebuilt local
+  # Hazard negative: a clean struct parameter still explodes into its leaves.
+  # Pointer leaf view_p replaces the struct, the body opens with the rebuilt local
   let cleanKernel = procD("cleanKernel", @[param("view", viewTy)], tVoid(), @[retS()])
   cleanKernel.isKernel = true
   let (outM, cleanErr) = explode(moduleD("probe", @[], @[cleanKernel]))
