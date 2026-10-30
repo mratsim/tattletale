@@ -74,7 +74,7 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     let scale = rsqrt(acc / float32(rowSize) + eps)
     # pass 2: scaled apply, the weight broadcast along the axis
     when withWeight:
-      let weightStrip = atAxisIndex(weight, 0, 0)
+      let weightStrip = alongAxisAt(weight, 0, 0)
       for r in countup(thrID, rowSize - 1, W):
         dstRow[r] = srcRow[r] * scale * weightStrip[r]
     else:
