@@ -34,10 +34,9 @@ func registerExplodeKernelStructs*(reg: var PassRegistry) =
     run = explodePass)
 
 proc explodePass(m: CirModule): string =
-  ## Registry adapter: `explodeKernelStructs` changes the module in place,
-  ## the registry run signature returns the refusal string.
-  explodeKernelStructs(m)
-  return ""
+  ## Registry adapter: `explodeKernelStructs` changes the module in place
+  ## and returns its refusal string, which the registry run signature forwards.
+  result = explodeKernelStructs(m)
 
 
 proc buildLeafConstr(t: CirType, name: string): CirExpr =
@@ -56,19 +55,24 @@ proc buildLeafConstr(t: CirType, name: string): CirExpr =
       fields.add kv(f.name, sym(name & "_" & f.name, f.typ))
   result = oconstrE(t, fields)
 
-proc explodeKernelStructs(m: CirModule) =
+proc explodeKernelStructs(m: CirModule): string =
   ## Expands every kernel parameter of struct type with a pointer field into leaves, in place.
+  ## Returns "" when clean, else the first refusal.
   ##
   ## Contract:
   ## - buffer leaves name the device address space, value leaves the thread space
   ## - the kernel body opens with the rebuilt struct local
-  ## - a leaf name colliding with an existing kernel parameter refuses
+  ## - a leaf name colliding with an existing kernel parameter or body local refuses
   for fn in m.procs:
     if not fn.isKernel:
       continue
     var taken: seq[string]
     for p in fn.params:
       taken.add p.name
+    var locals: seq[tuple[name: string, typ: CirType]]
+    fn.body.collectDeclaredLocals(locals)
+    for l in locals:
+      taken.add l.name
     var params: seq[CirParam]
     var preamble: seq[CirStmt]
     for p in fn.params:
@@ -76,8 +80,8 @@ proc explodeKernelStructs(m: CirModule) =
         let leaves = p.typ.kernelParamLeaves(p.name)
         for leaf in leaves:
           if leaf.name in taken:
-            doAssert false,
-              "explodeKernelStructs: leaf '" & leaf.name & "' collides with an existing kernel parameter"
+            return "kernel " & fn.name & ": leaf '" & leaf.name &
+              "' collides with an existing kernel parameter or local"
           taken.add leaf.name
           let typ =
             if leaf.isBuffer:
@@ -94,3 +98,4 @@ proc explodeKernelStructs(m: CirModule) =
     if preamble.len > 0:
       fn.params = params
       fn.body = preamble & fn.body
+  return ""
