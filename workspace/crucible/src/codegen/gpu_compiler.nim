@@ -55,13 +55,11 @@ macro codegenMetal(body: typed): string =
   let (m, lerr) = lowerCirv2Unverified(body)
   if lerr.len > 0:
     error(lerr)
-  # stage order, v1's pipeline: legalize -> normalize -> optimize -> lower
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
-  # per-target reserved-word renaming, before printing
   reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
   reg.registerMslLoweringPasses()
   reg.registerValidationPostPasses()
@@ -73,8 +71,8 @@ macro codegenMetal(body: typed): string =
 
 macro metal*(body: untyped): string =
   ## Converts the body of this macro into Metal Shading Language (MSL) code.
-  # untyped -> typed macro delegation: compileTime const resolution
-  # delays until after crucibleCompileTarget is updated
+  # untyped -> typed macro delegation: the body resolves after
+  # crucibleCompileTarget selects the target
   crucibleCompileTarget = ctMetal
   result = newCall(bindSym"codegenMetal", body)
 
@@ -116,7 +114,6 @@ macro codegenOpenCL(body: typed): string =
   reg.registerNormalizationPasses()
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
-  # per-target reserved-word renaming, before printing
   reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
   reg.registerOpenclLoweringPasses()
   reg.registerValidationPostPasses()
@@ -144,9 +141,9 @@ macro codegenGLSL(body: typed): string =
   reg.registerNormalizationPasses()
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
-  # per-target reserved-word renaming runs before printing, the GLSL lowering
-  # passes register after the rename so the relocated program-scope
-  # declarations use the renamed names their body already references
+  # registerRenameReservedIdentifiers runs first: the GLSL lowering passes
+  # register after the rename, so the relocated program-scope declarations
+  # reference the renamed names that their body text already uses
   reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
   reg.registerGlslLoweringPasses()
   reg.registerValidationPostPasses()
@@ -202,7 +199,6 @@ macro codegenWebGpu(body: typed): string =
   reg.registerNormalizationPasses()
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
-  # per-target reserved-word renaming, before printing
   # WGSL reserves the double-underscore identifier head, every `__`-prefixed name gains a `wgsl_` prefix
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
   reg.registerWgslLoweringPasses()
