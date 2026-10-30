@@ -12,7 +12,7 @@
 ## A device function cannot take the thread builtins as attributed parameters,
 ## so an `{.inline.}` proc that reads them splices into its caller. Per call site:
 ##
-## - complex arguments bind to fresh temps, immutable ones substitute directly
+## - arguments bind to fresh temps, immutable ones and pointer formals substitute directly
 ## - the callee's locals and labels rename fresh, its `result` maps to the call's destination
 ## - the trailing `ret` drops after moving a carried value into the call's destination
 ## - the spliced lab/jmp chain then joins the caller's structuring
@@ -339,10 +339,15 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
         " arguments for " & $callee.params.len & " parameters")
       return @[]
     let arg = args[i]
-    if arg.kind in {eSym, eIntLit, eFloatLit, eTrue, eFalse, eNil}:
+    if arg.kind in {eIntLit, eFloatLit, eTrue, eFalse, eNil} or
+        (arg.kind == eSym and p.typ.kind in {ctPtr, ctAptr}):
+      # immutable arguments and pointer formals substitute directly
+      # a pointer formal aliases the caller's object by contract
       renames[p.name] = arg
     else:
-      # a complex argument evaluates once, the body reads the temp
+      # a value argument binds to a fresh temp, a spliced write to the formal
+      # must not reach the caller's own variable
+      # a complex argument evaluates once, its body reads the temp
       let tname = ctx.freshInlineName(p.name)
       pre.add varD(tname, p.typ)
       pre.add asgnS(sym(tname, p.typ), arg)
