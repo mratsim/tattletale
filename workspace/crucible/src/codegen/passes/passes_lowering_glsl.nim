@@ -18,13 +18,11 @@
 ## - `glslDissolvePointerLocals`: pointer locals dissolve into their pointee,
 ##   reads through the alias rewrite to the pointee symbol
 ## - `glslHoistProgramScopeLocals`: `{.smem.}` kernel locals and `{.const_mem.}`
-##   locals relocate into `CirModule.globals` in encounter order, the smem relocation
-##   covers top-level kernel-body locals only, the const_mem relocation
-##   covers every proc and scope depth
+##   locals relocate into `CirModule.globals` in encounter order
 ## - kernel and device-function pointer parameters stay for the printer to refuse
 ##
 ## Program-scope `const` storage is visible to all functions, a device function
-## reads the constants of the kernels it serves.
+## reads the constants of the kernels that it serves.
 ##
 ## Refusal homes:
 ## - a pointer read before its address-of binding, a value read of a pointer,
@@ -48,7 +46,7 @@ func registerGlslLoweringPasses*(reg: var PassRegistry) =
   ## - `glslDissolvePointerLocals` then `glslHoistProgramScopeLocals`, in that order, before printing
   ##
   ## Registration contract: the passes sit after the reserved-word rename, the relocated declarations
-  ## use the renamed names their body already references.
+  ## use the renamed names that their body already references.
   reg.register("glslDissolvePointerLocals", pkTransform, phaseMain,
     "Dissolves pointer locals into their pointee locals",
     run = dissolvePointerLocals
@@ -82,7 +80,7 @@ proc toPlainSym(name: string, typ: CirType): CirExpr =
 proc isBindShape(e: CirExpr): bool =
   ## Address-of binding shape: the address of a struct or array local.
   ## The pointee's name stands in for the pointer, only a composite local
-  ## offers the reads the alias resolves.
+  ## offers the reads that the alias resolves.
   e.kind == eAddr and e.addrOperand.kind == eSym and
     e.addrOperand.typ != nil and
     e.addrOperand.typ.kind in {ctStruct, ctArray}
@@ -293,7 +291,7 @@ proc hoistProgramScopeLocals(m: CirModule): string =
   ## - the const_mem relocation covers every proc and scope depth, the shared
   ##   const_mem walk recurses into the nested scopes at their encounter position
   ## - the const_mem initializer is required, the printer emits it from the relocated node
-  ## - runs after the reserved-word rename, the relocated declarations use the renamed names their body already references
+  ## - runs after the reserved-word rename, the relocated declarations use the renamed names that their body already references
   for fn in m.procs:
     var i = 0
     while i < fn.body.len:

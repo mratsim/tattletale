@@ -11,7 +11,7 @@
 ##
 ## - identity folding: a `mul`/`div` by the literal 1 or an integer `add`/`sub`
 ##   with the literal 0 collapses to the surviving operand, one bottom-up walk
-## - dead-local elimination: a local nothing reads afterwards is deleted,
+## - dead-local elimination: a local that nothing reads afterwards is deleted,
 ##   its type never reaches the printer
 ## - folding runs first, the eliminations it enables cascade into the dead-local pass
 
@@ -179,7 +179,7 @@ proc foldArithmeticIdentities(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc eliminateDeadLocals(m: CirModule): string =
-  ## Deletes every local bound to a constant nothing reads, to a fixpoint.
+  ## Deletes every local bound to a constant that nothing reads, to a fixpoint.
   ## Returns "" always, the pass is unconditional.
   while m.procs.anyIt(removeDeadLocals(it)):
     discard
@@ -233,7 +233,7 @@ proc collectLocalReads(stmts: seq[CirStmt], reads: var HashSet[string]) =
       discard
 
 proc removeDeadLocals(fn: CirProc): bool =
-  ## Deletes the locals nothing reads, their writes included, one round.
+  ## Deletes the locals that nothing reads, their writes included, one round.
   ## True when something was removed, the caller iterates to a fixpoint.
   var reads = initHashSet[string]()
   fn.body.collectLocalReads(reads)

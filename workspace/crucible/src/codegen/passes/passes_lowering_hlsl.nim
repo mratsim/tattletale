@@ -10,7 +10,8 @@
 ## HLSL lowering: per-target transforms for the HLSL storage model,
 ## registered by the HLSL pipeline and run before printing.
 ##
-## HLSL has no pointer values, everything else refuses loudly, the printer never sees a pointer.
+## HLSL has no pointer values, every pointer use outside the dissolve pass refuses loudly,
+## the printer never sees a pointer.
 ##
 ## - `hlslMaterializeNumWorkgroups`: reads of `threadgroups_per_grid`
 ##   rewrite to a trailing kernel parameter named `crucible_numworkgroups`,
@@ -214,8 +215,9 @@ type
     structLocals: HashSet[string]
     ## Pointer-holding struct locals dissolved into field rewrites, use of the whole value refuses.
     fieldOf: Table[string, DissolveLeaf]
-    ## Dotted field path of a dissolved struct local -> leaf symbol,
-    ## `v.data` -> `v_data`, `v.inner.f` -> `v_inner_f`.
+    ## Dotted field path of a dissolved struct local -> the leaf symbol bound
+    ## by the object construction: `v.data` -> the symbol bound to `data`,
+    ## `v.inner.f` -> the symbol bound to the nested `f`.
 
 proc dissolveFail(fn: CirProc, detail: string): string =
   "dissolvePointerLocals: at " & fn.name & ": " & detail

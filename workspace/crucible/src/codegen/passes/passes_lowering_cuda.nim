@@ -14,7 +14,7 @@
 ##
 ## - the reserved-word rename registers here, through the shared renaming
 ##   pass with `CudaReserved` as data: the four execution-space qualifiers
-##   the CUDA-C++ emitter writes
+##   that the CUDA-C++ emitter writes
 ## - call-site materialization lives in the frontend: every `var T` call
 ##   argument lowers to an address-of over the lvalue, and Nim sem rejects
 ##   a computed value for a `var T` parameter before anything reaches CIRv2
@@ -24,7 +24,6 @@
 ## - the printer owns everything else: the warp-reduce scan plus template emission,
 ##   the braced init lists, the coordinate arithmetic,
 ##   the qualifier set, kernel linkage, the barrier and atomic names.
-##   The clang syntax fixtures exercise that template text verbatim
 
 import ../ir/cirv2_lang
 import ./pass_datatypes

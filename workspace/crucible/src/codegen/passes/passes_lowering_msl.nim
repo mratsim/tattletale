@@ -16,8 +16,7 @@
 ##   in encounter order, the printer emits them as program-scope `constant`
 ##   variables visible to all functions
 ## - `mslRewriteSmemLocals`: a kernel's top-level `{.smem.}` local stays in-body
-##   as kernel-scope `threadgroup` storage Metal allocates per threadgroup,
-##   no launch-time staging and any initializer is discarded
+##   as kernel-scope `threadgroup` storage
 ##
 ## Refusal homes:
 ## - a const_mem local without an initializer refuses in the pass, a const_mem local
@@ -77,7 +76,7 @@ proc mslRewriteSmemLocals(m: CirModule): string =
   ## Rewrites the top-level `{.smem.}` locals of every proc:
   ##
   ## - a kernel keeps the local in its body: the printer emits kernel-scope
-  ##   `threadgroup` storage Metal allocates per threadgroup,
+  ##   `threadgroup` storage that Metal allocates per threadgroup,
   ##   no launch-time staging and no parameter
   ## - a device function's smem local refuses, only a kernel owns threadgroup storage
   ##   and the inline splice already merged an inline callee's body into the calling kernel

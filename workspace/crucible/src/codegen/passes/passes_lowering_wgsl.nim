@@ -63,7 +63,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   ##
   ## Registration contract: the passes sit after the reserved-word rename.
   ## The dissolved aliases and the relocated declarations use the renamed names
-  ## their body already references, and a const_mem initializer reading a bool
+  ## that their body already references, and a const_mem initializer reading a bool
   ## kernel parameter is patched before the relocation moves it out of the body.
   registerExplodeKernelStructs(reg)
   reg.register("wgslDissolvePointerLocals", pkTransform, phaseMain,
@@ -98,8 +98,9 @@ type
     structLocals: HashSet[string]
     ## Pointer-holding struct locals dissolved into field rewrites, a whole-value use refuses.
     leafOf: Table[string, DissolveLeaf]
-    ## Dotted field path of a dissolved struct local -> leaf symbol,
-    ## `v.data` -> `dst`, `v.inner.f` -> the nested leaf.
+    ## Dotted field path of a dissolved struct local -> the leaf symbol bound
+    ## by the object construction: `v.data` -> the symbol bound to `data`,
+    ## `v.inner.f` -> the symbol bound to the nested `f`.
 
 proc dissolveFail(fn: CirProc, detail: string): string =
   "at " & fn.name & ": " & detail

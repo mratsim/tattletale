@@ -13,13 +13,9 @@
 ##
 ## The IR already names the builtins by their canonical MSL names.
 ##
-## Source of the canonical names:
-##
-## - the public catalog (`src/builtins/builtins_catalog.nim`) declares
-##   per-backend alias templates
-## - each alias, `threadIdx` and `gl_GlobalInvocationID` among them, expands
-##   to the canonical name during Nim semantic analysis
-## - no alias name reaches the IR
+## Canonical names come from the public catalog (`src/builtins/builtins_catalog.nim`),
+## whose per-backend alias templates expand during Nim semantic analysis,
+## no alias name reaches the IR.
 ##
 ## After this pass:
 ##

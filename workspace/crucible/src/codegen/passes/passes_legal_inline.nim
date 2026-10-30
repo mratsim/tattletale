@@ -208,8 +208,9 @@ proc argsMatchParams(callee: CirProc, args: seq[CirExpr]): bool =
   ## same lattice type, a pointer formal accepts another-space pointer
   ## with the same pointee.
   ##
-  ## A mismatch keeps the call, the spliced body indexes through the formal's
-  ## shape while an array argument reads through whatever node kind the pointer formal compiled against.
+  ## The pass splices only on a full match. On a mismatch the call stays:
+  ## the spliced body would index through the formal's shape while an array
+  ## argument reads through whatever node kind that the pointer formal compiled against.
   if args.len != callee.params.len:
     return false
   for i, p in callee.params:
@@ -408,7 +409,7 @@ proc inlineProcs(m: CirModule): string =
   for fn in m.procs:
     fn.body.appendCallTargetsStmts(surviving)
   # Dead-proc elimination to a fixpoint: kernels are the entry points and any
-  # non-kernel proc nothing calls is unreachable.
+  # non-kernel proc that nothing calls is unreachable.
   # Survivors are recomputed each round since a deletion can orphan callees.
   while true:
     var reachable: HashSet[string]
