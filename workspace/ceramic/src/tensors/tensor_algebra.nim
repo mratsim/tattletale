@@ -65,3 +65,16 @@ func atAxisIndex*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, idx: 
     let others = src.sliceAxes(axis)
     let axisAlone = src.diceAxes(axis)
     make_view(addr src.data[crd2idx(axisAlone, idx)], others)
+
+func alongAxisAt*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, idx: int): auto =
+  ## Returns a rank-1 view of the `axis` strip of `src`.
+  ## `idx` is the flat position over the other axes, dimension 0 fastest.
+  ##
+  ##   alongAxisAt(src, axis = 1, idx = 5)  # src (2, 3, 4) -> view (3,), view[r] aliases src[1, r, 2]
+  when src.rank() == 1:
+    # a rank-1 `src` is one strip, the only flat position is the full tensor
+    make_view(src.data, src.getLayout())
+  else:
+    let others = src.sliceAxes(axis)
+    let axisAlone = src.diceAxes(axis)
+    make_view(addr src.data[crd2idx(others, idx)], axisAlone)

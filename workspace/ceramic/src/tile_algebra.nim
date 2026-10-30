@@ -44,7 +44,7 @@ export layout_algebra.Layout, layout_algebra.make_layout, layout_algebra.cosize,
        layout_algebra.crd2idx, layout_algebra.idx2crd,
        layout_algebra.logical_divide, layout_algebra.diceAxes,
        layout_algebra.sliceAxes
-export tensors.atAxisIndex, tensors.diceAxes, tensors.sliceAxes,
+export tensors.atAxisIndex, tensors.alongAxisAt, tensors.diceAxes, tensors.sliceAxes,
        tensors.getLayout, tensors.`()`
 export h_mma_configgen, h_mma_properties
 export crucible_gpu_builtins.atomicFetchAdd
