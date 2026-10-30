@@ -42,12 +42,14 @@ proc runTest() =   # private: the compile checks run in a proc so build artifact
   block:
     var engine = newEngine(runVulkan)
     engine.ingest(coordHlsl)
-    let oDev = engine.allocDevice(uint32, 2)
+    # coordKernel gets numthreads(256, 1, 1) from the printer default.
+    # Output covers the full dispatch, one element per thread.
+    let oDev = engine.allocDevice(uint32, 256)
     engine.launchKernel("main", oDev, ())
-    var got: array[2, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 2)
-    # grid (1,1) x block (2,1): global id i in 0..1, group id 0
-    for i in 0 ..< 2:
+    var got: array[256, uint32]
+    engine.copyToHostFromDevice(addr got[0], oDev, 256)
+    # grid (1,1,1): global id i in 0..255, group id 0
+    for i in 0 ..< 256:
       doAssert got[i] == uint32(i), "coord got " & $got[i] & " at " & $i & ", expected " & $i
 
   block:
