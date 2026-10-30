@@ -299,7 +299,6 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
 proc rewriteDissolveChildren(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string =
-  ## Rewrites the child expressions of one expression in place.
   for ch in getExprChildren(e):
     let err = rewriteDissolveExpr(fn, ctx, ch)
     if err.len > 0:
