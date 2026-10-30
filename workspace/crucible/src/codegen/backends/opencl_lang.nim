@@ -617,7 +617,7 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
       var elems: seq[string]
       for el in s.init.elems:
         elems.add ctx.printExpr(el)
-      result &= " = {" & elems.join(", ") & "}"
+      result &= " = {" & elems.join(", ") & "};"
       return
   else:
     result = "__constant " & emitOpenclTypeBare(s.declType) & ' ' & s.name
