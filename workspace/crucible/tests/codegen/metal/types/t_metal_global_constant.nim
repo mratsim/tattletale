@@ -15,15 +15,19 @@ const globalConstantMsl = metal:
   proc bump(C: ptr UncheckedArray[int32]) {.global.} =
     C[0] = counter
 
-test "a kernel reads the program-scope constant":
-  var engine = newEngine(runMetal)
-  engine.ingest(globalConstantMsl)
-  let oDev = engine.allocDevice(int32, 1)
-  # Setup: this host copy puts 0 in the destination, the kernel overwrites
-  # it with the counter value 42.
-  let zero: int32 = 0
-  engine.copyToDeviceFromHost(oDev, addr zero, 1)
-  engine.launchKernel("bump", oDev, ())
-  var res: array[1, int32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 1)
-  check res[0] == 42
+proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+  test "a kernel reads the program-scope constant":
+    var engine = newEngine(runMetal)
+    engine.ingest(globalConstantMsl)
+    let oDev = engine.allocDevice(int32, 1)
+    # Sentinel setup: a host copy writes 0 before the kernel overwrites
+    # it with the counter value 42.
+    let zero: int32 = 0
+    engine.copyToDeviceFromHost(oDev, addr zero, 1)
+    engine.launchKernel("bump", oDev, ())
+    var res: array[1, int32]
+    engine.copyToHostFromDevice(addr res[0], oDev, 1)
+    check res[0] == 42
+
+when isMainModule:
+  runTest()
