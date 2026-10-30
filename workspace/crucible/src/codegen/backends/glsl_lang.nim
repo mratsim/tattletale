@@ -337,8 +337,37 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     return "(~" & ctx.printExpr(e.unOperand) & ")"
   of eNeg:
     return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eCast, eConv:
+  of eConv:
     let t = e.castType
+    if t.kind in {ctAptr, ctPtr}:
+      ctx.requireRefBlock(t.pElem)
+      return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
+    return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
+  of eCast:
+    # A bit reinterpret keeps the operand's bits: `uintBitsToFloat(u)` reads the pattern.
+    # A `T()` constructor call numerically converts.
+    # Core GLSL floatBits builtins cover the 32-bit float pairs only.
+    # A same-width integer pair keeps the constructor: the modular conversion preserves every bit.
+    # A wider float pair refuses over emitting a numeric conversion.
+    let t = e.castType
+    let src = getExprType(e.castOperand)
+    let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
+      src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
+    if scalar and src.kind == ctFloat and t.kind != ctFloat:
+      if src.bits == 32:
+        return (if t.kind == ctUint: "floatBitsToUint" else: "floatBitsToInt") &
+          "(" & ctx.printExpr(e.castOperand) & ")"
+      ctx.fail("bit cast of a 64-bit float has no GLSL emission, only the" &
+        " 32-bit floatBits builtins")
+      return ""
+    if scalar and t.kind == ctFloat and src.kind != ctFloat:
+      if t.bits == 32:
+        return (if src.kind == ctUint: "uintBitsToFloat" else: "intBitsToFloat") &
+          "(" & ctx.printExpr(e.castOperand) & ")"
+      ctx.fail("bit cast to a 64-bit float has no GLSL emission, only the" &
+        " 32-bit floatBits builtins")
+      return ""
+    # pointers and same-width integer pairs keep the constructor call
     if t.kind in {ctAptr, ctPtr}:
       ctx.requireRefBlock(t.pElem)
       return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"

@@ -325,9 +325,37 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     return "(~" & ctx.printExpr(e.unOperand) & ")"
   of eNeg:
     return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eConv, eCast:
-    # a conversion or bit reinterpret prints as the C-style cast, CUDA has no as_type and one C cast covers both semantics here
+  of eConv:
+    # a numeric conversion prints as the C-style cast
     let t = e.castType
+    return "(" & emitCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
+  of eCast:
+    # A bit reinterpret keeps the operand's bits: `__float_as_uint(1.5f)` reads 0x3FC00000.
+    # A C-style cast numerically converts: `(unsigned int) 1.5f` gives 1u.
+    # Float-as-integer intrinsics cover the 32- and 64-bit float pairs.
+    # A same-width integer pair keeps the C-style cast: the modular conversion preserves every bit.
+    # A same-width float pair without an intrinsic refuses over emitting a numeric conversion.
+    let t = e.castType
+    let src = getExprType(e.castOperand)
+    let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
+      src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
+    if scalar and src.kind == ctFloat and t.kind != ctFloat:
+      if src.bits == 32:
+        return (if t.kind == ctUint: "__float_as_uint" else: "__float_as_int") &
+          "(" & ctx.printExpr(e.castOperand) & ")"
+      if src.bits == 64:
+        return "__double_as_longlong(" & ctx.printExpr(e.castOperand) & ")"
+      ctx.fail("bit cast of a 16-bit float has no CUDA emission")
+      return ""
+    if scalar and t.kind == ctFloat and src.kind != ctFloat:
+      if t.bits == 32:
+        return (if src.kind == ctUint: "__uint_as_float" else: "__int_as_float") &
+          "(" & ctx.printExpr(e.castOperand) & ")"
+      if t.bits == 64:
+        return "__longlong_as_double(" & ctx.printExpr(e.castOperand) & ")"
+      ctx.fail("bit cast to a 16-bit float has no CUDA emission")
+      return ""
+    # pointers, same-width integer pairs and float-to-float keep the C-style cast
     return "(" & emitCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
   of eSizeof:
     return "sizeof(" & emitCudaType(e.ofType, "", true) & ")"
