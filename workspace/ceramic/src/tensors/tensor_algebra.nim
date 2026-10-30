@@ -54,6 +54,18 @@ func getIdentityLayout*[T, Sh, St](t: TensorOwned[T, Sh, St]): auto {.inline.} =
   ## Identity layout over the tensor's shape, its coordinate space.
   make_identity_layout(t.shape)
 
+func atAxisIndex*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, idx: int): auto =
+  ## View of `src` with `axis` fixed at `idx` and removed from the shape.
+  ##
+  ##   atAxisIndex(src, axis = 1, idx = 2)  # src (2, 3, 4) -> view (2, 4), view[a, b] aliases src[a, 2, b]
+  when src.rank() == 1:
+    # a rank-1 `src` keeps no other coordinate, the view is the full tensor
+    make_view(src.data, src.getLayout())
+  else:
+    let others = src.sliceAxes(axis)
+    let axisAlone = src.diceAxes(axis)
+    make_view(addr src.data[crd2idx(axisAlone, idx)], others)
+
 func alongAxisAt*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, idx: int): auto =
   ## Returns a rank-1 view of the `axis` strip of `src`.
   ## `idx` is the flat position over the other axes, dimension 0 fastest.
