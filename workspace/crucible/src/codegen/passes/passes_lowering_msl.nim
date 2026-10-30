@@ -12,24 +12,18 @@
 ##
 ##   kernel body → mslHoistProgramScopeConstants → mslRewriteSmemLocals → printed MSL source
 ##
-## - `mslHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into
-##   `CirModule.globals` in encounter order, every proc and scope depth covered,
-##   the printer emits the relocated declarations as program-scope `constant`
-##   variables
-## - program-scope `constant` storage is visible to all functions, a device
-##   function reads the constants of the kernels it serves
-## - `mslRewriteSmemLocals`: a kernel's top-level `{.smem.}` local stays
-##   in-body, Metal allocates the kernel-scope `threadgroup` storage,
-##   no launch-time staging and any initializer on a kept local is discarded
-## - a device function's top-level `{.smem.}` local refuses, only a kernel owns threadgroup storage
-##   and the inline splice already merged an inline callee's body into the calling kernel
+## - `mslHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into `CirModule.globals`
+##   in encounter order, the printer emits them as program-scope `constant`
+##   variables visible to all functions
+## - `mslRewriteSmemLocals`: a kernel's top-level `{.smem.}` local stays in-body
+##   as kernel-scope `threadgroup` storage Metal allocates per threadgroup,
+##   no launch-time staging and any initializer is discarded
 ##
 ## Refusal homes:
-## - a const_mem local without an initializer refuses in the pass, the printer
-##   keeps a nil-init shape guard on the relocated declarations
-## - a device-function smem local surviving the inline splice refuses
-##   in the pass, dead-local elimination already deleted the unread ones
-## - a const_mem local surviving outside the relocation refuses at the printer,
+## - a const_mem local without an initializer refuses in the pass, a const_mem local
+##   surviving outside the relocation refuses at the printer, which keeps a nil-init
+##   shape guard on the relocated declarations
+## - a device-function smem local surviving the inline splice refuses in the pass,
 ##   a smem initializer surviving the pass is discarded at the printer
 
 import ../ir/cirv2_lang
