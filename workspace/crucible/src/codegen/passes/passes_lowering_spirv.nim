@@ -100,16 +100,20 @@ proc spirvPatchBoolToI32(m: CirModule): string =
   ## Retypes bool kernel parameters and bool globals to i32 storage,
   ## rewriting the reads and stores of every proc body to match.
   ## Returns "" when clean.
-  var boolVals, boolPtrs: HashSet[string]
+  var globalVals, globalPtrs: HashSet[string]
   for g in m.globals:
     if g.declType.kind == ctBool:
       g.declType = tInt(32)
-      boolVals.incl g.name
+      globalVals.incl g.name
     elif g.declType.kind in {ctPtr, ctAptr} and g.declType.pElem != nil and
         g.declType.pElem.kind == ctBool:
       g.declType.pElem = tInt(32)
-      boolPtrs.incl g.name
+      globalPtrs.incl g.name
   for fn in m.procs:
+    # a kernel's bool parameter names apply to that kernel only:
+    # a device function with a same-named bool local keeps real bools
+    var boolVals = globalVals
+    var boolPtrs = globalPtrs
     if fn.isKernel:
       for p in mitems(fn.params):
         if p.typ.kind == ctBool:
