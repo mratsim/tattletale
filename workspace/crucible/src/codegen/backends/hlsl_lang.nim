@@ -236,200 +236,6 @@ proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size,
     ctx.fail("push member " & label & " of " & $t.kind & " type has no fvVulkan binding")
 
 # ═══════════════════════════════════════════════════════════════════════
-# Write-scan: read-write classification and the call graph
-# ═══════════════════════════════════════════════════════════════════════
-
-type
-  CallGraph = object
-    procs: Table[string, CirProc]
-    ## Module procs by name.
-    edges: seq[tuple[caller, arg, callee, param: string]]
-    ## One argument flow: `caller` passes the argument rooted at parameter
-    ## `arg` to the `param` parameter of `callee`.
-    stored: HashSet[string]
-    ## `fn/param` keys whose parameter the proc stores through directly.
-    reached: HashSet[string]
-    ## `fn/param` keys reachable from `stored` over the argument-flow edges.
-
-proc exprRootSym(e: CirExpr): CirExpr =
-  ## Symbol at the root of a dotted or indexed chain, nil otherwise.
-  result = e
-  while result != nil and result.kind in {eDot, ePat, eAt}:
-    result = case result.kind
-      of eDot: result.dotBase
-      of ePat: result.patBase
-      else: result.atBase
-  if result != nil and result.kind != eSym:
-    result = nil
-
-proc directCalls(ss: seq[CirStmt], outp: var seq[CirExpr]) =
-  ## Call expressions of one statement list, a call binds to its destination:
-  ## the sites are statement calls plus the right-hand sides of assignments,
-  ## declarations and returns.
-  for s in ss:
-    case s.kind
-    of sCall:
-      outp.add CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
-    of sAsgn:
-      if s.rhs != nil and s.rhs.kind == eCall:
-        outp.add s.rhs
-    of sVar, sConst:
-      if s.init != nil and s.init.kind == eCall:
-        outp.add s.init
-    of sRet:
-      if s.retVal != nil and s.retVal.kind == eCall:
-        outp.add s.retVal
-    of sIte:
-      directCalls(s.thenBody, outp)
-      directCalls(s.elseBody, outp)
-    of sLoop:
-      directCalls(s.loopBody, outp)
-    of sScope:
-      directCalls(s.scopeBody, outp)
-    of sJmp, sLab, sAssume, sDiscard, sCase, sAsm, sEmit:
-      discard
-
-proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
-  ## Records the parameters `fn` stores through: an assignment whose target
-  ## roots at a parameter symbol, anywhere in the statement tree.
-  for s in ss:
-    case s.kind
-    of sAsgn:
-      let root = exprRootSym(s.lhs)
-      if root != nil:
-        for p in fn.params:
-          if p.name == root.name:
-            graph.stored.incl(fn.name & "/" & p.name)
-    of sIte:
-      graph.scanStoredStmts(fn, s.thenBody)
-      graph.scanStoredStmts(fn, s.elseBody)
-    of sLoop:
-      graph.scanStoredStmts(fn, s.loopBody)
-    of sScope:
-      graph.scanStoredStmts(fn, s.scopeBody)
-    of sEmit:
-      # a store can hide in an emit: the verbatim text names the buffer,
-      # every parameter the text mentions counts as stored
-      var emitText = ""
-      for part in s.emitParts:
-        emitText.add part
-      for op in s.emitOperands:
-        emitText.add op.name
-      for p in fn.params:
-        if p.typ.kind in {ctPtr, ctAptr} and emitText.contains(p.name):
-          graph.stored.incl(fn.name & "/" & p.name)
-    of sCall:
-      # a store can hide in a call-bound destination expression
-      let root = exprRootSym(s.callCallee)
-      if root != nil:
-        for p in fn.params:
-          if p.name == root.name:
-            graph.stored.incl(fn.name & "/" & p.name)
-      for a in s.callArgs:
-        let ar = exprRootSym(a)
-        if ar != nil:
-          for p in fn.params:
-            if p.name == ar.name:
-              graph.stored.incl(fn.name & "/" & p.name)
-    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm:
-      discard
-
-proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
-  ## Records one edge per call argument rooted at a parameter symbol:
-  ## `caller/arg -> callee/paramI`. Call sites match `directCalls`:
-  ## statement calls plus assignment, declaration and return right-hand sides.
-  for s in ss:
-    case s.kind
-    of sCall:
-      let calleeName = if s.callCallee.kind == eSym: s.callCallee.name else: ""
-      if calleeName.len > 0 and graph.procs.hasKey(calleeName):
-        let callee = graph.procs[calleeName]
-        for i, a in s.callArgs:
-          let root = exprRootSym(a)
-          if root == nil:
-            continue
-          for p in fn.params:
-            if p.name == root.name:
-              if i < callee.params.len:
-                graph.edges.add (fn.name, p.name, calleeName, callee.params[i].name)
-    of sAsgn:
-      if s.rhs != nil and s.rhs.kind == eCall:
-        graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.rhs.callee,
-          callArgs: s.rhs.args)])
-    of sVar, sConst:
-      if s.init != nil and s.init.kind == eCall:
-        graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.init.callee,
-          callArgs: s.init.args)])
-    of sRet:
-      if s.retVal != nil and s.retVal.kind == eCall:
-        graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.retVal.callee,
-          callArgs: s.retVal.args)])
-    of sIte:
-      graph.scanCallStmts(fn, s.thenBody)
-      graph.scanCallStmts(fn, s.elseBody)
-    of sLoop:
-      graph.scanCallStmts(fn, s.loopBody)
-    of sScope:
-      graph.scanCallStmts(fn, s.scopeBody)
-    of sJmp, sLab, sAssume, sDiscard, sCase, sAsm, sEmit:
-      discard
-
-proc classifyRwBuffers(graph: var CallGraph) =
-  ## Marks every buffer parameter stored through, directly or transitively
-  ## over the argument-flow edges: a read-write fixpoint over the call graph.
-  ## Each edge propagates read-write both ways:
-  ## - a store through the callee's parameter writes the caller's buffer
-  ## - a stored caller buffer flows into the callee's parameter
-  graph.reached = graph.stored
-  var grew = true
-  while grew:
-    grew = false
-    for e in graph.edges:
-      let src = e.caller & "/" & e.arg
-      let dst = e.callee & "/" & e.param
-      if src in graph.reached and dst notin graph.reached:
-        graph.reached.incl(dst)
-        grew = true
-      if dst in graph.reached and src notin graph.reached:
-        graph.reached.incl(src)
-        grew = true
-
-proc checkDeviceFnRecursion(ctx: var PrintCtx, graph: CallGraph) =
-  ## Refuses recursion over the device-function call graph before emission:
-  ## a recursive call would not terminate, and DXC accepts recursive source
-  ## with exit 0 while miscompiling it.
-  var state = initTable[string, int]() # fn name: 1 = on the visit stack, 2 = fully visited
-
-  proc visit(ctx: var PrintCtx, graph: CallGraph, state: var Table[string, int], calleesOf: Table[string, seq[string]], fn: string) =
-    state[fn] = 1
-    for callee in calleesOf.getOrDefault(fn, @[]):
-      case state.getOrDefault(callee, 0)
-      of 1:
-        ctx.fail("recursive device function `" & callee &
-          "` would not terminate, recursion is rejected")
-      of 0:
-        visit(ctx, graph, state, calleesOf, callee)
-      else:
-        discard
-    state[fn] = 2
-
-  var calleesOf: Table[string, seq[string]]
-  for fn in graph.procs.values:
-    if fn.isKernel:
-      continue
-    var calls: seq[CirExpr]
-    directCalls(fn.body, calls)
-    for c in calls:
-      if c.callee.kind == eSym and graph.procs.hasKey(c.callee.name) and
-          not graph.procs[c.callee.name].isKernel:
-        calleesOf.mgetOrPut(fn.name, @[]).add(c.callee.name)
-  for fn in graph.procs.values:
-    if not fn.isKernel and state.getOrDefault(fn.name, 0) == 0:
-      visit(ctx, graph, state, calleesOf, fn.name)
-    if ctx.failing():
-      return
-
-# ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -974,7 +780,7 @@ proc spellResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
   let resTy = if rw: "RWStructuredBuffer" else: "StructuredBuffer"
   result = resTy & "<" & ctx.spellHlslScalar(p.typ.pElem) & "> " & p.name
 
-proc classifyParams(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
+proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
   ## Splits one proc's parameters into buffer resources and values.
   ## - kernels: values join the Push block, buffers take register ordinals
   ## - device functions: values pass by value (a `var T` binds `inout`),
@@ -1041,7 +847,7 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams
 proc spellFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams: var HashSet[string], forwardDeclare: bool): string =
   ## `RetType name(params)` of one proc, buffers as resources, `var T` device parameters as `inout`.
   var buffers: seq[CirParam]
-  ctx.classifyParams(fn, graph, pushParams, buffers)
+  ctx.classifyParams(fn, pushParams, buffers)
   if ctx.failing():
     return ""
   var params: seq[string]
@@ -1219,23 +1025,15 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
     ctx.fail("kernel `" & kernel.name & "` must return void, got " & $kernel.ret.kind)
     return ("", ctx.err)
 
-  # call graph: read-write classification, then the recursion refusal
-  var graph = CallGraph()
-  for fn in m.procs:
-    graph.procs[fn.name] = fn
-  for fn in m.procs:
-    graph.scanStoredStmts(fn, fn.body)
-    graph.scanCallStmts(fn, fn.body)
-  graph.classifyRwBuffers()
-  ctx.checkDeviceFnRecursion(graph)
-  if ctx.failing():
-    return ("", ctx.err)
+  # read-write classification of the buffer parameters: the stored record
+  # computed by the call-graph analysis pass after the last transform
+  let graph = m.callGraph
 
   # kernel resources: buffer parameters and Push members
   ctx.fnName = kernel.name
   var pushParams = initHashSet[string]()
   var buffers: seq[CirParam]
-  ctx.classifyParams(kernel, graph, pushParams, buffers)
+  ctx.classifyParams(kernel, pushParams, buffers)
   if ctx.failing():
     return ("", ctx.err)
 

@@ -8,6 +8,7 @@
 ## Shared pass helpers over CIRv2.
 ##
 ## - call-target collection
+## - the root symbol of a dotted or indexed chain
 ## - declaration and clone utilities
 ## - the kernel-parameter leaf walk
 ##
@@ -16,6 +17,17 @@
 import std/sets
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
+
+proc exprRootSym*(e: CirExpr): CirExpr =
+  ## Symbol at the root of a dotted or indexed chain, nil otherwise.
+  result = e
+  while result != nil and result.kind in {eDot, ePat, eAt}:
+    result = case result.kind
+      of eDot: result.dotBase
+      of ePat: result.patBase
+      else: result.atBase
+  if result != nil and result.kind != eSym:
+    result = nil
 
 proc appendCallTargetsExpr*(e: CirExpr, targets: var HashSet[string]) =
   ## Collects the callee names of one expression into `targets`.

@@ -17,7 +17,7 @@
 ##
 ## The verifier in `cirv2_verify` enforces what the shape cannot.
 
-import std/[macros, hashes, sequtils, tables]
+import std/[macros, hashes, sequtils, sets, tables]
 
 type
   CirAddrSpace* = enum
@@ -380,6 +380,22 @@ type
     memberOffsets*: seq[int]
     ## Start offset of each member in declaration order.
 
+  CallGraph* = object
+    ## Call graph over the device functions of one module, the stored record of the target's call-graph analysis pass.
+    ##
+    ## - each edge records one argument flow: `caller` passes the argument rooted at parameter `arg` to callee parameter `param`
+    ## - `reached` marks every `fn/param` key stored through its proc directly or through a transitive callee
+    ## - a buffer parameter whose `fn/param` key is in `reached` is read-write
+    procs*: Table[string, CirProc]
+    ## Module procs by name.
+    edges*: seq[tuple[caller, arg, callee, param: string]]
+    ## One argument flow: `caller` passes the argument rooted at parameter
+    ## `arg` to the `param` parameter of `callee`.
+    stored*: HashSet[string]
+    ## `fn/param` keys whose parameter the proc stores through directly.
+    reached*: HashSet[string]
+    ## `fn/param` keys reachable from `stored` over the argument-flow edges.
+
   CirModule* = ref object
     ## One CIRv2 module: nominal type declarations plus the proc set.
     name*: string
@@ -397,6 +413,12 @@ type
     ## - valid only if no transform runs after the scan: the pass registry
     ##   has no invalidation
     ## - the printer reads it, it never rescans
+    callGraph*: CallGraph
+    ## Call-graph analysis record: the argument-flow edges and the read-write classification of every buffer parameter.
+    ##
+    ## - filled by the target's call-graph analysis pass after the last transform
+    ## - valid only if no transform runs after the analysis: the pass registry has no invalidation
+    ## - the printer reads the stored record, it never rescans
     layouts*: Table[string, StructLayout]
     ## Packed layout of each nominal struct type, keyed by struct name,
     ## filled by the target's layout analysis pass after its last transform.

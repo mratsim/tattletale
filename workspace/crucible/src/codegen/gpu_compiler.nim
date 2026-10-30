@@ -41,6 +41,7 @@ import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_msl
 import ./passes/passes_lowering_opencl
 import ./passes/layout_std430
+import ./passes/callgraph_analysis
 import ./passes/scan_features
 import ./passes/passes_validations
 import ./passes/passes_low_reserved
@@ -234,7 +235,8 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   ## Compiles an `hlsl:` block body into HLSL compute shader code.
   ##
   ## - CIRv2 lowering, the pass registry in stage order with the HLSL
-  ##   per-target lowering passes, then the HLSL printer for `flavor`
+  ##   per-target lowering passes and the call-graph analysis, then the HLSL
+  ##   printer for `flavor`
   ## - a refusal or a verifier violation in the chain is a compile-time
   ##   error naming the construct
   let (m, lerr) = lowerCirv2Unverified(body)
@@ -246,6 +248,9 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   reg.registerHlslLoweringPasses()
+  # analysis passes after the last transform: analysis results are valid
+  # only if no transform runs after them (the registry never invalidates)
+  reg.registerHlslCallGraphPass()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
