@@ -1616,11 +1616,7 @@ func bodyMarksUnroll(body: NimNode): bool =
 
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `while` loop lowers to a conditionless `loop` with a leading guard
-  ## and the exit label after the loop (final_ir.md rule 2):
-  ##
-  ## - `break` targets the exit label
-  ## - `continue` targets a label at the body's end, so the condition re-checks on the wrap back to the guard
-  ## - the label is emitted only when the body uses `continue`, its jump stays forward under the verifier's forward-only `jmp` model
+  ## and the exit label after the loop (final_ir.md rule 2).
   if ctx.failing():
     return @[]
   let exitL = ctx.freshLabel("lx")
@@ -2169,19 +2165,11 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     # a label no `break label` targets is dead, the block lowers as its body
     return ctx.lowerStmt(n[1])
   of nnkBreakStmt:
-    if n[0].kind in {nnkSym, nnkIdent}:
-      ctx.fail("labeled break")
-      return @[]
-    if ctx.loopStack.len == 0:
-      ctx.fail("break outside a loop")
-      return @[]
-    return @[jmpS(ctx.loopStack[^1].exitL)]
+    ctx.fail("break: unsupported in device code, restructure the loop condition")
+    return @[]
   of nnkContinueStmt:
-    if ctx.loopStack.len == 0:
-      ctx.fail("continue outside a loop")
-      return @[]
-    ctx.continueUsed = true
-    return @[jmpS(ctx.loopStack[^1].contL)]
+    ctx.fail("continue: unsupported in device code, restructure the loop condition")
+    return @[]
   of nnkCaseStmt:
     ctx.fail("case statement: outside the supported set")
     return @[]
