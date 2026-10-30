@@ -17,7 +17,7 @@
 ##
 ## - `glslDissolvePointerLocals`: pointer locals dissolve into their pointee,
 ##   reads through the alias rewrite to the pointee symbol, a pointer read before
-##   its address-of binding or read as a value refuses. Kernel and device-function
+##   its address-of binding or read as a value refuses. A rebinding of an already-bound pointer local refuses too. Kernel and device-function
 ##   pointer parameters are untouched, the printer refuses them.
 ## - `glslHoistProgramScopeLocals`: `{.smem.}` kernel locals and `{.const_mem.}`
 ##   locals relocate into `CirModule.globals` in encounter order,
@@ -68,7 +68,7 @@ type
     pendingPtrs: HashSet[string]
     ## Pointer locals awaiting their address-of binding, a read refuses.
     aliasOf: Table[string, string]
-    ## Pointer local -> pointee local, the binding dissolved the pair.
+    ## Pointer local -> pointee local. One binding dissolves the pair, a rebinding refuses.
 
 proc dissolveFail(fn: CirProc, detail: string): string =
   "at " & fn.name & ": " & detail
@@ -204,6 +204,9 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
         return dissolveFail(fn, "pointer local " & s.lhs.name &
           " must bind the address of a local, GLSL has no function-storage" &
           " addressing")
+      if s.lhs.name in ctx.aliasOf:
+        return dissolveFail(fn, "pointer local " & s.lhs.name &
+          " rebound, GLSL has no pointer values")
       ctx.pendingPtrs.excl(s.lhs.name)
       ctx.aliasOf[s.lhs.name] = s.rhs.bindPointee
       return ""

@@ -37,7 +37,8 @@
 ##   refuses in the pass (WGSL workgroup variables are zero-initialized),
 ##   the printer keeps both shape guards on the relocated declarations
 ## - a pointer local read as a value or before its address-of binding,
-##   a dissolved struct local used whole or read through an unbound field path
+##   a pointer local rebound to a second pointee, a dissolved struct local
+##   used whole or read through an unbound field path
 ##   refuse in the pass, the printer keeps only the type-based pointer-local
 ##   refusals for shapes that reach it untouched
 
@@ -91,7 +92,7 @@ type
     pendingPtrs: HashSet[string]
     ## Pointer locals awaiting their address-of binding, a read refuses.
     aliasOf: Table[string, string]
-    ## Pointer local -> pointee local, the binding dissolved the pair.
+    ## Pointer local -> pointee local. One binding dissolves the pair, a rebinding refuses.
     structLocals: HashSet[string]
     ## Pointer-holding struct locals dissolved into field rewrites, a whole-value use refuses.
     leafOf: Table[string, DissolveLeaf]
@@ -258,6 +259,9 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
         if rerr.len > 0:
           return rerr
         return ""
+      if s.lhs.name in ctx.aliasOf:
+        return dissolveFail(fn, "pointer local " & s.lhs.name &
+          " rebound, WGSL has no pointer values")
       if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
         return dissolveFail(fn, "pointer local " & s.lhs.name &
           " rebound to a non-address value, WGSL has no pointer values")
