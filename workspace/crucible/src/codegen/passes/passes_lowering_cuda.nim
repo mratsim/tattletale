@@ -7,26 +7,24 @@
 
 {.experimental: "codeReordering".}
 
-## CUDA lowering: per-target registration for the CUDA storage model,
-## the shape the future CUDA printer wiring registers in one line.
+## CUDA lowering: per-target registration for the CUDA storage model.
 ##
-## The v1 CUDA emitter audit against the CIRv2 shared pipeline classifies
-## every v1 transform:
+## The shared pipeline contributes the reserved-word rename only, every other
+## CUDA-C++ transform stays printer-side (backends/):
 ##
-## - the reserved-word rename data registers here, through the shared
-##   renaming pass with `CudaReserved` as data: the four execution-space
-##   qualifiers the CUDA-C++ emitter writes
-## - call-site materialization of non-lvalue by-reference arguments:
-##   audited as absent, the frontend lowers every `var T` call argument
-##   into an address-of over the lvalue, and Nim sem rejects a computed
-##   value for a `var T` parameter before anything reaches CIRv2
-## - by-value array-parameter decay to `const T name[]` is printer-side:
-##   the shared pipeline passes a `ctArray` parameter through unchanged
-##   and the C++ parameter form belongs to the printer's parameter table
-## - everything else stays printer-side: the warp-reduce scan plus
-##   template emission, the braced init lists, the coordinate arithmetic
-##   and the qualifier set, kernel linkage, barrier and atomic names
-##   (the clang syntax fixtures exercise the template text verbatim)
+## - the reserved-word rename registers here, through the shared renaming
+##   pass with `CudaReserved` as data: the four execution-space qualifiers
+##   the CUDA-C++ emitter writes
+## - call-site materialization lives in the frontend: every `var T` call
+##   argument lowers to an address-of over the lvalue, and Nim sem rejects
+##   a computed value for a `var T` parameter before anything reaches CIRv2
+## - by-value array parameters decay to `const T name[]` at the printer:
+##   the shared pipeline passes a `ctArray` parameter through unchanged,
+##   the C++ parameter form belongs to the printer's parameter table
+## - the printer owns everything else: the warp-reduce scan plus template emission,
+##   the braced init lists, the coordinate arithmetic,
+##   the qualifier set, kernel linkage, the barrier and atomic names.
+##   The clang syntax fixtures exercise that template text verbatim
 
 import ../ir/cirv2_lang
 import ./pass_datatypes
