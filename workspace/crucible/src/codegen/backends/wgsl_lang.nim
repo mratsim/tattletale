@@ -533,7 +533,12 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
       ctx.indent.inc
       let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
       ctx.indent.dec
-      txt = spaces(ctx.indent * 2) & "loop {\n" & bodyTxt & "\n" &
+      let directive = if s.unroll:
+        # WGSL has no unroll directive, surface the drop in the artifact
+        spaces(ctx.indent * 2) & "// {.unroll.} requested but not honored on WebGPU\n"
+      else:
+        ""
+      txt = directive & spaces(ctx.indent * 2) & "loop {\n" & bodyTxt & "\n" &
         spaces(ctx.indent * 2) & '}'
       if lExit.len > 0:
         i.inc  # exit label, consumed
