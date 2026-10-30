@@ -343,13 +343,18 @@ func constrHasTypeElem(t: NimNode): bool =
   ## - a runtime tuple-typed formal instantiates to its member types:
   ##   `(int, int)` becomes a `TupleConstr` over two `int` type symbols
   ## - a bound static value instantiates to the value's own elements: literals, value symbols, named fields over literals
+  ##
+  ## An object constructor's child 0 names the constructed type, never a value.
+  ## Only value children decide, so an `ObjConstr` scan starts after child 0.
   case t.kind
   of nnkEmpty:
     result = false
   of nnkSym:
     result = t.symKind == nskType
   of nnkObjConstr, nnkTupleConstr, nnkPar, nnkExprColonExpr:
-    for e in t:
+    let first = if t.kind == nnkObjConstr: 1 else: 0
+    for i in first ..< t.len:
+      let e = t[i]
       # a named field's name is constructor vocabulary, the value decides
       let v = if e.kind == nnkExprColonExpr: e[1] else: e
       if constrHasTypeElem(v):
