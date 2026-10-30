@@ -851,7 +851,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   of eBitNot:
     let t = ctx.resolveExprType(fn, e.unOperand)
     let v = ctx.emitExpr(fn, e.unOperand)
-    ctx.builder.freshInst(OpBitwiseNot, @[ctx.tyId(ctx.valueTy(t)), v])
+    ctx.builder.freshInst(OpNot, @[ctx.tyId(ctx.valueTy(t)), v])
   of eAnd:
     let l = ctx.emitExpr(fn, e.andLeft)
     let r = ctx.emitExpr(fn, e.andRight)
