@@ -13,11 +13,9 @@
 ## a body computing a constant with no parameter read.
 ## Layout algebra (`logical_divide`, `slice`, static shapes) crosses the kernel boundary through such shells.
 ##
-## Pass contract:
-## - shell call site → its resolved constant, substituted before verification and printing
-## - a shell definition nothing calls anymore → deleted
-## - a local bound to a constant nothing reads afterwards → deleted by the
-##   dead-local pass of the optimization stage, its type never reaches the printer
+##   shell call site ──▶ its resolved constant, substituted before verification and printing
+##   dead shell definition ──▶ deleted
+##   dead constant local ──▶ deleted by the optimization stage's dead-local pass
 ##
 ## Detection is syntactic:
 ## - single-assignment local bindings
@@ -54,7 +52,6 @@ proc failing(ctx: FoldCtx): bool =
   ctx.err.len > 0
 
 proc fail(ctx: var FoldCtx, detail: string) =
-  ## Records the first refusal, naming the proc.
   if ctx.err.len == 0:
     ctx.err = "cirv2 fold: at " & ctx.fnName & ": " & detail
 
