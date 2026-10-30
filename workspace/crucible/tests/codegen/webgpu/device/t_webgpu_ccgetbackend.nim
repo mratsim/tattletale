@@ -18,9 +18,12 @@ const kernelCode = webgpu:
     else: output[0] = 5
 
 proc runTest() =
-  doAssert "(&output)[0] = 5;" in kernelCode,
+  # v1 wrote the store through pointer indexing `(&output)[0]`,
+  # WGSL storage writes the variable directly,
+  # both forms carry the same semantics.
+  doAssert "output[0] = 5;" in kernelCode,
     "WGSL missing the ctWebGPU dispatch constant (5):\n" & kernelCode
-  for other in ["(&output)[0] = 1;", "(&output)[0] = 2;", "(&output)[0] = 3;", "(&output)[0] = 4;"]:
+  for other in ["output[0] = 1;", "output[0] = 2;", "output[0] = 3;", "output[0] = 4;"]:
     doAssert other notin kernelCode,
       "a non-WebGPU dispatch branch survived semantic analysis:\n" & kernelCode
   doAssert "when" notin kernelCode,

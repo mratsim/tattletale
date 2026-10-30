@@ -20,7 +20,7 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ## Each output row is x * rsqrt(mean(x²) + eps), times the per-axis weight when withWeight. dst is fully overwritten.
   ##
   ## Sum of squares per row, one register tile at a time:
-  ## - `atAxisIndex` cuts the source and destination strips per row, the rank-1 weight strip is the full tensor
+  ## - `alongAxisAt` cuts the source and destination strips per row. The rank-1 weight strip is the full tensor
   ## - tile loads pad past-the-end slots with zero, so short and ragged rows contribute nothing to the sum
   ## - `tileSum += reg.data[i]` per element, `acc += reduceAdd(tileSum)` folds each tile onto the accumulator, one subgroup butterfly per tile
   ##
@@ -57,8 +57,8 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     gridStride = getGridSize()
   for g in countup(getLocalTileID(src.shape), rows - 1, gridStride):
     let
-      srcRow = atAxisIndex(src, axis, g)
-      dstRow = atAxisIndex(dst, axis, g)
+      srcRow = alongAxisAt(src, axis, g)
+      dstRow = alongAxisAt(dst, axis, g)
       rowSize = srcRow.size()
       tiled = make_layout(rowSize).logical_divide(reg.getLayout())
       stripTiles = tiled.getTileGrid().size()
@@ -74,7 +74,7 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     let scale = rsqrt(acc / float32(rowSize) + eps)
     # pass 2: scaled apply, the weight broadcast along the axis
     when withWeight:
-      let weightStrip = atAxisIndex(weight, 0, 0)
+      let weightStrip = alongAxisAt(weight, 0, 0)
       for r in countup(thrID, rowSize - 1, W):
         dstRow[r] = srcRow[r] * scale * weightStrip[r]
     else:

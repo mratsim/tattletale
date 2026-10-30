@@ -5,869 +5,1213 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## HLSL emission: one compute kernel per source.
+## HLSL printer: a structured CIRv2 module rendered as HLSL compute source for DXC,
+## table-driven over the closed set of type kinds.
+## Two resource-binding flavors share one language body, the binding section differs.
 ##
-## The printer emits each device proc as a standalone HLSL function and the kernel as `main`.
-## DXC accepts multi-function HLSL, so nothing is inlined: calls compile to plain calls.
+## Emission contract:
+## - one `{.global.}` kernel per module, emitted as `main` unless
+##   `{.exportc: "name".}` renames the entry,
+##   DXC compiles one entry point per invocation with `-E main`,
+##   device functions alongside, forward-declared
 ##
-## Resource mapping, kernels:
-## - A pointer parameter binds to a StructuredBuffer (read-only) or an RWStructuredBuffer
-##   (read-write) resource. A scalar parameter becomes a member of one shared ConstantBuffer.
-## - The printer assigns ordinals in declaration order: each read-only buffer takes
-##   the next `register(tN, space0)`, each read-write buffer the next `register(uN, space0)`,
-##   and the ConstantBuffer takes the last `register(bN, space0)`.
-## - The write-scan classifies each buffer: a function that never stores through it is read-only.
-## - Reading a scalar parameter emits the expression `push.<name>`, a member access into
-##   the ConstantBuffer struct.
+## fvD3D12 (default, D3D12-native binding):
+## - buffer parameters bind StructuredBuffer / RWStructuredBuffer resources,
+##   read-only vs read-write, on one global register ordinal in parameter order
+##   (`t` vs `u`), the write-scan is conservative: a buffer counts as read-write
+##   when the kernel or any device function argument stores through it.
+## - scalars and value structs pack into one `struct Push` block behind the buffers:
+##   `ConstantBuffer<Push> push : register(bN, space0)` where N is the buffer count,
+##   scalar reads go through `push.<dotted path>`
 ##
-## Coordinate builtins (SV_DispatchThreadID / SV_GroupID / SV_GroupIndex):
-## - The kernel reads coordinate builtins through HLSL input semantics.
-## - `main`'s signature contains only the semantics that the body actually reads.
+## fvVulkan (zero-descriptor, SPIR-V through the engine's address route):
+## - every kernel parameter is a member of one `[[vk::push_constant]]` struct,
+##   buffer parameters as `uint64_t` device addresses, every member offset
+##   locked with `[[vk::offset]]` to the launch-side packing
+## - the launch-side packing: width-aligned scalars and value structs, the staged grid member 16-byte aligned
+## - a buffer access constructs `vk::BufferPointer<E>` from the address per use,
+##   an lvalue for reads and writes, device-function buffer parameters take the address by value
+## - buffer elements: 32-bit integers, float, double, a buffer parameter is
+##   writable regardless of the write-scan, the BDA route has no read-only
+##   binding to violate
 ##
-## Resource mapping, device functions:
-## - A device-function buffer parameter declares a resource type but no register.
-##   Each call passes the caller's buffer as the argument, so the same function
-##   reads or writes whichever buffer the caller gives it.
-## - The function's own write-scan decides read-only (StructuredBuffer) vs
-##   read-write (RWStructuredBuffer).
-## - Scalars pass by value. A large-struct parameter binds `inout` to avoid a copy.
+## Shared:
+## - the dispatch grid size has no HLSL semantic: a `threadgroups_per_grid` read refuses,
+##   the HLSL lowering pass materializes the read into the trailing `crucible_numworkgroups` parameter,
+##   staged at launch as a descriptor-route uniform on fvD3D12, as a push block member on fvVulkan
 ##
-## DXC notes honored here:
-## - the entry point is always `main`, matching the required `-E main` invocation
-## - `[numthreads]` comes from pWorkgroupSize, (0, 0, 0) means 256x1x1
-## - brace-initialization is declaration-only: an object constructor assigned to an already-declared local lowers to member-wise assignment
-## - only int/uint/float/double/bool have HLSL type names, int64/uint64 are rejected by the printer
+## Addressing, memory classes, jumps:
+## - HLSL has no pointer values: pointer locals, pointer-holding struct locals,
+##   `var` parameter derefs all dissolve in the HLSL lowering pass,
+##   anything pointer shaped reaching the printer refuses
+## - `{.const_mem.}` locals relocate into `CirModule.globals` through the HLSL lowering pass,
+##   file-scope `static const` output, a smem, device-space or surviving
+##   constant-space local refuses
+## - jmp to the loop exit label is `break`, to the continue label `continue`,
+##   any other lab/jmp refuses
+## - object constructions emit flat brace lists at any depth, `{ 0, 1, 2 }`,
+##   the form DXC accepts over uniformly scalar members, a constructor assignment
+##   lowers to member-wise leaves, DXC rejects compound literals on assignment.
 
-import std / [macros, strutils, tables, sets, hashes]
+import std/[macros, sets, strutils, tables]
 
-import ../../builtins/builtins_functions
-import ../../builtins/builtins_gpu_types
 import ../ir/ast_datatypes
-import ../ir/ast_type_resolvers
-import ./lang_utils
 
-# ═══════════════════════════════════════════════════════════════════════
-# Flavor
-# ═══════════════════════════════════════════════════════════════════════
+import ../ir/cirv2_lang
+import ../frontend/nim_to_crucible
+import ../passes/pass_helpers
+import ./emit_common
 
 type HlslFlavor* = enum
   ## Resource-binding flavor of the emitted HLSL.
   ## The flavor changes the resource-binding section only, the language body is identical.
   fvD3D12   ## D3D12-native StructuredBuffer / RWStructuredBuffer / ConstantBuffer
             ## on `register(tN/uN/bN, space0)`, consumable by DXC for DXIL and SPIR-V
-  fvVulkan  ## reserved for the BDA-capable Vulkan flavor with vk::BufferPointer
-            ## and zero-descriptor launches, no emission yet
+  fvVulkan  ## zero-descriptor Vulkan flavor: every parameter binds into one `[[vk::push_constant]]` block,
+            ## buffers as device addresses,
+            ## accesses construct `vk::BufferPointer` from the address,
+            ## dxc -spirv emits physical-storage-buffer words for the address route
+
 
 # ═══════════════════════════════════════════════════════════════════════
-# Type mapping
+# Per-proc emission state
 # ═══════════════════════════════════════════════════════════════════════
 
-proc gpuTypeToString*(t: GpuTypeKind): string =
-  case t
-  of gtBool: "bool"
-  of gtInt32: "int"
-  of gtUint32, gtSize_t: "uint" # size_t launches as a 32-bit uint, matching the Vulkan launch ABI
-  of gtFloat32: "float"
-  of gtFloat64: "double"
-  of gtVoid: "void"
-  of gtStatic: "int"
-  of gtObject, gtGenericInst, gtArray: "struct"
-  of gtInt64, gtUint64:
-    error "HLSL: int64_t is a parse error in the HLSL frontend and uint64_t pulls the SPIR-V Int64 capability, 64-bit integers are rejected"
-  else:
-    error "HLSL has no type name for " & $t
+type
+  PrintCtx = object
+    fnName: string
+    ## First refusal of the walk, "" while clean.
+    err: string
+    indent: int
+    isKernel: bool
+    ## Scalar kernel parameters, their reads go through `push.<name>`.
+    pushParams: HashSet[string]
+    ## Buffer parameters of the proc in flight, bare use refuses.
+    bufferParams: HashSet[string]
+    ## Buffer parameters classified read-write by the module write-scan.
+    rwBuffers: HashSet[string]
+    flavor: HlslFlavor
+    ## Buffer parameters of the proc in flight by name, to their `aptr` type:
+    ## the fvVulkan access emitter reads the element type per access.
+    addressParams: Table[string, CirType]
+    ## Coordinate semantics the kernel body reads, main takes only those.
+    coordReads: set[CoordBuiltinKind]
+    workgroup: array[3, int]
+    procs: Table[string, CirProc]
+    ## Module procs by name, by-reference call arguments read callee
+    ## parameter types here.
 
-proc gpuTypeToString*(t: GpuType, ident: string = "", allowEmptyIdent = false): string =
-  ## HLSL type text, struct types render their own name
-  var skipIdent = false
+const printerTarget = "hlsl"
+
+# ═══════════════════════════════════════════════════════════════════════
+# Types
+# ═══════════════════════════════════════════════════════════════════════
+
+proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
+  ## HLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
-  of gtArray:
-    if t.aLen == 0:
-      error "HLSL: runtime-sized arrays exist only as buffer resources"
-    if ident.len == 0 and not allowEmptyIdent:
-      error "Invalid call, got an array type but don't have an identifier: " & $t
-    result = gpuTypeToString(t.aTyp, allowEmptyIdent = true) & ' ' & ident & '[' & $t.aLen & ']'
-    skipIdent = true
-  of gtObject: result = t.name
-  of gtGenericInst:
-    result = t.gName
-    if t.gArgs.len == 1:
-      result.add gpuTypeToShortString(t.gArgs[0])
-    elif t.gArgs.len > 1:
-      # 2+ args collapse to a short hash
-      result.add mangledHashName("", $hash(t))
-  of gtStatic: result = "int"
-  else:        result = gpuTypeToString(t.kind)
-
-  if ident.len > 0 and not skipIdent:
-    result.add ' ' & ident
-
-proc genLit*(ast: GpuAst): string =
-  ## HLSL literal text, suffixed per its type: without the suffix the HLSL
-  ## frontend changes width or signedness
-  if ast.lType.kind == gtString:
-    result = '"' & ast.lValue & '"'
-  elif ast.lValue == "DEFAULT":
-    error "HLSL: DEFAULT literal has no emission"
-  else:
-    case ast.lType.kind
-    of gtBool:
-      doAssert ast.lValue in ["true", "false"], "bool literal is " & ast.lValue
-      result = ast.lValue
-    of gtInt32: result = ast.lValue
-    of gtUint32, gtSize_t: result = ast.lValue & "u"
-    of gtFloat32:
-      result = if '.' in ast.lValue or 'e' in ast.lValue or 'E' in ast.lValue: ast.lValue & "f"
-               else: ast.lValue & ".0f"
-    of gtFloat64:
-      result = if '.' in ast.lValue or 'e' in ast.lValue or 'E' in ast.lValue: ast.lValue
-               else: ast.lValue & ".0"
-    else:
-      error "HLSL: literal of type " & $ast.lType.kind & " has no emission"
-
-# ═══════════════════════════════════════════════════════════════════════
-# Per-function emission state
-# ═══════════════════════════════════════════════════════════════════════
-
-type HlslBuffer = object
-  name: string        ## display name of the buffer parameter, the resource variable name
-  elem: GpuType       ## element type addressed through the buffer
-  binding: int        ## global resource ordinal: register(tN/uN) number, unused on device function params
-  readOnly: bool      ## true when the write-scan finds no store through the buffer
-
-type HlslKernel = ref object
-  ## Per-function emission state, codegen assembles the collected pieces after the body scan.
-  ## A ref so the gpuEmit renderer closure can capture and mutate it: Nim closures cannot capture `var` parameters.
-  buffers: Table[string, HlslBuffer] ## buffer param iSym -> resource info
-  pushParams: Table[string, GpuType] ## scalar param iSym -> push-block member type, kernels only
-  isKernel: bool                     ## false for device functions: scalars are plain params, returns carry values
-  gridRead: bool                     ## a thread_position_in_grid component was read
-  groupIdName: string                ## threadgroup_position_in_grid input name, "" when unread
-  groupIndexName: string             ## thread_index_in_threadgroup input name, "" when unread
-
-func indexBase(n: GpuAst): GpuAst =
-  ## Array expression an index node addresses, transparent through gpuDeref
-  ## nodes around pointer bases
-  if n.iArr.kind == gpuDeref:
-    n.iArr.dOf
-  else:
-    n.iArr
-
-proc classifyParams(st: HlslKernel, fn: GpuAst) =
-  ## Splits function parameters into buffer resources and scalars,
-  ## one global resource ordinal per buffer parameter:
-  ## - kernels: scalars join the Push block, buffers take register(tN/uN) ordinals
-  ## - device functions: scalars pass by value, buffers are unbound resource params
-  ##
-  ## Rejects the parameter shapes the HLSL resource model cannot bind,
-  ## every message names the rejected construct and the enclosing function.
-  let fnName = fn.pName.ident()
-  var ordinal = 0
-  for param in fn.pParams:
-    let sym = param.ident.symbol
-    if sym.coordBuiltin != gbkNone:
-      # coordinate builtins are inputs joined on read, never parameters
-      continue
-    if param.flavor == kVar:
-      error "HLSL: `var` (pass-by-reference) parameter " & sym.name & " in `" & fnName &
-        "` has no binding, buffers pass as `ptr UncheckedArray[T]`"
-    if param.passByRef and st.isKernel:
-      error "HLSL: by-reference parameter " & sym.name & " in kernel `" & fnName & "` has no binding"
-    if param.addressSpace == asSMEM:
-      error "HLSL: {.smem.} parameter " & sym.name & " in `" & fnName & "` has no binding"
-    case param.typ.kind
-    of gtVoidPtr:
-      error "HLSL: void pointer parameter " & sym.name & " in `" & fnName & "` has no resource binding"
-    of gtPtr:
-      if param.typ.to.kind != gtUncheckedArray:
-        error "HLSL: buffer parameter " & sym.name & " in `" & fnName &
-          "` must be `ptr UncheckedArray[T]`, got ptr " & $param.typ.to.kind
-      st.buffers[sym.iSym] = HlslBuffer(
-        name: sym.name,
-        elem: param.typ.to.uaTo,
-        binding: ordinal)
-      inc ordinal
-    of gtObject, gtGenericInst:
-      # gtObject carries the plain type name, gtGenericInst the generic's name
-      let tname = if param.typ.kind == gtGenericInst: param.typ.gName else: param.typ.name
-      if tname in ["TensorView", "TensorOwned"]:
-        error "HLSL: " & tname & " parameter " & sym.name & " in `" & fnName &
-          "` is outside the HLSL subset (HLSL structs cannot hold resources)"
-      if st.isKernel:
-        error "HLSL: struct parameter " & sym.name & " in kernel `" & fnName & "` has no binding"
-      # device functions take plain structs by value
-    of gtInt64, gtUint64:
-      error "HLSL: 64-bit integer parameter " & sym.name & " in `" & fnName &
-        "` is rejected: int64_t is a parse error in the HLSL frontend and uint64_t pulls the SPIR-V Int64 capability"
-    of gtArray, gtUncheckedArray:
-      error "HLSL: " & $param.typ.kind & " parameter " & sym.name & " in `" & fnName &
-        "` has no binding, buffers pass as `ptr UncheckedArray[T]`"
-    of gtFloat16, gtBf16, gtF8E4M3, gtF8E5M2, gtUint8, gtUint16, gtInt16, gtSpan, gtString:
-      error "HLSL: parameter " & sym.name & " of type " & $param.typ.kind & " in `" & fnName &
-        "` has no HLSL type name"
-    else:
-      if st.isKernel:
-        st.pushParams[sym.iSym] = param.typ
-      # device function scalars pass by value, no per-param state
-
-proc writesThrough(n: GpuAst, bufISym: string): bool =
-  ## True when the statement tree stores through the buffer parameter iSym, direct indexed assignment only
-  case n.kind
-  of gpuBlock:
-    for s in n.statements:
-      if s.writesThrough(bufISym):
-        return true
-  of gpuAssign:
-    if n.aLeft.kind == gpuIndex:
-      let base = indexBase(n.aLeft)
-      if base.kind == gpuIdent and base.symbol.iSym == bufISym:
-        return true
-  of gpuIf:
-    if n.ifThen.writesThrough(bufISym):
-      return true
-    for el in n.ifElifs:
-      if el.body.writesThrough(bufISym):
-        return true
-    if n.ifElse.kind != gpuDiscard and n.ifElse.writesThrough(bufISym):
-      return true
-  of gpuFor:
-    if n.fBody.writesThrough(bufISym):
-      return true
-  of gpuWhile:
-    if n.wBody.writesThrough(bufISym):
-      return true
-  of gpuEmit:
-    # expression parts render through the normal printer, so a store inside
-    # an emit takes the same indexed-assignment path
-    for part in n.parts:
-      if part.kind == peExpr and part.expr.writesThrough(bufISym):
-        return true
-  else:
-    discard
-
-proc emitMentions(n: GpuAst, name: string): bool =
-  ## True when a `{.emit.}` anywhere in the tree mentions the identifier `name`.
-  ## Verbatim literal runs are not parsed, so the substring match over-approximates:
-  ## a false positive classifies the buffer read-write, the safe direction.
-  case n.kind
-  of gpuBlock:
-    for s in n.statements:
-      if s.emitMentions(name):
-        return true
-  of gpuIf:
-    if n.ifThen.emitMentions(name):
-      return true
-    for el in n.ifElifs:
-      if el.body.emitMentions(name):
-        return true
-    if n.ifElse.kind != gpuDiscard and n.ifElse.emitMentions(name):
-      return true
-  of gpuFor:
-    if n.fBody.emitMentions(name):
-      return true
-  of gpuWhile:
-    if n.wBody.emitMentions(name):
-      return true
-  of gpuEmit:
-    for part in n.parts:
-      case part.kind
-      of peLiteral:
-        if name in part.literal:
-          return true
-      of peExpr:
-        if part.expr.emitMentions(name):
-          return true
-  else:
-    discard
-
-# ═══════════════════════════════════════════════════════════════════════
-# Device function signatures
-# ═══════════════════════════════════════════════════════════════════════
-
-proc fnRetTypeText(fn: GpuAst): string =
-  ## HLSL return type text of a function, gtVoid renders `void`
-  if fn.pRetType.isNil or fn.pRetType.kind == gtVoid:
+  of ctVoid:
     result = "void"
-  else:
-    result = gpuTypeToString(fn.pRetType, allowEmptyIdent = true)
-
-proc deviceFnSignature(st: HlslKernel, fn: GpuAst): string =
-  ## `RetType name(params)` of a device function:
-  ##
-  ## - buffer params render as StructuredBuffer / RWStructuredBuffer resource params
-  ##   over the element type, read-only vs RW from the function's own write-scan
-  ## - scalars pass by value
-  ## - large-struct params bind `inout`
-  var params: seq[string]
-  for p in fn.pParams:
-    let sym = p.ident.symbol
-    if sym.iSym in st.buffers:
-      let buf = st.buffers[sym.iSym]
-      let resTy = if buf.readOnly: "StructuredBuffer" else: "RWStructuredBuffer"
-      params.add resTy & "<" & gpuTypeToString(buf.elem, allowEmptyIdent = true) & "> " & sym.name
-    elif p.passByRef:
-      params.add "inout " & gpuTypeToString(p.typ, sym.name)
+  of ctBool:
+    result = "bool"
+  of ctInt:
+    case t.bits
+    of 32:
+      result = "int"
     else:
-      params.add gpuTypeToString(p.typ, sym.name)
-  result = fnRetTypeText(fn) & ' ' & fn.pName.ident() & '(' & params.join(", ") & ')'
+      ctx.fail("int" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
+        " are parse errors and int64_t is a parse error in the HLSL frontend," &
+        " 64-bit integers are rejected")
+  of ctUint:
+    case t.bits
+    of 32:
+      result = "uint"
+    else:
+      ctx.fail("uint" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
+        " are parse errors and uint64_t pulls the SPIR-V Int64 capability," &
+        " 64-bit integers are rejected")
+  of ctFloat:
+    case t.bits
+    of 32:
+      result = "float"
+    of 64:
+      result = "double"
+    else:
+      ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
+  of ctVector:
+    let elem = emitHlslScalar(ctx, t.vElem)
+    let base = case elem
+      of "float": "float"
+      of "int": "int"
+      of "uint": "uint"
+      of "bool": "bool"
+      else: ""
+    if base.len > 0 and t.vN in 2 .. 4:
+      result = base & $t.vN
+    else:
+      ctx.fail("vector of " & (if elem.len > 0: elem else: $t.vElem.kind) &
+        "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
+  of ctStruct:
+    result = t.name
+  of ctPtr, ctAptr, ctArray, ctProc:
+    result = ""
+
+proc emitHlslTypeBare(ctx: var PrintCtx, t: CirType): string =
+  ## HLSL name of `t` with no identifier, the form of casts and constructors.
+  ## Arrays have no bare form, `T name[N]` composes at the declaration.
+  case t.kind
+  of ctArray:
+    ctx.fail("array type has no bare HLSL name, arrays compose at their declaration")
+  else:
+    result = emitHlslScalar(ctx, t)
+
+proc emitHlslDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
+  ## HLSL declaration of `t` for `ident`, array dimensions composed into the name.
+  if t.kind == ctArray:
+    result = emitHlslScalar(ctx, t.aElem) & ' ' & ident & "[" & $t.aN & "]"
+  else:
+    result = emitHlslScalar(ctx, t) & ' ' & ident
+
+proc emitBpName(t: CirType): string =
+  ## Typedef name of the `vk::BufferPointer` alias for one buffer element type
+  case t.kind
+  of ctInt: result = "BpI32"
+  of ctUint: result = "BpU32"
+  of ctFloat: result = (if t.bits == 64: "BpF64" else: "BpF32")
+  else: result = ""
+
+proc bpElementStride(ctx: var PrintCtx, elem: CirType): int =
+  ## Byte stride of one buffer element on the fvVulkan route, its storage width.
+  ## The address arithmetic indexes buffers by it.
+  case elem.kind
+  of ctInt, ctUint:
+    if elem.bits != 32:
+      ctx.fail("buffer element of " & $elem.bits & "-bit integer has no fvVulkan" &
+        " binding, the element envelope is 32-bit integers, float and double")
+    result = 4
+  of ctFloat:
+    if elem.bits != 32 and elem.bits != 64:
+      ctx.fail("buffer element of float" & $elem.bits & " has no fvVulkan" &
+        " binding, the element envelope is 32-bit integers, float and double")
+    result = elem.bits div 8
+  else:
+    ctx.fail("buffer element of " & $elem.kind & " type has no fvVulkan binding," &
+      " the element envelope is 32-bit integers, float and double")
+    result = 0
+
+proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size, align: int] =
+  ## Packed size and alignment of one fvVulkan push-block value member.
+  ## Member offsets lock to the launch-side packing: scalars and vectors are
+  ## width-aligned, struct members stay flat over scalars, the alignment is
+  ## the max field width, the size rounds to it.
+  case t.kind
+  of ctInt, ctUint, ctFloat:
+    let w = t.bits div 8
+    result = (w, w)
+  of ctBool:
+    ctx.fail("bool push member " & label & ", the fvVulkan push block has no" &
+      " bool member")
+  of ctVector:
+    let w = t.vElem.bits div 8
+    result = (w * t.vN, w)
+  of ctStruct:
+    result.align = 1
+    var size = 0
+    for f in t.fields:
+      case f.typ.kind
+      of ctInt, ctUint, ctFloat:
+        let w = f.typ.bits div 8
+        size = roundUpMultiple(size, w) + w
+        result.align = max(result.align, w)
+      else:
+        ctx.fail("field " & f.name & " of push member " & label & " is a " &
+          $f.typ.kind & ", the fvVulkan push block packs struct members flat" &
+          " over 32/64-bit scalars: the compiler's internal struct layout" &
+          " (16-byte struct alignment, the vector register-straddle rule)" &
+          " diverges from the launch packing for anything wider")
+    size = roundUpMultiple(size, result.align)
+    result.size = size
+  else:
+    ctx.fail("push member " & label & " of " & $t.kind & " type has no fvVulkan binding")
+
+# ═══════════════════════════════════════════════════════════════════════
+# Coordinate builtins
+# ═══════════════════════════════════════════════════════════════════════
+
+## Synthesized main input variable per coordinate builtin kind, "" for the kinds
+## without one: threads_per_threadgroup reads the workgroup literal,
+## threadgroups_per_grid materializes in the lowering pass.
+const CoordInputNames: array[CoordBuiltinKind, string] = [
+  "", "gid", "groupId", "groupThreadId", "", "", "gidx",
+]
+
+proc coordInputName(kind: CoordBuiltinKind): string =
+  ## Synthesized main input variable of a coordinate builtin kind.
+  CoordInputNames[kind]
+
+proc emitCoordWhole(ctx: var PrintCtx, kind: CoordBuiltinKind): string =
+  ## Whole-vector read of a coordinate builtin, cast to the canonical int
+  ## tuple the CIRv2 vocabulary reads.
+  ctx.coordReads.incl(kind)
+  case kind
+  of cbkThreadsPerThreadgroup:
+    result = "int3(" & $ctx.workgroup[0] & ", " & $ctx.workgroup[1] & ", " &
+      $ctx.workgroup[2] & ")"
+  of cbkThreadIndexInThreadgroup:
+    result = "int(" & coordInputName(kind) & ")"
+  else:
+    let n = coordInputName(kind)
+    result = "int3(int(" & n & ".x), int(" & n & ".y), int(" & n & ".z))"
+
+proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string): string =
+  ## One coordinate-builtin component, cast to the canonical int the CIRv2 vocabulary reads.
+  ctx.coordReads.incl(kind)
+  case kind
+  of cbkThreadsPerThreadgroup:
+    let i = case field
+      of "x": 0
+      of "y": 1
+      of "z": 2
+      else: -1
+    if i < 0:
+      ctx.fail("no component " & field & " on threads_per_threadgroup")
+    result = $ctx.workgroup[i]
+  of cbkThreadIndexInThreadgroup:
+    result = "int(" & coordInputName(kind) & ")"
+  else:
+    result = "int(" & coordInputName(kind) & "." & field & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getExprTypeHlsl(ctx: GpuContext, n: GpuAst): GpuType =
-  ## getOperandType plus two fixups:
-  ## - `min`/`max`/`abs` calls resolve to the operand type: the call site keeps the unmangled
-  ##   Nim magic name while the materialized body sits in fnTab under its instantiation mangle,
-  ##   so the fn-table lookup cannot see it (the intrinsic prints the plain name)
-  ## - coordinate-builtin component reads are uint32, synthesized component idents carry no type
-  if n.kind == gpuCall and not n.cName.symbol.isNil and
-      n.cName.symbol.name in NimGpuNumericBuiltinsFunctions:
-    return ctx.getOperandType(n.cArgs[0])
-  result = ctx.getOperandType(n)
-  if result.isNil and n.kind == gpuDot and n.dParent.kind == gpuIdent and
-      n.dParent.symbol != nil and n.dParent.symbol.coordBuiltin != gbkNone:
-    result = GpuType(kind: gtUint32)
+proc printExpr(ctx: var PrintCtx, e: CirExpr): string
+  ## Forward declaration, expressions recurse into themselves.
 
-proc emitCast(ctx: GpuContext, target: GpuType, exprText: string, source: GpuType): string =
-  ## Explicit HLSL constructor cast when the IR carries a type change:
-  ##
-  ## - identical scalar types and sourceless expressions emit uncast
-  ## - a gtVoid target emits uncast, the implicit `result` ident carries no type,
-  ##   the frontend already converted its value to the declared result type
-  if source.isNil or target.kind == gtVoid or source.kind == target.kind:
-    return exprText
-  if target.kind == gtArray:
-    error "HLSL: array casts have no emission"
-  gpuTypeToString(target, allowEmptyIdent = true) & "(" & exprText & ")"
+# HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
+# `asfloat` (32 bit) and `asdouble` (64 bit).
+const hlslFloatTokens = FloatLitTokens(
+  inf16: "asfloat(0x7f800000)", negInf16: "asfloat(0xff800000)", nan16: "asfloat(0x7fc00000)",
+  inf32: "asfloat(0x7f800000)", negInf32: "asfloat(0xff800000)", nan32: "asfloat(0x7fc00000)",
+  inf64: "asdouble(0u, 0x7ff00000u)",
+  negInf64: "asdouble(0u, 0xfff00000u)",
+  nan64: "asdouble(0u, 0x7ff80000u)")
 
-proc genIdentRef(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string =
-  ## Text of an identifier read:
-  ## - a kernel scalar parameter reads through the push block (`push.<name>`)
-  ## - a coordinate builtin adds its semantic input to `main`'s signature
-  ##   when the body first reads it
-  ## - buffer parameters refuse bare use outside a call argument
-  let sym = n.symbol
-  case sym.coordBuiltin
-  of gbkThreadIndexInThreadgroup:
-    st.groupIndexName = sym.name
-    return sym.name
-  of gbkNone: discard
-  else:
-    error "HLSL: whole-vector use of coordinate builtin " & sym.name & " has no emission, index a component"
-  if sym.iSym in st.buffers:
-    error "HLSL: bare pointer value use of buffer parameter " & sym.name
-  if sym.iSym in st.pushParams:
-    return "push." & sym.name
-  sym.name
+proc emitHlslLit(e: CirExpr): string =
+  ## HLSL token of a literal, typed by its literal type: without the suffix
+  ## the HLSL frontend changes width or signedness.
+  case e.kind
+  of eIntLit:
+    case e.litType.kind
+    of ctUint:
+      result = $e.value & "u"
+    else:
+      result = $e.value
+  of eFloatLit:
+    result = nonFiniteFloatLit(e, hlslFloatTokens)
+    if result.len == 0:
+      case e.fLitType.bits
+      of 64:
+        result = $e.fValue & "l"
+      else:
+        result = $e.fValue & "f"
+  of eTrue: result = "true"
+  of eFalse: result = "false"
+  else: result = "<hlsl: not a literal>"
 
-proc isFp16ConversionCall(n: GpuAst): bool =
-  ## True for the fp16 ↔ fp32 conversion builtins (toFp16, toFp32, asFp16, asU16):
-  ## the per-backend name table carries no HLSL entries, the calls have no emission
-  let name = n.cName.ident()
-  for key in NimGpuFp16ConversionBuiltins.keys:
-    if key[1] == name:
-      return true
-  false
+proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string
+  ## Forward declaration, nested constructions flatten recursively.
 
-proc genHlslExpr(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string
-proc genHlsl(ctx: var GpuContext, st: HlslKernel, ast: GpuAst, indent = 0): string
-proc genBraceList(ctx: var GpuContext, st: HlslKernel, oc: GpuAst): string
+proc braceLeaves(ctx: var PrintCtx, t: CirType, v: CirExpr, outp: var seq[string]) =
+  ## Appends the flat leaf values of one construction over struct type `t`,
+  ## fields in declaration order, nested constructions flatten recursively.
+  ## A zero-field struct contributes one `0` slot for its padding member.
+  if t.fields.len == 0:
+    outp.add "0"
+    return
+  for f in t.fields:
+    var val: CirExpr = nil
+    for kvv in v.kvFields:
+      if kvv.name == f.name:
+        val = kvv.value
+    if val == nil:
+      ctx.fail("field " & f.name & " of " & t.name & " is not bound by the construction")
+      return
+    if val.kind == eOconstr and f.typ.kind == ctStruct:
+      ctx.braceLeaves(f.typ, val, outp)
+    else:
+      outp.add ctx.printExpr(val)
 
-proc genConstrValue(ctx: var GpuContext, st: HlslKernel, v: GpuAst): string =
-  ## One field value of a brace initializer, nested constructions emit nested braces
-  if v.kind == gpuObjConstr:
-    ctx.genBraceList(st, v)
-  else:
-    ctx.genHlslExpr(st, v)
-
-proc genBraceList(ctx: var GpuContext, st: HlslKernel, oc: GpuAst): string =
-  ## Brace initializer `{ a, { b, c } }` for an object constructor, fields in declaration order, verified against DXC
+proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string =
+  ## Flat brace list of one object construction: `{ 0, 1, 2 }` at any depth.
+  var leaves: seq[string]
+  ctx.braceLeaves(t, v, leaves)
+  if ctx.failing():
+    return ""
   result = "{ "
-  for i, f in oc.ocFields:
-    if i > 0:
-      result.add ", "
-    result.add ctx.genConstrValue(st, f.value)
+  result.add leaves.join(", ")
   result.add " }"
 
-proc genHlslExpr(ctx: var GpuContext, st: HlslKernel, n: GpuAst): string =
-  case n.kind
-  of gpuLit:
-    result = genLit(n)
-  of gpuIdent:
-    result = ctx.genIdentRef(st, n)
-  of gpuBinOp:
-    result = "(" & ctx.genHlslExpr(st, n.bLeft) & " " & n.bOp.ident() & " " &
-      ctx.genHlslExpr(st, n.bRight) & ")"
-  of gpuDot:
-    if n.dParent.kind == gpuIdent and n.dParent.symbol != nil and
-        n.dParent.symbol.coordBuiltin != gbkNone:
-      case n.dParent.symbol.coordBuiltin
-      of gbkThreadPositionInGrid:
-        st.gridRead = true
-        result = "gid." & n.dField.ident()
-      of gbkThreadgroupPositionInGrid:
-        st.groupIdName = n.dParent.ident()
-        result = n.dParent.ident() & "." & n.dField.ident()
+proc emitCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string =
+  ## One call argument: an address-of over a variable argument to a by-reference parameter
+  ## emits the variable itself, the `inout` binding takes lvalues directly.
+  if a.kind == eAddr and a.addrOperand.kind == eSym and
+      callee.kind == eSym and ctx.procs.hasKey(callee.name):
+    let fn = ctx.procs[callee.name]
+    if i < fn.params.len and fn.params[i].typ.kind == ctPtr and
+        fn.params[i].typ.space == caThread:
+      return a.addrOperand.name
+  return ctx.printExpr(a)
+
+proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
+  if ctx.failing():
+    return ""
+  case e.kind
+  of eNil:
+    ctx.fail("nil literal is outside the HLSL subset")
+    return ""
+  of eTrue, eFalse, eIntLit, eFloatLit:
+    return emitHlslLit(e)
+  of eSym:
+    if e.coordBuiltin != cbkNone:
+      if not ctx.isKernel:
+        ctx.fail("coordinate builtin in a device function, coordinate" &
+          " semantics bind the kernel entry point only")
+        return ""
+      if e.coordBuiltin == cbkThreadgroupsPerGrid:
+        ctx.fail("threadgroups_per_grid has no HLSL semantic, the HLSL" &
+          " lowering pass materializes it as the " & "crucible_numworkgroups" &
+          " parameter")
+        return ""
+      return emitCoordWhole(ctx, e.coordBuiltin)
+    if ctx.pushParams.contains(e.name):
+      return "push." & e.name
+    if ctx.bufferParams.contains(e.name):
+      if ctx.flavor == fvVulkan:
+        # zero-descriptor route: the parameter IS its u64 device address
+        return (if ctx.isKernel: "push." & e.name else: e.name)
+      ctx.fail("bare pointer value use of buffer parameter " & e.name)
+      return ""
+    return e.name
+  of eAt, ePat:
+    let base = (if e.kind == eAt: e.atBase else: e.patBase)
+    let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
+    if ctx.flavor == fvVulkan and base.kind == eSym and
+        ctx.addressParams.hasKey(base.name):
+      let elem = ctx.addressParams[base.name].pElem
+      let stride = ctx.bpElementStride(elem)
+      if ctx.failing():
+        return ""
+      return emitBpName(elem) & "(" & ctx.printExpr(base) &
+        " + (uint64_t)(" & idx & ") * " & $stride & ").Get()"
+    if base.kind == eSym and ctx.bufferParams.contains(base.name):
+      return base.name & "[" & idx & "]"
+    let bt = getExprType(base)
+    if bt != nil and bt.kind == ctArray:
+      var baseTxt = ctx.printExpr(base)
+      if base.kind in {eCast, eConv}:
+        # a cast binds looser than the subscript: parenthesize the base
+        baseTxt = "(" & baseTxt & ")"
+      return baseTxt & "[" & idx & "]"
+    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
+      " base is outside the HLSL subset")
+    return ""
+  of eDeref:
+    ctx.fail("bare dereference has no emission, HLSL has no pointer values")
+    return ""
+  of eDot:
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+      if not ctx.isKernel:
+        ctx.fail("coordinate builtin in a device function, coordinate" &
+          " semantics bind the kernel entry point only")
+        return ""
+      if e.dotBase.coordBuiltin == cbkThreadgroupsPerGrid:
+        ctx.fail("threadgroups_per_grid has no HLSL semantic, the HLSL" &
+          " lowering pass materializes it as the " & "crucible_numworkgroups" &
+          " parameter")
+        return ""
+      return emitCoordComponent(ctx, e.dotBase.coordBuiltin, e.fieldName)
+    let bt = getExprType(e.dotBase)
+    if bt != nil and bt.kind == ctVector:
+      let comp = emitVectorComponent(e.fieldName)
+      if comp.len == 0:
+        ctx.fail("no vector component " & e.fieldName)
+        return ""
+      return ctx.printExpr(e.dotBase) & "." & comp
+    return ctx.printExpr(e.dotBase) & "." & e.fieldName
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    let op = case e.kind
+      of eAdd: "+"
+      of eSub: "-"
+      of eMul: "*"
+      of eDiv: "/"
+      of eMod: "%"
+      of eShl: "<<"
+      of eShr: ">>"
+      of eBitAnd: "&"
+      of eBitOr: "|"
+      else: "^"
+    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
+  of eEq, eNeq, eLt, eLe:
+    let op = case e.kind
+      of eEq: "=="
+      of eNeq: "!="
+      of eLt: "<"
+      else: "<="
+    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
+  of eNot:
+    return "(!" & ctx.printExpr(e.notOperand) & ")"
+  of eAnd, eOr:
+    let op = if e.kind == eAnd: "&&" else: "||"
+    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
+  of eBitNot:
+    return "(~" & ctx.printExpr(e.unOperand) & ")"
+  of eNeg:
+    return "(-" & ctx.printExpr(e.unOperand) & ")"
+  of eCast:
+    let t = e.castType
+    let fn = if t.kind == ctInt and t.bits == 32: "asint"
+      elif t.kind == ctUint and t.bits == 32: "asuint"
+      elif t.kind == ctFloat and t.bits == 32: "asfloat"
+      else: ""
+    if fn.len == 0:
+      ctx.fail("bit cast to " & emitHlslTypeBare(ctx, t) &
+        " has no HLSL emission, only the 32-bit asint/asuint/asfloat reinterprets")
+      return ""
+    return fn & "(" & ctx.printExpr(e.castOperand) & ")"
+  of eConv:
+    return emitHlslTypeBare(ctx, e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
+  of eSizeof:
+    ctx.fail("sizeof has no HLSL emission, HLSL struct layout differs from the" &
+      " buffer layout the size would name")
+    return ""
+  of eAddr:
+    ctx.fail("address-of has no HLSL form, buffers are index-only resources" &
+      " and locals dissolve to their pointee")
+    return ""
+  of eOconstr:
+    if e.ocType.kind == ctVector:
+      # vectors construct by call, valid in declaration initializers and assignments alike,
+      # where struct brace lists only initialize
+      var parts: seq[string]
+      for kvv in e.kvFields:
+        parts.add ctx.printExpr(kvv.value)
+      return emitHlslScalar(ctx, e.ocType) & "(" & parts.join(", ") & ")"
+    return ctx.printBraceList(e.ocType, e)
+  of eAconstr:
+    var parts: seq[string]
+    for el in e.elems:
+      parts.add ctx.printExpr(el)
+    return "{ " & parts.join(", ") & " }"
+  of eCall:
+    let calleeName =
+      if e.callee.kind == eSym: e.callee.name
+      else: ctx.printExpr(e.callee)
+    var args: seq[string]
+    for i, a in e.args:
+      if ctx.flavor == fvD3D12 and a.kind == eSym and
+          ctx.bufferParams.contains(a.name):
+        # a buffer resource passes by name, each call site supplies the resource
+        # bound to its own register
+        args.add a.name
       else:
-        error "HLSL: component access on " & n.dParent.ident() & " has no emission (scalar or unsupported coordinate builtin)"
-    else:
-      let fieldName = if n.dField.kind == gpuIdent: n.dField.ident()
-                      else: ctx.genHlslExpr(st, n.dField)
-      result = ctx.genHlslExpr(st, n.dParent) & '.' & fieldName
-  of gpuIndex:
-    let base = indexBase(n)
-    if base.kind != gpuIdent:
-      error "HLSL: indexed base is not a plain identifier, got " & $base.kind
-    let sym = base.symbol
-    if sym.iSym in st.buffers:
-      # buffer element reads address the resource directly
-      result = sym.name & "[" & ctx.genHlslExpr(st, n.iIndex) & "]"
-    elif sym.typ != nil and sym.typ.kind == gtArray:
-      result = sym.name & "[" & ctx.genHlslExpr(st, n.iIndex) & "]"
-    else:
-      error "HLSL: indexing something other than a buffer parameter or a fixed array: " & sym.name
-  of gpuConv, gpuCast:
-    let target = if n.kind == gpuConv: n.convTo else: n.cTo
-    let src = if n.kind == gpuConv: n.convExpr else: n.cExpr
-    result = ctx.emitCast(target, ctx.genHlslExpr(st, src), ctx.getExprTypeHlsl(src))
-  of gpuPrefix:
-    result = "(" & n.pOp & ctx.genHlslExpr(st, n.pVal) & ")"
-  of gpuTernary:
-    result = "(" & ctx.genHlslExpr(st, n.tCond) & " ? " & ctx.genHlslExpr(st, n.tThen) &
-      " : " & ctx.genHlslExpr(st, n.tElse) & ")"
-  of gpuCall:
-    case n.cName.symbol.synchroBuiltin
-    of gbkThreadgroupBarrier:
-      result = "GroupMemoryBarrierWithGroupSync()"
-    of gbkThreadgroupBarrierDevice:
-      result = "DeviceMemoryBarrierWithGroupSync()"
-    of gbkNone:
-      case n.cName.symbol.shuffleBuiltin
-      of gbkSimdShuffle:
-        # WaveReadLaneAt requires a dynamically uniform lane
-        result = "WaveReadLaneAt(" & ctx.genHlslExpr(st, n.cArgs[0]) & ", " & ctx.genHlslExpr(st, n.cArgs[1]) & ")"
-      of gbkSimdShuffleXor:
-        error "HLSL: `simd_shuffle_xor` has no wave-intrinsic spelling, no HLSL intrinsic exchanges with a lane-index xor"
-      of gbkNone:
-        if n.cName.symbol.reductionBuiltin != gbkNone:
-          error "HLSL: subgroup reductions have no emission, wave intrinsics are outside this backend"
-        if n.cName.symbol.atomicsBuiltin != gbkNone:
-          error "HLSL: atomic builtins have no emission in this backend"
-        if isFp16ConversionCall(n):
-          error "HLSL: call to `" & n.cName.ident() & "` has no emission, float16 types are outside the HLSL subset"
-        # materialized min/max/abs wrappers pass through under their mangled names like on every backend,
-        # other plain names (exp2, rsqrt, device calls) emit verbatim
-        var parts: seq[string]
-        for arg in n.cArgs:
-          if arg.kind == gpuIdent and arg.symbol.iSym in st.buffers:
-            # HLSL buffer parameters are resource handles: the call passes the handle
-            parts.add arg.symbol.name
-          elif arg.kind == gpuMaterialize:
-            parts.add ctx.genHlslExpr(st, arg.mExpr)
-          else:
-            parts.add ctx.genHlslExpr(st, arg)
-        result = ctx.getFnName(bkHlsl, n) & "(" & parts.join(", ") & ")"
-  of gpuObjConstr:
-    error "HLSL: object constructor outside a declaration initializer or member-wise assignment"
-  of gpuAddr:
-    error "HLSL: address-of has no emission, buffers are index-only resources"
-  of gpuDeref:
-    error "HLSL: bare dereference has no emission, buffers are index-only resources"
-  else:
-    error "HLSL: expression node " & $n.kind & " has no emission"
+        args.add ctx.emitCallArg(e.callee, i, a)
+    if e.callee.kind == eSym:
+      case e.callee.synchroBuiltin
+      of sbkThreadgroupBarrier, sbkThreadgroupBarrierDevice:
+        ctx.fail("barrier is a statement, a value-position barrier is outside the HLSL subset")
+        return ""
+      else:
+        discard
+      if e.callee.reductionBuiltin != rbkNone:
+        ctx.fail("subgroup reductions have no emission, wave intrinsics are outside this backend")
+        return ""
+      if e.callee.atomicsBuiltin != abkNone:
+        ctx.fail("atomic builtins have no emission in this backend")
+        return ""
+      case e.callee.shuffleBuiltin
+      of shkSimdShuffle:
+        # simd_shuffle maps to WaveReadLaneAt, a dynamically uniform
+        # lane index is required by the intrinsic
+        return "WaveReadLaneAt(" & args.join(", ") & ")"
+      of shkSimdShuffleXor:
+        ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
+        return ""
+      of shkNone: discard
+    return calleeName & "(" & args.join(", ") & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
-proc genMemberType(t: GpuType, path: seq[string]): GpuType =
-  ## Field type reached by walking a struct type along a dotted path
-  result = t
-  for name in path:
-    var found = false
-    for f in result.fields:
-      if f.name == name:
-        result = f.typ
-        found = true
-        break
-    doAssert found, "no field " & name & " in " & gpuTypeToString(result, allowEmptyIdent = true)
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
+  ## Forward declaration, the loop context (break/continue labels) is a parameter.
 
-proc genObjAssignLeaves(ctx: var GpuContext, st: HlslKernel, targetType: GpuType,
-    targetName: string, v: GpuAst, path: seq[string], lines: var seq[string]) =
-  ## Appends one `targetName.leaf = rhs` line per leaf field of an object constructor,
-  ## nested constructions recurse, field values cast to the walked member type
-  for f in v.ocFields:
-    let leafPath = path & f.name
-    if f.value.kind == gpuObjConstr:
-      ctx.genObjAssignLeaves(st, targetType, targetName, f.value, leafPath, lines)
+proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, lines: var seq[string]) =
+  ## Appends one `target.leaf = value` line per leaf field of a struct construction,
+  ## nested constructions recurse. DXC rejects compound literals on assignment,
+  ## member-wise leaves are the form it accepts.
+  for f in t.fields:
+    var val: CirExpr = nil
+    for kvv in v.kvFields:
+      if kvv.name == f.name:
+        val = kvv.value
+    if val == nil:
+      ctx.fail("field " & f.name & " of " & t.name & " is not bound by the construction")
+      return
+    if val.kind == eOconstr and f.typ.kind == ctStruct:
+      ctx.printObjAssign(target & "." & f.name, f.typ, val, lines)
     else:
-      let member = genMemberType(targetType, leafPath)
-      let rhs = ctx.emitCast(member, ctx.genHlslExpr(st, f.value), ctx.getExprTypeHlsl(f.value))
-      lines.add targetName & "." & leafPath.join(".") & " = " & rhs
+      lines.add target & "." & f.name & " = " & ctx.printExpr(val) & ";"
 
-proc genObjAssign(ctx: var GpuContext, st: HlslKernel, target: GpuAst, value: GpuAst, indent: int): string =
-  ## Member-wise leaf assignment of an object constructor to a declared struct local:
-  ## the HLSL frontend rejects compound literals on assignment
-  let targetType = target.symbol.typ
-  var lines: seq[string]
-  ctx.genObjAssignLeaves(st, targetType, target.ident(), value, @[], lines)
-  # Each member line carries its own `;` except the last, the block renderer terminates the statement with one
-  for i, l in lines:
-    if i > 0:
-      result.add '\n'
-    result.add "  ".repeat(indent) & l
-    if i < lines.high:
-      result.add ';'
-
-proc genHlsl(ctx: var GpuContext, st: HlslKernel, ast: GpuAst, indent = 0): string =
-  let indentStr = "  ".repeat(indent)
-  case ast.kind
-  of gpuDiscard: return
-
-  of gpuBlock:
+proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
+  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
+  if ctx.failing():
+    return ""
+  let pad = spaces(ctx.indent * 2)
+  case s.kind
+  of sVar:
+    if s.declType.kind in {ctPtr, ctAptr}:
+      ctx.fail("pointer local " & s.name & ", HLSL has no pointer values," &
+        " the HLSL lowering pass dissolves pointer locals")
+      return ""
+    if s.space == caThreadgroup:
+      ctx.fail("local " & s.name & " in threadgroup space, HLSL has no" &
+        " program-scope shared emission")
+      return ""
+    if s.space == caConstant:
+      ctx.fail("local " & s.name & " in constant space, the HLSL lowering" &
+        " pass hoists const_mem locals to program scope")
+      return ""
+    if s.space == caDevice:
+      ctx.fail("local " & s.name & " in device space, HLSL locals are per-thread registers")
+      return ""
+    var decl = ctx.emitHlslDecl(s.declType, s.name)
+    if s.init != nil:
+      if s.init.kind == eOconstr and s.declType.kind == ctStruct:
+        decl &= " = " & ctx.printBraceList(s.declType, s.init)
+      else:
+        decl &= " = " & ctx.printExpr(s.init)
+    result = pad & decl & ";"
+  of sConst:
+    if s.init != nil and s.init.kind == eOconstr and s.declType.kind == ctStruct:
+      result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
+        " = " & ctx.printBraceList(s.declType, s.init) & ";"
+    else:
+      result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
+        " = " & ctx.printExpr(s.init) & ";"
+  of sAsgn:
+    let root = exprRootSym(s.lhs)
+    if root != nil and ctx.bufferParams.contains(root.name):
+      if ctx.flavor == fvD3D12 and root.name notin ctx.rwBuffers:
+        ctx.fail("assignment through read-only buffer parameter " & root.name)
+        return ""
+      result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+      return
+    if s.lhs.kind == eSym and ctx.pushParams.contains(s.lhs.name):
+      ctx.fail("assignment to push-constant parameter " & s.lhs.name &
+        ", push constants are read-only inputs")
+      return ""
+    if s.rhs != nil and s.rhs.kind == eOconstr and s.rhs.ocType.kind == ctStruct:
+      # member-wise leaf assignment, DXC rejects compound literals on assignment
+      var lines: seq[string]
+      ctx.printObjAssign(ctx.printExpr(s.lhs), s.rhs.ocType, s.rhs, lines)
+      if ctx.failing():
+        return ""
+      result = lines.join("\n")
+      return
+    if s.rhs != nil and s.rhs.kind == eAconstr:
+      ctx.fail("array constructor assignment has no HLSL form")
+      return ""
+    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+  of sIte:
+    let cond = ctx.printExpr(s.cond)
+    ctx.indent.inc
+    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
+    ctx.indent.dec
+    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
+    if s.elseBody.len == 1 and s.elseBody[0].kind == sIte:
+      # an else side of one ite is the elif chain, printed as `else if`
+      result &= " else " & ctx.printStmt(s.elseBody[0], exitL, contL)
+    elif s.elseBody.len > 0:
+      ctx.indent.inc
+      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
+      ctx.indent.dec
+      result &= " else {\n" & elseTxt & '\n' & pad & '}'
+  of sLoop:
+    # loops print through printStmts, which derives the loop's own labels
     result = ""
-    if ast.blockLabel.len > 0:
-      result.add '\n' & indentStr & "{ // " & ast.blockLabel & '\n'
-    for i, el in ast.statements:
-      result.add ctx.genHlsl(st, el, indent)
-      if not el.isSelfTerminating() and not ctx.skipSemicolon: # nested blocks and emits carry their own terminators
-        result.add ';'
-      if i < ast.statements.high:
-        result.add '\n'
-    if ast.blockLabel.len > 0:
-      result.add '\n' & indentStr & "} // " & ast.blockLabel & '\n'
-
-  of gpuVar:
-    if ast.addressSpace != asRMEM:
-      error "HLSL: local address spaces other than register memory have no emission"
-    doAssert not ast.vRequiresMemcpy, "memcpy variables are decomposed by the shared lowering pass"
-    let name = ast.vName.ident()
-    case ast.vType.kind
-    of gtPtr:
-      error "HLSL: pointer-valued local " & name & " has no emission"
-    of gtObject, gtGenericInst:
-      # gtObject carries the plain type name, gtGenericInst the generic's name
-      let typeName = if ast.vType.kind == gtGenericInst: ast.vType.gName else: ast.vType.name
-      if typeName in ["TensorView", "TensorOwned"]:
-        error "HLSL: " & typeName & " local " & name &
-          " is outside the HLSL subset (HLSL structs cannot hold resources)"
-      let tname = gpuTypeToString(ast.vType, allowEmptyIdent = true)
-      case ast.vInit.kind
-      of gpuDiscard:
-        result = indentStr & tname & ' ' & name
-      of gpuObjConstr:
-        result = indentStr & tname & ' ' & name & " = " & ctx.genBraceList(st, ast.vInit)
-      else:
-        # whole-struct copy declaration, verified against DXC
-        result = indentStr & tname & ' ' & name & " = " & ctx.genHlslExpr(st, ast.vInit)
-    else:
-      result = indentStr & gpuTypeToString(ast.vType, name)
-      if ast.vInit.kind != gpuDiscard:
-        result &= " = " & ctx.emitCast(ast.vType, ctx.genHlslExpr(st, ast.vInit),
-                                       ctx.getExprTypeHlsl(ast.vInit))
-
-  of gpuAssign:
-    if ast.aRight.kind == gpuObjConstr and ast.aLeft.kind == gpuIdent:
-      result = ctx.genObjAssign(st, ast.aLeft, ast.aRight, indent)
-    else:
-      case ast.aLeft.kind
-      of gpuIndex:
-        let base = indexBase(ast.aLeft)
-        if base.kind != gpuIdent:
-          error "HLSL: assignment target base is not a plain identifier, got " & $base.kind
-        let sym = base.symbol
-        if sym.iSym in st.buffers:
-          let buf = st.buffers[sym.iSym]
-          if buf.readOnly:
-            error "HLSL: assignment through read-only buffer parameter " & buf.name
-          let rhs = ctx.emitCast(buf.elem, ctx.genHlslExpr(st, ast.aRight),
-                                 ctx.getExprTypeHlsl(ast.aRight))
-          result = indentStr & buf.name & "[" & ctx.genHlslExpr(st, ast.aLeft.iIndex) & "] = " & rhs
-        elif sym.typ != nil and sym.typ.kind == gtArray:
-          let elem = sym.typ.aTyp
-          let rhs = ctx.emitCast(elem, ctx.genHlslExpr(st, ast.aRight),
-                                 ctx.getExprTypeHlsl(ast.aRight))
-          result = indentStr & sym.name & "[" & ctx.genHlslExpr(st, ast.aLeft.iIndex) & "] = " & rhs
-        else:
-          error "HLSL: assignment through something other than a buffer parameter or a fixed array: " & sym.name
-      of gpuIdent:
-        let sym = ast.aLeft.symbol
-        if sym.iSym in st.pushParams:
-          error "HLSL: assignment to push-constant parameter " & sym.name & ", push constants are read-only inputs"
-        if sym.iSym in st.buffers:
-          error "HLSL: bare buffer parameter " & sym.name & " as an assignment target"
-        let rhs = ctx.emitCast(sym.typ, ctx.genHlslExpr(st, ast.aRight),
-                               ctx.getExprTypeHlsl(ast.aRight))
-        result = indentStr & sym.name & ' ' & ast.aOp & ' ' & rhs
-      else:
-        error "HLSL: assignment target " & $ast.aLeft.kind & " has no emission"
-
-  of gpuIf:
-    if ast.ifIsExpr:
-      error "HLSL: expression if has no emission, use a statement if or a ternary"
-    ctx.withoutSemicolon:
-      result = indentStr & "if (" & ctx.genHlslExpr(st, ast.ifCond) & ") {\n"
-    result &= ctx.genHlsl(st, ast.ifThen, indent + 1) & '\n'
-    result &= indentStr & '}'
-    for el in ast.ifElifs:
-      ctx.withoutSemicolon:
-        result &= " else if (" & ctx.genHlslExpr(st, el.cond) & ") {\n"
-      result &= ctx.genHlsl(st, el.body, indent + 1) & '\n'
-      result &= indentStr & '}'
-    if ast.ifElse.kind != gpuDiscard:
-      result &= " else {\n"
-      result &= ctx.genHlsl(st, ast.ifElse, indent + 1) & '\n'
-      result &= indentStr & '}'
-
-  of gpuFor:
-    let i = ast.fVar.ident()
-    let indTyp = gpuTypeToString(ast.fVar.symbol.typ, allowEmptyIdent = true)
-    let cmp = if ast.fRangeKind == rkInclusive: " <= " else: " < "
+  of sLab:
+    # an exit label after a loop is the break target marker, dropped
     result = ""
-    if ast.fUnroll:
-      result &= indentStr & "[unroll]\n"
-    result &= indentStr & "for(" & indTyp & ' ' & i & " = " & ctx.genHlslExpr(st, ast.fStart) &
-             "; " & i & cmp & ctx.genHlslExpr(st, ast.fEnd) & "; " &
-             i & " += " & ctx.genHlslExpr(st, ast.fStep) & ") {\n"
-    result &= ctx.genHlsl(st, ast.fBody, indent + 1) & '\n'
-    result &= indentStr & '}'
-
-  of gpuWhile:
-    ctx.withoutSemicolon:
-      result = indentStr & "while (" & ctx.genHlslExpr(st, ast.wCond) & ") {\n"
-    result &= ctx.genHlsl(st, ast.wBody, indent + 1) & '\n'
-    result &= indentStr & '}'
-
-  of gpuReturn:
-    if ast.rValue.kind == gpuDiscard:
-      result = indentStr & "return"
-    elif st.isKernel:
-      error "HLSL: non-void return has no emission, kernels are void"
+  of sJmp:
+    if s.jmpTarget == exitL and exitL.len > 0:
+      result = pad & "break;"
+    elif s.jmpTarget == contL and contL.len > 0:
+      result = pad & "continue;"
     else:
-      result = indentStr & "return " & ctx.genHlslExpr(st, ast.rValue)
-
-  of gpuComment:
-    result = indentStr & "/* " & ast.comment & " */"
-
-  of gpuConstexpr:
-    result = indentStr & "const " & gpuTypeToString(ast.cType, ast.cIdent.ident()) &
-             " = " & ctx.genHlslExpr(st, ast.cValue)
-
-  of gpuEmit:
-    # Self-terminating raw text: the gpuBlock loop appends no `;`,
-    # the emitted text carries its own terminators.
-    proc renderEmitPart(c: var GpuContext, n: GpuAst): string =
-      c.genHlslExpr(st, n)
-    result = genEmitStmt(ctx, ast, renderEmitPart)
-
-  of gpuInlineAsm:
-    error "HLSL: inline assembly has no emission"
-
-  of gpuAlias:
-    error "HLSL: type aliases have no emission"
-
-  of gpuArrayLit:
-    error "HLSL: array literals have no emission"
-
-  else:
-    error "HLSL: statement node " & $ast.kind & " has no emission"
-
-# ═══════════════════════════════════════════════════════════════════════
-# Global declarations
-# ═══════════════════════════════════════════════════════════════════════
-
-proc emitStructDecl(byName: Table[string, GpuAst], emitted: var HashSet[string], name: string, outp: var string) =
-  ## Emits one struct definition, member structs first, deduplicated by name.
-  ## HLSL resolves types at their declaration site.
-  if name in emitted or name notin byName:
-    return
-  emitted.incl name
-  let blk = byName[name]
-  for f in blk.tFields:
-    case f.typ.kind
-    of gtObject, gtGenericInst:
-      emitStructDecl(byName, emitted, gpuTypeToString(f.typ, allowEmptyIdent = true), outp)
-    of gtArray:
-      if f.typ.aTyp.kind in {gtObject, gtGenericInst}:
-        emitStructDecl(byName, emitted, gpuTypeToString(f.typ.aTyp, allowEmptyIdent = true), outp)
+      ctx.fail("unstructured jump to " & s.jmpTarget)
+      result = ""
+  of sScope:
+    result = pad & "{\n"
+    ctx.indent.inc
+    result &= ctx.printStmts(s.scopeBody, exitL, contL)
+    ctx.indent.dec
+    result &= '\n' & pad & '}'
+  of sAssume:
+    # a loop-bound hint, HLSL has no assume construct
+    result = ""
+  of sRet:
+    if s.retVal != nil:
+      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
     else:
-      discard
-  outp.add "struct " & name & " {"
-  if blk.tFields.len == 0:
-    # HLSL requires at least one member in a struct
-    outp.add "\n  uint _padding;"
-  else:
-    for f in blk.tFields:
-      outp.add "\n  " & gpuTypeToString(f.typ, f.name) & ";"
-  outp.add "\n};\n"
-
-proc emitTypeDefs(ctx: GpuContext, outp: var string) =
-  ## Emits the struct definitions from the global blocks in dependency order
-  var byName = initTable[string, GpuAst]()
-  for blk in ctx.globalBlocks:
-    if blk.kind == gpuTypeDef:
-      byName[gpuTypeToString(blk.tTyp, allowEmptyIdent = true)] = blk
-  var emitted = initHashSet[string]()
-  for name in byName.keys:
-    emitStructDecl(byName, emitted, name, outp)
-
-proc emitResources(st: HlslKernel, kernel: GpuAst, flavor: HlslFlavor, result: var string) =
-  ## Emits the kernel resources on D3D12 register declarations:
-  ## one global ordinal across all resources in declaration order,
-  ## read-only buffers take t registers, read-write u, the scalar block b.
-  if flavor == fvVulkan:
-    error "HLSL: the fvVulkan flavor with vk::BufferPointer and zero-descriptor launches has no emission yet"
-  for param in kernel.pParams:
-    let sym = param.ident.symbol
-    if sym.iSym notin st.buffers:
-      continue
-    let buf = st.buffers[sym.iSym]
-    let resTy = if buf.readOnly: "StructuredBuffer" else: "RWStructuredBuffer"
-    let reg = if buf.readOnly: 't' else: 'u'
-    result.add resTy & "<" & gpuTypeToString(buf.elem, allowEmptyIdent = true) & "> " &
-      buf.name & " : register(" & reg & $buf.binding & ", space0);\n"
-  if st.pushParams.len > 0:
-    result.add "struct Push {\n"
-    for param in kernel.pParams:
-      let sym = param.ident.symbol
-      if sym.iSym in st.pushParams:
-        result.add "  " & gpuTypeToString(st.pushParams[sym.iSym], allowEmptyIdent = true) &
-          ' ' & sym.name & ";\n"
-    result.add "};\n"
-    # the scalar block takes the first ordinal after the buffers
-    result.add "ConstantBuffer<Push> push : register(b" & $st.buffers.len & ", space0);\n"
-
-proc workgroupSize(kernel: GpuAst): tuple[x, y, z: int] =
-  ## [numthreads] triple, (0, 0, 0) in the IR means the 256x1x1 default
-  if kernel.pWorkgroupSize == (0, 0, 0):
-    result = (256, 1, 1)
-  else:
-    result = kernel.pWorkgroupSize
-
-proc collectDeviceCallTargets(ctx: GpuContext, n: GpuAst, targets: var seq[GpuAst]) =
-  ## Device functions a statement tree calls directly or transitively,
-  ## resolved through fnTab (dead-code elimination keeps the called subset there)
-  if n.isNil:
-    return
-  if n.kind == gpuCall and not n.cName.isNil and not n.cName.symbol.isNil:
-    let fn = ctx.fnTab.getOrDefault(n.cName, nil)
-    # `!= nil` is wrong here: GpuAst's custom `==` returns false for (nil, nil), so a nil fn compares unequal to nil
-    if not fn.isNil and not fn.isGlobal():
-      targets.add fn
-  for ch in n:
-    if not ch.isNil:
-      ctx.collectDeviceCallTargets(ch, targets)
-
-proc checkDeviceFnRecursion(ctx: GpuContext) =
-  ## Refuses recursion over the device-function call graph before emission:
-  ## a recursive call would not terminate, and the HLSL compiler accepts
-  ## recursive source with exit 0 while miscompiling it
-  var state = initTable[string, int]() # fn iSym: 1 = on the visit stack, 2 = fully visited
-
-  proc visit(fn: GpuAst) =
-    let iSym = fn.pName.symbol.iSym
-    state[iSym] = 1
-    var callees: seq[GpuAst]
-    ctx.collectDeviceCallTargets(fn.pBody, callees)
-    for callee in callees:
-      case state.getOrDefault(callee.pName.symbol.iSym, 0)
-      of 1:
-        error "HLSL: recursive device function `" & callee.pName.ident() &
-          "` would not terminate, recursion is rejected"
-      of 0:
-        visit(callee)
+      result = pad & "return;"
+  of sDiscard:
+    result = ""
+  of sCall:
+    var parts: seq[string]
+    if s.callCallee.kind == eSym:
+      parts.add s.callCallee.name
+    else:
+      parts.add ctx.printExpr(s.callCallee)
+    for i, a in s.callArgs:
+      if ctx.flavor == fvD3D12 and a.kind == eSym and
+          ctx.bufferParams.contains(a.name):
+        parts.add a.name
       else:
-        discard
-    state[iSym] = 2
+        parts.add ctx.emitCallArg(s.callCallee, i, a)
+    if s.callCallee.kind == eSym and
+        s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+      result = pad & "GroupMemoryBarrierWithGroupSync();"
+    elif s.callCallee.kind == eSym and
+        s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+      result = pad & "DeviceMemoryBarrierWithGroupSync();"
+    else:
+      result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
+  of sAsm:
+    ctx.fail("inline assembly has no HLSL form")
+    result = ""
+  of sEmit:
+    # `{.emit.}` raw source: operand expressions rendered and spliced
+    # into the verbatim text, a push-block scalar qualifies as `push.name`.
+    # No terminator is appended, the text ends where it ends.
+    var text = ""
+    for i, part in s.emitParts:
+      text.add(part)
+      if i < s.emitOperands.len:
+        text.add(ctx.printExpr(s.emitOperands[i]))
+    result = pad & text
+  of sCase:
+    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+    result = ""
 
-  for fn in ctx.fnTab.values:
-    if fn.kind == gpuProc and not fn.isGlobal() and
-        state.getOrDefault(fn.pName.symbol.iSym, 0) == 0:
-      visit(fn)
-
-proc deviceFnText(ctx: var GpuContext, fn: GpuAst, forwardDeclare: bool): string =
-  ## Emitted text of one device function:
+proc exprHasCall(e: CirExpr): bool =
+  ## True when any subexpression of `e` is a call.
   ##
-  ## - the signature from its classified params
-  ## - `;` for a forward declaration, otherwise the body in braces
-  ## - device function calls emit as plain HLSL calls. An early `return`
-  ##   emits as an HLSL `return`
-  if fn.pBody.isNil:
-    error "HLSL: device function `" & fn.pName.ident() & "` has no IR body, extern declarations have no emission"
-  var st = HlslKernel()
-  st.classifyParams(fn)
-  for iSym in st.buffers.keys:
-    st.buffers[iSym].readOnly = not (fn.pBody.writesThrough(iSym) or
-      fn.pBody.emitMentions(st.buffers[iSym].name))
-  result = deviceFnSignature(st, fn)
+  ## A call may write memory. A conditional expression can evaluate
+  ## both variants on some hardware, so only call-free variants may take
+  ## the conditional form.
+  if e == nil:
+    return false
+  if e.kind == eCall:
+    return true
+  for c in e.getExprChildren():
+    if exprHasCall(c):
+      return true
+
+proc isSelectArm(s: CirStmt, name: string): bool =
+  ## True when `s` assigns the local `name` exactly once from a plain expression,
+  ## matching one variant of a hoisted if-expression.
+  s.kind == sAsgn and s.lhs.kind == eSym and s.lhs.name == name and s.rhs != nil
+
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
+  ## Prints one statement list. Plain statements take the caller's loop context,
+  ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
+  var lines: seq[string]
+  var i = 0
+  while i < stmts.len:
+    let s = stmts[i]
+    var txt: string
+    if s.kind == sLoop:
+      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
+        stmts[i + 1].labName
+      else:
+        ""
+      var lCont = ""
+      for t in s.loopBody:
+        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
+          lCont = t.labName
+      ctx.indent.inc
+      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
+      ctx.indent.dec
+      let directive = if s.unroll:
+        spaces(ctx.indent * 2) & "[unroll]\n"
+      else:
+        ""
+      txt = directive & spaces(ctx.indent * 2) & "for (;;)\n" &
+        spaces(ctx.indent * 2) & "{\n" & bodyTxt & "\n" & spaces(ctx.indent * 2) & '}'
+      if lExit.len > 0:
+        i.inc  # exit label, consumed
+    elif s.kind == sVar and s.space == caThread and s.init == nil and
+        s.declType.kind in {ctBool, ctInt, ctUint, ctFloat} and
+        i + 1 < stmts.len and stmts[i + 1].kind == sIte and
+        stmts[i + 1].thenBody.len == 1 and stmts[i + 1].elseBody.len == 1 and
+        stmts[i + 1].thenBody[0].isSelectArm(s.name) and
+        stmts[i + 1].elseBody[0].isSelectArm(s.name) and
+        not exprHasCall(stmts[i + 1].cond) and
+        not exprHasCall(stmts[i + 1].thenBody[0].rhs) and
+        not exprHasCall(stmts[i + 1].elseBody[0].rhs):
+      # a hoisted if-expression temp with one assignment per variant prints
+      # as the conditional expression the source wrote, and the space check
+      # (`caThread`) keeps printStmt's storage-class refusals in reach
+      ctx.indent.inc
+      let condTxt = ctx.printExpr(stmts[i + 1].cond)
+      let thenTxt = ctx.printExpr(stmts[i + 1].thenBody[0].rhs)
+      let elseTxt = ctx.printExpr(stmts[i + 1].elseBody[0].rhs)
+      ctx.indent.dec
+      if ctx.failing():
+        txt = ""
+      else:
+        txt = spaces(ctx.indent * 2) & ctx.emitHlslDecl(s.declType, s.name) &
+          " = " & condTxt & " ? " & thenTxt & " : " & elseTxt & ";"
+      i.inc  # consumes the ite with the temp it assigns
+    else:
+      txt = ctx.printStmt(s, exitL, contL)
+    if txt.len > 0:
+      lines.add txt
+    i.inc
+  return lines.join("\n")
+
+# ═══════════════════════════════════════════════════════════════════════
+# Procs and modules
+# ═══════════════════════════════════════════════════════════════════════
+
+proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
+  ## HLSL resource parameter of a buffer: StructuredBuffer / RWStructuredBuffer
+  ## over the element type, `rw` picks the read-write form.
+  let resTy = if rw: "RWStructuredBuffer" else: "StructuredBuffer"
+  result = resTy & "<" & ctx.emitHlslScalar(p.typ.pElem) & "> " & p.name
+
+proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
+  ## Splits one proc's parameters into buffer resources and values.
+  ## - kernels: values join the Push block, buffers take register ordinals
+  ## - device functions: values pass by value (a `var T` binds `inout`),
+  ##   buffers are unbound resource params
+  ## Rejects the parameter shapes the HLSL resource model cannot bind.
+  for p in fn.params:
+    case p.typ.kind
+    of ctAptr:
+      if p.typ.space != caDevice:
+        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space &
+          " space, buffers address device memory")
+        return
+      if ctx.flavor == fvVulkan:
+        # element types are checked up front, the access emitter and the buffer-pointer typedef both read them
+        discard ctx.bpElementStride(p.typ.pElem)
+        if ctx.failing():
+          return
+      buffers.add p
+    of ctPtr:
+      if p.typ.space == caThread:
+        if fn.isKernel:
+          ctx.fail("by-reference parameter " & p.name & " in kernel `" &
+            fn.name & "` has no binding, kernels take values and buffers")
+          return
+        # device function: the `inout` binding, reads and writes are direct
+        discard
+      else:
+        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.space &
+          " space has no binding")
+        return
+    of ctArray:
+      ctx.fail("array parameter " & p.name & " in `" & fn.name &
+        "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
+      return
+    of ctInt, ctUint:
+      if p.typ.bits != 32:
+        ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
+          "` is rejected: int64_t is a parse error in the HLSL frontend and" &
+          " uint64_t pulls the SPIR-V Int64 capability")
+        return
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctFloat:
+      if p.typ.bits == 16:
+        ctx.fail("float16 parameter " & p.name & " in `" & fn.name &
+          "`, float16 types are outside the HLSL subset")
+        return
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctBool:
+      if fn.isKernel:
+        if ctx.flavor == fvVulkan:
+          ctx.fail("bool parameter " & p.name & ", the fvVulkan push block has" &
+            " no bool member")
+          return
+        pushParams.incl(p.name)
+    of ctVoid, ctVector, ctStruct:
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctProc:
+      ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
+      return
+
+proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams: var HashSet[string], forwardDeclare: bool): string =
+  ## `RetType name(params)` of one proc, buffers as resources, `var T` device parameters as `inout`.
+  var buffers: seq[CirParam]
+  ctx.classifyParams(fn, pushParams, buffers)
+  if ctx.failing():
+    return ""
+  var params: seq[string]
+  for p in fn.params:
+    case p.typ.kind
+    of ctAptr:
+      if ctx.flavor == fvVulkan:
+        # address value only: reads and writes construct the buffer pointer per access
+        params.add "uint64_t " & p.name
+      else:
+        let rw = graph.reached.contains(fn.name & "/" & p.name)
+        params.add ctx.emitResourceParam(p, rw)
+    of ctPtr:
+      params.add "inout " & ctx.emitHlslDecl(p.typ.pElem, p.name)
+    else:
+      params.add ctx.emitHlslDecl(p.typ, p.name)
+  if ctx.failing():
+    return ""
+  let ret = ctx.emitHlslScalar(fn.ret)
+  if ctx.failing():
+    return ""
+  result = ret & ' ' & fn.name & '(' & params.join(", ") & ')'
   if forwardDeclare:
     result.add ';'
+
+proc printFn(ctx: var PrintCtx, fn: CirProc, graph: CallGraph): string =
+  ## One device function: signature, body, closing brace.
+  ctx.fnName = fn.name
+  ctx.indent = 0
+  ctx.isKernel = false
+  ctx.pushParams = initHashSet[string]()
+  ctx.bufferParams = initHashSet[string]()
+  ctx.rwBuffers = initHashSet[string]()
+  ctx.addressParams = initTable[string, CirType]()
+  for p in fn.params:
+    if p.typ.kind == ctAptr:
+      ctx.bufferParams.incl(p.name)
+      ctx.addressParams[p.name] = p.typ
+      if graph.reached.contains(fn.name & "/" & p.name):
+        ctx.rwBuffers.incl(p.name)
+  let bodyTxt = ctx.printStmts(fn.body, "", "")
+  if ctx.failing():
+    return ""
+  var pushParams = initHashSet[string]()
+  let sig = ctx.emitFnSignature(fn, graph, pushParams, forwardDeclare = false)
+  if ctx.failing():
+    return ""
+  return sig & " {\n" & bodyTxt & '\n' & "}"
+
+proc registerStructRefs(ctx: var PrintCtx, t: CirType, refs: var HashSet[string]) =
+  ## Records the struct type names reachable from `t`, through fields,
+  ## array elements and vector elements.
+  if t.isNil:
+    return
+  case t.kind
+  of ctStruct:
+    if t.name in refs:
+      return
+    refs.incl(t.name)
+    for f in t.fields:
+      ctx.registerStructRefs(f.typ, refs)
+  of ctArray:
+    ctx.registerStructRefs(t.aElem, refs)
+  of ctVector:
+    ctx.registerStructRefs(t.vElem, refs)
   else:
-    result.add " {\n"
-    result.add ctx.genHlsl(st, fn.pBody, 1)
-    result.add "\n}\n"
+    discard
 
-proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
-  ## Renders the compiled IR as HLSL compute source for DXC.
-  ## Returns: the complete source text.
-  ##
-  ## Layout: struct definitions, resources, device function forward declarations,
-  ## device function definitions, `[numthreads]` + `void main(...)`.
-  ##
-  ## One global kernel per source, emitted as `main` to match the DXC
-  ## invocation `-E main` (DXC compiles one entry point per invocation).
+proc scanStmtStructRefs(ctx: var PrintCtx, ss: seq[CirStmt], refs: var HashSet[string]) =
+  ## Records the struct types that the statement tree references: declaration types,
+  ## construction types and cast result types.
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      ctx.registerStructRefs(s.declType, refs)
+      if s.init != nil:
+        if s.init.kind == eOconstr:
+          ctx.registerStructRefs(s.init.ocType, refs)
+        if s.init.kind == eCall:
+          for a in s.init.args:
+            if a.kind == eOconstr:
+              ctx.registerStructRefs(a.ocType, refs)
+    of sAsgn:
+      if s.rhs != nil and s.rhs.kind == eOconstr:
+        ctx.registerStructRefs(s.rhs.ocType, refs)
+    of sIte:
+      ctx.scanStmtStructRefs(s.thenBody, refs)
+      ctx.scanStmtStructRefs(s.elseBody, refs)
+    of sLoop:
+      ctx.scanStmtStructRefs(s.loopBody, refs)
+    of sScope:
+      ctx.scanStmtStructRefs(s.scopeBody, refs)
+    of sCall:
+      for a in s.callArgs:
+        if a.kind == eOconstr:
+          ctx.registerStructRefs(a.ocType, refs)
+    of sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
+      discard
 
-  var kernel: GpuAst = nil
-  for _, fn in ctx.fnTab:
-    if fn.kind != gpuProc:
-      continue
-    if fn.isGlobal():
-      doAssert kernel.isNil, "HLSL compiles one kernel per source"
+proc emitStructDecls(ctx: var PrintCtx, refs: var HashSet[string],
+    byName: Table[string, CirType], emitted: var HashSet[string],
+    name: string, outp: var string) =
+  ## Emits one struct definition, member structs first, deduplicated by name.
+  ## HLSL resolves types at their declaration site, a referenced struct
+  ## holding a pointer refuses, HLSL structs cannot take resources.
+  if name in emitted or name notin refs:
+    return
+  let t = byName.getOrDefault(name, nil)
+  if t == nil:
+    ctx.fail("struct " & name & " is referenced but has no declaration")
+    return
+  if t.containsPtrDeep:
+    ctx.fail("struct " & name & " holds a pointer, HLSL structs cannot hold" &
+      " resources, the HLSL lowering pass dissolves pointer-holding locals")
+    return
+  emitted.incl name
+  for f in t.fields:
+    if f.typ.kind == ctStruct:
+      ctx.emitStructDecls(refs, byName, emitted, f.typ.name, outp)
+    elif f.typ.kind == ctArray:
+      ctx.registerStructRefs(f.typ, refs)
+      if f.typ.aElem.kind == ctStruct:
+        ctx.emitStructDecls(refs, byName, emitted, f.typ.aElem.name, outp)
+    elif f.typ.kind == ctVector:
+      ctx.registerStructRefs(f.typ, refs)
+  if ctx.failing():
+    return
+  outp.add "struct " & name & " {\n"
+  if t.fields.len == 0:
+    # HLSL requires at least one member in a struct
+    outp.add "  uint _padding;\n"
+  else:
+    for f in t.fields:
+      outp.add "  " & ctx.emitHlslDecl(f.typ, f.name) & ";\n"
+  outp.add "};\n\n"
+
+proc emitMainInputs(ctx: PrintCtx): string =
+  ## Semantics for `main`, exactly the ones the kernel body reads.
+  var inputs: seq[string]
+  if cbkThreadPositionInGrid in ctx.coordReads:
+    inputs.add "uint3 " & coordInputName(cbkThreadPositionInGrid) & " : SV_DispatchThreadID"
+  if cbkThreadgroupPositionInGrid in ctx.coordReads:
+    inputs.add "uint3 " & coordInputName(cbkThreadgroupPositionInGrid) & " : SV_GroupID"
+  if cbkThreadPositionInThreadgroup in ctx.coordReads:
+    inputs.add "uint3 " & coordInputName(cbkThreadPositionInThreadgroup) & " : SV_GroupThreadID"
+  if cbkThreadIndexInThreadgroup in ctx.coordReads:
+    inputs.add "uint " & coordInputName(cbkThreadIndexInThreadgroup) & " : SV_GroupIndex"
+  result = inputs.join(", ")
+
+proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
+  ## Emits the full HLSL translation unit: struct declarations, the binding section,
+  ## the device function declarations and definitions, then `[numthreads]`,
+  ## then the kernel entry: `main`, or the `{.exportc: "name".}` override.
+  ##
+  ## - fvD3D12: register resources and the `ConstantBuffer` push block
+  ## - fvVulkan: the `[[vk::push_constant]]` struct with every member offset locked
+  ##
+  ## Returns "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>", flavor: flavor)
+  var procsByName: Table[string, CirProc]
+  for fn in m.procs:
+    procsByName[fn.name] = fn
+  ctx.procs = procsByName
+  var kernel: CirProc = nil
+  for fn in m.procs:
+    if fn.isKernel:
+      if kernel != nil:
+        ctx.fail("exactly one kernel per module, found at least two")
+        return ("", ctx.err)
       kernel = fn
-  doAssert kernel.isNil.not, "HLSL found no global kernel"
-  if kernel.pRetType.kind != gtVoid:
-    error "HLSL: kernel `" & kernel.pName.ident() & "` must return void, got " & $kernel.pRetType.kind
+  if kernel == nil:
+    ctx.fail("exactly one kernel per module, found none")
+    return ("", ctx.err)
+  if kernel.ret.kind != ctVoid:
+    ctx.fail("kernel `" & kernel.name & "` must return void, got " & $kernel.ret.kind)
+    return ("", ctx.err)
 
-  var fns: seq[GpuAst]
-  for _, fn in ctx.fnTab:
-    if fn.kind == gpuProc and not fn.isGlobal():
-      fns.add fn
+  # read-write classification of the buffer parameters: the stored record
+  # computed by the call-graph analysis pass after the last transform
+  let graph = m.callGraph
 
-  ctx.checkDeviceFnRecursion()
+  # kernel resources: buffer parameters and Push members
+  ctx.fnName = kernel.name
+  var pushParams = initHashSet[string]()
+  var buffers: seq[CirParam]
+  ctx.classifyParams(kernel, pushParams, buffers)
+  if ctx.failing():
+    return ("", ctx.err)
 
-  var st = HlslKernel(isKernel: true)
-  st.classifyParams(kernel)
-  for iSym in st.buffers.keys:
-    st.buffers[iSym].readOnly = not (kernel.pBody.writesThrough(iSym) or
-      kernel.pBody.emitMentions(st.buffers[iSym].name))
+  # struct declarations for the referenced value structs, dependency order
+  var refs = initHashSet[string]()
+  for p in kernel.params:
+    if p.name != "crucible_numworkgroups":
+      ctx.registerStructRefs(p.typ, refs)
+  for fn in m.procs:
+    if fn.isKernel:
+      continue
+    ctx.registerStructRefs(fn.ret, refs)
+    for p in fn.params:
+      ctx.registerStructRefs(p.typ, refs)
+    ctx.scanStmtStructRefs(fn.body, refs)
+  ctx.scanStmtStructRefs(kernel.body, refs)
+  # relocated const_mem declarations, struct-typed ones included
+  ctx.scanStmtStructRefs(m.globals, refs)
+  var byName: Table[string, CirType]
+  for t in m.types:
+    if t.kind == ctStruct:
+      byName[t.name] = t
+  var emitted = initHashSet[string]()
+  var refList: seq[string]
+  for name in refs:
+    refList.add name
+  for name in refList:
+    ctx.emitStructDecls(refs, byName, emitted, name, result.src)
+  if ctx.failing():
+    return ("", ctx.err)
 
-  ctx.emitTypeDefs(result)
-  result.add "\n"
-  st.emitResources(kernel, flavor, result)
+  # binding section: fvD3D12 register resources, fvVulkan push-constant struct with locked offsets
+  if ctx.flavor == fvVulkan:
+    # buffer-pointer aliases, one per element type in encounter order
+    var bpEmitted: HashSet[string]
+    for p in buffers:
+      let nm = emitBpName(p.typ.pElem)
+      if nm notin bpEmitted:
+        bpEmitted.incl nm
+        result.src &= "typedef vk::BufferPointer<" &
+          ctx.emitHlslScalar(p.typ.pElem) & "> " & nm & ";\n"
+    if bpEmitted.len > 0:
+      result.src &= "\n"
+    if kernel.params.len > 0:
+      # one member per kernel parameter in host pack order, every member offset
+      # locked with [[vk::offset]] to the launch-side packing, the grid member 16-byte aligned
+      result.src &= "struct Push {\n"
+      var off = 0
+      for p in kernel.params:
+        if p.typ.kind == ctAptr:
+          off = roundUpMultiple(off, 8)
+          result.src &= "  [[vk::offset(" & $off & ")]] uint64_t " & p.name & ";\n"
+          off.inc 8
+        elif p.name == "crucible_numworkgroups":
+          # materialized dispatch grid size, an int3 the engine stages
+          # on the 16-byte boundary the std430 vector rule gives it
+          off = roundUpMultiple(off, 16)
+          result.src &= "  [[vk::offset(" & $off & ")]] int3 " & p.name & ";\n"
+          off.inc 12
+        else:
+          let (size, align) = ctx.pushMemberExtent(p.typ, p.name)
+          if ctx.failing():
+            return ("", ctx.err)
+          off = roundUpMultiple(off, align)
+          result.src &= "  [[vk::offset(" & $off & ")]] " &
+            ctx.emitHlslDecl(p.typ, p.name) & ";\n"
+          off.inc size
+        if ctx.failing():
+          return ("", ctx.err)
+      result.src &= "};\n"
+      result.src &= "[[vk::push_constant]] Push push;\n"
+      result.src &= "\n"
+  else:
+    # one global register ordinal across the buffers, read-only `t`, read-write `u`, the Push block on `b`
+    var ordinal = 0
+    for p in buffers:
+      let rw = graph.reached.contains(kernel.name & "/" & p.name)
+      let reg = if rw: 'u' else: 't'
+      result.src &= ctx.emitResourceParam(p, rw) & " : register(" & reg &
+        $ordinal & ", space0);\n"
+      ordinal.inc
+    if pushParams.len > 0:
+      result.src &= "struct Push {\n"
+      for p in kernel.params:
+        if p.name == "crucible_numworkgroups":
+          # materialized dispatch grid size, an int3 the engine stages
+          result.src &= "  int3 " & p.name & ";\n"
+        elif p.name in pushParams:
+          result.src &= "  " & ctx.emitHlslDecl(p.typ, p.name) & ";\n"
+      result.src &= "};\n"
+      result.src &= "ConstantBuffer<Push> push : register(b" & $ordinal &
+        ", space0);\n"
+      result.src &= "\n"
+  if ctx.failing():
+    return ("", ctx.err)
+
+  # file-scope `static const` declarations relocated into `m.globals` by the HLSL lowering pass,
+  # in encounter order: dxc folds them at compile time, they take no register
+  # in the cbuffer layout
+  var hoisted: seq[string]
+  for s in m.globals:
+    if s.kind == sVar and s.space == caConstant:
+      if s.init == nil:
+        ctx.fail("const_mem local " & s.name & " without an initializer")
+      elif s.init.kind == eOconstr and s.declType.kind == ctStruct:
+        hoisted.add "static const " & ctx.emitHlslDecl(s.declType, s.name) &
+          " = " & ctx.printBraceList(s.declType, s.init) & ";"
+      else:
+        hoisted.add "static const " & ctx.emitHlslDecl(s.declType, s.name) &
+          " = " & ctx.printExpr(s.init) & ";"
+  for d in hoisted:
+    result.src &= d & "\n"
+  if hoisted.len > 0:
+    result.src &= "\n"
+  if ctx.failing():
+    return ("", ctx.err)
 
   # forward declarations first, a call resolves to a definition emitted later through them
+  var fns: seq[CirProc]
+  for fn in m.procs:
+    if not fn.isKernel:
+      fns.add fn
   for fn in fns:
-    result.add ctx.deviceFnText(fn, forwardDeclare = true) & '\n'
+    ctx.fnName = fn.name
+    var fnPush = initHashSet[string]()
+    result.src &= ctx.emitFnSignature(fn, graph, fnPush, forwardDeclare = true) & '\n'
+    if ctx.failing():
+      return ("", ctx.err)
   if fns.len > 0:
-    result.add "\n"
+    result.src &= "\n"
   for fn in fns:
-    result.add ctx.deviceFnText(fn, forwardDeclare = false) & "\n\n"
+    result.src &= ctx.printFn(fn, graph) & "\n\n"
+  if ctx.failing():
+    return ("", ctx.err)
 
-  # The body emits before the signature: the printer must know which inputs
-  # the body reads before it can write main's signature.
-  let body = ctx.genHlsl(st, kernel.pBody, 1)
+  # body before signature: the printer must know which inputs the body
+  # reads before it can write main's signature
+  ctx.fnName = kernel.name
+  ctx.indent = 0
+  ctx.isKernel = true
+  ctx.pushParams = pushParams
+  ctx.bufferParams = initHashSet[string]()
+  ctx.addressParams = initTable[string, CirType]()
+  for p in buffers:
+    ctx.bufferParams.incl(p.name)
+    ctx.addressParams[p.name] = p.typ
+  ctx.rwBuffers = initHashSet[string]()
+  for p in buffers:
+    if graph.reached.contains(kernel.name & "/" & p.name):
+      ctx.rwBuffers.incl(p.name)
+  ctx.workgroup = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1]
+                   else: kernel.workgroup)
+  let bodyTxt = ctx.printStmts(kernel.body, "", "")
+  if ctx.failing():
+    return ("", ctx.err)
+  result.src &= "[numthreads(" & $ctx.workgroup[0] & ", " & $ctx.workgroup[1] &
+    ", " & $ctx.workgroup[2] & ")]\n"
+  let inputs = ctx.emitMainInputs()
+  # exportc renames a kernel entry for the host runtime lookup. Vulkan ingest reads
+  # back the entry name from the emitted `[numthreads]` line and passes it to dxc.
+  # Device functions keep the name their call sites reference, a bare kernel stays `main`.
+  let entryName = if kernel.exportName.len > 0: kernel.exportName else: "main"
+  result.src &= "void " & entryName & "(" & inputs & ")\n{\n" & bodyTxt & "\n}\n"
+  return (result.src, "")
 
-  let lws = kernel.workgroupSize()
-  result.add "\n[numthreads(" & $lws[0] & ", " & $lws[1] & ", " & $lws[2] & ")]\n"
-  var inputs: seq[string]
-  if st.gridRead:
-    inputs.add "uint3 gid : SV_DispatchThreadID"
-  if st.groupIdName.len > 0:
-    inputs.add "uint3 " & st.groupIdName & " : SV_GroupID"
-  if st.groupIndexName.len > 0:
-    inputs.add "uint " & st.groupIndexName & " : SV_GroupIndex"
-  result.add "void main(" & inputs.join(", ") & ")\n"
-  result.add "{\n"
-  result.add body
-  result.add "\n}\n"
+proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
+  ## Prints the module in `ctx` as HLSL source for `flavor`, the `backends_api` entry point.
+  ## A printer refusal is a compile error naming the construct.
+  codegenModule(printHlslModule(ctx.module, flavor))

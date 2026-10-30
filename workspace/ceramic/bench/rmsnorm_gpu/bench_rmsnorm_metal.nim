@@ -18,13 +18,12 @@
 # Run:
 #   nim c -r -d:release --outdir:build/bench workspace/ceramic/bench/rmsnorm_gpu/bench_rmsnorm_metal.nim (from tattletale)
 
-import std/[algorithm, monotimes, strformat, strutils, times]
+import std/[algorithm, monotimes, strformat, strutils, times, typetraits]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/kernels/k_tile_rmsnorm
-import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/tests/ceramic_testutils
 
@@ -44,14 +43,34 @@ proc makeHostVector[T](_: typedesc[T], size: int): auto =
 
 proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
   ## Logical position mod 7, times 0.25 plus 0.5: slot permutations change sums
-  for i in 0 ..< tv.size():
-    tv(i) = T(i mod 7) * T(0.25) + T(0.5)
+  when tupleLen(Sh) == 2:
+    var logical = 0
+    for i in 0 ..< tv.getLayout().shape[0]:
+      for j in 0 ..< tv.getLayout().shape[1]:
+        tv[i, j] = T(logical mod 7) * T(0.25) + T(0.5)
+        logical.inc
+  elif tupleLen(Sh) == 3:
+    var logical = 0
+    for i in 0 ..< tv.getLayout().shape[0]:
+      for j in 0 ..< tv.getLayout().shape[1]:
+        for k in 0 ..< tv.getLayout().shape[2]:
+          tv[i, j, k] = T(logical mod 7) * T(0.25) + T(0.5)
+          logical.inc
+  else:
+    var logical = 0
+    for i in 0 ..< tv.getLayout().shape[0]:
+      for j in 0 ..< tv.getLayout().shape[1]:
+        for k in 0 ..< tv.getLayout().shape[2]:
+          for l in 0 ..< tv.getLayout().shape[3]:
+            tv[i, j, k, l] = T(logical mod 7) * T(0.25) + T(0.5)
+            logical.inc
 
 proc fillWeight[T, Sh, St](tv: var TensorView[T, Sh, St]) =
   ## Position mod 5, times 0.25 plus 1.0: per-axis weights in [1.0, 2.0],
   ## the same pattern the MLX runner fills.
+  let data = cast[ptr UncheckedArray[T]](tv.data)
   for r in 0 ..< tv.size():
-    tv(r) = T(r mod 5) * T(0.25) + T(1.0)
+    data[r] = T(r mod 5) * T(0.25) + T(1.0)
 
 proc rmsnormLoop(weighted: static bool, dst, src, weight: distinct TensorView, eps: float32, axis: static int, iters: int) =
   ## Bench harness: iters RMSNorm passes in one launch.
@@ -74,7 +93,7 @@ proc runCase(engine: MetalEngine, shape, srcStrides, dstStrides: tuple, axis: st
     dstView = dstHost.view()
     weightHost = makeHostVector(float32, toInt(srcView.shape[axis]))
   fillPattern(srcView)
-  fillWith_cpu(dstView, 0'f32)
+  # dst stays uninitialized, the kernel overwrites every element of every row
   block:
     var wv = weightHost.view()
     fillWeight(wv)
@@ -105,7 +124,7 @@ proc runCase(engine: MetalEngine, shape, srcStrides, dstStrides: tuple, axis: st
         grid = (gx, 1)
         blk = (32, 1)
       let benchStop = getMonoTime()
-      engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, np)
+      engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, 1)
       timings[rep] = inNanoseconds(benchStop - benchStart) div iters
   sort(timings)
   let gbps = np.float * 12.0 / (timings[1].float / 1e9) / 1e9

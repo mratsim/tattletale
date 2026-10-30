@@ -45,7 +45,7 @@ proc simd_shuffle*[T](value: T, lane: int): T {.builtin.} = discard
   ##
   ## Backend catalogue:
   ##
-  ## | Backend       | Spelling                                                                          | Uniformity                                                                                               |
+  ## | Backend       | Backend syntax                                                                    | Uniformity                                                                                               |
   ## | ------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
   ## | MSL           | `simd_shuffle(value, simd_lane_id)`                                               | none: a valid lane id may differ per thread (MSL 4.1 stdlib, `simd_shuffle`)                             |
   ## | GLSL (Vulkan) | `subgroupShuffle(value, id)` under `GL_KHR_shader_subgroup_shuffle`               | none in the SPIR-V 1.6 lowering target, the KHR extension text is not vendored in this repository        |
@@ -72,7 +72,7 @@ proc simd_shuffle_xor*[T](value: T, mask: int): T {.builtin.} = discard
   ##
   ## Backend catalogue:
   ##
-  ## | Backend       | Spelling                                                                             | Uniformity                                                                                                 |
+  ## | Backend       | Backend syntax                                                                       | Uniformity                                                                                                 |
   ## | ------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
   ## | MSL           | `simd_shuffle_xor(value, mask)`                                                      | required: the mask must be the same on every thread of the SIMD-group (MSL 4.1 stdlib, `simd_shuffle_xor`) |
   ## | GLSL (Vulkan) | `subgroupShuffleXor(value, mask)` under `GL_KHR_shader_subgroup_shuffle`             | no clause in the SPIR-V 1.6 lowering target, the KHR extension text is not vendored in this repository     |
@@ -80,7 +80,7 @@ proc simd_shuffle_xor*[T](value: T, mask: int): T {.builtin.} = discard
   ## | OpenCL        | `sub_group_shuffle_xor(value, mask)`                                                 | OpenCL 2.1 core, no pragma                                                                                 |
   ## | CUDA          | `__shfl_xor_sync(0xffffffff, value, mask)`                                           | full mask: every warp lane participates, the exchange pairs lanes bitwise under a uniform mask             |
   ## | SPIR-V        | `OpGroupNonUniformShuffleXor` (opcode 346), capability `GroupNonUniformShuffle` (65) | no uniformity clause in core SPIR-V 1.6, the caller keeps the mask uniform                                 |
-  ## | HLSL          | refused loudly: no wave intrinsic exchanges with a lane-index xor                    | not applicable, HLSL has no faithful xor spelling                                                          |
+  ## | HLSL          | refused loudly: no wave intrinsic exchanges with a lane-index xor                    | not applicable, HLSL has no faithful xor syntax                                                            |
 
 template subgroupShuffle*[T](value: T, lane: int): untyped = simd_shuffle(value, lane)
 template subgroupShuffleXor*[T](value: T, mask: int): untyped = simd_shuffle_xor(value, mask)

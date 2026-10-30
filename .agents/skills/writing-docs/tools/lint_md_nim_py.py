@@ -455,6 +455,8 @@ BANNED = [
     (r"\bcarries\b|\bholds\b",
      None,
      "state what the thing is or does, name the actor or the mechanism directly"),
+    (r"\blattice\b|\blattices\b",
+     None, "use closed set of type kinds or name the kind"),
 ]
 
 LICENSE_SHAPE = re.compile(

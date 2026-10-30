@@ -6,12 +6,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-template cudaName*(s: string): untyped {.pragma.}
-
 template global*() {.pragma.}
 template workgroup*(size: untyped): untyped {.pragma.}
   ## Workgroup size annotation for a kernel proc: `{.workgroup: (X, Y, Z).}`
-  ## sets the threads per threadgroup. Backend spellings:
+  ## sets the threads per threadgroup.
+  ## Backend syntax:
   ##   `local_size_xyz` on Vulkan
   ##   `@workgroup_size` on WebGPU
   ## On Metal and CUDA the size is set host-side at dispatch, so the
@@ -21,6 +20,14 @@ template workgroup*(size: untyped): untyped {.pragma.}
   ##   64×1×1 on WebGPU
 template device*() {.pragma.}
 template forceinline*() {.pragma.}
+  ## Refused inlining hint. A proc marked with it fails compilation:
+  ##
+  ## - refusal message: `forceinline was merged into inline; use inline`
+  ## - replacement: `{.inline.}`
+  ##
+  ## The template survives Nim semantic analysis.
+  ## The frontend sees the pragma and refuses it by name.
+  ## Dropping the template would make Nim reject the unknown pragma first and never name the fix.
 
 template builtin*() {.pragma.}
   ## Marks a function, type, or variable as a builtin provided by the

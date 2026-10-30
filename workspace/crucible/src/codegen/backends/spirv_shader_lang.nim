@@ -5,45 +5,68 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+## SPIR-V word constants shared by the printer (writer) and the runtime
+## module scanner (reader), one source of truth.
+## The opcode, capability, and execution-mode numbers are the SPIR-V core
+## grammar values (SPIRV.html, sections 3.3-3.6).
+
+const
+  opEntryPoint* = 15'u32
+  opExecutionMode* = 16'u32
+  opCapability* = 17'u32
+
+  capPhysicalStorageBufferAddresses* = 5347'u32
+  modeLocalSize* = 17'u32
+
 # ═══════════════════════════════════════════════════════════════════════
-#  SPIR-V emission for the Vulkan environment
+#  Value types
 # ═══════════════════════════════════════════════════════════════════════
 
-import std/algorithm
-import std/macros
-import std/sets
-import std/strutils
-import std/tables
-import ../ir/ast_datatypes
-import ../passes/pass_helpers # roundUpMultiple, gpuScalarByteSize
+## SPIR-V emitter over CIRv2, Vulkan 1.4 environment on the encoder's
+## SPIR-V 1.3 baseline:
+##
+## - one `{.global.}` kernel per module, the device functions it calls emitted alongside
+## - one push-constant block binds the kernel parameters in parameter order, the host `store` packing order
+## - buffer parameters contribute one u64 device address each, converted to physical storage buffer pointers in the kernel prologue
+
+import std/[algorithm, sets, strutils, tables, macros]
+import ../ir/cirv2_lang
 import ./spirv_encoder {.all.}
-
-const spvScalarKinds = {gtVoid, gtBool, gtUint8, gtUint16, gtInt16, gtUint32,
-                         gtInt32, gtUint64, gtInt64, gtFloat32, gtFloat64,
-                         gtFloat16, gtSize_t}
-
-func uint32Type(): GpuType =
-  GpuType(kind: gtUint32)
+import ../ir/ast_datatypes
+import ./emit_common
 
 template spvRefuse(what: string) =
   error("SPIR-V backend does not support: " & what)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Type descriptors
-# ═══════════════════════════════════════════════════════════════════════
+proc cirUint32(): CirType =
+  CirType(kind: ctUint, bits: 32)
+
+proc cirInt32(): CirType =
+  CirType(kind: ctInt, bits: 32)
+
+proc cirUint64(): CirType =
+  CirType(kind: ctUint, bits: 64)
 
 type
-  SpvTyKind = enum
+  SpvTyKind* = enum
     stkScalar
+    stkVector
     stkArray
     stkRuntimeArray
     stkStruct
     stkPointer
 
-  SpvTy = ref object
+  SpvTy* = ref object
+    ## SPIR-V value-type descriptor lowered from a CirType.
+    ## `blockDecorated` marks push-constant and buffer-reference struct
+    ## wrappers with the Block decoration Vulkan requires on them.
+    blockDecorated*: bool
     case kind*: SpvTyKind
     of stkScalar:
-      scalar*: GpuType
+      scalar*: CirType          ## ctInt/ctUint/ctFloat/ctBool/ctVoid
+    of stkVector:
+      vElem*: SpvTy
+      vN*: int
     of stkArray:
       elem*: SpvTy
       len*: int
@@ -55,85 +78,63 @@ type
       storage*: uint32
       pointee*: SpvTy
 
-func spvScalar(t: GpuType): SpvTy =
-  doAssert t.kind in spvScalarKinds, "not a scalar GpuType: " & $t.kind
+proc spvScalar(t: CirType): SpvTy =
+  doAssert t.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat},
+    "not a scalar CirType: " & $t.kind
   SpvTy(kind: stkScalar, scalar: t)
 
-func spvArray(elem: SpvTy, len: int): SpvTy =
+proc spvVector(elem: SpvTy, n: int): SpvTy =
+  SpvTy(kind: stkVector, vElem: elem, vN: n)
+
+proc spvArray(elem: SpvTy, len: int): SpvTy =
   doAssert len >= 1, "length 0 means runtime-sized, use spvRuntimeArray"
   SpvTy(kind: stkArray, elem: elem, len: len)
 
-func spvRuntimeArray(elem: SpvTy): SpvTy =
-  SpvTy(kind: stkRuntimeArray, relem: elem)
-
-func spvStruct(members: seq[SpvTy]): SpvTy =
+proc spvStruct(members: seq[SpvTy]): SpvTy =
   SpvTy(kind: stkStruct, members: members)
 
-func spvPointer(storage: uint32, pointee: SpvTy): SpvTy =
+proc spvPointer(storage: uint32, pointee: SpvTy): SpvTy =
   SpvTy(kind: stkPointer, storage: storage, pointee: pointee)
 
-func spvTy(t: GpuType): SpvTy =
+proc isSpvScalarKind(t: CirType): bool =
+  t.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat}
+
+proc spvTyKey(t: SpvTy): string =
+  ## Structural key, the type-identity memo for OpType* dedup.
   case t.kind
-  of spvScalarKinds: spvScalar(t)
-  of gtArray:
-    if t.aLen > 0:
-      spvArray(spvTy(t.aTyp), t.aLen)
-    else:
-      spvRuntimeArray(spvTy(t.aTyp))
-  of gtUncheckedArray: spvRuntimeArray(spvTy(t.uaTo))
-  of gtObject:
-    var ms: seq[SpvTy]
-    for f in t.fields:
-      ms.add spvTy(f.typ)
-    spvStruct(ms)
-  of gtPtr: spvPointer(scPhysicalStorageBuffer, spvTy(t.to))
-  of gtBf16, gtF8E4M3, gtF8E5M2:
-    error("bf16/f8 need OpTypeFloat FPEncoding operands and extension machinery")
-  else:
-    error("GpuType outside the SPIR-V subset: " & $t.kind)
-
-
-func staticIntValue(t: GpuType): int =
-  t.sValue
-
-func valueType(t: GpuType): GpuType =
-  if t.kind == gtStatic:
-    GpuType(kind: gtInt32)
-  else:
-    t
-
-func valueTy(t: GpuType): SpvTy =
-  case t.kind
-  of spvScalarKinds: spvScalar(t)
-  of gtStatic: spvScalar(GpuType(kind: gtInt32))
-  of gtPtr, gtUncheckedArray: spvScalar(GpuType(kind: gtUint64))
-  of gtArray:
-    doAssert t.aTyp.kind in spvScalarKinds or t.aTyp.kind == gtStatic,
-      "array elements outside the SPIR-V subset: " & $t.aTyp.kind
-    spvArray(spvScalar(valueType(t.aTyp)), t.aLen)
-  of gtObject, gtGenericInst:
-    var ms: seq[SpvTy]
-    for f in t.fields:
-      ms.add valueTy(f.typ)
-    spvStruct(ms)
-  else:
-    error("GpuType outside the SPIR-V subset: " & $t.kind)
+  of stkScalar:
+    result = "s:" & $t.scalar.kind
+    if t.scalar.kind in {ctInt, ctUint, ctFloat}:
+      result &= ":" & $t.scalar.bits
+  of stkVector: result = "v:" & spvTyKey(t.vElem) & ":" & $t.vN
+  of stkArray: result = "a:" & spvTyKey(t.elem) & ":" & $t.len
+  of stkRuntimeArray: result = "r:" & spvTyKey(t.relem)
+  of stkStruct:
+    result = "t:"
+    for m in t.members:
+      result &= spvTyKey(m) & ","
+    if t.blockDecorated:
+      result &= "B"
+  of stkPointer: result = "p:" & $t.storage & ":" & spvTyKey(t.pointee)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  std430 layout
 # ═══════════════════════════════════════════════════════════════════════
 
-# Member offsets are the host deviceLayout C numbers
-
 type SpvLayout = object
   size*: int
   align*: int
 
-func std430Layout(t: SpvTy): SpvLayout =
+proc std430Layout(t: SpvTy): SpvLayout =
   case t.kind
   of stkScalar:
-    let s = gpuScalarByteSize(t.scalar)
+    let s = scalarByteSize(t.scalar)
     SpvLayout(size: s, align: s)
+  of stkVector:
+    let e = std430Layout(t.vElem)
+    # std430 base alignment: 1x/2x the component's for vec1/vec2, 4x for vec3/vec4
+    let alignMul = if t.vN <= 2: t.vN else: 4
+    SpvLayout(size: e.size * t.vN, align: alignMul * e.align)
   of stkArray:
     let e = std430Layout(t.elem)
     let stride = roundUpMultiple(e.size, e.align)
@@ -152,7 +153,7 @@ func std430Layout(t: SpvTy): SpvLayout =
   of stkPointer:
     SpvLayout(size: 8, align: 8)
 
-func std430Offsets(members: seq[SpvTy]): seq[int] =
+proc std430Offsets(members: seq[SpvTy]): seq[int] =
   var off = 0
   for m in members:
     let ml = std430Layout(m)
@@ -165,135 +166,215 @@ func std430Offsets(members: seq[SpvTy]): seq[int] =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvLangCtx = object
+  SpvLangCtx* = object
     builder*: SpvBuilder
-    caps*: HashSet[uint32]              ## pending capabilities, flushCapabilities emits them
-    structMemo*: Table[seq[uint32], uint32]
+    caps*: HashSet[uint32]
+    tyMemo*: Table[string, uint32]
+    structMemo*: Table[string, uint32]
     builtins*: Table[uint32, tuple[varId, vecTy: uint32]]
-    interfaceVars*: seq[uint32]
     scalarBuiltins*: Table[uint32, uint32]
-    fns*: Table[string, GpuAst]
-    emittedFns*: Table[string, uint32]
-    emitting*: HashSet[string]
+    interfaceVars*: seq[uint32]
     exts*: seq[string]
+    emittedFns*: Table[string, uint32]
+    fnProcs*: Table[string, CirProc]
+    emitting*: HashSet[string]
+    fnTypes*: Table[string, CirType]
+      ## proc name -> value type of its CirProc, the fn-value-type lookup
+    err*: string
 
-func initSpvLangCtx(): SpvLangCtx =
+proc initSpvLangCtx(): SpvLangCtx =
   result.builder = initSpvBuilder()
   result.caps.incl capShader
 
-func scalarId(ctx: var SpvLangCtx, t: GpuType): uint32 =
+proc failSpv(ctx: var SpvLangCtx, what: string) =
+  if ctx.err.len == 0:
+    ctx.err = "SPIR-V backend does not support: " & what
+
+proc scalarId(ctx: var SpvLangCtx, t: CirType): uint32 =
   case t.kind
-  of gtVoid: ctx.builder.tyVoid()
-  of gtBool: ctx.builder.tyBool()
-  of gtUint8:
-    ctx.caps.incl capInt8
-    ctx.builder.tyInt(8, false)
-  of gtUint16, gtInt16:
-    ctx.caps.incl capInt16
-    ctx.builder.tyInt(16, t.kind == gtInt16)
-  of gtUint32: ctx.builder.tyInt(32, false)
-  of gtInt32: ctx.builder.tyInt(32, true)
-  of gtUint64, gtInt64:
-    ctx.caps.incl capInt64
-    ctx.builder.tyInt(64, t.kind == gtInt64)
-  of gtFloat16:
-    ctx.caps.incl capFloat16
-    ctx.builder.tyFloat(16)
-  of gtFloat32: ctx.builder.tyFloat(32)
-  of gtFloat64:
-    ctx.caps.incl capFloat64
-    ctx.builder.tyFloat(64)
-  of gtSize_t: ctx.builder.tyInt(32, false)
-  else: error("not a scalar GpuType: " & $t.kind)
+  of ctVoid: ctx.builder.tyVoid()
+  of ctBool: ctx.builder.tyBool()
+  of ctUint:
+    case t.bits
+    of 8: ctx.caps.incl capInt8; ctx.builder.tyInt(8, false)
+    of 16: ctx.caps.incl capInt16; ctx.builder.tyInt(16, false)
+    of 32: ctx.builder.tyInt(32, false)
+    of 64: ctx.caps.incl capInt64; ctx.builder.tyInt(64, false)
+    else: ctx.failSpv("uint width " & $t.bits); return 0
+  of ctInt:
+    case t.bits
+    of 16: ctx.caps.incl capInt16; ctx.builder.tyInt(16, true)
+    of 32: ctx.builder.tyInt(32, true)
+    of 64: ctx.caps.incl capInt64; ctx.builder.tyInt(64, true)
+    else: ctx.failSpv("int width " & $t.bits); return 0
+  of ctFloat:
+    case t.bits
+    of 16: ctx.caps.incl capFloat16; ctx.builder.tyFloat(16)
+    of 32: ctx.builder.tyFloat(32)
+    of 64: ctx.caps.incl capFloat64; ctx.builder.tyFloat(64)
+    else: ctx.failSpv("float width " & $t.bits); return 0
+  else:
+    ctx.failSpv("scalar id of " & $t.kind)
+    return 0
 
-func tyId(ctx: var SpvLangCtx, t: SpvTy): uint32
+proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy
 
-func arrayTy(ctx: var SpvLangCtx, elem: SpvTy, len: int): uint32 =
-  doAssert len >= 1
-  let elemId = ctx.tyId(elem)
-  let lenId = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(len))
-  let key: SpvMemoKey = (OpTypeArray, @[elemId, lenId])
-  if key in ctx.builder.memo:
-    return ctx.builder.memo[key]
-  result = ctx.builder.memoInst(OpTypeArray, @[elemId, lenId])
-  let e = std430Layout(elem)
-  ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUpMultiple(e.size, e.align))])
-
-func runtimeArrayTy(ctx: var SpvLangCtx, elem: SpvTy): uint32 =
-  let elemId = ctx.tyId(elem)
-  let key: SpvMemoKey = (OpTypeRuntimeArray, @[elemId])
-  if key in ctx.builder.memo:
-    return ctx.builder.memo[key]
-  result = ctx.builder.memoInst(OpTypeRuntimeArray, @[elemId])
-  let e = std430Layout(elem)
-  ctx.builder.emitDecorate(result, decArrayStride, @[uint32(roundUpMultiple(e.size, e.align))])
-
-func structTy(ctx: var SpvLangCtx, members: seq[SpvTy], isBlock = false): uint32 =
-  let offsets = std430Offsets(members)
-  var memberIds: seq[uint32]
-  for m in members:
-    memberIds.add ctx.tyId(m)
-  var key = memberIds
-  for off in offsets:
-    key.add uint32(off)
-  key.add uint32(isBlock)
-  if key in ctx.structMemo:
-    return ctx.structMemo[key]
-  result = ctx.builder.module.allocId()
-  # result-carrying instructions lead with the result id, emitInstSeq does not insert it
-  var words = @[result]
-  for mid in memberIds:
-    words.add mid
-  ctx.builder.module.emitInstSeq(ssTypesConstantsGlobals,
-                                 OpTypeStruct, words)
-  for i, off in offsets:
-    ctx.builder.emitMemberDecorate(result, uint32(i), decOffset, @[uint32(off)])
-  if isBlock:
-    ctx.builder.emitDecorate(result, decBlock)
-  ctx.structMemo[key] = result
-
-func tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
+proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
+  ## SPIR-V value type of a CirType.
+  ##
+  ## Pointer-typed members keep their pointer type, storing pointer values
+  ## needs the variable-pointers capability and such a member declares it.
   case t.kind
-  of stkScalar: ctx.scalarId(t.scalar)
-  of stkArray: ctx.arrayTy(t.elem, t.len)
-  of stkRuntimeArray: ctx.runtimeArrayTy(t.relem)
-  of stkStruct: ctx.structTy(t.members)
+  of ctVoid, ctBool, ctInt, ctUint, ctFloat: spvScalar(t)
+  of ctVector: spvVector(ctx.valueTy(t.vElem), t.vN)
+  of ctArray: spvArray(ctx.valueTy(t.aElem), t.aN)
+  of ctStruct:
+    var ms: seq[SpvTy]
+    for f in t.fields:
+      ms.add ctx.valueTy(f.typ)
+    spvStruct(ms)
+  of ctPtr:
+    # an explicit pointer, the Function-storage pointer of var params/locals
+    spvPointer(scFunction, ctx.valueTy(t.pElem))
+  of ctAptr:
+    if t.space != caDevice:
+      ctx.failSpv("array pointer in " & $t.space & " space")
+      return nil
+    if t.pElem == nil or not isSpvScalarKind(t.pElem):
+      ctx.failSpv("array pointer to a non-scalar element")
+      return nil
+    ctx.caps.incl capPhysicalStorageBufferAddresses
+    # buffer reference shape: a Block struct over a runtime array
+    # element access chains through member 0 and the index
+    let arr = SpvTy(kind: stkRuntimeArray, relem: ctx.valueTy(t.pElem))
+    var wrapper = spvStruct(@[arr])
+    wrapper.blockDecorated = true
+    spvPointer(scPhysicalStorageBuffer, wrapper)
+  else:
+    ctx.failSpv("CirType outside the SPIR-V subset: " & $t.kind)
+    return nil
+
+proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
+  ## SPIR-V type id of a value type, memoized on the structural key.
+  let key = spvTyKey(t)
+  if ctx.tyMemo.hasKey(key):
+    return ctx.tyMemo[key]
+  case t.kind
+  of stkScalar: result = ctx.scalarId(t.scalar)
+  of stkVector:
+    result = ctx.builder.tyVector(ctx.tyId(t.vElem), t.vN)
+  of stkArray:
+    doAssert t.len >= 1
+    let elemId = ctx.tyId(t.elem)
+    let lenId = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(t.len))
+    let memoKey: SpvMemoKey = (OpTypeArray, @[elemId, lenId])
+    if memoKey in ctx.builder.memo:
+      return ctx.builder.memo[memoKey]
+    result = ctx.builder.memoInst(OpTypeArray, @[elemId, lenId])
+    let e = std430Layout(t.elem)
+    ctx.builder.emitDecorate(result, decArrayStride,
+      @[uint32(roundUpMultiple(e.size, e.align))])
+  of stkRuntimeArray:
+    let elemId = ctx.tyId(t.relem)
+    let memoKey: SpvMemoKey = (OpTypeRuntimeArray, @[elemId])
+    if memoKey in ctx.builder.memo:
+      return ctx.builder.memo[memoKey]
+    result = ctx.builder.memoInst(OpTypeRuntimeArray, @[elemId])
+    let e = std430Layout(t.relem)
+    ctx.builder.emitDecorate(result, decArrayStride,
+      @[uint32(roundUpMultiple(e.size, e.align))])
+  of stkStruct:
+    var memberIds: seq[uint32]
+    for m in t.members:
+      memberIds.add ctx.tyId(m)
+    let offsets = std430Offsets(t.members)
+    var memoKey = "t:"
+    for mid in memberIds:
+      memoKey &= $mid & ","
+    for off in offsets:
+      memoKey &= $off & ","
+    if t.blockDecorated:
+      memoKey &= "B"
+    if ctx.structMemo.hasKey(memoKey):
+      return ctx.structMemo[memoKey]
+    result = ctx.builder.module.allocId()
+    var words = @[result]
+    for mid in memberIds:
+      words.add mid
+    ctx.builder.module.emitInstSeq(ssTypesConstantsGlobals, OpTypeStruct, words)
+    for i, off in offsets:
+      ctx.builder.emitMemberDecorate(result, uint32(i), decOffset, @[uint32(off)])
+    if t.blockDecorated:
+      ctx.builder.emitDecorate(result, decBlock)
+    ctx.structMemo[memoKey] = result
   of stkPointer:
     if t.storage == scPhysicalStorageBuffer:
       ctx.caps.incl capPhysicalStorageBufferAddresses
-    ctx.builder.tyPointer(t.storage, ctx.tyId(t.pointee))
+    result = ctx.builder.tyPointer(t.storage, ctx.tyId(t.pointee))
+  ctx.tyMemo[key] = result
 
 type
   SpvPushBlock = object
-    structTy*: uint32     ## Block-decorated struct type id
-    ptrTy*: uint32        ## pointer to the struct in the PushConstant class
-    varId*: uint32        ## the block variable
-    members*: seq[SpvTy]  ## lowered member types, one per kernel parameter
-    offsets*: seq[int]    ## std430 offset per member
-    byteSize*: int        ## packed block size, the runtime push-blob length
+    structTy*: uint32
+    ptrTy*: uint32
+    varId*: uint32
+    members*: seq[SpvTy]
+    offsets*: seq[int]
+    byteSize*: int
 
-func pushMemberTy(p: GpuType): SpvTy =
-  case p.kind
-  of gtPtr, gtVoidPtr: spvScalar(GpuType(kind: gtUint64))
-  of gtObject, gtGenericInst: valueTy(p)
-  else: spvTy(p)
+proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
+  ## One push-block member per kernel parameter, in parameter order.
+  ## A device array pointer contributes its u64 device address
+  ## and everything else its value type.
+  if p.typ.kind == ctAptr:
+    spvScalar(cirUint64())
+  else:
+    ctx.valueTy(p.typ)
 
-func buildPushBlockTys(ctx: var SpvLangCtx, members: seq[SpvTy]): SpvPushBlock =
-  # bool members never reach here: the patchBoolToI32 pass retypes bool
-  # kernel params to i32 before emission
+proc bdaPointerTy(ctx: var SpvLangCtx, elemTy: CirType): uint32 =
+  ## Physical storage buffer pointer type of a buffer reference
+  ## the `valueTy` shape of the matching `aptr` type.
+  ctx.tyId(ctx.valueTy(CirType(kind: ctAptr, space: caDevice, pElem: elemTy)))
+
+proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
+  ## One OpTypeStruct push block in parameter order, offsets are the host
+  ## `store` packing numbers.
+  ##
+  ## Buffer args bind their address in place.
+  var members: seq[SpvTy]
+  for p in params:
+    if p.typ.kind == ctAptr:
+      if p.typ.space != caDevice:
+        ctx.failSpv("kernel parameter " & p.name & " in " & $p.typ.space &
+          " space, only device buffers carry a push address")
+      members.add spvScalar(cirUint64())
+    elif p.typ.kind in {ctPtr, ctAptr}:
+      ctx.failSpv("kernel parameter " & p.name & " of pointer type")
+    else:
+      if p.typ.kind == ctBool:
+        ctx.failSpv("bool kernel parameter " & p.name &
+          ", the 4-byte push convention has no bool member")
+      let m = ctx.valueTy(p.typ)
+      let l = std430Layout(m)
+      if l.align < 4:
+        ctx.failSpv("push member " & p.name & " is narrower than 32 bits (" &
+          $l.size & " bytes), narrow members need SPIR-V 1.5 storage capabilities")
+      members.add m
   result.members = members
-  result.offsets = std430Offsets(result.members)
-  result.byteSize = std430Layout(spvStruct(result.members)).size
-  result.structTy = ctx.structTy(result.members, isBlock = true)
+  result.offsets = std430Offsets(members)
+  var blockTy: SpvTy = spvStruct(members)
+  result.byteSize = std430Layout(blockTy).size
+  result.structTy = ctx.tyId(blockTy)
+  ctx.builder.emitDecorate(result.structTy, decBlock)
   result.ptrTy = ctx.builder.tyPointer(scPushConstant, result.structTy)
   result.varId = ctx.builder.opVariable(result.ptrTy, scPushConstant)
-  # PushConstant interface entries are invalid in SPIR-V 1.3,
-  # the OpTypeStruct signature alone binds the block
 
-func builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
-  if builtin in ctx.builtins:
+proc builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+  ## Input-storage builtin variable for a vector coordinate builtin,
+  ## the OpEntryPoint interface lists it.
+  if ctx.builtins.hasKey(builtin):
     return ctx.builtins[builtin].varId
-  let vecTy = ctx.builder.tyVector(ctx.scalarId(uint32Type()), 3)
+  let vecTy = ctx.builder.tyVector(ctx.scalarId(cirUint32()), 3)
   let ptrTy = ctx.builder.tyPointer(scInput, vecTy)
   let varId = ctx.builder.opVariable(ptrTy, scInput)
   ctx.builder.emitDecorate(varId, decBuiltIn, @[builtin])
@@ -301,26 +382,32 @@ func builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   ctx.interfaceVars.add varId
   result = varId
 
-func loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int): uint32 =
+proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32
+
+proc loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int, target: CirType): uint32 =
+  ## One coordinate-builtin component, cast to the canonical int type
+  ## the CIRv2 vocabulary reads.
   let varId = ctx.builtinInput(builtin)
   let v = ctx.builder.opLoad(ctx.builtins[builtin].vecTy, varId)
-  ctx.builder.opCompositeExtract(ctx.scalarId(uint32Type()), v, @[component])
+  let raw = ctx.builder.opCompositeExtract(ctx.scalarId(cirUint32()), v, @[component])
+  ctx.convertValue(raw, cirUint32(), target)
 
-func coordBuiltinInput(k: GpuCoordBuiltinKind): uint32 =
-  case k
-  of gbkThreadPositionInGrid: biGlobalInvocationId
-  of gbkThreadgroupPositionInGrid: biWorkgroupId
-  of gbkThreadPositionInThreadgroup: biLocalInvocationId
-  of gbkThreadsPerThreadgroup: biWorkgroupSize
-  of gbkThreadgroupsPerGrid: biNumWorkgroups
-  of gbkThreadIndexInThreadgroup: biLocalInvocationIndex
-  of gbkNone:
-    error("not a coordinate builtin")
+proc coordBuiltinInput(ctx: var SpvLangCtx, kind: CoordBuiltinKind): uint32 =
+  ## Canonical coordinate vocabulary mapped onto the BuiltIn enumerants.
+  case kind
+  of cbkThreadPositionInGrid: result = biGlobalInvocationId
+  of cbkThreadgroupPositionInGrid: result = biWorkgroupId
+  of cbkThreadPositionInThreadgroup: result = biLocalInvocationId
+  of cbkThreadsPerThreadgroup: result = biWorkgroupSize
+  of cbkThreadgroupsPerGrid: result = biNumWorkgroups
+  of cbkThreadIndexInThreadgroup: result = biLocalInvocationIndex
+  of cbkNone:
+    ctx.failSpv("not a coordinate builtin kind")
 
-func scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
-  if builtin in ctx.scalarBuiltins:
+proc scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+  if ctx.scalarBuiltins.hasKey(builtin):
     return ctx.scalarBuiltins[builtin]
-  let u32Ty = ctx.scalarId(uint32Type())
+  let u32Ty = ctx.scalarId(cirUint32())
   let ptrTy = ctx.builder.tyPointer(scInput, u32Ty)
   let varId = ctx.builder.opVariable(ptrTy, scInput)
   ctx.builder.emitDecorate(varId, decBuiltIn, @[builtin])
@@ -328,11 +415,13 @@ func scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   ctx.interfaceVars.add varId
   result = varId
 
-func loadScalarBuiltin(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+proc loadScalarBuiltin(ctx: var SpvLangCtx, builtin: uint32, target: CirType): uint32 =
+  ## Flat thread index, cast to the canonical int type the CIRv2 reads.
   let varId = ctx.scalarBuiltinInput(builtin)
-  ctx.builder.opLoad(ctx.scalarId(uint32Type()), varId)
+  let raw = ctx.builder.opLoad(ctx.scalarId(cirUint32()), varId)
+  ctx.convertValue(raw, cirUint32(), target)
 
-func flushCapabilities(ctx: var SpvLangCtx) =
+proc flushCapabilities(ctx: var SpvLangCtx) =
   var caps: seq[uint32]
   for c in ctx.caps:
     caps.add c
@@ -340,1189 +429,1173 @@ func flushCapabilities(ctx: var SpvLangCtx) =
   for c in caps:
     ctx.builder.emitCapability(c)
 
+proc flushExtensions(ctx: var SpvLangCtx) =
+  var exts = ctx.exts
+  exts.sort()
+  for e in exts:
+    ctx.builder.emitExtension(e)
+
 # ═══════════════════════════════════════════════════════════════════════
-#  Kernel body printer
+#  Function body emission
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvFnCtx = object
-    name*: string                      ## the kernel or device fn being emitted
-    locals*: Table[string, uint32]     ## symbol iSym to Function-storage variable id
-    paramVals*: Table[string, uint32]  ## scalar param iSym to hoisted value id
-    paramPtrs*: Table[string, uint32]  ## pointer param iSym to hoisted BDA pointer id
-    paramMembers*: Table[string, tuple[ptrId: uint32, t: GpuType]]
-      ## object kernel param iSym to its in-place push-block member pointer
-    addrs*: Table[string, uint32]
-    addrNames*: Table[string, uint32]
-    addrNamePointees*: Table[string, GpuType]
-    localTys*: Table[string, GpuType]
-    localsBySym*: Table[string, uint32]
-    localTysBySym*: Table[string, GpuType]
-    addrPointee*: Table[string, GpuType]
-    terminated*: bool                   ## a terminator already ended this fn
-    fns*: Table[string, GpuAst]         ## device fn bodies keyed by callee iSym
+  SpvFnCtx* = object
+    name*: string
+    locals*: Table[string, uint32]
+      ## local name -> Function-storage variable id
+    localTys*: Table[string, CirType]
+    consts*: Table[string, uint32]
+      ## const name -> its constant id
+    params*: Table[string, uint32]
+      ## scalar/struct param name -> hoisted value id
+    bdaParams*: Table[string, uint32]
+      ## device buffer param name -> the physical storage buffer pointer value
+    addrParams*: Table[string, uint32]
+      ## Function-storage pointer param name -> the parameter's pointer id
+    addrPointee*: Table[string, CirType]
+      ## pointer param name -> the pointee value type
+    labels*: Table[string, uint32]
+      ## label name -> block id, filled forward for jmp targets
+    loopMerge*: uint32
+      ## the merge block of the loop this body belongs to, 0 outside a loop
+    loopCont*: uint32
+      ## the continue target of the enclosing loop
+    loopExit*: string
+      ## the break label name of the enclosing loop
+    ptrTargets*: Table[string, uint32]
+      ## pointer-typed local name -> the Function-storage variable it names,
+      ## a pointer to a Function object cannot live in a Function variable
+    terminated*: bool
 
-const spvSignedInts = {gtInt16, gtInt32, gtInt64}
+proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
+proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType
 
-proc refuseNarrowPushMembers(t: GpuType, path: string) =
-  ## Push members are 32-bit or wider, narrower leaves refuse
-  ## (8/16-bit members need the SPIR-V 1.5 storage capabilities)
-  case t.kind
-  of gtBool:
-    spvRefuse("push-constant member " & path & " is gtBool, OpTypeBool is " &
-      "invalid in PushConstant storage, patchBoolToI32 rewrites plain bool " &
-      "kernel parameters only")
-  of gtUint8, gtUint16, gtInt16, gtFloat16:
-    spvRefuse("push-constant member " & path & " (" & $t.kind &
-      ") is narrower than 32 bits, 8/16-bit push members need SPIR-V 1.5 capabilities")
-  of gtArray: refuseNarrowPushMembers(t.aTyp, path)
-  of gtObject, gtGenericInst:
-    for f in t.fields:
-      refuseNarrowPushMembers(f.typ, path & "." & f.name)
-  else:
-    discard
-
-proc emitStmt(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst)
-
-func pointeeElem(t: GpuType): GpuType =
-  case t.kind
-  of gtPtr:
-    if t.to.kind == gtUncheckedArray:
-      t.to.uaTo
-    else:
-      t.to
-  else:
-    spvRefuse("element type of non-pointer type " & $t.kind)
-
-proc fieldEntry(t: GpuType, name: string): tuple[idx: int, typ: GpuType] =
-  doAssert t.kind in {gtObject, gtGenericInst},
-    "field access on non-object type " & $t.kind
-  for i, f in t.fields:
-    if f.name == name:
-      return (i, f.typ)
-  error("no field " & name & " on type " & t.pretty())
-
-func derefTy(t: GpuType): GpuType =
-  case t.kind
-  of gtPtr: t.to
-  of gtUncheckedArray: t.uaTo
-  else:
-    error("deref of non-pointer type " & $t.kind)
-
-proc valueTypeOfField(t: GpuType, name: string): GpuType =
-  valueType(fieldEntry(t, name).typ)
-
-type DotChain = object
-  root*: GpuAst
-  fields*: seq[GpuAst]
-
-func dotChain(n: GpuAst): DotChain =
-  doAssert n.kind == gpuDot, "not a member access"
-  var cur = n
-  while cur.kind == gpuDot:
-    doAssert cur.dField.kind == gpuIdent, "dot field is not an identifier"
-    result.fields.insert(cur.dField)
-    cur = cur.dParent
-  result.root = cur
-
-func chainRootType(root: GpuAst): GpuType =
-  case root.kind
-  of gpuIdent:
-    let t = root.symbol.typ
-    if t.kind in {gtPtr, gtUncheckedArray}:
-      t.to
-    else:
-      t
-  of gpuDeref: chainRootType(root.dOf)
-  else:
-    spvRefuse("member chain root node " & $root.kind)
-
-proc exprGpuType(n: GpuAst): GpuType =
-  case n.kind
-  of gpuLit: n.lType
-  of gpuIdent:
-    if n.symbol.coordBuiltin == gbkThreadIndexInThreadgroup:
-      # the scalar builtin reads as u32, conversions handle the cast
-      GpuType(kind: gtUint32)
-    else:
-      n.symbol.typ
-  of gpuBinOp: n.bType
-  of gpuVar: n.vType
-  of gpuConv: n.convTo
-  of gpuCast: n.cTo
-  of gpuObjConstr: valueType(n.ocType)
-  of gpuDot:
-    let ch = dotChain(n)
-    if ch.root.kind == gpuIdent and ch.root.symbol.coordBuiltin != gbkNone:
-      GpuType(kind: gtUint32)   ## coordinate builtin components are u32
-    else:
-      var t = chainRootType(ch.root)
-      for f in ch.fields:
-        t = valueTypeOfField(t, f.symbol.name)
-      t
-  of gpuIndex:
-    let inner = if n.iArr.kind == gpuDeref: n.iArr.dOf else: n.iArr
-    if inner.kind == gpuIdent:
-      let st = inner.symbol.typ
-      if st.kind == gtArray:
-        valueType(st.aTyp)
+proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
+  ## Function-storage variables must all precede the entry block's first load.
+  ## Every sVar declares here, the declaration site stores its value.
+  for s in ss:
+    case s.kind
+    of sVar:
+      if s.space != caThread:
+        ctx.failSpv("local " & s.name & " in " & $s.space &
+          " space, shared/constant locals are outside the SPIR-V subset")
+      if s.declType.kind == ctPtr:
+        # a pointer-typed local resolves to its pointee variable, no storage
+        discard
       else:
-        pointeeElem(st)
+        let vt = ctx.valueTy(s.declType)
+        let varId = ctx.builder.opVariableFn(
+          ctx.builder.tyPointer(scFunction, ctx.tyId(vt)))
+        fn.locals[s.name] = varId
+        fn.localTys[s.name] = s.declType
+    of sConst:
+      discard
+    of sIte:
+      ctx.hoistLocals(fn, s.thenBody)
+      ctx.hoistLocals(fn, s.elseBody)
+    of sLoop:
+      ctx.hoistLocals(fn, s.loopBody)
+    of sScope:
+      ctx.hoistLocals(fn, s.scopeBody)
     else:
-      let ch = dotChain(inner)
-      var t = chainRootType(ch.root)
-      for f in ch.fields:
-        t = valueTypeOfField(t, f.symbol.name)
-      case t.kind
-      of gtArray: valueType(t.aTyp)
-      of gtUncheckedArray: valueType(t.uaTo)
-      of gtPtr: valueType(pointeeElem(t))
-      else:
-        spvRefuse("index of non-array member type " & $t.kind)
-  of gpuDeref: valueType(derefTy(exprGpuType(n.dOf)))
-  of gpuPrefix: exprGpuType(n.pVal)
-  of gpuArrayLit:
-    GpuType(kind: gtArray, aTyp: n.aLitType, aLen: n.aValues.len)
-  else:
-    spvRefuse("result type of expression node " & $n.kind)
+      discard
 
-func spvConstLit(ctx: var SpvLangCtx, t: GpuType, lValue: string): uint32 =
-  let tyId = ctx.tyId(spvScalar(t))
-  case t.kind
-  of gtUint32:
-    ctx.builder.constUint(tyId, uint64(uint32(parseUInt(lValue))))
-  of gtSize_t:
-    let v = parseUInt(lValue)
-    if v > uint64(uint32.high):
-      spvRefuse("size_t literal " & lValue &
-        " exceeds the 32-bit device width")
-    ctx.builder.constUint(tyId, v)
-  of gtInt32: ctx.builder.constUint(tyId, uint64(uint32(parseBiggestInt(lValue))))
-  of gtUint64: ctx.builder.constUint(tyId, parseUInt(lValue))
-  of gtInt64: ctx.builder.constUint(tyId, uint64(parseBiggestInt(lValue)))
-  of gtFloat32: ctx.builder.constUint(tyId, cast[uint32](parseFloat(lValue).float32))
-  of gtFloat64: ctx.builder.constUint(tyId, cast[uint64](parseFloat(lValue)))
+proc constId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
+  ## Constant id of a literal, or the registered const name.
+  case e.kind
+  of eIntLit:
+    let tyId = ctx.tyId(spvScalar(e.litType))
+    let width = ctx.builder.getScalarWidth(tyId)
+    let mask =
+      if width >= 64: not 0'u64
+      else: (1'u64 shl uint64(width)) - 1
+    ctx.builder.constUint(tyId, uint64(e.value) and mask)
+  of eFloatLit:
+    let tyId = ctx.tyId(spvScalar(e.fLitType))
+    let width = ctx.builder.getScalarWidth(tyId)
+    if width == 32:
+      ctx.builder.constUint(tyId, uint64(cast[uint32](e.fValue.float32)))
+    else:
+      ctx.builder.constUint(tyId, cast[uint64](e.fValue))
+  of eTrue:
+    let boolTy = ctx.tyId(spvScalar(CirType(kind: ctBool)))
+    ctx.builder.constBool(boolTy, true)
+  of eFalse:
+    let boolTy = ctx.tyId(spvScalar(CirType(kind: ctBool)))
+    ctx.builder.constBool(boolTy, false)
+  of eSym:
+    if fn.consts.hasKey(e.name):
+      return fn.consts[e.name]
+    ctx.failSpv("literal expected, got symbol " & e.name)
+    0
   else:
-    spvRefuse("literal of type " & $t.kind)
+    ctx.failSpv("literal expected, got expression kind " & $e.kind)
+    0
 
-func convertValue(ctx: var SpvLangCtx, v: uint32, source, to: GpuType): uint32 =
-  if source.kind == to.kind:
+proc scalarBits(t: CirType): int =
+  ## Bit width of a scalar type, 0 for widthless kinds.
+  if t == nil:
+    return 0
+  if t.kind in {ctInt, ctUint, ctFloat}:
+    t.bits
+  else:
+    0
+
+proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32 =
+  ## Scalar conversion opcode between two value types.
+  if source == nil or to == nil:
+    ctx.failSpv("scalar conversion with a missing operand type")
+    return 0
+  if source.kind == to.kind and scalarBits(source) == scalarBits(to):
     return v
-  let fFloatTy = source.kind in {gtFloat16, gtFloat32, gtFloat64}
-  if to.kind == gtBool and not fFloatTy:
-    # Bool reads as truthiness: any nonzero integer means true.
-    # This is the patchBoolToI32 pass rule, the WGSL bool(i32) form.
+  let fFloat = source.kind == ctFloat
+  let tFloat = to.kind == ctFloat
+  let fInt = source.kind in {ctInt, ctUint}
+  let tInt = to.kind in {ctInt, ctUint}
+  if to.kind == ctBool and not fFloat:
+    # bool reads as truthiness, any nonzero integer means true
     let zero = ctx.builder.constUint(ctx.scalarId(source), 0)
-    return ctx.builder.freshInst(OpINotEqual, @[ctx.tyId(spvScalar(to)), v, zero])
-  let tFloatTy = to.kind in {gtFloat16, gtFloat32, gtFloat64}
-  let fInt = source.kind in spvScalarKinds and source.kind != gtBool and not fFloatTy
-  let tInt = to.kind in spvScalarKinds and to.kind != gtBool and not tFloatTy
-  let fFloat = source.kind in {gtFloat32, gtFloat64}
-  let tFloat = to.kind in {gtFloat32, gtFloat64}
-  let inst = if fInt and tInt:
-      if gpuScalarByteSize(source) == gpuScalarByteSize(to):
-        OpBitcast
-      elif to.kind in spvSignedInts:
-        # the convert opcode's signedness matches the result type:
-        # OpSConvert declares a signed result, OpUConvert an unsigned one
-        OpSConvert
-      else:
-        OpUConvert
-    elif fInt and tFloat:
-      if source.kind in spvSignedInts:
-        OpConvertSToF
-      else:
-        OpConvertUToF
-    elif fFloat and tInt:
-      if to.kind in spvSignedInts:
-        OpConvertFToS
-      else:
-        OpConvertFToU
-    elif fFloat and tFloat:
-      OpFConvert
+    return ctx.builder.freshInst(OpINotEqual,
+      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), v, zero])
+  if source.kind == ctBool and tInt:
+    let boolTy = ctx.tyId(spvScalar(CirType(kind: ctBool)))
+    let one = ctx.builder.constUint(ctx.scalarId(to), 1)
+    let zero = ctx.builder.constUint(ctx.scalarId(to), 0)
+    return ctx.builder.opSelect(ctx.scalarId(to),
+      ctx.builder.freshInst(OpLogicalEqual, @[boolTy, v,
+        ctx.builder.constBool(boolTy, true)]), one, zero)
+  if fInt and tInt:
+    if scalarBits(source) == scalarBits(to):
+      return ctx.builder.freshInst(OpBitcast, @[ctx.scalarId(to), v])
+    if to.kind == ctInt:
+      return ctx.builder.freshInst(OpSConvert, @[ctx.scalarId(to), v])
+    return ctx.builder.freshInst(OpUConvert, @[ctx.scalarId(to), v])
+  if fInt and tFloat:
+    if source.kind == ctInt:
+      return ctx.builder.freshInst(OpConvertSToF, @[ctx.scalarId(to), v])
+    return ctx.builder.freshInst(OpConvertUToF, @[ctx.scalarId(to), v])
+  if fFloat and tInt:
+    if to.kind == ctInt:
+      return ctx.builder.freshInst(OpConvertFToS, @[ctx.scalarId(to), v])
+    return ctx.builder.freshInst(OpConvertFToU, @[ctx.scalarId(to), v])
+  if fFloat and tFloat:
+    return ctx.builder.freshInst(OpFConvert, @[ctx.scalarId(to), v])
+  ctx.failSpv("no scalar conversion " & $source.kind & $scalarBits(source) &
+    " -> " & $to.kind & $scalarBits(to))
+  0
+
+proc memberIndex(t: CirType, name: string): int =
+  ## Member index of a named struct field or a vector component
+  ## (`F0`/`F1`/...), -1 when absent.
+  if t.kind == ctStruct:
+    for i, f in t.fields:
+      if f.name == name:
+        return i
+    return -1
+  if t.kind == ctVector and name.len >= 2 and name[0] == 'F':
+    let i = parseInt(name[1 ..^ 1])
+    if i >= 0 and i < t.vN:
+      return i
+    return -1
+  return -1
+
+proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
+  ## CirType of an expression, the read type for conversions.
+  case e.kind
+  of eNil: result = e.nilType
+  of eSym:
+    # temp syms carry no type, the hoisted declaration's type is the truth
+    result = fn.localTys.getOrDefault(e.name, e.typ)
+  of eIntLit: result = e.litType
+  of eFloatLit: result = e.fLitType
+  of eTrue, eFalse: result = CirType(kind: ctBool)
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    result = e.opType
+  of eBitNot, eNeg: result = e.unType
+  of eEq, eNeq, eLt, eLe:
+    # a comparison is a value of bool, cmpType names the operand type
+    result = CirType(kind: ctBool)
+  of eNot: result = CirType(kind: ctBool)
+  of eAnd, eOr: result = CirType(kind: ctBool)
+  of eCast, eConv: result = e.castType
+  of eAddr: result = e.addrType
+  of eSizeof: result = cirUint32()
+  of eOconstr: result = e.ocType
+  of eAconstr: result = e.acType
+  of eDeref:
+    let t = ctx.resolveExprType(fn, e.derefOperand)
+    if t != nil and t.kind in {ctPtr, ctAptr}:
+      result = t.pElem
     else:
-      error("no SPIR-V scalar conversion " & $source.kind & " -> " & $to.kind)
-  ctx.builder.freshInst(inst, @[ctx.tyId(spvScalar(to)), v])
+      ctx.failSpv("deref of a non-pointer operand")
+  of eAt:
+    let t = ctx.resolveExprType(fn, e.atBase)
+    if t != nil and t.kind == ctArray:
+      result = t.aElem
+    elif t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil:
+      result = t.pElem
+    else:
+      ctx.failSpv("index of a non-array operand")
+  of ePat:
+    let t = ctx.resolveExprType(fn, e.patBase)
+    if t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil:
+      result = t.pElem
+    else:
+      ctx.failSpv("pattern access on a non-pointer operand")
+  of eDot:
+    let t = ctx.resolveExprType(fn, e.dotBase)
+    if t != nil and t.kind == ctStruct:
+      let i = memberIndex(t, e.fieldName)
+      if i >= 0:
+        result = t.fields[i].typ
+      else:
+        ctx.failSpv("no field " & e.fieldName & " on " & t.name)
+    elif t != nil and t.kind == ctVector:
+      let i = memberIndex(t, e.fieldName)
+      if i >= 0:
+        result = t.vElem
+      else:
+        ctx.failSpv("no component " & e.fieldName & " on the vector")
+    else:
+      ctx.failSpv("field access on a non-struct operand")
+  of eCall:
+    if e.callee.kind == eSym and ctx.fnTypes.hasKey(e.callee.name):
+      result = ctx.fnTypes[e.callee.name]
+    elif e.callee.kind == eSym and e.callee.name == "atomicFetchAdd" and
+        e.args.len == 2 and e.args[0].kind == eAddr:
+      # an atomic add yields the addressed element, its first argument
+      # names the address
+      let pat = e.args[0].addrOperand
+      if pat.kind == ePat:
+        let t = ctx.resolveExprType(fn, pat.patBase)
+        if t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil:
+          result = t.pElem
+          return
+      ctx.failSpv("atomicFetchAdd address is not the address of an element")
+    elif e.callee.kind == eSym and e.args.len > 0:
+      # a builtin call, the result type is the first argument's type
+      result = ctx.resolveExprType(fn, e.args[0])
+    else:
+      ctx.failSpv("call result type of " & (if e.callee.kind == eSym: e.callee.name else: "non-symbol callee"))
 
-func bdaPointerTy(ctx: var SpvLangCtx, elem: GpuType): uint32 =
-  doAssert elem.kind in spvScalarKinds,
-    "SPIR-V buffer references address scalar elements only: " & $elem.kind
-  ctx.caps.incl capPhysicalStorageBufferAddresses
-  let refStruct = ctx.structTy(@[spvRuntimeArray(spvScalar(elem))], isBlock = true)
-  ctx.builder.tyPointer(scPhysicalStorageBuffer, refStruct)
+proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): tuple[ptrId: uint32, pointee: CirType, isBda: bool, isPush: bool]
 
-func getLocalVarId(fn: SpvFnCtx, sym: Symbol): uint32 =
-  if sym.iSym in fn.localsBySym:
-    return fn.localsBySym[sym.iSym]
-  if sym.name in fn.locals:
-    return fn.locals[sym.name]
-  spvRefuse("unknown local symbol " & sym.name)
+proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
 
-func getLocalType(fn: SpvFnCtx, sym: Symbol): GpuType =
-  if sym.iSym in fn.localTysBySym:
-    return fn.localTysBySym[sym.iSym]
-  if sym.name in fn.localTys:
-    return fn.localTys[sym.name]
-  spvRefuse("unknown local symbol " & sym.name)
-
-func emitIdentRef(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  let sym = n.symbol
-  case sym.coordBuiltin
-  of gbkThreadIndexInThreadgroup:
-    return ctx.loadScalarBuiltin(biLocalInvocationIndex)
-  of gbkNone: discard
-  else:
-    spvRefuse("whole-vector use of coordinate builtin " & sym.name &
-              ", index a component instead")
-  if sym.name == "true" or sym.name == "false":
-    let boolTy = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
-    return ctx.builder.constBool(boolTy, sym.name == "true")
-  if sym.iSym in fn.localsBySym:
-    let t = if sym.typ.kind == gtVoid: getLocalType(fn, sym) else: sym.typ
-    return ctx.builder.opLoad(ctx.tyId(valueTy(t)), getLocalVarId(fn, sym))
-  if sym.iSym in fn.paramVals:
-    return fn.paramVals[sym.iSym]
-  if sym.iSym in fn.paramMembers:
-    let pm = fn.paramMembers[sym.iSym]
-    return ctx.builder.opLoad(ctx.tyId(valueTy(pm.t)), pm.ptrId)
-  if sym.iSym in fn.addrs:
-    return ctx.builder.opLoad(ctx.tyId(valueTy(sym.typ)), fn.addrs[sym.iSym])
-  if sym.iSym in fn.paramPtrs:
-    spvRefuse("bare pointer value use of parameter " & sym.name)
-  error "spirv_shader_lang: unknown symbol `" & sym.name &
-    "` in " & fn.name & ": no local, parameter or constant carries this iSym"
-
-func coordComponent(field: GpuAst): int =
-  doAssert field.kind == gpuIdent, "coordinate component is not an identifier"
-  case field.symbol.name
-  of "x": 0
-  of "y": 1
-  of "z": 2
-  else:
-    spvRefuse("coordinate component " & field.symbol.name)
-
-func binopInst(op: GpuAst, resultTy, operandTy: GpuType): SpvOp =
-  doAssert op.kind == gpuIdent, "binary operator is not an identifier"
-  let name = op.symbol.name
-  let isFloat = operandTy.kind in {gtFloat32, gtFloat64}
-  let signed = operandTy.kind in spvSignedInts
-  if isFloat:
-    # ordered float comparisons, NaN fails every FOrd predicate
-    case name
-    of "==": return OpFOrdEqual
-    of "!=": return OpFOrdNotEqual
-    of "<": return OpFOrdLessThan
-    of "<=": return OpFOrdLessThanEqual
-    of ">": return OpFOrdGreaterThan
-    of ">=": return OpFOrdGreaterThanEqual
-    else: discard
+proc binopInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
+  ## SPIR-V opcode of an arithmetic or comparison operator.
+  ## OpNop marks an operator outside the supported set, the caller records it.
+  let isFloat = operandTy.kind == ctFloat
+  let signed = operandTy.kind == ctInt
   case name
-  of "+": (if isFloat: OpFAdd else: OpIAdd)
-  of "-": (if isFloat: OpFSub else: OpISub)
-  of "*": (if isFloat: OpFMul else: OpIMul)
+  of "+": result = (if isFloat: OpFAdd else: OpIAdd)
+  of "-": result = (if isFloat: OpFSub else: OpISub)
+  of "*": result = (if isFloat: OpFMul else: OpIMul)
   of "/":
-    if isFloat:
-      OpFDiv
-    elif signed:
-      OpSDiv
-    else:
-      OpUDiv
-  of "==":
-    if operandTy.kind == gtBool:
-      OpLogicalEqual
-    else:
-      OpIEqual
-  of "!=":
-    if operandTy.kind == gtBool:
-      OpLogicalNotEqual
-    else:
-      OpINotEqual
-  of "<": (if signed: OpSLessThan else: OpULessThan)
-  of "<=": (if signed: OpSLessThanEqual else: OpULessThanEqual)
-  of ">": (if signed: OpSGreaterThan else: OpUGreaterThan)
-  of ">=": (if signed: OpSGreaterThanEqual else: OpUGreaterThanEqual)
+    result = (if isFloat: OpFDiv elif signed: OpSDiv else: OpUDiv)
   of "%":
-    # a float `%` refuses: no float-mod opcode exists in the table
-    # an OpUMod over float operands is invalid
-    # the frontend refuses the same construct as an undeclared identifier
-    # Nim `mod` is dividend-sign remainder, OpSRem. OpSMod is the divisor-sign C %
     if isFloat:
-      spvRefuse("float modulo %")
-    elif signed:
-      OpSRem
-    else:
-      OpUMod
-  of "&&": OpLogicalAnd
-  of "||": OpLogicalOr
-  else:
-    spvRefuse("binary operator " & name)
-
-proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32
-
-proc exprType(fn: SpvFnCtx, n: GpuAst): GpuType
-
-func resolvePtrRoot(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst): tuple[ptrId: uint32, pointee: GpuType, isBda: bool, isPush: bool] =
-  case root.kind
-  of gpuIdent:
-    let sym = root.symbol
-    if sym.iSym in fn.localsBySym or sym.name in fn.locals:
-      let t = if sym.typ.kind == gtVoid: getLocalType(fn, sym) else: sym.typ
-      return (getLocalVarId(fn, sym), t, false, false)
-    if sym.iSym in fn.paramMembers:
-      let pm = fn.paramMembers[sym.iSym]
-      return (pm.ptrId, pm.t, false, true)
-    if sym.iSym in fn.addrs:
-      # pointer params address their pointee, a chain root through them
-      # starts at the pointee type, an implicit-ptr parameter's declared type
-      # names only the element
-      let t = fn.addrPointee.getOrDefault(sym.iSym, sym.typ)
-      let pt = if t.kind in {gtPtr, gtUncheckedArray}: derefTy(t) else: t
-      return (fn.addrs[sym.iSym], pt, false, false)
-    if sym.iSym in fn.paramPtrs:
-      return (fn.paramPtrs[sym.iSym], pointeeElem(sym.typ), true, false)
-    if sym.name in fn.addrNames:
-      # re-symbol'd assign target over a parameter: the name survives,
-      # the type comes from the registration site
-      let t = fn.addrNamePointees.getOrDefault(sym.name, sym.typ)
-      let pt = if t.kind in {gtPtr, gtUncheckedArray}: derefTy(t) else: t
-      return (fn.addrNames[sym.name], pt, false, false)
-    spvRefuse("member chain root is not a local or parameter: " & sym.name)
-  of gpuAddr: result = resolvePtrRoot(ctx, fn, root.aOf)
-  of gpuDeref: result = resolvePtrRoot(ctx, fn, root.dOf)
-  else:
-    spvRefuse("member chain root node " & $root.kind)
-
-proc emitChainPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, root: GpuAst, fields: seq[GpuAst]): tuple[ptrId: uint32, pointee: GpuType, isBda: bool, isPush: bool] =
-  let (base, baseTy, isBda, isPush) = resolvePtrRoot(ctx, fn, root)
-  if isBda:
-    spvRefuse("member access through a buffer device address parameter")
-  var t = baseTy
-  var idxs: seq[uint32]
-  for f in fields:
-    let (i, fty) = fieldEntry(t, f.symbol.name)
-    idxs.add ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
-    t = fty
-  # the access chain preserves the base's storage class (PushConstant or Function)
-  let sc = if isPush: scPushConstant else: scFunction
-  let ptrTy = ctx.builder.tyPointer(sc, ctx.tyId(valueTy(t)))
-  result.ptrId = ctx.builder.opAccessChain(ptrTy, base, idxs)
-  result.pointee = t
-  result.isPush = isPush
-
-proc emitDotValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  let ch = dotChain(n)
-  if ch.root.kind == gpuIdent and ch.root.symbol.coordBuiltin != gbkNone:
-    doAssert ch.fields.len == 1,
-      "coordinate builtin chains are single component accesses"
-    return ctx.loadBuiltinComponent(
-      coordBuiltinInput(ch.root.symbol.coordBuiltin),
-      coordComponent(ch.fields[0]))
-  if ch.root.kind in {gpuIdent, gpuAddr, gpuDeref}:
-    let (ptrId, pointee, _, _) = emitChainPtr(ctx, fn, ch.root, ch.fields)
-    return ctx.builder.opLoad(ctx.tyId(valueTy(pointee)), ptrId)
-  var v = emitExpr(ctx, fn, ch.root)
-  var idxs: seq[int]
-  var t = exprType(fn, ch.root)
-  for f in ch.fields:
-    let (i, fty) = fieldEntry(t, f.symbol.name)
-    doAssert fty.kind notin {gtPtr, gtUncheckedArray},
-      "device address member on a value-rooted chain"
-    idxs.add i
-    t = valueType(fty)
-  return ctx.builder.opCompositeExtract(ctx.tyId(valueTy(t)), v, idxs)
-
-proc emitAccessPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, base: GpuAst, index: GpuAst): tuple[ptrId: uint32, elem: GpuType, isBda: bool, isPush: bool] =
-  let inner = if base.kind == gpuDeref: base.dOf else: base
-  let idxVal = emitExpr(ctx, fn, index)
-  if inner.kind == gpuIdent:
-    let sym = inner.symbol
-    if sym.iSym in fn.paramPtrs:
-      result.elem = pointeeElem(sym.typ)
-      doAssert result.elem.kind in spvScalarKinds,
-        "SPIR-V buffer references address scalar elements only: " & $result.elem.kind
-      ctx.caps.incl capPhysicalStorageBufferAddresses
-      let elemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
-                                            ctx.tyId(spvScalar(result.elem)))
-      let member0 = ctx.builder.constUint(ctx.scalarId(uint32Type()), 0)
-      result.ptrId = ctx.builder.opAccessChain(elemPtrTy, fn.paramPtrs[sym.iSym],
-                                               @[member0, idxVal])
-      result.isBda = true
+      result = OpNop
       return
-    if sym.iSym in fn.addrs:
-      # Function-storage pointer parameter (`var T`): the recovered pointee
-      # is the array the call sites pass, one access chain indexes it
-      let pointee = fn.addrPointee.getOrDefault(sym.iSym, derefTy(sym.typ))
-      doAssert pointee.kind == gtArray,
-        "indexing a Function-storage pointer to a non-array: " & sym.name
-      result.elem = valueType(pointee.aTyp)
-      doAssert result.elem.kind in spvScalarKinds,
-        "composite element stores address scalar elements only"
-      let elemPtrTy = ctx.builder.tyPointer(scFunction,
-                                            ctx.tyId(spvScalar(result.elem)))
-      result.ptrId = ctx.builder.opAccessChain(elemPtrTy, fn.addrs[sym.iSym],
-                                               @[idxVal])
-      result.isBda = false
-      return
-    # local array: the Function-storage variable already is a pointer to it
-    let arrTy = getLocalType(fn, sym)
-    doAssert arrTy.kind == gtArray, "indexing a non-array local: " & sym.name
-    result.elem = valueType(arrTy.aTyp)
-    doAssert result.elem.kind in spvScalarKinds,
-      "composite element stores address scalar elements only"
-    let elemPtrTy = ctx.builder.tyPointer(scFunction,
-                                          ctx.tyId(spvScalar(result.elem)))
-    result.ptrId = ctx.builder.opAccessChain(elemPtrTy, getLocalVarId(fn, sym),
-                                             @[idxVal])
-    result.isBda = false
-    return
-  doAssert inner.kind == gpuDot, "index base outside the SPIR-V subset: " & $inner.kind
-  let ch = dotChain(inner)
-  var t = chainRootType(ch.root)
-  var memberIdxs: seq[uint32]
-  for f in ch.fields:
-    let (i, fty) = fieldEntry(t, f.symbol.name)
-    memberIdxs.add ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
-    t = fty
-  if t.kind in {gtPtr, gtUncheckedArray}:
-    result.elem = if t.kind == gtUncheckedArray: t.uaTo else: pointeeElem(t)
-    doAssert result.elem.kind in spvScalarKinds,
-      "SPIR-V buffer references address scalar elements only: " & $result.elem.kind
-    let (addrPtr, _, _, isPush) = emitChainPtr(ctx, fn, ch.root, ch.fields)
-    let u64Ty = ctx.tyId(spvScalar(GpuType(kind: gtUint64)))
-    let addrVal = ctx.builder.opLoad(u64Ty, addrPtr)
-    ctx.caps.incl capPhysicalStorageBufferAddresses
-    let bdaPtr = ctx.builder.opConvertUToPtr(ctx.bdaPointerTy(result.elem), addrVal)
-    let elemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
-                                          ctx.tyId(spvScalar(result.elem)))
-    let member0 = ctx.builder.constUint(ctx.scalarId(uint32Type()), 0)
-    result.ptrId = ctx.builder.opAccessChain(elemPtrTy, bdaPtr,
-                                             @[member0, idxVal])
-    result.isBda = true
-  else:
-    # the member chain exists (emitChainPtr), the element chain adds the index
-    doAssert t.kind == gtArray, "indexed member is not an array: " & $t.kind
-    result.elem = valueType(t.aTyp)
-    doAssert result.elem.kind in spvScalarKinds,
-      "composite element stores address scalar elements only"
-    let (basePtr, _, _, isPush) = emitChainPtr(ctx, fn, ch.root, ch.fields)
-    let sc = if isPush: scPushConstant else: scFunction
-    let elemPtrTy = ctx.builder.tyPointer(sc,
-                                          ctx.tyId(spvScalar(result.elem)))
-    result.ptrId = ctx.builder.opAccessChain(elemPtrTy, basePtr, @[idxVal])
-    result.isBda = false
-    result.isPush = isPush
+    result = (if signed: OpSRem else: OpUMod)
+  of "<<": result = OpShiftLeftLogical
+  of ">>":
+    result = (if signed: OpShiftRightArithmetic else: OpShiftRightLogical)
+  of "&": result = OpBitwiseAnd
+  of "|": result = OpBitwiseOr
+  of "xor": result = OpBitwiseXor
+  of "==": result = (if isFloat: OpFOrdEqual
+                    elif operandTy.kind == ctBool: OpLogicalEqual
+                    else: OpIEqual)
+  of "!=": result = (if isFloat: OpFOrdNotEqual
+                    elif operandTy.kind == ctBool: OpLogicalNotEqual
+                    else: OpINotEqual)
+  of "<": result = (if isFloat: OpFOrdLessThan
+                   elif signed: OpSLessThan else: OpULessThan)
+  of "<=": result = (if isFloat: OpFOrdLessThanEqual
+                    elif signed: OpSLessThanEqual else: OpULessThanEqual)
+  else: result = OpNop
 
-proc emitAddr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): tuple[ptrId: uint32, pointee: GpuType, isBda: bool, isPush: bool] =
-  case n.kind
-  of gpuIdent, gpuAddr, gpuDeref:
-    result = resolvePtrRoot(ctx, fn, n)
-  of gpuDot:
-    let ch = dotChain(n)
-    let (ptrId, pointee, isBda, isPush) = emitChainPtr(ctx, fn, ch.root, ch.fields)
-    result = (ptrId, pointee, isBda, isPush)
-  else:
-    spvRefuse("address of node " & $n.kind)
+proc cmpInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
+  ## Comparison opcode, the CIRv2 comparison vocabulary is eq/neq/lt/le,
+  ## OpNop when the operator is outside the supported set.
+  case name
+  of "==": result = (if operandTy.kind == ctFloat: OpFOrdEqual
+                    elif operandTy.kind == ctBool: OpLogicalEqual
+                    else: OpIEqual)
+  of "!=": result = (if operandTy.kind == ctFloat: OpFOrdNotEqual
+                    elif operandTy.kind == ctBool: OpLogicalNotEqual
+                    else: OpINotEqual)
+  of "<": result = (if operandTy.kind == ctFloat: OpFOrdLessThan
+                   elif operandTy.kind == ctInt: OpSLessThan else: OpULessThan)
+  of "<=": result = (if operandTy.kind == ctFloat: OpFOrdLessThanEqual
+                    elif operandTy.kind == ctInt: OpSLessThanEqual
+                    else: OpULessThanEqual)
+  else: result = OpNop
 
-proc exprType(fn: SpvFnCtx, n: GpuAst): GpuType =
-  if n.kind == gpuIdent and (n.symbol.name == "true" or n.symbol.name == "false"):
-    # the passes type bool literals as Void idents, emitExpr constBools them
-    return GpuType(kind: gtBool)
-  if n.kind == gpuCall:
-    let procNode = fn.fns.getOrDefault(n.cName.symbol.iSym)
-    if not procNode.isNil:
-      doAssert not procNode.pRetType.isNil,
-        "fn-table entry with nil return type: " & n.cName.symbol.name
-      return valueType(procNode.pRetType)
-    let argTy = exprGpuType(n.cArgs[0])
-    if argTy.isNil:
-      spvRefuse("result type of a call to " & n.cName.symbol.name &
-        " whose first argument carries no static type")
-    return valueType(argTy)
-  return exprGpuType(n)
-
-func fnRetTyId(ctx: var SpvLangCtx, retTy: GpuType): uint32 =
-  if retTy.kind == gtVoid:
-    ctx.builder.tyVoid()
-  elif retTy.kind in spvScalarKinds:
-    ctx.tyId(spvScalar(retTy))
-  else:
-    ctx.tyId(valueTy(valueType(retTy)))
-
-proc emitObjConstr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  let structId = ctx.tyId(valueTy(n.ocType))
-  var members: seq[uint32]
-  for f in n.ocFields:
-    let v = emitExpr(ctx, fn, f.value)
-    if f.typ.kind in spvScalarKinds:
-      members.add ctx.convertValue(v, exprType(fn, f.value), valueType(f.typ))
-    else:
-      members.add v
-  ctx.builder.freshInst(OpCompositeConstruct, @[structId] & members)
-
-proc emitScalarBuiltinCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  let name = n.cName.symbol.name
-  if name notin ["max", "min"]:
-    spvRefuse("call to unknown function " & name)
-  doAssert n.cArgs.len == 2, "max/min take two arguments"
-  let opTy = valueType(exprType(fn, n.cArgs[0]))
-  let a = ctx.convertValue(emitExpr(ctx, fn, n.cArgs[0]),
-                           exprType(fn, n.cArgs[0]), opTy)
-  let b = ctx.convertValue(emitExpr(ctx, fn, n.cArgs[1]),
-                           exprType(fn, n.cArgs[1]), opTy)
-  let signed = opTy.kind in spvSignedInts
-  let isFloat = opTy.kind in {gtFloat32, gtFloat64}
-  let cmpOp = if isFloat:
-                # ordered float comparison, the counterpart of the integer compare opcodes
-                (if name == "max": OpFOrdGreaterThan else: OpFOrdLessThan)
-              elif name == "max":
-                (if signed: OpSGreaterThan else: OpUGreaterThan)
-              else:
-                (if signed: OpSLessThan else: OpULessThan)
-  let boolTy = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
-  let cond = ctx.builder.freshInst(cmpOp, @[boolTy, a, b])
-  ctx.builder.opSelect(ctx.tyId(spvScalar(opTy)), cond, a, b)
-
-proc emitReduceAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  doAssert n.cArgs.len == 1, "reduceAdd takes one argument"
-  let v = emitExpr(ctx, fn, n.cArgs[0])
-  let resTy = valueType(exprType(fn, n.cArgs[0]))
-  doAssert resTy.kind == gtFloat32, "reduceAdd lowers f32 only: " & $resTy.kind
-  ctx.caps.incl capGroupNonUniformArithmetic
-  let scopeSub = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(scopeSubgroup))
-  ctx.builder.freshInst(OpGroupNonUniformFAdd, @[ctx.tyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
-
-proc emitShuffle(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst, op: SpvOp): uint32 =
-  doAssert n.cArgs.len == 2, "simd_shuffle takes a value and a lane index"
-  let v = emitExpr(ctx, fn, n.cArgs[0])
-  let lane = emitExpr(ctx, fn, n.cArgs[1])
-  let resTy = valueType(exprType(fn, n.cArgs[0]))
-  doAssert resTy.kind in spvScalarKinds, "simd_shuffle lowers scalars only: " & $resTy.kind
-  # Invocation Id and Mask take the unsigned width the grammar demands (Signedness 0)
-  let laneU = ctx.convertValue(lane, exprType(fn, n.cArgs[1]), uint32Type())
-  ctx.caps.incl capGroupNonUniformShuffle
-  let scopeSub = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(scopeSubgroup))
-  ctx.builder.freshInst(op, @[ctx.tyId(spvScalar(resTy)), scopeSub, v, laneU])
-
-proc emitAtomicFetchAdd(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  doAssert n.cArgs.len == 2, "atomicFetchAdd takes a pointer and a value"
-  let addrNode = n.cArgs[0]
-  doAssert addrNode.kind == gpuAddr and addrNode.aOf.kind == gpuIndex,
-    "atomicFetchAdd address is not addr(index(...))"
-  let (ptrId, elem, isBda, _) = emitAccessPtr(ctx, fn, addrNode.aOf.iArr,
-                                              addrNode.aOf.iIndex)
-  doAssert isBda, "atomicFetchAdd lowers through a buffer device address only"
-  doAssert elem.kind == gtFloat32, "atomicFetchAdd lowers f32 only: " & $elem.kind
-  let v = emitExpr(ctx, fn, n.cArgs[1])
-  let value = ctx.convertValue(v, exprType(fn, n.cArgs[1]), valueType(elem))
-  ctx.caps.incl capAtomicFloat32AddEXT
-  if "SPV_EXT_shader_atomic_float_add" notin ctx.exts:
-    ctx.exts.add "SPV_EXT_shader_atomic_float_add"
-  let scopeDev = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(scopeDevice))
-  let sem = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(semUniformMemory or semAcquireRelease))
-  ctx.builder.freshInst(OpAtomicFAddEXT, @[ctx.tyId(spvScalar(elem)), ptrId, scopeDev, sem, value])
-
-proc emitCall(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  let isym = n.cName.symbol.iSym
-  case n.cName.symbol.reductionBuiltin
-  of gbkReduceAdd:
-    return emitReduceAdd(ctx, fn, n)
-  of gbkNone: discard
-  else:
-    spvRefuse("reduction builtin " & $n.cName.symbol.reductionBuiltin)
-  case n.cName.symbol.shuffleBuiltin
-  of gbkSimdShuffle:
-    return emitShuffle(ctx, fn, n, OpGroupNonUniformShuffle)
-  of gbkSimdShuffleXor:
-    return emitShuffle(ctx, fn, n, OpGroupNonUniformShuffleXor)
-  of gbkNone: discard
-  case n.cName.symbol.atomicsBuiltin
-  of gbkAtomicFetchAdd:
-    return emitAtomicFetchAdd(ctx, fn, n)
-  of gbkNone: discard
-  else:
-    spvRefuse("atomics builtin " & $n.cName.symbol.atomicsBuiltin)
-  if isym notin fn.fns:
-    return emitScalarBuiltinCall(ctx, fn, n)
-  let procNode = fn.fns[isym]
-  let fnId = ctx.emittedFns.getOrDefault(isym, 0)
-  doAssert fnId != 0, "callee " & n.cName.symbol.name & " was not pre-emitted"
-  doAssert n.cArgs.len == procNode.pParams.len, "call argument count mismatch"
-  var args: seq[uint32]
-  for i, a in n.cArgs:
-    let p = procNode.pParams[i]
-    if p.typ.kind in {gtPtr, gtVoidPtr}:
-      let (ptrId, _, isBda, isPush) = emitAddr(ctx, fn, a)
-      doAssert not isBda,
-        "buffer device address pointers are not call arguments in the SPIR-V subset"
-      if isPush:
-        let what = if a.kind == gpuIdent: a.symbol.name else: $a.kind
-        spvRefuse("push-constant member `" & what &
-          "` cannot cross by reference, push constants are read-only")
-      args.add ptrId
-    else:
-      let v = emitExpr(ctx, fn, a)
-      args.add ctx.convertValue(v, exprType(fn, a), valueType(p.typ))
-  let retTyId = fnRetTyId(ctx, procNode.pRetType)
-  ctx.builder.freshInst(OpFunctionCall, @[retTyId, fnId] & args)
-
-proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst): uint32 =
-  case n.kind
-  of gpuLit:
-    if n.lValue == "DEFAULT":
-      spvRefuse("DEFAULT literal")
-    spvConstLit(ctx, n.lType, n.lValue)
-  of gpuIdent:
-    emitIdentRef(ctx, fn, n)
-  of gpuBinOp:
-    # comparisons yield gtBool and operate on the operand type, arithmetic on the self-carried result type
-    let resTy = n.bType
-    let opTy = if resTy.kind == gtBool: exprType(fn, n.bLeft) else: resTy
-    let l = convertValue(ctx, emitExpr(ctx, fn, n.bLeft),
-                         exprType(fn, n.bLeft), opTy)
-    let r = convertValue(ctx, emitExpr(ctx, fn, n.bRight),
-                         exprType(fn, n.bRight), opTy)
-    ctx.builder.freshInst(binopInst(n.bOp, resTy, opTy),
-                          @[ctx.tyId(spvScalar(resTy)), l, r])
-  of gpuDot:
-    emitDotValue(ctx, fn, n)
-  of gpuIndex:
-    let (ptrId, elem, isBda, _) = emitAccessPtr(ctx, fn, n.iArr, n.iIndex)
+proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
+  ## One expression, the SPIR-V id of its value.
+  if ctx.err.len > 0:
+    return 0
+  case e.kind
+  of eNil:
+    let t = ctx.tyId(ctx.valueTy(e.nilType))
+    ctx.builder.freshInst(OpUndef, @[t])
+  of eIntLit, eFloatLit, eTrue, eFalse:
+    ctx.constId(fn, e)
+  of eSym:
+    if e.coordBuiltin != cbkNone:
+      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+        return ctx.loadScalarBuiltin(biLocalInvocationIndex, e.typ)
+      ctx.failSpv("whole-vector use of coordinate builtin " & e.name &
+        ", index a component instead")
+      return 0
+    if fn.consts.hasKey(e.name):
+      return fn.consts[e.name]
+    if fn.params.hasKey(e.name):
+      return fn.params[e.name]
+    if fn.bdaParams.hasKey(e.name):
+      return fn.bdaParams[e.name]
+    if fn.locals.hasKey(e.name):
+      let t = fn.localTys.getOrDefault(e.name, ctx.resolveExprType(fn, e))
+      return ctx.builder.opLoad(ctx.tyId(ctx.valueTy(t)), fn.locals[e.name])
+    if fn.ptrTargets.hasKey(e.name):
+      # a pointer-typed local, its value is the pointee variable's address
+      return fn.ptrTargets[e.name]
+    if fn.addrParams.hasKey(e.name):
+      let t = ctx.resolveExprType(fn, e)
+      return ctx.builder.opLoad(ctx.tyId(ctx.valueTy(t)), fn.addrParams[e.name])
+    ctx.failSpv("unknown symbol " & e.name & " in " & fn.name)
+    0
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    let opTy = e.opType
+    let l = ctx.emitExpr(fn, e.left)
+    let r = ctx.emitExpr(fn, e.right)
+    let li = ctx.convertValue(l, ctx.resolveExprType(fn, e.left), opTy)
+    let ri = ctx.convertValue(r, ctx.resolveExprType(fn, e.right), opTy)
+    let opName = case e.kind
+      of eAdd: "+"
+      of eSub: "-"
+      of eMul: "*"
+      of eDiv: "/"
+      of eMod: "%"
+      of eShl: "<<"
+      of eShr: ">>"
+      of eBitAnd: "&"
+      of eBitOr: "|"
+      else: "xor"
+    let inst = ctx.binopInst(opName, opTy)
+    if inst == OpNop:
+      ctx.failSpv("binary operator " & opName)
+      return 0
+    ctx.builder.freshInst(inst, @[ctx.tyId(ctx.valueTy(opTy)), li, ri])
+  of eEq, eNeq, eLt, eLe:
+    let opTy = e.cmpType
+    let l = ctx.emitExpr(fn, e.a)
+    let r = ctx.emitExpr(fn, e.b)
+    let li = ctx.convertValue(l, ctx.resolveExprType(fn, e.a), opTy)
+    let ri = ctx.convertValue(r, ctx.resolveExprType(fn, e.b), opTy)
+    let name = case e.kind
+      of eEq: "=="
+      of eNeq: "!="
+      of eLt: "<"
+      else: "<="
+    let inst = ctx.cmpInst(name, opTy)
+    if inst == OpNop:
+      ctx.failSpv("comparison operator " & name)
+      return 0
+    ctx.builder.freshInst(inst,
+      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), li, ri])
+  of eNot:
+    let v = ctx.emitExpr(fn, e.notOperand)
+    ctx.builder.freshInst(OpLogicalNot,
+      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), v])
+  of eNeg:
+    let t = ctx.resolveExprType(fn, e.unOperand)
+    let v = ctx.emitExpr(fn, e.unOperand)
+    let inst = (if t.kind == ctFloat: OpFNegate else: OpSNegate)
+    ctx.builder.freshInst(inst, @[ctx.tyId(ctx.valueTy(t)), v])
+  of eBitNot:
+    let t = ctx.resolveExprType(fn, e.unOperand)
+    let v = ctx.emitExpr(fn, e.unOperand)
+    ctx.builder.freshInst(OpNot, @[ctx.tyId(ctx.valueTy(t)), v])
+  of eAnd:
+    let l = ctx.emitExpr(fn, e.andLeft)
+    let r = ctx.emitExpr(fn, e.andRight)
+    ctx.builder.freshInst(OpLogicalAnd,
+      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), l, r])
+  of eOr:
+    let l = ctx.emitExpr(fn, e.andLeft)
+    let r = ctx.emitExpr(fn, e.andRight)
+    ctx.builder.freshInst(OpLogicalOr,
+      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), l, r])
+  of eCast:
+    let srcTy = ctx.resolveExprType(fn, e.castOperand)
+    doAssert scalarBits(srcTy) == scalarBits(e.castType), "cast of differing bit widths"
+    let v = ctx.emitExpr(fn, e.castOperand)
+    ctx.builder.freshInst(OpBitcast, @[ctx.tyId(ctx.valueTy(e.castType)), v])
+  of eConv:
+    let srcTy = ctx.resolveExprType(fn, e.castOperand)
+    let v = ctx.emitExpr(fn, e.castOperand)
+    ctx.convertValue(v, srcTy, e.castType)
+  of eAddr:
+    # an addressable expression's address is its pointer, no instruction
+    let (ptrId, _, _, _) = ctx.emitLhsPtr(fn, e.addrOperand)
+    ptrId
+  of eSizeof:
+    let l = std430Layout(ctx.valueTy(e.ofType))
+    ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(l.size))
+  of eDeref:
+    # load through a pointer value: the operand evaluates to a pointer
+    let ptrVal = ctx.emitExpr(fn, e.derefOperand)
+    let pt = ctx.resolveExprType(fn, e)
+    ctx.builder.opLoad(ctx.tyId(ctx.valueTy(pt)), ptrVal)
+  of eAt, ePat:
+    let (ptrId, pointee, isBda, _) = ctx.emitLhsPtr(fn, e)
     if isBda:
-      let elemAlign = uint32(std430Layout(spvScalar(elem)).align)
-      ctx.builder.opLoadAligned(ctx.tyId(spvScalar(elem)), ptrId, elemAlign)
+      let elemAlign = uint32(std430Layout(ctx.valueTy(pointee)).align)
+      ctx.builder.opLoadAligned(ctx.tyId(ctx.valueTy(pointee)), ptrId, elemAlign)
     else:
-      ctx.builder.opLoad(ctx.tyId(spvScalar(valueType(elem))), ptrId)
-  of gpuObjConstr:
-    emitObjConstr(ctx, fn, n)
-  of gpuCall:
-    emitCall(ctx, fn, n)
-  of gpuConv, gpuCast:
-    let target = if n.kind == gpuConv: n.convTo else: n.cTo
-    let src = if n.kind == gpuConv: n.convExpr else: n.cExpr
-    convertValue(ctx, emitExpr(ctx, fn, src), exprType(fn, src), target)
-  of gpuDeref:
-    let (ptrId, pointee, isBda, _) = resolvePtrRoot(ctx, fn, n.dOf)
-    doAssert not isBda,
-      "deref load through a buffer device address is outside the SPIR-V subset"
-    ctx.builder.opLoad(ctx.tyId(valueTy(pointee)), ptrId)
-  of gpuPrefix:
-    let v = emitExpr(ctx, fn, n.pVal)
-    let t = exprGpuType(n.pVal)
-    case n.pOp
-    of "!":
-      doAssert t.kind == gtBool, "logical not of a non-bool operand"
-      ctx.builder.freshInst(OpLogicalNot, @[ctx.tyId(spvScalar(t)), v])
-    of "-":
-      let inst = if t.kind in {gtFloat32, gtFloat64}: OpFNegate else: OpSNegate
-      ctx.builder.freshInst(inst, @[ctx.tyId(spvScalar(t)), v])
+      ctx.builder.opLoad(ctx.tyId(ctx.valueTy(pointee)), ptrId)
+  of eDot:
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone and
+        e.dotBase.coordBuiltin != cbkThreadIndexInThreadgroup:
+      # a coordinate-builtin component, read from the builtin input variable
+      let comp =
+        case e.fieldName
+        of "x": 0
+        of "y": 1
+        of "z": 2
+        else:
+          ctx.failSpv("coordinate component " & e.fieldName)
+          -1
+      if comp < 0:
+        return 0
+      let compTy = ctx.resolveExprType(fn, e)
+      return ctx.loadBuiltinComponent(ctx.coordBuiltinInput(e.dotBase.coordBuiltin),
+        comp, compTy)
+    let baseTy = ctx.resolveExprType(fn, e.dotBase)
+    if baseTy != nil and baseTy.kind == ctVector:
+      let i = memberIndex(baseTy, e.fieldName)
+      if i < 0:
+        ctx.failSpv("no component " & e.fieldName & " on the vector")
+        return 0
+      let v = ctx.emitExpr(fn, e.dotBase)
+      ctx.builder.opCompositeExtract(ctx.tyId(ctx.valueTy(baseTy.vElem)), v, @[i])
+    elif baseTy != nil and baseTy.kind == ctStruct:
+      let i = memberIndex(baseTy, e.fieldName)
+      if i < 0:
+        ctx.failSpv("no field " & e.fieldName & " on " & baseTy.name)
+        return 0
+      # dot base is a value: composite extract, no storage
+      let v = ctx.emitExpr(fn, e.dotBase)
+      ctx.builder.opCompositeExtract(ctx.tyId(ctx.valueTy(baseTy.fields[i].typ)),
+        v, @[i])
     else:
-      spvRefuse("prefix operator " & n.pOp)
-  of gpuArrayLit:
-    let elemTy = valueType(n.aLitType)
-    let arrTy = ctx.tyId(spvArray(spvScalar(elemTy), n.aValues.len))
-    var vals: seq[uint32]
-    for v in n.aValues:
-      let e = emitExpr(ctx, fn, v)
-      vals.add ctx.convertValue(e, exprType(fn, v), elemTy)
-    ctx.builder.freshInst(OpCompositeConstruct, @[arrTy] & vals)
-  else:
-    spvRefuse("expression node " & $n.kind)
-
-proc emitAssign(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
-  doAssert not n.aRequiresMemcpy, "memcpy assignment outside the SPIR-V subset"
-  # compound assignments never reach the backend: the SPIR-V pipeline
-  # rewrites them into plain assignments of the binop
-  let rhs = emitExpr(ctx, fn, n.aRight)
-  case n.aLeft.kind
-  of gpuDot:
-    let ch = dotChain(n.aLeft)
-    let (ptrId, pointee, _, isPush) = emitChainPtr(ctx, fn, ch.root, ch.fields)
-    if isPush:
-      # a store updates only an unreachable copy, push constants are read-only
-      var path = ch.root.symbol.name
-      for f in ch.fields:
-        path.add "."
-        path.add f.symbol.name
-      spvRefuse("assignment to push-constant member `" & path &
-        "` (" & fn.name & "): push constants are read-only")
-    let value = ctx.convertValue(rhs, exprType(fn, n.aRight), valueType(pointee))
-    ctx.builder.opStore(ptrId, value)
-  of gpuDeref:
-    let (ptrId, pointee, isBda, isPush) = resolvePtrRoot(ctx, fn, n.aLeft)
-    doAssert not isBda,
-      "deref store through a buffer device address is outside the SPIR-V subset"
-    if isPush:
-      spvRefuse("assignment through push-constant storage (" & fn.name &
-        "): push constants are read-only")
-    let value = ctx.convertValue(rhs, exprType(fn, n.aRight), valueType(pointee))
-    ctx.builder.opStore(ptrId, value)
-  of gpuIndex:
-    let (ptrId, elem, isBda, isPush) = emitAccessPtr(ctx, fn, n.aLeft.iArr, n.aLeft.iIndex)
-    if isPush:
-      spvRefuse("assignment through push-constant storage (" & fn.name &
-        "): push constants are read-only")
-    let value = ctx.convertValue(rhs, exprType(fn, n.aRight), valueType(elem))
-    if isBda:
-      let elemAlign = uint32(std430Layout(spvScalar(elem)).align)
-      ctx.builder.opStoreAligned(ptrId, value, elemAlign)
-    else:
-      ctx.builder.opStore(ptrId, value)
-  of gpuIdent:
-    let sym = n.aLeft.symbol
-    if sym.iSym in fn.paramMembers:
-      spvRefuse("assignment to the whole parameter object `" & sym.name &
-        "` (" & fn.name & "): push constants are read-only")
-    let varId = if sym.iSym in fn.localsBySym:
-                  fn.localsBySym[sym.iSym]
-                elif sym.name in fn.locals:
-                  fn.locals[sym.name]
-                else:
-                  spvRefuse("assignment to non-local " & sym.name)
-    let t = if sym.iSym in fn.localTysBySym: fn.localTysBySym[sym.iSym]
-            elif sym.typ.kind == gtVoid and sym.name in fn.localTys:
-              fn.localTys[sym.name]
-            else: sym.typ
-    if t.kind in spvScalarKinds:
-      let value = ctx.convertValue(rhs, exprType(fn, n.aRight), valueType(t))
-      ctx.builder.opStore(varId, value)
-    else:
-      ctx.builder.opStore(varId, rhs)
-  else:
-    spvRefuse("assignment target " & $n.aLeft.kind)
-
-proc emitIfChain(ctx: var SpvLangCtx, fn: var SpvFnCtx, branches: seq[tuple[cond, body: GpuAst]], elseBody: GpuAst) =
-  let mergeLbl = ctx.builder.freshLabel()
-  let thenLbl = ctx.builder.freshLabel()
-  let cond = emitExpr(ctx, fn, branches[0].cond)
-  if branches.len == 1 and elseBody.kind == gpuDiscard:
-    ctx.builder.opSelectionMerge(mergeLbl, selNone)
-    ctx.builder.opBranchConditional(cond, thenLbl, mergeLbl)
-    ctx.builder.opLabelAt(thenLbl)
-    fn.terminated = false
-    emitStmt(ctx, fn, branches[0].body)
-    if not fn.terminated:
-      ctx.builder.opBranch(mergeLbl)
-  else:
-    let falseLbl = ctx.builder.freshLabel()
-    ctx.builder.opSelectionMerge(mergeLbl, selNone)
-    ctx.builder.opBranchConditional(cond, thenLbl, falseLbl)
-    ctx.builder.opLabelAt(thenLbl)
-    fn.terminated = false
-    emitStmt(ctx, fn, branches[0].body)
-    if not fn.terminated:
-      ctx.builder.opBranch(mergeLbl)
-    ctx.builder.opLabelAt(falseLbl)
-    fn.terminated = false
-    if branches.len == 1:
-      emitStmt(ctx, fn, elseBody)
-      if not fn.terminated:
-        ctx.builder.opBranch(mergeLbl)
-    else:
-      emitIfChain(ctx, fn, branches[1 ..^ 1], elseBody)
-      # the nested chain ends on its own merge block as the current block
-      if not fn.terminated:
-        ctx.builder.opBranch(mergeLbl)
-  # an unreachable merge block is legal SPIR-V: both branches returning
-  # leave the merge label without a predecessor, the block still ends
-  # the selection construct and receives the statements after the if
-  ctx.builder.opLabelAt(mergeLbl)
-  fn.terminated = false
-
-proc emitIf(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
-  doAssert not n.ifIsExpr, "expression if outside the SPIR-V subset"
-  var branches: seq[tuple[cond, body: GpuAst]] = @[(n.ifCond, n.ifThen)]
-  for el in n.ifElifs:
-    branches.add (el.cond, el.body)
-  emitIfChain(ctx, fn, branches, n.ifElse)
-
-proc emitFor(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
-  let indSym = n.fVar.symbol
-  let indVar = getLocalVarId(fn, indSym)
-  doAssert (indSym.iSym in fn.localTysBySym) or (indSym.name in fn.localTys),
-    "induction variable was not hoisted"
-  let indTy = ctx.tyId(spvScalar(indSym.typ))
-  let boolTy = ctx.tyId(spvScalar(GpuType(kind: gtBool)))
-  let startV = convertValue(ctx, emitExpr(ctx, fn, n.fStart),
-                            exprType(fn, n.fStart), indSym.typ)
-  ctx.builder.opStore(indVar, startV)
-  # the bound evaluates once, in the pre-header block
-  let endV = convertValue(ctx, emitExpr(ctx, fn, n.fEnd),
-                          exprType(fn, n.fEnd), indSym.typ)
-  let headerLbl = ctx.builder.freshLabel()
-  ctx.builder.opBranch(headerLbl)
-  let bodyLbl = ctx.builder.freshLabel()
-  let contLbl = ctx.builder.freshLabel()
-  let mergeLbl = ctx.builder.freshLabel()
-  ctx.builder.opLabelAt(headerLbl)
-  let cur = ctx.builder.opLoad(indTy, indVar)
-  let cmpOp = case n.fRangeKind
-              of rkExclusive:
-                if indSym.typ.kind in spvSignedInts:
-                  OpSLessThan
-                else:
-                  OpULessThan
-              of rkInclusive:
-                if indSym.typ.kind in spvSignedInts:
-                  OpSLessThanEqual
-                else:
-                  OpULessThanEqual
-  let cond = ctx.builder.freshInst(cmpOp, @[boolTy, cur, endV])
-  # OpLoopMerge must be the second-to-last instruction of its block,
-  # immediately before the branch terminator
-  ctx.builder.opLoopMerge(mergeLbl, contLbl, if n.fUnroll: lcUnroll else: lcNone)
-  ctx.builder.opBranchConditional(cond, bodyLbl, mergeLbl)
-  ctx.builder.opLabelAt(bodyLbl)
-  fn.terminated = false
-  emitStmt(ctx, fn, n.fBody)
-  if fn.terminated:
-    spvRefuse("return inside a loop body, the loop continue target would be unreachable")
-  ctx.builder.opBranch(contLbl)
-  ctx.builder.opLabelAt(contLbl)
-  fn.terminated = false
-  let stepV = convertValue(ctx, emitExpr(ctx, fn, n.fStep),
-                           exprType(fn, n.fStep), indSym.typ)
-  let iNow = ctx.builder.opLoad(indTy, indVar)
-  let next = ctx.builder.opIAdd(indTy, iNow, stepV)
-  ctx.builder.opStore(indVar, next)
-  ctx.builder.opBranch(headerLbl)
-  ctx.builder.opLabelAt(mergeLbl)
-  fn.terminated = false
-
-func hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
-  case n.kind
-  of gpuBlock:
-    for s in n.statements:
-      hoistLocals(ctx, fn, s)
-  of gpuVar:
-    doAssert n.addressSpace == asRMEM,
-      "shared/constant locals are outside the SPIR-V subset"
-    doAssert not n.vRequiresMemcpy,
-      "memcpy locals are outside the SPIR-V subset"
-    let sym = n.vName.symbol
-    let varId = ctx.builder.opVariableFn(
-      ctx.builder.tyPointer(scFunction, ctx.tyId(valueTy(n.vType))))
-    fn.localsBySym[sym.iSym] = varId
-    fn.localTysBySym[sym.iSym] = n.vType
-    if sym.name notin fn.locals:
-      fn.locals[sym.name] = varId
-      fn.localTys[sym.name] = n.vType
-  of gpuFor:
-    let indSym = n.fVar.symbol
-    let varId = ctx.builder.opVariableFn(
-      ctx.builder.tyPointer(scFunction, ctx.tyId(spvScalar(indSym.typ))))
-    fn.localsBySym[indSym.iSym] = varId
-    fn.localTysBySym[indSym.iSym] = indSym.typ
-    if indSym.name notin fn.locals:
-      fn.locals[indSym.name] = varId
-      fn.localTys[indSym.name] = indSym.typ
-    hoistLocals(ctx, fn, n.fBody)
-  of gpuIf:
-    hoistLocals(ctx, fn, n.ifThen)
-    for el in n.ifElifs:
-      hoistLocals(ctx, fn, el.body)
-    if n.ifElse.kind != gpuDiscard:
-      hoistLocals(ctx, fn, n.ifElse)
-  else:
-    discard
-
-proc emitStmt(ctx: var SpvLangCtx, fn: var SpvFnCtx, n: GpuAst) =
-  case n.kind
-  of gpuDiscard:
-    discard
-  of gpuComment:
-    discard
-  of gpuBlock:
-    doAssert not n.isExpr, "block expressions are outside the SPIR-V subset"
-    for s in n.statements:
-      emitStmt(ctx, fn, s)
-  of gpuAssign:
-    emitAssign(ctx, fn, n)
-  of gpuVar:
-    # storage hoisted to the setup block, the initializer stores here
-    let sym = n.vName.symbol
-    let varId = getLocalVarId(fn, sym)
-    if n.vInit.kind != gpuDiscard:
-      let v = emitExpr(ctx, fn, n.vInit)
-      if n.vType.kind in spvScalarKinds:
-        let value = ctx.convertValue(v, exprType(fn, n.vInit), valueType(n.vType))
-        ctx.builder.opStore(varId, value)
+      # dot base is a pointer-valued symbol: access chain through it
+      if e.dotBase.kind != eSym:
+        ctx.failSpv("field access base outside the supported set: " & $e.dotBase.kind)
+        return 0
+      let rootTy = ctx.resolveExprType(fn, e.dotBase)
+      if rootTy == nil or rootTy.kind != ctPtr:
+        ctx.failSpv("field access through a non-pointer: " & e.dotBase.name)
+        return 0
+      let i = memberIndex(rootTy.pElem, e.fieldName)
+      if i < 0:
+        ctx.failSpv("no field " & e.fieldName & " on " & rootTy.pElem.name)
+        return 0
+      let ptrVal = ctx.emitExpr(fn, e.dotBase)
+      let memberPtrTy = ctx.builder.tyPointer(scFunction,
+        ctx.tyId(ctx.valueTy(rootTy.pElem.fields[i].typ)))
+      let idx0 = ctx.builder.constUint(ctx.scalarId(cirUint32()), 0)
+      let memberPtr = ctx.builder.opAccessChain(memberPtrTy, ptrVal, @[idx0])
+      ctx.builder.opLoad(ctx.tyId(ctx.valueTy(rootTy.pElem.fields[i].typ)),
+        memberPtr)
+  of eOconstr:
+    let structTy = ctx.valueTy(e.ocType)
+    let structId = ctx.tyId(structTy)
+    var members: seq[uint32]
+    for f in e.kvFields:
+      let fi = memberIndex(e.ocType, f.name)
+      doAssert fi >= 0, "constructor field " & f.name & " not on " & e.ocType.name
+      let v = ctx.emitExpr(fn, f.value)
+      let ft = ctx.resolveExprType(fn, f.value)
+      let target =
+        if e.ocType.kind == ctVector: e.ocType.vElem
+        else: e.ocType.fields[fi].typ
+      if isSpvScalarKind(target):
+        members.add ctx.convertValue(v, ft, target)
       else:
-        ctx.builder.opStore(varId, v)
-  of gpuIf:
-    emitIf(ctx, fn, n)
-  of gpuFor:
-    emitFor(ctx, fn, n)
-  of gpuCall:
-    discard emitCall(ctx, fn, n)
-  of gpuConstexpr:
-    # compile-time constant: the passes folded the value into literals
-    discard
-  of gpuReturn:
-    if fn.terminated:
-      spvRefuse("a second return in one basic block")
-    if n.rValue.kind != gpuDiscard:
-      let v = emitExpr(ctx, fn, n.rValue)
-      ctx.builder.opReturnValue(v)
+        members.add v
+    ctx.builder.freshInst(OpCompositeConstruct, @[structId] & members)
+  of eAconstr:
+    let arrTy = ctx.tyId(ctx.valueTy(e.acType))
+    var vals: seq[uint32]
+    for el in e.elems:
+      let v = ctx.emitExpr(fn, el)
+      vals.add v
+    ctx.builder.freshInst(OpCompositeConstruct, @[arrTy] & vals)
+  of eCall:
+    # a call binds to its destination as an asgn right-hand side
+    # value emission is the call itself
+    ctx.emitCallValue(fn, e)
+
+proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
+    tuple[ptrId: uint32, pointee: CirType, isBda: bool, isPush: bool] =
+  ## Pointer of an addressable expression, the OpStore/OpAccessChain target.
+  if ctx.err.len > 0:
+    return
+  case e.kind
+  of eSym:
+    if fn.locals.hasKey(e.name):
+      # stored value's type is the variable's member type
+      # a pointer-typed local stores pointer values
+      let t = fn.localTys.getOrDefault(e.name, ctx.resolveExprType(fn, e))
+      return (fn.locals[e.name], t, false, false)
+    if fn.addrParams.hasKey(e.name):
+      return (fn.addrParams[e.name], fn.addrPointee[e.name], false, false)
+    ctx.failSpv("assignment target is not a local: " & e.name)
+  of eDeref:
+    # store through a pointer value held in an expression
+    let ptrVal = ctx.emitExpr(fn, e.derefOperand)
+    let pt = ctx.resolveExprType(fn, e)
+    return (ptrVal, pt, false, false)
+  of eDot:
+    # field write on a local struct: access chain, member write
+    if e.dotBase.kind != eSym or not fn.locals.hasKey(e.dotBase.name):
+      ctx.failSpv("field write outside a local struct")
+      return
+    let rootTy = ctx.resolveExprType(fn, e.dotBase)
+    if rootTy == nil or rootTy.kind != ctStruct:
+      ctx.failSpv("field write on a non-struct local")
+      return
+    let i = memberIndex(rootTy, e.fieldName)
+    if i < 0:
+      ctx.failSpv("no field " & e.fieldName & " on " & rootTy.name)
+      return
+    let memberPtrTy = ctx.builder.tyPointer(scFunction,
+      ctx.tyId(ctx.valueTy(rootTy.fields[i].typ)))
+    let idx0 = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(i))
+    let ptrId = ctx.builder.opAccessChain(memberPtrTy, fn.locals[e.dotBase.name],
+      @[idx0])
+    result = (ptrId, rootTy.fields[i].typ, false, false)
+  of ePat:
+    # element write through a pointer value: the base evaluates to a pointer
+    let baseTy = ctx.resolveExprType(fn, e.patBase)
+    if baseTy == nil or baseTy.kind notin {ctPtr, ctAptr}:
+      ctx.failSpv("pattern write base is not a pointer")
+      return
+    if baseTy.kind == ctAptr:
+      if baseTy.space != caDevice:
+        ctx.failSpv("pattern write through a " & $baseTy.space & " array pointer")
+        return
+      let idxVal = ctx.emitExpr(fn, e.patIndex)
+      let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.patIndex), cirInt32())
+      let elemTy = baseTy.pElem
+      let elemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
+        ctx.tyId(ctx.valueTy(elemTy)))
+      let idx0 = ctx.builder.constUint(ctx.scalarId(cirUint32()), 0)
+      let ptrId = ctx.builder.opAccessChain(elemPtrTy,
+        ctx.emitExpr(fn, e.patBase), @[idx0, idxInt])
+      return (ptrId, elemTy, true, false)
     else:
-      ctx.builder.opReturn()
-    fn.terminated = true
+      # a pointer to array in Function storage: the parameter names the array
+      let idxVal = ctx.emitExpr(fn, e.patIndex)
+      let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.patIndex), cirInt32())
+      let elemTy = baseTy.pElem
+      let elemPtrTy = ctx.builder.tyPointer(scFunction,
+        ctx.tyId(ctx.valueTy(elemTy)))
+      let ptrId = ctx.builder.opAccessChain(elemPtrTy,
+        ctx.emitExpr(fn, e.patBase), @[idxInt])
+      return (ptrId, elemTy, false, false)
+  of eAt:
+    # base chain rooted at a local: a plain local or the struct behind
+    # a pointer-typed local: the access chain runs on the variable directly
+    var rootVar = 0'u32
+    var memberIdxs: seq[int]
+    var chainOk = true
+    var walk = e.atBase
+    while chainOk:
+      case walk.kind
+      of eSym:
+        if fn.locals.hasKey(walk.name):
+          rootVar = fn.locals[walk.name]
+        else:
+          chainOk = false
+        break
+      of eDeref:
+        if walk.derefOperand.kind == eSym and fn.locals.hasKey(walk.derefOperand.name):
+          rootVar = fn.locals[walk.derefOperand.name]
+          break
+        if walk.derefOperand.kind == eSym and fn.ptrTargets.hasKey(walk.derefOperand.name):
+          rootVar = fn.ptrTargets[walk.derefOperand.name]
+          break
+        chainOk = false
+      of eDot:
+        let innerTy = ctx.resolveExprType(fn, walk.dotBase)
+        if innerTy == nil or innerTy.kind != ctStruct:
+          chainOk = false
+          break
+        let mi = memberIndex(innerTy, walk.fieldName)
+        if mi < 0:
+          chainOk = false
+          break
+        memberIdxs.insert(mi, 0)
+        walk = walk.dotBase
+      else:
+        chainOk = false
+    let arrTy = ctx.resolveExprType(fn, e.atBase)
+    if chainOk and arrTy != nil and arrTy.kind == ctArray:
+      let idxVal = ctx.emitExpr(fn, e.atIndex)
+      let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.atIndex), cirInt32())
+      let elemPtrTy = ctx.builder.tyPointer(scFunction,
+        ctx.tyId(ctx.valueTy(arrTy.aElem)))
+      var idxs: seq[uint32]
+      for mi in memberIdxs:
+        idxs.add ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(mi))
+      idxs.add idxInt
+      let ptrId = ctx.builder.opAccessChain(elemPtrTy, rootVar, idxs)
+      result = (ptrId, arrTy.aElem, false, false)
+      return
+    let baseTy = ctx.resolveExprType(fn, e.atBase)
+    if baseTy == nil or baseTy.kind notin {ctArray, ctAptr, ctPtr}:
+      ctx.failSpv("array element access on a non-array base")
+      return
+    let idxVal = ctx.emitExpr(fn, e.atIndex)
+    let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.atIndex), cirInt32())
+    let elemTy =
+      if baseTy.kind == ctArray: baseTy.aElem
+      else: baseTy.pElem
+    let elemPtrTy = ctx.builder.tyPointer(scFunction,
+      ctx.tyId(ctx.valueTy(elemTy)))
+    if baseTy.kind == ctArray:
+      if e.atBase.kind != eSym or not fn.locals.hasKey(e.atBase.name):
+        ctx.failSpv("array element write outside a local array")
+        return
+      let ptrId = ctx.builder.opAccessChain(elemPtrTy, fn.locals[e.atBase.name],
+        @[idxInt])
+      result = (ptrId, elemTy, false, false)
+    elif baseTy.kind == ctAptr:
+      if baseTy.space != caDevice:
+        ctx.failSpv("array element access through a " & $baseTy.space & " pointer")
+        return
+      let devElemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
+        ctx.tyId(ctx.valueTy(elemTy)))
+      let idx0 = ctx.builder.constUint(ctx.scalarId(cirUint32()), 0)
+      let basePtr = ctx.emitExpr(fn, e.atBase)
+      let ptrId = ctx.builder.opAccessChain(devElemPtrTy, basePtr, @[idx0, idxInt])
+      result = (ptrId, elemTy, true, false)
+    else:
+      # a pointer to the element storage in Function scope, index directly
+      let basePtr = ctx.emitExpr(fn, e.atBase)
+      let ptrId = ctx.builder.opAccessChain(elemPtrTy, basePtr, @[idxInt])
+      result = (ptrId, elemTy, false, false)
   else:
-    spvRefuse("statement node " & $n.kind)
+    ctx.failSpv("assignment target " & $e.kind)
 
-func scanTree(n: GpuAst, calls: var seq[string]) =
-  case n.kind
-  of gpuCall:
-    calls.add n.cName.symbol.iSym
-    for a in n.cArgs:
-      scanTree(a, calls)
-  of gpuProc:
-    scanTree(n.pBody, calls)
-  of gpuBlock:
-    for s in n.statements:
-      scanTree(s, calls)
-  of gpuVar:
-    scanTree(n.vInit, calls)
-  of gpuAssign:
-    scanTree(n.aLeft, calls)
-    scanTree(n.aRight, calls)
-  of gpuIf:
-    scanTree(n.ifCond, calls)
-    scanTree(n.ifThen, calls)
-    for el in n.ifElifs:
-      scanTree(el.cond, calls)
-      scanTree(el.body, calls)
-    if n.ifElse.kind != gpuDiscard:
-      scanTree(n.ifElse, calls)
-  of gpuFor:
-    scanTree(n.fStart, calls)
-    scanTree(n.fEnd, calls)
-    scanTree(n.fStep, calls)
-    scanTree(n.fBody, calls)
-  of gpuWhile:
-    scanTree(n.wCond, calls)
-    scanTree(n.wBody, calls)
-  of gpuReturn:
-    scanTree(n.rValue, calls)
-  of gpuBinOp:
-    scanTree(n.bLeft, calls)
-    scanTree(n.bRight, calls)
-  of gpuDot:
-    scanTree(n.dParent, calls)
-    scanTree(n.dField, calls)
-  of gpuIndex:
-    scanTree(n.iArr, calls)
-    scanTree(n.iIndex, calls)
-  of gpuPrefix:
-    scanTree(n.pVal, calls)
-  of gpuAddr:
-    scanTree(n.aOf, calls)
-  of gpuDeref:
-    scanTree(n.dOf, calls)
-  of gpuConv:
-    scanTree(n.convExpr, calls)
-  of gpuCast:
-    scanTree(n.cExpr, calls)
-  of gpuObjConstr:
-    for f in n.ocFields:
-      scanTree(f.value, calls)
-  of gpuArrayLit:
-    for v in n.aValues:
-      scanTree(v, calls)
-  of gpuMaterialize:
-    scanTree(n.mExpr, calls)
-  of gpuConstexpr:
-    scanTree(n.cValue, calls)
-  else:
+proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
+  ## Value of a call: builtin vocabulary maps to native instructions
+  ## and a device function emits an OpFunctionCall.
+  if ctx.err.len > 0:
+    return 0
+  doAssert e.callee.kind == eSym, "call callee is not a symbol"
+  let name = e.callee.name
+  # builtin vocabulary dispatches on the typed kinds, never on names,
+  # `max`/`min` stay a name case, harvested magics outside the four categories
+  if e.callee.reductionBuiltin == rbkReduceAdd:
+    doAssert e.args.len == 1, "reduceAdd takes one argument"
+    let v = ctx.emitExpr(fn, e.args[0])
+    let resTy = ctx.resolveExprType(fn, e.args[0])
+    if resTy.kind != ctFloat or resTy.bits != 32:
+      ctx.failSpv("reduceAdd lowers f32 only")
+      return 0
+    ctx.caps.incl capGroupNonUniformArithmetic
+    let scopeSub = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeSubgroup))
+    return ctx.builder.freshInst(OpGroupNonUniformFAdd,
+      @[ctx.tyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
+  if e.callee.kind == eSym and e.callee.shuffleBuiltin != shkNone:
+    doAssert e.args.len == 2, "simd_shuffle takes a value and a lane index"
+    let v = ctx.emitExpr(fn, e.args[0])
+    let lane = ctx.emitExpr(fn, e.args[1])
+    let resTy = ctx.resolveExprType(fn, e.args[0])
+    if resTy == nil or resTy.kind notin {ctInt, ctUint, ctFloat, ctBool}:
+      ctx.failSpv("simd_shuffle lowers scalars only")
+      return 0
+    # Invocation Id and Mask take the unsigned width the grammar demands
+    let laneU = ctx.convertValue(lane, ctx.resolveExprType(fn, e.args[1]), cirUint32())
+    ctx.caps.incl capGroupNonUniformShuffle
+    let scopeSub = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeSubgroup))
+    let op = if e.callee.shuffleBuiltin == shkSimdShuffle: OpGroupNonUniformShuffle
+             else: OpGroupNonUniformShuffleXor
+    return ctx.builder.freshInst(op, @[ctx.tyId(spvScalar(resTy)), scopeSub, v, laneU])
+  if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
+    doAssert e.args.len == 2, "atomicFetchAdd takes a pointer and a value"
+    if e.args[0].kind != eAddr or e.args[0].addrOperand.kind != ePat:
+      ctx.failSpv("atomicFetchAdd address is not the address of an element")
+      return 0
+    let pat = e.args[0].addrOperand
+    let baseTy = ctx.resolveExprType(fn, pat.patBase)
+    if baseTy == nil or baseTy.kind != ctAptr or baseTy.space != caDevice:
+      ctx.failSpv("atomicFetchAdd lowers through a device buffer element only")
+      return 0
+    let elemTy = baseTy.pElem
+    if elemTy.kind != ctFloat or elemTy.bits != 32:
+      ctx.failSpv("atomicFetchAdd lowers f32 only")
+      return 0
+    let (ptrId, _, _, _) = ctx.emitLhsPtr(fn, pat)
+    let v = ctx.emitExpr(fn, e.args[1])
+    let value = ctx.convertValue(v, ctx.resolveExprType(fn, e.args[1]), elemTy)
+    ctx.caps.incl capAtomicFloat32AddEXT
+    if "SPV_EXT_shader_atomic_float_add" notin ctx.exts:
+      ctx.exts.add "SPV_EXT_shader_atomic_float_add"
+    let scopeDev = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeDevice))
+    let sem = ctx.builder.constUint(ctx.scalarId(cirUint32()),
+      uint64(semUniformMemory or semAcquireRelease))
+    return ctx.builder.freshInst(OpAtomicFAddEXT,
+      @[ctx.tyId(spvScalar(elemTy)), ptrId, scopeDev, sem, value])
+  case name
+  of "max", "min":
+    doAssert e.args.len == 2, name & " takes two arguments"
+    let opTy = ctx.resolveExprType(fn, e.args[0])
+    let a = ctx.convertValue(ctx.emitExpr(fn, e.args[0]),
+      ctx.resolveExprType(fn, e.args[0]), opTy)
+    let b = ctx.convertValue(ctx.emitExpr(fn, e.args[1]),
+      ctx.resolveExprType(fn, e.args[1]), opTy)
+    let signed = opTy.kind == ctInt
+    let isFloat = opTy.kind == ctFloat
+    let cmpOp = if isFloat:
+                  (if name == "max": OpFOrdGreaterThan else: OpFOrdLessThan)
+                elif name == "max":
+                  (if signed: OpSGreaterThan else: OpUGreaterThan)
+                else:
+                  (if signed: OpSLessThan else: OpULessThan)
+    let boolTy = ctx.tyId(spvScalar(CirType(kind: ctBool)))
+    let cond = ctx.builder.freshInst(cmpOp, @[boolTy, a, b])
+    return ctx.builder.opSelect(ctx.tyId(spvScalar(opTy)), cond, a, b)
+  if e.callee.synchroBuiltin == sbkThreadgroupBarrier:
+    let scopeDev = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeDevice))
+    let sem = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(semAcquireRelease))
+    discard ctx.builder.freshInst(OpControlBarrier, @[scopeDev, scopeDev, sem])
+    return 0
+  # a device function call
+  if not ctx.emittedFns.hasKey(name):
+    ctx.failSpv("callee " & name & " was not pre-emitted")
+    return 0
+  let fnId = ctx.emittedFns[name]
+  let retTy = ctx.fnTypes[name]
+  var args: seq[uint32]
+  for a in e.args:
+    args.add ctx.emitExpr(fn, a)
+  return ctx.builder.freshInst(OpFunctionCall,
+    @[ctx.tyId(ctx.valueTy(retTy)), fnId] & args)
+
+proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt])
+
+proc freshBlock(ctx: var SpvLangCtx, fn: var SpvFnCtx, name: string): uint32 =
+  ## A new basic block for a label, branching from the current block when open.
+  let lbl = ctx.builder.module.allocId()
+  if not fn.terminated:
+    ctx.builder.opBranch(lbl)
+  ctx.builder.opLabelAt(lbl)
+  fn.terminated = false
+  fn.labels[name] = lbl
+  lbl
+
+proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
+  ## One statement list into the current basic block.
+  for s in ss:
+    if ctx.err.len > 0:
+      return
+    case s.kind
+    of sVar:
+      # storage hoisted to the entry block, the initializer stores here
+      if s.init != nil and s.init.kind != eNil:
+        let v = ctx.emitExpr(fn, s.init)
+        let t = ctx.resolveExprType(fn, s.init)
+        let target = fn.localTys[s.name]
+        if t != nil:
+          let value = ctx.convertValue(v, t, target)
+          ctx.builder.opStore(fn.locals[s.name], value)
+        else:
+          ctx.builder.opStore(fn.locals[s.name], v)
+    of sConst:
+      # a compile-time literal binding, reads use the constant id
+      if s.init != nil and s.init.kind in {eIntLit, eFloatLit, eTrue, eFalse}:
+        fn.consts[s.name] = ctx.constId(fn, s.init)
+      else:
+        ctx.failSpv("const " & s.name & " initializer outside the literal set")
+    of sAsgn:
+      if s.lhs.kind == eSym:
+        let lhsTy = fn.localTys.getOrDefault(s.lhs.name, s.lhs.typ)
+        if lhsTy != nil and lhsTy.kind == ctPtr and
+            not fn.ptrTargets.hasKey(s.lhs.name):
+          # a pointer-typed local binds the address of its pointee
+          # pointee is a hoisted local, binding is symbolic
+          if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym or
+              not fn.locals.hasKey(s.rhs.addrOperand.name):
+            ctx.failSpv("pointer local " & s.lhs.name &
+              " binds an address outside a local")
+            return
+          fn.ptrTargets[s.lhs.name] = fn.locals[s.rhs.addrOperand.name]
+          continue
+      let rhs = ctx.emitExpr(fn, s.rhs)
+      let (ptrId, pointee, isBda, isPush) = ctx.emitLhsPtr(fn, s.lhs)
+      if isPush:
+        ctx.failSpv("assignment through push-constant storage, push constants are read-only")
+        return
+      let rhsTy = ctx.resolveExprType(fn, s.rhs)
+      let value = ctx.convertValue(rhs, rhsTy, pointee)
+      if isBda:
+        let elemAlign = uint32(std430Layout(ctx.valueTy(pointee)).align)
+        ctx.builder.opStoreAligned(ptrId, value, elemAlign)
+      else:
+        ctx.builder.opStore(ptrId, value)
+    of sIte:
+      let cond = ctx.emitExpr(fn, s.cond)
+      let mergeLbl = ctx.builder.freshLabel()
+      let thenLbl = ctx.builder.freshLabel()
+      let elseLbl = ctx.builder.freshLabel()
+      ctx.builder.opSelectionMerge(mergeLbl, selNone)
+      ctx.builder.opBranchConditional(cond, thenLbl, elseLbl)
+      ctx.builder.opLabelAt(thenLbl)
+      fn.terminated = false
+      ctx.emitStmts(fn, s.thenBody)
+      if not fn.terminated:
+        ctx.builder.opBranch(mergeLbl)
+      ctx.builder.opLabelAt(elseLbl)
+      fn.terminated = false
+      ctx.emitStmts(fn, s.elseBody)
+      if not fn.terminated:
+        ctx.builder.opBranch(mergeLbl)
+      ctx.builder.opLabelAt(mergeLbl)
+      fn.terminated = false
+    of sLoop:
+      # loop body break targets the merge block, the exit label after the loop
+      # aliases it and the continue target ends the body
+      var localLabs: HashSet[string]
+      proc scanLabs(ss: seq[CirStmt]) =
+        for s in ss:
+          case s.kind
+          of sLab: localLabs.incl s.labName
+          of sIte: scanLabs(s.thenBody); scanLabs(s.elseBody)
+          of sLoop: scanLabs(s.loopBody)
+          of sScope: scanLabs(s.scopeBody)
+          else: discard
+      scanLabs(s.loopBody)
+      var exitName = ""
+      proc scanJmps(ss: seq[CirStmt]) =
+        for s in ss:
+          case s.kind
+          of sJmp:
+            if s.jmpTarget notin localLabs and exitName == "":
+              exitName = s.jmpTarget
+          of sIte: scanJmps(s.thenBody); scanJmps(s.elseBody)
+          of sLoop: scanJmps(s.loopBody)
+          of sScope: scanJmps(s.scopeBody)
+          else: discard
+      scanJmps(s.loopBody)
+      let headerLbl = ctx.builder.freshLabel()
+      let bodyLbl = ctx.builder.freshLabel()
+      let contLbl = ctx.builder.freshLabel()
+      let mergeLbl = ctx.builder.freshLabel()
+      let savedMerge = fn.loopMerge
+      let savedCont = fn.loopCont
+      let savedExit = fn.loopExit
+      ctx.builder.opBranch(headerLbl)
+      ctx.builder.opLabelAt(headerLbl)
+      fn.terminated = false
+      ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.unroll: lcUnroll else: lcNone)
+      ctx.builder.opBranch(bodyLbl)
+      ctx.builder.opLabelAt(bodyLbl)
+      fn.terminated = false
+      fn.loopMerge = mergeLbl
+      fn.loopCont = contLbl
+      fn.loopExit = exitName
+      ctx.emitStmts(fn, s.loopBody)
+      fn.loopMerge = savedMerge
+      fn.loopCont = savedCont
+      fn.loopExit = savedExit
+      if fn.terminated:
+        ctx.failSpv("return inside a loop body, the continue target would be unreachable")
+        return
+      ctx.builder.opBranch(contLbl)
+      ctx.builder.opLabelAt(contLbl)
+      fn.terminated = false
+      ctx.builder.opBranch(headerLbl)
+      ctx.builder.opLabelAt(mergeLbl)
+      fn.terminated = false
+    of sLab:
+      # a label the control flow reaches by falling into it or by a jmp
+      if fn.labels.hasKey(s.labName):
+        # forward jmp target: the block was created at the jmp site
+        let lbl = fn.labels[s.labName]
+        if not fn.terminated:
+          ctx.builder.opBranch(lbl)
+        ctx.builder.opLabelAt(lbl)
+        fn.terminated = false
+      elif s.labName == fn.loopExit:
+        # an exit label after a loop: the merge block is this block
+        discard
+      else:
+        discard ctx.freshBlock(fn, s.labName)
+    of sJmp:
+      if s.jmpTarget == fn.loopExit:
+        ctx.builder.opBranch(fn.loopMerge)
+        fn.terminated = true
+      elif fn.labels.hasKey(s.jmpTarget):
+        ctx.builder.opBranch(fn.labels[s.jmpTarget])
+        fn.terminated = true
+      else:
+        # forward jump, the label block is created now and filled at the lab
+        let lbl = ctx.builder.module.allocId()
+        fn.labels[s.jmpTarget] = lbl
+        ctx.builder.opBranch(lbl)
+        fn.terminated = true
+    of sScope:
+      ctx.emitStmts(fn, s.scopeBody)
+    of sAssume:
+      # an optimizer hint, no instruction
+      discard
+    of sRet:
+      if fn.terminated:
+        ctx.failSpv("a second return in one basic block")
+        return
+      if s.retVal != nil and s.retVal.kind != eNil:
+        let v = ctx.emitExpr(fn, s.retVal)
+        ctx.builder.opReturnValue(v)
+      else:
+        ctx.builder.opReturn()
+      fn.terminated = true
+    of sDiscard:
+      discard
+    of sCall:
+      # statement-position call: void calls emit, value calls compute
+      # into a fresh temp the caller stores (the frontend lowers both shapes)
+      if s.callCallee.kind == eSym and ctx.fnTypes.hasKey(s.callCallee.name) and
+          ctx.fnTypes[s.callCallee.name].kind == ctVoid:
+        var callE = CirExpr(kind: eCall)
+        callE.callee = s.callCallee
+        callE.args = s.callArgs
+        discard ctx.emitCallValue(fn, callE)
+      else:
+        ctx.failSpv("statement call " & s.callCallee.name &
+          " without a destination binding")
+    of sCase, sAsm, sEmit:
+      ctx.failSpv("statement construct " & $s.kind &
+        " outside the SPIR-V subset, it must lower earlier")
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Function and kernel emission
+# ═══════════════════════════════════════════════════════════════════════
+
+proc scanCallExpr(e: CirExpr, calls: var seq[string]) =
+  ## Callee names of one expression tree, nested calls included.
+  if e.isNil:
+    return
+  case e.kind
+  of eCall:
+    if e.callee.kind == eSym:
+      calls.add e.callee.name
+    for a in e.args:
+      scanCallExpr(a, calls)
+  of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSizeof:
     discard
+  of eSym:
+    discard
+  of eDeref: scanCallExpr(e.derefOperand, calls)
+  of eAt: scanCallExpr(e.atBase, calls); scanCallExpr(e.atIndex, calls)
+  of ePat: scanCallExpr(e.patBase, calls); scanCallExpr(e.patIndex, calls)
+  of eDot: scanCallExpr(e.dotBase, calls)
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    scanCallExpr(e.left, calls); scanCallExpr(e.right, calls)
+  of eBitNot, eNeg: scanCallExpr(e.unOperand, calls)
+  of eEq, eNeq, eLt, eLe: scanCallExpr(e.a, calls); scanCallExpr(e.b, calls)
+  of eNot: scanCallExpr(e.notOperand, calls)
+  of eAnd, eOr: scanCallExpr(e.andLeft, calls); scanCallExpr(e.andRight, calls)
+  of eCast, eConv: scanCallExpr(e.castOperand, calls)
+  of eAddr: scanCallExpr(e.addrOperand, calls)
+  of eOconstr:
+    for f in e.kvFields:
+      scanCallExpr(f.value, calls)
+  of eAconstr:
+    for el in e.elems:
+      scanCallExpr(el, calls)
 
-proc emitDeviceFn(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
-  doAssert procNode.kind == gpuProc, "not a function"
-  doAssert not procNode.forwardDeclare, "forward declarations do not emit"
-  let retTyId = fnRetTyId(ctx, procNode.pRetType)
+proc scanCalls(ss: seq[CirStmt], calls: var seq[string]) =
+  ## Callee names of one statement list, nested bodies and expressions included.
+  for s in ss:
+    case s.kind
+    of sCall:
+      if s.callCallee.kind == eSym:
+        calls.add s.callCallee.name
+      for a in s.callArgs:
+        scanCallExpr(a, calls)
+    of sAsgn:
+      scanCallExpr(s.lhs, calls)
+      scanCallExpr(s.rhs, calls)
+    of sVar, sConst:
+      if s.init != nil:
+        scanCallExpr(s.init, calls)
+    of sIte:
+      scanCallExpr(s.cond, calls)
+      scanCalls(s.thenBody, calls)
+      scanCalls(s.elseBody, calls)
+    of sLoop:
+      scanCalls(s.loopBody, calls)
+    of sScope:
+      scanCalls(s.scopeBody, calls)
+    of sRet:
+      if s.retVal != nil:
+        scanCallExpr(s.retVal, calls)
+    of sAssume:
+      scanCallExpr(s.assumeCond, calls)
+    else:
+      discard
+
+
+proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
+  ## One device function.
+  ##
+  ## Pointer parameters are Function-storage pointers and value parameters
+  ## pass by value.
+  let retTyId =
+    if procNode.ret.kind == ctVoid: ctx.builder.tyVoid()
+    else: ctx.tyId(ctx.valueTy(procNode.ret))
   var paramTyIds: seq[uint32]
-  var objParams: seq[tuple[sym: Symbol, pid: uint32, t: GpuType]]
-  for i, p in procNode.pParams:
-    if p.typ.kind == gtPtr:
-      doAssert p.typ.to.kind notin {gtUncheckedArray},
-        "unchecked-array pointer params are kernel BDA parameters"
-      # `var T` parameters: call sites pass whole arrays or addresses
-      # of locals, the declared pointee types the Function-storage pointer
-      paramTyIds.add ctx.builder.tyPointer(scFunction,
-        ctx.tyId(valueTy(p.typ.to)))
-    elif p.passByRef:
-      doAssert p.typ.kind in {gtObject, gtGenericInst},
-        "byRef scalar params are outside the SPIR-V subset"
-      paramTyIds.add ctx.tyId(valueTy(p.typ))
+  for p in procNode.params:
+    if p.typ.kind == ctPtr:
+      # a var parameter: the caller passes the address of a local
+      paramTyIds.add ctx.builder.tyPointer(scFunction, ctx.tyId(ctx.valueTy(p.typ.pElem)))
     else:
-      paramTyIds.add ctx.tyId(valueTy(valueType(p.typ)))
+      paramTyIds.add ctx.tyId(ctx.valueTy(p.typ))
   let fnTy = ctx.builder.tyFunction(retTyId, paramTyIds)
   result = ctx.builder.opFunction(retTyId, fnTy)
-  var fn = SpvFnCtx(name: "device fn " & procNode.pName.ident(), fns: ctx.fns)
-  for i, p in procNode.pParams:
+  var fn: SpvFnCtx = SpvFnCtx(name: "device fn " & procNode.name)
+  for i, p in procNode.params:
     let pid = ctx.builder.opFunctionParameter(paramTyIds[i])
-    let sym = p.ident.symbol
-    if p.typ.kind == gtPtr:
-      fn.addrs[sym.iSym] = pid
-      fn.addrNames[sym.name] = pid
-      if p.typ.implicit:
-        fn.addrPointee[sym.iSym] = p.typ.to
-      else:
-        fn.addrPointee[sym.iSym] = pointeeElem(p.typ)
-    elif p.typ.kind in {gtObject, gtGenericInst}:
-      objParams.add (sym, pid, p.typ)
+    if p.typ.kind == ctPtr:
+      fn.addrParams[p.name] = pid
+      fn.addrPointee[p.name] = p.typ.pElem
     else:
-      fn.paramVals[sym.iSym] = pid
+      fn.params[p.name] = pid
   discard ctx.builder.opLabel()
-  hoistLocals(ctx, fn, procNode.pBody)
-  # by-value object parameter copies: every OpVariable in a function must
-  # precede any load, so they declare here before the copies store
-  var copies: seq[tuple[varId: uint32, pid: uint32]]
-  for (sym, pid, t) in objParams:
-    let varId = ctx.builder.opVariableFn(
-      ctx.builder.tyPointer(scFunction, ctx.tyId(valueTy(t))))
-    copies.add (varId, pid)
-    fn.addrs[sym.iSym] = varId
-    fn.addrPointee[sym.iSym] = t
-    fn.addrNames[sym.name] = varId
-    fn.addrNamePointees[sym.name] = t
-  # every OpVariable precedes every store in the entry block
-  for (varId, pid) in copies:
-    ctx.builder.opStore(varId, pid)
-  emitStmt(ctx, fn, procNode.pBody)
+  ctx.hoistLocals(fn, procNode.body)
+  ctx.emitStmts(fn, procNode.body)
   if not fn.terminated:
     ctx.builder.opReturn()
   ctx.builder.opFunctionEnd()
 
-proc emitDeviceFnRec(ctx: var SpvLangCtx, procNode: GpuAst): uint32 =
-  let isym = procNode.pName.symbol.iSym
-  if isym in ctx.emittedFns:
-    return ctx.emittedFns[isym]
-  doAssert isym notin ctx.emitting,
+proc emitDeviceFnRec(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
+  ## One device function with its transitive callees emitted first.
+  if ctx.emittedFns.hasKey(procNode.name):
+    return ctx.emittedFns[procNode.name]
+  doAssert procNode.name notin ctx.emitting,
     "recursive device function calls are outside the SPIR-V subset"
-  ctx.emitting.incl isym
+  ctx.emitting.incl procNode.name
+  ctx.fnTypes[procNode.name] = procNode.ret
   var calls: seq[string]
-  scanTree(procNode.pBody, calls)
+  scanCalls(procNode.body, calls)
   var seen: HashSet[string]
   for c in calls:
-    if c in ctx.fns and c notin seen:
+    if ctx.fnProcs.hasKey(c) and c notin seen:
       seen.incl c
-      discard ctx.emitDeviceFnRec(ctx.fns[c])
+      discard ctx.emitDeviceFnRec(ctx.fnProcs[c])
   result = ctx.emitDeviceFn(procNode)
-  ctx.emittedFns[isym] = result
-  ctx.emitting.excl isym
+  ctx.emittedFns[procNode.name] = result
+  ctx.emitting.excl procNode.name
 
-proc emitKernel(ctx: var SpvLangCtx, kernel: GpuAst, fns: Table[string, GpuAst]): uint32 =
-  doAssert kernel.kind == gpuProc, "not a function"
-  doAssert attGlobal in kernel.pAttributes, "only global kernels emit"
-  doAssert kernel.pRetType.kind == gtVoid, "kernels are void"
-  doAssert not kernel.forwardDeclare, "forward declarations do not emit"
-
-  ctx.fns = fns
-  # One OpTypeStruct push block in parameter order,
-  # offsets are the host deviceLayout C numbers, object params bind in place
-  var memberTys: seq[SpvTy]
-  var hasBda = false
-  for p in kernel.pParams:
-    doAssert p.addressSpace != asSMEM,
-      "shared-memory params are outside the SPIR-V subset"
-    if p.typ.kind == gtVoidPtr:
-      spvRefuse("void ptr params")
-    if p.typ.kind in {gtPtr, gtUncheckedArray}:
-      hasBda = true
-    else:
-      refuseNarrowPushMembers(p.typ, p.ident.symbol.name)
-    memberTys.add pushMemberTy(p.typ)
-
-  let push = ctx.buildPushBlockTys(memberTys)
-
+proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
+  ## Compute entry point.
+  ##
+  ## One push block in parameter order, the builtin inputs on the interface
+  ## and structured control flow from the CIRv2 body.
+  doAssert kernel.ret.kind == ctVoid, "kernels are void"
+  let push = ctx.buildPushBlock(kernel.params)
   # device fns emit first, an OpFunctionCall result id must exist at the call site
   var calls: seq[string]
-  scanTree(kernel.pBody, calls)
+  scanCalls(kernel.body, calls)
+  var seen: HashSet[string]
   for c in calls:
-    if c in fns and c notin ctx.emittedFns:
-      discard ctx.emitDeviceFnRec(fns[c])
-
+    if ctx.fnProcs.hasKey(c) and c notin seen:
+      seen.incl c
+      discard ctx.emitDeviceFnRec(ctx.fnProcs[c])
   let voidTy = ctx.builder.tyVoid()
   let fnTy = ctx.builder.tyFunction(voidTy, @[])
   result = ctx.builder.opFunction(voidTy, fnTy)
-  var fn = SpvFnCtx(name: "kernel " & kernel.pName.ident(), fns: ctx.fns)
+  var fn: SpvFnCtx = SpvFnCtx(name: "kernel " & kernel.name)
   discard ctx.builder.opLabel()
-
-  # setup block: Function-storage variables first, then hoisted parameter bindings, all later blocks dominated by the entry block
-  hoistLocals(ctx, fn, kernel.pBody)
-  for i, p in kernel.pParams:
-    let sym = p.ident.symbol
-    if p.typ.kind in {gtPtr, gtUncheckedArray}:
+  # prologue: hoisted locals, then the parameter bindings
+  ctx.hoistLocals(fn, kernel.body)
+  for i, p in kernel.params:
+    if p.typ.kind == ctAptr:
       # u64 device address in the push block, converted to a buffer pointer
-      let u64Ty = ctx.tyId(spvScalar(GpuType(kind: gtUint64)))
+      let u64Ty = ctx.tyId(spvScalar(cirUint64()))
       let slotPtrTy = ctx.builder.tyPointer(scPushConstant, u64Ty)
-      let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
+      let memberIdx = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
       let devAddr = ctx.builder.opLoad(u64Ty, slot)
-      fn.paramPtrs[sym.iSym] =
-        ctx.builder.opConvertUToPtr(ctx.bdaPointerTy(pointeeElem(p.typ)), devAddr)
-    elif p.typ.kind in {gtObject, gtGenericInst}:
-      let memberTy = memberTys[i]
-      let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))
-      let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
-      let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
-      fn.paramMembers[sym.iSym] = (slot, p.typ)
+      let pointeeTyId = ctx.bdaPointerTy(p.typ.pElem)
+      fn.bdaParams[p.name] = ctx.builder.opConvertUToPtr(pointeeTyId, devAddr)
     else:
-      let memberTy = memberTys[i]
+      let memberTy = ctx.pushMemberTy(p)
       let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))
-      let memberIdx = ctx.builder.constUint(ctx.scalarId(uint32Type()), uint64(i))
+      let memberIdx = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
-      fn.paramVals[sym.iSym] = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
-
-  emitStmt(ctx, fn, kernel.pBody)
+      fn.params[p.name] = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
+  ctx.emitStmts(fn, kernel.body)
   if not fn.terminated:
     ctx.builder.opReturn()
   ctx.builder.opFunctionEnd()
-
-  # BDA loads through u64 address members pull
-  # the PhysicalStorageBuffer capability too: memory model and extension
-  # must pair with it
-  let usePhys = hasBda or (capPhysicalStorageBufferAddresses in ctx.caps)
+  let usePhys = capPhysicalStorageBufferAddresses in ctx.caps
   if usePhys:
     # PhysicalStorageBufferAddresses is extension-gated on SPIR-V 1.3
     ctx.builder.emitExtension("SPV_KHR_physical_storage_buffer")
-  var pendingExts: seq[string]
-  for e in ctx.exts:
-    pendingExts.add e
-  pendingExts.sort()
-  for e in pendingExts:
-    ctx.builder.emitExtension(e)
-  let lws = if kernel.pWorkgroupSize == (0, 0, 0): (256, 1, 1)
-            else: kernel.pWorkgroupSize
-  ctx.builder.emitEntryPoint(emGLCompute, result, kernel.pName.ident(),
-                             ctx.interfaceVars)
+  ctx.flushExtensions()
+  let lws = if kernel.workgroup == [0, 0, 0]: [256, 1, 1]
+            else: kernel.workgroup
+  # exportc renames a kernel entry for the host runtime lookup. Host launchers look up
+  # an OpEntryPoint Name operand, so the rename patches that operand. No OpName debug
+  # instruction is emitted for the entry, that operand is the whole rename.
+  let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
+  ctx.builder.emitEntryPoint(emGLCompute, result, entryName, ctx.interfaceVars)
   ctx.builder.emitExecutionMode(result, modeLocalSize,
-                                @[uint32(lws[0]), uint32(lws[1]), uint32(lws[2])])
+    @[uint32(lws[0]), uint32(lws[1]), uint32(lws[2])])
   ctx.builder.emitMemoryModel(
     (if usePhys: amPhysicalStorageBuffer64 else: amLogical), mmGLSL450)
   ctx.flushCapabilities()
 
 # ═══════════════════════════════════════════════════════════════════════
-# Driver
+#  Driver
 # ═══════════════════════════════════════════════════════════════════════
 
-proc codegen*(ctx: var GpuContext): seq[uint32] =
-  ## Returns the SPIR-V words of one `spirv:` block for the Vulkan environment
-  ## (SPIR-V 1.3, target environment vulkan1.4):
-  ## - exactly one `{.global.}` kernel per block, refusal otherwise
-  ## - device functions used by the kernel emit alongside it
-  ## - pointer parameters carry one u64 device address push member each
-  ## - the words ingest directly into the Vulkan engine
+proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
+  ## Returns the SPIR-V words of one CIRv2 module for the Vulkan environment.
+  ##
+  ## Exactly one `{.global.}` kernel per module, the device functions it
+  ## calls emitted alongside.
+  ## A refusal names the construct otherwise.
   var lang = initSpvLangCtx()
-  var kernels: seq[GpuAst]
-  for _, fn in ctx.fnTab:
-    if fn.isGlobal():
+  var kernels: seq[CirProc]
+  for fn in m.procs:
+    if fn.isKernel:
       kernels.add fn
   if kernels.len != 1:
-    error "SPIR-V codegen requires exactly one `{.global.}` kernel per `spirv:` block, found " & $kernels.len
-  var fns: Table[string, GpuAst] = initTable[string, GpuAst]()
-  for _, fn in ctx.allFnTab:
-    if fn.kind == gpuProc and not fn.isGlobal() and not fn.forwardDeclare:
-      fns[fn.pName.symbol.iSym] = fn
-  discard lang.emitKernel(kernels[0], fns)
-  result = lang.builder.module.finalize()
+    lang.failSpv("exactly one kernel per module, found " & $kernels.len)
+    return (@[], lang.err)
+  lang.fnProcs = initTable[string, CirProc]()
+  for fn in m.procs:
+    if not fn.isKernel:
+      lang.fnProcs[fn.name] = fn
+  discard lang.emitKernel(kernels[0])
+  if lang.err.len > 0:
+    return (@[], lang.err)
+  (lang.builder.module.finalize(), "")
+
+
+proc codegen*(ctx: var GpuContext): seq[uint32] =
+  ## Encodes the module in `ctx` as SPIR-V words for the Vulkan environment,
+  ## the `backends_api` entry point.
+  ## An encoder refusal raises, the macro layer turns it into a compile error
+  ## naming the construct.
+  codegenModule(printSpirvModule(ctx.module))

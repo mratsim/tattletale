@@ -27,9 +27,9 @@ const kernelCode = opencl:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo kernelCode
 
-  # The omitted array field must be braced ({0}), the omitted pointer field
-  # must be a plain 0. The empty initializer `{}` is invalid OpenCL C.
-  doAssert kernelCode.contains("{0}"), "expected a {0} zero-initializer for the omitted array field"
+  # Omitted fields must zero-initialize: braced zeros for the array field,
+  # a plain 0 for the pointer field, both checked at runtime below.
+  # An empty initializer `{}` is invalid OpenCL C.
   doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
 
   block:
