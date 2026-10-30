@@ -166,6 +166,12 @@ proc emitMslPtr(t: CirType, ident: string): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
+# `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
+const mslFloatTokens = FloatLitTokens(
+  inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
+  inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
+  inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN")
+
 proc emitMslLit(e: CirExpr): string =
   ## MSL token of a literal, typed by its literal type.
   case e.kind
@@ -184,17 +190,8 @@ proc emitMslLit(e: CirExpr): string =
     else:
       result = $e.value
   of eFloatLit:
-    # MSL has no `inf`/`nan` tokens and Nim's `$` renders `inf`/`nan`.
-    # Emission text is the <math.h> macros that the MSL compiler accepts.
-    # Literal width converts at the use site.
-    case e.fValue.classify
-    of fcInf:
-      result = "INFINITY"
-    of fcNegInf:
-      result = "-INFINITY"
-    of fcNan:
-      result = "NAN"
-    else:
+    result = nonFiniteFloatLit(e, mslFloatTokens)
+    if result.len == 0:
       case e.fLitType.bits
       of 16: result = $e.fValue & "h"
       of 32: result = $e.fValue & "f"

@@ -181,6 +181,17 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
+# WGSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
+# `bitcast` from the unsigned integer of the same width.
+const wgslFloatTokens = FloatLitTokens(
+  inf16: "bitcast<f16>(0x7c00u)", negInf16: "bitcast<f16>(0xfc00u)", nan16: "bitcast<f16>(0x7e00u)",
+  inf32: "bitcast<f32>(0x7f800000u)",
+  negInf32: "bitcast<f32>(0xff800000u)",
+  nan32: "bitcast<f32>(0x7fc00000u)",
+  inf64: "bitcast<f64>(0x7ff0000000000000u)",
+  negInf64: "bitcast<f64>(0xfff0000000000000u)",
+  nan64: "bitcast<f64>(0x7ff8000000000000u)")
+
 proc emitWgslLit(e: CirExpr): string =
   ## WGSL token of a literal, typed by its literal type.
   ## Bare literals are abstract in WGSL and work in any typed context,
@@ -196,9 +207,11 @@ proc emitWgslLit(e: CirExpr): string =
     else:
       result = $e.value
   of eFloatLit:
-    case e.fLitType.bits
-    of 16: result = $e.fValue & "h"
-    else: result = $e.fValue
+    result = nonFiniteFloatLit(e, wgslFloatTokens)
+    if result.len == 0:
+      case e.fLitType.bits
+      of 16: result = $e.fValue & "h"
+      else: result = $e.fValue
   of eTrue: result = "true"
   of eFalse: result = "false"
   else: result = "<wgsl: not a literal>"

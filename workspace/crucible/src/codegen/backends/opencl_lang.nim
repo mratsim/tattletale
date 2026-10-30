@@ -182,6 +182,13 @@ proc emitExtensions(features: ModuleFeatures): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
+# OpenCL C defines `INFINITY` and `NAN` as float-typed constants.
+# A C cast forms the wider widths.
+const openclFloatTokens = FloatLitTokens(
+  inf16: "(half)INFINITY", negInf16: "(half)-INFINITY", nan16: "(half)NAN",
+  inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
+  inf64: "((double)INFINITY)", negInf64: "((double)-INFINITY)", nan64: "((double)NAN)")
+
 proc emitOpenclLit(e: CirExpr): string =
   ## OpenCL C token of a literal, typed by its literal type.
   ## C suffixes mark the 32-bit and 64-bit widths, a cast forms the narrow widths.
@@ -201,10 +208,12 @@ proc emitOpenclLit(e: CirExpr): string =
     else:
       result = $e.value
   of eFloatLit:
-    case e.fLitType.bits
-    of 16: result = "(half)" & $e.fValue
-    of 32: result = $e.fValue & "f"
-    else: result = $e.fValue
+    result = nonFiniteFloatLit(e, openclFloatTokens)
+    if result.len == 0:
+      case e.fLitType.bits
+      of 16: result = "(half)" & $e.fValue
+      of 32: result = $e.fValue & "f"
+      else: result = $e.fValue
   of eTrue: result = "true"
   of eFalse: result = "false"
   else: result = "<opencl: not a literal>"

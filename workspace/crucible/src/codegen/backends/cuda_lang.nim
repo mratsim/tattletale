@@ -149,6 +149,12 @@ proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
+# `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
+const cudaFloatTokens = FloatLitTokens(
+  inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
+  inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
+  inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN")
+
 proc emitCudaLit(e: CirExpr): string =
   ## CUDA token of a literal, typed by its literal type.
   case e.kind
@@ -167,16 +173,8 @@ proc emitCudaLit(e: CirExpr): string =
     else:
       result = $e.value
   of eFloatLit:
-    # CUDA has no `inf`/`nan` tokens and Nim's `$` renders `inf`/`nan`,
-    # emission text is the <math.h> macros that the CUDA compiler accepts
-    case e.fValue.classify
-    of fcInf:
-      result = "INFINITY"
-    of fcNegInf:
-      result = "-INFINITY"
-    of fcNan:
-      result = "NAN"
-    else:
+    result = nonFiniteFloatLit(e, cudaFloatTokens)
+    if result.len == 0:
       case e.fLitType.bits
       of 32: result = $e.fValue & "f"
       else: result = $e.fValue

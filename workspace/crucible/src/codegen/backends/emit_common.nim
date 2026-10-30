@@ -7,15 +7,17 @@
 
 ## Shared printer leaves over CIRv2.
 ##
-## - failing / fail: the first-refusal-wins walk state, a template over each
-##   printer's own `PrintCtx` record (the `err` and `fnName` fields)
-## - codegenModule: the `(artifact, err)` to entry-point-result conversion
-## - roundUpMultiple, scalarByteSize: shared layout arithmetic over CIRv2 types
-## - emitVectorComponent: vector component letters (`F0`..`F3` to `x`..`w`)
+## | leaf                            | contract                                                                       |
+## | ------------------------------- | ------------------------------------------------------------------------------ |
+## | failing / fail                  | first-refusal-wins walk state over each printer's `PrintCtx` (`err`, `fnName`) |
+## | codegenModule                   | `(artifact, err)` to entry-point-result conversion                             |
+## | roundUpMultiple, scalarByteSize | shared layout arithmetic over CIRv2 types                                      |
+## | emitVectorComponent             | vector component letters (`F0`..`F3` to `x`..`w`)                              |
+## | nonFiniteFloatLit               | non-finite float literal token, classified against the printer's token table   |
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
 
-import std/macros
+import std/[macros, math]
 import ../ir/cirv2_lang
 import ../ir/ast_datatypes
 
@@ -61,6 +63,48 @@ proc emitVectorComponent*(name: string): string =
   of "F2": "z"
   of "F3": "w"
   else: ""
+
+type
+  FloatLitTokens* = object
+    ## Non-finite float literal tokens for one printer target:
+    ##
+    ## - one field per literal width
+    ## - Nim's `$` renders the special values `inf`, `-inf` and `nan`, and no
+    ##   shader language accepts those as a literal token
+
+    inf16*, negInf16*, nan16*: string
+    inf32*, negInf32*, nan32*: string
+    inf64*, negInf64*, nan64*: string
+
+proc nonFiniteFloatLit*(e: CirExpr, tok: FloatLitTokens): string =
+  ## Emission token of a non-finite float literal.
+  ##
+  ## Returns "" when the value is finite.
+  ##
+  ## Finite values keep the caller's own width suffix:
+  ##
+  ##   of eFloatLit:
+  ##     result = nonFiniteFloatLit(e, targetTokens)
+  ##     if result.len == 0:
+  ##       result = $e.fValue & "f"
+  case e.fValue.classify
+  of fcInf:
+    case e.fLitType.bits
+    of 16: result = tok.inf16
+    of 32: result = tok.inf32
+    else: result = tok.inf64
+  of fcNegInf:
+    case e.fLitType.bits
+    of 16: result = tok.negInf16
+    of 32: result = tok.negInf32
+    else: result = tok.negInf64
+  of fcNan:
+    case e.fLitType.bits
+    of 16: result = tok.nan16
+    of 32: result = tok.nan32
+    else: result = tok.nan64
+  else:
+    result = ""
 
 proc codegenModule*[R](printed: (R, string)): R =
   ## Converts a printer result tuple into the `backends_api` entry-point return value.

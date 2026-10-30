@@ -289,6 +289,15 @@ proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
+# HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
+# `asfloat` (32 bit) and `asdouble` (64 bit).
+const hlslFloatTokens = FloatLitTokens(
+  inf16: "asfloat(0x7f800000)", negInf16: "asfloat(0xff800000)", nan16: "asfloat(0x7fc00000)",
+  inf32: "asfloat(0x7f800000)", negInf32: "asfloat(0xff800000)", nan32: "asfloat(0x7fc00000)",
+  inf64: "asdouble(0u, 0x7ff00000u)",
+  negInf64: "asdouble(0u, 0xfff00000u)",
+  nan64: "asdouble(0u, 0x7ff80000u)")
+
 proc emitHlslLit(e: CirExpr): string =
   ## HLSL token of a literal, typed by its literal type: without the suffix
   ## the HLSL frontend changes width or signedness.
@@ -300,11 +309,13 @@ proc emitHlslLit(e: CirExpr): string =
     else:
       result = $e.value
   of eFloatLit:
-    case e.fLitType.bits
-    of 64:
-      result = $e.fValue & "l"
-    else:
-      result = $e.fValue & "f"
+    result = nonFiniteFloatLit(e, hlslFloatTokens)
+    if result.len == 0:
+      case e.fLitType.bits
+      of 64:
+        result = $e.fValue & "l"
+      else:
+        result = $e.fValue & "f"
   of eTrue: result = "true"
   of eFalse: result = "false"
   else: result = "<hlsl: not a literal>"

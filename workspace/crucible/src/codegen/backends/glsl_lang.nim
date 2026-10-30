@@ -205,6 +205,19 @@ proc emitExtensions(features: ModuleFeatures): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
+# GLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
+# `uintBitsToFloat` (32 bit) and the width conversion at the use site.
+const glslFloatTokens = FloatLitTokens(
+  inf16: "float16_t(uintBitsToFloat(0x7f800000u))",
+  negInf16: "float16_t(uintBitsToFloat(0xff800000u))",
+  nan16: "float16_t(uintBitsToFloat(0x7fc00000u))",
+  inf32: "uintBitsToFloat(0x7f800000u)",
+  negInf32: "uintBitsToFloat(0xff800000u)",
+  nan32: "uintBitsToFloat(0x7fc00000u)",
+  inf64: "double(uintBitsToFloat(0x7f800000u))",
+  negInf64: "double(uintBitsToFloat(0xff800000u))",
+  nan64: "double(uintBitsToFloat(0x7fc00000u))")
+
 proc emitGlslLit(e: CirExpr): string =
   ## GLSL token of a literal, typed by its literal type.
   ## Wide integer literals print as constructor calls (`int64_t(5)`),
@@ -225,11 +238,13 @@ proc emitGlslLit(e: CirExpr): string =
     else:
       result = $e.value
   of eFloatLit:
-    case e.fLitType.bits
-    of 16: result = "float16_t(" & $e.fValue & ")"
-    of 32: result = $e.fValue & "f"
-    of 64: result = "double(" & $e.fValue & ")"
-    else: result = $e.fValue
+    result = nonFiniteFloatLit(e, glslFloatTokens)
+    if result.len == 0:
+      case e.fLitType.bits
+      of 16: result = "float16_t(" & $e.fValue & ")"
+      of 32: result = $e.fValue & "f"
+      of 64: result = "double(" & $e.fValue & ")"
+      else: result = $e.fValue
   of eTrue: result = "true"
   of eFalse: result = "false"
   else: result = "<glsl: not a literal>"
