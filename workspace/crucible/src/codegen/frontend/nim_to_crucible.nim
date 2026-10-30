@@ -302,8 +302,8 @@ func zeroValue(t: CirType): CirExpr =
   ## - 0 for numerics, false for bool, nil for pointers
   ## - element-wise zeros for arrays, all-zero fields for structs
   ##
-  ## An omitted object-constructor field initializes to this, v1's rule,
-  ## an empty initializer list is never valid C.
+  ## An omitted object-constructor field takes this zero value.
+  ## An empty initializer list is never valid C.
   case t.kind
   of ctInt, ctUint:
     result = intLit(0, t)
@@ -384,7 +384,6 @@ proc drainHoisted(ctx: var FrontendCtx): seq[CirStmt]
   ## Forward declaration, hoist placement is needed before the walk.
 
 proc resolveSymExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
-  ## A local symbol reference (param, let, var, for var, result, temp).
   result = ctx.resolveLocal(n.repr)
   if result.isNil:
     ctx.fail("unknown local symbol " & n.repr)
@@ -753,7 +752,7 @@ proc lowerMagicPrimitive(ctx: var FrontendCtx, callee: NimNode, call: NimNode, m
 proc numericBuiltinCall(ctx: var FrontendCtx, calleeSym: NimNode, call: NimNode): CirExpr =
   ## Lowers a `min`/`max`/`abs` call over scalar operands as a builtin call, no body harvest:
   ##
-  ## - the printers use the per-type native name, v1's contract:
+  ## - the printers use the per-type native name:
   ##   `fmax`/`fmin`/`fabs` on OpenCL floats
   ## - a user proc sharing the name, a `max` over tiles, say, takes the ordinary harvest path: the targets have no builtin over aggregates
   if calleeSym.strVal notin ["min", "max", "abs"]:
@@ -1462,10 +1461,9 @@ proc genCond(ctx: var FrontendCtx, n: NimNode, trueL, falseL, fallL: string): se
   let node = unwrapConv(n)
   if node.kind == nnkInfix and node[0].strVal in ["and", "or"] and
       node[1].getTypeInst().typeKind == ntyBool:
-    # a call-free and/or tree folds into one boolean expression
-    # every inner false (true) target of the chain reaches the same branch
-    # a label chain cannot express that inside nested ites
-    # that drop rule would lose the inner exits
+    # a call-free and/or tree folds into one boolean expression:
+    # every chain exit reaches the same false (true) target.
+    # Nested ite labels cannot express that without losing the exits.
     if not containsCall(node):
       let condE = ctx.genCondBoolExpr(node)
       if ctx.failing():
@@ -1540,7 +1538,6 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
   if elseBody.isNil and dest != nil:
     ctx.fail("if expression without an else branch")
     return @[]
-  # flat elif chain over one shared merge label
   let mergeL = ctx.freshLabel("merge")
   var targeted = false
   result = @[]
@@ -1575,7 +1572,6 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
     result.add(labS(mergeL))
 
 proc lowerIfStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  ## An `if` statement: branches and optional else.
   var branches: seq[tuple[cond, body: NimNode]] = @[]
   var elseBody: NimNode = nil
   for c in n:
@@ -1593,7 +1589,6 @@ proc lowerIfStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   return ctx.lowerIfForm(branches, elseBody, nil)
 
 func isUnrollPragma(n: NimNode): bool =
-  ## True for the statement pragma `{.unroll.}`.
   if n.kind != nnkPragma:
     return false
   for p in n:
@@ -1603,10 +1598,8 @@ func isUnrollPragma(n: NimNode): bool =
 
 func bodyMarksUnroll(body: NimNode): bool =
   ## True when the loop body states `{.unroll.}` directly: the pragma is
-  ## one statement of the body's own statement list.
-  ## V1 semantics:
-  ## - any position inside the body marks the loop
-  ## - a pragma nested inside an inner loop's body marks that inner loop
+  ## one statement of the body's own statement list. A pragma nested inside
+  ## an inner loop's body marks that inner loop, never this one.
   if body.kind != nnkStmtList:
     return false
   for stmt in body:
@@ -1616,7 +1609,7 @@ func bodyMarksUnroll(body: NimNode): bool =
 
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `while` loop lowers to a conditionless `loop` with a leading guard
-  ## and the exit label after the loop (final_ir.md rule 2).
+  ## and the exit label after the loop.
   if ctx.failing():
     return @[]
   let exitL = ctx.freshLabel("lx")
@@ -1860,8 +1853,7 @@ proc resolveLocalSpace(ctx: var FrontendCtx, nameNode: NimNode): CirAddrSpace =
   ## Memory class of a local declaration. The pragma list decides:
   ## - `smem` → threadgroup memory
   ## - `const_mem` → constant memory
-  ## - `rmem` or no annotation → per-thread registers, the `asRMEM`
-  ##   default of the type constructors this replaces
+  ## - `rmem` or no annotation → per-thread registers
   result = caThread
   if nameNode.kind != nnkPragmaExpr:
     return
@@ -1997,7 +1989,6 @@ proc isScalarCompoundAssign(ctx: var FrontendCtx, n: NimNode): bool =
   return isScalar(lp) and isScalar(rt)
 
 proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  ## Translates one statement node.
   if ctx.failing():
     return @[]
   if n.isNil:
@@ -2447,7 +2438,6 @@ proc lowerModule(ctx: var FrontendCtx, bodyIn: NimNode) =
     discard ctx.lowerProcDef(body)
     return
   if body.kind == nnkSym:
-    # a bare kernel proc symbol: translate its definition
     let impl = body.getImpl()
     if impl.kind notin {nnkProcDef, nnkFuncDef}:
       ctx.fail(body.strVal & " does not name a proc")
