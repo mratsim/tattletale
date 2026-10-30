@@ -9,7 +9,7 @@
 ##
 ## Every pass wrapper runs `verify` (or `verifyAfter`) over its output.
 ## A violation is a compile-time rejection through `macros.error`.
-## The rejection message names the construct, the node path, and the detail.
+## A rejection message names the construct, its node path, and the detail.
 ## `verifyMessage` runs the same walk purely and returns the message.
 ##
 ## | Invariant    | Contract                                                                                 |
@@ -56,7 +56,8 @@ type
   ## A lab at chain `L` is reachable from a jmp with chain `J` iff `L` is a prefix of `J` (same or enclosing scope).
 
 proc getConstructName(k: CirExprKind | CirStmtKind): string =
-  ## Leng vocabulary name of a node kind (`eAdd` -> `add`, `sIte` -> `ite`), the name that leads every rejection message.
+  ## Leng vocabulary name of a node kind (`eAdd` -> `add`, `sIte` -> `ite`).
+  ## Every rejection message leads with this name.
   toLowerAscii($k)[1 ..^ 1]
 
 proc fail(ctx: var VerifyCtx, path: string, construct: string, detail: string) =
@@ -89,8 +90,9 @@ proc sameOrFails(ctx: var VerifyCtx, a, b: CirType, path: string, construct: str
 
 proc callArgReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
   ## Call-argument check under v1's birth-space rule: a pointer argument
-  ## may hold another address space than the formal states, the call site
-  ## re-spaces to the formal's space. The pointee type must match exactly.
+  ## may hold another address space than the formal states.
+  ## The call site re-spaces the argument to the formal's space.
+  ## The pointee type must match exactly.
   if sameType(a, b):
     return
   if a.kind == b.kind and a.kind in {ctPtr, ctAptr} and sameType(a.pElem, b.pElem):
@@ -100,9 +102,10 @@ proc callArgReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
     spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
 
 proc retReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
-  ## Return-value check under v1's birth-space rule: a pointer return may carry
-  ## another address space than the proc return type states, the call site
-  ## re-spaces to the declared space. The pointee type must match exactly.
+  ## Return-value check under v1's birth-space rule: a pointer return may
+  ## carry another address space than the proc return type states.
+  ## The call site re-spaces to the declared space.
+  ## The pointee type must match exactly.
   if sameType(a, b):
     return
   if a.kind == b.kind and a.kind in {ctPtr, ctAptr} and sameType(a.pElem, b.pElem):
@@ -112,7 +115,7 @@ proc retReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
     spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
 
 proc litFitsBits(ctx: var VerifyCtx, v: int64, t: CirType, path: string) =
-  ## Zero-tolerance literal range check against the named type's bits.
+  ## Fails when an int64 value does not fit the named type's bit width.
   if t.bits <= 0:
     return
   if t.kind == ctInt:
@@ -260,7 +263,7 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
     if e.kind == eNeq and at.kind == ctBool and e.b.kind == eIntLit and
         e.b.value == 0 and bt.kind == ctUint and bt.bits == 32:
       # ABI zero test of a bool value: the launch ABI stores a bool kernel
-      # parameter as u32, the WGSL lowering pass emits the read as `flag != 0u`
+      # parameter as u32, and the WGSL lowering pass emits the read as `flag != 0u`
       discard
     else:
       sameOrFails(ctx, bt, e.cmpType, path, getConstructName(e.kind),
@@ -633,7 +636,7 @@ proc checkProc(fn: CirProc): string =
       return "lab at " & fn.name & ": label " & labName & " is never targeted"
 
 proc verifyMessage*(fn: CirProc, passName = ""): string =
-  ## Pure rejection check: returns "" when `fn` verifies clean, else the zero-tolerance message.
+  ## Pure rejection check: returns "" when `fn` verifies clean, else the rejection message.
   ## The message reads "cirv2 verify: <construct> at <proc>/<path>: <detail>".
   ## With `passName` the message gains the "[pass <name>] " prefix, matching the `verifyAfter` rejection message.
   ##
@@ -661,7 +664,7 @@ proc verifyAfter*(passName: string, fn: CirProc) =
     error(msg)
 
 proc verifyMessage*(m: CirModule): string =
-  ## Pure rejection check for a module: returns "" when `m` verifies clean, else the zero-tolerance message.
+  ## Pure rejection check for a module: returns "" when `m` verifies clean, else the rejection message.
   ## The message names the module and the offending proc index, matching the `verify` rejection message.
   if m.isNil:
     return "cirv2 verify: missing module"
