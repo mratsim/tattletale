@@ -341,22 +341,54 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   r.cache[cacheKey] = result
   r.structs.add(result)
 
-func isCompileTimeFormal(t: NimNode): bool =
-  ## True for `static T` (either node layout), for `typedesc`, and for any
-  ## `static` formal whose instantiated type shows the bound value.
+func constrHasTypeElem(t: NimNode): bool =
+  ## True when an instantiated tuple/object constructor type node has a type element anywhere:
   ##
-  ## The instantiated type node shows that value, a literal or an enum member.
-  ## The parameter is compile-time only.
+  ## - a runtime tuple-typed formal instantiates to its member types:
+  ##   `(int, int)` becomes a `TupleConstr` over two `int` type symbols
+  ## - a bound static value instantiates to the value's own elements: literals, value symbols, named fields over literals
+  case t.kind
+  of nnkEmpty:
+    result = false
+  of nnkSym:
+    result = t.symKind == nskType
+  of nnkObjConstr, nnkTupleConstr, nnkPar, nnkExprColonExpr:
+    for e in t:
+      # a named field's name is constructor vocabulary, the value decides
+      let v = if e.kind == nnkExprColonExpr: e[1] else: e
+      if constrHasTypeElem(v):
+        return true
+    result = false
+  else:
+    # literals are values, any other shape (bracket exprs, static ty) is a type
+    result = t.kind notin nnkLiterals
+
+func isCompileTimeFormal*(t: NimNode): bool =
+  ## `static T` (either node layout) or `typedesc`: the argument is
+  ## compile-time only, erased from the closure.
+  ##
+  ## A `static` formal bound to a value shows that value as its instantiated type node:
+  ##
+  ## - a literal, an enum member's ordinal for a `static ReduceOp`-like formal
+  ## - the enum field's symbol
+  ## - a tuple/object constructor over the value's elements
+  ##
+  ## A runtime tuple-typed formal instantiates to a constructor over its member types, its parameters are runtime values.
   if t.kind in nnkIntLit .. nnkUInt64Lit:
     return true
   if t.kind == nnkSym and t.symKind == nskEnumField:
     return true
   if t.kind in {nnkStaticTy, nnkBracketExpr, nnkCommand}:
-    if t.len > 0 and t[0].repr in ["static", "typeDesc"]:
+    if t.len > 0 and t[0].repr == "static":
       return true
   if t.kind in {nnkIdent, nnkSym} and t.strVal == "typedesc":
     return true
+  if t.kind in {nnkObjConstr, nnkTupleConstr}:
+    # a bound static record or tuple formal instantiates to its value,
+    # such an argument is compile-time only like any bound static
+    return not constrHasTypeElem(t)
   if t.kind == nnkBracketExpr and t.len > 0 and t[0].strVal == "typeDesc":
+    # an instantiated `typeDesc[T]` formal of a generic callee
     return true
   return false
 

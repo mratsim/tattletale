@@ -537,31 +537,6 @@ proc isGenericDef(fn: NimNode): bool =
           return true
   return false
 
-proc isCompileTimeFormal(t: NimNode): bool =
-  ## `static T` (either node layout) or `typedesc`: the argument is
-  ## compile-time only, erased from the closure.
-  ##
-  ## A `static` formal bound to a value shows that value as its instantiated
-  ## type node: a literal (an enum member's ordinal for a `static ReduceOp`-
-  ## like formal) or the enum field's symbol. The argument never reaches runtime.
-  if t.kind in nnkIntLit .. nnkUInt64Lit:
-    return true
-  if t.kind == nnkSym and t.symKind == nskEnumField:
-    return true
-  if t.kind in {nnkStaticTy, nnkBracketExpr, nnkCommand}:
-    if t.len > 0 and t[0].repr == "static":
-      return true
-  if t.kind in {nnkIdent, nnkSym} and t.strVal == "typedesc":
-    return true
-  if t.kind in {nnkObjConstr, nnkTupleConstr}:
-    # a bound static record or tuple formal instantiates to its value,
-    # such an argument is compile-time only like any bound static
-    return true
-  if t.kind == nnkBracketExpr and t.len > 0 and t[0].strVal == "typeDesc":
-    # an instantiated `typeDesc[T]` formal of a generic callee
-    return true
-  return false
-
 func isGenericProc(node: NimNode): bool =
   ## True for a generic proc or an instantiation of one, whose params sit
   ## in an `nnkBracket` at `impl[5]`.
@@ -1636,12 +1611,11 @@ func bodyMarksUnroll(body: NimNode): bool =
 
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `while` loop lowers to a conditionless `loop` with a leading guard
-  ## and the exit label after the loop (final_ir.md rule 2).
-  ## `break` targets the exit label.
-  ## `continue` targets a label at the body's end, so the condition
-  ## re-checks on the wrap back to the guard.
-  ## The label is emitted only when the body uses `continue`.
-  ## Its jump stays forward under the verifier's forward-only `jmp` model.
+  ## and the exit label after the loop (final_ir.md rule 2):
+  ##
+  ## - `break` targets the exit label
+  ## - `continue` targets a label at the body's end, so the condition re-checks on the wrap back to the guard
+  ## - the label is emitted only when the body uses `continue`, its jump stays forward under the verifier's forward-only `jmp` model
   if ctx.failing():
     return @[]
   let exitL = ctx.freshLabel("lx")
