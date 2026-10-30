@@ -109,17 +109,14 @@ proc failing(ctx: InlineCtx): bool =
   ctx.err.len > 0
 
 proc fail(ctx: InlineCtx, detail: string) =
-  ## Records the first refusal, naming the proc.
   if ctx.err.len == 0:
     ctx.err = "cirv2 inline: at " & ctx.fnName & ": " & detail
 
 proc freshInlineName(ctx: InlineCtx, name: string): string =
-  ## Proc-unique renamed local: `inl<N>_name`.
   ctx.counter.inc
   result = "inl" & $ctx.counter & "_" & name
 
 proc renameExpr(ctx: InlineCtx, e: var CirExpr, renames: Table[string, CirExpr], labels: Table[string, string]) =
-  ## Substitutes symbols and rewrites labels through the maps, in place.
   if e.isNil:
     return
   case e.kind
@@ -134,7 +131,6 @@ proc renameExpr(ctx: InlineCtx, e: var CirExpr, renames: Table[string, CirExpr],
     return
   else:
     discard
-  # operand positions vary by kind, walk the known children
   case e.kind
   of eAt:
     ctx.renameExpr(e.atBase, renames, labels)
@@ -173,7 +169,6 @@ proc renameExpr(ctx: InlineCtx, e: var CirExpr, renames: Table[string, CirExpr],
     discard
 
 proc renameStmts(ctx: InlineCtx, stmts: var seq[CirStmt], renames: Table[string, CirExpr], labels: var Table[string, string]) =
-  ## Renames declarations, rewrites symbols and labels through the maps.
   for i in 0 ..< stmts.len:
     let s = addr stmts[i]
     case s[].kind
@@ -341,7 +336,6 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
     let arg = args[i]
     if arg.kind in {eIntLit, eFloatLit, eTrue, eFalse, eNil} or
         (arg.kind == eSym and p.typ.kind in {ctPtr, ctAptr}):
-      # immutable arguments and pointer formals substitute directly
       # a pointer formal aliases the caller's object by contract
       renames[p.name] = arg
     else:
@@ -384,7 +378,6 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
     body[^1].retVal != nil and body[^1].retVal.kind == eSym and
     body[^1].retVal.name == "result"
   ctx.renameStmts(body, renames, labels)
-  # trailing-ret handling: the value moves into dest, which the call site already owns
   if body.len > 0 and body[^1].kind == sRet:
     let retVal = body[^1].retVal
     body.setLen(body.len - 1)
@@ -416,7 +409,6 @@ proc inlineProcs(m: CirModule): string =
         return ctx.err
     if not spliced:
       break
-  # delete the inline procs nothing calls anymore
   var surviving: HashSet[string]
   for fn in m.procs:
     fn.body.appendCallTargetsStmts(surviving)
