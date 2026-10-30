@@ -13,7 +13,7 @@
 ## - control flow is statement-based
 ## - `loop` has no condition slot
 ## - calls bind to their destination: a call exists only as a statement or as the RHS of `asgn`
-## - every typed operation states its type, the `(add Type a b)` discipline from the Leng grammar
+## - every typed operation states its type in the `(add Type a b)` discipline of the Leng grammar
 ##
 ## The verifier in `cirv2_verify` enforces what the shape cannot.
 
@@ -110,7 +110,7 @@ type
 
   CirExprKind* = enum
     ## Expression vocabulary, Leng names. `eCall` exists so a call can bind
-    ## to its destination as the RHS of `asgn`, the verifier rejects it everywhere else.
+    ## to its destination as the RHS of `asgn`. The verifier rejects it everywhere else.
     eNil
     eTrue
     eFalse
@@ -266,10 +266,10 @@ type
     ##
     ## Control flow is statement-based:
     ## - `ite` takes a bool condition and two statement lists
-    ## - `loop` is conditionless, the shape has no condition slot
+    ## - `loop` is conditionless: the shape has no condition slot
     ## - `lab`/`jmp` are forward-only and scoped, `scope` gives destructor discipline
     ## - a `var` states the memory class of its declaration in `space`, `const` ignores `space`
-    ##   (`caThread` is per-thread registers, the unannotated default)
+    ##   (`caThread` is per-thread registers and the unannotated default)
     case kind*: CirStmtKind
     of sVar, sConst:
       name*: string
@@ -333,7 +333,7 @@ type
     ret*: CirType
     body*: seq[CirStmt]
     isKernel*: bool
-    ## `{.global.}` proc: a compute entry point, the printers emit the backend's kernel qualifier and its argument ABI for it.
+    ## `{.global.}` proc: a compute entry point. The printers emit the backend's kernel qualifier and its argument ABI for it.
     forceInline*: bool
     ## `{.forceinline.}` proc, an inlining hint at emission.
     cudaName*: string
@@ -353,8 +353,8 @@ type
     ## Empty on every module a lowering pass has not touched.
 
 ## Canonical name -> builtin-kind tables. The alias canonicalization pass reads
-## them after it renames an alias to its canonical name, the cross-check against
-## the catalog declarations is in the pass module, the only importer of both sides.
+## them after it renames an alias to its canonical name. The cross-check against
+## the catalog declarations lives in the pass module, which is the only importer of both sides.
 
 let CoordBuiltinKindByName* {.compileTime.}: Table[string, CoordBuiltinKind] = {
   "thread_position_in_grid": cbkThreadPositionInGrid,
@@ -397,8 +397,8 @@ proc atomicsBuiltinKind*(name: string): AtomicsBuiltinKind =
   AtomicsBuiltinKindByName.getOrDefault(name, abkNone)
 
 proc withSpace*(t: CirType, space: CirAddrSpace): CirType =
-  ## Returns a copy of pointer type `t` re-spaced to `space`, the pointee shared.
-  ## Types are cache-shared refs, a caller never re-spaces in place, the copy is the per-site instance.
+  ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.
+  ## Types are cache-shared refs: a caller never re-spaces in place, so the copy is the per-site instance.
   doAssert t != nil and t.kind in {ctPtr, ctAptr}
   result = CirType(kind: t.kind)
   result.space = space
@@ -490,12 +490,12 @@ proc getExprType*(e: CirExpr): CirType =
         result = t.pElem
       elif t != nil and t.kind == ctArray:
         # element access through a dereferenced pointer to array
-        # pattern selects one element of the array the dereference yields
+        # pattern selects one element of the array that the dereference yields
         result = t.aElem
       elif t != nil and t.kind == ctPtr and t.pElem != nil and
           t.pElem.kind == ctArray:
         # element access through a pointer to array
-        # pattern selects one element of the array the pointer names
+        # pattern selects one element of the array that the pointer names
         result = t.pElem.aElem
   of eDot:
     if e.dotBase != nil:
