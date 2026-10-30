@@ -9,8 +9,6 @@
 
 import
   ./codegen/ir/ast_datatypes,
-  ./codegen/ir/ast_type_constructors,
-  ./codegen/ir/ast_type_resolvers,
   ./codegen/frontend/nim_to_crucible,
   ./codegen/frontend/nim_type_resolvers,
   ./codegen/passes/pass_datatypes,
@@ -20,12 +18,6 @@ import
   ./codegen/passes/passes_optimizations,
   ./codegen/passes/passes_normalizations,
   ./codegen/passes/passes_lowering,
-  ./codegen/passes/passes_low_pointers,
-  ./codegen/passes/passes_low_views,
-  ./codegen/passes/passes_low_array_assign,
-  ./codegen/passes/passes_low_address_spaces,
-  ./codegen/passes/passes_legal_if_expr,
-  ./codegen/passes/passes_legal_block_expr,
   ./codegen/passes/passes_lowering_msl,
   ./codegen/passes/passes_lowering_cuda,
   ./codegen/passes/passes_lowering_glsl,
@@ -36,13 +28,12 @@ import
   ./builtins/builtins_pragmas,
   ./builtins/builtins_functions
 
-export gpu_compiler, ast_datatypes, ast_type_constructors, ast_type_resolvers,
+export gpu_compiler, ast_datatypes,
        nim_to_crucible, nim_type_resolvers,
        pass_datatypes, pass_registry,
-       passes_legalizations, passes_legal_if_expr, passes_legal_block_expr,
+       passes_legalizations,
        passes_validations, passes_optimizations, passes_normalizations,
-       passes_lowering, passes_low_pointers, passes_low_views,
-       passes_low_array_assign, passes_low_address_spaces,
+       passes_lowering,
        passes_lowering_msl, passes_lowering_cuda, passes_lowering_glsl,
        passes_lowering_opencl, passes_lowering_wgsl,
        passes_lowering_hlsl,
