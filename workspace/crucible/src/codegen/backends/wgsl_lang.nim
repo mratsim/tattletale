@@ -389,11 +389,14 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       if e.callee.synchroBuiltin != sbkNone:
         ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
         return ""
-    case calleeName
-    of "rsqrt":
-      return "inverseSqrt(" & args.join(", ") & ")"
-    else:
-      return calleeName & "(" & args.join(", ") & ")"
+    # a math intrinsic reroutes only when the callee IS the builtin
+    # a user proc that shares the name stays an ordinary call
+    if e.callee.kind == eSym and e.callee.builtin:
+      case calleeName
+      of "rsqrt":
+        return "inverseSqrt(" & args.join(", ") & ")"
+      else: discard
+    return calleeName & "(" & args.join(", ") & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Statements

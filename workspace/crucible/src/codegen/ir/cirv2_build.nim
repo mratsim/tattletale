@@ -65,7 +65,8 @@ proc withOrigin*(t: CirType, n: NimNode): CirType =
 
 proc sym*(name: string, typ: CirType, builtin = false,
           coordBuiltin = cbkNone, synchroBuiltin = sbkNone,
-          reductionBuiltin = rbkNone, atomicsBuiltin = abkNone): CirExpr =
+          reductionBuiltin = rbkNone, atomicsBuiltin = abkNone,
+          shuffleBuiltin = shkNone): CirExpr =
   ## One symbol reference. `builtin` marks a `{.builtin.}` read.
   ##
   ## Contract:
@@ -73,7 +74,8 @@ proc sym*(name: string, typ: CirType, builtin = false,
   ## - the printers dispatch on the kinds
   CirExpr(kind: eSym, name: name, typ: typ, builtin: builtin,
     coordBuiltin: coordBuiltin, synchroBuiltin: synchroBuiltin,
-    reductionBuiltin: reductionBuiltin, atomicsBuiltin: atomicsBuiltin)
+    reductionBuiltin: reductionBuiltin, atomicsBuiltin: atomicsBuiltin,
+    shuffleBuiltin: shuffleBuiltin)
 
 proc intLit*(value: int64, typ: CirType): CirExpr =
   CirExpr(kind: eIntLit, value: value, litType: typ)

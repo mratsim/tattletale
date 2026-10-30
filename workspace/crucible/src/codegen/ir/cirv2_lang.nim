@@ -57,6 +57,12 @@ type
     abkNone
     abkAtomicFetchAdd
 
+  ShuffleBuiltinKind* = enum
+    ## Canonical cross-lane shuffle builtin category, `shkNone` when not a shuffle.
+    shkNone
+    shkSimdShuffle
+    shkSimdShuffleXor
+
   CirTypeKind* = enum
     ## Closed set of type kinds, derived once at the frontend boundary and never
     ## re-derived by passes.
@@ -166,7 +172,7 @@ type
       ##
       ## - the alias canonicalization pass renames only builtin symbols, a local
       ##   or parameter that happens to share a builtin's name stays untouched
-      ## - the pass assigns the four typed kinds below from the canonical name tables
+      ## - the pass assigns the five typed kinds below from the canonical name tables
       ## - downstream recognition dispatches on the kinds, never on names
       coordBuiltin*: CoordBuiltinKind
       ## Coordinate builtin kind, `cbkNone` when not a coordinate.
@@ -176,6 +182,8 @@ type
       ## Reduction builtin kind, `rbkNone` when not a reduction intrinsic.
       atomicsBuiltin*: AtomicsBuiltinKind
       ## Atomic builtin kind, `abkNone` when not an atomic intrinsic.
+      shuffleBuiltin*: ShuffleBuiltinKind
+      ## Shuffle builtin kind, `shkNone` when not a shuffle intrinsic.
     of eIntLit:
       value*: int64
       litType*: CirType
@@ -455,6 +463,11 @@ let AtomicsBuiltinKindByName* {.compileTime.}: Table[string, AtomicsBuiltinKind]
   "atomicFetchAdd": abkAtomicFetchAdd,
 }.toTable()
 
+let ShuffleBuiltinKindByName* {.compileTime.}: Table[string, ShuffleBuiltinKind] = {
+  "simd_shuffle": shkSimdShuffle,
+  "simd_shuffle_xor": shkSimdShuffleXor,
+}.toTable()
+
 proc coordBuiltinKind*(name: string): CoordBuiltinKind =
   ## Returns the coordinate builtin kind of a canonical name, `cbkNone` for every
   ## other name (locals, math intrinsics, shadowing symbols).
@@ -471,6 +484,10 @@ proc reductionBuiltinKind*(name: string): ReductionBuiltinKind =
 proc atomicsBuiltinKind*(name: string): AtomicsBuiltinKind =
   ## Returns the atomic builtin kind of a canonical name, `abkNone` otherwise.
   AtomicsBuiltinKindByName.getOrDefault(name, abkNone)
+
+proc shuffleBuiltinKind*(name: string): ShuffleBuiltinKind =
+  ## Returns the shuffle builtin kind of a canonical name, `shkNone` otherwise.
+  ShuffleBuiltinKindByName.getOrDefault(name, shkNone)
 
 proc withSpace*(t: CirType, space: CirAddrSpace): CirType =
   ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.

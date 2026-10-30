@@ -428,15 +428,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       of rbkReduceMax:
         return "subgroupMax(" & args.join(", ") & ")"
       of rbkNone: discard
-    if e.callee.kind == eSym and e.callee.builtin:
-      case e.callee.name
-      of "simd_shuffle":
+    if e.callee.kind == eSym:
+      case e.callee.shuffleBuiltin
+      of shkSimdShuffle:
         # subgroupShuffle takes the subgroup-relative index as `uint`. A plain cast
         # compiles without GL_NV_explicit_typecast
         return "subgroupShuffle(" & args[0] & ", uint(" & args[1] & "))"
-      of "simd_shuffle_xor":
+      of shkSimdShuffleXor:
         return "subgroupShuffleXor(" & args[0] & ", uint(" & args[1] & "))"
-      else: discard
+      of shkNone: discard
       if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
         # int atomicAdd is core. fp needs GL_EXT_shader_atomic_float,
         # emitted at module scope for an fp atomicFetchAdd in the module.

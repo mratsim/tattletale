@@ -530,13 +530,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       if e.callee.atomicsBuiltin != abkNone:
         ctx.fail("atomic builtins have no emission in this backend")
         return ""
-      if e.callee.builtin and e.callee.name == "simd_shuffle":
+      case e.callee.shuffleBuiltin
+      of shkSimdShuffle:
         # simd_shuffle maps to WaveReadLaneAt, a dynamically uniform
         # lane index is required by the intrinsic
         return "WaveReadLaneAt(" & args.join(", ") & ")"
-      if e.callee.builtin and e.callee.name == "simd_shuffle_xor":
+      of shkSimdShuffleXor:
         ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
         return ""
+      of shkNone: discard
     return calleeName & "(" & args.join(", ") & ")"
 
 # ═══════════════════════════════════════════════════════════════════════

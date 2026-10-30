@@ -251,12 +251,14 @@ proc emitCudaBuiltinCall(callee: CirExpr, args: seq[string]): string =
   if callee.atomicsBuiltin == abkAtomicFetchAdd:
     # atomicAdd overloads on the pointee type, no cast needed
     return "atomicAdd(" & args[0] & ", " & args[1] & ")"
-  if callee.builtin and callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
+  case callee.shuffleBuiltin
+  of shkSimdShuffle, shkSimdShuffleXor:
     # full mask: every warp lane participates and receives the result,
     # xor exchanges lane pairs bitwise
-    let shfl = if callee.name == "simd_shuffle": "__shfl_sync"
+    let shfl = if callee.shuffleBuiltin == shkSimdShuffle: "__shfl_sync"
                else: "__shfl_xor_sync"
     return shfl & "(0xffffffffu, " & args[0] & ", " & args[1] & ")"
+  of shkNone: discard
   return ""
 
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string =

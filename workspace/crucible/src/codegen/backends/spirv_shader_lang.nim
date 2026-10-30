@@ -1114,8 +1114,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let scopeSub = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeSubgroup))
     return ctx.builder.freshInst(OpGroupNonUniformFAdd,
       @[ctx.tyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
-  if e.callee.kind == eSym and e.callee.builtin and
-      e.callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
+  if e.callee.kind == eSym and e.callee.shuffleBuiltin != shkNone:
     doAssert e.args.len == 2, "simd_shuffle takes a value and a lane index"
     let v = ctx.emitExpr(fn, e.args[0])
     let lane = ctx.emitExpr(fn, e.args[1])
@@ -1127,7 +1126,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let laneU = ctx.convertValue(lane, ctx.resolveExprType(fn, e.args[1]), cirUint32())
     ctx.caps.incl capGroupNonUniformShuffle
     let scopeSub = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeSubgroup))
-    let op = if e.callee.name == "simd_shuffle": OpGroupNonUniformShuffle
+    let op = if e.callee.shuffleBuiltin == shkSimdShuffle: OpGroupNonUniformShuffle
              else: OpGroupNonUniformShuffleXor
     return ctx.builder.freshInst(op, @[ctx.tyId(spvScalar(resTy)), scopeSub, v, laneU])
   if e.callee.atomicsBuiltin == abkAtomicFetchAdd:

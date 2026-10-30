@@ -20,11 +20,11 @@
 ## After this pass:
 ##
 ## - every builtin symbol is kind-assigned from the `cirv2_lang` name tables,
-##   one of coordinate, synchronization, reduction, atomic
+##   one of coordinate, synchronization, reduction, atomic, shuffle
 ## - the printers dispatch on the typed kinds alone, no name recognition survives downstream
 ##
-## A builtin outside the four categories (a math intrinsic like `rsqrt`) keeps
-## `none` in all four, its native name resolves in the printers' own tables.
+## A builtin outside the five categories (a math intrinsic like `rsqrt`) keeps
+## `none` in all five, its native name resolves in the printers' own tables.
 ##
 ## Ordering: the pass runs in the legalization stage, before the inline splice.
 ## The kernel-only-reads check there sees the typed kinds. A later ordering
@@ -65,6 +65,8 @@ static:
     doAssert reductionBuiltinKind(n) != rbkNone
   for n in builtinSymNames(atomicFetchAdd):
     doAssert atomicsBuiltinKind(n) != abkNone
+  for n in builtinSymNames(simd_shuffle, simd_shuffle_xor):
+    doAssert shuffleBuiltinKind(n) != shkNone
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -88,6 +90,7 @@ proc assignBuiltinKinds(e: CirExpr) =
   e.synchroBuiltin = synchroBuiltinKind(e.name)
   e.reductionBuiltin = reductionBuiltinKind(e.name)
   e.atomicsBuiltin = atomicsBuiltinKind(e.name)
+  e.shuffleBuiltin = shuffleBuiltinKind(e.name)
 
 proc assignBuiltinKindsExpr(e: CirExpr) =
   ## Kind-assigns one expression's builtin-marked symbols in place.

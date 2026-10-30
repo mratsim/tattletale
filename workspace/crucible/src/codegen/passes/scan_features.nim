@@ -91,8 +91,7 @@ proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, prof
     return
   if callee.reductionBuiltin in {rbkReduceAdd, rbkReduceMax}:
     f.subgroup = true
-  if profile.shuffleNames and callee.builtin and
-      callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
+  if profile.shuffleNames and callee.shuffleBuiltin != shkNone:
     f.subgroupShuffle = true
   if callee.atomicsBuiltin == abkAtomicFetchAdd:
     var pt = getExprType(args[0])
