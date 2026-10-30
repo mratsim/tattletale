@@ -10,8 +10,10 @@
 ## WGSL lowering: per-target transforms for the WGSL storage model,
 ## registered by the WebGPU pipeline and run before printing.
 ##
-##   kernel body → wgslDissolvePointerLocals → wgslRewriteBoolKernelParamReads → wgslHoistProgramScopeLocals → printed WGSL source
+##   kernel body → explodeKernelStructs → wgslDissolvePointerLocals → wgslRewriteBoolKernelParamReads → wgslHoistProgramScopeLocals → printed WGSL source
 ##
+## - `explodeKernelStructs`: kernel parameters of struct type with pointer fields
+##   expand into flat ptr/scalar leaf parameters, WebGPU is a flat resource target
 ## - `wgslDissolvePointerLocals`: pointer locals dissolve into their pointee,
 ##   pointer-holding struct locals into per-field leaf rewrites,
 ##   reads through an alias rewrite to the pointee or leaf symbol
@@ -53,13 +55,14 @@ import ./pass_helpers
 func registerWgslLoweringPasses*(reg: var PassRegistry) =
   ## Registers the WGSL per-target lowering passes:
   ##
-  ## - WebGPU is a flat resource target, the struct-argument explosion runs here
+  ## - the kernel struct-argument explosion, WebGPU is a flat resource target
   ## - `wgslDissolvePointerLocals`, `wgslRewriteBoolKernelParamReads`, `wgslHoistProgramScopeLocals`, in that order, before printing
   ##
   ## Registration contract: the passes sit after the reserved-word rename.
   ## The dissolved aliases and the relocated declarations use the renamed names
   ## their body already references, and a const_mem initializer reading a bool
   ## kernel parameter is patched before the relocation moves it out of the body.
+  registerExplodeKernelStructs(reg)
   reg.register("wgslDissolvePointerLocals", pkTransform, phaseMain,
     "Dissolves pointer locals and pointer-holding struct locals into their" &
     " pointees and leaf symbols",
