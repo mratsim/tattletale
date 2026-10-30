@@ -123,7 +123,7 @@ workspace/crucible/
       builtins_gpu_types.nim    float16, bfloat16, fp8e4m3, fp8e5m2
       builtins_warp_sync_reductions.nim  reduceAdd, reduceMax
       builtins_atomics.nim      atomicFetchAdd
-      builtins_pragmas.nim      Backend pragmas: cudaName, workgroup, builtin, smem, ...
+      builtins_pragmas.nim      Backend pragmas: workgroup, builtin, smem, ...; `exportc` names the kernel entry point
       builtins_compilermagic.nim  CompileTarget, ccGetBackend
     codegen/
       gpu_compiler.nim            Entry point: `cuda:`/`opencl:`/`glsl:`/`hlsl:`/`webgpu:`/`metal:` macros

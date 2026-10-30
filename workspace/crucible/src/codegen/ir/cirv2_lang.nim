@@ -336,8 +336,8 @@ type
     ## `{.global.}` proc: a compute entry point. The printers emit the backend's kernel qualifier and its argument ABI for it.
     forceInline*: bool
     ## `{.forceinline.}` proc, an inlining hint at emission.
-    cudaName*: string
-    ## `{.cudaName "..."}` override of the emitted entry-point name, "" when the proc's own name is used.
+    exportName*: string
+    ## `{.exportc: "name".}` override of the emitted entry-point name, "" when the proc's own name is used.
     workgroup*: array[3, int]
     ## `{.workgroup(x, y, z)}` baked launch shape for the targets that compile it into the shader (Vulkan, WebGPU), all 0 when absent.
 

@@ -2252,7 +2252,7 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
 
 proc applyProcPragmas(fn: NimNode, p: CirProc) =
   ## Reads the public pragma surface off a proc definition: `global` marks the compute entry point,
-  ## `forceinline` the inlining hint, `cudaName` the entry-point name override,
+  ## `forceinline` the inlining hint, `exportc` the entry-point name override,
   ## `workgroup(x, y, z)` the baked launch shape. Other pragmas are legal and dropped.
   for prag in fn.pragma:
     case prag.kind
@@ -2269,8 +2269,10 @@ proc applyProcPragmas(fn: NimNode, p: CirProc) =
     of nnkExprColonExpr, nnkCall, nnkCommand:
       if prag.len >= 2:
         case prag[0].strVal
-        of "cudaName":
-          p.cudaName = prag[1].strVal
+        of "exportc":
+          # `exportc: "entry"` renames the emitted entry point.
+          # Bare `exportc` keeps the proc's own name.
+          p.exportName = prag[1].strVal
         of "workgroup":
           # both call and colon forms: `workgroup(x, y, z)`, `workgroup: (x, y, z)`
           var dims: NimNode =

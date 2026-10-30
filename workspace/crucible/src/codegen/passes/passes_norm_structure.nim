@@ -299,7 +299,7 @@ proc structureProc(fn: CirProc): tuple[fn: CirProc, err: string] =
   var ctx = StructCtx(fnName: fn.name)
   let outFn = CirProc(name: fn.name, params: fn.params, ret: fn.ret,
     isKernel: fn.isKernel, forceInline: fn.forceInline,
-    cudaName: fn.cudaName, workgroup: fn.workgroup)
+    exportName: fn.exportName, workgroup: fn.workgroup)
   outFn.body = ctx.structurizeList(fn.body)
   result = (outFn, ctx.err)
 

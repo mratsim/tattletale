@@ -566,7 +566,9 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
   let bodyTxt = ctx.printStmts(fn.body, "", "")
   if ctx.failing():
     return ""
-  let name = if fn.cudaName.len > 0: fn.cudaName else: fn.name
+  # exportc renames a kernel entry for the host runtime lookup.
+  # A device function keeps the name its call sites reference.
+  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
   var params: seq[string]
   var slot = 0
   if fn.isKernel:
