@@ -6,7 +6,7 @@
 ## Run:
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/ir/control_flow/manual_ir_structure_cross_list_jmp.nim
+##     workspace/crucible/tests/ir/control_flow/t_ir_structure_cross_list_jmp.nim
 
 import std/strutils
 import workspace/crucible/src/codegen/ir/cirv2_build

@@ -6,7 +6,7 @@
 ## Run:
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/ir/functions/manual_ir_inline_ret_splice.nim
+##     workspace/crucible/tests/ir/functions/t_ir_inline_ret_splice.nim
 
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_registry
