@@ -128,7 +128,8 @@ proc negE*(opType: CirType, operand: CirExpr): CirExpr =
   CirExpr(kind: eNeg, unType: opType, unOperand: operand)
 
 proc cmpE*(opKind: CirExprKind, a, b: CirExpr): CirExpr =
-  ## One constructor for the comparison family (eEq/eNeq/eLt/eLe), the operand type comes from `a`.
+  ## One constructor for the comparison family (eEq/eNeq/eLt/eLe).
+  ## The operand type comes from `a`.
   doAssert opKind in {eEq, eNeq, eLt, eLe}
   result = CirExpr(kind: opKind)
   result.cmpType = getExprType(a)
