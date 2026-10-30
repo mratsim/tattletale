@@ -321,5 +321,5 @@ proc registerCudaFeatureScan*(reg: var PassRegistry) =
   ##   runs after them
   reg.register("cudaScanModuleFeatures", pkAnalysis, phaseMain,
     "Scans the proc bodies once for the reduction kinds the warp-reduction" &
-    " templates spell",
+    " templates emit",
     run = cudaScanFeatures)

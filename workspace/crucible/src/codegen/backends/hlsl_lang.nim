@@ -108,7 +108,7 @@ const printerTarget = "hlsl"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellHlslScalar(ctx: var PrintCtx, t: CirType): string =
+proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid:
@@ -140,7 +140,7 @@ proc spellHlslScalar(ctx: var PrintCtx, t: CirType): string =
     else:
       ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
   of ctVector:
-    let elem = spellHlslScalar(ctx, t.vElem)
+    let elem = emitHlslScalar(ctx, t.vElem)
     let base = case elem
       of "float": "float"
       of "int": "int"
@@ -151,29 +151,29 @@ proc spellHlslScalar(ctx: var PrintCtx, t: CirType): string =
       result = base & $t.vN
     else:
       ctx.fail("vector of " & (if elem.len > 0: elem else: $t.vElem.kind) &
-        "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors spell")
+        "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
   of ctStruct:
     result = t.name
   of ctPtr, ctAptr, ctArray, ctProc:
     result = ""
 
-proc spellHlslTypeBare(ctx: var PrintCtx, t: CirType): string =
+proc emitHlslTypeBare(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of `t` with no identifier, the form of casts and constructors.
   ## Arrays have no bare form, `T name[N]` composes at the declaration.
   case t.kind
   of ctArray:
-    ctx.fail("array type has no bare HLSL spelling, arrays compose at their declaration")
+    ctx.fail("array type has no bare HLSL name, arrays compose at their declaration")
   else:
-    result = spellHlslScalar(ctx, t)
+    result = emitHlslScalar(ctx, t)
 
-proc spellHlslDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
+proc emitHlslDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
   ## HLSL declaration of `t` for `ident`, array dimensions composed into the name.
   if t.kind == ctArray:
-    result = spellHlslScalar(ctx, t.aElem) & ' ' & ident & "[" & $t.aN & "]"
+    result = emitHlslScalar(ctx, t.aElem) & ' ' & ident & "[" & $t.aN & "]"
   else:
-    result = spellHlslScalar(ctx, t) & ' ' & ident
+    result = emitHlslScalar(ctx, t) & ' ' & ident
 
-proc spellBpName(t: CirType): string =
+proc emitBpName(t: CirType): string =
   ## Typedef name of the `vk::BufferPointer` alias for one buffer element type
   case t.kind
   of ctInt: result = "BpI32"
@@ -250,7 +250,7 @@ proc coordInputName(kind: CoordBuiltinKind): string =
   ## Synthesized main input variable of a coordinate builtin kind.
   CoordInputNames[kind]
 
-proc spellCoordWhole(ctx: var PrintCtx, kind: CoordBuiltinKind): string =
+proc emitCoordWhole(ctx: var PrintCtx, kind: CoordBuiltinKind): string =
   ## Whole-vector read of a coordinate builtin, cast to the canonical int
   ## tuple the CIRv2 vocabulary reads.
   ctx.coordReads.incl(kind)
@@ -264,7 +264,7 @@ proc spellCoordWhole(ctx: var PrintCtx, kind: CoordBuiltinKind): string =
     let n = coordInputName(kind)
     result = "int3(int(" & n & ".x), int(" & n & ".y), int(" & n & ".z))"
 
-proc spellCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string): string =
+proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string): string =
   ## One coordinate-builtin component, cast to the canonical int the CIRv2 vocabulary reads.
   ctx.coordReads.incl(kind)
   case kind
@@ -289,7 +289,7 @@ proc spellCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: strin
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
-proc spellHlslLit(e: CirExpr): string =
+proc emitHlslLit(e: CirExpr): string =
   ## HLSL token of a literal, typed by its literal type: without the suffix
   ## the HLSL frontend changes width or signedness.
   case e.kind
@@ -342,7 +342,7 @@ proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string =
   result.add leaves.join(", ")
   result.add " }"
 
-proc spellCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string =
+proc emitCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string =
   ## One call argument: an address-of over a variable argument to a by-reference parameter
   ## emits the variable itself, the `inout` binding takes lvalues directly.
   if a.kind == eAddr and a.addrOperand.kind == eSym and
@@ -361,7 +361,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("nil literal is outside the HLSL subset")
     return ""
   of eTrue, eFalse, eIntLit, eFloatLit:
-    return spellHlslLit(e)
+    return emitHlslLit(e)
   of eSym:
     if e.coordBuiltin != cbkNone:
       if not ctx.isKernel:
@@ -373,7 +373,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
           " lowering pass materializes it as the " & "crucible_numworkgroups" &
           " parameter")
         return ""
-      return spellCoordWhole(ctx, e.coordBuiltin)
+      return emitCoordWhole(ctx, e.coordBuiltin)
     if ctx.pushParams.contains(e.name):
       return "push." & e.name
     if ctx.bufferParams.contains(e.name):
@@ -392,7 +392,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       let stride = ctx.bpElementStride(elem)
       if ctx.failing():
         return ""
-      return spellBpName(elem) & "(" & ctx.printExpr(base) &
+      return emitBpName(elem) & "(" & ctx.printExpr(base) &
         " + (uint64_t)(" & idx & ") * " & $stride & ").Get()"
     if base.kind == eSym and ctx.bufferParams.contains(base.name):
       return base.name & "[" & idx & "]"
@@ -420,10 +420,10 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
           " lowering pass materializes it as the " & "crucible_numworkgroups" &
           " parameter")
         return ""
-      return spellCoordComponent(ctx, e.dotBase.coordBuiltin, e.fieldName)
+      return emitCoordComponent(ctx, e.dotBase.coordBuiltin, e.fieldName)
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
-      let comp = spellVectorComponent(e.fieldName)
+      let comp = emitVectorComponent(e.fieldName)
       if comp.len == 0:
         ctx.fail("no vector component " & e.fieldName)
         return ""
@@ -465,12 +465,12 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       elif t.kind == ctFloat and t.bits == 32: "asfloat"
       else: ""
     if fn.len == 0:
-      ctx.fail("bit cast to " & spellHlslTypeBare(ctx, t) &
+      ctx.fail("bit cast to " & emitHlslTypeBare(ctx, t) &
         " has no HLSL emission, only the 32-bit asint/asuint/asfloat reinterprets")
       return ""
     return fn & "(" & ctx.printExpr(e.castOperand) & ")"
   of eConv:
-    return spellHlslTypeBare(ctx, e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
+    return emitHlslTypeBare(ctx, e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
   of eSizeof:
     ctx.fail("sizeof has no HLSL emission, HLSL struct layout differs from the" &
       " buffer layout the size would name")
@@ -486,7 +486,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       var parts: seq[string]
       for kvv in e.kvFields:
         parts.add ctx.printExpr(kvv.value)
-      return spellHlslScalar(ctx, e.ocType) & "(" & parts.join(", ") & ")"
+      return emitHlslScalar(ctx, e.ocType) & "(" & parts.join(", ") & ")"
     return ctx.printBraceList(e.ocType, e)
   of eAconstr:
     var parts: seq[string]
@@ -505,7 +505,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         # bound to its own register
         args.add a.name
       else:
-        args.add ctx.spellCallArg(e.callee, i, a)
+        args.add ctx.emitCallArg(e.callee, i, a)
     if e.callee.kind == eSym:
       case e.callee.synchroBuiltin
       of sbkThreadgroupBarrier, sbkThreadgroupBarrierDevice:
@@ -524,7 +524,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         # lane index is required by the intrinsic
         return "WaveReadLaneAt(" & args.join(", ") & ")"
       if e.callee.builtin and e.callee.name == "simd_shuffle_xor":
-        ctx.fail("simd_shuffle_xor has no wave-intrinsic spelling, no HLSL intrinsic exchanges with a lane-index xor")
+        ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
         return ""
     return calleeName & "(" & args.join(", ") & ")"
 
@@ -574,7 +574,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     if s.space == caDevice:
       ctx.fail("local " & s.name & " in device space, HLSL locals are per-thread registers")
       return ""
-    var decl = ctx.spellHlslDecl(s.declType, s.name)
+    var decl = ctx.emitHlslDecl(s.declType, s.name)
     if s.init != nil:
       if s.init.kind == eOconstr and s.declType.kind == ctStruct:
         decl &= " = " & ctx.printBraceList(s.declType, s.init)
@@ -583,10 +583,10 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     result = pad & decl & ";"
   of sConst:
     if s.init != nil and s.init.kind == eOconstr and s.declType.kind == ctStruct:
-      result = pad & "const " & ctx.spellHlslDecl(s.declType, s.name) &
+      result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
         " = " & ctx.printBraceList(s.declType, s.init) & ";"
     else:
-      result = pad & "const " & ctx.spellHlslDecl(s.declType, s.name) &
+      result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
         " = " & ctx.printExpr(s.init) & ";"
   of sAsgn:
     let root = exprRootSym(s.lhs)
@@ -667,7 +667,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
           ctx.bufferParams.contains(a.name):
         parts.add a.name
       else:
-        parts.add ctx.spellCallArg(s.callCallee, i, a)
+        parts.add ctx.emitCallArg(s.callCallee, i, a)
     if s.callCallee.kind == eSym and
         s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
       result = pad & "GroupMemoryBarrierWithGroupSync();"
@@ -760,7 +760,7 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
       if ctx.failing():
         txt = ""
       else:
-        txt = spaces(ctx.indent * 2) & ctx.spellHlslDecl(s.declType, s.name) &
+        txt = spaces(ctx.indent * 2) & ctx.emitHlslDecl(s.declType, s.name) &
           " = " & condTxt & " ? " & thenTxt & " : " & elseTxt & ";"
       i.inc  # consumes the ite with the temp it assigns
     else:
@@ -774,11 +774,11 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
+proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
   ## HLSL resource parameter of a buffer: StructuredBuffer / RWStructuredBuffer
   ## over the element type, `rw` picks the read-write form.
   let resTy = if rw: "RWStructuredBuffer" else: "StructuredBuffer"
-  result = resTy & "<" & ctx.spellHlslScalar(p.typ.pElem) & "> " & p.name
+  result = resTy & "<" & ctx.emitHlslScalar(p.typ.pElem) & "> " & p.name
 
 proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
   ## Splits one proc's parameters into buffer resources and values.
@@ -844,7 +844,7 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
       ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
       return
 
-proc spellFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams: var HashSet[string], forwardDeclare: bool): string =
+proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams: var HashSet[string], forwardDeclare: bool): string =
   ## `RetType name(params)` of one proc, buffers as resources, `var T` device parameters as `inout`.
   var buffers: seq[CirParam]
   ctx.classifyParams(fn, pushParams, buffers)
@@ -859,14 +859,14 @@ proc spellFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushPara
         params.add "uint64_t " & p.name
       else:
         let rw = graph.reached.contains(fn.name & "/" & p.name)
-        params.add ctx.spellResourceParam(p, rw)
+        params.add ctx.emitResourceParam(p, rw)
     of ctPtr:
-      params.add "inout " & ctx.spellHlslDecl(p.typ.pElem, p.name)
+      params.add "inout " & ctx.emitHlslDecl(p.typ.pElem, p.name)
     else:
-      params.add ctx.spellHlslDecl(p.typ, p.name)
+      params.add ctx.emitHlslDecl(p.typ, p.name)
   if ctx.failing():
     return ""
-  let ret = ctx.spellHlslScalar(fn.ret)
+  let ret = ctx.emitHlslScalar(fn.ret)
   if ctx.failing():
     return ""
   result = ret & ' ' & fn.name & '(' & params.join(", ") & ')'
@@ -892,7 +892,7 @@ proc printFn(ctx: var PrintCtx, fn: CirProc, graph: CallGraph): string =
   if ctx.failing():
     return ""
   var pushParams = initHashSet[string]()
-  let sig = ctx.spellFnSignature(fn, graph, pushParams, forwardDeclare = false)
+  let sig = ctx.emitFnSignature(fn, graph, pushParams, forwardDeclare = false)
   if ctx.failing():
     return ""
   return sig & " {\n" & bodyTxt & '\n' & "}"
@@ -947,7 +947,7 @@ proc scanStmtStructRefs(ctx: var PrintCtx, ss: seq[CirStmt], refs: var HashSet[s
     of sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
       discard
 
-proc spellStructDecls(ctx: var PrintCtx, refs: var HashSet[string],
+proc emitStructDecls(ctx: var PrintCtx, refs: var HashSet[string],
     byName: Table[string, CirType], emitted: var HashSet[string],
     name: string, outp: var string) =
   ## Emits one struct definition, member structs first, deduplicated by name.
@@ -966,11 +966,11 @@ proc spellStructDecls(ctx: var PrintCtx, refs: var HashSet[string],
   emitted.incl name
   for f in t.fields:
     if f.typ.kind == ctStruct:
-      ctx.spellStructDecls(refs, byName, emitted, f.typ.name, outp)
+      ctx.emitStructDecls(refs, byName, emitted, f.typ.name, outp)
     elif f.typ.kind == ctArray:
       ctx.registerStructRefs(f.typ, refs)
       if f.typ.aElem.kind == ctStruct:
-        ctx.spellStructDecls(refs, byName, emitted, f.typ.aElem.name, outp)
+        ctx.emitStructDecls(refs, byName, emitted, f.typ.aElem.name, outp)
     elif f.typ.kind == ctVector:
       ctx.registerStructRefs(f.typ, refs)
   if ctx.failing():
@@ -981,10 +981,10 @@ proc spellStructDecls(ctx: var PrintCtx, refs: var HashSet[string],
     outp.add "  uint _padding;\n"
   else:
     for f in t.fields:
-      outp.add "  " & ctx.spellHlslDecl(f.typ, f.name) & ";\n"
+      outp.add "  " & ctx.emitHlslDecl(f.typ, f.name) & ";\n"
   outp.add "};\n\n"
 
-proc spellMainInputs(ctx: PrintCtx): string =
+proc emitMainInputs(ctx: PrintCtx): string =
   ## Semantics for `main`, exactly the ones the kernel body reads.
   var inputs: seq[string]
   if cbkThreadPositionInGrid in ctx.coordReads:
@@ -1061,7 +1061,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   for name in refs:
     refList.add name
   for name in refList:
-    ctx.spellStructDecls(refs, byName, emitted, name, result.src)
+    ctx.emitStructDecls(refs, byName, emitted, name, result.src)
   if ctx.failing():
     return ("", ctx.err)
 
@@ -1070,11 +1070,11 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
     # buffer-pointer aliases, one per element type in encounter order
     var bpEmitted: HashSet[string]
     for p in buffers:
-      let nm = spellBpName(p.typ.pElem)
+      let nm = emitBpName(p.typ.pElem)
       if nm notin bpEmitted:
         bpEmitted.incl nm
         result.src &= "typedef vk::BufferPointer<" &
-          ctx.spellHlslScalar(p.typ.pElem) & "> " & nm & ";\n"
+          ctx.emitHlslScalar(p.typ.pElem) & "> " & nm & ";\n"
     if bpEmitted.len > 0:
       result.src &= "\n"
     if kernel.params.len > 0:
@@ -1099,7 +1099,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
             return ("", ctx.err)
           off = roundUpMultiple(off, align)
           result.src &= "  [[vk::offset(" & $off & ")]] " &
-            ctx.spellHlslDecl(p.typ, p.name) & ";\n"
+            ctx.emitHlslDecl(p.typ, p.name) & ";\n"
           off.inc size
         if ctx.failing():
           return ("", ctx.err)
@@ -1112,7 +1112,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
     for p in buffers:
       let rw = graph.reached.contains(kernel.name & "/" & p.name)
       let reg = if rw: 'u' else: 't'
-      result.src &= ctx.spellResourceParam(p, rw) & " : register(" & reg &
+      result.src &= ctx.emitResourceParam(p, rw) & " : register(" & reg &
         $ordinal & ", space0);\n"
       ordinal.inc
     if pushParams.len > 0:
@@ -1122,7 +1122,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
           # materialized dispatch grid size, an int3 the engine stages
           result.src &= "  int3 " & p.name & ";\n"
         elif p.name in pushParams:
-          result.src &= "  " & ctx.spellHlslDecl(p.typ, p.name) & ";\n"
+          result.src &= "  " & ctx.emitHlslDecl(p.typ, p.name) & ";\n"
       result.src &= "};\n"
       result.src &= "ConstantBuffer<Push> push : register(b" & $ordinal &
         ", space0);\n"
@@ -1139,10 +1139,10 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
       if s.init == nil:
         ctx.fail("const_mem local " & s.name & " without an initializer")
       elif s.init.kind == eOconstr and s.declType.kind == ctStruct:
-        hoisted.add "static const " & ctx.spellHlslDecl(s.declType, s.name) &
+        hoisted.add "static const " & ctx.emitHlslDecl(s.declType, s.name) &
           " = " & ctx.printBraceList(s.declType, s.init) & ";"
       else:
-        hoisted.add "static const " & ctx.spellHlslDecl(s.declType, s.name) &
+        hoisted.add "static const " & ctx.emitHlslDecl(s.declType, s.name) &
           " = " & ctx.printExpr(s.init) & ";"
   for d in hoisted:
     result.src &= d & "\n"
@@ -1159,7 +1159,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   for fn in fns:
     ctx.fnName = fn.name
     var fnPush = initHashSet[string]()
-    result.src &= ctx.spellFnSignature(fn, graph, fnPush, forwardDeclare = true) & '\n'
+    result.src &= ctx.emitFnSignature(fn, graph, fnPush, forwardDeclare = true) & '\n'
     if ctx.failing():
       return ("", ctx.err)
   if fns.len > 0:
@@ -1191,7 +1191,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
     return ("", ctx.err)
   result.src &= "[numthreads(" & $ctx.workgroup[0] & ", " & $ctx.workgroup[1] &
     ", " & $ctx.workgroup[2] & ")]\n"
-  let inputs = ctx.spellMainInputs()
+  let inputs = ctx.emitMainInputs()
   # exportc renames a kernel entry for the host runtime lookup. Vulkan ingest reads
   # back the entry name from the emitted `[numthreads]` line and passes it to dxc.
   # Device functions keep the name their call sites reference, a bare kernel stays `main`.

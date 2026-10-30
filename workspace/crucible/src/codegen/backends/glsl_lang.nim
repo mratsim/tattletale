@@ -44,7 +44,7 @@ const printerTarget = "glsl"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellGlslScalar(t: CirType): string =
+proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid:
@@ -86,7 +86,7 @@ proc spellGlslScalar(t: CirType): string =
     else:
       result = ""
   of ctVector:
-    let elem = spellGlslScalar(t.vElem)
+    let elem = emitGlslScalar(t.vElem)
     let prefix = case elem
       of "float": "vec"
       of "double": "dvec"
@@ -102,19 +102,19 @@ proc spellGlslScalar(t: CirType): string =
   of ctPtr, ctAptr, ctArray, ctProc:
     result = ""
 
-proc spellGlslTypeBare(t: CirType): string =
+proc emitGlslTypeBare(t: CirType): string =
   ## GLSL name of `t` with no identifier, array dimensions composed into
   ## the name (`float[4]`), the form of casts and constructors.
   case t.kind
   of ctArray:
-    result = spellGlslTypeBare(t.aElem) & "[" & $t.aN & "]"
+    result = emitGlslTypeBare(t.aElem) & "[" & $t.aN & "]"
   else:
-    result = spellGlslScalar(t)
+    result = emitGlslScalar(t)
 
 proc refTypeName(t: CirType): string =
   ## GLSL name of the buffer-reference block binding `t`:
   ## a pointer renders as its reference block type.
-  result = "Ref_" & spellGlslTypeBare(t).multiReplace(
+  result = "Ref_" & emitGlslTypeBare(t).multiReplace(
     (" ", "_"), ("[", ""), ("]", ""), (",", "_"), ("(", ""), (")", ""))
 
 proc requireRefBlock(ctx: var PrintCtx, pointee: CirType) =
@@ -133,16 +133,16 @@ proc requireRefBlock(ctx: var PrintCtx, pointee: CirType) =
       while base.kind == ctArray:
         dims &= "[" & $base.aN & "]"
         base = base.aElem
-      spellGlslScalar(base) & " x[]" & dims & ";"
+      emitGlslScalar(base) & " x[]" & dims & ";"
     of ctVoid, ctProc:
       ctx.fail("buffer reference to " & $pointee.kind)
       ""
     else:
-      spellGlslScalar(pointee) & " x[];"
+      emitGlslScalar(pointee) & " x[];"
   if member.len > 0:
     ctx.refBlocks[name] = member
 
-proc spellGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
+proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
   ## GLSL declaration of a buffer pointer: the reference block handle,
   ## `Ref_T ident`.
   if t.space != caDevice:
@@ -167,7 +167,7 @@ proc glslCoordName(kind: CoordBuiltinKind): string =
   of cbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
   of cbkNone: ""
 
-proc spellExtensions(features: ModuleFeatures): string =
+proc emitExtensions(features: ModuleFeatures): string =
   ## GLSL extension block from the stored module feature scan
   ## (`CirModule.features`, filled by the feature-scan pass), `#version 450` first.
   result = "#version 450\n"
@@ -205,7 +205,7 @@ proc spellExtensions(features: ModuleFeatures): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
-proc spellGlslLit(e: CirExpr): string =
+proc emitGlslLit(e: CirExpr): string =
   ## GLSL token of a literal, typed by its literal type.
   ## Wide integer literals print as constructor calls (`int64_t(5)`),
   ## the `LL` suffix is rejected by glslang.
@@ -216,12 +216,12 @@ proc spellGlslLit(e: CirExpr): string =
       case e.litType.bits
       of 64: result = "uint64_t(" & $e.value & ")"
       of 32: result = $e.value & "U"
-      else: result = "(" & spellGlslScalar(e.litType) & ")" & $e.value
+      else: result = "(" & emitGlslScalar(e.litType) & ")" & $e.value
     of ctInt:
       case e.litType.bits
       of 64: result = "int64_t(" & $e.value & ")"
       of 32: result = $e.value
-      else: result = "(" & spellGlslScalar(e.litType) & ")" & $e.value
+      else: result = "(" & emitGlslScalar(e.litType) & ")" & $e.value
     else:
       result = $e.value
   of eFloatLit:
@@ -234,7 +234,7 @@ proc spellGlslLit(e: CirExpr): string =
   of eFalse: result = "false"
   else: result = "<glsl: not a literal>"
 
-proc spellVectorComponent(name: string): string =
+proc emitVectorComponent(name: string): string =
   ## GLSL component letter of a CIRv2 vector component name (`F0`..`F3`).
   case name
   of "F0": "x"
@@ -251,7 +251,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("nil literal is outside the GLSL subset")
     return ""
   of eTrue, eFalse, eIntLit, eFloatLit:
-    return spellGlslLit(e)
+    return emitGlslLit(e)
   of eSym:
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
@@ -302,7 +302,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "int(" & glslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
-      let comp = spellVectorComponent(e.fieldName)
+      let comp = emitVectorComponent(e.fieldName)
       if comp.len == 0:
         ctx.fail("no vector component " & e.fieldName)
         return ""
@@ -342,7 +342,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     if t.kind in {ctAptr, ctPtr}:
       ctx.requireRefBlock(t.pElem)
       return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
-    return spellGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
+    return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
   of eSizeof:
     return $typeByteSize(ctx.layouts, e.ofType, std430BoolWidth)
   of eAddr:
@@ -355,15 +355,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eOconstr:
     if e.kvFields.len == 0:
       # a zero-field struct: the emitted padding member zero-initializes
-      return spellGlslTypeBare(e.ocType) & "(0)"
-    result = spellGlslTypeBare(e.ocType) & "("
+      return emitGlslTypeBare(e.ocType) & "(0)"
+    result = emitGlslTypeBare(e.ocType) & "("
     for i, kvv in e.kvFields:
       if i > 0:
         result.add ", "
       result.add ctx.printExpr(kvv.value)
     result.add ")"
   of eAconstr:
-    result = spellGlslTypeBare(e.acType) & "("
+    result = emitGlslTypeBare(e.acType) & "("
     for i, el in e.elems:
       if i > 0:
         result.add ", "
@@ -441,18 +441,18 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     var decl: string
     if s.declType.kind == ctAptr:
       # a buffer pointer local is the reference block handle
-      decl = ctx.spellGlslPtrDecl(s.declType, s.name)
+      decl = ctx.emitGlslPtrDecl(s.declType, s.name)
     elif s.declType.kind == ctArray:
-      decl = spellGlslScalar(s.declType.aElem) & ' ' & s.name &
+      decl = emitGlslScalar(s.declType.aElem) & ' ' & s.name &
         "[" & $s.declType.aN & "]"
     else:
-      decl = spellGlslTypeBare(s.declType) & ' ' & s.name
+      decl = emitGlslTypeBare(s.declType) & ' ' & s.name
     result = pad & decl
     if s.init != nil:
       result &= " = " & ctx.printExpr(s.init)
     result &= ";"
   of sConst:
-    result = pad & "const " & spellGlslTypeBare(s.declType) & ' ' &
+    result = pad & "const " & emitGlslTypeBare(s.declType) & ' ' &
       s.name & " = " & ctx.printExpr(s.init) & ";"
   of sAsgn:
     if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
@@ -582,26 +582,26 @@ proc printFn(ctx: var PrintCtx, fn: CirProc): string =
   for p in fn.params:
     case p.typ.kind
     of ctAptr:
-      params.add ctx.spellGlslPtrDecl(p.typ, p.name)
+      params.add ctx.emitGlslPtrDecl(p.typ, p.name)
     of ctPtr:
       ctx.fail("pointer parameter " & p.name &
         ", GLSL device functions take buffer references or values")
       return ""
     else:
-      params.add spellGlslTypeBare(p.typ) & ' ' & p.name
-  let ret = spellGlslTypeBare(fn.ret)
+      params.add emitGlslTypeBare(p.typ) & ' ' & p.name
+  let ret = emitGlslTypeBare(fn.ret)
   let sig = ret & ' ' & fn.name & '(' & params.join(", ") & ")"
   return sig & " {\n" & bodyTxt & '\n' & "}"
 
-proc spellSmemDecl(t: CirType, name: string): string =
+proc emitSmemDecl(t: CirType, name: string): string =
   ## Program-scope `shared` declaration of a threadgroup local.
   if t.kind == ctArray:
-    result = "shared " & spellGlslScalar(t.aElem) & ' ' & name &
+    result = "shared " & emitGlslScalar(t.aElem) & ' ' & name &
       "[" & $t.aN & "];"
   else:
-    result = "shared " & spellGlslTypeBare(t) & ' ' & name & ";"
+    result = "shared " & emitGlslTypeBare(t) & ' ' & name & ";"
 
-proc spellConstDecl(ctx: var PrintCtx, s: CirStmt): string =
+proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `const` declaration of one hoisted const_mem local.
   ## Shape guard: the lowering pass refuses an initializer-less const_mem
   ## local before relocation, this check fails loudly on a malformed node.
@@ -609,10 +609,10 @@ proc spellConstDecl(ctx: var PrintCtx, s: CirStmt): string =
     ctx.fail("const_mem local " & s.name & " without an initializer")
     return ""
   if s.declType.kind == ctArray:
-    result = "const " & spellGlslScalar(s.declType.aElem) & ' ' & s.name &
+    result = "const " & emitGlslScalar(s.declType.aElem) & ' ' & s.name &
       "[" & $s.declType.aN & "]"
   else:
-    result = "const " & spellGlslTypeBare(s.declType) & ' ' & s.name
+    result = "const " & emitGlslTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
 
 proc registerTypeRefBlocks(ctx: var PrintCtx, t: CirType) =
@@ -750,7 +750,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
         ctx.requireRefBlock(p.typ.pElem)
     ctx.registerStmtRefBlocks(fn.body)
 
-  result.src = spellExtensions(m.features)
+  result.src = emitExtensions(m.features)
 
   for name, member in ctx.refBlocks:
     result.src &= "layout(buffer_reference, std430) buffer " & name &
@@ -766,12 +766,12 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     if t.fields.len == 0:
       result.src &= "  uint _padding;\n"
     for f in t.fields:
-      var field = spellGlslTypeBare(f.typ) & ' ' & f.name
+      var field = emitGlslTypeBare(f.typ) & ' ' & f.name
       if f.typ.kind == ctArray:
-        field = spellGlslScalar(f.typ.aElem) & ' ' & f.name &
+        field = emitGlslScalar(f.typ.aElem) & ' ' & f.name &
           "[" & $f.typ.aN & "]"
       elif f.typ.kind in {ctAptr, ctPtr}:
-        field = ctx.spellGlslPtrDecl(f.typ, f.name)
+        field = ctx.emitGlslPtrDecl(f.typ, f.name)
       result.src &= "  " & field & ";\n"
     result.src &= "};\n\n"
 
@@ -783,13 +783,13 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
       case p.typ.kind
       of ctAptr, ctPtr:
         # a device pointer packs as the buffer-reference handle: the engine passes the device address, the block dereferences it
-        decl = ctx.spellGlslPtrDecl(p.typ, p.name)
+        decl = ctx.emitGlslPtrDecl(p.typ, p.name)
       of ctArray:
         ctx.fail("kernel parameter " & p.name &
           " of array type, arrays do not pack into the push block")
         decl = ""
       else:
-        decl = spellGlslTypeBare(p.typ) & ' ' & p.name
+        decl = emitGlslTypeBare(p.typ) & ' ' & p.name
       if decl notin pushDecls:
         pushDecls.add decl
   if ctx.failing():
@@ -805,12 +805,12 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   var hoisted: seq[string]
   for s in m.globals:
     if s.kind == sVar and s.space == caThreadgroup:
-      hoisted.add spellSmemDecl(s.declType, s.name)
+      hoisted.add emitSmemDecl(s.declType, s.name)
     elif s.kind == sVar and s.space == caConstant:
       if s.init == nil:
         ctx.fail("const_mem local " & s.name & " without an initializer")
       else:
-        hoisted.add ctx.spellConstDecl(s)
+        hoisted.add ctx.emitConstDecl(s)
   for d in hoisted:
     result.src &= d & "\n"
   if hoisted.len > 0:
@@ -829,15 +829,15 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     for p in fn.params:
       case p.typ.kind
       of ctAptr:
-        params.add ctx.spellGlslPtrDecl(p.typ, p.name)
+        params.add ctx.emitGlslPtrDecl(p.typ, p.name)
       of ctPtr:
         ctx.fail("pointer parameter " & p.name &
           ", GLSL device functions take buffer references or values")
       else:
-        params.add spellGlslTypeBare(p.typ) & ' ' & p.name
+        params.add emitGlslTypeBare(p.typ) & ' ' & p.name
     if ctx.failing():
       return ("", ctx.err)
-    result.src &= spellGlslTypeBare(fn.ret) & ' ' & fn.name & '(' &
+    result.src &= emitGlslTypeBare(fn.ret) & ' ' & fn.name & '(' &
       params.join(", ") & ");\n"
   if fns.len > 0:
     result.src &= "\n"

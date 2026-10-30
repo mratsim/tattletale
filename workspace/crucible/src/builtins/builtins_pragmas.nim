@@ -9,7 +9,8 @@
 template global*() {.pragma.}
 template workgroup*(size: untyped): untyped {.pragma.}
   ## Workgroup size annotation for a kernel proc: `{.workgroup: (X, Y, Z).}`
-  ## sets the threads per threadgroup. Backend spellings:
+  ## sets the threads per threadgroup.
+  ## Backend syntax:
   ##   `local_size_xyz` on Vulkan
   ##   `@workgroup_size` on WebGPU
   ## On Metal and CUDA the size is set host-side at dispatch, so the

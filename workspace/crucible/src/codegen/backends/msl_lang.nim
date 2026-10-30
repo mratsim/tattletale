@@ -51,7 +51,7 @@ const printerTarget = "msl"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellMslSpace(space: CirAddrSpace): string =
+proc emitMslSpace(space: CirAddrSpace): string =
   ## MSL address-space qualifier of a memory class.
   case space
   of caThread: "thread"
@@ -59,7 +59,7 @@ proc spellMslSpace(space: CirAddrSpace): string =
   of caConstant: "constant"
   of caDevice: "device"
 
-proc spellMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
+proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
   ## Forward declaration, arrays recurse into themselves.
 
 ## `{.builtin.}` numeric conversions resolve to the MSL native call text:
@@ -81,7 +81,7 @@ const MslConversionBuiltinNames: Table[string, string] = {
   "asU16": "$1",
 }.toTable()
 
-proc spellMslScalar(t: CirType): string =
+proc emitMslScalar(t: CirType): string =
   ## MSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid:
@@ -121,18 +121,18 @@ proc spellMslScalar(t: CirType): string =
     else:
       result = ""
   of ctVector:
-    result = spellMslScalar(t.vElem)
+    result = emitMslScalar(t.vElem)
     if result.len > 0:
       result.add $t.vN
   of ctPtr, ctAptr:
-    result = spellMslScalar(t.pElem) & "*"
+    result = emitMslScalar(t.pElem) & "*"
   of ctStruct:
     result = t.name
   of ctArray, ctProc:
     result = ""
 
 
-proc spellMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
+proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## MSL name of `t` with `ident` appended. Arrays take the identifier into
   ## the declarator (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
   ## `allowEmptyIdent` permits no identifier (return types, casts), an array without one otherwise refuses.
@@ -141,23 +141,23 @@ proc spellMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
     if ident.len == 0 and not allowEmptyIdent:
       return "<msl: array needs an identifier>"
     if t.aElem.kind == ctArray:
-      result = spellMslType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
+      result = emitMslType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
         allowEmptyIdent)
     else:
-      result = spellMslType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
+      result = emitMslType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
   else:
-    result = spellMslScalar(t)
+    result = emitMslScalar(t)
     if ident.len > 0:
       result.add ' ' & ident
 
-proc spellMslPtr(t: CirType, ident: string): string =
+proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL name of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
   let inner = t.pElem
   if inner.kind == ctArray:
-    result = spellMslSpace(t.space) & ' ' & spellMslType(inner, "(*" & ident & ")", true)
+    result = emitMslSpace(t.space) & ' ' & emitMslType(inner, "(*" & ident & ")", true)
   else:
-    result = spellMslSpace(t.space) & ' ' & spellMslScalar(inner) & "* " & ident
+    result = emitMslSpace(t.space) & ' ' & emitMslScalar(inner) & "* " & ident
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -166,7 +166,7 @@ proc spellMslPtr(t: CirType, ident: string): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
-proc spellMslLit(e: CirExpr): string =
+proc emitMslLit(e: CirExpr): string =
   ## MSL token of a literal, typed by its literal type.
   case e.kind
   of eIntLit:
@@ -175,12 +175,12 @@ proc spellMslLit(e: CirExpr): string =
       case e.litType.bits
       of 64: result = $e.value & "ULL"
       of 32: result = $e.value & "U"
-      else: result = "(" & spellMslScalar(e.litType) & ")" & $e.value
+      else: result = "(" & emitMslScalar(e.litType) & ")" & $e.value
     of ctInt:
       case e.litType.bits
       of 64: result = $e.value & "LL"
       of 32: result = $e.value
-      else: result = "(" & spellMslScalar(e.litType) & ")" & $e.value
+      else: result = "(" & emitMslScalar(e.litType) & ")" & $e.value
     else:
       result = $e.value
   of eFloatLit:
@@ -218,7 +218,7 @@ proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
     return "int3((int)" & name & ".x, (int)" & name & ".y, (int)" & name & ".z)"
   return name
 
-proc spellMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
+proc emitMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## Returns the MSL text of a builtin call, "" when `callee` is not a builtin.
   ##
   ## Shared by expression- and statement-position calls: the statement path
@@ -270,7 +270,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     return ""
   case e.kind
   of eNil, eTrue, eFalse, eIntLit, eFloatLit:
-    return spellMslLit(e)
+    return emitMslLit(e)
   of eSym:
     if e.coordBuiltin != cbkNone:
       return ctx.printBuiltinRef(e.name, true)
@@ -333,9 +333,9 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eConv:
     # a numeric conversion prints as the C-style cast
     let t = e.castType
-    var castTyp = spellMslType(t, "", true)
+    var castTyp = emitMslType(t, "", true)
     if t.kind in {ctPtr, ctAptr}:
-      castTyp = spellMslSpace(t.space) & ' ' & castTyp
+      castTyp = emitMslSpace(t.space) & ' ' & castTyp
     return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
   of eCast:
     # A same-size scalar `cast` reinterprets the bits: the SPIR-V printer
@@ -350,15 +350,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     if t.kind in {ctInt, ctUint, ctFloat} and src != nil and
         src.kind in {ctInt, ctUint, ctFloat} and
         t.bits in {8, 16, 32, 64} and src.bits == t.bits:
-      return "as_type<" & spellMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
-    var castTyp = spellMslType(t, "", true)
+      return "as_type<" & emitMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
+    var castTyp = emitMslType(t, "", true)
     if t.kind in {ctPtr, ctAptr}:
-      castTyp = spellMslSpace(t.space) & ' ' & castTyp
+      castTyp = emitMslSpace(t.space) & ' ' & castTyp
     return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
   of eSizeof:
-    return "sizeof(" & spellMslType(e.ofType, "", true) & ")"
+    return "sizeof(" & emitMslType(e.ofType, "", true) & ")"
   of eOconstr:
-    result = spellMslType(e.ocType, "", true) & "{"
+    result = emitMslType(e.ocType, "", true) & "{"
     for i, kv in e.kvFields:
       if i > 0:
         result.add ", "
@@ -369,7 +369,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     for i, el in e.elems:
       if i > 0:
         result.add ", "
-      result.add "(" & spellMslType(e.acType.aElem, "", true) & ")" &
+      result.add "(" & emitMslType(e.acType.aElem, "", true) & ")" &
         ctx.printExpr(el)
     result.add "}"
   of eCall:
@@ -379,7 +379,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     var args: seq[string]
     for a in e.args:
       args.add ctx.printExpr(a)
-    let builtinTxt = spellMslBuiltinCall(e.callee, args)
+    let builtinTxt = emitMslBuiltinCall(e.callee, args)
     if builtinTxt.len > 0:
       return builtinTxt
     return calleeName & "(" & args.join(", ") & ")"
@@ -402,7 +402,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
       # kernel-scope threadgroup storage: the MSL lowering pass keeps only
       # a kernel's top-level smem locals here, an inline device function's
       # smem local merges into the calling kernel, any initializer is discarded
-      result = pad & "threadgroup " & spellMslType(s.declType, s.name, false) & ";"
+      result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
       return
     if s.space == caConstant:
       # MSL lowering pass relocates const_mem locals at every scope,
@@ -410,9 +410,9 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
       ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
         " pass hoists const_mem locals to program scope")
       return ""
-    var decl = spellMslType(s.declType, s.name, false)
+    var decl = emitMslType(s.declType, s.name, false)
     if s.declType.kind in {ctPtr, ctAptr}:
-      decl = spellMslPtr(s.declType, s.name)
+      decl = emitMslPtr(s.declType, s.name)
     result = pad & decl
     if s.init != nil:
       result &= " = " & ctx.printExpr(s.init)
@@ -420,9 +420,9 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sConst:
     if s.declType.kind == ctArray:
       result = pad & "constexpr " &
-        spellMslType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
+        emitMslType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
     else:
-      result = pad & "constexpr " & spellMslScalar(s.declType) & ' ' & s.name &
+      result = pad & "constexpr " & emitMslScalar(s.declType) & ' ' & s.name &
         " = " & ctx.printExpr(s.init) & ";"
   of sAsgn:
     result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
@@ -474,7 +474,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     var args: seq[string]
     for a in s.callArgs:
       args.add ctx.printExpr(a)
-    let builtinTxt = spellMslBuiltinCall(s.callCallee, args)
+    let builtinTxt = emitMslBuiltinCall(s.callCallee, args)
     if builtinTxt.len > 0:
       result = pad & builtinTxt & ";"
     else:
@@ -537,7 +537,7 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellMslSmemParam(p: CirParam): string =
+proc emitMslSmemParam(p: CirParam): string =
   ## MSL parameter of a relocated smem local: threadgroup storage by pointer
   ## for an array local (`threadgroup T* name`), by reference otherwise
   ## (`threadgroup T& name`).
@@ -546,10 +546,10 @@ proc spellMslSmemParam(p: CirParam): string =
   ## parameters of the kernel signature.
   let inner = p.typ.pElem
   if inner.kind == ctArray:
-    return "threadgroup " & spellMslType(inner.aElem, "", true) & "* " & p.name
-  return "threadgroup " & spellMslScalar(inner) & "& " & p.name
+    return "threadgroup " & emitMslType(inner.aElem, "", true) & "* " & p.name
+  return "threadgroup " & emitMslScalar(inner) & "& " & p.name
 
-proc spellBuiltinParam(name: string): string =
+proc emitBuiltinParam(name: string): string =
   ## Attributed MSL parameter of a canonical builtin reference:
   ## `uint3 name [[name]]` for the coordinate vectors, a scalar `uint` for the flat thread index.
   ## No binding, no buffer slot.
@@ -575,30 +575,30 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
     for p in fn.params:
       if p.typ.kind == ctPtr and p.typ.space == caThreadgroup:
         # a relocated smem local, no buffer slot
-        params.add spellMslSmemParam(p)
+        params.add emitMslSmemParam(p)
         continue
       case p.typ.kind
       of ctAptr, ctPtr:
         let inner = p.typ.pElem
-        params.add "device " & spellMslType(inner, "", true) & "* " & p.name &
+        params.add "device " & emitMslType(inner, "", true) & "* " & p.name &
           " [[buffer(" & $slot & ")]]"
       else:
-        var elem = spellMslScalar(p.typ)
+        var elem = emitMslScalar(p.typ)
         if p.typ.kind == ctBool:
           elem = "int"
         params.add "constant " & elem & "& " & p.name
       inc slot
     for b in ctx.builtins:
       # coordinate builtins are attributed params, no binding, no slot
-      params.add spellBuiltinParam(b)
+      params.add emitBuiltinParam(b)
   else:
     for p in fn.params:
       case p.typ.kind
       of ctAptr, ctPtr:
-        params.add spellMslPtr(p.typ, p.name)
+        params.add emitMslPtr(p.typ, p.name)
       else:
-        params.add spellMslType(p.typ, p.name, true)
-  let ret = spellMslType(fn.ret, "", true)
+        params.add emitMslType(p.typ, p.name, true)
+  let ret = emitMslType(fn.ret, "", true)
   let prefix = if fn.isKernel: "kernel "
     elif fn.inline: "inline "
     else: ""
@@ -622,9 +622,9 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
     if t.fields.len == 0:
       src &= "  char _;\n"
     for f in t.fields:
-      var field = spellMslType(f.typ, f.name, false)
+      var field = emitMslType(f.typ, f.name, false)
       if f.typ.kind in {ctPtr, ctAptr}:
-        field = spellMslPtr(f.typ, f.name)
+        field = emitMslPtr(f.typ, f.name)
       src &= "  " & field & ";\n"
     src &= "};\n\n"
   # program-scope `constant` declarations relocated into `m.globals` by the MSL lowering pass,
@@ -635,9 +635,9 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
       if s.init == nil:
         ctx.fail("const_mem local " & s.name & " without an initializer")
       else:
-        var decl = spellMslType(s.declType, s.name, false)
+        var decl = emitMslType(s.declType, s.name, false)
         if s.declType.kind in {ctPtr, ctAptr}:
-          decl = spellMslPtr(s.declType, s.name)
+          decl = emitMslPtr(s.declType, s.name)
         hoisted.add "constant " & decl & " = " & ctx.printExpr(s.init) & ";"
   for d in hoisted:
     src &= d & "\n"

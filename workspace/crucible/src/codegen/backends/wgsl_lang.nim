@@ -53,7 +53,7 @@ const printerTarget = "wgsl"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellWgslScalar(ctx: var PrintCtx, t: CirType): string =
+proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## WGSL name of a non-array leaf type, "" when the caller composes the name.
   ## A struct name registers the struct for reference-driven emission.
   case t.kind
@@ -90,7 +90,7 @@ proc spellWgslScalar(ctx: var PrintCtx, t: CirType): string =
     else:
       result = ""
   of ctVector:
-    let elem = ctx.spellWgslScalar(t.vElem)
+    let elem = ctx.emitWgslScalar(t.vElem)
     if elem.len > 0:
       result = "vec" & $t.vN & "<" & elem & ">"
   of ctStruct:
@@ -99,22 +99,22 @@ proc spellWgslScalar(ctx: var PrintCtx, t: CirType): string =
   of ctPtr, ctAptr, ctArray, ctProc:
     result = ""
 
-proc spellWgslTypeBare(ctx: var PrintCtx, t: CirType): string =
+proc emitWgslTypeBare(ctx: var PrintCtx, t: CirType): string =
   ## WGSL name of `t` with no identifier, the form of casts and constructors.
   case t.kind
   of ctArray:
-    let elem = ctx.spellWgslTypeBare(t.aElem)
+    let elem = ctx.emitWgslTypeBare(t.aElem)
     if t.aN == 0:
       result = "array<" & elem & ">"
     else:
       result = "array<" & elem & ", " & $t.aN & ">"
   else:
-    result = ctx.spellWgslScalar(t)
+    result = ctx.emitWgslScalar(t)
 
-proc spellWgslPtrType(ctx: var PrintCtx, t: CirType): string =
+proc emitWgslPtrType(ctx: var PrintCtx, t: CirType): string =
   ## WGSL pointer type of a `ptr` local or device-function parameter,
   ## the address space leads, storage pointers declare the access mode.
-  let elem = ctx.spellWgslTypeBare(t.pElem)
+  let elem = ctx.emitWgslTypeBare(t.pElem)
   case t.space
   of caThread:
     result = "ptr<function, " & elem & ">"
@@ -181,7 +181,7 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
-proc spellWgslLit(e: CirExpr): string =
+proc emitWgslLit(e: CirExpr): string =
   ## WGSL token of a literal, typed by its literal type.
   ## Bare literals are abstract in WGSL and work in any typed context,
   ## u32 gains the `u` suffix, f16 the `h` suffix.
@@ -203,7 +203,7 @@ proc spellWgslLit(e: CirExpr): string =
   of eFalse: result = "false"
   else: result = "<wgsl: not a literal>"
 
-proc spellVectorComponent(name: string): string =
+proc emitVectorComponent(name: string): string =
   ## WGSL component letter of a CIRv2 vector component name (`F0`..`F3`).
   case name
   of "F0": "x"
@@ -220,7 +220,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("nil literal is outside the WGSL subset")
     return ""
   of eTrue, eFalse, eIntLit, eFloatLit:
-    return spellWgslLit(e)
+    return emitWgslLit(e)
   of eSym:
     if e.typ != nil and e.typ.kind == ctPtr and e.name notin ctx.paramNames:
       ctx.fail("pointer local " & e.name & " used as a value, WGSL has no" &
@@ -281,7 +281,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return mapped
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
-      let comp = spellVectorComponent(e.fieldName)
+      let comp = emitVectorComponent(e.fieldName)
       if comp.len == 0:
         ctx.fail("no vector component " & e.fieldName)
         return ""
@@ -317,7 +317,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eNeg:
     return "(-" & ctx.printExpr(e.unOperand) & ")"
   of eCast:
-    return "bitcast<" & ctx.spellWgslTypeBare(e.castType) & ">(" &
+    return "bitcast<" & ctx.emitWgslTypeBare(e.castType) & ">(" &
       ctx.printExpr(e.castOperand) & ")"
   of eConv:
     if e.castType.kind == ctBool:
@@ -328,7 +328,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     if bt != nil and bt.kind == ctBool:
       ctx.fail("conversion from bool, WGSL has no bool-to-numeric conversion")
       return ""
-    return ctx.spellWgslTypeBare(e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
+    return ctx.emitWgslTypeBare(e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
   of eSizeof:
     return $typeByteSize(ctx.layouts, e.ofType, launchAbiBoolWidth)
   of eAddr:
@@ -336,15 +336,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eOconstr:
     if e.kvFields.len == 0:
       # a zero-field struct, the padding member zero-initializes
-      return ctx.spellWgslTypeBare(e.ocType) & "(0u)"
-    result = ctx.spellWgslTypeBare(e.ocType) & "("
+      return ctx.emitWgslTypeBare(e.ocType) & "(0u)"
+    result = ctx.emitWgslTypeBare(e.ocType) & "("
     for i, kvv in e.kvFields:
       if i > 0:
         result.add ", "
       result.add ctx.printExpr(kvv.value)
     result.add ")"
   of eAconstr:
-    result = ctx.spellWgslTypeBare(e.acType) & "("
+    result = ctx.emitWgslTypeBare(e.acType) & "("
     for i, el in e.elems:
       if i > 0:
         result.add ", "
@@ -389,14 +389,14 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
   ## Forward declaration, the loop context (break/continue labels) is a parameter.
 
-proc spellLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
+proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Declaration text of one local, the init stays with the caller.
   ## A pointer-typed local refuses earlier, the WGSL lowering pass dissolves it.
   case s.declType.kind
   of ctArray:
-    result = s.name & ": " & ctx.spellWgslTypeBare(s.declType)
+    result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
   else:
-    result = s.name & ": " & ctx.spellWgslTypeBare(s.declType)
+    result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
 
 proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
@@ -428,13 +428,13 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
         " members, the WGSL lowering pass dissolves pointer locals")
       return ""
     else:
-      result = pad & "var " & ctx.spellLocalDecl(s)
+      result = pad & "var " & ctx.emitLocalDecl(s)
       if s.init != nil:
         result &= " = " & ctx.printExpr(s.init)
       result &= ";"
   of sConst:
     result = pad & "let " & s.name & ": " &
-      ctx.spellWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
+      ctx.emitWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
   of sAsgn:
     if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr and
         s.lhs.name notin ctx.paramNames:
@@ -565,13 +565,13 @@ proc printFn(ctx: var PrintCtx, fn: CirProc): string =
     of ctAptr:
       ctx.fail("device pointer parameter " & p.name & " in device function " &
         fn.name & ", WGSL device functions take no buffer pointers, the" &
-        " call sites have no pointer spelling for a storage binding")
+        " call sites have no pointer form for a storage binding")
       return ""
     of ctPtr:
-      params.add p.name & ": " & ctx.spellWgslPtrType(p.typ)
+      params.add p.name & ": " & ctx.emitWgslPtrType(p.typ)
     else:
-      params.add p.name & ": " & ctx.spellWgslTypeBare(p.typ)
-  let ret = ctx.spellWgslTypeBare(fn.ret)
+      params.add p.name & ": " & ctx.emitWgslTypeBare(p.typ)
+  let ret = ctx.emitWgslTypeBare(fn.ret)
   let sig = "fn " & fn.name & "(" & params.join(", ") & ")"
   let arrow = if ret.len > 0: " -> " & ret else: ""
   return sig & arrow & " {\n" & bodyTxt & '\n' & "}"
@@ -595,7 +595,7 @@ proc registerTypeStructs(ctx: var PrintCtx, t: CirType) =
   else:
     discard
 
-proc spellBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
+proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
   ## `@group(0) @binding(i)` declaration of one kernel parameter in host `store` packing order:
   ## - device buffers bind writable storage, `var<storage, read_write>`
   ## - scalars and value structs bind read-only storage, packed in the engine scratch buffer
@@ -607,7 +607,7 @@ proc spellBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
         " space, the WebGPU engine binds device buffers only")
       return ""
     result = attr & "var<storage, read_write> " & p.name & ": array<" &
-      ctx.spellWgslTypeBare(p.typ.pElem) & ">;"
+      ctx.emitWgslTypeBare(p.typ.pElem) & ">;"
   of ctPtr:
     ctx.fail("kernel parameter " & p.name &
       " of pointer type, the engine binds device buffers and values")
@@ -633,14 +633,14 @@ proc spellBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
         " holds a pointer, the parameter explosion removes those before printing")
       return ""
     result = attr & "var<storage, read> " & p.name & ": " &
-      ctx.spellWgslTypeBare(p.typ) & ";"
+      ctx.emitWgslTypeBare(p.typ) & ";"
   of ctBool:
     result = attr & "var<storage, read> " & p.name & ": u32;"
   else:
     result = attr & "var<storage, read> " & p.name & ": " &
-      ctx.spellWgslTypeBare(p.typ) & ";"
+      ctx.emitWgslTypeBare(p.typ) & ";"
 
-proc spellWgslStruct(ctx: var PrintCtx, t: CirType): string =
+proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
   ## One struct declaration, WGSL requires at least one member.
   if t.containsPtrDeep:
     ctx.fail("struct " & t.name &
@@ -651,9 +651,9 @@ proc spellWgslStruct(ctx: var PrintCtx, t: CirType): string =
     result &= "  _padding: u32,\n"
   else:
     for f in t.fields:
-      var field = f.name & ": " & ctx.spellWgslTypeBare(f.typ)
+      var field = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
       if f.typ.kind == ctArray:
-        field = f.name & ": " & ctx.spellWgslTypeBare(f.typ)
+        field = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
       result &= "  " & field & ",\n"
   result &= '}'
 
@@ -731,13 +731,13 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
           " with an initializer, WGSL workgroup variables are zero-initialized")
       else:
         hoisted.add "var<workgroup> " & s.name & ": " &
-          ctx.spellWgslTypeBare(s.declType) & ";"
+          ctx.emitWgslTypeBare(s.declType) & ";"
     elif s.kind == sVar and s.space == caConstant:
       if s.init == nil:
         ctx.fail("const_mem local " & s.name & " without an initializer")
       else:
         hoisted.add "const " & s.name & ": " &
-          ctx.spellWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
+          ctx.emitWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
   if ctx.failing():
     return ("", ctx.err)
 
@@ -761,14 +761,14 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
       continue
     if t.name notin toEmit:
       continue
-    result.src &= ctx.spellWgslStruct(t) & "\n\n"
+    result.src &= ctx.emitWgslStruct(t) & "\n\n"
   if ctx.failing():
     return ("", ctx.err)
 
   # kernel parameter bindings, one per parameter in order
   var bindings: seq[string]
   for i, p in kernel.params:
-    let b = ctx.spellBinding(p, i)
+    let b = ctx.emitBinding(p, i)
     if ctx.failing():
       return ("", ctx.err)
     bindings.add b

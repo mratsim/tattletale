@@ -46,7 +46,7 @@ const printerTarget = "opencl"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellOpenclScalar(t: CirType): string =
+proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid:
@@ -89,7 +89,7 @@ proc spellOpenclScalar(t: CirType): string =
     else:
       result = ""
   of ctVector:
-    let elem = spellOpenclScalar(t.vElem)
+    let elem = emitOpenclScalar(t.vElem)
     if elem.len > 0:
       result = elem & $t.vN
   of ctStruct:
@@ -97,20 +97,20 @@ proc spellOpenclScalar(t: CirType): string =
   of ctPtr, ctAptr, ctArray, ctProc:
     result = ""
 
-proc spellOpenclTypeBare(t: CirType): string =
+proc emitOpenclTypeBare(t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
   case t.kind
   of ctPtr, ctAptr:
-    result = spellOpenclTypeBare(t.pElem) & "*"
+    result = emitOpenclTypeBare(t.pElem) & "*"
   else:
-    result = spellOpenclScalar(t)
+    result = emitOpenclScalar(t)
 
-proc spellOpenclArrayDecl(t: CirType, ident: string): string =
+proc emitOpenclArrayDecl(t: CirType, ident: string): string =
   ## OpenCL C declaration of an array local or field, the length moves
   ## behind the identifier (`float ident[4]`).
-  spellOpenclScalar(t.aElem) & ' ' & ident & "[" & $t.aN & "]"
+  emitOpenclScalar(t.aElem) & ' ' & ident & "[" & $t.aN & "]"
 
-proc spellOpenclPtrField(t: CirType, ident: string): string =
+proc emitOpenclPtrField(t: CirType, ident: string): string =
   ## OpenCL C declaration of a pointer field or local, the address space qualifier leads.
   ## `restrict` is a function-parameter qualifier, struct fields and locals drop it.
   let qualifier = case t.space
@@ -118,7 +118,7 @@ proc spellOpenclPtrField(t: CirType, ident: string): string =
     of caThreadgroup: "__local "
     of caConstant: "__constant "
     of caThread: ""
-  result = qualifier & spellOpenclTypeBare(t) & ' ' & ident
+  result = qualifier & emitOpenclTypeBare(t) & ' ' & ident
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
@@ -161,7 +161,7 @@ proc atomicOperandPtr(e: CirExpr): CirType =
   if t != nil and t.kind in {ctPtr, ctAptr}:
     return t
 
-proc spellExtensions(features: ModuleFeatures): string =
+proc emitExtensions(features: ModuleFeatures): string =
   ## OpenCL C extension pragma block from the stored module feature scan
   ## (`CirModule.features`, filled by the feature-scan pass), one line per
   ## feature in use.
@@ -182,7 +182,7 @@ proc spellExtensions(features: ModuleFeatures): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
-proc spellOpenclLit(e: CirExpr): string =
+proc emitOpenclLit(e: CirExpr): string =
   ## OpenCL C token of a literal, typed by its literal type.
   ## C suffixes mark the 32-bit and 64-bit widths, a cast forms the narrow widths.
   case e.kind
@@ -192,12 +192,12 @@ proc spellOpenclLit(e: CirExpr): string =
       case e.litType.bits
       of 64: result = $e.value & "ULL"
       of 32: result = $e.value & "U"
-      else: result = "(" & spellOpenclScalar(e.litType) & ")" & $e.value
+      else: result = "(" & emitOpenclScalar(e.litType) & ")" & $e.value
     of ctInt:
       case e.litType.bits
       of 64: result = $e.value & "LL"
       of 32: result = $e.value
-      else: result = "(" & spellOpenclScalar(e.litType) & ")" & $e.value
+      else: result = "(" & emitOpenclScalar(e.litType) & ")" & $e.value
     else:
       result = $e.value
   of eFloatLit:
@@ -217,7 +217,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     # a null pointer prints as the plain 0, valid OpenCL C
     return "0"
   of eTrue, eFalse, eIntLit, eFloatLit:
-    return spellOpenclLit(e)
+    return emitOpenclLit(e)
   of eSym:
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
@@ -245,7 +245,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return mapped
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
-      let comp = spellVectorComponent(e.fieldName)
+      let comp = emitVectorComponent(e.fieldName)
       if comp.len == 0:
         ctx.fail("no vector component " & e.fieldName)
         return ""
@@ -284,20 +284,20 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     # a pointer cast includes the address space: the C compiler rejects
     # a silent change of the pointee's space
     let target = if e.castType.kind in {ctPtr, ctAptr}:
-        spellOpenclPtrField(e.castType, "").strip()
+        emitOpenclPtrField(e.castType, "").strip()
       else:
-        spellOpenclTypeBare(e.castType)
+        emitOpenclTypeBare(e.castType)
     return "(" & target & ")" & ctx.printExpr(e.castOperand)
   of eSizeof:
-    return "sizeof(" & spellOpenclTypeBare(e.ofType) & ")"
+    return "sizeof(" & emitOpenclTypeBare(e.ofType) & ")"
   of eAddr:
     return "(&" & ctx.printExpr(e.addrOperand) & ")"
   of eOconstr:
     # C99 compound literal, a bare braced init list cannot be member-accessed
     if e.kvFields.len == 0:
       # a zero-field struct, the padding member zero-initializes
-      return "(" & spellOpenclTypeBare(e.ocType) & "){0}"
-    result = "(" & spellOpenclTypeBare(e.ocType) & "){"
+      return "(" & emitOpenclTypeBare(e.ocType) & "){0}"
+    result = "(" & emitOpenclTypeBare(e.ocType) & "){"
     for i, kvv in e.kvFields:
       if i > 0:
         result.add ", "
@@ -306,7 +306,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eAconstr:
     # an array member initializer takes plain braces, OpenCL C has no array
     # compound-literal cast. Every other type casts: `(Type){...}`
-    let bare = spellOpenclTypeBare(e.acType)
+    let bare = emitOpenclTypeBare(e.acType)
     result = if bare.len > 0: "(" & bare & "){" else: "{"
     for i, el in e.elems:
       if i > 0:
@@ -371,7 +371,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
           else: ""
         else: ""
       if atomicTy.len == 0:
-        ctx.fail("atomicFetchAdd on " & spellOpenclScalar(pt.pElem) &
+        ctx.fail("atomicFetchAdd on " & emitOpenclScalar(pt.pElem) &
           ", only 32-bit int/uint/float pointees")
         return ""
       # atomic_fetch_add acts on `atomic_*` pointees: cast the raw
@@ -390,15 +390,15 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
   ## Forward declaration, the loop context (break/continue labels) is a parameter.
 
-proc spellLocalDecl(s: CirStmt): string =
+proc emitLocalDecl(s: CirStmt): string =
   ## Declaration text of one local, the array form appends the length to the name, the init stays with the caller.
   ## Pointer types include the address-space qualifier in their own text, the caller adds no storage prefix (OpenCL rejects a doubled qualifier).
   if s.declType.kind == ctArray:
-    result = spellOpenclArrayDecl(s.declType, s.name)
+    result = emitOpenclArrayDecl(s.declType, s.name)
   elif s.declType.kind in {ctPtr, ctAptr}:
-    result = spellOpenclPtrField(s.declType, s.name)
+    result = emitOpenclPtrField(s.declType, s.name)
   else:
-    result = spellOpenclTypeBare(s.declType) & ' ' & s.name
+    result = emitOpenclTypeBare(s.declType) & ' ' & s.name
 
 proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
@@ -412,7 +412,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
         ctx.fail("smem local " & s.name & " in a device function, __local is kernel storage")
         return ""
       var decl = (if s.declType.kind in {ctPtr, ctAptr}: "" else: "__local ") &
-        spellLocalDecl(s)
+        emitLocalDecl(s)
       result = pad & decl
       if s.init != nil:
         result &= " = " & ctx.printExpr(s.init)
@@ -428,7 +428,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
       return ""
     else:
       var decl = (if s.declType.kind in {ctPtr, ctAptr}: "" else: "__private ") &
-        spellLocalDecl(s)
+        emitLocalDecl(s)
       result = pad & decl
       if s.init != nil:
         if s.declType.kind == ctArray and s.init.kind == eAconstr:
@@ -440,7 +440,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
           result &= " = " & ctx.printExpr(s.init)
       result &= ";"
   of sConst:
-    result = pad & "const " & spellOpenclTypeBare(s.declType) & ' ' &
+    result = pad & "const " & emitOpenclTypeBare(s.declType) & ' ' &
       s.name & " = " & ctx.printExpr(s.init) & ";"
   of sAsgn:
     result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
@@ -554,13 +554,13 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
+proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
   ## Parameter declaration of one kernel or device-function parameter.
   ## A raw `ptr` parameter is legal C between device functions, a kernel refuses it.
   ## The engine binds device buffers and values, never raw pointers.
   case p.typ.kind
   of ctAptr:
-    let inner = spellOpenclScalar(p.typ.pElem)
+    let inner = emitOpenclScalar(p.typ.pElem)
     case p.typ.space
     of caDevice:
       result = "__global " & inner & "* restrict " & p.name
@@ -575,13 +575,13 @@ proc spellParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
       ctx.fail("kernel parameter " & p.name &
         " of pointer type, the engine binds device buffers and values")
       return ""
-    result = spellOpenclTypeBare(p.typ) & ' ' & p.name
+    result = emitOpenclTypeBare(p.typ) & ' ' & p.name
   of ctArray:
     ctx.fail("array parameter " & p.name &
       ", OpenCL C array parameters decay to pointers, the engine packs the value")
     return ""
   else:
-    result = spellOpenclTypeBare(p.typ) & ' ' & p.name
+    result = emitOpenclTypeBare(p.typ) & ' ' & p.name
 
 proc printFn(ctx: var PrintCtx, fn: CirProc): string =
   ## One device function: signature, body, closing brace.
@@ -590,20 +590,20 @@ proc printFn(ctx: var PrintCtx, fn: CirProc): string =
   ctx.indent = 0
   var params: seq[string]
   for p in fn.params:
-    params.add ctx.spellParam(p, false)
+    params.add ctx.emitParam(p, false)
   if ctx.failing():
     return ""
   let bodyTxt = ctx.printStmts(fn.body, "", "")
   if ctx.failing():
     return ""
-  let sig = "static inline " & spellOpenclTypeBare(fn.ret) & ' ' &
+  let sig = "static inline " & emitOpenclTypeBare(fn.ret) & ' ' &
     fn.name & '(' & params.join(", ") & ")"
   return sig & " {\n" & bodyTxt & '\n' & "}"
 
-proc spellConstDecl(ctx: var PrintCtx, s: CirStmt): string =
+proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `__constant` declaration of a const_mem local.
   if s.declType.kind == ctArray:
-    result = "__constant " & spellOpenclArrayDecl(s.declType, s.name)
+    result = "__constant " & emitOpenclArrayDecl(s.declType, s.name)
     if s.init != nil and s.init.kind == eAconstr:
       var elems: seq[string]
       for el in s.init.elems:
@@ -611,7 +611,7 @@ proc spellConstDecl(ctx: var PrintCtx, s: CirStmt): string =
       result &= " = {" & elems.join(", ") & "}"
       return
   else:
-    result = "__constant " & spellOpenclTypeBare(s.declType) & ' ' & s.name
+    result = "__constant " & emitOpenclTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
 
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
@@ -629,7 +629,7 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     ctx.fail("no kernel in the module")
     return ("", ctx.err)
 
-  result.src = spellExtensions(m.features)
+  result.src = emitExtensions(m.features)
 
   for t in m.types:
     if t.kind != ctStruct:
@@ -642,16 +642,16 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     for f in t.fields:
       var field: string
       if f.typ.kind == ctArray:
-        field = spellOpenclArrayDecl(f.typ, f.name)
+        field = emitOpenclArrayDecl(f.typ, f.name)
       elif f.typ.kind in {ctAptr, ctPtr}:
         if f.typ.kind == ctAptr and f.typ.space != caDevice:
           ctx.fail("struct field " & t.name & "." & f.name &
             " in " & $f.typ.space & " space, only device pointers nest in structs")
           field = ""
         else:
-          field = spellOpenclPtrField(f.typ, f.name)
+          field = emitOpenclPtrField(f.typ, f.name)
       else:
-        field = spellOpenclTypeBare(f.typ) & ' ' & f.name
+        field = emitOpenclTypeBare(f.typ) & ' ' & f.name
       result.src &= "  " & field & ";\n"
     result.src &= "} " & t.name & ";\n\n"
   if ctx.failing():
@@ -664,7 +664,7 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
       if s.init == nil:
         ctx.fail("const_mem local " & s.name & " without an initializer")
       else:
-        hoisted.add ctx.spellConstDecl(s)
+        hoisted.add ctx.emitConstDecl(s)
   for d in hoisted:
     result.src &= d & "\n"
   if hoisted.len > 0:
@@ -681,10 +681,10 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     ctx.fnName = fn.name
     var params: seq[string]
     for p in fn.params:
-      params.add ctx.spellParam(p, false)
+      params.add ctx.emitParam(p, false)
     if ctx.failing():
       return ("", ctx.err)
-    result.src &= "static inline " & spellOpenclTypeBare(fn.ret) & ' ' &
+    result.src &= "static inline " & emitOpenclTypeBare(fn.ret) & ' ' &
       fn.name & '(' & params.join(", ") & ");\n"
   if fns.len > 0:
     result.src &= "\n"
@@ -700,7 +700,7 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     ctx.indent = 0
     var params: seq[string]
     for p in kernel.params:
-      params.add ctx.spellParam(p, true)
+      params.add ctx.emitParam(p, true)
     if ctx.failing():
       return ("", ctx.err)
     let bodyTxt = ctx.printStmts(kernel.body, "", "")

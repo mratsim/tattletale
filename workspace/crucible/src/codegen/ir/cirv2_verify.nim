@@ -71,20 +71,20 @@ proc checkOperand(ctx: var VerifyCtx, e: CirExpr, path: string, side: string): C
   if result.isNil:
     ctx.fail(path, getConstructName(e.kind), side & " has no derivable type")
 
-proc spellTypeDbg(t: CirType): string =
+proc emitTypeDbg(t: CirType): string =
   ## Type text for a rejection message: the struct name when present, otherwise the lattice kind.
   if t.isNil:
     return "nil"
   if t.kind == ctStruct:
     return t.name
   if t.kind in {ctPtr, ctAptr}:
-    return $t.kind & "(" & $t.space & " " & spellTypeDbg(t.pElem) & ")"
+    return $t.kind & "(" & $t.space & " " & emitTypeDbg(t.pElem) & ")"
   return $t.kind
 
 proc sameOrFails(ctx: var VerifyCtx, a, b: CirType, path: string, construct: string, detail: string) =
   if not sameType(a, b):
     ctx.fail(path, construct,
-      detail & ": got " & spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
+      detail & ": got " & emitTypeDbg(a) & ", expected " & emitTypeDbg(b))
 
 proc callArgReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
   ## Call-argument check under v1's birth-space rule: a pointer argument
@@ -97,7 +97,7 @@ proc callArgReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
     return
   ctx.fail(path, "call",
     "argument type differs from the parameter type: got " &
-    spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
+    emitTypeDbg(a) & ", expected " & emitTypeDbg(b))
 
 proc retReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
   ## Return-value check under v1's birth-space rule: a pointer return may
@@ -110,7 +110,7 @@ proc retReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
     return
   ctx.fail(path, "ret",
     "return type differs from the proc return type: got " &
-    spellTypeDbg(a) & ", expected " & spellTypeDbg(b))
+    emitTypeDbg(a) & ", expected " & emitTypeDbg(b))
 
 proc litFitsBits(ctx: var VerifyCtx, v: int64, t: CirType, path: string) =
   ## Fails when an int64 value does not fit the named type's bit width.
@@ -160,7 +160,7 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
     result = e.fLitType
   of eNil:
     if e.nilType.isNil or e.nilType.kind notin {ctPtr, ctAptr}:
-      ctx.fail(path, "nil", "nil needs a spelled pointer type")
+      ctx.fail(path, "nil", "nil needs a stated pointer type")
       return nil
     result = e.nilType
   of eTrue, eFalse:
@@ -220,7 +220,7 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
       ctx.fail(path, "dot", "struct " & t.name & " has no field " & e.fieldName)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     if e.opType.isNil:
-      ctx.fail(path, getConstructName(e.kind), "operator does not spell its type")
+      ctx.fail(path, getConstructName(e.kind), "operator does not state its type")
       return nil
     let lt = checkOperand(ctx, e.left, path & ".left", "left operand")
     if ctx.err.len > 0:
@@ -229,26 +229,26 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
     if ctx.err.len > 0:
       return nil
     sameOrFails(ctx, lt, e.opType, path, getConstructName(e.kind),
-      "left operand type differs from the spelled type")
+      "left operand type differs from the stated type")
     sameOrFails(ctx, rt, e.opType, path, getConstructName(e.kind),
-      "right operand type differs from the spelled type")
+      "right operand type differs from the stated type")
     discard ctx.verifyExpr(e.left, path & ".left", false)
     discard ctx.verifyExpr(e.right, path & ".right", false)
     result = e.opType
   of eBitNot, eNeg:
     if e.unType.isNil:
-      ctx.fail(path, getConstructName(e.kind), "operator does not spell its type")
+      ctx.fail(path, getConstructName(e.kind), "operator does not state its type")
       return nil
     let t = checkOperand(ctx, e.unOperand, path & ".operand", "operand")
     if ctx.err.len > 0:
       return nil
     sameOrFails(ctx, t, e.unType, path, getConstructName(e.kind),
-      "operand type differs from the spelled type")
+      "operand type differs from the stated type")
     discard ctx.verifyExpr(e.unOperand, path & ".operand", false)
     result = e.unType
   of eEq, eNeq, eLt, eLe:
     if e.cmpType.isNil:
-      ctx.fail(path, getConstructName(e.kind), "comparison does not spell its operand type")
+      ctx.fail(path, getConstructName(e.kind), "comparison does not state its operand type")
       return nil
     let at = checkOperand(ctx, e.a, path & ".a", "left operand")
     if ctx.err.len > 0:
@@ -257,7 +257,7 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
     if ctx.err.len > 0:
       return nil
     sameOrFails(ctx, at, e.cmpType, path, getConstructName(e.kind),
-      "left operand type differs from the spelled operand type")
+      "left operand type differs from the stated operand type")
     if e.kind == eNeq and at.kind == ctBool and e.b.kind == eIntLit and
         e.b.value == 0 and bt.kind == ctUint and bt.bits == 32:
       # ABI zero test of a bool value: the launch ABI stores a bool kernel
@@ -265,7 +265,7 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
       discard
     else:
       sameOrFails(ctx, bt, e.cmpType, path, getConstructName(e.kind),
-        "right operand type differs from the spelled operand type")
+        "right operand type differs from the stated operand type")
     discard ctx.verifyExpr(e.a, path & ".a", false)
     discard ctx.verifyExpr(e.b, path & ".b", false)
     result = CirType(kind: ctBool)
@@ -295,14 +295,14 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
     result = CirType(kind: ctBool)
   of eCast, eConv:
     if e.castType.isNil:
-      ctx.fail(path, getConstructName(e.kind), "cast does not spell its result type")
+      ctx.fail(path, getConstructName(e.kind), "cast does not state its result type")
       return nil
     discard checkOperand(ctx, e.castOperand, path & ".operand", "cast operand")
     discard ctx.verifyExpr(e.castOperand, path & ".operand", false)
     result = e.castType
   of eAddr:
     if e.addrType.isNil or e.addrType.kind != ctPtr:
-      ctx.fail(path, "addr", "does not spell a ptr result type")
+      ctx.fail(path, "addr", "does not state a ptr result type")
       return nil
     if not isLvalue(e.addrOperand):
       ctx.fail(path, "addr", "operand is not an lvalue")
@@ -317,7 +317,7 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
     result = CirType(kind: ctUint, bits: -1)
   of eOconstr:
     if e.ocType.isNil or e.ocType.kind != ctStruct:
-      ctx.fail(path, "oconstr", "does not spell a struct type")
+      ctx.fail(path, "oconstr", "does not state a struct type")
       return nil
     for i, kvField in e.kvFields:
       var found = false
@@ -335,7 +335,7 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
     result = e.ocType
   of eAconstr:
     if e.acType.isNil or e.acType.kind != ctArray:
-      ctx.fail(path, "aconstr", "does not spell an array type")
+      ctx.fail(path, "aconstr", "does not state an array type")
       return nil
     if e.elems.len != e.acType.aN:
       ctx.fail(path, "aconstr",
@@ -621,7 +621,7 @@ proc checkProc(fn: CirProc): string =
       ctx.fail("param[" & $pi & "]", "param", "parameter needs a non-void type")
       return ctx.err
   if fn.ret.isNil:
-    return fn.name & ": proc without a spelled return type"
+    return fn.name & ": proc without a stated return type"
   ctx.verifyStmtList(fn.body, "body", chain)
   if ctx.err.len > 0:
     return ctx.err

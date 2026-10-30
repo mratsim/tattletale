@@ -11,7 +11,7 @@
 ##   printer's own `PrintCtx` record (the `err` and `fnName` fields)
 ## - codegenModule: the `(artifact, err)` to entry-point-result conversion
 ## - roundUpMultiple, scalarByteSize: shared layout arithmetic over CIRv2 types
-## - spellVectorComponent: vector component letters (`F0`..`F3` to `x`..`w`)
+## - emitVectorComponent: vector component letters (`F0`..`F3` to `x`..`w`)
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
 
@@ -51,7 +51,7 @@ proc scalarByteSize*(t: CirType, boolWidth: static int = 1): int =
   of ctInt, ctUint, ctFloat: t.bits div 8
   else: 0
 
-proc spellVectorComponent*(name: string): string =
+proc emitVectorComponent*(name: string): string =
   ## Component letter of a CIRv2 vector component name (`F0`..`F3`).
   ##
   ## Returns "x", "y", "z" or "w", "" when the name is not a component.

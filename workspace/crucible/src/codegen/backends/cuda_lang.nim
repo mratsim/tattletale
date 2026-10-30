@@ -52,7 +52,7 @@ const printerTarget = "cuda"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc spellCudaScalar(t: CirType): string =
+proc emitCudaScalar(t: CirType): string =
   ## CUDA name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid:
@@ -117,13 +117,13 @@ proc spellCudaScalar(t: CirType): string =
     if elem.len > 0:
       result = elem & $t.vN
   of ctPtr, ctAptr:
-    result = spellCudaScalar(t.pElem) & "*"
+    result = emitCudaScalar(t.pElem) & "*"
   of ctStruct:
     result = t.name
   of ctArray, ctProc:
     result = ""
 
-proc spellCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
+proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## CUDA name of `t` with `ident` appended. Arrays take the identifier into
   ## the declarator (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
   ## `allowEmptyIdent` permits no identifier, return types and casts use it.
@@ -133,12 +133,12 @@ proc spellCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
     if ident.len == 0 and not allowEmptyIdent:
       return "<cuda: array needs an identifier>"
     if t.aElem.kind == ctArray:
-      result = spellCudaType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
+      result = emitCudaType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
         allowEmptyIdent)
     else:
-      result = spellCudaType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
+      result = emitCudaType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
   else:
-    result = spellCudaScalar(t)
+    result = emitCudaScalar(t)
     if ident.len > 0:
       result.add ' ' & ident
 
@@ -149,7 +149,7 @@ proc spellCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
-proc spellCudaLit(e: CirExpr): string =
+proc emitCudaLit(e: CirExpr): string =
   ## CUDA token of a literal, typed by its literal type.
   case e.kind
   of eIntLit:
@@ -158,12 +158,12 @@ proc spellCudaLit(e: CirExpr): string =
       case e.litType.bits
       of 64: result = $e.value & "ULL"
       of 32: result = $e.value & "U"
-      else: result = "(" & spellCudaScalar(e.litType) & ")" & $e.value
+      else: result = "(" & emitCudaScalar(e.litType) & ")" & $e.value
     of ctInt:
       case e.litType.bits
       of 64: result = $e.value & "LL"
       of 32: result = $e.value
-      else: result = "(" & spellCudaScalar(e.litType) & ")" & $e.value
+      else: result = "(" & emitCudaScalar(e.litType) & ")" & $e.value
     else:
       result = $e.value
   of eFloatLit:
@@ -192,7 +192,7 @@ proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: st
   ##   the canonical Nim type is int, the components cast
   ## - component use: a cast to int, the flat thread index linearizes
   ##   x-major and parenthesizes so a trailing `* k` cannot mis-associate
-  let vecTy = spellCudaScalar(coordTy)
+  let vecTy = emitCudaScalar(coordTy)
   case kind
   of cbkThreadgroupPositionInGrid:
     if whole:
@@ -229,7 +229,7 @@ proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: st
   of cbkNone:
     result = name
 
-proc spellCudaBuiltinCall(callee: CirExpr, args: seq[string]): string =
+proc emitCudaBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## Returns the CUDA text of a builtin call, "" when `callee` is not a builtin.
   ##
   ## Shared by expression- and statement-position calls: the statement path
@@ -266,7 +266,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     return ""
   case e.kind
   of eNil, eTrue, eFalse, eIntLit, eFloatLit:
-    return spellCudaLit(e)
+    return emitCudaLit(e)
   of eSym:
     if e.coordBuiltin != cbkNone:
       ctx.builtins.incl(e.name)
@@ -328,14 +328,14 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eConv, eCast:
     # a conversion or bit reinterpret prints as the C-style cast, CUDA has no as_type and one C cast covers both semantics here
     let t = e.castType
-    return "(" & spellCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
+    return "(" & emitCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
   of eSizeof:
-    return "sizeof(" & spellCudaType(e.ofType, "", true) & ")"
+    return "sizeof(" & emitCudaType(e.ofType, "", true) & ")"
   of eOconstr:
     # Braced init list: `TypeName{val, ...}`, the functional-style cast form
     # keeps the result a valid C++ expression, bare braced-init-lists are
     # not expressions and cannot be used with member access
-    result = spellCudaType(e.ocType, "", true) & "{"
+    result = emitCudaType(e.ocType, "", true) & "{"
     for i, kv in e.kvFields:
       if i > 0:
         result.add ", "
@@ -346,7 +346,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     for i, el in e.elems:
       if i > 0:
         result.add ", "
-      result.add "(" & spellCudaType(e.acType.aElem, "", true) & ")" &
+      result.add "(" & emitCudaType(e.acType.aElem, "", true) & ")" &
         ctx.printExpr(el)
     result.add "}"
   of eCall:
@@ -356,7 +356,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     var args: seq[string]
     for a in e.args:
       args.add ctx.printExpr(a)
-    let builtinTxt = spellCudaBuiltinCall(e.callee, args)
+    let builtinTxt = emitCudaBuiltinCall(e.callee, args)
     if builtinTxt.len > 0:
       return builtinTxt
     return calleeName & "(" & args.join(", ") & ")"
@@ -381,7 +381,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     if s.space == caThreadgroup:
       # kernel-scope shared storage in `__shared__` form,
       # NVRTC allocates it per threadgroup, any initializer is discarded
-      result = pad & "__shared__ " & spellCudaType(s.declType, s.name, false) & ";"
+      result = pad & "__shared__ " & emitCudaType(s.declType, s.name, false) & ";"
       return
     if s.space == caConstant:
       # program-scope storage belongs to CirModule.globals, a survivor here
@@ -389,7 +389,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
       ctx.fail("local " & s.name & " in constant space, CUDA constant storage" &
         " is program scope only")
       return ""
-    var decl = spellCudaType(s.declType, s.name, false)
+    var decl = emitCudaType(s.declType, s.name, false)
     result = pad & decl
     if s.init != nil:
       result &= " = " & ctx.printExpr(s.init)
@@ -397,9 +397,9 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sConst:
     if s.declType.kind == ctArray:
       result = pad & "constexpr " &
-        spellCudaType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
+        emitCudaType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
     else:
-      result = pad & "constexpr " & spellCudaScalar(s.declType) & ' ' & s.name &
+      result = pad & "constexpr " & emitCudaScalar(s.declType) & ' ' & s.name &
         " = " & ctx.printExpr(s.init) & ";"
   of sAsgn:
     result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
@@ -451,7 +451,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     var args: seq[string]
     for a in s.callArgs:
       args.add ctx.printExpr(a)
-    let builtinTxt = spellCudaBuiltinCall(s.callCallee, args)
+    let builtinTxt = emitCudaBuiltinCall(s.callCallee, args)
     if builtinTxt.len > 0:
       result = pad & builtinTxt & ";"
     else:
@@ -511,7 +511,7 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
     i.inc
   return lines.join("\n")
 
-proc spellWarpReduceTemplate(kind: ReductionBuiltinKind): string =
+proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
   ## Butterfly warp-reduction template for one reduction kind: CUDA has no
   ## float warp-reduce intrinsic, the tree walks the xor mask 16/8/4/2/1.
   let op = case kind
@@ -550,13 +550,13 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
     for p in fn.params:
       case p.typ.kind
       of ctAptr, ctPtr:
-        params.add spellCudaScalar(p.typ.pElem) & "* " & p.name
+        params.add emitCudaScalar(p.typ.pElem) & "* " & p.name
       of ctArray:
         # by-value array params decay to pointers, they are read-only,
         # const-qualified so the read-only contract reaches the callee
-        params.add "const " & spellCudaType(p.typ, p.name, false)
+        params.add "const " & emitCudaType(p.typ, p.name, false)
       else:
-        params.add spellCudaType(p.typ, p.name, true)
+        params.add emitCudaType(p.typ, p.name, true)
     for b in ctx.builtins:
       # coordinate builtins have no CUDA parameter, the vocabulary is global
       discard b
@@ -564,10 +564,10 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
     for p in fn.params:
       case p.typ.kind
       of ctAptr, ctPtr:
-        params.add spellCudaScalar(p.typ.pElem) & "* " & p.name
+        params.add emitCudaScalar(p.typ.pElem) & "* " & p.name
       else:
-        params.add spellCudaType(p.typ, p.name, true)
-  let ret = spellCudaType(fn.ret, "", true)
+        params.add emitCudaType(p.typ, p.name, true)
+  let ret = emitCudaType(fn.ret, "", true)
   var prefix = ""
   if fn.isKernel:
     # extern "C" keeps the unmangled name that the host runtime looks up
@@ -595,13 +595,13 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
       # CUDA requires at least one field in a struct
       src &= "  char _;\n"
     for f in t.fields:
-      src &= "  " & spellCudaType(f.typ, f.name, false) & ";\n"
+      src &= "  " & emitCudaType(f.typ, f.name, false) & ";\n"
     src &= "};\n\n"
   for s in m.globals:
     if s.kind != sVar:
       ctx.fail("module global " & s.name & " is not a variable")
       break
-    var decl = spellCudaType(s.declType, s.name, false)
+    var decl = emitCudaType(s.declType, s.name, false)
     if s.init != nil:
       decl &= " = " & ctx.printExpr(s.init)
     src &= "__constant__ " & decl & ";\n"
@@ -611,9 +611,9 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   # (`CirModule.features`, filled by the feature-scan pass)
   let reduceKinds = m.features.reductions
   if rbkReduceAdd in reduceKinds:
-    src &= spellWarpReduceTemplate(rbkReduceAdd)
+    src &= emitWarpReduceTemplate(rbkReduceAdd)
   if rbkReduceMax in reduceKinds:
-    src &= spellWarpReduceTemplate(rbkReduceMax)
+    src &= emitWarpReduceTemplate(rbkReduceMax)
   if ctx.failing():
     return ("", ctx.err)
   for fn in m.procs:
