@@ -1,5 +1,6 @@
-## SPIR-V per-target lowering: bool storage retype.
 {.experimental: "codeReordering".}
+
+## SPIR-V per-target lowering: bool storage retype.
 ##
 ## The 4-byte push-constant convention has no bool member.
 ## Module-level bool storage and kernel-boundary bool symbols retype
