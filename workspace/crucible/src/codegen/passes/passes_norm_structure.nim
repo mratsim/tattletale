@@ -232,10 +232,12 @@ proc structurize(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt] =
       elif thenTgt.len > 0 or elseTgt.len > 0:
         # one side jumps, the other is empty
         let tgt = if thenTgt.len > 0: thenTgt else: elseTgt
-        if ctx.exitL.len == 0 or tgt != ctx.exitL:
+        let isGuardBreak = ctx.exitL.len > 0 and tgt == ctx.exitL
+        let isContinue = ctx.contL.len > 0 and tgt == ctx.contL
+        if not (isGuardBreak or isContinue):
           ctx.fail("one-sided jump to " & tgt & " outside a loop guard")
           continue
-        result.add s  # guard's break, named at emission
+        result.add s  # guard's break or a continue, named at emission
         i.inc
     of sLoop:
       # exit label sits right after the loop, the continue label inside

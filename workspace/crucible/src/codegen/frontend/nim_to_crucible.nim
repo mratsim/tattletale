@@ -1632,11 +1632,23 @@ func bodyMarksUnroll(body: NimNode): bool =
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `while` loop lowers to a conditionless `loop` with a leading guard
   ## and the exit label after the loop (final_ir.md rule 2).
+  ## `break` targets the exit label.
+  ## `continue` targets a label at the body's end, so the condition
+  ## re-checks on the wrap back to the guard.
+  ## The label is emitted only when the body uses `continue`.
+  ## Its jump stays forward under the verifier's forward-only `jmp` model.
   if ctx.failing():
     return @[]
   let exitL = ctx.freshLabel("lx")
+  let contL = ctx.freshLabel("lc")
+  let savedContinue = ctx.continueUsed
+  ctx.continueUsed = false
+  ctx.loopStack.add((exitL: exitL, contL: contL))
   let unroll = bodyMarksUnroll(n[1])
   let body = ctx.lowerStmt(n[1])
+  let contUsed = ctx.continueUsed
+  ctx.loopStack.del(ctx.loopStack.high)
+  ctx.continueUsed = savedContinue
   if ctx.failing():
     return @[]
   var guard: seq[CirStmt] = @[]
@@ -1646,7 +1658,8 @@ proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     guard = ctx.genCond(n[0], "", exitL, "")
     if ctx.failing():
       return @[]
-  result = @[loopS(guard & body, unroll), labS(exitL)]
+  let bodyTail = if contUsed: @[labS(contL)] else: @[]
+  result = @[loopS(guard & body & bodyTail, unroll), labS(exitL)]
 
 proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `for` over a literal range or `countup`:
