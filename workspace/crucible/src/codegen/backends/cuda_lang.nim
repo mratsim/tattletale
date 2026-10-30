@@ -43,7 +43,7 @@ type
     indent: int
     ## Per-kernel state.
     builtins: OrderedSet[string]
-    ## Canonical builtin names the kernel body references, first-use order.
+    ## Canonical builtin names that the kernel body references, first-use order.
 
 proc failing(ctx: PrintCtx): bool =
   ctx.err.len > 0
@@ -97,7 +97,7 @@ proc spellCudaScalar(t: CirType): string =
     else:
       result = ""
   of ctVector:
-    # CUDA vector types, the short scalar names the CUDA headers define
+    # CUDA vector types, the short scalar names that the CUDA headers define
     let elem = case t.vElem.kind
       of ctInt:
         case t.vElem.bits
@@ -173,7 +173,7 @@ proc spellCudaLit(e: CirExpr): string =
       result = $e.value
   of eFloatLit:
     # CUDA has no `inf`/`nan` tokens and Nim's `$` renders `inf`/`nan`,
-    # emission text is the <math.h> macros the CUDA compiler accepts
+    # emission text is the <math.h> macros that the CUDA compiler accepts
     case e.fValue.classify
     of fcInf:
       result = "INFINITY"
@@ -469,8 +469,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
         text.add(s.asmOperands[i].name)
     result = pad & "asm(" & text.strip() & ");"
   of sEmit:
-    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
-    # no terminator appended, the text ends where it ends
+    # `{.emit.}` raw source: the operand names splice into the verbatim text,
+    # no terminator appended, the text supplies its own terminators
     var text = ""
     for i, part in s.emitParts:
       text.add(part)
@@ -622,7 +622,7 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
   let ret = spellCudaType(fn.ret, "", true)
   var prefix = ""
   if fn.isKernel:
-    # extern "C" keeps the unmangled name the host runtime looks up
+    # extern "C" keeps the unmangled name that the host runtime looks up
     prefix = "extern \"C\" __global__ "
   else:
     if fn.forceInline:

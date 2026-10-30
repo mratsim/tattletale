@@ -42,7 +42,7 @@ type
     indent: int
     ## Per-kernel state.
     builtins: OrderedSet[string]
-    ## Canonical builtin names the kernel body references, first-use order.
+    ## Canonical builtin names that the kernel body references, first-use order.
 
 proc failing(ctx: PrintCtx): bool =
   ctx.err.len > 0
@@ -190,7 +190,7 @@ proc spellMslLit(e: CirExpr): string =
       result = $e.value
   of eFloatLit:
     # MSL has no `inf`/`nan` tokens and Nim's `$` renders `inf`/`nan`.
-    # Emission text is the <math.h> macros the MSL compiler accepts.
+    # Emission text is the <math.h> macros that the MSL compiler accepts.
     # Literal width converts at the use site.
     case e.fValue.classify
     of fcInf:
@@ -492,7 +492,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
         text.add(s.asmOperands[i].name)
     result = pad & text
   of sEmit:
-    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
+    # `{.emit.}` raw source: the operand names splice into the verbatim text,
     # no terminator appended, the text supplies its own terminators
     var text = ""
     for i, part in s.emitParts:

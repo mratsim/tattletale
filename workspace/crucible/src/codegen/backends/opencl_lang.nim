@@ -9,7 +9,8 @@
 ## table-driven over the closed type lattice.
 ##
 ## Emission contract:
-## - one `{.global.}` kernel per module, the device functions it calls emitted alongside
+## - every kernel of the module prints, in encounter order: one OpenCL program per module,
+##   the device functions print alongside, forward-declared
 ## - the kernel signature is `__kernel void <name>(...)`: one parameter per kernel parameter, the host `store` packing order
 ## - device pointers render as `__global T* restrict` parameters, element access `p[index]`
 ## - `eSizeof` prints C `sizeof`, OpenCL C is C99
@@ -428,10 +429,12 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     if e.callee.kind == eSym and e.callee.builtin:
       case e.callee.name
       of "simd_shuffle":
-        # `sub_group_shuffle` takes the subgroup-relative index as `uint`, cast
+        # `sub_group_shuffle` takes the subgroup-relative index as `uint`,
+        # a `(uint)` cast wraps the second argument
         return "sub_group_shuffle(" & args[0] & ", (uint)(" & args[1] & "))"
       of "simd_shuffle_xor":
-        # `sub_group_shuffle_xor` takes the xor mask as `uint`, cast
+        # `sub_group_shuffle_xor` takes the xor mask as `uint`,
+        # a `(uint)` cast wraps the second argument
         return "sub_group_shuffle_xor(" & args[0] & ", (uint)(" & args[1] & "))"
       else: discard
     if e.callee.kind == eSym and e.callee.builtin and
@@ -600,7 +603,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     ctx.fail("inline assembly has no OpenCL C form")
     result = ""
   of sEmit:
-    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
+    # `{.emit.}` raw source: the operand names splice into the verbatim text,
     # no terminator appended, the text supplies its own terminators
     var text = ""
     for i, part in s.emitParts:
@@ -714,7 +717,7 @@ proc spellConstDecl(ctx: var PrintCtx, s: CirStmt): string =
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full OpenCL C translation unit: extension pragmas, struct typedefs,
   ## program-scope `__constant` declarations, the device functions,
-  ## and the kernel.
+  ## and the kernels.
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>")

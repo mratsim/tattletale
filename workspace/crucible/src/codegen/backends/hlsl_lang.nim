@@ -1135,7 +1135,7 @@ proc registerStructRefs(ctx: var PrintCtx, t: CirType, refs: var HashSet[string]
     discard
 
 proc scanStmtStructRefs(ctx: var PrintCtx, ss: seq[CirStmt], refs: var HashSet[string]) =
-  ## Records the struct types the statement tree references: declaration types,
+  ## Records the struct types that the statement tree references: declaration types,
   ## construction types and cast result types.
   for s in ss:
     case s.kind
