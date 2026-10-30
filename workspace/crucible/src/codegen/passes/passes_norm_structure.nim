@@ -27,8 +27,10 @@
 ## - a Cx test `ite(c, [jmp A], [jmp B])`: one block continues the condition chain, the other reaches the shared merge
 ## - an elif chain `ite(c, body, [])` ending in `jmp(merge)`: the rest of the list is the else, the merge label closes it
 ## - a plain `ite` with real bodies: if/else, or a loop guard with one empty side jumping to the loop exit: the break form
-## - a `jmp` to a label outside the current list: the block's exit, dropped, the caller's continuation takes over
+## - a block's trailing `jmp` to a label outside the current list: the block's exit, dropped,
 ##   the caller's continuation takes over
+##
+## Any other `jmp` to a label outside the current list refuses loudly.
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -80,12 +82,25 @@ proc structurizeList(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt]
 
 proc structurizeBlock(ctx: var StructCtx, stmts: seq[CirStmt], lo, hi: int): seq[CirStmt] =
   ## Structurizes the slice `stmts[lo ..< hi]`.
-  ## The slice's own labels form its label table. A jump to a label outside
-  ## the slice leaves the block, the caller's continuation takes over.
+  ## The slice's own labels form its label table. Only the slice's trailing
+  ## `jmp` may target a label outside the slice: that jump is the block's exit.
+  ## Dropping it lets the caller's continuation take over.
+  ## Any other jump refuses loudly.
   if ctx.failing():
     return
   var sub = ctx
-  result = sub.structurizeList(stmts[lo ..< hi])
+  var endIx = hi
+  if hi > lo and stmts[hi - 1].kind == sJmp:
+    var targetInside = false
+    for j in lo ..< hi - 1:
+      if stmts[j].kind == sLab and stmts[j].labName == stmts[hi - 1].jmpTarget:
+        targetInside = true
+        break
+    if not targetInside:
+      # block-exit jump: the target names the caller's continuation
+      # hiding it from the walk, so an earlier leaving jump cannot pass for it
+      endIx = hi - 1
+  result = sub.structurizeList(stmts[lo ..< endIx])
   ctx.err = sub.err
 
 proc isTrivialJmp(s: seq[CirStmt]): bool =
@@ -126,7 +141,8 @@ proc structurize(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt] =
       if s.jmpTarget == ctx.exitL or s.jmpTarget == ctx.contL:
         result.add s  # break/continue, named at emission
       elif not ctx.labPos.hasKey(s.jmpTarget):
-        discard  # block's exit, the caller's continuation takes over
+        ctx.fail("jump to " & s.jmpTarget & " leaves the statement list")
+        continue
       else:
         ctx.fail("unexpected jump to " & s.jmpTarget)
         continue
@@ -267,8 +283,8 @@ proc structurize(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt] =
 proc structurizeList(ctx: var StructCtx, stmts: seq[CirStmt]): seq[CirStmt] =
   ## Structurizes one statement list.
   ## The list's own labels form its label table: a jump to a label outside
-  ## the list leaves it. The caller's continuation or the enclosing loop
-  ## then takes over.
+  ## this list refuses. `structurizeBlock` strips a block-exit jump before the walk,
+  ## the caller's continuation then takes over.
   if ctx.failing():
     return
   ctx.labPos = initTable[string, int]()
