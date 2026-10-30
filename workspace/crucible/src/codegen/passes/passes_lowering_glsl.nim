@@ -12,27 +12,27 @@
 ##
 ##   kernel body → glslDissolvePointerLocals → glslHoistProgramScopeLocals → printed GLSL source
 ##
-## GLSL has no function-storage addressing, so a local cannot be addressed,
-## and threadgroup/constant-storage locals must live at program scope:
+## GLSL has no function-storage addressing, a local cannot be addressed.
+## Threadgroup and constant-storage locals must live at program scope:
 ##
 ## - `glslDissolvePointerLocals`: pointer locals dissolve into their pointee,
-##   reads through the alias rewrite to the pointee symbol, a pointer read before
-##   its address-of binding or read as a value refuses. A rebinding of an already-bound pointer local refuses too. Kernel and device-function
-##   pointer parameters are untouched, the printer refuses them.
+##   reads through the alias rewrite to the pointee symbol
 ## - `glslHoistProgramScopeLocals`: `{.smem.}` kernel locals and `{.const_mem.}`
-##   locals relocate into `CirModule.globals` in encounter order,
-##   the printer emits them at program scope
-## - the smem relocation covers top-level kernel-body locals only, the const_mem
-##   relocation covers every proc and scope depth, program-scope `const` storage
-##   is visible to all functions
-## - an initializer-less const_mem local refuses in the pass and again at the printer as a shape guard
+##   locals relocate into `CirModule.globals` in encounter order, the smem relocation
+##   covers top-level kernel-body locals only, the const_mem relocation
+##   covers every proc and scope depth
+## - kernel and device-function pointer parameters stay for the printer to refuse
+##
+## Program-scope `const` storage is visible to all functions, a device function
+## reads the constants of the kernels it serves.
 ##
 ## Refusal homes:
-## - a `caDevice`-space local refuses at the printer, the pass does not touch
-##   device-space locals (GLSL locals are private)
-## - a threadgroup local surviving in a nested scope or device function refuses
-##   at the printer, the smem relocation covers only top-level kernel-body locals
-## - a const_mem local surviving outside the relocation refuses at the printer
+## - a pointer read before its address-of binding, a value read of a pointer,
+##   or a rebinding refuses in the dissolve pass
+## - a device-space local and a nested-scope or device-function threadgroup local
+##   refuse at the printer, GLSL locals are private
+## - a const_mem local without an initializer refuses in the hoist pass and again
+##   at the printer as a shape guard
 
 import std/[sets, tables]
 import ../ir/cirv2_lang
