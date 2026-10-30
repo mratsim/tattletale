@@ -1,8 +1,8 @@
 ## CUDA: `{.exportc.}` entry-point name override at macroexpansion.
 ##
-## Test that `{.exportc: "my_custom_entry".}` renames the emitted CUDA kernel
-## entry to `extern "C" __global__ void my_custom_entry` and that a bare
-## `{.exportc.}` kernel keeps its proc name.
+## Test that `{.exportc: "my_custom_entry".}` renames the emitted CUDA kernel entry
+## to `extern "C" __global__ void my_custom_entry`, and that a bare `{.exportc.}` kernel keeps its proc name.
+## newEngine(runCuda) quits with an error before any launch without a CUDA device, launch verification runs on the CUDA workstation.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

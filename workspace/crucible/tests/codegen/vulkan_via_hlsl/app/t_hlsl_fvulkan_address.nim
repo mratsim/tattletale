@@ -1,12 +1,7 @@
 ## Vulkan: the fvVulkan HLSL flavor, zero-descriptor device-address route.
 ##
-## Test that an `hlsl(fvVulkan)` kernel with buffer parameters produces
-## validated SPIR-V through dxc and executes through the engine's address route
-##
-## - every parameter is a `[[vk::push_constant]]` block member, buffer
-##   parameters hold `uint64_t` device addresses on locked member offsets
-## - a buffer access constructs `vk::BufferPointer` from the address per use
-## - readback [16, 27] for a = [10, 20], b = [1, 2], z = 5, byte-exact
+## Test that an `hlsl(fvVulkan)` kernel with buffer parameters produces valid
+## SPIR-V through dxc and executes through the engine's device-address route.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
