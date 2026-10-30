@@ -38,7 +38,6 @@ func registerOptimizationPasses*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 func isLitValue(e: CirExpr, value: int64): bool =
-  ## True for the integer or float literal carrying `value` exactly.
   case e.kind
   of eIntLit: e.value == value
   of eFloatLit: e.fValue == float64(value)
@@ -188,7 +187,6 @@ proc eliminateDeadLocals(m: CirModule): string =
 
 
 proc collectLocalReads(e: CirExpr, reads: var HashSet[string]) =
-  ## Every local name read in the expression.
   if e.isNil:
     return
   if e.kind == eSym:
@@ -224,7 +222,7 @@ proc collectLocalReads(stmts: seq[CirStmt], reads: var HashSet[string]) =
       for op in s.asmOperands:
         collectLocalReads(op, reads)
     of sEmit:
-      # an emit operand reads its symbol. The dead-local pass must keep it.
+      # an emit operand reads its symbol, the dead-local pass must keep it
       for op in s.emitOperands:
         collectLocalReads(op, reads)
     else:
