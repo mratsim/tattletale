@@ -13,7 +13,7 @@
 ## a body computing a constant with no parameter read.
 ## Layout algebra (`logical_divide`, `slice`, static shapes) crosses the kernel boundary through such shells.
 ##
-##   shell call site ──▶ its resolved constant, substituted before verification and printing
+##   shell call site ──▶ its resolved constant, substituted before printing
 ##   dead shell definition ──▶ deleted
 ##   dead constant local ──▶ deleted by the optimization stage's dead-local pass
 ##

@@ -27,13 +27,14 @@
 # - the C-family targets print the split pointer with its address space
 # - the per-address-space callee instantiation, registered after this pass,
 #   re-spaces the split pointer per call site
-# - the normal-form verifier refuses any span that survives, so the printers
+# - the pass refuses any span that survives its own rewrite, so the printers
 #   never see one
 
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
+import ./pass_helpers
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -325,6 +326,73 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
+# Survivor guard
+# ═══════════════════════════════════════════════════════════════════════
+
+proc typeHoldsSpan(t: CirType): bool =
+  ## True when `t` is a span or names one inside:
+  ##
+  ## - a pointer, array, or vector element
+  ## - a struct field, a proc parameter or return type
+  if t.isNil:
+    return false
+  case t.kind
+  of ctSpan:
+    result = true
+  of ctPtr, ctAptr:
+    result = typeHoldsSpan(t.pElem)
+  of ctArray:
+    result = typeHoldsSpan(t.aElem)
+  of ctVector:
+    result = typeHoldsSpan(t.vElem)
+  of ctStruct:
+    result = false
+    for f in t.fields:
+      if typeHoldsSpan(f.typ):
+        return true
+  of ctProc:
+    result = typeHoldsSpan(t.ret)
+    if result:
+      return true
+    for p in t.params:
+      if typeHoldsSpan(p):
+        return true
+  else:
+    result = false
+
+proc survivingSpanRejection(fn: CirProc): string =
+  ## Refusal naming the first openArray span that survived the split in one proc, "" when the proc is span-free.
+  ##
+  ## Refusal sites:
+  ##
+  ## - the return type
+  ## - a declaration that binds no `toOpenArray` assignment
+  ## - a span nested under another type
+  ## - an expression whose type resolves to a span
+  ##
+  ## Walk gaps the guard must still catch:
+  ##
+  ## - `sAsm` and `sEmit` operands, positions the rewrite walk skips
+  for p in fn.params:
+    if typeHoldsSpan(p.typ):
+      return "parameter " & p.name & " keeps an openArray span"
+  if typeHoldsSpan(fn.ret):
+    return "return type keeps an openArray span"
+  var err = ""
+  let checkStmt = proc(s: CirStmt) =
+    if err.len > 0:
+      return
+    if s.kind in {sVar, sConst} and typeHoldsSpan(s.declType):
+      err = "declaration " & s.name & " keeps an openArray span"
+  let checkExpr = proc(e: CirExpr) =
+    if err.len > 0:
+      return
+    if typeHoldsSpan(e.getExprType):
+      err = "an expression resolves to an openArray span type"
+  fn.body.walkStmts(checkStmt, checkExpr)
+  return err
+
+# ═══════════════════════════════════════════════════════════════════════
 # Pass runner
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -352,4 +420,10 @@ proc lowerSpansPass(m: CirModule): string =
       rewriteSpanUsesStmts(fn.body, ctx, err)
     if err.len > 0:
       return "in proc " & fn.name & ": " & err
+    let spanErr = fn.survivingSpanRejection()
+    if spanErr.len > 0:
+      return "in proc " & fn.name & ": " & spanErr
+  for g in m.globals:
+    if g.kind in {sVar, sConst} and typeHoldsSpan(g.declType):
+      return "in global scope: declaration " & g.name & " keeps an openArray span"
   return ""

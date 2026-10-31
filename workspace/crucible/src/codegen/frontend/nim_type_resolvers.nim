@@ -21,7 +21,7 @@
 ## Widths use the crucible convention: Nim `int`/`uint` lower to 32 bits.
 ##
 ## Rejections go into `err` as the first refusal message, the walk unwinds
-## through the err guards, matching the `cirv2_verify` rejection messages.
+## through the err guards.
 
 import ../ir/cirv2_lang
 import ../ir/cirv2_build

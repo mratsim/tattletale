@@ -6,7 +6,7 @@
 ## - a span parameter splits to `aptr` + `int32` in the callee's signature
 ## - a `toOpenArray` call argument splits into `base + first` and `last - first + 1`, a `len` read folds the same way
 ## - a threadgroup-space call site names a clone whose split pointer formal re-types to the threadgroup space
-## - no `toOpenArray` call survives, and the verifier refuses a surviving span
+## - no `toOpenArray` call survives, and the pass refuses a span that survives the split
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -15,7 +15,6 @@
 
 import std/strutils
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/ir/cirv2_verify
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/passes_lowering
 import workspace/crucible/src/codegen/passes/passes_lowering_msl
@@ -206,19 +205,54 @@ static:
     doAssert not fn.body.holdsToOpenArrayCall,
       "no toOpenArray call may survive the split in " & fn.name
 
-  # ═══ the post-pass module verifies clean ═══
-  doAssert verifyMessage(m).len == 0,
-    "the post-pass module must verify clean: " & verifyMessage(m)
+  # ═══ an unconsumed span declaration refuses in the pass ═══
+  # No `toOpenArray` assignment binds the declaration. The split leaves the span type in place.
+  let declSurvivor = moduleD("survivor", @[], @[procD("g",
+    @[param("out", outT)], tVoid(), @[
+      varD("v", spanDev, nil),
+      asgnS(patE(sym("out", outT), intLit(0, i32)), intLit(1, i32)),
+    ])])
+  declSurvivor.procs[0].isKernel = true
+  let dmsg = declSurvivor.runLowering()
+  doAssert dmsg.contains("span"),
+    "the pass must refuse an unconsumed span declaration, got: [" & dmsg & "]"
 
-  # ═══ the verifier refuses a span that survived lowering ═══
-  let survivor = moduleD("survivor", @[], @[procD("g",
-    @[param("s", spanDev)], f32, @[retS(patE(sym("s", spanDev), intLit(0, i32)))]),
-    procD("h", @[param("out", outT)], tVoid(), @[asgnS(
-      patE(sym("out", outT), intLit(0, i32)),
-      callE(sym("g", tProcT(spanDev, f32)), toOpenArrayE(sym("out", outT),
-        caDevice, 0, 3)))])])
-  let vmsg = verifyMessage(survivor)
-  doAssert vmsg.contains("span"), "the verifier must refuse a surviving span, got: " & vmsg
+  # ═══ a span nested inside another type refuses in the pass ═══
+  # This span sits under the array pointer. The split only rewrites parameters
+  # typed as the span itself.
+  let nestSurvivor = moduleD("nest", @[], @[procD("g",
+    @[param("p", tAptr(caDevice, spanDev))], tVoid(), @[])])
+  nestSurvivor.procs[0].isKernel = true
+  let nmsg = nestSurvivor.runLowering()
+  doAssert nmsg.contains("span"),
+    "the pass must refuse a span nested in a parameter type, got: [" & nmsg & "]"
+
+  # ═══ a span return type refuses in the pass ═══
+  # A return type has no statement slot for the split to consume.
+  let retSurvivor = moduleD("retspan", @[], @[procD("g",
+    @[param("out", outT)], spanDev, @[retS(nil)])])
+  retSurvivor.procs[0].isKernel = true
+  let rmsg = retSurvivor.runLowering()
+  doAssert rmsg.contains("span"),
+    "the pass must refuse a span-typed return, got: [" & rmsg & "]"
+
+  # ═══ an expression stating a span type refuses in the pass ═══
+  let exprSurvivor = moduleD("exprspan", @[], @[procD("g",
+    @[param("out", outT)], tVoid(), @[
+      asgnS(patE(sym("out", outT), intLit(0, i32)),
+        castE(spanDev, intLit(0, i32))),
+    ])])
+  exprSurvivor.procs[0].isKernel = true
+  let emsg = exprSurvivor.runLowering()
+  doAssert emsg.contains("span"),
+    "the pass must refuse an expression stating a span type, got: [" & emsg & "]"
+
+  # ═══ a span-typed program-scope global refuses in the pass ═══
+  let globSurvivor = moduleD("glob", @[], @[])
+  globSurvivor.globals.add(varD("gv", spanDev, nil))
+  let gmsg = globSurvivor.runLowering()
+  doAssert gmsg.contains("span"),
+    "the pass must refuse a span-typed global declaration, got: [" & gmsg & "]"
 
   # ═══ an unconsumed toOpenArray call refuses in the pass ═══
   let stray = moduleD("stray", @[], @[procD("h2", @[param("out", outT)], tVoid(),

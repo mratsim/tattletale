@@ -6,7 +6,6 @@
 ## - a matching-space call site keeps the callee
 ## - a differing call site names a clone whose pointer formal re-types to the argument's space
 ## - same-combination call sites share one clone, and callees outside the module never specialize
-## - the verifier rejects a surviving module-callee space mismatch
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -15,7 +14,6 @@
 
 import std/[sets, strutils]
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/ir/cirv2_verify
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/passes_lowering_msl
 
@@ -120,37 +118,5 @@ static:
 
   # g's threadgroup formal never specializes
   doAssert m.findProcs("g").len == 1
-
-  # ═══ the verifier rejects a surviving module-callee space mismatch ═══
-  let mismatchKern = procD("k2", @[param("out", tAptr(caDevice, f32))], tVoid(), @[
-    asgnS(patE(sym("out", tAptr(caDevice, f32)), intLit(0, tInt(32))),
-      callE(sym("h", tProcT(devP, tInt(32), f32)),
-        addrE(tgP, atE(sym("scratch", arrT), intLit(0, tInt(32)))),
-        intLit(0, tInt(32)))),
-  ])
-  mismatchKern.isKernel = true
-  let mismatch = moduleD("mismatch", @[], @[
-    procD("h", @[param("p", devP), param("i", tInt(32))], f32,
-      @[retS(derefE(sym("p", devP)))]),
-    mismatchKern,
-  ])
-  let msg = verifyMessage(mismatch)
-  doAssert msg.contains("address space"),
-    "the verifier must reject a module-callee space mismatch, got: " & msg
-  doAssert msg.contains("h"), "the rejection must name the callee, got: " & msg
-
-  # a foreign callee with a pointee-matching space mismatch stays legal
-  let foreignKern = procD("k3", @[param("out", tAptr(caDevice, f32))], tVoid(), @[
-    varD("priv", arrT, nil, caThread),
-    callS(sym("foreign_copy", tProcT(thP, devP, tVoid())),
-      addrE(thP, sym("priv", arrT)),
-      addrE(devP, patE(sym("out", tAptr(caDevice, f32)),
-        intLit(0, tInt(32))))),
-  ])
-  foreignKern.isKernel = true
-  let foreign = moduleD("foreign", @[], @[foreignKern])
-  doAssert verifyMessage(foreign).len == 0,
-    "a foreign callee's pointee-matching space mismatch stays legal: " &
-    verifyMessage(foreign)
 
 echo "[OK] t_ir_space_generics"

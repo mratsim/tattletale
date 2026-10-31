@@ -175,7 +175,7 @@ proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx) =
   ## - a callee outside the module
   ## - an arity mismatch with the module callee
   ##
-  ## The printers and the verifier judge whatever survives.
+  ## The printers judge whatever survives.
   let onExpr = proc(e: CirExpr) =
     if ctx.err.len > 0 or e.kind != eCall or e.callee.kind != eSym:
       return

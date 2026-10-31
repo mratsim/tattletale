@@ -16,7 +16,6 @@
 
 import std/[sets, strutils]
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/ir/cirv2_verify
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/passes_lowering_glsl {.all.}
 
@@ -108,10 +107,6 @@ static:
     "a var parameter passed through re-types to the pointee at the call boundary"
   doAssert fBody.callCallee.typ.kind == ctProc and
     sameType(fBody.callCallee.typ.params[0], i32)
-
-  # ═══ the post-pass module verifies clean ═══
-  doAssert verifyMessage(m).len == 0,
-    "the post-pass module must verify clean: " & verifyMessage(m)
 
   # ═══ a non-lvalue argument at a var parameter position refuses ═══
   let badBump = varParamProc("bump", @[param("x", xPtr)], @[

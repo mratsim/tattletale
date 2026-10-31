@@ -16,7 +16,6 @@
 
 import std/[sets, strutils]
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/ir/cirv2_verify
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/passes_lowering_wgsl {.all.}
 
@@ -96,10 +95,6 @@ static:
   doAssert call.kind == sCall and call.callCallee.kind == eSym and
     call.callCallee.name == "bump" and call.callArgs[0].kind == eAddr,
     "the function-space call site keeps its address-of argument"
-
-  # ═══ the post-pass module verifies clean ═══
-  doAssert verifyMessage(m).len == 0,
-    "the post-pass module must verify clean: " & verifyMessage(m)
 
   # ═══ a callee whose body returns refuses ═══
   block:

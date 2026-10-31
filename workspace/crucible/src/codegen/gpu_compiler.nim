@@ -54,9 +54,9 @@ from ./backends/hlsl_lang import HlslFlavor, fvD3D12, fvVulkan
 macro codegenMetal(body: typed): string =
   ## Compiles a `metal:` block body into Metal Shading Language (MSL) code:
   ## CIRv2 lowering, the pass registry in stage order, then the MSL printer.
-  ## A refusal or a verifier violation anywhere in the chain is a compile-time
+  ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
   var reg = PassRegistry.new()
@@ -83,9 +83,9 @@ macro metal*(body: untyped): string =
 macro codegenCuda(body: typed): string =
   ## Compiles a `cuda:` block body into CUDA C++ source: CIRv2 lowering,
   ## the pass registry in stage order, then the CUDA printer.
-  ## Refusals and verifier violations in the chain are compile-time
+  ## Refusals in the chain are compile-time
   ## errors naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
   var reg = PassRegistry.new()
@@ -112,9 +112,9 @@ macro cuda*(body: untyped): string =
 macro codegenOpenCL(body: typed): string =
   ## Compiles an `opencl:` block body into OpenCL C code: CIRv2 lowering,
   ## the pass registry in stage order, then the OpenCL printer.
-  ## Refusals and verifier violations in the chain are compile-time
+  ## Refusals in the chain are compile-time
   ## errors naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
   var reg = PassRegistry.new()
@@ -142,9 +142,9 @@ macro opencl*(body: untyped): string =
 macro codegenGLSL(body: typed): string =
   ## Compiles a `glsl:` block body into GLSL compute shader code:
   ## CIRv2 lowering, the pass registry in stage order, then the GLSL printer.
-  ## A refusal or a verifier violation anywhere in the chain is a compile-time
+  ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
   var reg = PassRegistry.new()
@@ -178,9 +178,9 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   ## environment through CIRv2 lowering, the pass registry in stage order,
   ## then the SPIR-V encoder.
   ##
-  ## Any refusal or verifier violation in the chain is a compile-time error
+  ## Any refusal in the chain is a compile-time error
   ## naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
   var reg = PassRegistry.new()
@@ -204,9 +204,9 @@ macro spirv*(body: untyped): seq[uint32] =
 macro codegenWebGpu(body: typed): string =
   ## Compiles a `webgpu:` block body into WebGPU WGSL code: CIRv2 lowering,
   ## the pass registry in stage order, then the WGSL printer.
-  ## A refusal or a verifier violation anywhere in the chain is a compile-time
+  ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
   var reg = PassRegistry.new()
@@ -239,9 +239,9 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   ## - CIRv2 lowering, the pass registry in stage order with the HLSL
   ##   per-target lowering passes and the call-graph analysis, then the HLSL
   ##   printer for `flavor`
-  ## - a refusal or a verifier violation in the chain is a compile-time
+  ## - a refusal in the chain is a compile-time
   ##   error naming the construct
-  let (m, lerr) = lowerCirv2Unverified(body)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
   var reg = PassRegistry.new()

@@ -13,7 +13,7 @@
 ## - comparisons derive their operand type from the first operand
 ## - calls exist only as statements (`callS`) or destination-bound expressions (`callE`)
 ##
-## Anything the builders cannot express correctly is a verifier violation, and `cirv2_verify` catches it.
+## A construct that the builders cannot express correctly has no node: build no such shape.
 
 import cirv2_lang
 import std/macros

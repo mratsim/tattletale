@@ -7,12 +7,10 @@
 
 {.experimental: "codeReordering".}
 
-## Validation stage over CIRv2: semantic checks plus the normal-form verifier,
-## all registry passes run after the transforms, right before printing.
+## Validation stage over CIRv2: semantic checks over the transformed module, right before printing.
 
 import std/sets
 import ../ir/cirv2_lang
-import ../ir/cirv2_verify
 import ./pass_datatypes
 import ./pass_helpers
 
@@ -21,8 +19,8 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerValidationPostPasses*(reg: var PassRegistry) =
-  ## Registers the validation stage every backend bundle runs last:
-  ## two semantic checks, then the normal-form verifier.
+  ## Registers the validation stage that every backend bundle runs last:
+  ## the two semantic checks.
   ##
   ## Placement contract: the stage sits after every transform, before printing.
   ##
@@ -30,21 +28,12 @@ func registerValidationPostPasses*(reg: var PassRegistry) =
   ##   The const_mem hoist relocates program-scope constants into `m.globals`
   ## - the per-address-space callee instantiation settles which pointer
   ##   spaces reach the printer, so the cast check reads final spaces
-  ## - the verifier assumes sound casts and read-only constant storage,
-  ##   so it runs after the semantic checks
   reg.register("validateAddressSpaceCasts", pkValidation, phaseMain,
     "Rejects pointer casts whose target space differs from the operand's storage provenance",
     run = validateAddressSpaceCastsPass)
   reg.register("validateConstantWrites", pkValidation, phaseMain,
     "Rejects assignments into constant storage, direct or through a pointer",
     run = validateConstantWritesPass)
-  reg.register("verify", pkValidation, phaseMain,
-    "Verifies the module, refuses on the first invariant violation",
-    run = verifyPass)
-
-proc verifyPass(m: CirModule): string =
-  verifyMessage(m)
-
 # ═══════════════════════════════════════════════════════════════════════
 # Address-space cast validation
 # ═══════════════════════════════════════════════════════════════════════
@@ -122,7 +111,9 @@ proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStora
   for p in fn.params:
     found.otherLocals.incl p.name
   let collect = proc(s: CirStmt) =
-    if s.kind == sVar:
+    if s.kind == sConst:
+      found.constLocals.incl s.name
+    elif s.kind == sVar:
       if s.space == caConstant:
         found.constLocals.incl s.name
       else:
@@ -138,6 +129,7 @@ proc constStorageTarget(e: CirExpr, storage: ConstStorage): string =
   ##
   ## Bare symbols:
   ##
+  ## - a `const` declaration is constant storage whatever its space
   ## - a const-space local is constant storage
   ## - any other local declaration or parameter shadows the program-scope globals of the same name
   ## - an undeclared name resolves against the program-scope globals
@@ -195,9 +187,13 @@ proc checkConstWritesStmts(ss: seq[CirStmt], fnName: string, storage: ConstStora
 proc validateConstantWritesPass(m: CirModule): string =
   ## Rejects writes into constant storage across every module proc and every
   ## program-scope statement. Returns "" when clean, else the first refusal.
+  ##
+  ## Reachability: the frontend emits an sConst declaration for every Nim `const` section.
+  ## Nim sem refuses any assignment to a `const`, so the frontend never emits a write to an sConst target.
+  ## The refusal has teeth over hand-built IR and any future producer.
   var constGlobals: HashSet[string]
   for g in m.globals:
-    if g.kind == sVar and g.space == caConstant:
+    if g.kind == sConst or (g.kind == sVar and g.space == caConstant):
       constGlobals.incl g.name
   for fn in m.procs:
     let err = fn.body.checkConstWritesStmts(fn.name,

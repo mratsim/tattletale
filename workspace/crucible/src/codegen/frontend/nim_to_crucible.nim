@@ -13,7 +13,7 @@
 ## - the single `{.global.}` wrapper proc whose body calls the kernel
 ##   (the launchDeviceFn shape)
 ##
-##   typed NimNode ──lower──▶ CIRv2 normal form ──verify──▶ CirModule
+##   typed NimNode ──lower──▶ CIRv2 module
 ##
 ## Types translate exactly once through `nim_type_resolvers`. Normal form produced directly:
 ##
@@ -29,7 +29,6 @@
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import nim_type_resolvers
-import ../ir/cirv2_verify
 import ../ir/cirv2_pretty
 import std/[macros, tables, strutils, hashes]
 
@@ -1472,8 +1471,7 @@ proc branchOn(ctx: var FrontendCtx, cond: CirExpr, trueL, falseL, fallL: string)
   ## Guarded transfer on a ready boolean expression:
   ## - jumps to `trueL`/`falseL`, one explicit `jmp` per taken side
   ## - an empty target name means fall-through, with no label to name
-  # A named target always gets an explicit jump: the verifier's lab/jmp
-  # model has no fall-through into a lab.
+  # A named target always gets an explicit jump: the lab/jmp model has no fall-through into a lab.
   # Both targets empty leaves no branch to take, that fails loudly.
   if trueL.len == 0 and falseL.len == 0:
     ctx.fail("branchOn: both branch targets are empty")
@@ -2513,13 +2511,12 @@ proc lowerModule(ctx: var FrontendCtx, bodyIn: NimNode) =
       ctx.fail("top-level construct not supported: " & $c.kind & " " & c.repr)
       return
 
-proc lowerCirv2Unverified*(body: NimNode): tuple[m: CirModule, err: string] =
-  ## Lowers the typed macro body to CIRv2 without verifying the normal form.
+proc lowerCirv2*(body: NimNode): tuple[m: CirModule, err: string] =
+  ## Lowers the typed macro body to CIRv2.
   ## Returns the module and "" when clean, else the first refusal message.
   ##
   ## Pipeline order:
   ## - the constant-shell fold and the structuring pass run on this output
-  ## - verification runs after those passes
   var ctx = FrontendCtx()
   ctx.pushScope()
   ctx.lowerModule(body)
@@ -2528,17 +2525,13 @@ proc lowerCirv2Unverified*(body: NimNode): tuple[m: CirModule, err: string] =
   return (m, ctx.resolver.err)
 
 proc tryLowerCirv2*(body: NimNode): tuple[m: CirModule, err: string] =
-  ## Pure lowering entry: returns the verified CIRv2 module and "" when clean,
+  ## Pure lowering entry: returns the lowered CIRv2 module and "" when clean,
   ## else the first refusal message (the zero-tolerance channel).
-  let (m, err) = lowerCirv2Unverified(body)
-  if err.len == 0:
-    let vmsg = verifyMessage(m)
-    if vmsg.len > 0:
-      return (m, vmsg)
+  let (m, err) = lowerCirv2(body)
   return (m, err)
 
 proc toCirv2Module*(body: NimNode): CirModule =
-  ## Lowers the typed macro body to CIRv2 and verifies the normal form.
+  ## Lowers the typed macro body to CIRv2.
   ## Returns the module. A construct outside the supported closure rejects
   ## through `error`, naming the construct.
   let (m, err) = tryLowerCirv2(body)

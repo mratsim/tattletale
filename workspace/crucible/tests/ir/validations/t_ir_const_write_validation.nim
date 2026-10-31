@@ -159,6 +159,34 @@ static:
       "the forward-referenced shadow write must stay legal under the accepted " &
       "proc-granular resolution, got: [" & err & "]"
 
+  # ═══ 10. a `const` declaration is constant storage whatever its space ═══
+  # `const` ignores the space field: the declaration itself names read-only storage.
+  block:
+    let kern = procD("k10", @[param("out", devA)], tVoid(), @[
+      constD("k", f32, fltLit(1.0, f32)),
+      asgnS(sym("k", f32), fltLit(2.0, f32)),
+      asgnS(patE(sym("out", devA), intLit(0, tInt(32))), sym("k", f32)),
+    ])
+    kern.isKernel = true
+    let err = moduleD("probe", @[], @[kern]).runValidationStage()
+    doAssert err.contains("assignment into constant storage"),
+      "the validation stage must refuse the write to a const declaration, got: [" & err & "]"
+    doAssert err.contains("k10") and err.contains("k"),
+      "the refusal must name the kernel and the target, got: " & err
+
+  # ═══ 11. a program-scope `const` declaration, written from the kernel body ═══
+  block:
+    let kern = procD("k11", @[param("out", devA)], tVoid(), @[
+      asgnS(sym("g", f32), fltLit(5.0, f32)),
+      asgnS(patE(sym("out", devA), intLit(0, tInt(32))), sym("g", f32)),
+    ])
+    kern.isKernel = true
+    let m = moduleD("probe", @[], @[kern])
+    m.globals.add(constD("g", f32, fltLit(3.0, f32)))
+    let err = m.runValidationStage()
+    doAssert err.contains("assignment into constant storage"),
+      "the validation stage must refuse the write to a program-scope const, got: [" & err & "]"
+
   # ═══ hazard negatives: mutable storage and constant reads stay legal ═══
   block:
     let arrT = tArray(4, f32)

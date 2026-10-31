@@ -18,7 +18,7 @@
 ##
 ## Contract:
 ##
-## - input: a verified CIRv2 module, the verifier guarantees forward-only scoped `jmp` and targeted `lab`
+## - input: a CIRv2 module whose `jmp` are forward-only and scoped and whose `lab` are targeted
 ## - output: an equivalent module whose only remaining `lab`/`jmp` are a loop's continue and exit labels, either jmp names continue/break
 ## - any other `lab`/`jmp` refuses loudly, naming the proc and the label
 ##

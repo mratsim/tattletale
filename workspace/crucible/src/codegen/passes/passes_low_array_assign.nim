@@ -47,8 +47,8 @@ func registerDecomposeArrayAssign*(reg: var PassRegistry) =
 proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
   ## Builds the `__builtin_memcpy(&lhs, &rhs, sizeof(lhsType))` statement.
   ## The address operands type as thread pointers: the printers emit `&`
-  ## without a space qualifier, and the verifier re-spaces pointer arguments
-  ## to the callee's parameter space.
+  ## without a space qualifier, and the per-address-space callee instantiation
+  ## re-spaces pointer arguments to the callee's parameter space.
   let callee = sym("__builtin_memcpy",
     tProcT([tPtr(caThread, lhsType), tPtr(caThread, lhsType), tUint(-1)], tVoid()))
   let dst = addrE(tPtr(caThread, lhsType), lhs)

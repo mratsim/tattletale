@@ -15,7 +15,8 @@
 ## - calls bind to their destination: a call exists only as a statement or as the RHS of `asgn`
 ## - every typed operation states its type in the `(add Type a b)` discipline of the Leng grammar
 ##
-## The verifier in `cirv2_verify` enforces what the shape cannot.
+## The frontend refuses a construct that it cannot lower. The validation passes
+## check the semantics that the shape cannot encode.
 
 import std/[macros, hashes, sequtils, sets, tables]
 
@@ -120,7 +121,7 @@ type
 
   CirExprKind* = enum
     ## Expression vocabulary, Leng names. `eCall` exists so a call can bind
-    ## to its destination as the RHS of `asgn`. The verifier rejects it everywhere else.
+    ## to its destination as the RHS of `asgn`. The call builders emit it in that position only.
     eNil
     eTrue
     eFalse
@@ -564,7 +565,6 @@ proc getExprType*(e: CirExpr): CirType =
   ## Returns the expression's type, or nil when the node's shape does not determine one.
   ## Nil arises for a `deref` of a non-pointer, an `at` of a non-array, a `dot` naming no field of its struct.
   ##
-  ## The verifier turns a nil result into a positioned rejection.
   ## The shape-enforced kinds always produce a type: `eTrue`/`eFalse` yield `bool`,
   ## comparisons yield `bool`, `eSizeof` yields the machine word.
   case e.kind
