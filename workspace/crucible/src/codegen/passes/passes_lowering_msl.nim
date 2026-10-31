@@ -25,13 +25,6 @@
 ## - `mslThreadCoordinateBuiltins`: coordinate builtins thread down to device
 ##   functions as parameters (Metal rejects them outside kernel functions)
 ##
-## Arena ownership: the caller owns the arena and passes it as the call argument.
-## A kernel caller without a matching local gets an arena synthesized
-## into its body (the launchDeviceFn wrapper).
-##
-## Threading: call sites forward the caller's values, a kernel reads the builtins
-## it forwards directly.
-##
 ## Refusal homes:
 ## - a const_mem local without an initializer refuses in the pass, a survivor
 ##   outside the relocation refuses at the printer, which keeps a nil-init
@@ -67,9 +60,8 @@ func registerMslLoweringPasses*(reg: var PassRegistry) =
   ## Registration contract: the passes sit after the reserved-word rename,
   ## relocated declaration and appended parameter names match the renamed body references.
   ##
-  ## Order note: the smem hoist runs before the builtin threading.
   ## Each pass appends its parameters and matching call-site arguments last,
-  ## keeping both orders consistent.
+  ## the two orders stay consistent.
   reg.registerDecomposeArrayAssign()
   registerExplodeKernelStructs(reg)
   reg.register("mslHoistProgramScopeConstants", pkTransform, phaseMain,
@@ -115,39 +107,26 @@ proc mslHoistProgramScopeConstants(m: CirModule): string =
 proc extendedProcType(t: CirType, extra: seq[CirType]): CirType =
   ## A fresh proc type with `extra` appended to the parameters.
   ##
-  ## Call-site callee types are interned: structurally identical signatures
-  ## share one `CirType` ref. An in-place extension would leak into every
-  ## proc and call site carrying that signature, so each call site replaces
-  ## its symbol type with a fresh extended copy.
+  ## Callee types are interned, structurally identical signatures share one
+  ## `CirType` ref: an in-place extension would leak into every proc and call
+  ## site carrying the signature, so each call site takes a fresh extended copy.
   result = CirType(kind: ctProc)
   result.params = t.params & extra
   result.ret = t.ret
 
 proc procsByName(m: CirModule): Table[string, CirProc] =
-  ## Module procs keyed by name, backing the call-site callee lookup.
   for fn in m.procs:
     result[fn.name] = fn
 
 type
   SmemArena = tuple[name: string, declType: CirType, typ: CirType]
     ## One hoisted `{.smem.}` local:
-    ##
     ## - `name`, `declType`: the parameter name and the declared local type
-    ## - `typ`: the threadgroup pointer type that replaced the local:
-    ##   - an array arena takes `aptr[caThreadgroup, element]`, the body
-    ##     reads elements through the pointer
-    ##   - an object arena takes `ptr[caThreadgroup, object]`, the body
-    ##     reads fields through the reference
+    ## - `typ`: the threadgroup pointer type that replaced the local, an array
+    ##   arena takes an `aptr` over the element, an object arena a `ptr` over
+    ##   the object
 
 proc hoistSmemLocal(fn: CirProc, s: CirStmt, arenas: var seq[SmemArena]) =
-  ## Hoists one `{.smem.}` local into a threadgroup pointer parameter:
-  ##
-  ## - an array arena takes an `aptr` over the element type, the emitted
-  ##   parameter is `threadgroup T* name` and the body reads elements
-  ##   through the pointer
-  ## - an object arena takes a `ptr` over the object type, the emitted
-  ##   parameter is `threadgroup T& name` and the body reads fields
-  ##   through the reference
   let typ = if s.declType.kind == ctArray:
     tAptr(caThreadgroup, s.declType.aElem)
   else:
@@ -182,10 +161,8 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]) =
 proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
   ## Rewrites the reads of a hoisted array arena in place:
   ##
-  ## - every reference to the arena symbol retypes to the arena's `aptr`
-  ##   parameter type
-  ## - an `at` over the arena symbol becomes a `pat` over it, the printed
-  ##   text stays `scratch[i]`, the element type derives from the `aptr` base
+  ## - arena-symbol references retype to the `aptr` parameter type
+  ## - an `at` over the symbol becomes a `pat`, the printed text stays `scratch[i]`
   ##
   ## Expressions are refs, the rewrite applies to every sharer.
   if e.isNil:
@@ -235,11 +212,6 @@ proc rewriteArenaReadsStmts(ss: seq[CirStmt], arenaTypes: Table[string, CirType]
       discard
 
 proc ownedSmemNames(fn: CirProc): HashSet[string] =
-  ## Names under which a proc owns threadgroup storage:
-  ##
-  ## - the hoisted arena parameters the proc received
-  ## - the `{.smem.}` locals still declared in the body, top level and one
-  ##   `scope` level deep
   for p in fn.params:
     if p.typ.kind == ctPtr and p.typ.space == caThreadgroup:
       result.incl(p.name)
@@ -256,16 +228,15 @@ proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
                   arenas: seq[SmemArena], owned: var HashSet[string]): string =
   ## Appends one argument per hoisted arena of the callee to one call site:
   ##
-  ## - the caller owns a matching-name arena: the argument names it, typed
-  ##   as the callee's parameter. An array arena decays to its element
-  ##   pointer in the emitted source, an object arena binds by reference.
-  ## - a kernel caller without one: the arena synthesizes into the kernel
-  ##   body as the first statement, so a generated kernel launches a device
-  ##   function that owns its scratch (the launchDeviceFn wrapper)
-  ## - a device-function caller without one refuses, it has no threadgroup
-  ##   storage to lend
+  ## - a matching-name `{.smem.}` local in the caller supplies the argument,
+  ##   an array arena decays to its element pointer in the emitted source,
+  ##   an object arena binds by reference
+  ## - a kernel caller without one gets the arena synthesized into its body
+  ##   as the first statement (the launchDeviceFn wrapper)
+  ## - a device-function caller without one refuses, threadgroup storage is
+  ##   the caller's to lend
   ##
-  ## A callee symbol's proc type grows by the arena types. The growth is
+  ## A callee symbol's proc type grows by the arena types, the growth is
   ## idempotent per shared symbol node and matches the appended arguments.
   if callee.typ.kind == ctProc and
       callee.typ.params.len == calleeProc.params.len - arenas.len:
@@ -338,13 +309,10 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
   ## Hoists the `{.smem.}` locals of every device function to threadgroup
   ## reference parameters and binds the call sites.
   ##
-  ## Contract:
-  ## - the caller owns the arena: a matching-name `{.smem.}` local, or one
-  ##   synthesized into a kernel body when the kernel owns none (the launchDeviceFn wrapper case)
-  ## - a device-function caller without a matching arena refuses
-  ## - a callee symbol's proc type grows by the arena types to match the appended parameters and arguments
-  ## - runs before `mslRewriteSmemLocals`, which keeps the kernel-owned
-  ##   arenas in-body as threadgroup storage
+  ## - the caller owns the arena: a kernel without a matching local gets one
+  ##   synthesized into its body, a device-function caller without one refuses
+  ## - runs before `mslRewriteSmemLocals`, which keeps the kernel-owned arenas
+  ##   in-body
   var hoisted = initTable[string, seq[SmemArena]]()
   for fn in m.procs:
     if fn.isKernel:
@@ -427,10 +395,6 @@ proc builtinParamType(kind: CoordBuiltinKind): CirType =
 proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[CoordBuiltinKind]],
                       callTargets: Table[string, HashSet[string]],
                       needs: var Table[string, HashSet[CoordBuiltinKind]]): bool =
-  ## One fixpoint step of the need computation over the precomputed per-proc
-  ## reads and call targets. Returns true when the proc's need set grew.
-  ## A proc needs every coordinate builtin its body reads plus every builtin
-  ## its callees need.
   var kinds = direct[fn.name]
   for target in callTargets[fn.name]:
     if needs.hasKey(target):
@@ -468,10 +432,9 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
   ## builtin in the callee's parameter order, and grows the callee symbol's
   ## proc type to match.
   ##
-  ## - a kernel forwards the builtin-marked symbol: the printer emits the builtin read,
-  ##   the kernel signature gains the attributed parameter
-  ## - a device function forwards its own parameter, the plain symbol prints
-  ##   the bare name
+  ## - a kernel forwards the builtin-marked symbol: the printer then emits
+  ##   the builtin read, the kernel signature gains the attributed parameter
+  ## - a device function forwards its own parameter, the printer emits the bare name
   if callee.kind != eSym or not needs.hasKey(callee.name):
     return ""
   let calleeKinds = sortedCoordKinds(needs[callee.name])
@@ -571,12 +534,8 @@ proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
 proc mslThreadCoordinateBuiltins(m: CirModule): string =
   ## Threads the coordinate builtins down to the device functions as parameters.
   ##
-  ## Contract:
   ## - every device function gains one parameter per transitively needed coordinate builtin in builtin-kind declaration order
-  ## - a kernel body is untouched: it reads the builtins it forwards directly,
-  ##   the printer emits the attributed parameters from those reads
-  ## - every call site forwards the caller's values and the callee symbol's
-  ##   proc type grows by the appended parameter types
+  ## - a kernel body is untouched, it reads the builtins it forwards directly
   ## - Metal only: the builtins stay legal reads inside device functions on other targets, so the pass is not registered there
   var needs = initTable[string, HashSet[CoordBuiltinKind]]()
   var direct = initTable[string, HashSet[CoordBuiltinKind]]()

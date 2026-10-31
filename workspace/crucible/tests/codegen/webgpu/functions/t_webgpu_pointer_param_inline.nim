@@ -1,4 +1,4 @@
-## WebGPU: buffer-pointer device functions inline at their call sites (v1 port).
+## WebGPU: buffer-pointer device functions inline at their call sites.
 ##
 ## Test that a device function taking a pointer that cannot cross a WGSL
 ## function signature inlines at the call site and mutates the caller's storage:

@@ -35,9 +35,6 @@ import ./pass_datatypes
 
 func registerDecomposeArrayAssign*(reg: var PassRegistry) =
   ## Registers the whole-array assignment decomposition pass of the lowering stage.
-  ##
-  ## - the Metal, CUDA, and OpenCL bundles register it
-  ## - GLSL, HLSL, and WGSL assign arrays natively
   reg.register("decomposeArrayAssign", pkTransform, phaseMain,
     "Rewrites whole-array assignment and array-valued declaration init into" &
     " __builtin_memcpy calls",

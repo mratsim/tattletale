@@ -42,9 +42,9 @@ import ./pass_datatypes
 func registerLowerSpans*(reg: var PassRegistry) =
   ## Registers the openArray span split of the lowering stage.
   ##
-  ## Returns the registration on `reg`. Position: the shared lowering stage,
-  ## before every per-target transform, so the per-address-space callee
-  ## instantiation sees the split pointer + length call sites.
+  ## Placement contract: the shared lowering stage, before every per-target transform,
+  ## so the per-address-space callee instantiation sees the split
+  ## pointer + length call sites.
   reg.register("lowerSpans", pkTransform, phaseMain,
     "Splits openArray spans into pointer + length pairs, rewrites" &
     " toOpenArray call arguments, folds len reads",
@@ -57,11 +57,9 @@ func registerLowerSpans*(reg: var PassRegistry) =
 type
   SpanSig = object
     paramIdx: int
-    ## Position of the span parameter in the callee's parameter list.
     ptrTyp: CirType
     ## Element pointer the span splits to, the span's own space.
     lenTyp: CirType
-    ## int32, the split length's type.
 
   SpanSigs = Table[string, seq[SpanSig]]
   ## Callee name -> the span parameters that split, in parameter order.
@@ -71,7 +69,6 @@ type
   ##   mangling or prefix matching applies
 
 proc collectSpanSigs(m: CirModule): SpanSigs =
-  ## Span parameters of every module proc, keyed by proc name.
   for fn in m.procs:
     var sigs: seq[SpanSig]
     for i, p in fn.params:

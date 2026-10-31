@@ -113,7 +113,6 @@ proc crossesWgslSignature(t: CirType): bool =
     result = false
 
 proc hasCrossingPointerParam(fn: CirProc): bool =
-  ## Returns true when one of the proc's parameters cannot cross a WGSL function signature.
   for p in fn.params:
     if p.typ.crossesWgslSignature:
       return true
@@ -147,7 +146,6 @@ proc containsReturn(ss: seq[CirStmt]): bool =
   return false
 
 proc containsCall(e: CirExpr): bool =
-  ## True when a call expression appears anywhere inside the expression tree.
   if e.isNil:
     return false
   if e.kind == eCall:

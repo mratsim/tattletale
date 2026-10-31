@@ -248,7 +248,7 @@ SECTION_END_RE = re.compile(
     r"export|include)\b")
 
 # The emitted-text-assert rule (tests/codegen scope). Behavioral kernel tests
-# launch kernels and check readbacks; a string literal containment asserts on
+# launch kernels and check readbacks. A string literal containment asserts on
 # the emitted shader source instead, which the testing rules ban.
 #
 # - `"text" in expr` and `"text" notin expr`: a string literal on the left of

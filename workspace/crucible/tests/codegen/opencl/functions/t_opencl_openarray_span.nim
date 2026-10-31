@@ -1,4 +1,4 @@
-## OpenCL: openArray spans split to pointer + length (v1 port).
+## OpenCL: openArray spans split to pointer + length.
 ##
 ## Test that a device function taking an openArray[float32] parameter compiles, runs, and reads back exactly:
 ##

@@ -20,12 +20,13 @@
 ## - the clone's body reads of those formals retype with them
 ## - one clone serves every call site with the same combination
 ##
-## The key is the callee name plus one position/space pair per re-spaced formal.
-## The clone name uses the instantiation-name convention: callee name plus a base58 discriminator of the combination.
+## The clone name uses the instantiation-name convention: the callee name
+## plus a base58 discriminator of the combination.
 ##
 ## Two shapes never specialize:
 ##
-## - a formal declaring threadgroup or constant storage: its space names the storage the callee declares
+## - a formal declaring threadgroup or constant storage: its space names
+##   the storage the callee declares, never a provenance the call site picks
 ## - a callee outside the module: a builtin such as `__builtin_memcpy` states
 ##   a nominal formal space. The printers re-space it at the call site
 ##
@@ -77,9 +78,6 @@ proc wantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirTy
   ## Each `wanted[i]` re-types the formal's pointee to the argument's space whenever the argument names another space.
   ##
   ## Returns true when at least one pointer formal specializes.
-  ##
-  ## A formal declaring threadgroup or constant storage never specializes:
-  ## that space names the storage the callee declares, never a provenance the call site picks.
   wanted.setLen(callee.params.len)
   for i in 0 ..< callee.params.len:
     wanted[i] = callee.params[i].typ
@@ -95,9 +93,7 @@ proc wantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirTy
       result = true
 
 proc instKey(callee: CirProc, wanted: seq[CirType]): string =
-  ## Instantiation key: the callee name plus one position/space pair per
-  ## re-spaced parameter. Two call sites with the same per-argument spaces
-  ## produce the same key.
+  ## Instantiation key: the callee name plus one position/space pair per re-spaced parameter.
   result = callee.name
   for i in 0 ..< callee.params.len:
     if not sameType(wanted[i], callee.params[i].typ):

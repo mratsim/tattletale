@@ -7,7 +7,6 @@
 ## - device buffer, threadgroup scratch, per-thread local call sites
 ## - sentinel-initialized input, launch + byte-exact readback
 ##
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
