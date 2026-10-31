@@ -1,6 +1,7 @@
 ## Metal: compound-assign `+=` / `*=` executes on the device, including side-effecting-index and block-expression lvalues
 ##
-## Test that the value accumulates in the stored element and the LHS index expression is evaluated exactly once
+## Test that the value accumulates in the stored element and that the LHS index
+## expression of a compound assign evaluates exactly once
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -23,6 +24,14 @@ const hazardMsl = metal:
 
   proc hazardKernel(x: ptr UncheckedArray[int32]) {.global.} =
     x[tick(x) + 1] += 7
+
+  proc dupKernel(x: ptr UncheckedArray[int32]) {.global.} =
+    x[tick(x) + 1] = x[tick(x) + 1] + 7
+
+  proc captureKernel(x: ptr UncheckedArray[int32]) {.global.} =
+    var lhs_val = 100'i32
+    x[tick(x) + 1] += 7
+    x[3] = lhs_val
 
 const blitMsl = metal:
   proc blitKernel(x: ptr UncheckedArray[int32]) {.global.} =
@@ -57,9 +66,33 @@ proc runTest() =   # private, tests run in a proc so engines are destroyed at re
       engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
       engine.launchKernel("hazardKernel", oDev, ())
       engine.copyToHostFromDevice(addr x[0], oDev, x.len)
-      check x[0] == 1  # the index side effect fired exactly once
+      check x[0] == 1  # index side effect fired exactly once
       check x[1] == 7  # stored back into the element the single index selected
       check x[2] == 0  # a second index evaluation would have stored here
+
+    test "x[tick(x) + 1] = x[tick(x) + 1] + 7 written out keeps both index evaluations":
+      var x: array[4, int32] = [0'i32, 0, 0, 0]
+      var engine = newEngine(runMetal)
+      engine.ingest(hazardMsl)
+      let oDev = engine.allocDevice(int32, x.len)
+      engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
+      engine.launchKernel("dupKernel", oDev, ())
+      engine.copyToHostFromDevice(addr x[0], oDev, x.len)
+      check x[0] == 2  # written-out form evaluates the index twice
+      check x[2] == 7  # second evaluation selected the stored element
+      check x[1] == 0  # shared-tree binding shape would have stored here
+
+    test "x[tick(x) + 1] += 7 beside a local named lhs_val reads the user local back":
+      var x: array[4, int32] = [0'i32, 0, 0, 0]
+      var engine = newEngine(runMetal)
+      engine.ingest(hazardMsl)
+      let oDev = engine.allocDevice(int32, x.len)
+      engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
+      engine.launchKernel("captureKernel", oDev, ())
+      engine.copyToHostFromDevice(addr x[0], oDev, x.len)
+      check x[0] == 1  # index side effect fired exactly once
+      check x[1] == 7  # stored into the element the single index selected
+      check x[3] == 100  # temp never captured the user's lhs_val local
 
     test "x[block-expr] += 3 accumulates through the blitted lvalue":
       var x: array[4, int32] = [0'i32, 0, 0, 0]

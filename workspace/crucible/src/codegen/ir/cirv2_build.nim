@@ -273,3 +273,57 @@ proc procD*(name: string, params: seq[CirParam], ret: CirType, body: seq[CirStmt
 
 proc moduleD*(name: string, types: seq[CirType], procs: seq[CirProc]): CirModule =
   CirModule(name: name, types: types, procs: procs)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Proc pragmas
+# ═══════════════════════════════════════════════════════════════════════
+
+proc applyProcPragmas*(fn: NimNode, p: CirProc) =
+  ## Args:
+  ## - `p` the CirProc annotated in place
+  ##
+  ## `global` marks the compute entry point, `exportc` renames the emitted entry point,
+  ## `workgroup(x, y, z)` sets the baked launch shape.
+  ## `{.inline.}` marks an inline device function.
+  ##
+  ## Other pragmas are legal and dropped.
+  for prag in fn.pragma:
+    case prag.kind
+    of nnkIdent, nnkSym:
+      case prag.strVal
+      of "global":
+        p.isKernel = true
+      of "inline":
+        p.inline = true
+      else:
+        discard
+    of nnkExprColonExpr, nnkCall, nnkCommand:
+      if prag.len >= 2:
+        case prag[0].strVal
+        of "exportc":
+          # `exportc: "entry"` renames the emitted entry point.
+          # Bare `exportc` keeps the proc's own name.
+          p.exportName = prag[1].strVal
+        of "workgroup":
+          # both call and colon forms: `workgroup(x, y, z)`, `workgroup: (x, y, z)`
+          var dims: NimNode =
+            if prag.kind == nnkExprColonExpr:
+              prag[1]
+            else:
+              prag
+          if dims.kind in {nnkPar, nnkTupleConstr, nnkBracket}:
+            for d in 0 ..< 3:
+              # a missing trailing dimension defaults to 1: workgroup: (4, 2) is the (4, 2, 1) launch shape, 0 is not a legal GLSL/WGSL dimension
+              if d < dims.len:
+                p.workgroup[d] = dims[d].intVal.int
+              else:
+                p.workgroup[d] = 1
+          elif dims.kind in nnkIntLit .. nnkUInt64Lit:
+            p.workgroup[0] = dims.intVal.int
+            p.workgroup[1] = 1
+            p.workgroup[2] = 1
+        else:
+          discard
+    else:
+      discard
+

@@ -10,7 +10,9 @@
 ## Target-independent, every backend registers them identically.
 
 import ./pass_datatypes
+import ./passes_norm_compound_assign
 import ./passes_norm_shell_fold
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
+  reg.registerCompoundAssignTemps()
   reg.registerShellFolding()

@@ -20,7 +20,7 @@
 ## The frontend refuses a construct that it cannot lower. The validation passes
 ## check the semantics that the shape cannot encode.
 
-import std/[macros, hashes, sequtils, sets, tables]
+import std/[macros, hashes, sequtils, sets, strutils, tables]
 
 type
   CirAddrSpace* = enum
@@ -726,3 +726,85 @@ func isLvalue*(e: CirExpr): bool =
   ## An expression that names storage: a symbol, a dereference, an index,
   ## a pointer index, or a field access. `addr` and assignment take lvalues.
   e.kind in {eSym, eDeref, eAt, ePat, eDot}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Emitted-name vocabulary
+# ═══════════════════════════════════════════════════════════════════════
+
+const Base58Alphabet* = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+  ## Base58 alphabet: no 0/O/I/l for readability in emitted device code.
+
+func sanitizeIdent*(s: string): string =
+  ## Returns `s` with every character invalid in a target identifier replaced
+  ## by an underscore: Nim gensym backticks and the punctuation of structural
+  ## type text (`(int, int)` derives `_int__int_`).
+  result = newStringOfCap(s.len)
+  for c in s:
+    result.add(if c in {'a'..'z', 'A'..'Z', '0'..'9', '_'}: c else: '_')
+
+func mangleOperatorName*(s: string): string =
+  ## Returns `s` with operator punctuation replaced by words:
+  ## `*=` becomes `star_eq`, `+` becomes `plus`.
+  ## Any other non-identifier character becomes `X` plus its two-digit hex code.
+  ## An operator is not a legal identifier in the target languages.
+  result = newStringOfCap(s.len + 1)
+  if s.len > 0 and s[0] in Digits:
+    result.add "X"
+  template special(word: string) =
+    if result.len > 0 and result[^1] != '_':
+      result.add '_'
+    result.add word
+  for c in s:
+    case c
+    of 'a'..'z', '0'..'9', 'A'..'Z', '_':
+      result.add c
+    of '$': special "dollar"
+    of '%': special "percent"
+    of '&': special "amp"
+    of '^': special "roof"
+    of '!': special "emark"
+    of '?': special "qmark"
+    of '*': special "star"
+    of '+': special "plus"
+    of '-': special "minus"
+    of '/': special "slash"
+    of '\\': special "backslash"
+    of '=': special "eq"
+    of '<': special "lt"
+    of '>': special "gt"
+    of '~': special "tilde"
+    of ':': special "colon"
+    of '.': special "dot"
+    of '@': special "at"
+    of '|': special "bar"
+    else:
+      special "X" & toHex(ord(c), 2)
+
+func base58Short*(h: uint64): string =
+  ## Returns the 7-character base58 encoding of `h`, left-padded with `1` while `h` is small.
+  ## 58^7 is about 2.2e12: enough collision avoidance for one compilation unit's symbol names.
+  var n = h
+  result = newString(7)
+  for i in countdown(6, 0):
+    result[i] = Base58Alphabet[int(n mod 58)]
+    n = n div 58
+    if n == 0 and i == 0:
+      break
+    if n == 0:
+      for j in 0 ..< i:
+        result[j] = '1'
+      break
+
+func typeIdentityHash*(s: string): uint64 =
+  ## Returns the 64-bit FNV-1a hash of `s` with a splitmix64 finalizer:
+  ## the value distributes uniformly over all 64 bits so the base58 digits
+  ## never cluster on short inputs.
+  var h: uint64 = 0xcbf29ce484222325'u64
+  for c in s:
+    h = (h xor uint64(ord(c))) * 0x100000001b3'u64
+  h = (h xor (h shr 30)) * 0xbf58476d1ce4e5b9'u64
+  h = (h xor (h shr 27)) * 0x94d049bb133111eb'u64
+  h = h xor (h shr 31)
+  if h == 0:
+    h = 1
+  result = h

@@ -40,7 +40,6 @@
 import std/tables
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
-import ../frontend/nim_type_resolvers
 import ./pass_datatypes
 import ./pass_helpers
 
