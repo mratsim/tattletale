@@ -337,6 +337,13 @@ type
     ## class inside the `ptr`/`aptr` type (`space`).
     name*: string
     typ*: CirType
+    varParam*: bool
+    ## Nim `var T` formal: the argument binds by reference at the call boundary.
+    ##
+    ## Contract:
+    ## - the frontend marks it while the type is still the thread pointer
+    ## - the GLSL lowering pass retypes the parameter to its pointee
+    ## - the GLSL printer emits the `inout` qualifier on the mark
 
   CirProc* = ref object
     ## One proc or kernel: name, typed params, return type, statement body.

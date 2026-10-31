@@ -16,7 +16,10 @@
 ##
 ## Lowering-pass contract (`passes_lowering_glsl.nim` runs before printing):
 ## - `ptr` locals dissolve into their pointees (GLSL has no function-storage addressing), a surviving pointer local refuses, naming the pass
+## - a `var T` device-function parameter binds as `inout`, the qualify pass retyped it to its pointee
 ## - `{.smem.}` and `{.const_mem.}` kernel locals relocate into `CirModule.globals`, emitted as program-scope `shared`/`const` declarations
+##
+## Remaining checks:
 ## - a threadgroup/constant local surviving in a nested scope or device function refuses, a `caDevice`-space local refuses too
 ## - jmp to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
 
@@ -150,6 +153,15 @@ proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
     return ""
   ctx.requireRefBlock(t.pElem)
   result = refTypeName(t.pElem) & ' ' & ident
+
+proc emitGlslParam(t: CirType, name: string, varParam: bool): string =
+  ## GLSL parameter of a device function. A `var` binding gains an `inout` qualifier.
+  ## An array composes the dimension after the name (`float a[8]`).
+  let binding = if varParam: "inout " else: ""
+  if t.kind == ctArray:
+    result = binding & emitGlslScalar(t.aElem) & ' ' & name & "[" & $t.aN & "]"
+  else:
+    result = binding & emitGlslTypeBare(t) & ' ' & name
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
@@ -632,7 +644,7 @@ proc printFn(ctx: var PrintCtx, fn: CirProc): string =
         ", GLSL device functions take buffer references or values")
       return ""
     else:
-      params.add emitGlslTypeBare(p.typ) & ' ' & p.name
+      params.add emitGlslParam(p.typ, p.name, p.varParam)
   let ret = emitGlslTypeBare(fn.ret)
   let sig = ret & ' ' & fn.name & '(' & params.join(", ") & ")"
   return sig & " {\n" & bodyTxt & '\n' & "}"
@@ -878,7 +890,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
         ctx.fail("pointer parameter " & p.name &
           ", GLSL device functions take buffer references or values")
       else:
-        params.add emitGlslTypeBare(p.typ) & ' ' & p.name
+        params.add emitGlslParam(p.typ, p.name, p.varParam)
     if ctx.failing():
       return ("", ctx.err)
     result.src &= emitGlslTypeBare(fn.ret) & ' ' & fn.name & '(' &

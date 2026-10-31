@@ -2320,7 +2320,8 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
     for j in 0 ..< formal.len - 2:
       let pname = ctx.uniqueName(formal[j].strVal)
       let psym = sym(pname, typ)
-      params.add(CirParam(name: pname, typ: typ))
+      params.add(CirParam(name: pname, typ: typ,
+        varParam: ftype.kind == nnkVarTy))
       ctx.declareLocal(formal[j], psym)
   let ret = ctx.retType
   if ret.kind != ctVoid:

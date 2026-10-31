@@ -10,7 +10,7 @@
 ## WGSL lowering: per-target transforms for the WGSL storage model,
 ## registered by the WebGPU pipeline and run before printing.
 ##
-##   kernel body → explodeKernelStructs → wgslDissolvePointerLocals → wgslRewriteBoolKernelParamReads → wgslHoistProgramScopeLocals → printed WGSL source
+##   kernel body → explodeKernelStructs → wgslDissolvePointerLocals → wgslRewriteBoolKernelParamReads → wgslHoistProgramScopeLocals → wgslInlinePointerParamCalls → printed WGSL source
 ##
 ## - `explodeKernelStructs`: kernel parameters of struct type with pointer fields
 ##   expand into flat ptr/scalar leaf parameters, WebGPU is a flat resource target
@@ -23,6 +23,13 @@
 ## - `wgslHoistProgramScopeLocals`: `{.smem.}` and `{.const_mem.}` kernel
 ##   locals relocate into `CirModule.globals` in kernel-body order,
 ##   the printer emits them at module scope, top-level kernel-body locals only
+##
+## `wgslInlinePointerParamCalls` runs last:
+##
+## - a statement call to a device function inlines the callee at the call site
+## - the trigger is a callee parameter of buffer-reference type, or a pointer
+##   parameter outside the function address space
+## - the inlined callee drops from the module
 ##
 ## Kernel and device-function pointer parameters are untouched in the pass,
 ## the printer emits `ptr<function, T>` parameters as-is.
@@ -82,6 +89,301 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
     run = hoistProgramScopeLocals
   )
   reg.registerInstantiateAddressSpaceGenerics()
+  reg.register("wgslInlinePointerParamCalls", pkTransform, phaseMain,
+    "Inlines calls whose pointer arguments cannot cross a WGSL function" &
+    " signature",
+    run = inlinePointerParamCalls)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pointer-param call inlining
+# ═══════════════════════════════════════════════════════════════════════
+
+proc crossesWgslSignature(t: CirType): bool =
+  ## Returns true when the parameter type has no WGSL function-parameter form.
+  ## WGSL function signatures accept values and `ptr<function>` pointers only,
+  ## so a buffer reference and a pointer in any other address space refuse.
+  if t.isNil:
+    return false
+  case t.kind
+  of ctAptr:
+    result = true
+  of ctPtr:
+    result = t.space != caThread
+  else:
+    result = false
+
+proc hasCrossingPointerParam(fn: CirProc): bool =
+  ## Returns true when one of the proc's parameters cannot cross a WGSL function signature.
+  for p in fn.params:
+    if p.typ.crossesWgslSignature:
+      return true
+
+proc containsReturn(ss: seq[CirStmt]): bool =
+  ## Returns true when a `return` statement appears in the statement list:
+  ##
+  ## - nested bodies count
+  ## - the frontend's trailing `return` of a void body does not count, the caller drops it before splicing
+  for s in ss:
+    case s.kind
+    of sRet:
+      return true
+    of sIte:
+      if s.thenBody.containsReturn or s.elseBody.containsReturn:
+        return true
+    of sLoop:
+      if s.loopBody.containsReturn:
+        return true
+    of sCase:
+      for br in s.branches:
+        if br.body.containsReturn:
+          return true
+      if s.caseElse.containsReturn:
+        return true
+    of sScope:
+      if s.scopeBody.containsReturn:
+        return true
+    else:
+      discard
+  return false
+
+proc containsCall(e: CirExpr): bool =
+  ## True when a call expression appears anywhere inside the expression tree.
+  if e.isNil:
+    return false
+  if e.kind == eCall:
+    return true
+  for ch in getExprChildren(e):
+    if ch.containsCall:
+      return true
+  return false
+
+proc callsCrossingCalleeTransitively(fn: CirProc, procs: Table[string, CirProc], seen: var HashSet[string]): bool =
+  ## Returns true when `fn` calls itself or reaches a proc whose parameters
+  ## cannot cross a WGSL function signature. Splicing such a cycle would never terminate.
+  if fn.name in seen:
+    return false
+  seen.incl(fn.name)
+  var targets: HashSet[string]
+  fn.body.collectCallTargets(targets)
+  for t in targets:
+    let callee = procs.getOrDefault(t)
+    if callee.isNil:
+      continue
+    if callee.hasCrossingPointerParam:
+      return true
+    if callee.callsCrossingCalleeTransitively(procs, seen):
+      return true
+  return false
+
+proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
+  ## Replaces every symbol named in `subst` with its call-site argument, in place.
+  ## One substitution pass covers every parameter: the spliced argument is not re-walked, its symbols belong to the caller.
+  ## Expressions are refs, the rewrite applies to the node every sharer sees.
+  if e.isNil:
+    return
+  if e.kind == eSym:
+    if subst.hasKey(e.name):
+      let arg = subst[e.name]
+      e[] = arg[]
+    return
+  for ch in getExprChildren(e):
+    ch.substituteArgsExpr(subst)
+
+proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
+  ## Statement-walk overload of `substituteArgsExpr`, nested bodies included.
+  for s in mitems(ss):
+    case s.kind
+    of sVar, sConst:
+      s.init.substituteArgsExpr(subst)
+    of sAsgn:
+      s.lhs.substituteArgsExpr(subst)
+      s.rhs.substituteArgsExpr(subst)
+    of sIte:
+      s.cond.substituteArgsExpr(subst)
+      s.thenBody.substituteArgsStmts(subst)
+      s.elseBody.substituteArgsStmts(subst)
+    of sLoop:
+      s.loopBody.substituteArgsStmts(subst)
+    of sCase:
+      s.selector.substituteArgsExpr(subst)
+      for br in mitems(s.branches):
+        br.body.substituteArgsStmts(subst)
+      s.caseElse.substituteArgsStmts(subst)
+    of sScope:
+      s.scopeBody.substituteArgsStmts(subst)
+    of sAssume:
+      s.assumeCond.substituteArgsExpr(subst)
+    of sRet:
+      s.retVal.substituteArgsExpr(subst)
+    of sDiscard:
+      s.discardVal.substituteArgsExpr(subst)
+    of sCall:
+      s.callCallee.substituteArgsExpr(subst)
+      for a in mitems(s.callArgs):
+        a.substituteArgsExpr(subst)
+    of sJmp, sLab, sAsm, sEmit:
+      discard
+
+proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string
+  ## Forward declaration, nested statement lists recurse into each other.
+
+proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]): string =
+  ## A value-position call to a callee carrying a crossing pointer has no
+  ## statement form to splice into, so the call refuses. Returns "" when clean.
+  if e.isNil:
+    return ""
+  if e.kind == eCall and e.callee.kind == eSym:
+    let callee = procs.getOrDefault(e.callee.name)
+    if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
+      return dissolveFail(fn, "device function " & callee.name &
+        " takes a pointer that cannot cross a WGSL function signature," &
+        " a value-position call has no statement form to inline into")
+  for ch in getExprChildren(e):
+    let err = refuseValuePositionCalls(fn, ch, procs)
+    if err.len > 0:
+      return err
+  return ""
+
+proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string =
+  ## Splices one inlinable call into the statement list at its position, then recurses into the nested bodies.
+  ## Returns "" when clean, else the refusal.
+  var i = 0
+  while i < ss.len:
+    let s = ss[i]
+    if s.kind == sCall and s.callCallee.kind == eSym:
+      let callee = procs.getOrDefault(s.callCallee.name)
+      if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
+        if callee.ret.kind != ctVoid:
+          return dissolveFail(fn, "device function " & callee.name &
+            " takes a pointer that cannot cross a WGSL function signature" &
+            " and returns a value, only void device functions inline")
+        var body = cloneStmts(callee.body)
+        if body.len > 0 and body[^1].kind == sRet and body[^1].retVal == nil:
+          # an implicit fall-through return of the frontend, dropping it is
+          # semantics-preserving at the splice position
+          body.setLen(body.len - 1)
+        if body.containsReturn:
+          return dissolveFail(fn, "device function " & callee.name &
+            " takes a pointer that cannot cross a WGSL function signature," &
+            " its body must not return, a spliced return would exit the caller")
+        for a in s.callArgs:
+          if a.containsCall:
+            return dissolveFail(fn, "call argument of " & callee.name &
+              " contains a call, inlining would re-evaluate it")
+        var seen: HashSet[string]
+        if callee.callsCrossingCalleeTransitively(procs, seen):
+          return dissolveFail(fn, "device function " & callee.name &
+            " takes a pointer that cannot cross a WGSL function signature" &
+            " and reaches one through its calls, inlining would not terminate")
+        var subst = initTable[string, CirExpr]()
+        for j, p in callee.params:
+          subst[p.name] = s.callArgs[j]
+        body.substituteArgsStmts(subst)
+        ss = ss[0 ..< i] & body & ss[i + 1 .. ^1]
+        continue
+      for a in s.callArgs:
+        let aerr = refuseValuePositionCalls(fn, a, procs)
+        if aerr.len > 0:
+          return aerr
+    else:
+      case s.kind
+      of sVar, sConst:
+        let err = refuseValuePositionCalls(fn, s.init, procs)
+        if err.len > 0:
+          return err
+      of sAsgn:
+        let lerr = refuseValuePositionCalls(fn, s.lhs, procs)
+        if lerr.len > 0:
+          return lerr
+        let rerr = refuseValuePositionCalls(fn, s.rhs, procs)
+        if rerr.len > 0:
+          return rerr
+      of sIte:
+        let cerr = refuseValuePositionCalls(fn, s.cond, procs)
+        if cerr.len > 0:
+          return cerr
+        let terr = inlineInStmts(fn, s.thenBody, procs)
+        if terr.len > 0:
+          return terr
+        let eerr = inlineInStmts(fn, s.elseBody, procs)
+        if eerr.len > 0:
+          return eerr
+      of sLoop:
+        let lerr = inlineInStmts(fn, s.loopBody, procs)
+        if lerr.len > 0:
+          return lerr
+      of sCase:
+        let serr = refuseValuePositionCalls(fn, s.selector, procs)
+        if serr.len > 0:
+          return serr
+        for br in mitems(s.branches):
+          let berr = inlineInStmts(fn, br.body, procs)
+          if berr.len > 0:
+            return berr
+        let eerr = inlineInStmts(fn, s.caseElse, procs)
+        if eerr.len > 0:
+          return eerr
+      of sScope:
+        let serr = inlineInStmts(fn, s.scopeBody, procs)
+        if serr.len > 0:
+          return serr
+      of sAssume:
+        let aerr = refuseValuePositionCalls(fn, s.assumeCond, procs)
+        if aerr.len > 0:
+          return aerr
+      of sRet:
+        let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
+        if rerr.len > 0:
+          return rerr
+      of sDiscard:
+        let derr = refuseValuePositionCalls(fn, s.discardVal, procs)
+        if derr.len > 0:
+          return derr
+      of sCall, sJmp, sLab, sAsm, sEmit:
+        discard
+    i.inc
+  return ""
+
+proc inlinePointerParamCalls(m: CirModule): string =
+  ## Inlines the statement calls whose callee takes a non-crossable pointer:
+  ##
+  ## - a non-crossable pointer is a buffer reference, or a pointer whose address space is not the function space
+  ## - the callee body splices over the call with every argument substituted
+  ##   at its parameter's uses
+  ## - the inlined callee drops from the module
+  ## - calls whose pointer arguments all live in the function space keep real calls
+  ##
+  ## Returns "" when clean, else the first refusal.
+  ##
+  ## Placement contract:
+  ## - the pass runs after the dissolve pass, so the spliced bodies carry no pointer locals
+  ## - the pass runs after the per-address-space callee instantiation
+  ## - a formal re-spaced by its call sites refuses here exactly when the re-spaced signature could not print
+  var procs = initTable[string, CirProc]()
+  for fn in m.procs:
+    procs[fn.name] = fn
+  for fn in mitems(m.procs):
+    while true:
+      let err = inlineInStmts(fn, fn.body, procs)
+      if err.len > 0:
+        return err
+      var changed = false
+      var targets: HashSet[string]
+      fn.body.collectCallTargets(targets)
+      for t in targets:
+        let callee = procs.getOrDefault(t)
+        if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
+          changed = true
+      if not changed:
+        break
+  var kept: seq[CirProc]
+  for fn in m.procs:
+    if not fn.isKernel and fn.hasCrossingPointerParam:
+      # every call site inlined, the signature has no WGSL form
+      continue
+    kept.add fn
+  m.procs = kept
+  return ""
 
 # ═══════════════════════════════════════════════════════════════════════
 # Pointer dissolution
