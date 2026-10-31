@@ -47,8 +47,8 @@
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the HLSL lowering pass,
 ##   file-scope `static const` output, a smem, device-space or surviving
 ##   constant-space local refuses
-## - jmp to the loop exit label is `break`, to the continue label `continue`,
-##   any other lab/jmp refuses
+## - a loop prints `while (cond)`, a conditionless loop prints the braceless
+##   `for (;;)` head with the brace on its own line, `{.unroll.}` adds `[unroll]`
 ## - object constructions emit flat brace lists at any depth, `{ 0, 1, 2 }`,
 ##   the form DXC accepts over uniformly scalar members, a constructor assignment
 ##   lowers to member-wise leaves, DXC rejects compound literals on assignment.
@@ -547,8 +547,8 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
-  ## Forward declaration, the loop context (break/continue labels) is a parameter.
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
+  ## Forward declaration, nested statement lists recurse into it.
 
 proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, lines: var seq[string]) =
   ## Appends one `target.leaf = value` line per leaf field of a struct construction,
@@ -567,8 +567,8 @@ proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, l
     else:
       lines.add target & "." & f.name & " = " & ctx.printExpr(val) & ";"
 
-proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
-  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
+proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
+  ## One structured statement.
   if ctx.failing():
     return ""
   let pad = spaces(ctx.indent * 2)
@@ -630,35 +630,24 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sIte:
     let cond = ctx.printExpr(s.cond)
     ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
+    let thenTxt = ctx.printStmts(s.thenBody)
     ctx.indent.dec
     result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
     if s.elseBody.len == 1 and s.elseBody[0].kind == sIte:
       # an else side of one ite is the elif chain, printed as `else if`
-      result &= " else " & ctx.printStmt(s.elseBody[0], exitL, contL)
+      result &= " else " & ctx.printStmt(s.elseBody[0])
     elif s.elseBody.len > 0:
       ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
+      let elseTxt = ctx.printStmts(s.elseBody)
       ctx.indent.dec
       result &= " else {\n" & elseTxt & '\n' & pad & '}'
   of sLoop:
-    # loops print through printStmts, which derives the loop's own labels
+    # loops print through printStmts
     result = ""
-  of sLab:
-    # an exit label after a loop is the break target marker, dropped
-    result = ""
-  of sJmp:
-    if s.jmpTarget == exitL and exitL.len > 0:
-      result = pad & "break;"
-    elif s.jmpTarget == contL and contL.len > 0:
-      result = pad & "continue;"
-    else:
-      ctx.fail("unstructured jump to " & s.jmpTarget)
-      result = ""
   of sScope:
     result = pad & "{\n"
     ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody, exitL, contL)
+    result &= ctx.printStmts(s.scopeBody)
     ctx.indent.dec
     result &= '\n' & pad & '}'
   of sAssume:
@@ -727,25 +716,16 @@ proc isSelectArm(s: CirStmt, name: string): bool =
   ## matching one variant of a hoisted if-expression.
   s.kind == sAsgn and s.lhs.kind == eSym and s.lhs.name == name and s.rhs != nil
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
-  ## Prints one statement list. Plain statements take the caller's loop context,
-  ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
+  ## Prints one statement list.
   var lines: seq[string]
   var i = 0
   while i < stmts.len:
     let s = stmts[i]
     var txt: string
     if s.kind == sLoop:
-      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
-        stmts[i + 1].labName
-      else:
-        ""
-      var lCont = ""
-      for t in s.loopBody:
-        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
-          lCont = t.labName
       ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
+      let bodyTxt = ctx.printStmts(s.loopBody)
       ctx.indent.dec
       let directive = if s.unroll:
         spaces(ctx.indent * 2) & "[unroll]\n"
@@ -757,8 +737,7 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
         "for (;;)\n"
       txt = directive & spaces(ctx.indent * 2) & head &
         spaces(ctx.indent * 2) & "{\n" & bodyTxt & "\n" & spaces(ctx.indent * 2) & '}'
-      if lExit.len > 0:
-        i.inc  # exit label, consumed
+      i.inc
     elif s.kind == sVar and s.space == caThread and s.init == nil and
         s.declType.kind in {ctBool, ctInt, ctUint, ctFloat} and
         i + 1 < stmts.len and stmts[i + 1].kind == sIte and
@@ -783,7 +762,7 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
           " = " & condTxt & " ? " & thenTxt & " : " & elseTxt & ";"
       i.inc  # consumes the ite with the temp it assigns
     else:
-      txt = ctx.printStmt(s, exitL, contL)
+      txt = ctx.printStmt(s)
     if txt.len > 0:
       lines.add txt
     i.inc
@@ -915,7 +894,7 @@ proc printFn(ctx: var PrintCtx, fn: CirProc, graph: CallGraph): string =
       ctx.addressParams[p.name] = p.typ
       if graph.reached.contains(fn.name & "/" & p.name):
         ctx.rwBuffers.incl(p.name)
-  let bodyTxt = ctx.printStmts(fn.body, "", "")
+  let bodyTxt = ctx.printStmts(fn.body)
   if ctx.failing():
     return ""
   var pushParams = initHashSet[string]()
@@ -971,7 +950,7 @@ proc scanStmtStructRefs(ctx: var PrintCtx, ss: seq[CirStmt], refs: var HashSet[s
       for a in s.callArgs:
         if a.kind == eOconstr:
           ctx.registerStructRefs(a.ocType, refs)
-    of sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
+    of sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
       discard
 
 proc emitStructDecls(ctx: var PrintCtx, refs: var HashSet[string],
@@ -1213,7 +1192,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
       ctx.rwBuffers.incl(p.name)
   ctx.workgroup = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1]
                    else: kernel.workgroup)
-  let bodyTxt = ctx.printStmts(kernel.body, "", "")
+  let bodyTxt = ctx.printStmts(kernel.body)
   if ctx.failing():
     return ("", ctx.err)
   result.src &= "[numthreads(" & $ctx.workgroup[0] & ", " & $ctx.workgroup[1] &

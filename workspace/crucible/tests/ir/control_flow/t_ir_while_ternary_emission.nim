@@ -46,9 +46,7 @@ static:
       asgnS(patE(sym("output", outT), sym("i", u32)), sym("i", u32)),
       asgnS(sym("i", u32),
         addE(u32, sym("i", u32), intLit(1, u32))),
-      iteS(leE(sym("i", u32), intLit(2, u32)), @[jmpS("loop_exit")]),
     ]),
-    labS("loop_exit"),
     retS(),
   ])
   plainKern.isKernel = true
@@ -66,16 +64,34 @@ static:
   ])
   ternCondKern.isKernel = true
 
+  # kernel: {.unroll.} on a conditioned loop prints its directive in front of the while head
+  let unrollKern = procD("unrollKernel", @[param("output", outT)], tVoid(), @[
+    varD("i", u32, intLit(0, u32)),
+    varD("limit", u32, intLit(3, u32)),
+    whileS(ltE(sym("i", u32), sym("limit", u32)), @[
+      asgnS(sym("i", u32), addE(u32, sym("i", u32), intLit(1, u32))),
+    ], true),
+    retS(),
+  ])
+  unrollKern.isKernel = true
+
   # HLSL takes one kernel per module, so the loops live in separate modules
   let m = moduleD("probe", @[], @[condKern])
   let plainM = moduleD("probePlain", @[], @[plainKern])
   let ternCondM = moduleD("probeTernCond", @[], @[ternCondKern])
+  let unrollM = moduleD("probeUnroll", @[], @[unrollKern])
 
   # HLSL classifies read-write buffer parameters from the stored call-graph record, so the analysis must run before printing
   var reg = PassRegistry.new()
   reg.registerHlslCallGraphPass()
   let perr = m.runPasses(reg)
   doAssert perr.len == 0, "call-graph analysis refused: " & perr
+  # plainM gets its own analysis so the hlsl print classifies the output
+  # buffer read-write from the stored record
+  let perrPlain = plainM.runPasses(reg)
+  doAssert perrPlain.len == 0, "call-graph analysis refused: " & perrPlain
+  let perrUnroll = unrollM.runPasses(reg)
+  doAssert perrUnroll.len == 0, "call-graph analysis refused: " & perrUnroll
 
   # ═══ the debug renderer shows the new nodes ═══
   let pretty = renderModule(m)
@@ -121,6 +137,14 @@ static:
   # ═══ the conditionless loop keeps the label-free form ═══
   doAssert printCudaModule(plainM).src.contains("for (;;) {"),
     "cuda keeps the conditionless loop form"
+  doAssert printMslModule(plainM).src.contains("for (;;) {"),
+    "msl keeps the conditionless loop form"
+  doAssert printOpenclModule(plainM).src.contains("for (;;) {"),
+    "opencl keeps the conditionless loop form"
+  doAssert printGlslModule(plainM).src.contains("for (;;) {"),
+    "glsl keeps the conditionless loop form"
+  doAssert printHlslModule(plainM).src.contains("for (;;)\n"),
+    "hlsl keeps the conditionless loop head without a brace, the brace is on its own line"
   doAssert printWgslModule(plainM).src.contains("loop {"),
     "wgsl keeps the conditionless loop form"
 
@@ -135,3 +159,27 @@ static:
   doAssert ternWgsl.err.len == 0, "wgsl printer refused: " & ternWgsl.err
   doAssert ternWgsl.src.contains("while (select(false, (i < 3u), (i < 2u)))"),
     "wgsl emits the ternary loop condition as select(else, then, cond), got:\n" & ternWgsl.src
+
+  # ═══ {.unroll.} on a conditioned loop ═══
+  # Each target prints its own directive in front of the while head.
+  type UnrollPin = tuple[name, marker: string]
+  let pins: seq[UnrollPin] = @[
+    (name: "cuda", marker: "#pragma unroll\n"),
+    (name: "msl", marker: "#pragma clang loop unroll(full)\n"),
+    (name: "opencl", marker: "#pragma unroll\n"),
+    (name: "glsl", marker: "[[unroll]]\n"),
+    (name: "hlsl", marker: "[unroll]\n"),
+    (name: "wgsl", marker: "// {.unroll.} requested but not honored on WebGPU\n"),
+  ]
+  for pin in pins:
+    let printed = case pin.name
+      of "cuda": printCudaModule(unrollM)
+      of "msl": printMslModule(unrollM)
+      of "opencl": printOpenclModule(unrollM)
+      of "glsl": printGlslModule(unrollM)
+      of "hlsl": printHlslModule(unrollM)
+      else: printWgslModule(unrollM)
+    doAssert printed.err.len == 0, pin.name & " printer refused: " & printed.err
+    doAssert printed.src.contains(pin.marker),
+      pin.name & " must emit its unroll directive in front of the while head, got:\n" &
+        printed.src

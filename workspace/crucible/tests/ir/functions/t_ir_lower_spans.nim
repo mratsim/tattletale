@@ -77,7 +77,7 @@ proc holdsToOpenArrayCall(body: seq[CirStmt]): bool =
       for a in s.callArgs:
         if a.holdsToOpenArrayCall:
           return true
-    of sLab, sJmp, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
   result = false
 

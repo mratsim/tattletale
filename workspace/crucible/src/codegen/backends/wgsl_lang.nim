@@ -18,7 +18,9 @@
 ## - a pointer local or pointer-holding struct local refuses, the WGSL lowering pass dissolves the shapes into pointees and leaf symbols
 ## - a smem/const_mem kernel local relocates into `CirModule.globals`, the WGSL lowering pass owns the relocation
 ## - struct declarations emit for the referenced value structs only, a referenced pointer-holding struct refuses
-## - jmp to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
+## - a loop prints `while (cond)`, a conditionless loop prints `loop {`
+##   (WGSL's `while` takes a condition), an unrolled loop notes the unroll
+##   directive has no WGSL form
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -398,8 +400,8 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
-  ## Forward declaration, the loop context (break/continue labels) is a parameter.
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
+  ## Forward declaration, nested statement lists recurse into it.
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Declaration text of one local, the init stays with the caller.
@@ -410,8 +412,8 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   else:
     result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
 
-proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
-  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
+proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
+  ## One structured statement.
   if ctx.failing():
     return ""
   let pad = spaces(ctx.indent * 2)
@@ -457,32 +459,21 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sIte:
     let cond = ctx.printExpr(s.cond)
     ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
+    let thenTxt = ctx.printStmts(s.thenBody)
     ctx.indent.dec
     result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
     if s.elseBody.len > 0:
       ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
+      let elseTxt = ctx.printStmts(s.elseBody)
       ctx.indent.dec
       result &= " else {\n" & elseTxt & '\n' & pad & '}'
   of sLoop:
-    # loops print through printStmts, which derives the loop's own labels
+    # loops print through printStmts
     result = ""
-  of sLab:
-    # an exit label after a loop is the break target marker, dropped
-    result = ""
-  of sJmp:
-    if s.jmpTarget == exitL and exitL.len > 0:
-      result = pad & "break;"
-    elif s.jmpTarget == contL and contL.len > 0:
-      result = pad & "continue;"
-    else:
-      ctx.fail("unstructured jump to " & s.jmpTarget)
-      result = ""
   of sScope:
     result = pad & "{\n"
     ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody, exitL, contL)
+    result &= ctx.printStmts(s.scopeBody)
     ctx.indent.dec
     result &= '\n' & pad & '}'
   of sAssume:
@@ -525,25 +516,14 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
     result = ""
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
-  ## Prints one statement list. Plain statements take the caller's loop context,
-  ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
+proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
+  ## Prints one statement list.
   var lines: seq[string]
-  var i = 0
-  while i < stmts.len:
-    let s = stmts[i]
+  for s in stmts:
     var txt: string
     if s.kind == sLoop:
-      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
-        stmts[i + 1].labName
-      else:
-        ""
-      var lCont = ""
-      for t in s.loopBody:
-        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
-          lCont = t.labName
       ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
+      let bodyTxt = ctx.printStmts(s.loopBody)
       ctx.indent.dec
       let directive = if s.unroll:
         # WGSL has no unroll directive, surface the drop in the artifact
@@ -556,13 +536,10 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
         "loop {\n"
       txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
         spaces(ctx.indent * 2) & '}'
-      if lExit.len > 0:
-        i.inc  # exit label, consumed
     else:
-      txt = ctx.printStmt(s, exitL, contL)
+      txt = ctx.printStmt(s)
     if txt.len > 0:
       lines.add txt
-    i.inc
   return lines.join("\n")
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -577,7 +554,7 @@ proc printFn(ctx: var PrintCtx, fn: CirProc): string =
   ctx.paramNames = HashSet[string]()
   for p in fn.params:
     ctx.paramNames.incl p.name
-  let bodyTxt = ctx.printStmts(fn.body, "", "")
+  let bodyTxt = ctx.printStmts(fn.body)
   if ctx.failing():
     return ""
   var params: seq[string]
@@ -728,7 +705,7 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ctx.fnName = kernel.name
   ctx.inKernel = true
   ctx.indent = 0
-  let bodyTxt = ctx.printStmts(kernel.body, "", "")
+  let bodyTxt = ctx.printStmts(kernel.body)
   if ctx.failing():
     return ("", ctx.err)
   var builtinArgs: seq[string]

@@ -222,8 +222,6 @@ proc whileS*(cond: CirExpr, loopBody: seq[CirStmt], unroll = false): CirStmt =
   ##
   ## Args:
   ## - `cond` is an ordinary expression, calls may appear in it
-  ## - the body may not jump into or out of the loop by label
-  ## - the structured targets own the loop exits
   doAssert cond != nil, "whileS: a conditioned loop takes a condition, use loopS"
   CirStmt(kind: sLoop, loopCond: cond, loopBody: loopBody, unroll: unroll)
 
@@ -235,12 +233,6 @@ proc branch*(ranges: seq[CirRange], body: seq[CirStmt]): CirCaseBranch =
 
 proc caseS*(selector: CirExpr, branches: seq[CirCaseBranch], caseElse: seq[CirStmt] = @[]): CirStmt =
   CirStmt(kind: sCase, selector: selector, branches: branches, caseElse: caseElse)
-
-proc labS*(labName: string): CirStmt =
-  CirStmt(kind: sLab, labName: labName)
-
-proc jmpS*(jmpTarget: string): CirStmt =
-  CirStmt(kind: sJmp, jmpTarget: jmpTarget)
 
 proc scopeS*(scopeBody: seq[CirStmt]): CirStmt =
   CirStmt(kind: sScope, scopeBody: scopeBody)

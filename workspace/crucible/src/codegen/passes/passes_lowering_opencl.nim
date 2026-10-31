@@ -276,7 +276,7 @@ proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int) =
     s.callArgs = callE.args
   of sVar, sConst:
     addrWrapByrefArgs(s.init, pre, tmpCount)
-  of sLab, sJmp, sAsm, sEmit:
+  of sAsm, sEmit:
     discard
 
 proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int) =
@@ -361,7 +361,7 @@ proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =
       wrapParamReads(st.callCallee, oldName, ptrSym)
     of sVar, sConst:
       wrapParamReads(st.init, oldName, ptrSym)
-    of sLab, sJmp, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
 
 proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
@@ -451,5 +451,5 @@ proc retargetProcTypeStmts(stmts: seq[CirStmt], newFormals: Table[string, seq[Ci
         retargetProcTypeSyms(a, newFormals)
     of sVar, sConst:
       retargetProcTypeSyms(st.init, newFormals)
-    of sLab, sJmp, sAsm, sEmit:
+    of sAsm, sEmit:
       discard

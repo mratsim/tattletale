@@ -145,7 +145,7 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
       scanExpr(s.discardVal, f, profile)
     of sAssume:
       scanExpr(s.assumeCond, f, profile)
-    of sJmp, sLab, sCase, sAsm, sEmit:
+    of sCase, sAsm, sEmit:
       discard
 
 proc scanModuleFeatures(m: CirModule, f: var ModuleFeatures, profile: ScanProfile) =
@@ -200,7 +200,7 @@ proc wgslScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
     of sRet:
       if s.retVal != nil:
         wgslScanType(getExprType(s.retVal), f)
-    of sCall, sJmp, sLab, sDiscard, sAssume, sCase, sAsm, sEmit:
+    of sCall, sDiscard, sAssume, sCase, sAsm, sEmit:
       discard
 
 proc wgslScanFeatures(m: CirModule): string {.nimcall.} =
@@ -270,7 +270,7 @@ proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
       scanCudaCallee(s.callCallee, f)
       for a in s.callArgs:
         cudaScanExpr(a, f)
-    of sJmp, sLab, sCase, sAsm, sEmit:
+    of sCase, sAsm, sEmit:
       discard
 
 proc cudaScanFeatures(m: CirModule): string {.nimcall.} =

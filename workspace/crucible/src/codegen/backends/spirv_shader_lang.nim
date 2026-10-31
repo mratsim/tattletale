@@ -455,14 +455,10 @@ type
       ## Function-storage pointer param name -> the parameter's pointer id
     addrPointee*: Table[string, CirType]
       ## pointer param name -> the pointee value type
-    labels*: Table[string, uint32]
-      ## label name -> block id, filled forward for jmp targets
     loopMerge*: uint32
       ## the merge block of the loop this body belongs to, 0 outside a loop
     loopCont*: uint32
       ## the continue target of the enclosing loop
-    loopExit*: string
-      ## the break label name of the enclosing loop
     ptrTargets*: Table[string, uint32]
       ## pointer-typed local name -> the Function-storage variable it names,
       ## a pointer to a Function object cannot live in a Function variable
@@ -1203,16 +1199,6 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
 
 proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt])
 
-proc freshBlock(ctx: var SpvLangCtx, fn: var SpvFnCtx, name: string): uint32 =
-  ## A new basic block for a label, branching from the current block when open.
-  let lbl = ctx.builder.module.allocId()
-  if not fn.terminated:
-    ctx.builder.opBranch(lbl)
-  ctx.builder.opLabelAt(lbl)
-  fn.terminated = false
-  fn.labels[name] = lbl
-  lbl
-
 proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
   ## One statement list into the current basic block.
   for s in ss:
@@ -1282,37 +1268,12 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.builder.opLabelAt(mergeLbl)
       fn.terminated = false
     of sLoop:
-      # loop body break targets the merge block, the exit label after the loop
-      # aliases it and the continue target ends the body
-      var localLabs: HashSet[string]
-      proc scanLabs(ss: seq[CirStmt]) =
-        for s in ss:
-          case s.kind
-          of sLab: localLabs.incl s.labName
-          of sIte: scanLabs(s.thenBody); scanLabs(s.elseBody)
-          of sLoop: scanLabs(s.loopBody)
-          of sScope: scanLabs(s.scopeBody)
-          else: discard
-      scanLabs(s.loopBody)
-      var exitName = ""
-      proc scanJmps(ss: seq[CirStmt]) =
-        for s in ss:
-          case s.kind
-          of sJmp:
-            if s.jmpTarget notin localLabs and exitName == "":
-              exitName = s.jmpTarget
-          of sIte: scanJmps(s.thenBody); scanJmps(s.elseBody)
-          of sLoop: scanJmps(s.loopBody)
-          of sScope: scanJmps(s.scopeBody)
-          else: discard
-      scanJmps(s.loopBody)
       let headerLbl = ctx.builder.freshLabel()
       let bodyLbl = ctx.builder.freshLabel()
       let contLbl = ctx.builder.freshLabel()
       let mergeLbl = ctx.builder.freshLabel()
       let savedMerge = fn.loopMerge
       let savedCont = fn.loopCont
-      let savedExit = fn.loopExit
       ctx.builder.opBranch(headerLbl)
       ctx.builder.opLabelAt(headerLbl)
       fn.terminated = false
@@ -1329,11 +1290,9 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       fn.terminated = false
       fn.loopMerge = mergeLbl
       fn.loopCont = contLbl
-      fn.loopExit = exitName
       ctx.emitStmts(fn, s.loopBody)
       fn.loopMerge = savedMerge
       fn.loopCont = savedCont
-      fn.loopExit = savedExit
       if fn.terminated:
         ctx.failSpv("return inside a loop body, the continue target would be unreachable")
         return
@@ -1343,33 +1302,6 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.builder.opBranch(headerLbl)
       ctx.builder.opLabelAt(mergeLbl)
       fn.terminated = false
-    of sLab:
-      # a label the control flow reaches by falling into it or by a jmp
-      if fn.labels.hasKey(s.labName):
-        # forward jmp target: the block was created at the jmp site
-        let lbl = fn.labels[s.labName]
-        if not fn.terminated:
-          ctx.builder.opBranch(lbl)
-        ctx.builder.opLabelAt(lbl)
-        fn.terminated = false
-      elif s.labName == fn.loopExit:
-        # an exit label after a loop: the merge block is this block
-        discard
-      else:
-        discard ctx.freshBlock(fn, s.labName)
-    of sJmp:
-      if s.jmpTarget == fn.loopExit:
-        ctx.builder.opBranch(fn.loopMerge)
-        fn.terminated = true
-      elif fn.labels.hasKey(s.jmpTarget):
-        ctx.builder.opBranch(fn.labels[s.jmpTarget])
-        fn.terminated = true
-      else:
-        # forward jump, the label block is created now and filled at the lab
-        let lbl = ctx.builder.module.allocId()
-        fn.labels[s.jmpTarget] = lbl
-        ctx.builder.opBranch(lbl)
-        fn.terminated = true
     of sScope:
       ctx.emitStmts(fn, s.scopeBody)
     of sAssume:

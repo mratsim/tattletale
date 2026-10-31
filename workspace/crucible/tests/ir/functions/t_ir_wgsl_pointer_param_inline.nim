@@ -148,6 +148,25 @@ static:
     doAssert ierr.contains("re-evaluate"),
       "an argument holding a call must refuse, got: " & ierr
 
+  # ═══ a call in a loop condition refuses ═══
+  block:
+    let lfill = procD("fill", @[param("p", fillT), param("n", i32)], tVoid(), @[
+      asgnS(patE(sym("p", fillT), intLit(0, i32)), sym("n", i32)),
+      retS(),
+    ])
+    let lkern = procD("k", @[param("out", outT)], tVoid(), @[
+      whileS(callE(sym("fill", tProcT([fillT, i32], tVoid())),
+        sym("out", outT), intLit(3, i32)), @[
+        retS(),
+      ]),
+      retS(),
+    ])
+    lkern.isKernel = true
+    let lm = moduleD("loopcond", @[], @[lfill, lkern])
+    let lerr = lm.runWgslLowering()
+    doAssert lerr.contains("value-position"),
+      "a call in a loop condition must refuse, got: " & lerr
+
   # ═══ a transitively self-calling crossing callee refuses ═══
   block:
     let rec = procD("rec", @[param("p", fillT), param("n", i32)], tVoid(), @[

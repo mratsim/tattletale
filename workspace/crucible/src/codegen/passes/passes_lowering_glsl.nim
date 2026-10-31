@@ -136,7 +136,7 @@ proc unwrapVarDerefsStmts(ss: var seq[CirStmt], varParams: HashSet[string]) =
       s.callCallee.unwrapVarDerefsExpr(varParams)
       for a in mitems(s.callArgs):
         a.unwrapVarDerefsExpr(varParams)
-    of sJmp, sLab, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
 
 proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]): string =
@@ -249,7 +249,7 @@ proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashS
       s.callArgs = tmp.args
       if err.len > 0:
         return err
-    of sJmp, sLab, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
   return ""
 
@@ -468,7 +468,7 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
     s.callCallee = tmp.callee
     s.callArgs = tmp.args
     return err
-  of sJmp, sLab, sCase, sAsm, sEmit:
+  of sCase, sAsm, sEmit:
     return ""
 
 proc rewriteDissolveStmts(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string =

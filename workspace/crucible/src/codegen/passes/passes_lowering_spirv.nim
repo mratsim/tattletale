@@ -94,7 +94,7 @@ proc patchBoolReadsStmts(ss: var seq[CirStmt], boolVals, boolPtrs: HashSet[strin
     of sCall:
       for a in mitems(s.callArgs):
         patchBoolReadsExpr(a, boolVals, boolPtrs)
-    of sJmp, sLab, sCase, sAsm, sEmit:
+    of sCase, sAsm, sEmit:
       discard
 
 proc spirvPatchBoolToI32(m: CirModule): string =

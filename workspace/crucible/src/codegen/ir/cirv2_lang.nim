@@ -278,8 +278,6 @@ type
     sIte
     sLoop
     sCase
-    sLab
-    sJmp
     sScope
     sAssume
     sRet
@@ -295,7 +293,7 @@ type
     ## - `ite` takes a bool condition and two statement lists
     ## - `loop` takes an optional bool condition in `loopCond`, a nil loopCond
     ##   keeps the conditionless shape that every target already emits
-    ## - `lab`/`jmp` are forward-only and scoped, `scope` gives destructor discipline
+    ## - `scope` gives destructor discipline
     ## - a `var` states the memory class of its declaration in `space`, `const` ignores `space`
     ##   (`caThread` is per-thread registers and the unannotated default)
     case kind*: CirStmtKind
@@ -311,8 +309,7 @@ type
       thenBody*, elseBody*: seq[CirStmt]
     of sLoop:
       loopCond*: CirExpr
-      ## Only `whileS` sets `loopCond`. The loop stays structured, no label may target
-      ## into or out of a conditioned loop body.
+      ## Only `whileS` sets `loopCond`.
       loopBody*: seq[CirStmt]
       unroll*: bool
       ## `{.unroll.}` statement in the loop body: every printer emits a full-unroll directive in front of the loop.
@@ -322,10 +319,6 @@ type
       selector*: CirExpr
       branches*: seq[CirCaseBranch]
       caseElse*: seq[CirStmt]
-    of sLab:
-      labName*: string
-    of sJmp:
-      jmpTarget*: string
     of sScope:
       scopeBody*: seq[CirStmt]
     of sAssume:

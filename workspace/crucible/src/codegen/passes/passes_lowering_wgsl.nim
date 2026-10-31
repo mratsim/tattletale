@@ -220,7 +220,7 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
       s.callCallee.substituteArgsExpr(subst)
       for a in mitems(s.callArgs):
         a.substituteArgsExpr(subst)
-    of sJmp, sLab, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
 
 proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string
@@ -308,6 +308,9 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
         if eerr.len > 0:
           return eerr
       of sLoop:
+        let cerr = refuseValuePositionCalls(fn, s.loopCond, procs)
+        if cerr.len > 0:
+          return cerr
         let lerr = inlineInStmts(fn, s.loopBody, procs)
         if lerr.len > 0:
           return lerr
@@ -338,7 +341,7 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
         let derr = refuseValuePositionCalls(fn, s.discardVal, procs)
         if derr.len > 0:
           return derr
-      of sCall, sJmp, sLab, sAsm, sEmit:
+      of sCall, sAsm, sEmit:
         discard
     i.inc
   return ""
@@ -605,7 +608,7 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
     s.callCallee = tmp.callee
     s.callArgs = tmp.args
     return err
-  of sJmp, sLab, sCase, sAsm, sEmit:
+  of sCase, sAsm, sEmit:
     return ""
 
 proc rewriteDissolveStmts(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string =
@@ -700,7 +703,7 @@ proc rewriteBoolReadsStmts(ss: var seq[CirStmt], boolParams: HashSet[string]) =
       rewriteBoolReadsExpr(s.callCallee, boolParams)
       for a in mitems(s.callArgs):
         rewriteBoolReadsExpr(a, boolParams)
-    of sJmp, sLab, sCase, sAsm, sEmit:
+    of sCase, sAsm, sEmit:
       discard
 
 proc rewriteBoolKernelParamReads(m: CirModule): string =

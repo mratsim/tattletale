@@ -109,8 +109,6 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
     of sEmit:
       for op in s.emitOperands:
         slot(op)
-    of sLab, sJmp:
-      discard
     if onStmt != nil:
       onStmt(s)
 
@@ -255,10 +253,6 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.loopCond = cloneExpr(s.loopCond)
       c.loopBody = cloneStmts(s.loopBody)
       c.unroll = s.unroll
-    of sLab:
-      c.labName = s.labName
-    of sJmp:
-      c.jmpTarget = s.jmpTarget
     of sScope:
       c.scopeBody = cloneStmts(s.scopeBody)
     of sAssume:

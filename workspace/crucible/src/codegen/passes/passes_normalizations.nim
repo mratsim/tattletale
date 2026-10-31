@@ -11,8 +11,6 @@
 
 import ./pass_datatypes
 import ./passes_norm_shell_fold
-import ./passes_norm_structure
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
   reg.registerShellFolding()
-  reg.registerStructuring()

@@ -168,8 +168,6 @@ proc foldIdentitiesStmts(ss: var seq[CirStmt]) =
     of sEmit:
       for op in s.emitOperands.mitems:
         foldIdentitiesExpr(op)
-    of sLab, sJmp:
-      discard
 
 proc foldArithmeticIdentities(m: CirModule): string =
   for fn in m.procs:

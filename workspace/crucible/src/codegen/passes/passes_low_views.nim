@@ -258,7 +258,7 @@ proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
         return
       for a in s.callArgs.mitems:
         a.rewriteSpanUsesExpr(ctx, err)
-    of sLab, sJmp, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
     if err.len > 0:
       return

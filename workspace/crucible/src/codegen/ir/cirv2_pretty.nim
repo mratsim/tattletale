@@ -177,10 +177,6 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
         b.renderStmt(inner)
       b.close
     b.close
-  of sLab:
-    b.add("(lab " & s.labName & ")")
-  of sJmp:
-    b.add("(jmp " & s.jmpTarget & ")")
   of sScope:
     b.open("(scope")
     for inner in s.scopeBody:

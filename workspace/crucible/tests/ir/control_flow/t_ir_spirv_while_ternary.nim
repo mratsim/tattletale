@@ -111,6 +111,40 @@ const ternCondWords = block:
     "the loop header must emit OpBranchConditional, got " & $tops
   twords
 
+const mixedTernWords = block:
+  let u32 = tUint(32)
+  let i32 = tInt(32)
+  let outT = tAptr(caDevice, u32)
+
+  # kernel: y[i] = (i < 1 ? 5 : i) with an i32 then branch and a u32 ternary type, so the emitter converts the i32 branch through OpBitcast
+  let kern = procD("mixedTernKernel", @[param("y", outT)], tVoid(), @[
+    varD("i", u32, intLit(0, u32)),
+    whileS(ltE(sym("i", u32), intLit(3, u32)), @[
+      asgnS(patE(sym("y", outT), sym("i", u32)),
+        ternaryE(u32, ltE(sym("i", u32), intLit(1, u32)),
+          intLit(5, i32), sym("i", u32))),
+      asgnS(sym("i", u32),
+        addE(u32, sym("i", u32), intLit(1, u32))),
+    ]),
+    retS(),
+  ])
+  kern.isKernel = true
+
+  let m = moduleD("probeMixedTern", @[], @[kern])
+  let (words, err) = printSpirvModule(m)
+
+  doAssert err.len == 0, "SPIR-V emitter refused the mixed-branch module: " & err
+  doAssert words.len > 0, "SPIR-V emitter produced no words for the mixed-branch module"
+  doAssert words[0] == 0x07230203'u32, "SPIR-V magic number missing"
+
+  # OpSelect=169 converts both branches to the ternary type, OpBitcast=124 converts the i32 branch to u32
+  let ops = instructionOpcodes(words)
+  doAssert countOpcode(ops, 169) >= 1,
+    "the mixed-branch ternary must emit OpSelect, got " & $ops
+  doAssert countOpcode(ops, 124) >= 1,
+    "the i32 branch must convert to the u32 ternary type through OpBitcast, got " & $ops
+  words
+
 proc runTest() =
   block validation:
     let spirvVal = findExe("spirv-val")
@@ -122,6 +156,7 @@ proc runTest() =
     createDir(outDir)
     let spvPath = outDir / "t_ir_spirv_while_ternary.spv"
     let ternSpvPath = outDir / "t_ir_spirv_while_ternary_cond.spv"
+    let mixedSpvPath = outDir / "t_ir_spirv_while_ternary_mixed.spv"
     # defer statements close both files, so the subprocesses read complete modules
     block:
       var f = open(spvPath, fmWrite)
@@ -131,8 +166,12 @@ proc runTest() =
       var f = open(ternSpvPath, fmWrite)
       defer: f.close()
       discard f.writeBuffer(addr ternCondWords[0], ternCondWords.len * 4)
+    block:
+      var f = open(mixedSpvPath, fmWrite)
+      defer: f.close()
+      discard f.writeBuffer(addr mixedTernWords[0], mixedTernWords.len * 4)
 
-    for path in [spvPath, ternSpvPath]:
+    for path in [spvPath, ternSpvPath, mixedSpvPath]:
       let (valOut, valCode) = execCmdEx(spirvVal & " --target-env vulkan1.4 " & path)
       if valCode != 0:
         var msg = "spirv-val rejected the emitted module:\n" & valOut

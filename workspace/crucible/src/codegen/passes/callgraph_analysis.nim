@@ -58,7 +58,7 @@ proc directCalls(ss: seq[CirStmt], outp: var seq[CirExpr]) =
       directCalls(s.loopBody, outp)
     of sScope:
       directCalls(s.scopeBody, outp)
-    of sJmp, sLab, sAssume, sDiscard, sCase, sAsm, sEmit:
+    of sAssume, sDiscard, sCase, sAsm, sEmit:
       discard
 
 proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
@@ -103,7 +103,7 @@ proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
           for p in fn.params:
             if p.name == ar.name:
               graph.stored.incl(fn.name & "/" & p.name)
-    of sVar, sConst, sJmp, sLab, sAssume, sRet, sDiscard, sCase, sAsm:
+    of sVar, sConst, sAssume, sRet, sDiscard, sCase, sAsm:
       discard
 
 proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
@@ -143,7 +143,7 @@ proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
       graph.scanCallStmts(fn, s.loopBody)
     of sScope:
       graph.scanCallStmts(fn, s.scopeBody)
-    of sJmp, sLab, sAssume, sDiscard, sCase, sAsm, sEmit:
+    of sAssume, sDiscard, sCase, sAsm, sEmit:
       discard
 
 # ═══════════════════════════════════════════════════════════════════════

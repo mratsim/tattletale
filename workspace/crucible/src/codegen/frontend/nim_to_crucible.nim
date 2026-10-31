@@ -18,9 +18,9 @@
 ## Types translate exactly once through `nim_type_resolvers`. Normal form produced directly:
 ##
 ## - a value-producing call is an `asgn` RHS, nested call operands hoist in front of the enclosing statement
-## - `while` and `for` lower to a conditionless `loop` with a leading guard
-## - `and`/`or` compile through the two-target condition compiler (Appel Cx), value position materializes into a bool temp through `ite`
-## - if/elif chains lay flat over one shared merge label
+## - `while` and `for` lower to `whileS` and re-test the condition before every iteration
+## - `and`/`or` emit as the boolean operators over their operands
+## - if/elif chains nest one `ite` per branch, first match wins
 ##
 ## Constructs outside the supported closure refuse through the pure refusal
 ## channel (`lowerMessage`), naming the construct. The macro wrapper turns
@@ -54,7 +54,11 @@ type
     moduleGlobals: seq[CirStmt]
     ## Program-scope declarations in encounter order, `m.globals` of the module.
     nameCounts: Table[string, int]
-    labels: int
+    condDepth: int
+    ## Nesting depth of condition lowering:
+    ## - a condition site has no hoist slot, a call emits into the condition
+    ##   tree and re-evaluates at every test
+    ## - a condition that needs a temp (a splice, a span view binding) refuses
     hoisted: seq[CirStmt]
     ## Statements hoisted in front of the statement being lowered.
 
@@ -67,12 +71,8 @@ proc fail(ctx: var FrontendCtx, detail: string) =
     ctx.resolver.err = "cirv2 frontend: at " & ctx.fnName & ": " & detail
 
 # ═══════════════════════════════════════════════════════════════════════
-# Names, scopes, labels
+# Names and scopes
 # ═══════════════════════════════════════════════════════════════════════
-
-const ContinueLabelPrefix* = "lc"
-  ## freshLabel prefix of a for-loop's continue label, the structure pass
-  ## picks the loop's `continue` target by it.
 
 proc uniqueName(ctx: var FrontendCtx, base: string): string =
   ## Per-proc unique CIRv2 name: the sanitized base, suffixed when reused.
@@ -83,11 +83,6 @@ proc uniqueName(ctx: var FrontendCtx, base: string): string =
   else:
     ctx.nameCounts[clean] = 0
     result = clean
-
-proc freshLabel(ctx: var FrontendCtx, prefix: string): string =
-  ## Proc-unique label name, forward-only lab/jmp targets derive from these.
-  ctx.labels.inc
-  result = prefix & $ctx.labels
 
 proc pushScope(ctx: var FrontendCtx) =
   ctx.scopes.add(initTable[string, CirExpr]())
@@ -171,8 +166,8 @@ proc hasPragmaNim(n: NimNode, name: string): bool =
 proc containsCall(n: NimNode): bool =
   ## True when a call occurs anywhere in the node.
   ## `StmtListExpr`-wrapped operands count too.
-  ## A call-bearing condition needs the two-target compiler.
-  ## Short-circuit must not evaluate the call side.
+  ## A spliced operand or a ternary branch value holding a call lowers
+  ## through the statement form.
   if n.isNil:
     return false
   case n.kind
@@ -210,6 +205,9 @@ func unwrapConv(n: NimNode): NimNode =
 
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr
   ## Forward declaration, expressions and statements recurse into each other.
+
+proc lowerCondExpr(ctx: var FrontendCtx, n: NimNode): CirExpr
+  ## Forward declaration, conditions lower through the expression walker.
 
 proc lowerOperandExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## Lowers one operator operand. A literal under a sem-introduced conversion
@@ -722,6 +720,8 @@ proc numericBuiltinCall(ctx: var FrontendCtx, calleeSym: NimNode, call: NimNode)
   let args = ctx.lowerCallArgs(calleeSym, call)
   if ctx.failing():
     return nil
+  if ctx.condDepth > 0:
+    return callE(sym(calleeSym.strVal, fnType, true), args)
   let tmpName = ctx.uniqueName("tmp")
   let ret = fnType.ret
   ctx.hoisted.add(varD(tmpName, ret))
@@ -795,6 +795,8 @@ proc lowerSpanLenCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
       " is outside the supported set")
     return nil
   let readTyp = tProcT(argTyp, tInt(32))
+  if ctx.condDepth > 0:
+    return callE(sym("len", readTyp), arg)
   let tmp = ctx.uniqueName("tmp")
   ctx.hoisted.add(varD(tmp, tInt(32)))
   ctx.hoisted.add(asgnS(sym(tmp, tInt(32)),
@@ -821,6 +823,8 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     if arith.isNil:
       ctx.fail("magic call " & callee.repr & " (" & magic & ") is outside the supported set")
       return nil
+    if ctx.condDepth > 0:
+      return arith
     let tmpName = ctx.uniqueName("tmp")
     let ret = getExprType(arith)
     ctx.hoisted.add(varD(tmpName, ret))
@@ -854,6 +858,8 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
   let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
   let calleeName = if calleeBuiltin: calleeSym.strVal
                    else: cirName
+  if ctx.condDepth > 0:
+    return callE(sym(calleeName, fnType, calleeBuiltin), args)
   let tmpName = ctx.uniqueName("tmp")
   let ret = fnType.ret
   ctx.hoisted.add(varD(tmpName, ret))
@@ -880,7 +886,7 @@ proc isLatticeScalar(ctx: var FrontendCtx, n: NimNode): bool =
 proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## Operators: arithmetic and bitwise directly, comparisons normalized to
   ## the four primitive comparison kinds (`>` and `>=` swap operands), boolean
-  ## `and`/`or` materialize into a temp through `ite` statements.
+  ## `and`/`or` emit as the boolean operators over their operands.
   let op = n[0].strVal
   case op
   of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
@@ -917,39 +923,22 @@ proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
       result = leE(b, a)
     return result
   of "and", "or", "xor":
-    # bool domain: short-circuit `and`/`or` materialize into a temp
-    # through ite statements. `xor` evaluates both sides and compares.
-    # int domain: the bitwise operators.
+    # bool domain: boolean operators emit directly over their operands
+    # (`xor` evaluates both sides and compares). Text targets apply
+    # short-circuit natively, SPIR-V's OpLogicalAnd/OpLogicalOr do not.
+    # int domain: bitwise operators.
     let at = getExprType(a)
     if at != nil and at.kind == ctBool:
-      let tmpName = ctx.uniqueName("condtmp")
-      let boolT = tBool()
-      let (bVal, bHoists) = block:
-        # right operand's own hoists belong inside the branch evaluating it, short-circuit
-        let saved = ctx.hoisted
-        ctx.hoisted = @[]
-        let lowered = ctx.lowerOperandExpr(n[2])
-        let inner = ctx.hoisted
-        ctx.hoisted = saved
-        (lowered, inner)
+      let b = ctx.lowerOperandExpr(n[2])
       if ctx.failing():
         return nil
-      let setTrue = asgnS(sym(tmpName, boolT), trueE())
-      let setFalse = asgnS(sym(tmpName, boolT), falseE())
-      if op == "xor":
-        # no short-circuit: both operands evaluate. The right operand's
-        # hoisted statements queue before the comparison reads them.
-        ctx.hoisted.add(bHoists)
-        result = neqE(a, bVal)
-        return result
-      if op == "and":
-        ctx.hoisted.add(varD(tmpName, boolT, falseE()))
-        ctx.hoisted.add(iteS(a, bHoists & iteS(bVal, @[setTrue]), @[]))
+      case op
+      of "and":
+        return andE(a, b)
+      of "or":
+        return orE(a, b)
       else:
-        ctx.hoisted.add(varD(tmpName, boolT, trueE()))
-        ctx.hoisted.add(iteS(a, @[], bHoists & iteS(bVal, @[setTrue], @[setFalse])))
-      ctx.declareLocal(tmpName, sym(tmpName, boolT))
-      return sym(tmpName, boolT)
+        return neqE(a, b)
     let b = ctx.lowerOperandExpr(n[2])
     if ctx.failing():
       return nil
@@ -1007,15 +996,63 @@ proc buildBranchBody(ctx: var FrontendCtx, bodyNode: NimNode, dest: CirExpr): se
 proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode, dest: CirExpr): seq[CirStmt]
   ## Forward declaration, the if expression reuses the statement forms.
 
+func branchValueExpr(n: NimNode): NimNode =
+  ## Value expression of an if-expression branch body, with a one-child
+  ## statement list unwrapped to its child.
+  result = n
+  while result.kind == nnkStmtList and result.len == 1:
+    result = result[0]
+
+func isStmtBody(n: NimNode): bool =
+  ## True when the node is a statement, not a value expression.
+  case n.kind
+  of nnkStmtList, nnkAsgn, nnkLetSection, nnkVarSection, nnkConstSection,
+      nnkIfStmt, nnkWhileStmt, nnkForStmt, nnkReturnStmt, nnkDiscardStmt,
+      nnkBlockStmt, nnkCaseStmt:
+    result = true
+  else:
+    result = false
+
+func allBranchesSimple(branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode): bool =
+  ## True when every branch body and the else body hold a value expression
+  ## with no call:
+  ## - that shape nests into ternary values with no hoisted temp
+  ## - a call in a branch value binds a temp and the hoisted-temp path
+  ##   keeps that binding inside the taken branch
+  ## - call-bearing branches therefore take the statement form
+  for br in branches:
+    if isStmtBody(branchValueExpr(br.body)) or containsCall(branchValueExpr(br.body)):
+      return false
+  return not isStmtBody(branchValueExpr(elseBody)) and
+      not containsCall(branchValueExpr(elseBody))
+
+proc lowerNestedTernary(ctx: var FrontendCtx,
+    branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode, idx: int,
+    resType: CirType): CirExpr =
+  ## Returns branch `idx` of an if-expression as a ternary whose else variant
+  ## contains the next branch, so first match wins. The innermost else
+  ## variant is the `elseBody` argument.
+  let cond = ctx.lowerCondExpr(branches[idx].cond)
+  if ctx.failing():
+    return nil
+  let thenV = ctx.lowerExpr(branchValueExpr(branches[idx].body))
+  if ctx.failing():
+    return nil
+  let elseV = if idx + 1 < branches.len:
+                 lowerNestedTernary(ctx, branches, elseBody, idx + 1, resType)
+               else:
+                 ctx.lowerExpr(branchValueExpr(elseBody))
+  if ctx.failing():
+    return nil
+  return ternaryE(resType, cond, thenV, elseV)
+
 proc lowerIfExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## An if-expression:
-  ## - a hoisted temp, one per expression
-  ## - the statement form lowers with each branch assigning that temp
+  ## - single-expression branches nest into conditional values, no temp
+  ## - statement-bearing branches hoist a temp that the statement form assigns
   let resType = ctx.resolver.resolveCirType(n.getTypeInst())
   if ctx.failing():
     return nil
-  let tmpName = ctx.uniqueName("iftmp")
-  ctx.declareLocal(tmpName, sym(tmpName, resType))
   var branches: seq[tuple[cond: NimNode, body: NimNode]] = @[]
   var elseBody: NimNode = nil
   for c in n:
@@ -1033,6 +1070,10 @@ proc lowerIfExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     else:
       ctx.fail("if expression: unexpected branch " & $c.kind)
       return nil
+  if allBranchesSimple(branches, elseBody):
+    return lowerNestedTernary(ctx, branches, elseBody, 0, resType)
+  let tmpName = ctx.uniqueName("iftmp")
+  ctx.declareLocal(tmpName, sym(tmpName, resType))
   let stmts = ctx.lowerIfForm(branches, elseBody, sym(tmpName, resType))
   if ctx.failing():
     return nil
@@ -1420,111 +1461,26 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return nil
 
 # ═══════════════════════════════════════════════════════════════════════
-# Conditions: the two-target compiler (Appel Cx)
+# Conditions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc containsShortCircuit(n: NimNode): bool =
-  ## True when a boolean `and`/`or` occurs anywhere in the node,
-  ## `StmtListExpr`-wrapped operands included.
-  if n.isNil:
-    return false
-  case n.kind
-  of nnkInfix:
-    if n[0].strVal in ["and", "or"] and n[1].getTypeInst().typeKind == ntyBool:
-      return true
-  of nnkPrefix:
-    if n[0].strVal == "not":
-      return containsShortCircuit(n[1])
-  else:
-    discard
-  for c in n:
-    if containsShortCircuit(c):
-      return true
-  return false
-
-proc genCondBoolExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
-  ## Boolean expression of a call-free condition:
-  ## - an `and`/`or` tree nests into `eAnd`/`eOr`, no short-circuit needed,
-  ##   the operands are side-effect-free
-  ## - `not` negates
-  ## - any other leaf lowers as an expression (a comparison, a bool local)
-  let node = unwrapConv(n)
-  if node.kind == nnkInfix and node[0].strVal in ["and", "or"] and
-      node[1].getTypeInst().typeKind == ntyBool:
-    let a = ctx.genCondBoolExpr(node[1])
-    if ctx.failing():
-      return nil
-    let b = ctx.genCondBoolExpr(node[2])
-    if ctx.failing():
-      return nil
-    if node[0].strVal == "and":
-      return andE(a, b)
-    return orE(a, b)
-  if node.kind == nnkPrefix and node[0].strVal == "not":
-    let a = ctx.genCondBoolExpr(node[1])
-    if ctx.failing():
-      return nil
-    return notE(a)
-  return ctx.lowerExpr(node)
-
-proc branchOn(ctx: var FrontendCtx, cond: CirExpr, trueL, falseL, fallL: string): seq[CirStmt] =
-  ## Guarded transfer on a ready boolean expression:
-  ## - jumps to `trueL`/`falseL`, one explicit `jmp` per taken side
-  ## - an empty target name means fall-through, with no label to name
-  # A named target always gets an explicit jump: the lab/jmp model has no fall-through into a lab.
-  # Both targets empty leaves no branch to take, that fails loudly.
-  if trueL.len == 0 and falseL.len == 0:
-    ctx.fail("branchOn: both branch targets are empty")
-    return
-  if trueL.len == 0:
-    result.add(iteS(notE(cond), @[jmpS(falseL)], @[]))
-  elif falseL.len == 0:
-    result.add(iteS(cond, @[jmpS(trueL)], @[]))
-  else:
-    result.add(iteS(cond, @[jmpS(trueL)], @[jmpS(falseL)]))
-
-proc genLeaf(ctx: var FrontendCtx, n: NimNode, trueL, falseL, fallL: string): seq[CirStmt] =
-  ## Guarded transfer for a pure boolean leaf:
-  ## - jumps to `trueL`/`falseL`, one explicit `jmp` per taken side
-  ## - an empty target name means fall-through, with no label to name
-  ## - the leaf's own hoisted statements (call bindings) prefix the guard
-  let cond = ctx.lowerExpr(n)
+proc lowerCondExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
+  ## Lowers a condition: a loop head, an `ite` condition, a ternary condition.
+  ## - a call emits into the condition tree, it re-evaluates at every test site
+  ## - a condition that lowers to statements refuses, a deliberate fail-loud
+  ##   narrowing
+  ## - an ite site could host the binding slot between tests, releasing
+  ##   that shape waits for calls to emit as tree values everywhere
+  ctx.condDepth.inc
+  let e = ctx.lowerExpr(n)
+  ctx.condDepth.dec
   if ctx.failing():
-    return @[]
-  result = ctx.drainHoisted()
-  result.add(ctx.branchOn(cond, trueL, falseL, fallL))
-
-proc genCond(ctx: var FrontendCtx, n: NimNode, trueL, falseL, fallL: string): seq[CirStmt] =
-  ## Compiles a condition against two targets over forward-only scoped
-  ## `lab`/`jmp`:
-  ## - jump to `trueL` when true, to `falseL` when false
-  ## - an empty target name means fall-through, with no label to name
-  ## - `and` chains on the false target, `or` on the true target, `not` swaps targets
-  ## - each join is a fresh shared label, a nested boolean stays flat
-  if ctx.failing():
-    return @[]
-  let node = unwrapConv(n)
-  if node.kind == nnkInfix and node[0].strVal in ["and", "or"] and
-      node[1].getTypeInst().typeKind == ntyBool:
-    # a call-free and/or tree folds into one boolean expression:
-    # every chain exit reaches the same false (true) target.
-    # Nested ite labels cannot express that without losing the exits.
-    if not containsCall(node):
-      let condE = ctx.genCondBoolExpr(node)
-      if ctx.failing():
-        return @[]
-      return ctx.branchOn(condE, trueL, falseL, fallL)
-    let a = unwrapConv(node[1])
-    let b = unwrapConv(node[2])
-    let z = ctx.freshLabel("cz")
-    if node[0].strVal == "and":
-      result = ctx.genCond(a, z, falseL, z) & labS(z) & ctx.genCond(b, trueL, falseL, fallL)
-    else:
-      result = ctx.genCond(a, trueL, z, z) & labS(z) & ctx.genCond(b, trueL, falseL, fallL)
-    return result
-  if node.kind == nnkPrefix and node[0].strVal == "not":
-    return ctx.genCond(node[1], falseL, trueL, fallL)
-  return ctx.genLeaf(node, trueL, falseL, fallL)
+    return nil
+  if ctx.hoisted.len > 0:
+    ctx.fail("condition " & n.repr &
+      " lowers to statements, conditions must be expressions")
+    return nil
+  return e
 
 # ═══════════════════════════════════════════════════════════════════════
 # Statements
@@ -1558,63 +1514,31 @@ proc buildBranchBody(ctx: var FrontendCtx, bodyNode: NimNode, dest: CirExpr): se
   return stmts & ctx.drainHoisted() & @[asgnS(dest, value)]
 
 proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode, dest: CirExpr): seq[CirStmt] =
-  ## Forms produced, by branch shape:
-  ## - one branch, leaf condition, statement form: a single `ite`
-  ## - one branch, leaf condition, expression form: `ite` over both bodies
-  ## - short-circuit condition: the two-target compiler over `then`/`merge`
-  ##   labels
-  ## - elif chains: flat, every branch jumps one shared merge label
+  ## An elif chain nests one `ite` per branch:
+  ## - each branch nests into the previous branch's else body so the tests
+  ##   chain and first match wins
+  ## - the else statements sit innermost, a taken branch runs its body
+  ##   and skips the remaining tests
+  ## - the expression form assigns `dest` in every branch body
   if ctx.failing():
     return @[]
-  let thenStmts = ctx.buildBranchBody(branches[0].body, dest)
-  if ctx.failing():
-    return @[]
-  if branches.len == 1 and not containsShortCircuit(branches[0].cond):
-    let cond = ctx.lowerExpr(unwrapConv(branches[0].cond))
-    if ctx.failing():
-      return @[]
-    if not elseBody.isNil:
-      let elseStmts = ctx.buildBranchBody(elseBody, dest)
-      if ctx.failing():
-        return @[]
-      return ctx.drainHoisted() & @[iteS(cond, thenStmts, elseStmts)]
-    if dest.isNil:
-      return ctx.drainHoisted() & @[iteS(cond, thenStmts, @[])]
   if elseBody.isNil and dest != nil:
     ctx.fail("if expression without an else branch")
     return @[]
-  let mergeL = ctx.freshLabel("merge")
-  var targeted = false
-  result = @[]
-  for i, br in branches:
-    let body = ctx.buildBranchBody(br.body, dest)
-    if ctx.failing():
-      return @[]
-    if containsShortCircuit(br.cond):
-      let thenL = ctx.freshLabel("then")
-      let nextL = ctx.freshLabel("next")
-      result.add(ctx.genCond(br.cond, thenL, nextL, thenL))
-      result.add(labS(thenL))
-      result.add(body)
-      result.add(jmpS(mergeL))
-      result.add(labS(nextL))
-      targeted = true
-    else:
-      let cond = ctx.lowerExpr(unwrapConv(br.cond))
-      if ctx.failing():
-        return @[]
-      # a branch condition's own hoists run only after the earlier
-      # branches' tests failed: they sit between the previous branch's
-      # test and this branch's test
-      result.add(ctx.drainHoisted() & iteS(cond, body & jmpS(mergeL), @[]))
-      targeted = true
+  var tail: seq[CirStmt] = @[]
   if not elseBody.isNil:
-    let elseStmts = ctx.buildBranchBody(elseBody, dest)
+    tail = ctx.buildBranchBody(elseBody, dest)
     if ctx.failing():
       return @[]
-    result.add(elseStmts)
-  if targeted:
-    result.add(labS(mergeL))
+  for i in countdown(branches.len - 1, 0):
+    let cond = ctx.lowerCondExpr(branches[i].cond)
+    if ctx.failing():
+      return @[]
+    let body = ctx.buildBranchBody(branches[i].body, dest)
+    if ctx.failing():
+      return @[]
+    tail = @[iteS(cond, body, tail)]
+  result = tail
 
 proc lowerIfStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   var branches: seq[tuple[cond, body: NimNode]] = @[]
@@ -1653,39 +1577,23 @@ func bodyMarksUnroll(body: NimNode): bool =
   return false
 
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  ## A `while` loop lowers to a conditionless `loop` with a leading guard
-  ## and the exit label after the loop.
+  ## A `while` loop lowers to a loop re-testing its condition before every iteration.
   if ctx.failing():
     return @[]
-  let exitL = ctx.freshLabel("lx")
   let unroll = bodyMarksUnroll(n[1])
+  let cond = ctx.lowerCondExpr(n[0])
+  if ctx.failing():
+    return @[]
   let body = ctx.lowerStmt(n[1])
   if ctx.failing():
     return @[]
-  var guard: seq[CirStmt] = @[]
-  let condNode = unwrapConv(n[0])
-  if containsShortCircuit(condNode) and containsCall(condNode):
-    # a call-bearing and/or tree has no named target for the body entry
-    # its chain template expresses fall-through only per operand
-    # value lowering materializes the tree into one boolean temp
-    # guard lowering breaks on that temp
-    let condV = ctx.lowerExpr(condNode)
-    if ctx.failing():
-      return @[]
-    guard = ctx.drainHoisted() & @[iteS(notE(condV), @[jmpS(exitL)], @[])]
-  elif n[0].kind == nnkSym and n[0].strVal == "true":
-    discard
-  else:
-    guard = ctx.genCond(n[0], "", exitL, "")
-    if ctx.failing():
-      return @[]
-  result = @[loopS(guard & body, unroll), labS(exitL)]
+  return @[whileS(cond, body, unroll)]
 
 proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `for` over a literal range or `countup`:
-  ## - a loop variable declared in front
-  ## - a conditionless `loop`, its leading guard is the continue-condition
-  ## - the increment last, the exit label after the loop
+  ## - a loop variable declared in front, bounds evaluate once at entry
+  ## - a loop re-testing the range condition before every iteration
+  ## - the increment last
   if ctx.failing():
     return @[]
   let vars = n[0]
@@ -1757,6 +1665,7 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   let startT = operandLiteralTypedAs(startV, varType)
   let stopT = operandLiteralTypedAs(stopV, varType)
   var stepV: CirExpr = nil
+  var stepT: CirExpr = nil
   var stepIsConst = true
   if stepNode.isNil:
     stepV = intLit(1, varType)
@@ -1769,13 +1678,14 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         return @[]
       stepV = ctx.lowerExpr(unwrapped)
     else:
+      # no entry lowering: a step's calls must not run once before the loop
+      # body ever executes, per-iteration lowering belongs to the incr branch
       stepIsConst = false
-      stepV = ctx.lowerExpr(unwrapped)
   if ctx.failing():
     return @[]
-  let stepT = operandLiteralTypedAs(stepV, varType)
+  if stepIsConst:
+    stepT = operandLiteralTypedAs(stepV, varType)
   ctx.declareLocal(vars, sym(varName, varType))
-  let exitL = ctx.freshLabel("lx")
   let varSym = sym(varName, varType)
   let unroll = bodyMarksUnroll(n[^1])
   # start/stop/step hoists queued so far belong to the preamble, the body's own hoists drain per statement inside it
@@ -1788,7 +1698,6 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     leE(varSym, stopT)
   else:
     ltE(varSym, stopT)
-  let guard = iteS(cmp, @[], @[jmpS(exitL)])
   var incr: seq[CirStmt] = @[]
   if stepIsConst:
     incr.add(asgnS(varSym, addE(varType, varSym, stepT)))
@@ -1801,13 +1710,10 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       return @[]
     let stepNowT = operandLiteralTypedAs(stepNow, varType)
     incr.add(ctx.drainHoisted() & @[asgnS(varSym, addE(varType, varSym, stepNowT))])
-  var preamble = ctx.drainHoisted()
+  var preamble = startHoists
   preamble.add(varD(varName, varType))
   preamble.add(asgnS(varSym, startT))
-  if not stepIsConst:
-    preamble.add(assumeS(ltE(intLit(0, varType), stepT)))
-  result = startHoists & preamble & @[
-    loopS(bodyHoists & guard & body & incr, unroll), labS(exitL)]
+  result = preamble & @[whileS(cmp, bodyHoists & body & incr, unroll)]
 
 proc lowerReturn(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `return`: the value binds to its destination, then the `ret`.
@@ -2516,7 +2422,7 @@ proc lowerCirv2*(body: NimNode): tuple[m: CirModule, err: string] =
   ## Returns the module and "" when clean, else the first refusal message.
   ##
   ## Pipeline order:
-  ## - the constant-shell fold and the structuring pass run on this output
+  ## - the constant-shell fold runs on this output
   var ctx = FrontendCtx()
   ctx.pushScope()
   ctx.lowerModule(body)
