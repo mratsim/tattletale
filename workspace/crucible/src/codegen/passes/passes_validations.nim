@@ -127,57 +127,22 @@ proc spaceCastRejection(e: CirExpr, fnName: string): string =
     "from storage of the target space"
   result = "at " & fnName & ": cross-space " & construct & ": " & detail
 
-proc checkSpaceCastsExpr(e: CirExpr, fnName: string, err: var string) =
-  ## First cross-space cast or conversion in one expression tree, pre-order.
-  if e.isNil or err.len > 0:
-    return
-  err = spaceCastRejection(e, fnName)
-  for ch in getExprChildren(e):
-    checkSpaceCastsExpr(ch, fnName, err)
-
-proc checkSpaceCastsStmts(ss: seq[CirStmt], fnName: string, err: var string) =
-  ## Statement-walk overload, nested bodies included.
-  for s in ss:
+proc checkSpaceCastsStmts(ss: seq[CirStmt], fnName: string): string =
+  ## First cross-space cast or conversion in one statement list, walk order,
+  ## nested bodies included.
+  var err = ""
+  let check = proc(e: CirExpr) =
     if err.len > 0:
       return
-    case s.kind
-    of sVar, sConst:
-      checkSpaceCastsExpr(s.init, fnName, err)
-    of sAsgn:
-      checkSpaceCastsExpr(s.lhs, fnName, err)
-      checkSpaceCastsExpr(s.rhs, fnName, err)
-    of sIte:
-      checkSpaceCastsExpr(s.cond, fnName, err)
-      checkSpaceCastsStmts(s.thenBody, fnName, err)
-      checkSpaceCastsStmts(s.elseBody, fnName, err)
-    of sLoop:
-      checkSpaceCastsStmts(s.loopBody, fnName, err)
-    of sCase:
-      checkSpaceCastsExpr(s.selector, fnName, err)
-      for br in s.branches:
-        checkSpaceCastsStmts(br.body, fnName, err)
-      checkSpaceCastsStmts(s.caseElse, fnName, err)
-    of sScope:
-      checkSpaceCastsStmts(s.scopeBody, fnName, err)
-    of sAssume:
-      checkSpaceCastsExpr(s.assumeCond, fnName, err)
-    of sRet:
-      checkSpaceCastsExpr(s.retVal, fnName, err)
-    of sDiscard:
-      checkSpaceCastsExpr(s.discardVal, fnName, err)
-    of sCall:
-      checkSpaceCastsExpr(s.callCallee, fnName, err)
-      for a in s.callArgs:
-        checkSpaceCastsExpr(a, fnName, err)
-    of sLab, sJmp, sAsm, sEmit:
-      discard
+    err = spaceCastRejection(e, fnName)
+  ss.walkStmts(nil, check)
+  return err
 
 proc validateAddressSpaceCastsPass(m: CirModule): string =
   ## Rejects cross-space pointer casts and conversions over every module proc.
   ## Returns "" when clean, else the first refusal.
   for fn in m.procs:
-    var err = ""
-    fn.body.checkSpaceCastsStmts(fn.name, err)
+    let err = fn.body.checkSpaceCastsStmts(fn.name)
     if err.len > 0:
       return err
   return ""
@@ -186,30 +151,18 @@ proc validateAddressSpaceCastsPass(m: CirModule): string =
 # Constant-storage write validation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectConstLocals(ss: seq[CirStmt], names: var HashSet[string]) =
-  ## Collects the `{.const_mem.}` local names of one statement list.
-  ## Scopes and case branches are included.
+proc collectConstLocals(ss: seq[CirStmt], seeded: HashSet[string]): HashSet[string] =
+  ## Every `{.const_mem.}` local name of one statement list over `seeded`,
+  ## scopes and case branches included.
   ##
   ## The hoisting passes relocate these locals on most targets.
   ## The CUDA bundle keeps them in-body, and a write to one refuses here.
-  for s in ss:
-    case s.kind
-    of sVar:
-      if s.space == caConstant:
-        names.incl s.name
-    of sIte:
-      s.thenBody.collectConstLocals(names)
-      s.elseBody.collectConstLocals(names)
-    of sLoop:
-      s.loopBody.collectConstLocals(names)
-    of sCase:
-      for br in s.branches:
-        br.body.collectConstLocals(names)
-      s.caseElse.collectConstLocals(names)
-    of sScope:
-      s.scopeBody.collectConstLocals(names)
-    of sConst, sAsgn, sLab, sJmp, sAssume, sRet, sDiscard, sCall, sAsm, sEmit:
-      discard
+  var names = seeded
+  let collect = proc(s: CirStmt) =
+    if s.kind == sVar and s.space == caConstant:
+      names.incl s.name
+  ss.walkStmts(collect, nil)
+  return names
 
 proc constStorageTarget(e: CirExpr, constNames: HashSet[string]): string =
   ## Name of the constant-storage target an lvalue designates.
@@ -253,27 +206,17 @@ proc constWriteRejection(lhs: CirExpr, fnName: string, constNames: HashSet[strin
     target & " lives in read-only program-scope memory. Globals are " &
     "read-only; pass mutable state as a pointer parameter"
 
-proc checkConstWritesStmts(ss: seq[CirStmt], fnName: string, constNames: HashSet[string], err: var string) =
-  ## Statement-walk overload, nested bodies included.
-  for s in ss:
+proc checkConstWritesStmts(ss: seq[CirStmt], fnName: string, constNames: HashSet[string]): string =
+  ## First assignment into constant storage in one statement list, walk order,
+  ## nested bodies included. Only assignment targets are checked, reads of constant storage stay legal.
+  var err = ""
+  let check = proc(s: CirStmt) =
     if err.len > 0:
       return
-    case s.kind
-    of sAsgn:
+    if s.kind == sAsgn:
       err = constWriteRejection(s.lhs, fnName, constNames)
-    of sIte:
-      s.thenBody.checkConstWritesStmts(fnName, constNames, err)
-      s.elseBody.checkConstWritesStmts(fnName, constNames, err)
-    of sLoop:
-      s.loopBody.checkConstWritesStmts(fnName, constNames, err)
-    of sCase:
-      for br in s.branches:
-        br.body.checkConstWritesStmts(fnName, constNames, err)
-      s.caseElse.checkConstWritesStmts(fnName, constNames, err)
-    of sScope:
-      s.scopeBody.checkConstWritesStmts(fnName, constNames, err)
-    of sVar, sConst, sLab, sJmp, sAssume, sRet, sDiscard, sCall, sAsm, sEmit:
-      discard
+  ss.walkStmts(check, nil)
+  return err
 
 proc validateConstantWritesPass(m: CirModule): string =
   ## Rejects writes into constant storage across every module proc and every
@@ -283,12 +226,8 @@ proc validateConstantWritesPass(m: CirModule): string =
     if g.kind == sVar and g.space == caConstant:
       constGlobals.incl g.name
   for fn in m.procs:
-    var constNames = constGlobals
-    fn.body.collectConstLocals(constNames)
-    var err = ""
-    fn.body.checkConstWritesStmts(fn.name, constNames, err)
+    let constNames = fn.body.collectConstLocals(constGlobals)
+    let err = fn.body.checkConstWritesStmts(fn.name, constNames)
     if err.len > 0:
       return err
-  var err = ""
-  m.globals.checkConstWritesStmts("global scope", constGlobals, err)
-  return err
+  return m.globals.checkConstWritesStmts("global scope", constGlobals)

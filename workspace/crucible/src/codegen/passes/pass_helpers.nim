@@ -7,7 +7,7 @@
 
 ## Shared pass helpers over CIRv2.
 ##
-## - call-target collection
+## - call-target collection and the shared statement and expression walk
 ## - the root symbol of a dotted or indexed chain
 ## - declaration and clone utilities
 ## - the kernel-parameter leaf walk
@@ -29,41 +29,108 @@ proc exprRootSym*(e: CirExpr): CirExpr =
   if result != nil and result.kind != eSym:
     result = nil
 
+proc walkExprs*(e: CirExpr, visit: proc(e: CirExpr)) =
+  ## Pre-order walk over one expression tree, `visit` sees every node once.
+  ##
+  ## Contract:
+  ## - `visit` runs on a node before the walk descends into the children
+  ## - a visitor may rewrite the node in place, expressions are shared refs
+  ## - the children are read after `visit`, a rewrite of the visited node
+  ##   steers the descent into the rewritten shape
+  if e.isNil:
+    return
+  visit(e)
+  for ch in getExprChildren(e):
+    walkExprs(ch, visit)
+
+proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirExpr)) =
+  ## Walks one statement list through two visitors, either nil.
+  ##
+  ## - `onExpr` sees every expression position of every statement kind:
+  ##   declaration initializers, assignment operands, branch conditions,
+  ##   case selectors, assume conditions, return values, discard values,
+  ##   `sAsm` and `sEmit` operands, call callees, call arguments
+  ## - `onStmt` sees every statement once, after its expression positions
+  ##   and after its nested statement lists
+  ## - nested bodies recurse: then and else branches, loop bodies,
+  ##   case branches and case else, scopes
+  ##
+  ## The walk iterates a shallow copy of the statement list, so an insertion
+  ## from `onStmt` does not disturb the iteration.
+  ##
+  ## Visitors return nothing. A visitor that refuses captures the refusal
+  ## in a variable and stops work once the variable is set, so the first
+  ## refusal in walk order wins.
+
+  proc slot(e: CirExpr) =
+    if onExpr != nil:
+      e.walkExprs(onExpr)
+  var walked: seq[CirStmt]
+  for s in ss:
+    walked.add s
+  for s in walked:
+    case s.kind
+    of sVar, sConst:
+      slot(s.init)
+    of sAsgn:
+      slot(s.lhs)
+      slot(s.rhs)
+    of sIte:
+      slot(s.cond)
+      walkStmts(s.thenBody, onStmt, onExpr)
+      walkStmts(s.elseBody, onStmt, onExpr)
+    of sLoop:
+      walkStmts(s.loopBody, onStmt, onExpr)
+    of sCase:
+      slot(s.selector)
+      for br in s.branches:
+        walkStmts(br.body, onStmt, onExpr)
+      walkStmts(s.caseElse, onStmt, onExpr)
+    of sScope:
+      walkStmts(s.scopeBody, onStmt, onExpr)
+    of sAssume:
+      slot(s.assumeCond)
+    of sRet:
+      slot(s.retVal)
+    of sDiscard:
+      slot(s.discardVal)
+    of sCall:
+      slot(s.callCallee)
+      for a in s.callArgs:
+        slot(a)
+    of sAsm:
+      for op in s.asmOperands:
+        slot(op)
+    of sEmit:
+      for op in s.emitOperands:
+        slot(op)
+    of sLab, sJmp:
+      discard
+    if onStmt != nil:
+      onStmt(s)
+
 proc appendCallTargetsExpr*(e: CirExpr, targets: var HashSet[string]) =
-  ## Collects the callee names of one expression into `targets`.
+  ## Collects the callee name of one expression node into `targets`.
   if e.isNil:
     return
   if e.kind == eCall and e.callee.kind == eSym:
     targets.incl e.callee.name
-  for ch in getExprChildren(e):
-    appendCallTargetsExpr(ch, targets)
 
 proc appendCallTargetsStmts*(ss: seq[CirStmt], targets: var HashSet[string]) =
   ## Collects the callee names of one statement list, nested bodies included.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      appendCallTargetsExpr(s.init, targets)
-    of sAsgn:
-      appendCallTargetsExpr(s.lhs, targets)
-      appendCallTargetsExpr(s.rhs, targets)
-    of sIte:
-      appendCallTargetsExpr(s.cond, targets)
-      appendCallTargetsStmts(s.thenBody, targets)
-      appendCallTargetsStmts(s.elseBody, targets)
-    of sLoop:
-      appendCallTargetsStmts(s.loopBody, targets)
-    of sScope:
-      appendCallTargetsStmts(s.scopeBody, targets)
-    of sRet:
-      appendCallTargetsExpr(s.retVal, targets)
-    of sCall:
-      if s.callCallee.kind == eSym:
-        targets.incl s.callCallee.name
-      for a in s.callArgs:
-        appendCallTargetsExpr(a, targets)
-    else:
-      discard
+  ##
+  ## Contract:
+  ## - a statement-level call names its callee with a bare symbol,
+  ##   `onStmt` reads `s.callCallee` directly
+  ## - the expression visitor sees only the call nodes nested in expression positions
+  var collected = targets
+  let onExpr = proc(e: CirExpr) =
+    e.appendCallTargetsExpr(collected)
+  let onStmt = proc(s: CirStmt) =
+    if s.kind == sCall and s.callCallee.kind == eSym:
+      collected.incl s.callCallee.name
+  ss.walkStmts(onStmt, onExpr)
+  targets = collected
 
 
 proc collectCallTargets*(stmts: seq[CirStmt], targets: var HashSet[string]) =
@@ -73,19 +140,12 @@ proc collectCallTargets*(stmts: seq[CirStmt], targets: var HashSet[string]) =
 
 proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: string, typ: CirType]]) =
   ## Every local declared in the statement list with its type, nested bodies included.
-  for s in stmts:
-    case s.kind
-    of sVar, sConst:
-      locals.add((name: s.name, typ: s.declType))
-    of sIte:
-      collectDeclaredLocals(s.thenBody, locals)
-      collectDeclaredLocals(s.elseBody, locals)
-    of sLoop:
-      collectDeclaredLocals(s.loopBody, locals)
-    of sScope:
-      collectDeclaredLocals(s.scopeBody, locals)
-    else:
-      discard
+  var collected = locals
+  let collect = proc(s: CirStmt) =
+    if s.kind in {sVar, sConst}:
+      collected.add((name: s.name, typ: s.declType))
+  stmts.walkStmts(collect, nil)
+  locals = collected
 
 proc cloneExpr*(e: CirExpr): CirExpr =
   ## Deep copy of one expression: statements and expressions are ref objects,

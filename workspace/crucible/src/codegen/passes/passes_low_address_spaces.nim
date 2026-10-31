@@ -110,51 +110,15 @@ proc freshProcType(params: seq[CirType], ret: CirType): CirType =
   result.ret = ret
 
 proc retypeSymsExpr(e: CirExpr, name: string, typ: CirType) =
-  ## Retypes every symbol named `name` in one expression tree, in place.
+  ## Retypes the symbol named `name` in place.
   ## Expressions are refs: the rewrite applies to every sharer.
-  if e.isNil:
-    return
-  if e.kind == eSym:
-    if e.name == name:
-      e.typ = typ
-    return
-  for ch in getExprChildren(e):
-    ch.retypeSymsExpr(name, typ)
+  if e.kind == eSym and e.name == name:
+    e.typ = typ
 
 proc retypeSymsStmts(ss: seq[CirStmt], name: string, typ: CirType) =
-  ## Statement-walk overload of `retypeSymsExpr`, nested bodies included.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      retypeSymsExpr(s.init, name, typ)
-    of sAsgn:
-      retypeSymsExpr(s.lhs, name, typ)
-      retypeSymsExpr(s.rhs, name, typ)
-    of sIte:
-      retypeSymsExpr(s.cond, name, typ)
-      retypeSymsStmts(s.thenBody, name, typ)
-      retypeSymsStmts(s.elseBody, name, typ)
-    of sLoop:
-      retypeSymsStmts(s.loopBody, name, typ)
-    of sCase:
-      retypeSymsExpr(s.selector, name, typ)
-      for br in s.branches:
-        retypeSymsStmts(br.body, name, typ)
-      retypeSymsStmts(s.caseElse, name, typ)
-    of sScope:
-      retypeSymsStmts(s.scopeBody, name, typ)
-    of sAssume:
-      retypeSymsExpr(s.assumeCond, name, typ)
-    of sRet:
-      retypeSymsExpr(s.retVal, name, typ)
-    of sDiscard:
-      retypeSymsExpr(s.discardVal, name, typ)
-    of sCall:
-      retypeSymsExpr(s.callCallee, name, typ)
-      for a in s.callArgs:
-        retypeSymsExpr(a, name, typ)
-    of sLab, sJmp, sAsm, sEmit:
-      discard
+  ## Retypes every symbol named `name` across one statement list, nested bodies included.
+  ss.walkStmts(nil, proc(e: CirExpr) =
+    e.retypeSymsExpr(name, typ))
 
 proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
   ## One instantiation of `callee` over the re-spaced formals `wanted`.
@@ -172,12 +136,21 @@ proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
       result.params.add param(p.name, wanted[i])
       retypeSymsStmts(result.body, p.name, wanted[i])
 
-proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr],
-                     calleeProc: CirProc, taken: var HashSet[string],
-                     procs: var Table[string, CirProc],
-                     clones: var Table[string, CirProc],
-                     byBase: var Table[string, seq[CirProc]],
-                     queue: var seq[CirProc]): CirProc =
+type
+  InstantiateCtx = ref object
+    ## Shared state of the per-address-space instantiation walk.
+    ##
+    ## - `procs` maps every proc name to its body, clones included as they appear
+    ## - `clones` keys one instantiation per argument-space combination
+    ## - `byBase` groups clones under their base callee for the placement loop
+    ## - `queue` lists the procs whose bodies still need the call-site walk
+    procs: Table[string, CirProc]
+    taken: HashSet[string]
+    clones: Table[string, CirProc]
+    byBase: Table[string, seq[CirProc]]
+    queue: seq[CirProc]
+
+proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirProc, ctx: InstantiateCtx): CirProc =
   ## Rewrites one call site onto the instantiation its argument spaces select.
   ## A first-use combination creates the clone and queues it for the driver's body walk.
   ## Returns the instantiation, nil when the argument spaces match the formals.
@@ -185,150 +158,58 @@ proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr],
   if not calleeProc.wantedParamTypes(args, wanted):
     return nil
   let key = calleeProc.instKey(wanted)
-  if clones.hasKey(key):
-    result = clones[key]
+  if ctx.clones.hasKey(key):
+    result = ctx.clones[key]
   else:
     var name = calleeProc.name & "_" & base58Discriminator(key)
-    while name in taken:
+    while name in ctx.taken:
       # a discriminator collision over an existing proc name: rehash with a salt.
       # every rehash salts the key, so the loop stays bounded
       name = calleeProc.name & "_" & base58Discriminator(key & "\x1f" & name)
     result = cloneCallee(calleeProc, wanted, name)
-    taken.incl name
-    procs[name] = result
-    clones[key] = result
-    byBase.mgetOrPut(calleeProc.name, @[]).add result
-    queue.add result
+    ctx.taken.incl name
+    ctx.procs[name] = result
+    ctx.clones[key] = result
+    ctx.byBase.mgetOrPut(calleeProc.name, @[]).add result
+    ctx.queue.add result
   calleeExpr.name = result.name
   calleeExpr.typ = freshProcType(wanted, result.ret)
 
-proc instantiateCallSitesStmts(ss: seq[CirStmt],
-                               procs: var Table[string, CirProc],
-                               taken: var HashSet[string],
-                               clones: var Table[string, CirProc],
-                               byBase: var Table[string, seq[CirProc]],
-                               queue: var seq[CirProc]): string
-  ## Forward declaration: nested statement lists recurse into each other.
-
-proc instantiateCallSitesExpr(e: CirExpr, procs: var Table[string, CirProc],
-                              taken: var HashSet[string],
-                              clones: var Table[string, CirProc],
-                              byBase: var Table[string, seq[CirProc]],
-                              queue: var seq[CirProc]): string =
-  ## Instantiates every call nested in one expression, outermost last.
-  ## Returns "" when clean, else the first refusal.
-  if e.isNil:
-    return ""
-  if e.kind == eCall and e.callee.kind == eSym:
-    for a in e.args.mitems:
-      let err = instantiateCallSitesExpr(a, procs, taken, clones, byBase, queue)
-      if err.len > 0:
-        return err
-    let calleeProc = procs.getOrDefault(e.callee.name)
-    if calleeProc.isNil or e.args.len != calleeProc.params.len:
-      return ""
-    discard e.callee.rewriteCallSite(e.args, calleeProc, taken, procs, clones, byBase, queue)
-    return ""
-  for ch in getExprChildren(e):
-    let err = ch.instantiateCallSitesExpr(procs, taken, clones, byBase, queue)
+proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx): string =
+  ## Instantiates every call site in one statement list, calls nested inside
+  ## expressions included. Returns "" when clean, else the first refusal.
+  var err = ""
+  let onExpr = proc(e: CirExpr) =
     if err.len > 0:
-      return err
-  return ""
-
-proc instantiateCallSitesStmts(ss: seq[CirStmt],
-                               procs: var Table[string, CirProc],
-                               taken: var HashSet[string],
-                               clones: var Table[string, CirProc],
-                               byBase: var Table[string, seq[CirProc]],
-                               queue: var seq[CirProc]): string =
-  ## Statement-walk overload of `instantiateCallSitesExpr`, nested bodies included.
-  ## Returns "" when clean, else the first refusal.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      let err = instantiateCallSitesExpr(s.init, procs, taken, clones, byBase, queue)
-      if err.len > 0:
-        return err
-    of sAsgn:
-      let lerr = instantiateCallSitesExpr(s.lhs, procs, taken, clones, byBase, queue)
-      if lerr.len > 0:
-        return lerr
-      let rerr = instantiateCallSitesExpr(s.rhs, procs, taken, clones, byBase, queue)
-      if rerr.len > 0:
-        return rerr
-    of sIte:
-      let cerr = instantiateCallSitesExpr(s.cond, procs, taken, clones, byBase, queue)
-      if cerr.len > 0:
-        return cerr
-      let thenErr = instantiateCallSitesStmts(s.thenBody, procs, taken, clones, byBase, queue)
-      if thenErr.len > 0:
-        return thenErr
-      let elseErr = instantiateCallSitesStmts(s.elseBody, procs, taken, clones, byBase, queue)
-      if elseErr.len > 0:
-        return elseErr
-    of sLoop:
-      let loopErr = instantiateCallSitesStmts(s.loopBody, procs, taken, clones, byBase, queue)
-      if loopErr.len > 0:
-        return loopErr
-    of sCase:
-      let selErr = instantiateCallSitesExpr(s.selector, procs, taken, clones, byBase, queue)
-      if selErr.len > 0:
-        return selErr
-      for br in s.branches:
-        let brErr = instantiateCallSitesStmts(br.body, procs, taken, clones, byBase, queue)
-        if brErr.len > 0:
-          return brErr
-      let elseErr = instantiateCallSitesStmts(s.caseElse, procs, taken, clones, byBase, queue)
-      if elseErr.len > 0:
-        return elseErr
-    of sScope:
-      let scopeErr = instantiateCallSitesStmts(s.scopeBody, procs, taken, clones, byBase, queue)
-      if scopeErr.len > 0:
-        return scopeErr
-    of sAssume:
-      let aerr = instantiateCallSitesExpr(s.assumeCond, procs, taken, clones, byBase, queue)
-      if aerr.len > 0:
-        return aerr
-    of sRet:
-      let rerr = instantiateCallSitesExpr(s.retVal, procs, taken, clones, byBase, queue)
-      if rerr.len > 0:
-        return rerr
-    of sDiscard:
-      let derr = instantiateCallSitesExpr(s.discardVal, procs, taken, clones, byBase, queue)
-      if derr.len > 0:
-        return derr
-    of sCall:
-      for a in s.callArgs.mitems:
-        let aerr = instantiateCallSitesExpr(a, procs, taken, clones, byBase, queue)
-        if aerr.len > 0:
-          return aerr
-      let calleeProc = procs.getOrDefault(s.callCallee.name)
+      return
+    if e.kind == eCall and e.callee.kind == eSym:
+      let calleeProc = ctx.procs.getOrDefault(e.callee.name)
+      if calleeProc.isNil or e.args.len != calleeProc.params.len:
+        return
+      discard e.callee.rewriteCallSite(e.args, calleeProc, ctx)
+  let onStmt = proc(s: CirStmt) =
+    if err.len > 0:
+      return
+    if s.kind == sCall:
+      let calleeProc = ctx.procs.getOrDefault(s.callCallee.name)
       if calleeProc != nil and s.callArgs.len == calleeProc.params.len:
-        discard s.callCallee.rewriteCallSite(s.callArgs, calleeProc, taken,
-          procs, clones, byBase, queue)
-    of sLab, sJmp, sAsm, sEmit:
-      discard
-  return ""
+        discard s.callCallee.rewriteCallSite(s.callArgs, calleeProc, ctx)
+  ss.walkStmts(onStmt, onExpr)
+  return err
 
 proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
   ## Instantiates the module callees whose pointer arguments name another
   ## address space than the formal.
   ##
   ## Clones append to `m.procs` after the walk, their bodies walked like any other proc's.
-  var procs = initTable[string, CirProc]()
-  var clones = initTable[string, CirProc]()
-  var byBase = initTable[string, seq[CirProc]]()
-  var taken: HashSet[string]
+  var ctx = InstantiateCtx()
   for fn in m.procs:
-    procs[fn.name] = fn
-    taken.incl fn.name
-  var queue: seq[CirProc]
-  for fn in m.procs:
-    queue.add fn
+    ctx.procs[fn.name] = fn
+    ctx.taken.incl fn.name
+    ctx.queue.add fn
   var i = 0
-  while i < queue.len:
-    let err = instantiateCallSitesStmts(queue[i].body, procs, taken, clones,
-      byBase, queue)
+  while i < ctx.queue.len:
+    let err = ctx.queue[i].body.instantiateCallSitesStmts(ctx)
     if err.len > 0:
       return err
     i.inc
@@ -336,7 +217,7 @@ proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
   var placed: seq[CirProc]
   for fn in m.procs:
     placed.add fn
-    for c in byBase.getOrDefault(fn.name):
+    for c in ctx.byBase.getOrDefault(fn.name):
       placed.add c
   m.procs = placed
   return ""

@@ -159,17 +159,14 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]) =
     i.inc
 
 proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
-  ## Rewrites the reads of a hoisted array arena in place:
+  ## Rewrites one expression node that reads a hoisted array arena, in place:
   ##
   ## - arena-symbol references retype to the `aptr` parameter type
   ## - an `at` over the symbol becomes a `pat`, the printed text stays `scratch[i]`
   ##
   ## Expressions are refs, the rewrite applies to every sharer.
-  if e.isNil:
-    return
   if e.kind == eSym and arenaTypes.hasKey(e.name):
     e.typ = arenaTypes[e.name]
-    return
   if e.kind == eAt and e.atBase.kind == eSym and arenaTypes.hasKey(e.atBase.name):
     let base = e.atBase
     let idx = e.atIndex
@@ -177,39 +174,12 @@ proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
     e.kind = ePat
     e.patBase = base
     e.patIndex = idx
-    rewriteArenaReads(e.patIndex, arenaTypes)
-    return
-  for ch in getExprChildren(e):
-    rewriteArenaReads(ch, arenaTypes)
 
 proc rewriteArenaReadsStmts(ss: seq[CirStmt], arenaTypes: Table[string, CirType]) =
-  ## Statement-walk overload of `rewriteArenaReads`, nested bodies included.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      rewriteArenaReads(s.init, arenaTypes)
-    of sAsgn:
-      rewriteArenaReads(s.lhs, arenaTypes)
-      rewriteArenaReads(s.rhs, arenaTypes)
-    of sIte:
-      rewriteArenaReads(s.cond, arenaTypes)
-      rewriteArenaReadsStmts(s.thenBody, arenaTypes)
-      rewriteArenaReadsStmts(s.elseBody, arenaTypes)
-    of sLoop:
-      rewriteArenaReadsStmts(s.loopBody, arenaTypes)
-    of sScope:
-      rewriteArenaReadsStmts(s.scopeBody, arenaTypes)
-    of sAssume:
-      rewriteArenaReads(s.assumeCond, arenaTypes)
-    of sRet:
-      rewriteArenaReads(s.retVal, arenaTypes)
-    of sDiscard:
-      rewriteArenaReads(s.discardVal, arenaTypes)
-    of sCall:
-      for a in s.callArgs:
-        rewriteArenaReads(a, arenaTypes)
-    of sLab, sJmp, sCase, sAsm, sEmit:
-      discard
+  ## Retypes the reads of a hoisted array arena across one statement list,
+  ## nested bodies included.
+  ss.walkStmts(nil, proc(e: CirExpr) =
+    e.rewriteArenaReads(arenaTypes))
 
 proc ownedSmemNames(fn: CirProc): HashSet[string] =
   for p in fn.params:
@@ -258,52 +228,24 @@ proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
       "', the caller must declare a matching {.smem.} var"
   return ""
 
-proc bindSmemCallSiteStmts(fn: CirProc, ss: seq[CirStmt],
-                           procs: Table[string, CirProc],
-                           hoisted: Table[string, seq[SmemArena]],
-                           owned: var HashSet[string]): string =
+proc bindSmemCallSiteStmts(fn: CirProc, ss: seq[CirStmt], procs: Table[string, CirProc], hoisted: Table[string, seq[SmemArena]]): string =
   ## Binds the hoisted-arena arguments of every call in one statement list,
   ## nested bodies included. Returns "" when clean, else the first refusal.
-  ##
-  ## Walks a snapshot of the statement references: binding a kernel call site
-  ## synthesizes its arena into `fn.body`, and the synthesis must not perturb
-  ## the walk (a synthesized declaration binds no call).
-  var walked: seq[CirStmt]
-  for s in ss:
-    walked.add(s)
-  for s in walked:
-    case s.kind
-    of sCall:
-      if s.callCallee.kind == eSym and hoisted.hasKey(s.callCallee.name):
-        let err = bindSmemArgs(fn, procs[s.callCallee.name], s.callCallee,
-          s.callArgs, hoisted[s.callCallee.name], owned)
-        if err.len > 0:
-          return err
-    of sAsgn:
-      if s.rhs.kind == eCall and s.rhs.callee.kind == eSym and
-          hoisted.hasKey(s.rhs.callee.name):
-        let err = bindSmemArgs(fn, procs[s.rhs.callee.name], s.rhs.callee,
-          s.rhs.args, hoisted[s.rhs.callee.name], owned)
-        if err.len > 0:
-          return err
-    of sIte:
-      let thenErr = bindSmemCallSiteStmts(fn, s.thenBody, procs, hoisted, owned)
-      if thenErr.len > 0:
-        return thenErr
-      let elseErr = bindSmemCallSiteStmts(fn, s.elseBody, procs, hoisted, owned)
-      if elseErr.len > 0:
-        return elseErr
-    of sLoop:
-      let loopErr = bindSmemCallSiteStmts(fn, s.loopBody, procs, hoisted, owned)
-      if loopErr.len > 0:
-        return loopErr
-    of sScope:
-      let scopeErr = bindSmemCallSiteStmts(fn, s.scopeBody, procs, hoisted, owned)
-      if scopeErr.len > 0:
-        return scopeErr
-    else:
-      discard
-  return ""
+  var owned = fn.ownedSmemNames()
+  var err = ""
+  let bindCall = proc(callee: CirExpr, args: var seq[CirExpr]) =
+    if callee.kind == eSym and hoisted.hasKey(callee.name):
+      err = bindSmemArgs(fn, procs[callee.name], callee, args,
+        hoisted[callee.name], owned)
+  let onStmt = proc(s: CirStmt) =
+    if err.len > 0:
+      return
+    if s.kind == sCall:
+      s.callCallee.bindCall(s.callArgs)
+    elif s.kind == sAsgn and s.rhs.kind == eCall:
+      s.rhs.callee.bindCall(s.rhs.args)
+  ss.walkStmts(onStmt, nil)
+  return err
 
 proc mslHoistDeviceFnSmem(m: CirModule): string =
   ## Hoists the `{.smem.}` locals of every device function to threadgroup
@@ -331,8 +273,7 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
     return ""
   let procs = procsByName(m)
   for fn in m.procs:
-    var owned = fn.ownedSmemNames()
-    let err = bindSmemCallSiteStmts(fn, fn.body, procs, hoisted, owned)
+    let err = bindSmemCallSiteStmts(fn, fn.body, procs, hoisted)
     if err.len > 0:
       return err
   return ""
@@ -342,44 +283,18 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc collectCoordReads(e: CirExpr, kinds: var HashSet[CoordBuiltinKind]) =
-  ## Collects the coordinate builtin kinds one expression reads across the whole tree.
-  if e.isNil:
-    return
+  ## Collects the coordinate builtin kind one expression node reads.
   if e.kind == eSym and e.coordBuiltin != cbkNone:
     kinds.incl(e.coordBuiltin)
-    return
-  for ch in getExprChildren(e):
-    collectCoordReads(ch, kinds)
 
-proc collectCoordReadsStmts(ss: seq[CirStmt], kinds: var HashSet[CoordBuiltinKind]) =
-  ## Statement-walk overload of `collectCoordReads`, nested bodies included.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      collectCoordReads(s.init, kinds)
-    of sAsgn:
-      collectCoordReads(s.lhs, kinds)
-      collectCoordReads(s.rhs, kinds)
-    of sIte:
-      collectCoordReads(s.cond, kinds)
-      collectCoordReadsStmts(s.thenBody, kinds)
-      collectCoordReadsStmts(s.elseBody, kinds)
-    of sLoop:
-      collectCoordReadsStmts(s.loopBody, kinds)
-    of sScope:
-      collectCoordReadsStmts(s.scopeBody, kinds)
-    of sAssume:
-      collectCoordReads(s.assumeCond, kinds)
-    of sRet:
-      collectCoordReads(s.retVal, kinds)
-    of sDiscard:
-      collectCoordReads(s.discardVal, kinds)
-    of sCall:
-      collectCoordReads(s.callCallee, kinds)
-      for a in s.callArgs:
-        collectCoordReads(a, kinds)
-    of sLab, sJmp, sCase, sAsm, sEmit:
-      discard
+proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CoordBuiltinKind] =
+  ## Collects the coordinate builtin kinds read across one statement list,
+  ## nested bodies included.
+  var kinds: HashSet[CoordBuiltinKind]
+  let collect = proc(e: CirExpr) =
+    e.collectCoordReads(kinds)
+  ss.walkStmts(nil, collect)
+  return kinds
 
 proc builtinParamType(kind: CoordBuiltinKind): CirType =
   ## Parameter type standing in for one coordinate builtin:
@@ -453,83 +368,27 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
       args.add(sym(CoordBuiltinCanonicalName[kind], builtinParamType(kind)))
   return ""
 
-proc appendCoordForwardingArgs(fn: CirProc, e: CirExpr, procs: Table[string, CirProc],
-                               needs: Table[string, HashSet[CoordBuiltinKind]]): string =
-  ## Appends the builtin arguments of every call nested in one expression,
-  ## outermost call last. Returns "" when clean, else the first refusal.
-  if e.isNil:
-    return ""
-  if e.kind == eCall:
-    for i in 0 ..< e.args.len:
-      let err = appendCoordForwardingArgs(fn, e.args[i], procs, needs)
-      if err.len > 0:
-        return err
-    return appendCoordCallArgs(fn, procs.getOrDefault(e.callee.name), e.callee, e.args, needs)
-  for ch in getExprChildren(e):
-    let err = appendCoordForwardingArgs(fn, ch, procs, needs)
-    if err.len > 0:
-      return err
-  return ""
-
 proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
                                     procs: Table[string, CirProc],
                                     needs: Table[string, HashSet[CoordBuiltinKind]]): string =
-  ## Statement-walk overload of `appendCoordForwardingArgs` over nested bodies.
+  ## Appends the builtin arguments of every call site in one statement list,
+  ## calls nested inside expressions included.
   ## Returns "" when clean, else the first refusal.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      let err = appendCoordForwardingArgs(fn, s.init, procs, needs)
-      if err.len > 0:
-        return err
-    of sAsgn:
-      let lerr = appendCoordForwardingArgs(fn, s.lhs, procs, needs)
-      if lerr.len > 0:
-        return lerr
-      let rerr = appendCoordForwardingArgs(fn, s.rhs, procs, needs)
-      if rerr.len > 0:
-        return rerr
-    of sIte:
-      let cerr = appendCoordForwardingArgs(fn, s.cond, procs, needs)
-      if cerr.len > 0:
-        return cerr
-      let thenErr = appendCoordForwardingArgsStmts(fn, s.thenBody, procs, needs)
-      if thenErr.len > 0:
-        return thenErr
-      let elseErr = appendCoordForwardingArgsStmts(fn, s.elseBody, procs, needs)
-      if elseErr.len > 0:
-        return elseErr
-    of sLoop:
-      let loopErr = appendCoordForwardingArgsStmts(fn, s.loopBody, procs, needs)
-      if loopErr.len > 0:
-        return loopErr
-    of sScope:
-      let scopeErr = appendCoordForwardingArgsStmts(fn, s.scopeBody, procs, needs)
-      if scopeErr.len > 0:
-        return scopeErr
-    of sAssume:
-      let aerr = appendCoordForwardingArgs(fn, s.assumeCond, procs, needs)
-      if aerr.len > 0:
-        return aerr
-    of sRet:
-      let rerr = appendCoordForwardingArgs(fn, s.retVal, procs, needs)
-      if rerr.len > 0:
-        return rerr
-    of sDiscard:
-      let derr = appendCoordForwardingArgs(fn, s.discardVal, procs, needs)
-      if derr.len > 0:
-        return derr
-    of sCall:
-      for a in s.callArgs:
-        let aerr = appendCoordForwardingArgs(fn, a, procs, needs)
-        if aerr.len > 0:
-          return aerr
-      let cerr = appendCoordCallArgs(fn, procs.getOrDefault(s.callCallee.name), s.callCallee, s.callArgs, needs)
-      if cerr.len > 0:
-        return cerr
-    of sLab, sJmp, sCase, sAsm, sEmit:
-      discard
-  return ""
+  var err = ""
+  let onExpr = proc(e: CirExpr) =
+    if err.len > 0:
+      return
+    if e.kind == eCall:
+      err = appendCoordCallArgs(fn, procs.getOrDefault(e.callee.name), e.callee,
+        e.args, needs)
+  let onStmt = proc(s: CirStmt) =
+    if err.len > 0:
+      return
+    if s.kind == sCall:
+      err = appendCoordCallArgs(fn, procs.getOrDefault(s.callCallee.name),
+        s.callCallee, s.callArgs, needs)
+  ss.walkStmts(onStmt, onExpr)
+  return err
 
 proc mslThreadCoordinateBuiltins(m: CirModule): string =
   ## Threads the coordinate builtins down to the device functions as parameters.
@@ -542,9 +401,7 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
   var callTargets = initTable[string, HashSet[string]]()
   for fn in m.procs:
     needs[fn.name] = initHashSet[CoordBuiltinKind]()
-    var kinds: HashSet[CoordBuiltinKind]
-    fn.body.collectCoordReadsStmts(kinds)
-    direct[fn.name] = kinds
+    direct[fn.name] = fn.body.collectCoordReadsStmts()
     var targets: HashSet[string]
     fn.body.collectCallTargets(targets)
     callTargets[fn.name] = targets
