@@ -96,7 +96,7 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   of ctStruct:
     ctx.neededStructs.incl(t.name)
     result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc:
+  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitWgslTypeBare(ctx: var PrintCtx, t: CirType): string =
@@ -583,9 +583,9 @@ proc printFn(ctx: var PrintCtx, fn: CirProc): string =
       params.add p.name & ": " & ctx.emitWgslPtrType(p.typ)
     else:
       params.add p.name & ": " & ctx.emitWgslTypeBare(p.typ)
-  let ret = ctx.emitWgslTypeBare(fn.ret)
   let sig = "fn " & fn.name & "(" & params.join(", ") & ")"
-  let arrow = if ret.len > 0: " -> " & ret else: ""
+  # a void return emits no arrow, WGSL has no `void` type name
+  let arrow = if fn.ret.kind == ctVoid: "" else: " -> " & ctx.emitWgslTypeBare(fn.ret)
   return sig & arrow & " {\n" & bodyTxt & '\n' & "}"
 
 proc registerTypeStructs(ctx: var PrintCtx, t: CirType) =

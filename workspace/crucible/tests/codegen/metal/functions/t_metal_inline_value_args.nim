@@ -1,7 +1,7 @@
 ## Metal: inline device fn taking value arguments, including a struct.
 ##
-## Test that the spliced call keeps plain value-argument passing correct:
-## the caller's variables feed the call and stay unchanged after it.
+## Test that a call to an `{.inline.}` device fn keeps plain value-argument
+## passing correct: the call reads the caller's values and the caller's variables keep theirs.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -27,7 +27,7 @@ const valueArgsMsl = metal:
     output[2] = v.tag
 
 proc runTest() =
-  suite "Metal - inline value arguments pass by fresh temps":
+  suite "Metal - inline value arguments":
     test "the call reads the caller's values, the caller's variables keep theirs":
       var engine = newEngine(runMetal)
       engine.ingest(valueArgsMsl)

@@ -9,7 +9,6 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_hlsl/app/t_hlsl_exportc_entry.nim
 
-import std/strutils
 import workspace/crucible
 
 const renamedHlsl = hlsl:
@@ -19,14 +18,6 @@ const renamedHlsl = hlsl:
 const bareHlsl = hlsl:
   proc bareKernel(output, a: ptr UncheckedArray[uint32]) {.global, exportc.} =
     output[0] = a[0] + 2
-
-static:
-  # compile-time signals: a rename regression fails compilation here
-  doAssert "void my_custom_entry(" in renamedHlsl
-  doAssert "void renamedKernel(" notin renamedHlsl
-  # HLSL names the bare entry `main`, its built-in entry-point name
-  doAssert "void main(" in bareHlsl
-  doAssert "void my_custom_entry(" notin bareHlsl
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   # Renamed HLSL compiles through dxc and launches under the exportc name

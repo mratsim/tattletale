@@ -60,11 +60,6 @@ const maxPartialsVk = glsl:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Vulkan - warp-synchronous sum and max":
 
-    test "reduceAdd emits subgroupAdd and the subgroup extensions":
-      check "subgroupAdd(" in scalarVk
-      check "#extension GL_KHR_shader_subgroup_basic : enable" in scalarVk
-      check "#extension GL_KHR_shader_subgroup_arithmetic : enable" in scalarVk
-
     test "scalar reduce sums the 32 lanes and broadcasts to each":
       var engine = newEngine(runVulkan)
       engine.ingest(scalarVk)

@@ -31,11 +31,6 @@ import ../ir/ast_datatypes
 import ./emit_common
 
 type
-  PrintError* = object
-    ## Refusal of the printer, names the proc and the cause.
-    procName*: string
-    msg*: string
-
   PrintCtx = object
     fnName: string
     ## First refusal of the walk, "" while clean.
@@ -120,15 +115,22 @@ proc emitMslScalar(t: CirType): string =
       result = "float"
     else:
       result = ""
-  of ctVector:
-    result = emitMslScalar(t.vElem)
-    if result.len > 0:
-      result.add $t.vN
   of ctPtr, ctAptr:
     result = emitMslScalar(t.pElem) & "*"
   of ctStruct:
     result = t.name
-  of ctArray, ctProc:
+  of ctVector:
+    # coordinate builtins carry `ivec3`, so the builtin-threading
+    # parameters and whole-value reads print this MSL vector name
+    case t.vElem.kind
+    of ctInt, ctUint:
+      if t.vElem.bits == 32:
+        result = (if t.vElem.kind == ctInt: "int" else: "uint") & $t.vN
+      else:
+        result = ""
+    else:
+      result = ""
+  of ctArray, ctProc, ctSpan:
     result = ""
 
 
@@ -397,8 +399,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sVar:
     if s.space == caThreadgroup:
       # kernel-scope threadgroup storage: the MSL lowering pass keeps only
-      # a kernel's top-level smem locals here, an inline device function's
-      # smem local merges into the calling kernel, any initializer is discarded
+      # a kernel's top-level smem locals here, a device function's smem local
+      # refuses in the pass, any initializer is discarded
       result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
       return
     if s.space == caConstant:
@@ -592,7 +594,16 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
     for p in fn.params:
       case p.typ.kind
       of ctAptr, ctPtr:
-        params.add emitMslPtr(p.typ, p.name)
+        # a threadgroup-space pointer parameter is a relocated smem arena,
+        # caller-owned storage (Metal rejects threadgroup allocation inside device functions)
+        # - an `aptr` over the element type prints a pointer:
+        #   `threadgroup T* name`
+        # - a `ptr` over the object type prints a reference:
+        #   `threadgroup T& name`
+        if p.typ.space == caThreadgroup and p.typ.kind == ctPtr:
+          params.add emitMslSmemParam(p)
+        else:
+          params.add emitMslPtr(p.typ, p.name)
       else:
         params.add emitMslType(p.typ, p.name, true)
   let ret = emitMslType(fn.ret, "", true)

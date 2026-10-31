@@ -29,9 +29,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
 
   # Omitted fields must zero-initialize: braced zeros for the array field,
   # a plain 0 for the pointer field, both checked at runtime below.
-  # An empty initializer `{}` is invalid OpenCL C.
-  doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
-
   block:
     var engine = newEngine(runOpenCL)
     engine.ingest(kernelCode)

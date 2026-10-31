@@ -27,24 +27,16 @@
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
-import std/[macros, strutils, sequtils, sets, tables, math]
+import std/[macros, strutils, sequtils, tables, math]
 import ../ir/ast_datatypes
 import ./emit_common
 
 type
-  PrintError* = object
-    ## Refusal of the printer, names the proc and the cause.
-    procName*: string
-    msg*: string
-
   PrintCtx = object
     fnName: string
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
-    ## Per-kernel state.
-    builtins: OrderedSet[string]
-    ## Canonical builtin names that the kernel body references, first-use order.
 
 const printerTarget = "cuda"
 
@@ -91,36 +83,11 @@ proc emitCudaScalar(t: CirType): string =
       result = "double"
     else:
       result = ""
-  of ctVector:
-    # CUDA vector types, the short scalar names that the CUDA headers define
-    let elem = case t.vElem.kind
-      of ctInt:
-        case t.vElem.bits
-        of 8: "char"
-        of 16: "short"
-        of 32: "int"
-        of 64: "longlong"
-        else: ""
-      of ctUint:
-        case t.vElem.bits
-        of 8: "uchar"
-        of 16: "ushort"
-        of 32: "uint"
-        of 64: "ulonglong"
-        else: ""
-      of ctFloat:
-        case t.vElem.bits
-        of 32: "float"
-        of 64: "double"
-        else: ""
-      else: ""
-    if elem.len > 0:
-      result = elem & $t.vN
   of ctPtr, ctAptr:
     result = emitCudaScalar(t.pElem) & "*"
   of ctStruct:
     result = t.name
-  of ctArray, ctProc:
+  of ctVector, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
@@ -269,7 +236,6 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     return emitCudaLit(e)
   of eSym:
     if e.coordBuiltin != cbkNone:
-      ctx.builtins.incl(e.name)
       return cudaCoordToken(e.coordBuiltin, e.name, true, "", e.typ)
     return e.name
   of eAt:
@@ -285,7 +251,6 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     return base & '[' & ctx.printExpr(e.patIndex) & ']'
   of eDot:
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      ctx.builtins.incl(e.dotBase.name)
       return cudaCoordToken(e.dotBase.coordBuiltin, e.dotBase.name, false,
         e.fieldName, e.dotBase.typ)
     let base = ctx.printExpr(e.dotBase)
@@ -562,10 +527,8 @@ proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printProc(ctx: var PrintCtx, fn: CirProc): string =
-  ## One proc or kernel: signature, body, closing brace. The body prints first,
-  ## the kernel signature consumes the builtin set the body references.
+  ## One proc or kernel: signature, body, closing brace.
   ctx.fnName = fn.name
-  ctx.builtins = initOrderedSet[string]()
   ctx.indent = 0
   let bodyTxt = ctx.printStmts(fn.body, "", "")
   if ctx.failing():
@@ -585,9 +548,6 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
         params.add "const " & emitCudaType(p.typ, p.name, false)
       else:
         params.add emitCudaType(p.typ, p.name, true)
-    for b in ctx.builtins:
-      # coordinate builtins have no CUDA parameter, the vocabulary is global
-      discard b
   else:
     for p in fn.params:
       case p.typ.kind

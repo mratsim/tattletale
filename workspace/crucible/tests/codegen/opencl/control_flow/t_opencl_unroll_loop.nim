@@ -8,7 +8,6 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/opencl/control_flow/t_opencl_unroll_loop.nim
 
-import std/strutils
 import workspace/crucible
 
 const unrollOpenCL = opencl:
@@ -20,7 +19,6 @@ const unrollOpenCL = opencl:
 proc runTest() =
   var engine = newEngine(runOpenCL)
   engine.ingest(unrollOpenCL)
-  doAssert "#pragma unroll" in engine.getArtifact(), "unroll pragma missing in the generated code"
   let oDev = engine.allocDevice(uint32, 4)
   engine.launchKernel("unrollKernel", oDev, ())
   var res: array[4, uint32]

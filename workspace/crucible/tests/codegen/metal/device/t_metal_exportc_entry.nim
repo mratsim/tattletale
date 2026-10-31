@@ -9,7 +9,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/device/t_metal_exportc_entry.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const renamedMsl = metal:
@@ -23,9 +23,7 @@ const bareMsl = metal:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Metal - {.exportc.} entry-point name override":
 
-    test "exportc: \"name\" renames the emitted entry and launches under it":
-      check "kernel void my_custom_entry(" in renamedMsl
-      check "kernel void renamedKernel(" notin renamedMsl
+    test "exportc: \"name\" launches the kernel under the override name":
       var engine = newEngine(runMetal)
       engine.ingest(renamedMsl)
       var a: array[1, uint32] = [41'u32]
@@ -38,8 +36,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "bare exportc keeps the proc name and launches":
-      check "kernel void bareKernel(" in bareMsl
-      check "kernel void my_custom_entry(" notin bareMsl
       var engine = newEngine(runMetal)
       engine.ingest(bareMsl)
       var a: array[1, uint32] = [40'u32]

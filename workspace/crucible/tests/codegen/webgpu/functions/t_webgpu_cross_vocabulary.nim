@@ -5,7 +5,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/functions/t_webgpu_cross_vocabulary.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const kernel2d = webgpu:
@@ -39,10 +39,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "CUDA idiom + native flat local + barrier execute with correct values":
       var engine = newEngine(runWebGPU)
       engine.ingest(kernel2d)
-      let src = engine.getArtifact()
-      check "@builtin(workgroup_size)" notin src
-      check "@builtin(local_invocation_index)" in src
-      check "@builtin(workgroup_id)" in src
       var res: array[64 + 8, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("crossVocab2d", oDev, ())

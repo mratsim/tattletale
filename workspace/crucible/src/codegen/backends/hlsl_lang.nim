@@ -153,7 +153,7 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
         "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
   of ctStruct:
     result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc:
+  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitHlslTypeBare(ctx: var PrintCtx, t: CirType): string =
@@ -827,6 +827,11 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
       ctx.fail("array parameter " & p.name & " in `" & fn.name &
         "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
       return
+    of ctSpan:
+      ctx.fail("span parameter " & p.name & " in `" & fn.name &
+        "` has no HLSL binding, openArray spans split to pointer + length" &
+        " before printing")
+      return
     of ctInt, ctUint:
       if p.typ.bits != 32:
         ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
@@ -858,6 +863,7 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
 
 proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams: var HashSet[string], forwardDeclare: bool): string =
   ## `RetType name(params)` of one proc, buffers as resources, `var T` device parameters as `inout`.
+  ## The signature of an `{.inline.}` proc opens with the `inline ` qualifier.
   var buffers: seq[CirParam]
   ctx.classifyParams(fn, pushParams, buffers)
   if ctx.failing():
@@ -881,7 +887,9 @@ proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParam
   let ret = ctx.emitHlslScalar(fn.ret)
   if ctx.failing():
     return ""
-  result = ret & ' ' & fn.name & '(' & params.join(", ") & ')'
+  if fn.inline:
+    result = "inline "
+  result &= ret & ' ' & fn.name & '(' & params.join(", ") & ')'
   if forwardDeclare:
     result.add ';'
 

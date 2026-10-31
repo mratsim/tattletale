@@ -10,16 +10,20 @@
 ## GLSL lowering: per-target transforms for the GLSL storage model,
 ## registered by the GLSL pipeline and run before printing.
 ##
-##   kernel body → glslDissolvePointerLocals → glslHoistProgramScopeLocals → printed GLSL source
+##   kernel body → glslQualifyVarParams → glslDissolvePointerLocals → glslHoistProgramScopeLocals → printed GLSL source
 ##
 ## GLSL has no function-storage addressing, a local cannot be addressed.
 ## Threadgroup and constant-storage locals must live at program scope:
 ##
+## - `glslQualifyVarParams`: `var T` device-function parameters bind as `inout`
+## - the qualify pass retypes each marked parameter to its pointee, unwraps
+##   the body derefs and rewrites the call sites to pass the plain lvalue
 ## - `glslDissolvePointerLocals`: pointer locals dissolve into their pointee,
 ##   reads through the alias rewrite to the pointee symbol
 ## - `glslHoistProgramScopeLocals`: `{.smem.}` kernel locals and `{.const_mem.}`
 ##   locals relocate into `CirModule.globals` in encounter order
-## - kernel and device-function pointer parameters stay for the printer to refuse
+##
+## Kernel and device-function pointer parameters stay for the printer to refuse.
 ##
 ## Program-scope `const` storage is visible to all functions, a device function
 ## reads the constants of the kernels that it serves.
@@ -36,6 +40,7 @@ import std/[sets, tables]
 import ../ir/cirv2_lang
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_low_address_spaces
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -47,6 +52,11 @@ func registerGlslLoweringPasses*(reg: var PassRegistry) =
   ##
   ## Registration contract: the passes sit after the reserved-word rename, the relocated declarations
   ## use the renamed names that their body already references.
+  reg.register("glslQualifyVarParams", pkTransform, phaseMain,
+    "Retypes var parameters to their pointee, unwraps their body derefs and" &
+    " the call-site address arguments",
+    run = qualifyVarParams
+  )
   reg.register("glslDissolvePointerLocals", pkTransform, phaseMain,
     "Dissolves pointer locals into their pointee locals",
     run = dissolvePointerLocals
@@ -56,6 +66,221 @@ func registerGlslLoweringPasses*(reg: var PassRegistry) =
     " program scope",
     run = hoistProgramScopeLocals
   )
+  reg.registerInstantiateAddressSpaceGenerics()
+
+# ═══════════════════════════════════════════════════════════════════════
+# var-parameter qualification
+# ═══════════════════════════════════════════════════════════════════════
+
+proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
+  ## Splices one expression node into a plain symbol reference, in place.
+  ## Expressions are refs, the rewrite applies to the node every sharer sees.
+  e.kind = eSym
+  e.name = name
+  e.typ = typ
+  e.builtin = false
+  e.coordBuiltin = cbkNone
+  e.synchroBuiltin = sbkNone
+  e.reductionBuiltin = rbkNone
+  e.atomicsBuiltin = abkNone
+  e.shuffleBuiltin = shkNone
+
+proc unwrapVarDerefsExpr(e: CirExpr, varParams: HashSet[string]) =
+  ## Rewrites one expression tree. Every deref of a `var` parameter
+  ## splices to the parameter itself, typed at the pointee the deref read.
+  ## Other derefs survive. Nested bodies recurse through the statement overload.
+  if e.isNil:
+    return
+  case e.kind
+  of eDeref:
+    let op = e.derefOperand
+    if op.kind == eSym and op.name in varParams and
+        op.typ != nil and op.typ.kind == ctPtr:
+      e.splicePlainSym(op.name, op.typ.pElem)
+    else:
+      op.unwrapVarDerefsExpr(varParams)
+  else:
+    for ch in getExprChildren(e):
+      ch.unwrapVarDerefsExpr(varParams)
+
+proc unwrapVarDerefsStmts(ss: var seq[CirStmt], varParams: HashSet[string]) =
+  ## Statement-walk overload of `unwrapVarDerefsExpr`, nested bodies included.
+  for s in mitems(ss):
+    case s.kind
+    of sVar, sConst:
+      s.init.unwrapVarDerefsExpr(varParams)
+    of sAsgn:
+      s.lhs.unwrapVarDerefsExpr(varParams)
+      s.rhs.unwrapVarDerefsExpr(varParams)
+    of sIte:
+      s.cond.unwrapVarDerefsExpr(varParams)
+      s.thenBody.unwrapVarDerefsStmts(varParams)
+      s.elseBody.unwrapVarDerefsStmts(varParams)
+    of sLoop:
+      s.loopBody.unwrapVarDerefsStmts(varParams)
+    of sCase:
+      s.selector.unwrapVarDerefsExpr(varParams)
+      for br in mitems(s.branches):
+        br.body.unwrapVarDerefsStmts(varParams)
+      s.caseElse.unwrapVarDerefsStmts(varParams)
+    of sScope:
+      s.scopeBody.unwrapVarDerefsStmts(varParams)
+    of sAssume:
+      s.assumeCond.unwrapVarDerefsExpr(varParams)
+    of sRet:
+      s.retVal.unwrapVarDerefsExpr(varParams)
+    of sDiscard:
+      s.discardVal.unwrapVarDerefsExpr(varParams)
+    of sCall:
+      s.callCallee.unwrapVarDerefsExpr(varParams)
+      for a in mitems(s.callArgs):
+        a.unwrapVarDerefsExpr(varParams)
+    of sJmp, sLab, sAsm, sEmit:
+      discard
+
+proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]): string =
+  ## Rewrites the call arguments of one expression tree:
+  ##
+  ## - an argument at a `var` parameter position drops its address-of wrapper
+  ## - an argument naming the enclosing proc's own `var` parameter re-types to the pointee
+  ## - anything else at a `var` position must be an lvalue
+  ##
+  ## Returns "" when clean.
+  if e.isNil:
+    return ""
+  if e.kind == eCall and e.callee.kind == eSym:
+    let callee = procs.getOrDefault(e.callee.name)
+    if callee != nil and e.args.len == callee.params.len:
+      var hasVarParams = false
+      for p in callee.params:
+        hasVarParams = hasVarParams or p.varParam
+      for i, arg in mpairs(e.args):
+        if not callee.params[i].varParam:
+          continue
+        if arg.kind == eAddr:
+          e.args[i] = arg.addrOperand
+        elif arg.kind == eSym and arg.name in varParams and
+            arg.typ != nil and arg.typ.kind == ctPtr:
+          arg.typ = arg.typ.pElem
+        elif arg.kind notin {eSym, eAt, ePat, eDot}:
+          return dissolveFail(fn, "var parameter call argument must be an" &
+            " lvalue, got " & $arg.kind)
+      if hasVarParams:
+        # a call site's callee type still states the pre-lowering signature, so the rewrite re-types it to the retyped parameters
+        var ps: seq[CirType]
+        for p in callee.params:
+          ps.add p.typ
+        e.callee.typ = freshProcType(ps, callee.ret)
+    for ch in getExprChildren(e):
+      let err = rewriteVarCallArgsExpr(fn, ch, varParams, procs)
+      if err.len > 0:
+        return err
+    return ""
+  for ch in getExprChildren(e):
+    let err = rewriteVarCallArgsExpr(fn, ch, varParams, procs)
+    if err.len > 0:
+      return err
+  return ""
+
+proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashSet[string], procs: Table[string, CirProc]): string =
+  ## Statement-walk overload of `rewriteVarCallArgsExpr`, nested bodies included.
+  for s in mitems(ss):
+    case s.kind
+    of sVar, sConst:
+      let err = rewriteVarCallArgsExpr(fn, s.init, varParams, procs)
+      if err.len > 0:
+        return err
+    of sAsgn:
+      let lerr = rewriteVarCallArgsExpr(fn, s.lhs, varParams, procs)
+      if lerr.len > 0:
+        return lerr
+      let rerr = rewriteVarCallArgsExpr(fn, s.rhs, varParams, procs)
+      if rerr.len > 0:
+        return rerr
+    of sIte:
+      let cerr = rewriteVarCallArgsExpr(fn, s.cond, varParams, procs)
+      if cerr.len > 0:
+        return cerr
+      let terr = rewriteVarCallArgsStmts(fn, s.thenBody, varParams, procs)
+      if terr.len > 0:
+        return terr
+      let eerr = rewriteVarCallArgsStmts(fn, s.elseBody, varParams, procs)
+      if eerr.len > 0:
+        return eerr
+    of sLoop:
+      let lerr = rewriteVarCallArgsStmts(fn, s.loopBody, varParams, procs)
+      if lerr.len > 0:
+        return lerr
+    of sCase:
+      let serr = rewriteVarCallArgsExpr(fn, s.selector, varParams, procs)
+      if serr.len > 0:
+        return serr
+      for br in mitems(s.branches):
+        let berr = rewriteVarCallArgsStmts(fn, br.body, varParams, procs)
+        if berr.len > 0:
+          return berr
+      let eerr = rewriteVarCallArgsStmts(fn, s.caseElse, varParams, procs)
+      if eerr.len > 0:
+        return eerr
+    of sScope:
+      let serr = rewriteVarCallArgsStmts(fn, s.scopeBody, varParams, procs)
+      if serr.len > 0:
+        return serr
+    of sAssume:
+      let aerr = rewriteVarCallArgsExpr(fn, s.assumeCond, varParams, procs)
+      if aerr.len > 0:
+        return aerr
+    of sRet:
+      let rerr = rewriteVarCallArgsExpr(fn, s.retVal, varParams, procs)
+      if rerr.len > 0:
+        return rerr
+    of sDiscard:
+      let derr = rewriteVarCallArgsExpr(fn, s.discardVal, varParams, procs)
+      if derr.len > 0:
+        return derr
+    of sCall:
+      let tmp = CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
+      let err = rewriteVarCallArgsExpr(fn, tmp, varParams, procs)
+      s.callCallee = tmp.callee
+      s.callArgs = tmp.args
+      if err.len > 0:
+        return err
+    of sJmp, sLab, sAsm, sEmit:
+      discard
+  return ""
+
+proc qualifyVarParams(m: CirModule): string =
+  ## Lowers the Nim `var T` parameters of every proc to GLSL inout bindings:
+  ##
+  ## - each marked parameter retypes to its pointee
+  ## - its body derefs unwrap to the parameter
+  ## - its call sites pass the plain lvalue
+  ## - the printer emits the `inout` qualifier on the marked parameters
+  ##
+  ## Returns "" when clean, else the first refusal.
+  var procs = initTable[string, CirProc]()
+  for fn in m.procs:
+    procs[fn.name] = fn
+  # every parameter retypes before any body walks: a call site in a proc
+  # preceding its callee must see the retyped signature
+  for fn in m.procs:
+    for p in mitems(fn.params):
+      if p.varParam:
+        if p.typ != nil and p.typ.kind == ctPtr:
+          p.typ = p.typ.pElem
+        else:
+          return dissolveFail(fn, "var parameter " & p.name &
+            " without a pointer type")
+  for fn in m.procs:
+    var varParams: HashSet[string]
+    for p in fn.params:
+      if p.varParam:
+        varParams.incl(p.name)
+    fn.body.unwrapVarDerefsStmts(varParams)
+    let err = rewriteVarCallArgsStmts(fn, fn.body, varParams, procs)
+    if err.len > 0:
+      return err
+  return ""
 
 # ═══════════════════════════════════════════════════════════════════════
 # Pointer dissolution

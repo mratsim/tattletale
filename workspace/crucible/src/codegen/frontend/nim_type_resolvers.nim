@@ -561,6 +561,17 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     result = r.resolveCirType(n.getType()[1], ptrSpace)
   of ntyStatic:
     result = r.resolveCirType(n.getTypeInst(), ptrSpace)
+  of ntyOpenArray:
+    # openArray[T] travels as a span over the element type in the pointer
+    # space:
+    #
+    # - the span split pass decomposes every span into an element pointer plus an int32 length
+    # - no span reaches the printers
+    var span = n
+    if span.kind == nnkSym:
+      span = span.getTypeImpl()
+    span.expectKind(nnkBracketExpr)
+    result = tSpan(ptrSpace, r.resolveCirType(span[1], ptrSpace))
   of ntyRange:
     # A range type has no runtime representation. Sem wraps index literals
     # and `range` aliases in `range[lo .. hi]` around the real type: its base type.

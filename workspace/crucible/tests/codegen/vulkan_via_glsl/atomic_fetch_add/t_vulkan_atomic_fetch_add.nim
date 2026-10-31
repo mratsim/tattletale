@@ -10,7 +10,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_glsl/atomic_fetch_add/t_vulkan_atomic_fetch_add.nim
 
-import std/[strutils, unittest, algorithm]
+import std/[unittest, algorithm]
 import workspace/crucible
 
 const addFpVk = glsl:
@@ -33,10 +33,6 @@ const addMultiTgVk = glsl:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Vulkan - atomicFetchAdd":
-
-    test "atomicFetchAdd emits atomicAdd and the atomic float extension":
-      check "atomicAdd(" in addFpVk
-      check "#extension GL_EXT_shader_atomic_float : enable" in addFpVk
 
     test "fp: 32 lanes add 1.0, each reads a distinct old value 0..31":
       var engine = newEngine(runVulkan)

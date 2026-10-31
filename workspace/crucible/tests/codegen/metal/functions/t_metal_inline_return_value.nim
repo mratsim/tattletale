@@ -1,6 +1,6 @@
 ## Metal: inline device fn ending in an explicit `return expr`.
 ##
-## Test that the spliced call destination receives the returned value.
+## Test that a call to an `{.inline.}` device fn receives the returned value.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -20,8 +20,8 @@ const inlineRetMsl = metal:
     output[1] = r
 
 proc runTest() =
-  suite "Metal - inline call splices the returned value":
-    test "the call destination receives the value of a trailing return expr":
+  suite "Metal - inline device fn return value":
+    test "the call site receives the value of a trailing return expr":
       var engine = newEngine(runMetal)
       engine.ingest(inlineRetMsl)
       let oDev = engine.allocDevice(int32, 2)

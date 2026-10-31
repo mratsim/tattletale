@@ -10,11 +10,6 @@
 
 import ./pass_datatypes
 import ./passes_norm_aliases
-import ./passes_legal_inline
 
 func registerLegalizationPasses*(reg: var PassRegistry) =
-  # builtin kind assignment runs first: the inline splice's
-  # kernel-only-reads check keys on the typed kinds, the `dependsOn` entry
-  # records that dependency
   reg.registerBuiltinKindAssignment()
-  reg.registerInlineSplice()

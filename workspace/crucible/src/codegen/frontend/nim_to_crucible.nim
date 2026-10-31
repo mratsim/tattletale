@@ -322,7 +322,7 @@ func zeroValue(t: CirType): CirExpr =
     for f in t.fields:
       fields.add(kv(f.name, zeroValue(f.typ)))
     result = oconstrE(t, fields)
-  of ctVoid, ctVector, ctProc:
+  of ctVoid, ctVector, ctProc, ctSpan:
     result = nil
 
 proc lowerEmitArg(ctx: var FrontendCtx, emitArg: NimNode): CirStmt =
@@ -773,12 +773,90 @@ proc numericBuiltinCall(ctx: var FrontendCtx, calleeSym: NimNode, call: NimNode)
   ctx.declareLocal(tmpName, sym(tmpName, ret))
   return sym(tmpName, ret)
 
+proc callTargetName(n: NimNode): string =
+  ## Name of a call's callee symbol: the symbol's own name, or the first
+  ## overload candidate's name for a choice node, "" otherwise.
+  if n.kind == nnkSym:
+    return n.strVal
+  if n.kind in {nnkOpenSymChoice, nnkClosedSymChoice} and n.len > 0:
+    return n[0].strVal
+  return ""
+
+proc lowerToOpenArrayCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
+  ## Lowers a `toOpenArray(base, first, last)` call into the span
+  ## construction the span split pass consumes:
+  ##
+  ## - a hoisted span-typed view binds the call, typed over the base
+  ##   pointer's element type and space
+  ## - the base must be a pointer: the split's pointer side offsets the base
+  ##   by `first`, and CIRv2 states pointer arithmetic over pointers
+  if call.len != 4:
+    ctx.fail("toOpenArray call with " & $(call.len - 1) & " arguments, expected 3")
+    return nil
+  let base = ctx.lowerExpr(call[1])
+  if ctx.failing():
+    return nil
+  let first = ctx.lowerOperandExpr(call[2])
+  let last = ctx.lowerOperandExpr(call[3])
+  if ctx.failing():
+    return nil
+  let baseTyp = getExprType(base)
+  if baseTyp.isNil or baseTyp.kind notin {ctPtr, ctAptr}:
+    ctx.fail("toOpenArray over a " &
+      (if baseTyp.isNil: "base with no derivable type" else: $baseTyp.kind) &
+      " is outside the supported set, pass a pointer to the storage")
+    return nil
+  let firstTyp = getExprType(first)
+  let lastTyp = getExprType(last)
+  if firstTyp.isNil or firstTyp.kind notin {ctInt, ctUint} or
+      lastTyp.isNil or lastTyp.kind notin {ctInt, ctUint}:
+    ctx.fail("toOpenArray bounds must be integers")
+    return nil
+  let spanTyp = tSpan(baseTyp.space, baseTyp.pElem)
+  let callTyp = tProcT(baseTyp, firstTyp, lastTyp, spanTyp)
+  let view = ctx.uniqueName("view")
+  ctx.hoisted.add(varD(view, spanTyp))
+  ctx.hoisted.add(asgnS(sym(view, spanTyp),
+    callE(sym("toOpenArray", callTyp), base, first, last)))
+  ctx.declareLocal(view, sym(view, spanTyp))
+  return sym(view, spanTyp)
+
+proc lowerSpanLenCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
+  ## Lowers a `len(s)` read over an openArray into the form the span split
+  ## pass folds: a hoisted int32 temp bound to the `len` call over the span.
+  ## The pass rewrites the read to the span's split length binding.
+  if call.len != 2:
+    ctx.fail("len call with " & $(call.len - 1) & " arguments, expected 1")
+    return nil
+  let arg = ctx.lowerExpr(call[1])
+  if ctx.failing():
+    return nil
+  let argTyp = getExprType(arg)
+  if argTyp.isNil or argTyp.kind != ctSpan:
+    ctx.fail("len over " &
+      (if argTyp.isNil: "an operand with no derivable type" else: "a " & $argTyp.kind) &
+      " is outside the supported set")
+    return nil
+  let readTyp = tProcT(argTyp, tInt(32))
+  let tmp = ctx.uniqueName("tmp")
+  ctx.hoisted.add(varD(tmp, tInt(32)))
+  ctx.hoisted.add(asgnS(sym(tmp, tInt(32)),
+    callE(sym("len", readTyp), arg)))
+  ctx.declareLocal(tmp, sym(tmp, tInt(32)))
+  return sym(tmp, tInt(32))
+
 proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirExpr =
   ## A value-producing call binds to a fresh temp: the `asgn` RHS hoists
   ## in front of the enclosing statement. Returns the temp symbol.
   ## A magic callee (the system operators) lowers to the primitive
   ## operation directly. No proc harvests, no call emits.
   let magic = nimMagicName(callee)
+  # toOpenArray builds a span and len reads a span's length: the span split
+  # pass consumes both forms, no proc harvests, no call emits
+  if magic == "Slice" and callTargetName(callee) == "toOpenArray":
+    return ctx.lowerToOpenArrayCall(call)
+  if magic == "LengthOpenArray":
+    return ctx.lowerSpanLenCall(call)
   if isBodilessMagic(callee):
     let arith = ctx.lowerMagicPrimitive(callee, call, magic)
     if ctx.failing():
@@ -1124,6 +1202,9 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if bt != nil and bt.kind == ctAptr:
       ctx.fail("deref of an array pointer: index it instead")
       return nil
+    if bt != nil and bt.kind == ctSpan:
+      # a sem deref of a span names the span, an index over it selects one element
+      return base
     return derefE(base)
   of nnkHiddenAddr, nnkAddr:
     let base = ctx.lowerExpr(n[0])
@@ -1194,6 +1275,10 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
           " is outside the supported set")
         return nil
       return atE(derefE(loweredBase), idx)
+    of ctSpan:
+      # a span element read, the span split pass retypes the base symbol
+      # to the element pointer
+      return patE(loweredBase, idx)
     of ctStruct:
       # tuple-style `[i]` access over a named struct: the field of that index
       if idx.kind != eIntLit:
@@ -2235,7 +2320,8 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
     for j in 0 ..< formal.len - 2:
       let pname = ctx.uniqueName(formal[j].strVal)
       let psym = sym(pname, typ)
-      params.add(CirParam(name: pname, typ: typ))
+      params.add(CirParam(name: pname, typ: typ,
+        varParam: ftype.kind == nnkVarTy))
       ctx.declareLocal(formal[j], psym)
   let ret = ctx.retType
   if ret.kind != ctVoid:
@@ -2257,7 +2343,7 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
 
 proc applyProcPragmas(ctx: var FrontendCtx, fn: NimNode, p: CirProc) =
   ## Reads the public pragma surface off a proc definition: `global` marks the compute entry point,
-  ## `inline` the splice mark, `exportc` the entry-point name override,
+  ## `inline` marks an `{.inline.}` device function, `exportc` renames the emitted entry point,
   ## `workgroup(x, y, z)` the baked launch shape. Other pragmas are legal and dropped.
   for prag in fn.pragma:
     case prag.kind
@@ -2266,11 +2352,7 @@ proc applyProcPragmas(ctx: var FrontendCtx, fn: NimNode, p: CirProc) =
       of "global":
         p.isKernel = true
       of "inline":
-        # an inline mark splices the body into its callers, a device function
-        # cannot take the thread builtins as attributed parameters
         p.inline = true
-      of "forceinline":
-        ctx.fail("forceinline was merged into inline; use inline")
       else:
         discard
     of nnkExprColonExpr, nnkCall, nnkCommand:

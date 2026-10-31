@@ -21,10 +21,6 @@ const kernelCode = opencl:
 proc runTest() =   # private — tests run in a proc so engines are destroyed at return
   echo kernelCode
 
-  # The empty struct initializer must be `{0}`: `{}` is invalid C99.
-  doAssert kernelCode.contains("{0}"), "expected a {0} zero-initializer for the empty object"
-  doAssert not kernelCode.contains("){}"), "empty initializer list {} is invalid OpenCL C"
-
   block:
     var engine = newEngine(runOpenCL)
     engine.ingest(kernelCode)

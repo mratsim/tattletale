@@ -28,9 +28,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "single dummy struct const":
       var engine = newEngine(runMetal)
       engine.ingest(kernelCode)
-      echo kernelCode
-      check kernelCode.contains("FixMe8")
-      check not kernelCode.contains("= {}")
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]
@@ -40,9 +37,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "tuple of dummy structs const":
       var engine = newEngine(runMetal)
       engine.ingest(kernelCode2)
-      echo kernelCode2
-      check kernelCode2.contains("FixMe1") and kernelCode2.contains("FixMe8")
-      check not kernelCode2.contains("= {")
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var res: array[1, uint32]

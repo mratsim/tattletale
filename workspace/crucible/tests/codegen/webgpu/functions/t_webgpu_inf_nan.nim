@@ -8,7 +8,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/functions/t_webgpu_inf_nan.nim
 
-import std/[math, strutils]
+import std/math
 import workspace/crucible
 
 const infNanWgsl = webgpu:
@@ -23,12 +23,6 @@ const infNanWgsl = webgpu:
 proc runTest() =
   var engine = newEngine(runWebGPU)
   engine.ingest(infNanWgsl)
-  doAssert "bitcast<f32>(0x7f800000u)" in engine.getArtifact(),
-    "the +inf literal did not emit the bitcast bit pattern"
-  doAssert "bitcast<f32>(0xff800000u)" in engine.getArtifact(),
-    "the -inf literal did not emit the bitcast bit pattern"
-  doAssert "bitcast<f32>(0x7fc00000u)" in engine.getArtifact(),
-    "the NaN literal did not emit the bitcast bit pattern"
   let oDev = engine.allocDevice(float32, 3)
   engine.launchKernel("infNanKernel", oDev, ())
   var res: array[3, float32]

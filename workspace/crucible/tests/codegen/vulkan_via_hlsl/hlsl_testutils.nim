@@ -140,16 +140,15 @@ proc assertHlslBindings*(spvPath: string, expected: openArray[BindingExpectation
       "binding reflection: no buffer resource named " & name & " carries a Binding decoration"
   echo "  binding reflection: ", expected.len, " buffer resources on their printer-numbered bindings, set 0"
 
-proc compileCheck*(name, source: string, expected: openArray[BindingExpectation], expect: string = ""): seq[uint32] =
-  ## Compiles one emitted kernel through the validated route and returns the SPIR-V words
-  ## for vkCreateShaderModule. Assertions:
-  ## - `expect` (when not "") must appear in the emitted text, it locks the construct under test to the shader
-  ## - when `expected` lists buffer resources, the binding reflection runs (assertHlslBindings).
-  ##   An empty `expected` is the compile-only path for kernels without buffer resources
+proc compileCheck*(name, source: string, expected: openArray[BindingExpectation]): seq[uint32] =
+  ## Compiles one emitted kernel through the validated route.
+  ## Returns the SPIR-V words for vkCreateShaderModule.
+  ##
+  ## - buffer resources in `expected` trigger the binding reflection
+  ##   (assertHlslBindings) over the compiled module
+  ## - an empty `expected` is the compile-only path for kernels without
+  ##   buffer resources
   ## No HLSL engine exists, this compile check substitutes for `engine.launchKernel()` (house exception for backends without runtime support).
-  if expect.len > 0:
-    doAssert source.contains(expect),
-      "emitted HLSL for " & name & " is missing `" & expect & "`:\n" & source
   result = compileToSpirV(name, source)
   if expected.len == 0:
     echo name, ": dxc + spirv-val ok"

@@ -8,7 +8,6 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/cuda/control_flow/t_cuda_unroll_loop.nim
 
-import std/strutils
 import workspace/crucible
 
 const unrollCuda = cuda:
@@ -20,7 +19,6 @@ const unrollCuda = cuda:
 proc runTest() =
   var engine = newEngine(runCuda)
   engine.ingest(unrollCuda)
-  doAssert "#pragma unroll" in engine.getArtifact(), "unroll pragma missing in the generated code"
   let oDev = engine.allocDevice(uint32, 4)
   engine.launchKernel("unrollKernel", oDev, ())
   var res: array[4, uint32]

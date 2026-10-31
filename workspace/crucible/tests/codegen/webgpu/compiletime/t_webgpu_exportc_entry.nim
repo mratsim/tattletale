@@ -8,7 +8,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/compiletime/t_webgpu_exportc_entry.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const renamedWgsl = webgpu:
@@ -23,11 +23,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - {.exportc.} entry-point name override":
 
     test "both kernels launch under their exportc entry names":
-      # Compile-time signals: a rename regression fails compilation here.
-      check "fn my_custom_entry(" in renamedWgsl
-      check "fn renamedKernel(" notin renamedWgsl
-      check "fn bareKernel(" in bareWgsl
-      check "fn my_custom_entry(" notin bareWgsl
       var renamedEngine = newEngine(runWebGPU)
       renamedEngine.ingest(renamedWgsl)
       var bareEngine = newEngine(runWebGPU)

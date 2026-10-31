@@ -263,6 +263,17 @@ proc kernelParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
 # Const_mem locals to program scope
 # ═══════════════════════════════════════════════════════════════════════
 
+proc freshProcType*(params: seq[CirType], ret: CirType): CirType =
+  ## A fresh proc type over `params`.
+  ##
+  ## Returns a `CirType` ref sharing nothing with the interned signature types:
+  ##
+  ## - structurally identical call-site callee types share one `CirType` ref
+  ## - a call site re-typing its callee swaps the symbol type for this fresh copy, the shared ref stays untouched
+  result = CirType(kind: ctProc)
+  result.params = params
+  result.ret = ret
+
 proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): string =
   ## Relocates the `{.const_mem.}` locals of one statement list into `m.globals` in encounter order,
   ## nested scopes and case branches included, the declarations deleted from the list.

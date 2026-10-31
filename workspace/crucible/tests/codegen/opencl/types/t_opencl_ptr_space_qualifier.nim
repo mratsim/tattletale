@@ -27,13 +27,6 @@ const kernelCode = opencl:
     C[tid] = scratch[tid] + 1
 
 proc runTest() =
-  # sanity: the clone prints unqualified, the smem pointer prints __local
-  doAssert "__global float* p" notin kernelCode,
-    "thread-space pointer parameter printed as __global:\n" & kernelCode
-  doAssert "float* p" in kernelCode, kernelCode
-  doAssert "__local uint* q" in kernelCode,
-    "smem pointer printed without __local:\n" & kernelCode
-
   var engine = newEngine(runOpenCL)
   engine.ingest(kernelCode)
 

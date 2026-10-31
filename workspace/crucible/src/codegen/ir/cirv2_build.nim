@@ -53,6 +53,14 @@ proc tStruct*(name: string, fields: varargs[CirField]): CirType =
 proc tArray*(n: int, elem: CirType): CirType =
   CirType(kind: ctArray, aN: n, aElem: elem)
 
+proc tSpan*(space: CirAddrSpace, elem: CirType): CirType =
+  ## Runtime-length view over `elem` storage in `space`:
+  ##
+  ## - an `openArray[T]` parameter or the result of a `toOpenArray` call
+  ## - the span split pass decomposes every span into an element pointer
+  ##   plus an int32 length, no span survives to the printers
+  CirType(kind: ctSpan, sSpace: space, sElem: elem)
+
 proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
   CirType(kind: ctProc, params: @params, ret: ret)
 

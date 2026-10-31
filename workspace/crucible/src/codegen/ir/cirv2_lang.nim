@@ -76,6 +76,7 @@ type
     ctAptr
     ctStruct
     ctArray
+    ctSpan
     ctProc
 
   CirField* = object
@@ -107,6 +108,9 @@ type
     of ctArray:
       aN*: int
       aElem*: CirType
+    of ctSpan:
+      sSpace*: CirAddrSpace
+      sElem*: CirType
     of ctProc:
       params*: seq[CirType]
       ret*: CirType
@@ -333,6 +337,13 @@ type
     ## class inside the `ptr`/`aptr` type (`space`).
     name*: string
     typ*: CirType
+    varParam*: bool
+    ## Nim `var T` formal: the argument binds by reference at the call boundary.
+    ##
+    ## Contract:
+    ## - the frontend marks it while the type is still the thread pointer
+    ## - the GLSL lowering pass retypes the parameter to its pointee
+    ## - the GLSL printer emits the `inout` qualifier on the mark
 
   CirProc* = ref object
     ## One proc or kernel: name, typed params, return type, statement body.
@@ -343,8 +354,7 @@ type
     isKernel*: bool
     ## `{.global.}` proc: a compute entry point. The printers emit the backend's kernel qualifier and its argument ABI for it.
     inline*: bool
-    ## `{.inline.}` proc: the inline-splice pass splices its call sites into
-    ## the callers before printing.
+    ## `{.inline.}` proc: the printers emit the target inline qualifier on it.
     exportName*: string
     ## `{.exportc: "name".}` override of the emitted entry-point name, "" when the proc's own name is used.
     workgroup*: array[3, int]
@@ -449,6 +459,22 @@ let CoordBuiltinKindByName* {.compileTime.}: Table[string, CoordBuiltinKind] = {
   "thread_index_in_threadgroup": cbkThreadIndexInThreadgroup,
 }.toTable()
 
+## Canonical name of each coordinate builtin kind, "" for `cbkNone`.
+## Inverse of `CoordBuiltinKindByName`.
+##
+## Consumers that synthesize a coordinate-builtin reference read the name
+## from here: the Metal builtin-threading pass names its parameters
+## after the builtin.
+let CoordBuiltinCanonicalName* {.compileTime.}: array[CoordBuiltinKind, string] = [
+  cbkNone: "",
+  cbkThreadPositionInGrid: "thread_position_in_grid",
+  cbkThreadgroupPositionInGrid: "threadgroup_position_in_grid",
+  cbkThreadPositionInThreadgroup: "thread_position_in_threadgroup",
+  cbkThreadsPerThreadgroup: "threads_per_threadgroup",
+  cbkThreadgroupsPerGrid: "threadgroups_per_grid",
+  cbkThreadIndexInThreadgroup: "thread_index_in_threadgroup",
+]
+
 let SynchroBuiltinKindByName* {.compileTime.}: Table[string, SynchroBuiltinKind] = {
   "threadgroup_barrier": sbkThreadgroupBarrier,
   "threadgroup_barrier_device": sbkThreadgroupBarrierDevice,
@@ -524,6 +550,8 @@ proc sameType*(a, b: CirType): bool =
     result = a.name == b.name
   of ctArray:
     result = a.aN == b.aN and sameType(a.aElem, b.aElem)
+  of ctSpan:
+    result = a.sSpace == b.sSpace and sameType(a.sElem, b.sElem)
   of ctProc:
     if a.params.len != b.params.len:
       return false
@@ -588,6 +616,10 @@ proc getExprType*(e: CirExpr): CirType =
           t.pElem.kind == ctArray:
         # A pat over a pointer-to-array base reads one element of the array that the pointer names.
         result = t.pElem.aElem
+      elif t != nil and t.kind == ctSpan:
+        # A pat over a span base reads one element of the view. The span split
+        # pass retypes the base symbol to the element pointer first.
+        result = t.sElem
   of eDot:
     if e.dotBase != nil:
       let t = getExprType(e.dotBase)

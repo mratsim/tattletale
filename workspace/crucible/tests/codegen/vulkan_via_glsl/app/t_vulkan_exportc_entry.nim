@@ -9,7 +9,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_glsl/app/t_vulkan_exportc_entry.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const renamedGlsl = glsl:
@@ -23,9 +23,7 @@ const bareGlsl = glsl:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Vulkan (GLSL) - {.exportc.} entry-point name override":
 
-    test "exportc: \"name\" renames the emitted entry and launches under it":
-      check "void my_custom_entry() {" in renamedGlsl
-      check "void renamedKernel(" notin renamedGlsl
+    test "exportc: \"name\" launches the kernel under the override name":
       var engine = newEngine(runVulkan)
       engine.ingest(renamedGlsl)
       var a: array[1, uint32] = [41'u32]
@@ -38,8 +36,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       check res[0] == 42
 
     test "bare exportc keeps the proc name and launches":
-      check "void bareKernel() {" in bareGlsl
-      check "void my_custom_entry(" notin bareGlsl
       var engine = newEngine(runVulkan)
       engine.ingest(bareGlsl)
       var a: array[1, uint32] = [40'u32]

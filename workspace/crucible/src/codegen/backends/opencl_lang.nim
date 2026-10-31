@@ -94,7 +94,7 @@ proc emitOpenclScalar(t: CirType): string =
       result = elem & $t.vN
   of ctStruct:
     result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc:
+  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitOpenclTypeBare(t: CirType): string =
@@ -307,6 +307,9 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         emitOpenclTypeBare(e.castType)
     return "(" & target & ")" & ctx.printExpr(e.castOperand)
   of eSizeof:
+    # an array type names through the declaration form: the bare-name composer `emitOpenclTypeBare` prints "" for an array leaf
+    if e.ofType.kind == ctArray:
+      return "sizeof(" & emitOpenclArrayDecl(e.ofType, "") & ")"
     return "sizeof(" & emitOpenclTypeBare(e.ofType) & ")"
   of eAddr:
     return "(&" & ctx.printExpr(e.addrOperand) & ")"

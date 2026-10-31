@@ -9,8 +9,10 @@
 
 ## CUDA lowering: per-target registration for the CUDA storage model.
 ##
-## The shared pipeline contributes the reserved-word rename only, every other
-## CUDA-C++ transform stays printer-side (backends/):
+## The shared pipeline contributes the whole-array copy decomposition
+## (`decomposeArrayAssign`, copies lower to `__builtin_memcpy` calls) plus
+## the reserved-word rename, every other CUDA-C++ transform stays printer-side
+## (backends/):
 ##
 ## - the reserved-word rename registers here, through the shared renaming
 ##   pass with `CudaReserved` as data: the four execution-space qualifiers
@@ -27,6 +29,8 @@
 
 import ../ir/cirv2_lang
 import ./pass_datatypes
+import ./passes_low_address_spaces
+import ./passes_low_array_assign
 import ./passes_low_reserved
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -34,9 +38,12 @@ import ./passes_low_reserved
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerCudaLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the CUDA per-target lowering stage, the reserved-word rename
-  ## with `CudaReserved` as data.
+  ## Registers the CUDA per-target lowering stage:
+  ## - `decomposeArrayAssign`: whole-array copies that CUDA-C++ cannot express
+  ## - the reserved-word rename with `CudaReserved` as data
   ##
-  ## Registration contract: the rename sits after the shared lowering passes
+  ## Registration contract: both passes sit after the shared lowering passes
   ## and before printing, the position every target uses.
+  reg.registerDecomposeArrayAssign()
   reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
+  reg.registerInstantiateAddressSpaceGenerics()

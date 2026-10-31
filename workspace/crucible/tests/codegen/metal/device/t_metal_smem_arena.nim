@@ -1,5 +1,5 @@
 ## Metal: `{.smem.}` arena pass. A device function's `{.smem.}` var hoists
-## to a `threadgroup T*` parameter, the caller supplies the arena.
+## to a `threadgroup T` reference parameter and the caller supplies the arena.
 ##
 ## - raw ingest: a user kernel declares the arena and calls the device fn
 ## - launchDeviceFn: the generated wrapper kernel synthesizes the arena
@@ -32,18 +32,6 @@ const smemArenaMsl = metal:
     # Kernel entry owning the arena, matched to fold's hoisted var by name
     var scratch {.smem.}: array[64, float32]
     fold(input, output)
-
-proc foldKernel(output, input: ptr UncheckedArray[float32]) {.inline.} =
-  ## Device proc declaring its own scratch, launched through `launchDeviceFn`,
-  ## the generated wrapper kernel synthesizes the arena
-  var scratch {.smem.}: array[64, float32]
-  let t = thread_position_in_threadgroup.x
-  scratch[t] = input[t]
-  threadgroup_barrier()
-  var acc = 0.0'f32
-  for i in 0 ..< 64:
-    acc += scratch[i]
-  output[t] = acc
 
 proc runTest() =
   suite "Metal - {.smem.} arena pass":
@@ -91,6 +79,17 @@ proc runTest() =
         check res[i] == 2016.0'f32
 
     test "launchDeviceFn synthesizes the arena for a hoisting device proc":
+      proc foldKernel(output, input: ptr UncheckedArray[float32]) {.inline.} =
+        ## Device proc declaring its own scratch, launched through `launchDeviceFn`,
+        ## the generated wrapper kernel synthesizes the arena
+        var scratch {.smem.}: array[64, float32]
+        let t = thread_position_in_threadgroup.x
+        scratch[t] = input[t]
+        threadgroup_barrier()
+        var acc = 0.0'f32
+        for i in 0 ..< 64:
+          acc += scratch[i]
+        output[t] = acc
       var engine = newEngine(runMetal)
       let iDev = engine.allocDevice(float32, 64)
       let oDev = engine.allocDevice(float32, 64)

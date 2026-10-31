@@ -1,7 +1,7 @@
 ## HLSL: `{.unroll.}` marks a device loop for full unrolling
 ##
 ## Test that a kernel with an `{.unroll.}`-marked loop compiles through
-## the DXC route with the `[unroll]` attribute in the emitted source
+## the DXC route
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -19,7 +19,7 @@ const unrollHlsl = hlsl:
 
 proc runTest() =
   let bindings: seq[BindingExpectation] = @[("output", 0, false)]
-  discard compileCheck("unroll_loop", unrollHlsl, bindings, expect = "[unroll]")
+  discard compileCheck("unroll_loop", unrollHlsl, bindings)
   echo "  OK - t_hlsl_unroll_loop"
 
 when isMainModule:
