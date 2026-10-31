@@ -59,7 +59,7 @@ Rule table (rule | trigger | severity):
 | dump-identifier       | an identifier carrying dump in crucible or ceramic Nim code, dump mechanisms are debug-only and never committed, debugEcho inline, write at the call site, a macro can debugEcho result.toStrLit() | counted  |
 | crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
-| emitted-text-assert | a string literal containment in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks | counted  |
+| emitted-text-assert | a string literal containment or scan in tests/codegen Nim code, an assert-context hit asserts on the emitted shader source (violation), a non-assert hit is an advisory naming the shape, behavioral tests launch kernels and check readbacks | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -247,21 +247,55 @@ SECTION_END_RE = re.compile(
     r"^\s*(?:proc|func|macro|iterator|template|converter|const|let|var|import|"
     r"export|include)\b")
 
-# The emitted-text-assert rule (tests/codegen scope). Behavioral kernel tests
-# launch kernels and check readbacks. A string literal containment asserts on
-# the emitted shader source instead, which the testing rules ban.
+# Emitted-text-assert rule (tests/codegen scope). Behavioral kernel tests
+# launch kernels and check readbacks. A string literal containment or scan
+# over the emitted shader source instead is what the testing rules ban.
 #
-# - `"text" in expr` and `"text" notin expr`: a string literal on the left of
-#   the containment operators, an `&` concatenation that ends in a literal
-#   matches too (`prefix & " = OpTypeStruct" in line`)
-# - `.contains("text")` and `.contains(prefix & "text")`: a method-call
-#   containment whose argument carries a string literal
-# - legal shapes the left anchor keeps out: membership of a plain identifier
-#   or a loop variable (`x in collected`, `for line in lines`), a call whose
-#   argument carries no literal (`parts.contains(pair.control)`)
+# Pin shapes:
+# - `"text" in expr` and `"text" notin expr`: a string literal next to the
+#   containment operators, an `&` concatenation that ends in a literal
+#   matches too (`prefix & " = OpTypeStruct" in line`), a raw string
+#   (`r"\bfoo" in src`) and a triple-quoted literal match as well
+# - `.contains("text")`, the bare proc form `contains(expr, "text")`, and a
+#   find/rfind/startsWith/endsWith call whose argument carries a string
+#   literal
+# - a membership test whose right side is a string literal list
+#   (`line in ["a;"]`)
+# - closing parens between the literal and the operator match too
+#   (`check (prefix & " = OpTypeStruct") in line`)
+# - a call wrapped across lines joins into one logical line first, so the
+#   literal on a continuation line still matches
+#
+# Tier: a hit on a line that also carries an assert keyword (doAssert, check,
+# assert, expect) is a violation, that line asserts on the emitted source.
+# A hit without one is an advisory naming the shape, a runtime dispatch like
+# `if "metal" in backendName` never asserts anything.
+#
+# Legal shapes the anchors keep out: membership of a plain identifier or a
+# loop variable (`x in collected`, `for line in lines`), a call whose
+# argument carries no literal (`parts.contains(pair.control)`), a numeric
+# literal list (`res[0] in [1'u32, 2'u32]`), a char argument
+# (`rest.find(' ')`).
+#
+# Known blind spot: a literal folded into an identifier before the test
+# (`let expected = "a" & "b"` then `doAssert expected in src`) hides the
+# literal from every anchor, such sites stay on the reviewer.
+# One string literal as the containment patterns see it: a triple-quoted
+# literal first, then a plain or raw single-quoted-run literal.
+_TEXT_PIN_LIT = (r'(?:\br)?"""(?:[^"]|"(?!""))*"""'
+                 r'|(?:\br)?"(?:\\.|[^"\\])*"')
+
 TEXT_PIN_IN_RE = re.compile(
-    r'(?<![\w"])(?:\br)?"(?:\\.|[^"\\])*"\s+(?:not\s*)?in\b')
-TEXT_PIN_CONTAINS_RE = re.compile(r'\.\s*contains\s*\([^)]*"')
+    # closing parens between the literal and `in`: `check (prefix & "x") in line`
+    # group 1: the literal, the message quotes it whole even when it holds spaces
+    r'(?<![\w"])((?:%s))\s*\)*\s+(?:not\s*)?in\b' % _TEXT_PIN_LIT)
+TEXT_PIN_IN_LIST_RE = re.compile(
+    r'\b(?:not\s*)?in\s*(?:@\s*)?\[\s*(?:%s)' % _TEXT_PIN_LIT)
+TEXT_PIN_CONTAINS_RE = re.compile(
+    r'(?:\.\s*|(?<![\w.]))contains\s*\([^)]*"')
+TEXT_PIN_SCAN_RE = re.compile(
+    r'(?:\.\s*|(?<![\w.]))(find|rfind|startsWith|endsWith)\s*\([^)]*"')
+TEXT_PIN_ASSERT_RE = re.compile(r'\b(?:doAssert|assert|check|expect)\b')
 
 # Temporal and history narration (the narration rule).
 # Each entry carries the pattern plus a one-line hint.
@@ -2183,40 +2217,117 @@ def _code_part(raw):
     return "".join(out).rstrip()
 
 
-def nim_emitted_text_assert_checks(path, text, findings):
-    """Flags string literal containments on emitted source in tests/codegen.
+# Net open parenthesis and bracket count outside string literals in one
+# code line, the logical-line join reads it.
+def _paren_depth(code):
+    depth = 0
+    in_str = False
+    i, n = 0, len(code)
+    while i < n:
+        c = code[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
+        i += 1
+    return depth
 
-    - `"text" in expr`, `"text" notin expr`, and the `.contains("text")`
-      method call assert on the emitted shader source; the testing rules
-      ban that surface, a behavioral test launches the kernel and checks
-      the readback
+
+# A malformed file never joins the rest of the file into one logical line.
+_LOGICAL_JOIN_CAP = 20
+
+
+def _logical_code_lines(text):
+    """Returns (first line number, code) pairs, a line joined into the next
+    while its parentheses and brackets stay unbalanced outside string
+    literals. A call wrapped across lines therefore matches the containment
+    patterns, the literal on a continuation line is not invisible.
+    """
+    out = []
+    buf = ""
+    start = 0
+    depth = 0
+    for i, raw in enumerate(text.splitlines(), 1):
+        code = _code_part(raw)
+        if buf:
+            buf += " " + code
+            depth += _paren_depth(code)
+        elif code.strip():
+            buf = code
+            start = i
+            depth = _paren_depth(code)
+        else:
+            continue
+        if depth <= 0 or i - start + 1 >= _LOGICAL_JOIN_CAP:
+            out.append((start, buf))
+            buf = ""
+            depth = 0
+    if buf:
+        out.append((start, buf))
+    return out
+
+
+def nim_emitted_text_assert_checks(path, text, findings):
+    """Flags string literal containments and scans over emitted source in
+    tests/codegen.
+
+    - `"text" in expr`, `"text" notin expr`, `.contains("text")`, the bare
+      `contains(expr, "text")` form, a find/rfind/startsWith/endsWith call
+      with a string literal in its argument, a membership test whose right
+      side is a string literal list, and a triple-quoted literal all match
     - the left anchor keeps the legal shapes out: a plain identifier or a
       loop variable on the left of `in` (`x in collected`,
-      `for line in lines`) and a `.contains(x)` call with no literal in
-      its argument never match
+      `for line in lines`) and a call with no literal in its argument
+      (`parts.contains(pair.control)`) never match
+    - a hit on a line carrying an assert keyword (doAssert, check, assert,
+      expect) is a violation, a hit without one is an advisory, a runtime
+      dispatch like `if "metal" in backendName` asserts nothing
     """
     if "tests" not in path.parts or "codegen" not in path.parts:
         return
     blocked = nim_block_comment_lines(text)
-    for i, raw in enumerate(text.splitlines()):
-        if (i + 1) in blocked:
+    raws = text.splitlines()
+    for start, code in _logical_code_lines(text):
+        if start in blocked:
             continue
-        code = _code_part(raw)
         if not code.strip():
             continue
         hit = None
         m = TEXT_PIN_IN_RE.search(code)
         if m:
             op = "notin" if "notin" in m.group(0) else "in"
-            hit = "%s %s" % (m.group(0).split()[0], op)
+            hit = "%s %s" % (m.group(1), op)
+        elif TEXT_PIN_IN_LIST_RE.search(code):
+            hit = "in [<literal>]"
         elif TEXT_PIN_CONTAINS_RE.search(code):
-            hit = ".contains(<literal>)"
-        if hit:
+            hit = "contains(<literal>)"
+        else:
+            m = TEXT_PIN_SCAN_RE.search(code)
+            if m:
+                hit = "%s(<literal>)" % m.group(1)
+        if not hit:
+            continue
+        if TEXT_PIN_ASSERT_RE.search(code):
             findings.append(Finding(
-                path, i + 1, "emitted-text-assert",
+                path, start, "emitted-text-assert",
                 "string literal containment (%s) asserts on the emitted "
                 "source, delete the assertion and keep the launch and the "
                 "readback" % hit))
+        else:
+            findings.append(Finding(
+                path, start, "emitted-text-assert",
+                "string literal scan (%s) in tests/codegen code, confirm it "
+                "does not assert on the emitted shader source, behavioral "
+                "tests launch kernels and check readbacks" % hit,
+                warning=True))
 
 
 def scan(path, text, findings):

@@ -12,9 +12,9 @@
 import std/[strformat, strutils]
 import workspace/crucible
 
-# The kernel calls a void-returning device function: the codegen forward-
-# declares it (`void helper(uint x);`) before the kernel's preamble, which is
-# exactly the shape that breaks a naive first-`void ` entry-point scan.
+# A void-returning device function gets forward-declared
+# (`void helper(uint x);`) before the kernel's preamble, exactly the shape
+# that breaks a naive first-`void ` entry-point scan.
 const helperVk = glsl:
   proc helper(x: uint32) {.device.} =
     let y = x + 1
@@ -29,21 +29,12 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   echo helperVk
   echo ""
 
-  # Shape check: the helper forward declaration must precede the first kernel
-  # preamble in the generated GLSL (this is what breaks the old parse).
-  let fwdIdx = helperVk.find("void helper(")
-  let preIdx = helperVk.find("layout(local_size_x")
-  doAssert fwdIdx >= 0, "expected a `void helper(` forward declaration in the GLSL"
-  doAssert preIdx > fwdIdx,
-    &"helper forward declaration (idx {fwdIdx}) must precede the kernel " &
-    &"preamble (idx {preIdx})"
-
   var engine = newEngine(runVulkan)
   engine.ingest(helperVk)
 
-  # Sentinel: a wrong entry point either fails ingest (glslang `-e helper`) or
-  # silently recompiles per launch; correct output proves the fast path parsed
-  # the kernel name.
+  # A wrong entry point fails ingest (glslang `-e helper`) or silently
+  # recompiles per launch. Correct output proves that entry-point parsing
+  # picked the kernel name.
   var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
   let oDev = engine.allocDevice(uint32, 1)
   engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)

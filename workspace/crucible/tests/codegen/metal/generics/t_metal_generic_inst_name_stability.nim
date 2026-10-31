@@ -1,30 +1,13 @@
-## Emitted discriminator tokens must track the instantiated body, not
-## source position. Variant B mirrors variant A with inserted comments
-## and shifted lines, and each kernel must still run its own factor.
+## Metal: generic device procs in a comment-shifted source each run
+## their own static parameter at runtime.
 ##
 ## Run:
-##   nim c -r --outdir:build/tests --nimcache:nimcache/tests \
+##   nim c -r --hints:off --warnings:off \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/generics/t_metal_generic_inst_name_stability.nim
 
 import std/unittest
-import std/[strutils, sets]
 import workspace/crucible
-
-# ── Variant A ──
-
-proc scaleA[Factor: static int](
-    outp, inp: ptr UncheckedArray[float32]) {.device.} =
-  outp[0] = inp[0] * float32(Factor)
-
-const artA = metal:
-  proc kA16(outp, inp: ptr UncheckedArray[float32]) {.global.} =
-    scaleA[16](outp, inp)
-  proc kA32(outp, inp: ptr UncheckedArray[float32]) {.global.} =
-    scaleA[32](outp, inp)
-  proc kA7(outp, inp: ptr UncheckedArray[float32]) {.global.} =
-    scaleA[7](outp, inp)
-
-# ── Variant B: variant A with filler comments and shifted lines ──
 
 proc scaleB[Factor: static int](
     outp, inp: ptr UncheckedArray[float32]) {.device.} =
@@ -50,24 +33,6 @@ const artB = metal:
   proc kB7(outp, inp: ptr UncheckedArray[float32]) {.global.} =
     scaleB[7](outp, inp)
 
-func discriminators(artifact, procName: string): HashSet[string] =
-  ## Returns the trailing base58 discriminator token of every emitted device
-  ## function named `procName`.
-  var i = 0
-  while true:
-    let idx = artifact.find(procName & "_", i)
-    if idx < 0:
-      break
-    var j = idx
-    while j < artifact.len and artifact[j] in IdentChars:
-      inc j
-    var tok = ""
-    for part in artifact[idx ..< j].split('_'):
-      if part.len > 0:
-        tok = part
-    result.incl tok
-    i = j
-
 proc runKernel(artifact: string, launcher: string): seq[float32] =
   var engine = newEngine(runMetal)
   engine.ingest(artifact)
@@ -82,17 +47,8 @@ proc runKernel(artifact: string, launcher: string): seq[float32] =
   result = outp
 
 proc runTest() =
-  suite "Metal - generic instantiation name stability under source edits":
-    test "discriminator tokens are unchanged by comment and line shifts":
-      let dA = discriminators(artA, "scaleA")
-      let dB = discriminators(artB, "scaleB")
-      check dA.len == 3
-      check dB.len == 3
-      check dA == dB
-
+  suite "Metal - generic instantiation under comment-shifted sources":
     test "the comment-shifted variant computes its own factors at runtime":
-      # Variant A's 16/32/7 runtime results are covered by
-      # t_metal_generic_inst_dedup.nim (scale1 at the same factors).
       check runKernel(artB, "kB16") == @[16.0'f32]
       check runKernel(artB, "kB32") == @[32.0'f32]
       check runKernel(artB, "kB7") == @[7.0'f32]
