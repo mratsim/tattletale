@@ -31,11 +31,6 @@ import ../ir/ast_datatypes
 import ./emit_common
 
 type
-  PrintError* = object
-    ## Refusal of the printer, names the proc and the cause.
-    procName*: string
-    msg*: string
-
   PrintCtx = object
     fnName: string
     ## First refusal of the walk, "" while clean.
@@ -120,15 +115,11 @@ proc emitMslScalar(t: CirType): string =
       result = "float"
     else:
       result = ""
-  of ctVector:
-    result = emitMslScalar(t.vElem)
-    if result.len > 0:
-      result.add $t.vN
   of ctPtr, ctAptr:
     result = emitMslScalar(t.pElem) & "*"
   of ctStruct:
     result = t.name
-  of ctArray, ctProc:
+  of ctVector, ctArray, ctProc:
     result = ""
 
 

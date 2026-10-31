@@ -46,9 +46,6 @@ type
     fnName: string
     err: string
     counter: int
-    splicedAway: HashSet[string]
-      ## Procs spliced at least once. A spliced proc with no surviving caller
-      ## deletes from the module, its body lives in the splicers.
 
 proc appendBuiltinReads(e: CirExpr, found: var HashSet[string]) =
   ## Collects the coordinate builtin names one expression reads.
@@ -320,7 +317,6 @@ proc spliceCall(ctx: InlineCtx, callee: CirProc, args: seq[CirExpr], dest: CirEx
     ctx.fail("inline proc " & callee.name & " returns a value with no call destination")
     return @[]
 
-  ctx.splicedAway.incl(callee.name)
   var renames = initTable[string, CirExpr]()
   var pre: seq[CirStmt]
   for i, p in callee.params:
