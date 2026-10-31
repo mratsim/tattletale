@@ -153,7 +153,7 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
         "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
   of ctStruct:
     result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc:
+  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitHlslTypeBare(ctx: var PrintCtx, t: CirType): string =
@@ -826,6 +826,11 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
     of ctArray:
       ctx.fail("array parameter " & p.name & " in `" & fn.name &
         "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
+      return
+    of ctSpan:
+      ctx.fail("span parameter " & p.name & " in `" & fn.name &
+        "` has no HLSL binding, openArray spans split to pointer + length" &
+        " before printing")
       return
     of ctInt, ctUint:
       if p.typ.bits != 32:

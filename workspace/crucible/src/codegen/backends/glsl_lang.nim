@@ -99,7 +99,7 @@ proc emitGlslScalar(t: CirType): string =
       result = prefix & $t.vN
   of ctStruct:
     result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc:
+  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitGlslTypeBare(t: CirType): string =

@@ -94,7 +94,7 @@ proc emitOpenclScalar(t: CirType): string =
       result = elem & $t.vN
   of ctStruct:
     result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc:
+  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitOpenclTypeBare(t: CirType): string =

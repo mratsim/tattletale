@@ -104,7 +104,7 @@ func cirSizeBytes(t: CirType): int =
     result = 0
     for f in t.fields:
       result += cirSizeBytes(f.typ)
-  of ctVoid, ctProc:
+  of ctVoid, ctProc, ctSpan:
     result = 0
 
 func isLargeStruct(t: CirType): bool =

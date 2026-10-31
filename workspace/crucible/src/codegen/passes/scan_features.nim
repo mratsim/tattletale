@@ -79,7 +79,7 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
   of ctStruct:
     for fl in t.fields:
       scanType(fl.typ, f, profile)
-  of ctVoid, ctBool, ctProc:
+  of ctVoid, ctBool, ctProc, ctSpan:
     discard
 
 proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, profile: ScanProfile) =
@@ -175,7 +175,7 @@ proc wgslScanType(t: CirType, f: var ModuleFeatures) =
   of ctStruct:
     for fl in t.fields:
       wgslScanType(fl.typ, f)
-  of ctVoid, ctBool, ctInt, ctUint, ctProc:
+  of ctVoid, ctBool, ctInt, ctUint, ctProc, ctSpan:
     discard
 
 proc wgslScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =

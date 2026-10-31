@@ -52,6 +52,7 @@ proc renderType(t: CirType): string =
   of ctAptr: result = "(aptr " & getSpaceName(t.space) & " " & renderType(t.pElem) & ")"
   of ctStruct: result = ":" & t.name
   of ctArray: result = "(array " & renderType(t.aElem) & " " & $t.aN & ")"
+  of ctSpan: result = "(span " & getSpaceName(t.sSpace) & " " & renderType(t.sElem) & ")"
   of ctProc:
     result = "(proctype (params"
     for p in t.params:

@@ -76,6 +76,7 @@ type
     ctAptr
     ctStruct
     ctArray
+    ctSpan
     ctProc
 
   CirField* = object
@@ -107,6 +108,9 @@ type
     of ctArray:
       aN*: int
       aElem*: CirType
+    of ctSpan:
+      sSpace*: CirAddrSpace
+      sElem*: CirType
     of ctProc:
       params*: seq[CirType]
       ret*: CirType
@@ -539,6 +543,8 @@ proc sameType*(a, b: CirType): bool =
     result = a.name == b.name
   of ctArray:
     result = a.aN == b.aN and sameType(a.aElem, b.aElem)
+  of ctSpan:
+    result = a.sSpace == b.sSpace and sameType(a.sElem, b.sElem)
   of ctProc:
     if a.params.len != b.params.len:
       return false
@@ -603,6 +609,10 @@ proc getExprType*(e: CirExpr): CirType =
           t.pElem.kind == ctArray:
         # A pat over a pointer-to-array base reads one element of the array that the pointer names.
         result = t.pElem.aElem
+      elif t != nil and t.kind == ctSpan:
+        # A pat over a span base reads one element of the view. The span split
+        # pass retypes the base symbol to the element pointer first.
+        result = t.sElem
   of eDot:
     if e.dotBase != nil:
       let t = getExprType(e.dotBase)

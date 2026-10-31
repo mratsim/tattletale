@@ -87,7 +87,7 @@ proc emitCudaScalar(t: CirType): string =
     result = emitCudaScalar(t.pElem) & "*"
   of ctStruct:
     result = t.name
-  of ctVector, ctArray, ctProc:
+  of ctVector, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =

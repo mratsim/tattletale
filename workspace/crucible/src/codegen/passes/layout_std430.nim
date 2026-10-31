@@ -88,7 +88,7 @@ proc packedSize(t: CirType, boolWidth: static int): int =
       align = max(align, fa)
     roundUpMultiple(off, align)
   of ctPtr, ctAptr: 8
-  of ctProc: 0
+  of ctSpan, ctProc: 0
 
 proc computeStructLayout(t: CirType, boolWidth: static int): StructLayout =
   ## Packed layout of one struct type under the launch packing rules.
@@ -130,7 +130,7 @@ proc typeByteSize*(layouts: Table[string, StructLayout], t: CirType, boolWidth: 
   of ctArray:
     typeByteSize(layouts, t.aElem, boolWidth) * t.aN
   of ctPtr, ctAptr: 8
-  of ctProc: 0
+  of ctSpan, ctProc: 0
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration

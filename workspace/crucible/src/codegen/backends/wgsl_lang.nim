@@ -96,7 +96,7 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   of ctStruct:
     ctx.neededStructs.incl(t.name)
     result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc:
+  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitWgslTypeBare(ctx: var PrintCtx, t: CirType): string =

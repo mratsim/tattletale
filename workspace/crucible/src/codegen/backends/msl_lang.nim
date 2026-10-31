@@ -130,7 +130,7 @@ proc emitMslScalar(t: CirType): string =
         result = ""
     else:
       result = ""
-  of ctArray, ctProc:
+  of ctArray, ctProc, ctSpan:
     result = ""
 
 
