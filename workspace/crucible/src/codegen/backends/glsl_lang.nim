@@ -217,6 +217,9 @@ proc emitExtensions(features: ModuleFeatures): string =
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
+proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string
+  ## Forward declaration, shared by the value and statement call paths.
+
 # GLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `uintBitsToFloat` (32 bit) and the width conversion at the use site.
 const glslFloatTokens = FloatLitTokens(
@@ -429,6 +432,9 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(el)
     result.add ")"
   of eCall:
+    if e.callee.kind == eSym and e.callee.atomicsBuiltin == abkAtomicFetchAdd:
+      # atomicFetchAdd prints its own arguments, a pre-print into the shared arg list would print each argument twice
+      return ctx.printGlslAtomicFetchAdd(e.args)
     let calleeName =
       if e.callee.kind == eSym: e.callee.name
       else: ctx.printExpr(e.callee)
@@ -452,17 +458,6 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       of shkSimdShuffleXor:
         return "subgroupShuffleXor(" & args[0] & ", uint(" & args[1] & "))"
       of shkNone: discard
-      if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-        # int atomicAdd is core. fp needs GL_EXT_shader_atomic_float,
-        # emitted at module scope for an fp atomicFetchAdd in the module.
-        # atomicAdd increments through one indirection: the address operand
-        # is the reference's element 0
-        let addrTxt = if getExprType(e.args[0]) != nil and getExprType(
-            e.args[0]).kind in {ctAptr, ctPtr}:
-          args[0] & ".x[0]"
-        else:
-          args[0]
-        return "atomicAdd(" & addrTxt & ", " & args[1] & ")"
       if e.callee.synchroBuiltin != sbkNone:
         ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
         return ""
@@ -471,6 +466,21 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 # ═══════════════════════════════════════════════════════════════════════
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
+
+proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
+  ## GLSL vocabulary for the atomic fetch-and-add builtin, shared by the value and statement call paths:
+  ##
+  ## - int atomicAdd is core
+  ## - fp needs GL_EXT_shader_atomic_float, enabled at module scope
+  ##   for an fp atomicFetchAdd in the module
+  ## - atomicAdd increments through one indirection, the address operand
+  ##   is the reference's element 0
+  let addrTxt = if getExprType(args[0]) != nil and getExprType(
+      args[0]).kind in {ctAptr, ctPtr}:
+    ctx.printExpr(args[0]) & ".x[0]"
+  else:
+    ctx.printExpr(args[0])
+  return "atomicAdd(" & addrTxt & ", " & ctx.printExpr(args[1]) & ")"
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
   ## Forward declaration, nested statement lists recurse into it.
@@ -550,10 +560,6 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
   of sDiscard:
     result = ""
   of sCall:
-    var parts: seq[string]
-    parts.add ctx.printExpr(s.callCallee)
-    for a in s.callArgs:
-      parts.add ctx.printExpr(a)
     if s.callCallee.kind == eSym and
         s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
       result = pad & "barrier();"
@@ -562,7 +568,15 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
       # GLSL's barrier() orders shared memory only, buffer writes are
       # ordered before it by a leading memoryBarrierBuffer() call
       result = pad & "memoryBarrierBuffer();\n" & pad & "barrier();"
+    elif s.callCallee.kind == eSym and
+        s.callCallee.atomicsBuiltin == abkAtomicFetchAdd:
+      # a GLSL call statement discards the fetched old value
+      result = pad & ctx.printGlslAtomicFetchAdd(s.callArgs) & ";"
     else:
+      var parts: seq[string]
+      parts.add ctx.printExpr(s.callCallee)
+      for a in s.callArgs:
+        parts.add ctx.printExpr(a)
       result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
   of sAsm:
     ctx.fail("inline assembly has no GLSL form")

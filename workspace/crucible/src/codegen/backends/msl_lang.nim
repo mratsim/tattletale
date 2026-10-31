@@ -321,8 +321,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eNot:
     return "(!" & ctx.printExpr(e.notOperand) & ")"
   of eAnd, eOr:
-    # pure bool operators over side-effect-free operands: the frontend materializes
-    # value-position short-circuits into temps and the remainder prints directly
+    # MSL's native operators short-circuit, the operands may carry calls
     let op = if e.kind == eAnd: "&&" else: "||"
     return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
   of eTernary:

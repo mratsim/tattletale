@@ -1320,17 +1320,14 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
     of sDiscard:
       discard
     of sCall:
-      # statement-position call: void calls emit, value calls compute
-      # into a fresh temp the caller stores (the frontend lowers both shapes)
-      if s.callCallee.kind == eSym and ctx.fnTypes.hasKey(s.callCallee.name) and
-          ctx.fnTypes[s.callCallee.name].kind == ctVoid:
-        var callE = CirExpr(kind: eCall)
-        callE.callee = s.callCallee
-        callE.args = s.callArgs
-        discard ctx.emitCallValue(fn, callE)
-      else:
-        ctx.failSpv("statement call " & s.callCallee.name &
-          " without a destination binding")
+      # statement-position call: the call instruction emits, a value call's result id stays unused
+      if s.callCallee.kind != eSym:
+        ctx.failSpv("statement call without a symbol callee, no destination binding")
+        return
+      var callE = CirExpr(kind: eCall)
+      callE.callee = s.callCallee
+      callE.args = s.callArgs
+      discard ctx.emitCallValue(fn, callE)
     of sCase, sAsm, sEmit:
       ctx.failSpv("statement construct " & $s.kind &
         " outside the SPIR-V subset, it must lower earlier")

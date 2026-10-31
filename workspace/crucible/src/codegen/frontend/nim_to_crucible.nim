@@ -17,7 +17,7 @@
 ##
 ## Types translate exactly once through `nim_type_resolvers`. Normal form produced directly:
 ##
-## - a value-producing call is an `asgn` RHS, nested call operands hoist in front of the enclosing statement
+## - a value-producing call emits as a call expression, nested into the operator tree of its use site
 ## - `while` and `for` lower to `whileS` and re-test the condition before every iteration
 ## - `and`/`or` emit as the boolean operators over their operands
 ## - if/elif chains nest one `ite` per branch, first match wins
@@ -54,11 +54,6 @@ type
     moduleGlobals: seq[CirStmt]
     ## Program-scope declarations in encounter order, `m.globals` of the module.
     nameCounts: Table[string, int]
-    condDepth: int
-    ## Nesting depth of condition lowering:
-    ## - a condition site has no hoist slot, a call emits into the condition
-    ##   tree and re-evaluates at every test
-    ## - a condition that needs a temp (a splice, a span view binding) refuses
     hoisted: seq[CirStmt]
     ## Statements hoisted in front of the statement being lowered.
 
@@ -180,6 +175,59 @@ proc containsCall(n: NimNode): bool =
       return true
   return false
 
+func cirExprHasCall(e: CirExpr): bool =
+  ## True when a call occurs anywhere in the lowered expression tree.
+  if e.isNil:
+    return false
+  if e.kind == eCall:
+    return true
+  for ch in getExprChildren(e):
+    if cirExprHasCall(ch):
+      return true
+  return false
+
+proc bindOperandTemp(ctx: var FrontendCtx, e: CirExpr): CirExpr =
+  ## Binds one call-bearing operand into a fresh temp and returns the temp symbol.
+  ## The operand evaluates once, the use site reads the temp.
+  let typ = getExprType(e)
+  let name = ctx.uniqueName("lhs_val")
+  let tmp = sym(name, typ)
+  ctx.hoisted.add(varD(name, typ))
+  ctx.hoisted.add(asgnS(tmp, e))
+  ctx.declareLocal(name, tmp)
+  return tmp
+
+proc bindCallBearingOperands(ctx: var FrontendCtx, e: CirExpr): CirExpr =
+  ## Binds each call-bearing operand of an lvalue tree into a fresh temp.
+  ## A compound assignment prints its lvalue twice, once as the arithmetic read
+  ## and once as the store, so a call left in the shared tree evaluates twice:
+  ##
+  ## - only operand positions bind, the lvalue spine (`x`, `x[i]`, `x.f`)
+  ##   is structural
+  ## - an operand temp is legal on every target, an address temp is not,
+  ##   GLSL dissolves pointer locals and keeps no function storage
+  if e.kind notin {eAt, ePat, eDot, eDeref}:
+    if cirExprHasCall(e):
+      return ctx.bindOperandTemp(e)
+    return e
+  case e.kind
+  of eAt:
+    e.atBase = ctx.bindCallBearingOperands(e.atBase)
+    if cirExprHasCall(e.atIndex):
+      e.atIndex = ctx.bindOperandTemp(e.atIndex)
+  of ePat:
+    e.patBase = ctx.bindCallBearingOperands(e.patBase)
+    if cirExprHasCall(e.patIndex):
+      e.patIndex = ctx.bindOperandTemp(e.patIndex)
+  of eDot:
+    e.dotBase = ctx.bindCallBearingOperands(e.dotBase)
+  of eDeref:
+    e.derefOperand = ctx.bindCallBearingOperands(e.derefOperand)
+  else:
+    # unreachable, the guard above admits only the four spine kinds, the case must stay total
+    discard
+  return e
+
 func unwrapConv(n: NimNode): NimNode =
   ## Peels the sem-introduced wrappers off a node.
   ## Wrappers: `HiddenStdConv` and the `StmtListExpr(Empty, x)` short-circuit operand form.
@@ -205,9 +253,6 @@ func unwrapConv(n: NimNode): NimNode =
 
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr
   ## Forward declaration, expressions and statements recurse into each other.
-
-proc lowerCondExpr(ctx: var FrontendCtx, n: NimNode): CirExpr
-  ## Forward declaration, conditions lower through the expression walker.
 
 proc lowerOperandExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## Lowers one operator operand. A literal under a sem-introduced conversion
@@ -286,8 +331,8 @@ proc lowerEmitArg(ctx: var FrontendCtx, emitArg: NimNode): CirStmt =
   ## - a plain string literal emits verbatim
   ## - an argument list alternates literal runs with spliced expressions,
   ##   Nim hands backticked identifiers in the string over as symbols
-  ## - a compound expression splices through a fresh temp: the hoisted
-  ##   assignment computes the value, the text references the temp's name
+  ## - a compound expression splices through a fresh temp, whose hoisted declaration
+  ##   and assignment compute the value, the emitted text references the temp's name
   if emitArg.kind in {nnkStrLit, nnkRStrLit, nnkTripleStrLit}:
     return emitS(@[emitArg.strVal], @[])
   var parts: seq[string] = @[""]
@@ -303,7 +348,9 @@ proc lowerEmitArg(ctx: var FrontendCtx, emitArg: NimNode): CirStmt =
       var op = e
       if e.kind != eSym:
         let tmpName = ctx.uniqueName("emit_tmp")
-        op = sym(tmpName, getExprType(e))
+        let tmpType = getExprType(e)
+        op = sym(tmpName, tmpType)
+        ctx.hoisted.add(varD(tmpName, tmpType))
         ctx.hoisted.add(asgnS(op, e))
         ctx.declareLocal(tmpName, op)
       parts.add("")
@@ -720,15 +767,7 @@ proc numericBuiltinCall(ctx: var FrontendCtx, calleeSym: NimNode, call: NimNode)
   let args = ctx.lowerCallArgs(calleeSym, call)
   if ctx.failing():
     return nil
-  if ctx.condDepth > 0:
-    return callE(sym(calleeSym.strVal, fnType, true), args)
-  let tmpName = ctx.uniqueName("tmp")
-  let ret = fnType.ret
-  ctx.hoisted.add(varD(tmpName, ret))
-  ctx.hoisted.add(asgnS(sym(tmpName, ret),
-    callE(sym(calleeSym.strVal, fnType, true), args)))
-  ctx.declareLocal(tmpName, sym(tmpName, ret))
-  return sym(tmpName, ret)
+  return callE(sym(calleeSym.strVal, fnType, true), args)
 
 proc callTargetName(n: NimNode): string =
   ## Name of a call's callee symbol: the symbol's own name, or the first
@@ -743,7 +782,7 @@ proc lowerToOpenArrayCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
   ## Lowers a `toOpenArray(base, first, last)` call into the span
   ## construction the span split pass consumes:
   ##
-  ## - a hoisted span-typed view binds the call, typed over the base
+  ## - the construction emits as a call expression, typed over the base
   ##   pointer's element type and space
   ## - the base must be a pointer: the split's pointer side offsets the base
   ##   by `first`, and CIRv2 states pointer arithmetic over pointers
@@ -771,17 +810,10 @@ proc lowerToOpenArrayCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
     return nil
   let spanTyp = tSpan(baseTyp.space, baseTyp.pElem)
   let callTyp = tProcT(baseTyp, firstTyp, lastTyp, spanTyp)
-  let view = ctx.uniqueName("view")
-  ctx.hoisted.add(varD(view, spanTyp))
-  ctx.hoisted.add(asgnS(sym(view, spanTyp),
-    callE(sym("toOpenArray", callTyp), base, first, last)))
-  ctx.declareLocal(view, sym(view, spanTyp))
-  return sym(view, spanTyp)
+  return callE(sym("toOpenArray", callTyp), base, first, last)
 
 proc lowerSpanLenCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
-  ## Lowers a `len(s)` read over an openArray into the form the span split
-  ## pass folds: a hoisted int32 temp bound to the `len` call over the span.
-  ## The pass rewrites the read to the span's split length binding.
+  ## Lowers a `len(s)` read over an openArray into the `len` call that the span split pass folds to the span's split length binding.
   if call.len != 2:
     ctx.fail("len call with " & $(call.len - 1) & " arguments, expected 1")
     return nil
@@ -795,18 +827,11 @@ proc lowerSpanLenCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
       " is outside the supported set")
     return nil
   let readTyp = tProcT(argTyp, tInt(32))
-  if ctx.condDepth > 0:
-    return callE(sym("len", readTyp), arg)
-  let tmp = ctx.uniqueName("tmp")
-  ctx.hoisted.add(varD(tmp, tInt(32)))
-  ctx.hoisted.add(asgnS(sym(tmp, tInt(32)),
-    callE(sym("len", readTyp), arg)))
-  ctx.declareLocal(tmp, sym(tmp, tInt(32)))
-  return sym(tmp, tInt(32))
+  return callE(sym("len", readTyp), arg)
 
 proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirExpr =
-  ## A value-producing call binds to a fresh temp: the `asgn` RHS hoists
-  ## in front of the enclosing statement. Returns the temp symbol.
+  ## Returns a value-producing call as a call expression, the use site
+  ## nests it into its operator tree.
   ## A magic callee (the system operators) lowers to the primitive
   ## operation directly. No proc harvests, no call emits.
   let magic = nimMagicName(callee)
@@ -823,14 +848,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     if arith.isNil:
       ctx.fail("magic call " & callee.repr & " (" & magic & ") is outside the supported set")
       return nil
-    if ctx.condDepth > 0:
-      return arith
-    let tmpName = ctx.uniqueName("tmp")
-    let ret = getExprType(arith)
-    ctx.hoisted.add(varD(tmpName, ret))
-    ctx.hoisted.add(asgnS(sym(tmpName, ret), arith))
-    ctx.declareLocal(tmpName, sym(tmpName, ret))
-    return sym(tmpName, ret)
+    return arith
   let calleeSym = ctx.resolveCallCallee(callee, call)
   if ctx.failing():
     return nil
@@ -858,15 +876,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
   let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
   let calleeName = if calleeBuiltin: calleeSym.strVal
                    else: cirName
-  if ctx.condDepth > 0:
-    return callE(sym(calleeName, fnType, calleeBuiltin), args)
-  let tmpName = ctx.uniqueName("tmp")
-  let ret = fnType.ret
-  ctx.hoisted.add(varD(tmpName, ret))
-  ctx.hoisted.add(asgnS(sym(tmpName, ret),
-    callE(sym(calleeName, fnType, calleeBuiltin), args)))
-  ctx.declareLocal(tmpName, sym(tmpName, ret))
-  return sym(tmpName, ret)
+  return callE(sym(calleeName, fnType, calleeBuiltin), args)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expression translation
@@ -1032,7 +1042,7 @@ proc lowerNestedTernary(ctx: var FrontendCtx,
   ## Returns branch `idx` of an if-expression as a ternary whose else variant
   ## contains the next branch, so first match wins. The innermost else
   ## variant is the `elseBody` argument.
-  let cond = ctx.lowerCondExpr(branches[idx].cond)
+  let cond = ctx.lowerExpr(branches[idx].cond)
   if ctx.failing():
     return nil
   let thenV = ctx.lowerExpr(branchValueExpr(branches[idx].body))
@@ -1114,7 +1124,7 @@ proc retypedLiteral(e: CirExpr, typ: CirType): CirExpr =
 
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## Translates one expression node.
-  ## Hoisted statements (fresh temps, unnested call bindings) sit in front of the enclosing statement.
+  ## Statements spliced by the expression sit in front of the enclosing statement.
   if ctx.failing():
     return nil
   if n.kind == nnkNilLit:
@@ -1461,28 +1471,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return nil
 
 # ═══════════════════════════════════════════════════════════════════════
-# Conditions
-# ═══════════════════════════════════════════════════════════════════════
-
-proc lowerCondExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
-  ## Lowers a condition: a loop head, an `ite` condition, a ternary condition.
-  ## - a call emits into the condition tree, it re-evaluates at every test site
-  ## - a condition that lowers to statements refuses, a deliberate fail-loud
-  ##   narrowing
-  ## - an ite site could host the binding slot between tests, releasing
-  ##   that shape waits for calls to emit as tree values everywhere
-  ctx.condDepth.inc
-  let e = ctx.lowerExpr(n)
-  ctx.condDepth.dec
-  if ctx.failing():
-    return nil
-  if ctx.hoisted.len > 0:
-    ctx.fail("condition " & n.repr &
-      " lowers to statements, conditions must be expressions")
-    return nil
-  return e
-
-# ═══════════════════════════════════════════════════════════════════════
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -1531,13 +1519,16 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
     if ctx.failing():
       return @[]
   for i in countdown(branches.len - 1, 0):
-    let cond = ctx.lowerCondExpr(branches[i].cond)
+    let cond = ctx.lowerExpr(branches[i].cond)
     if ctx.failing():
       return @[]
+    # condition splices emit before the branch test, inside the else body
+    # of the previous branch, so a splice runs only when the test runs
+    let condHoists = ctx.drainHoisted()
     let body = ctx.buildBranchBody(branches[i].body, dest)
     if ctx.failing():
       return @[]
-    tail = @[iteS(cond, body, tail)]
+    tail = condHoists & @[iteS(cond, body, tail)]
   result = tail
 
 proc lowerIfStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
@@ -1578,10 +1569,13 @@ func bodyMarksUnroll(body: NimNode): bool =
 
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `while` loop lowers to a loop re-testing its condition before every iteration.
+  ## Statements spliced by the condition drain to the front of the loop body,
+  ## so a splice runs once per iteration after the test that admits it.
+  ## The failing test that exits the loop runs no splice.
   if ctx.failing():
     return @[]
   let unroll = bodyMarksUnroll(n[1])
-  let cond = ctx.lowerCondExpr(n[0])
+  let cond = ctx.lowerExpr(n[0])
   if ctx.failing():
     return @[]
   let body = ctx.lowerStmt(n[1])
@@ -1716,8 +1710,7 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   result = preamble & @[whileS(cmp, bodyHoists & body & incr, unroll)]
 
 proc lowerReturn(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  ## A `return`: the value binds to its destination, then the `ret`.
-  ## A call value binds through `asgn result` first.
+  ## A `return` of the value expression, hoisted splices in front.
   if ctx.failing():
     return @[]
   var valueNode = n[0]
@@ -1733,18 +1726,13 @@ proc lowerReturn(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   if ctx.retType.kind == ctVoid:
     ctx.fail("value returned from a void proc")
     return @[]
-  let hoists = ctx.drainHoisted()
-  if value.kind == eCall:
-    return hoists & @[asgnS(sym("result", ctx.retType), value),
-        retS(sym("result", ctx.retType))]
-  return hoists & @[retS(value)]
+  return ctx.drainHoisted() & @[retS(value)]
 
 proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  ## A void call in statement position:
+  ## A call in statement position:
   ## - `threadgroup_barrier()`
   ## - a kernel call
-  ##
-  ## The only statement-position call the normal form allows.
+  ## - a discardable non-void call, its value drops
   if ctx.failing():
     return @[]
   let callee = n[0]
@@ -1776,21 +1764,6 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   if isBodilessMagic(callee):
     ctx.fail("magic call " & callee.repr & " in statement position without a destination")
     return @[]
-  if fnType.ret.kind != ctVoid:
-    # a discardable non-void call in statement position: the value is
-    # computed into a fresh temp and dropped
-    if not hasPragmaNim(calleeSym, "builtin") and not known:
-      ctx.harvestProc(calleeSym, cirName)
-      if ctx.failing():
-        return @[]
-    let args = ctx.lowerCallArgs(calleeSym, n)
-    if ctx.failing():
-      return @[]
-    let tmpName = ctx.uniqueName("tmp")
-    ctx.hoisted.add(varD(tmpName, fnType.ret))
-    ctx.hoisted.add(asgnS(sym(tmpName, fnType.ret),
-      callE(sym(calleeName, fnType, calleeBuiltin), args)))
-    return ctx.drainHoisted()
   if not hasPragmaNim(calleeSym, "builtin") and not known:
     ctx.harvestProc(calleeSym, cirName)
     if ctx.failing():
@@ -1961,49 +1934,6 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     let lhs = ctx.lowerExpr(n[0])
     if ctx.failing():
       return @[]
-    if n[1].kind in {nnkCall, nnkCommand}:
-      # destination-bound: the call binds directly to the assignment
-      let callee = n[1][0]
-      if callee.kind notin {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
-        ctx.fail("call callee " & callee.repr & " is not a proc symbol")
-        return @[]
-      # a magic callee lowers to the primitive operation as the right-hand side
-      if isBodilessMagic(callee):
-        let magic = nimMagicName(callee)
-        let arith = ctx.lowerMagicPrimitive(callee, n[1], magic)
-        if ctx.failing():
-          return @[]
-        if arith.isNil:
-          ctx.fail("magic call " & callee.repr & " (" & magic & ") is outside the supported set")
-          return @[]
-        return ctx.drainHoisted() & @[asgnS(lhs, arith)]
-      let calleeSym = ctx.resolveCallCallee(callee, n[1])
-      if ctx.failing():
-        return @[]
-      let numeric = ctx.numericBuiltinCall(calleeSym, n[1])
-      if ctx.failing():
-        return @[]
-      if numeric != nil:
-        return ctx.drainHoisted() & @[asgnS(lhs, numeric)]
-      let fnType = ctx.resolveCalleeProcType(calleeSym)
-      if ctx.failing():
-        return @[]
-      let (cirName, known) = ctx.resolveCallCalleeName(calleeSym)
-      if not hasPragmaNim(calleeSym, "builtin") and not known:
-        ctx.harvestProc(calleeSym, cirName)
-        if ctx.failing():
-          return @[]
-      let args = ctx.lowerCallArgs(calleeSym, n[1])
-      if ctx.failing():
-        return @[]
-      # a builtin callee emits the canonical native name, an instantiation hash would
-      # name a proc the backend never defines. Builtin-marking the callee symbol
-      # lets the alias canonicalization pass kind-assign from the canonical tables
-      let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
-      let calleeName = if calleeBuiltin: calleeSym.strVal
-                       else: cirName
-      return ctx.drainHoisted() & @[asgnS(lhs,
-        callE(sym(calleeName, fnType, calleeBuiltin), args))]
     let rhs = ctx.lowerExpr(n[1])
     if ctx.failing():
       return @[]
@@ -2020,7 +1950,17 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       var lhs = ctx.lowerExpr(n[1])
       if ctx.failing():
         return @[]
-      if lhs.kind == eAddr:
+      if containsCall(n[1]):
+        # Nim evaluates the desugared `op=` lvalue once, the shared tree
+        # prints twice: once as the arithmetic read, once as the store.
+        # Call-bearing operands bind into temps, both prints stay pure
+        if lhs.kind == eAddr:
+          # address targets assign through the location behind it,
+          # volatile operands live in that location tree
+          lhs = ctx.bindCallBearingOperands(lhs.addrOperand)
+        else:
+          lhs = ctx.bindCallBearingOperands(lhs)
+      elif lhs.kind == eAddr:
         # a var-returning `[]` hands the compound assignment the element's address
         # and the assignment target is the location behind it
         lhs = lhs.addrOperand
@@ -2153,7 +2093,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     return @[]
 
 proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  ## Translates one statement node, its hoists (fresh temps, call bindings) sitting in front of the statement.
+  ## Translates one statement node, the statements spliced by its expressions sitting in front of it.
   let body = ctx.lowerStmtBody(n)
   if ctx.failing():
     return @[]

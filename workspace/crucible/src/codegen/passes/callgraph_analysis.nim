@@ -29,56 +29,45 @@ import ./pass_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 
 proc directCalls(ss: seq[CirStmt], outp: var seq[CirExpr]) =
-  ## Call expressions of one statement list.
+  ## Call expressions of one statement list, in walk order.
   ##
-  ## A call value may appear in any operand position, including a loop condition
-  ## or a ternary branch.
+  ## A call value may appear in any operand position, every position is visited:
   ##
-  ## Sites collected: statement calls plus the right-hand sides of assignments,
-  ## declarations and returns.
-  ##
-  ## A loop condition or a ternary branch is not visited yet.
-  for s in ss:
-    case s.kind
-    of sCall:
-      outp.add CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
-    of sAsgn:
-      if s.rhs != nil and s.rhs.kind == eCall:
-        outp.add s.rhs
-    of sVar, sConst:
-      if s.init != nil and s.init.kind == eCall:
-        outp.add s.init
-    of sRet:
-      if s.retVal != nil and s.retVal.kind == eCall:
-        outp.add s.retVal
-    of sIte:
-      directCalls(s.thenBody, outp)
-      directCalls(s.elseBody, outp)
-    of sLoop:
-      directCalls(s.loopBody, outp)
-    of sScope:
-      directCalls(s.scopeBody, outp)
-    of sAssume, sDiscard, sCase, sAsm, sEmit:
-      discard
+  ## - statement calls
+  ## - assignment, declaration, and return values
+  ## - operands nested inside other calls
+  ## - loop conditions and ternary branches
+  var calls: seq[CirExpr]
+  let onStmt = proc(s: CirStmt) =
+    if s.kind == sCall:
+      calls.add CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
+  let onExpr = proc(e: CirExpr) =
+    if e != nil and e.kind == eCall:
+      calls.add e
+  ss.walkStmts(onStmt, onExpr)
+  outp = calls
 
 proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
-  ## Records the parameters `fn` stores through: an assignment whose target
-  ## roots at a parameter symbol, anywhere in the statement tree.
-  for s in ss:
+  ## Records the parameters `fn` stores through, anywhere in the statement tree:
+  ##
+  ## - an assignment whose target roots at a parameter symbol
+  ## - a statement call whose callee or argument roots at one
+  ##   (a var parameter that the callee stores through, or a buffer passed deeper)
+  ## - the verbatim text of an emit, which can name a buffer
+  var g = graph
+  proc markStored(root: CirExpr) =
+    if root != nil:
+      for p in fn.params:
+        if p.name == root.name:
+          g.stored.incl(fn.name & "/" & p.name)
+  let onStmt = proc(s: CirStmt) =
     case s.kind
     of sAsgn:
-      let root = exprRootSym(s.lhs)
-      if root != nil:
-        for p in fn.params:
-          if p.name == root.name:
-            graph.stored.incl(fn.name & "/" & p.name)
-    of sIte:
-      graph.scanStoredStmts(fn, s.thenBody)
-      graph.scanStoredStmts(fn, s.elseBody)
-    of sLoop:
-      graph.scanStoredStmts(fn, s.loopBody)
-    of sScope:
-      graph.scanStoredStmts(fn, s.scopeBody)
+      markStored(exprRootSym(s.lhs))
+    of sCall:
+      markStored(exprRootSym(s.callCallee))
+      for a in s.callArgs:
+        markStored(exprRootSym(a))
     of sEmit:
       # a store can hide in an emit: the verbatim text names the buffer,
       # every parameter the text mentions counts as stored
@@ -89,62 +78,39 @@ proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
         emitText.add op.name
       for p in fn.params:
         if p.typ.kind in {ctPtr, ctAptr} and emitText.contains(p.name):
-          graph.stored.incl(fn.name & "/" & p.name)
-    of sCall:
-      # a store can hide in a call-bound destination expression
-      let root = exprRootSym(s.callCallee)
-      if root != nil:
-        for p in fn.params:
-          if p.name == root.name:
-            graph.stored.incl(fn.name & "/" & p.name)
-      for a in s.callArgs:
-        let ar = exprRootSym(a)
-        if ar != nil:
-          for p in fn.params:
-            if p.name == ar.name:
-              graph.stored.incl(fn.name & "/" & p.name)
-    of sVar, sConst, sAssume, sRet, sDiscard, sCase, sAsm:
+          g.stored.incl(fn.name & "/" & p.name)
+    else:
       discard
+  ss.walkStmts(onStmt, nil)
+  graph = g
 
 proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
   ## Records one edge per call argument rooted at a parameter symbol:
-  ## `caller/arg -> callee/paramI`. Call sites match `directCalls`:
-  ## statement calls plus assignment, declaration and return right-hand sides.
-  for s in ss:
-    case s.kind
-    of sCall:
-      let calleeName = if s.callCallee.kind == eSym: s.callCallee.name else: ""
-      if calleeName.len > 0 and graph.procs.hasKey(calleeName):
-        let callee = graph.procs[calleeName]
-        for i, a in s.callArgs:
-          let root = exprRootSym(a)
-          if root == nil:
-            continue
-          for p in fn.params:
-            if p.name == root.name:
-              if i < callee.params.len:
-                graph.edges.add (fn.name, p.name, calleeName, callee.params[i].name)
-    of sAsgn:
-      if s.rhs != nil and s.rhs.kind == eCall:
-        graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.rhs.callee,
-          callArgs: s.rhs.args)])
-    of sVar, sConst:
-      if s.init != nil and s.init.kind == eCall:
-        graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.init.callee,
-          callArgs: s.init.args)])
-    of sRet:
-      if s.retVal != nil and s.retVal.kind == eCall:
-        graph.scanCallStmts(fn, @[CirStmt(kind: sCall, callCallee: s.retVal.callee,
-          callArgs: s.retVal.args)])
-    of sIte:
-      graph.scanCallStmts(fn, s.thenBody)
-      graph.scanCallStmts(fn, s.elseBody)
-    of sLoop:
-      graph.scanCallStmts(fn, s.loopBody)
-    of sScope:
-      graph.scanCallStmts(fn, s.scopeBody)
-    of sAssume, sDiscard, sCase, sAsm, sEmit:
-      discard
+  ## `caller/arg -> callee/paramI`.
+  ##
+  ## Call sites match `directCalls`, every operand position included,
+  ## each nested call contributes one edge.
+  var g = graph
+  proc record(callee: CirExpr, args: seq[CirExpr]) =
+    let calleeName = if callee != nil and callee.kind == eSym: callee.name else: ""
+    if calleeName.len == 0 or not g.procs.hasKey(calleeName):
+      return
+    let calleeFn = g.procs[calleeName]
+    for i, a in args:
+      let root = exprRootSym(a)
+      if root == nil or i >= calleeFn.params.len:
+        continue
+      for p in fn.params:
+        if p.name == root.name:
+          g.edges.add (fn.name, p.name, calleeName, calleeFn.params[i].name)
+  let onStmt = proc(s: CirStmt) =
+    if s.kind == sCall:
+      record(s.callCallee, s.callArgs)
+  let onExpr = proc(e: CirExpr) =
+    if e != nil and e.kind == eCall:
+      record(e.callee, e.args)
+  ss.walkStmts(onStmt, onExpr)
+  graph = g
 
 # ═══════════════════════════════════════════════════════════════════════
 # Read-write fixpoint and recursion refusal
