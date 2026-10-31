@@ -1,10 +1,10 @@
 ## Hand-built CIRv2: bit-reinterpret casts refuse the widths a printer cannot emit.
 ##
-## Test that each printer refuses a cast it cannot emit and keeps the 32-bit pairs
-## printing:
+## Test that each printer refuses a cast it cannot emit, while the 32-bit pairs
+## keep printing:
 ##
 ## - CUDA refuses a bit cast of/to a 16-bit float, sole coverage of `__float_as_uint` lives here, CUDA has no runtime on this host
-## - GLSL refuses a bit cast of/to a 64-bit float, its 32-bit pair launches and readbacks both cast directions in t_glsl_bit_cast.nim
+## - GLSL refuses a bit cast of/to a 64-bit float, its 32-bit pair launches and readbacks both cast directions
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

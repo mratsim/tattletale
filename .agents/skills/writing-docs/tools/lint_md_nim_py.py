@@ -248,8 +248,8 @@ SECTION_END_RE = re.compile(
     r"export|include)\b")
 
 # Emitted-text-assert rule (tests/codegen scope). Behavioral kernel tests
-# launch kernels and check readbacks. A string literal containment, scan, or
-# equality against the emitted shader source is what the testing rules ban.
+# launch kernels and check readbacks. A string literal containment, scan,
+# or equality against the emitted shader source is what the testing rules ban.
 #
 # Pin shapes:
 # - `"text" in expr` and `"text" notin expr`: a string literal
@@ -268,18 +268,18 @@ SECTION_END_RE = re.compile(
 # - a call wrapped across lines joins into one logical line first so that a literal on a continuation line still matches
 #
 # Tier: a hit on a line that also carries an assert keyword
-# (doAssert, check, assert, expect) is a violation, that line asserts on the
-# emitted source.
+# (doAssert, check, assert, expect) is a violation, that line asserts on
+# the emitted source.
 # A hit without one is an advisory naming the shape, a runtime dispatch never
 # asserts anything (`if "metal" in backendName`, `if backend == "metal"`).
 #
 # Legal shapes the anchors keep out: a plain identifier or a loop variable
 # on the left of `in` (`x in collected`, `for line in lines`), a call
 # whose argument carries no literal (`parts.contains(pair.control)`,
-# `src.count(name)`), a numeric comparison (`res[0] == 1'u32`), a numeric literal
-# list (`res[0] in [1'u32, 2'u32]`), a char argument (`rest.find(' ')`), a
-# literal call argument left of the comparison (`runScale("k16") == @[16.0'f32]`,
-# the closing parens keep the anchor out).
+# `src.count(name)`), a numeric comparison (`res[0] == 1'u32`),
+# a numeric literal list (`res[0] in [1'u32, 2'u32]`), a char argument
+# (`rest.find(' ')`), a literal call argument left of the comparison
+# (`runScale("k16") == @[16.0'f32]`, the closing parens keep the anchor out).
 #
 # Known blind spots (such sites stay on the reviewer):
 # - a literal folded into an identifier before the test
@@ -2201,8 +2201,8 @@ def _line_scan(raw, in_tq):
     """Scans one raw line under the incoming triple-quote state.
 
     Returns the code text with the comment removed, the net open-paren count
-    outside string literals, and the outgoing triple-quote state. A
-    triple-quoted literal spans lines: its interior is string data, so a `#`
+    outside string literals, and the outgoing triple-quote state.
+    A triple-quoted literal spans lines: its interior is string data, so a `#`
     inside it survives the cut and its parens stay uncounted, while the
     closing quote run hands the state back to the caller.
     """
@@ -2288,8 +2288,8 @@ def _logical_code_lines(text):
 
 
 def nim_emitted_text_assert_checks(path, text, findings):
-    """Flags string literal containments, scans, and equalities over emitted source in
-    tests/codegen.
+    """Flags string literal containments, scans, and equalities over emitted
+    source in tests/codegen.
 
     - `"text" in expr`, `"text" notin expr`, `.contains("text")`, the bare
       `contains(expr, "text")` form, a find/rfind/startsWith/endsWith/count
