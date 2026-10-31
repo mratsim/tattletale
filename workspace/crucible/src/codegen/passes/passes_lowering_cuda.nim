@@ -29,6 +29,7 @@
 
 import ../ir/cirv2_lang
 import ./pass_datatypes
+import ./passes_low_address_spaces
 import ./passes_low_array_assign
 import ./passes_low_reserved
 
@@ -45,3 +46,4 @@ func registerCudaLoweringPasses*(reg: var PassRegistry) =
   ## and before printing, the position every target uses.
   reg.registerDecomposeArrayAssign()
   reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
+  reg.registerInstantiateAddressSpaceGenerics()

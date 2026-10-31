@@ -48,6 +48,7 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_low_address_spaces
 import ./passes_low_array_assign
 import ./passes_low_kernel_params
 
@@ -89,6 +90,7 @@ func registerMslLoweringPasses*(reg: var PassRegistry) =
     " call sites forward the caller's values",
     run = mslThreadCoordinateBuiltins
   )
+  reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
 # Const_mem locals to program-scope constants

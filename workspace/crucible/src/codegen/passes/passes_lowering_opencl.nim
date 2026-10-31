@@ -35,6 +35,7 @@ import ../ir/cirv2_build
 import ./pass_datatypes
 import ./passes_low_kernel_params
 import ./pass_helpers
+import ./passes_low_address_spaces
 import ./passes_low_array_assign
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -61,6 +62,7 @@ func registerOpenclLoweringPasses*(reg: var PassRegistry) =
     "Passes large structs to device functions as hidden thread pointers",
     run = openclLowerByrefParams
   )
+  reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
 # Const_mem locals to program-scope constants

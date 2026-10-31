@@ -23,6 +23,7 @@
 ## | Control flow | `ite` conditions are bool                                                                |
 ## | Control flow | `case` ranges are disjoint literal ranges over an int/uint selector                      |
 ## | Calls        | `eCall` appears only as the whole RHS of `asgn`                                          |
+## | Calls        | a pointer call argument re-spaces only against a foreign (non-module) callee             |
 ## | Calls        | `sCall` appears only as a void statement                                                 |
 ## | Calls        | a call never appears under `and`/`or` or in any other operand position                   |
 ## | Returns      | `ret` matches the proc return type                                                       |
@@ -45,6 +46,9 @@ type
     targetedLabs: HashSet[string]
     pendingJmps: seq[PendingJmp]
     nextScopeId: int
+    modProcs: HashSet[string]
+    ## Callee names this verification treats as module procs: a pointer argument against one of them may not re-space.
+    ## Empty in the single-proc entries, which keep the birth-space rule for every callee.
 
   PendingJmp = object
     name: string
@@ -86,17 +90,29 @@ proc sameOrFails(ctx: var VerifyCtx, a, b: CirType, path: string, construct: str
     ctx.fail(path, construct,
       detail & ": got " & emitTypeDbg(a) & ", expected " & emitTypeDbg(b))
 
-proc callArgReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
-  ## Call-argument check under v1's birth-space rule: a pointer argument
-  ## may hold another address space than the formal states.
-  ## The call site re-spaces the argument to the formal's space.
-  ## The pointee type must match exactly.
+proc callArgReSpace(ctx: var VerifyCtx, a, b: CirType, path: string, calleeName: string) =
+  ## Call-argument check: the argument type must equal the parameter type.
+  ## A pointer argument may hold another address space than the formal states
+  ## only against a foreign callee.
+  ##
+  ## - a builtin such as `__builtin_memcpy` states a nominal pointer space
+  ## - the printers re-space that nominal space at the call site
+  ##
+  ## A module proc has no such escape.
+  ## The per-address-space instantiation pass gives every argument-space combination its own clone.
+  ## A surviving mismatch would print a cross-space call the target compiler rejects.
   if sameType(a, b):
     return
+  if calleeName notin ctx.modProcs and a.kind == b.kind and
+      a.kind in {ctPtr, ctAptr} and sameType(a.pElem, b.pElem):
+    return
   if a.kind == b.kind and a.kind in {ctPtr, ctAptr} and sameType(a.pElem, b.pElem):
+    ctx.fail(path, "call",
+      "pointer argument address space " & $a.space & " differs from the" &
+      " parameter space " & $b.space & " of " & calleeName)
     return
   ctx.fail(path, "call",
-    "argument type differs from the parameter type: got " &
+    "argument type differs from the parameter type of " & calleeName & ": got " &
     emitTypeDbg(a) & ", expected " & emitTypeDbg(b))
 
 proc retReSpace(ctx: var VerifyCtx, a, b: CirType, path: string) =
@@ -371,7 +387,9 @@ proc verifyExpr(ctx: var VerifyCtx, e: CirExpr, path: string, allowCall: bool): 
       let t = checkOperand(ctx, arg, path & ".arg[" & $i & "]", "call argument")
       if ctx.err.len > 0:
         return nil
-      callArgReSpace(ctx, t, calleeType.params[i], path & ".arg[" & $i & "]")
+      let calleeName = if e.callee.kind == eSym: e.callee.name else: ""
+      callArgReSpace(ctx, t, calleeType.params[i], path & ".arg[" & $i & "]",
+        calleeName)
       discard ctx.verifyExpr(arg, path & ".arg[" & $i & "]", false)
     result = calleeType.ret
 
@@ -394,11 +412,13 @@ proc verifyCallArgs(ctx: var VerifyCtx, callee: CirExpr, args: seq[CirExpr], pat
       "argument count " & $args.len & " differs from parameter count " &
       $calleeType.params.len)
     return
+  let calleeName = if callee.kind == eSym: callee.name else: ""
   for i, arg in args:
     let t = checkOperand(ctx, arg, path & ".arg[" & $i & "]", "call argument")
     if ctx.err.len > 0:
       return
-    callArgReSpace(ctx, t, calleeType.params[i], path & ".arg[" & $i & "]")
+    callArgReSpace(ctx, t, calleeType.params[i], path & ".arg[" & $i & "]",
+      calleeName)
     discard ctx.verifyExpr(arg, path & ".arg[" & $i & "]", false)
 
 proc isComparisonShaped(e: CirExpr): bool =
@@ -609,12 +629,14 @@ proc verifyStmtList(ctx: var VerifyCtx, body: seq[CirStmt], path: string, chain:
       return
     ctx.verifyStmt(s, path & "[" & $i & "]", chain)
 
-proc checkProc(fn: CirProc): string =
+proc checkProc(fn: CirProc, modProcs: HashSet[string] = initHashSet[string]()): string =
   ## Pure contract walk over one proc: "" when clean, else the rejection
   ## message body ("<construct> at <proc>/<path>: <detail>").
+  ## `modProcs` names the callees the pointer-space rule treats as module procs.
+  ## Empty in the single-proc entries.
   if fn.isNil:
     return "missing proc"
-  var ctx = VerifyCtx(fnName: fn.name, retType: fn.ret)
+  var ctx = VerifyCtx(fnName: fn.name, retType: fn.ret, modProcs: modProcs)
   var chain: ScopeChain = @[ctx.freshScope]
   for pi, p in fn.params:
     if p.typ.isNil or p.typ.kind == ctVoid:
@@ -673,8 +695,11 @@ proc verifyMessage*(m: CirModule): string =
       return "cirv2 verify: " & m.name & "/type[" & $i & "]: missing type"
     if t.kind == ctStruct and t.name.len == 0:
       return "cirv2 verify: " & m.name & "/type[" & $i & "]: struct without a name"
+  var modProcs: HashSet[string]
+  for fn in m.procs:
+    modProcs.incl fn.name
   for i, fn in m.procs:
-    let msg = checkProc(fn)
+    let msg = checkProc(fn, modProcs)
     if msg.len > 0:
       return "cirv2 verify: " & m.name & "/proc[" & $i & "]: " & msg
   for i, g in m.globals:

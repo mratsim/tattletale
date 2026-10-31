@@ -36,6 +36,7 @@ import std/[sets, tables]
 import ../ir/cirv2_lang
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_low_address_spaces
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -56,6 +57,7 @@ func registerGlslLoweringPasses*(reg: var PassRegistry) =
     " program scope",
     run = hoistProgramScopeLocals
   )
+  reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
 # Pointer dissolution

@@ -48,6 +48,7 @@ import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
+import ./passes_low_address_spaces
 import ./passes_low_kernel_params
 import ./pass_helpers
 
@@ -80,6 +81,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
     " program scope",
     run = hoistProgramScopeLocals
   )
+  reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
 # Pointer dissolution

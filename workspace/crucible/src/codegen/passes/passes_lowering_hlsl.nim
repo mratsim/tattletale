@@ -32,6 +32,7 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_low_address_spaces
 import ./passes_low_reserved
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -56,6 +57,7 @@ func registerHlslLoweringPasses*(reg: var PassRegistry) =
     "Relocates const_mem locals into the module's program scope",
     run = hlslHoistProgramScopeConstants
   )
+  reg.registerInstantiateAddressSpaceGenerics()
 
 
 
