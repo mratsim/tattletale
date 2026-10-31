@@ -1,11 +1,11 @@
-## WebGPU: address-space tagging of locals and pointer aliases, source-text asserts on the WGSL plus on-device runs.
+## WebGPU: address-space tagging of locals and pointer aliases, on-device runs.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/serialization/t_webgpu_address_space.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const addressSpaceWgsl = webgpu:
@@ -34,10 +34,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "unannotated locals emit no address-space template and run":
       var engine = newEngine(runWebGPU)
       engine.ingest(addressSpaceWgsl)
-      let src = engine.getArtifact()
-      check "<private>" notin src
-      check "var x: u32 = 7;" in src
-      check "var arr: array<u32, 4>;" in src
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("plainLocalKernel", oDev, ())
@@ -46,8 +42,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "let alias of a storage param keeps ptr<storage, ...> and runs":
       var engine = newEngine(runWebGPU)
       engine.ingest(addressSpaceWgsl)
-      let src = engine.getArtifact()
-      check "let p: ptr<storage, array<u32>, read_write> = (&output);" in src
       var res: array[2, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("paramAliasKernel", oDev, ())
@@ -57,9 +51,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "let alias of a smem var keeps ptr<workgroup, ...> and runs":
       var engine = newEngine(runWebGPU)
       engine.ingest(addressSpaceWgsl)
-      let src = engine.getArtifact()
-      check "var<workgroup> scratch: array<u32, 4>;" in src
-      check "let p: ptr<workgroup, u32> = (&scratch[" in src
       var res: array[4, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("smemAliasKernel", oDev, ())

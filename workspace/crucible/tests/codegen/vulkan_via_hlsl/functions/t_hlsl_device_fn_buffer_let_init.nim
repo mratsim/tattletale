@@ -8,7 +8,6 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_hlsl/functions/t_hlsl_device_fn_buffer_let_init.nim
 
-import std/strutils
 import workspace/crucible
 import workspace/crucible/tests/codegen/vulkan_via_hlsl/hlsl_testutils
 
@@ -24,9 +23,7 @@ const letInitHlsl = hlsl:
 proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
   # `counts` reaches the device fn only as a call argument inside a let initializer,
   # read-write classification flows to the kernel's buffer over the argument-flow edge.
-  doAssert letInitHlsl.contains("RWStructuredBuffer<uint> counts : register(u0, space0);"),
-    "the kernel buffer written only through the device fn call in the let" &
-    " initializer must bind read-write:\n" & letInitHlsl
+  # Binding reflection below asserts the read-write (non-NonWritable) binding.
   let bindings: seq[BindingExpectation] =
     @[("counts", 0, false), ("outBuf", 1, false)]
   discard compileCheck("device_fn_buffer_let_init", letInitHlsl, bindings)

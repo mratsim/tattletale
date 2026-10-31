@@ -35,11 +35,8 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   suite "OpenCL — max on basic types":
 
     test "float32/uint32/int max compile, run, and produce the right values":
-      # The fold must emit fmax/fmin for OpenCL floats — max/min are
-      # integer-only there and silently compute wrong values on float args.
-      check kernelCode.contains("fmax")
-      check kernelCode.contains("fmin")
-
+      # max/min are integer-only in OpenCL C and silently compute wrong
+      # values on float args. The readback below catches a wrong fold.
       var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
       var engine = newEngine(runOpenCL)
       engine.ingest(kernelCode)

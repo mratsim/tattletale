@@ -24,12 +24,6 @@ const passbyrefOpencl = opencl:
     output[0] = v
 
 proc runTest() =   # private: engines are destroyed at return
-  # A single-use struct local folds into its only reader (the call argument).
-  # Splicing leaves no named lvalue, so the pass-by-ref call site materializes
-  # its own temp and takes its address under `&`
-  doAssert passbyrefOpencl.contains("takeLarge((&"),
-    "Expected the pass-by-ref call site to take an lvalue address:\n" & passbyrefOpencl
-
   var engine = newEngine(runOpenCL)
   engine.ingest(passbyrefOpencl)
   let oDev = engine.allocDevice(uint32, 1)

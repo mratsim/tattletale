@@ -8,7 +8,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_glsl/functions/t_vulkan_inf_nan.nim
 
-import std/[math, strutils]
+import std/math
 import workspace/crucible
 
 const infNanGlsl = glsl:
@@ -23,12 +23,6 @@ const infNanGlsl = glsl:
 proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(infNanGlsl)
-  doAssert "uintBitsToFloat(0x7f800000u)" in engine.getArtifact(),
-    "the +inf literal did not emit the uintBitsToFloat bit pattern"
-  doAssert "uintBitsToFloat(0xff800000u)" in engine.getArtifact(),
-    "the -inf literal did not emit the uintBitsToFloat bit pattern"
-  doAssert "uintBitsToFloat(0x7fc00000u)" in engine.getArtifact(),
-    "the NaN literal did not emit the uintBitsToFloat bit pattern"
   let oDev = engine.allocDevice(float32, 3)
   engine.launchKernel("infNanKernel", oDev, ())
   var res: array[3, float32]

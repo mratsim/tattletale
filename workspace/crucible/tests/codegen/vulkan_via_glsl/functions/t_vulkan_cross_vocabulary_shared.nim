@@ -7,7 +7,6 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_glsl/functions/t_vulkan_cross_vocabulary_shared.nim
 
-import std/strutils
 import workspace/crucible
 
 const kernelCode = glsl:
@@ -20,12 +19,6 @@ const kernelCode = glsl:
     C[tid] = scratch[(tid + 1) mod 8]
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
-  # The shared array must print in the GLSL declaration position:
-  # `shared uint scratch[8]`, not `shared uint [8] scratch`.
-  doAssert "shared uint scratch[8]" in kernelCode,
-    "Vulkan shared-array emission missing:\n" & kernelCode
-  doAssert "barrier()" in kernelCode, "Vulkan barrier lowering missing:\n" & kernelCode
-
   var engine = newEngine(runVulkan)
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, 8)

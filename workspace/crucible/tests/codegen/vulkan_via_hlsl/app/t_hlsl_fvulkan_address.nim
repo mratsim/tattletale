@@ -8,7 +8,6 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_hlsl/app/t_hlsl_fvulkan_address.nim
 
-import std/strutils
 import workspace/crucible
 import workspace/crucible/tests/codegen/vulkan_via_hlsl/hlsl_testutils
 
@@ -20,13 +19,6 @@ const addVulkanHlsl = hlsl(fvVulkan):
 proc runTest() =   # private: the engine is destroyed at return
   # fvVulkan binds no descriptor resources: every parameter sits in the push block,
   # buffers as device addresses, so the compile check needs no binding expectations.
-  # Push-constant block plus BufferPointer accesses lock the flavor to the emitted text.
-  doAssert "vk::BufferPointer" in addVulkanHlsl,
-    "fvVulkan output has no BufferPointer access:\n" & addVulkanHlsl
-  doAssert "[[vk::push_constant]]" in addVulkanHlsl,
-    "fvVulkan output has no push-constant block:\n" & addVulkanHlsl
-  doAssert "[[vk::offset(8)]] uint64_t a;" in addVulkanHlsl,
-    "fvVulkan buffer members are not uint64_t on locked offsets:\n" & addVulkanHlsl
   let words = compileFvVulkanSpirV("fvvulkan_add", addVulkanHlsl)
   echo "  fvVulkan add: dxc -spirv + spirv-val ok, ", words.len, " words"
 

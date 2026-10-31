@@ -59,6 +59,7 @@ Rule table (rule | trigger | severity):
 | dump-identifier       | an identifier carrying dump in crucible or ceramic Nim code, dump mechanisms are debug-only and never committed, debugEcho inline, write at the call site, a macro can debugEcho result.toStrLit() | counted  |
 | crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
+| emitted-text-assert | a string literal containment in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -245,6 +246,22 @@ TYPE_DECL_RE = re.compile(
 SECTION_END_RE = re.compile(
     r"^\s*(?:proc|func|macro|iterator|template|converter|const|let|var|import|"
     r"export|include)\b")
+
+# The emitted-text-assert rule (tests/codegen scope). Behavioral kernel tests
+# launch kernels and check readbacks; a string literal containment asserts on
+# the emitted shader source instead, which the testing rules ban.
+#
+# - `"text" in expr` and `"text" notin expr`: a string literal on the left of
+#   the containment operators, an `&` concatenation that ends in a literal
+#   matches too (`prefix & " = OpTypeStruct" in line`)
+# - `.contains("text")` and `.contains(prefix & "text")`: a method-call
+#   containment whose argument carries a string literal
+# - legal shapes the left anchor keeps out: membership of a plain identifier
+#   or a loop variable (`x in collected`, `for line in lines`), a call whose
+#   argument carries no literal (`parts.contains(pair.control)`)
+TEXT_PIN_IN_RE = re.compile(
+    r'(?<![\w"])(?:\br)?"(?:\\.|[^"\\])*"\s+(?:not\s*)?in\b')
+TEXT_PIN_CONTAINS_RE = re.compile(r'\.\s*contains\s*\([^)]*"')
 
 # Temporal and history narration (the narration rule).
 # Each entry carries the pattern plus a one-line hint.
@@ -577,6 +594,8 @@ RULES = {
                             "the call site, a macro can debugEcho result.toStrLit()"),
     "license-driveby": Rule("license-driveby", True,
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
+    "emitted-text-assert": Rule("emitted-text-assert", True,
+                                "a string literal containment in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
     "diag-downgrade": Rule("diag-downgrade", True,
@@ -2131,6 +2150,75 @@ def check_license_driveby(path, text, findings):
             "the header or split the change"))
 
 
+def _code_part(raw):
+    """Returns the code text of one raw line with the comment removed.
+
+    A `#` starts a comment only outside a string literal, so an emitted-text
+    literal that carries `#` (`"#pragma unroll"`) survives the cut.
+    """
+    out = []
+    i, n = 0, len(raw)
+    in_str = False
+    while i < n:
+        c = raw[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(raw[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "#" and (i == 0 or raw[i - 1] in " \t#"):
+            break
+        out.append(c)
+        i += 1
+    return "".join(out).rstrip()
+
+
+def nim_emitted_text_assert_checks(path, text, findings):
+    """Flags string literal containments on emitted source in tests/codegen.
+
+    - `"text" in expr`, `"text" notin expr`, and the `.contains("text")`
+      method call assert on the emitted shader source; the testing rules
+      ban that surface, a behavioral test launches the kernel and checks
+      the readback
+    - the left anchor keeps the legal shapes out: a plain identifier or a
+      loop variable on the left of `in` (`x in collected`,
+      `for line in lines`) and a `.contains(x)` call with no literal in
+      its argument never match
+    """
+    if "tests" not in path.parts or "codegen" not in path.parts:
+        return
+    blocked = nim_block_comment_lines(text)
+    for i, raw in enumerate(text.splitlines()):
+        if (i + 1) in blocked:
+            continue
+        code = _code_part(raw)
+        if not code.strip():
+            continue
+        hit = None
+        m = TEXT_PIN_IN_RE.search(code)
+        if m:
+            op = "notin" if "notin" in m.group(0) else "in"
+            hit = "%s %s" % (m.group(0).split()[0], op)
+        elif TEXT_PIN_CONTAINS_RE.search(code):
+            hit = ".contains(<literal>)"
+        if hit:
+            findings.append(Finding(
+                path, i + 1, "emitted-text-assert",
+                "string literal containment (%s) asserts on the emitted "
+                "source, delete the assertion and keep the launch and the "
+                "readback" % hit))
+
+
 def scan(path, text, findings):
     """Runs every rule over one file's prose, appending to findings."""
     entries, meta = extract(path, text)
@@ -2179,6 +2267,7 @@ def scan(path, text, findings):
             nim_except_rewrap_checks(path, text, findings)
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
+            nim_emitted_text_assert_checks(path, text, findings)
             nim_callable_semicolon_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
             check_license_driveby(path, text, findings)

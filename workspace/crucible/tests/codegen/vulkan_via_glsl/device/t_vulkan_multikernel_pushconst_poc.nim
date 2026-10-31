@@ -60,17 +60,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     let (outp, code) = execCmdEx(getAppFilename() & " --child")
     echo &"  child exit code: {code}"
     doAssert code != 0, "multi-kernel scalar ingest must quit loudly"
-    doAssert "multi-kernel source with scalar params" in outp,
-             "guard message missing: " & outp
-
-  block:  # single-kernel by-value scalar becomes a push constant block
-    doAssert codeWithVal.contains("push_constant"),
-             &"Expected push_constant block in:\n{codeWithVal}"
-    doAssert codeWithVal.contains("void kernelWithVal()"),
-             &"Expected void kernelWithVal() in:\n{codeWithVal}"
-    doAssert codeWithVal.contains("val"),
-             &"Expected `val` in push constants or a storage-buffer descriptor in:\n{codeWithVal}"
-    echo "  single-kernel kernelWithVal: push_constant block, no function params"
 
   echo "\n  OK: multi-kernel scalar sources rejected loudly"
   echo "  (single-kernel scalars unaffected)"

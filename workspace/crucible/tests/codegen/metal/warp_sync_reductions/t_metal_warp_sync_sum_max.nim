@@ -6,7 +6,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/warp_sync_reductions/t_metal_warp_sync_sum_max.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const scalarMsl = metal:
@@ -59,9 +59,6 @@ const maxPartialsMsl = metal:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Metal - warp-synchronous sum and max":
-
-    test "reduceAdd emits simd_sum":
-      check "simd_sum(" in scalarMsl
 
     test "scalar reduce sums the 32 lanes and broadcasts to each":
       var engine = newEngine(runMetal)

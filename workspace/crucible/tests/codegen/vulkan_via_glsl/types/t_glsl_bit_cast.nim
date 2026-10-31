@@ -1,13 +1,12 @@
 ## GLSL: the bit-reinterpret cast emits the float-bits builtins and reinterprets bits.
 ##
-## Test that `cast[uint32](f)` and `cast[float32](u)` emit `floatBitsToUint`/`uintBitsToFloat`, not the `T()` constructor,
-## and that the launched kernel returns the host cast's bit pattern, not a numeric conversion.
+## Test that the launched kernel returns the host cast's bit pattern.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_glsl/types/t_glsl_bit_cast.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const bitsToUintGlsl = glsl:
@@ -24,12 +23,6 @@ const uintToBitsGlsl = glsl:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "GLSL - bit-reinterpret cast emission":
-
-    test "cast[uint32](float) emits floatBitsToUint":
-      check "floatBitsToUint(" in bitsToUintGlsl
-
-    test "cast[float32](uint32) emits uintBitsToFloat":
-      check "uintBitsToFloat(" in uintToBitsGlsl
 
     test "cast[uint32](float) reinterprets the bits on the device":
       # host cast is the independent truth: -2.0-lane gives

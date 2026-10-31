@@ -7,7 +7,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/atomic_fetch_add/t_metal_atomic_fetch_add.nim
 
-import std/[strutils, unittest, algorithm]
+import std/[unittest, algorithm]
 import workspace/crucible
 
 const addFpMsl = metal:
@@ -30,9 +30,6 @@ const addMultiTgMsl = metal:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "Metal - atomicFetchAdd":
-
-    test "atomicFetchAdd emits atomic_fetch_add_explicit over an atomic_float cast":
-      check "atomic_fetch_add_explicit((volatile device atomic_float*)" in addFpMsl
 
     test "fp: 32 lanes add 1.0, each reads a distinct old value 0..31":
       var engine = newEngine(runMetal)

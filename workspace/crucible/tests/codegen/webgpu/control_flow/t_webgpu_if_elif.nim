@@ -5,7 +5,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/webgpu/control_flow/t_webgpu_if_elif.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const elifWgsl = webgpu:
@@ -35,13 +35,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   suite "WebGPU - if/elif/else statement lowering":
 
     test "elif chain reaches the device: all four branches distinct":
-      # Emitted shape: every branch condition present, in source order, as an `else if` chain.
-      doAssert "if (((&x)[0] == 0)) {" in elifWgsl
-      doAssert "else if (((&x)[0] == 1)) {" in elifWgsl
-      doAssert "else if (((&x)[0] == 2)) {" in elifWgsl
-      doAssert elifWgsl.find("else if (((&x)[0] == 1))") < elifWgsl.find("else if (((&x)[0] == 2))")
-      for v in ["(&output)[0] = 10;", "(&output)[0] = 20;", "(&output)[0] = 30;", "(&output)[0] = 40;"]:
-        doAssert v in elifWgsl
       var engine = newEngine(runWebGPU)
       engine.ingest(elifWgsl)
       var res: array[1, int32]
@@ -68,9 +61,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, res.len)
       check res[0] == 40
 
-    test "no else in source emits no else block":
-      doAssert "else if (((&x)[0] == 1)) {" in noElseWgsl
-      doAssert "else {" notin noElseWgsl
+    test "no else in source leaves the sentinel standing on no match":
       var engine = newEngine(runWebGPU)
       engine.ingest(noElseWgsl)
       var res: array[1, int32]

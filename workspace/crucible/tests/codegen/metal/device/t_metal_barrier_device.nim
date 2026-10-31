@@ -22,12 +22,9 @@ const deviceExchangeMsl = metal:
 proc runTest() =
   suite "Metal - device-scope barrier":
 
-    test "threadgroup_barrier_device emits the mem_device spelling and runs":
+    test "threadgroup_barrier_device orders the device exchange and runs":
       var engine = newEngine(runMetal)
       engine.ingest(deviceExchangeMsl)
-      let msl = engine.getArtifact()
-      check "threadgroup_barrier(mem_flags::mem_device)" in msl
-      check "threadgroup_barrier(mem_flags::mem_threadgroup)" notin msl
       let oDev = engine.allocDevice(uint32, 128)
       engine.launchKernel<<(grid: (2, 1), blk: (64, 1))>>("deviceExchangeKernel", oDev, ())
       var res: array[128, uint32]

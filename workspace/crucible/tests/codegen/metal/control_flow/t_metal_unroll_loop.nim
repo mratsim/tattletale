@@ -1,14 +1,12 @@
 ## Metal: `{.unroll.}` marks a device loop for full unrolling
 ##
-## Test that a kernel with an `{.unroll.}`-marked loop emits the clang
-## full-unroll directive and computes the right result
+## Test that a kernel with an `{.unroll.}`-marked loop computes the right result
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_unroll_loop.nim
 
-import std/strutils
 import workspace/crucible
 
 const unrollMsl = metal:
@@ -20,9 +18,6 @@ const unrollMsl = metal:
 proc runTest() =
   var engine = newEngine(runMetal)
   engine.ingest(unrollMsl)
-  # the directive locks the construct to the artifact
-  doAssert "#pragma clang loop unroll(full)" in engine.getArtifact(),
-    "the unroll directive is missing:\n" & engine.getArtifact()
   let oDev = engine.allocDevice(uint32, 4)
   engine.launchKernel("unrollKernel", oDev, ())
   var res: array[4, uint32]

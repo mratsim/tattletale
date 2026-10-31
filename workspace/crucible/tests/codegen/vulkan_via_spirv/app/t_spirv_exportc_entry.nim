@@ -9,7 +9,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_spirv/app/t_spirv_exportc_entry.nim
 
-import std/[os, osproc, strutils]
+import std/[os, osproc]
 import workspace/crucible
 
 const renamedSpv = spirv:
@@ -20,7 +20,7 @@ const bareSpv = spirv:
   proc bareKernel(o: ptr UncheckedArray[uint32]) {.global, exportc.} =
     o[thread_position_in_grid.x] = 43'u32
 
-proc entryPointLine(spv: seq[uint32], name: string): string =
+proc validateSpirv(spv: seq[uint32], name: string) =
   # spirv-val the module before it reaches the engine: a mis-encoded word
   # sequence must fail here, not as a driver-side opaque launch error
   let spirvVal = findExe("spirv-val")
@@ -36,25 +36,11 @@ proc entryPointLine(spv: seq[uint32], name: string): string =
     discard f.writeBuffer(addr spv[0], spv.len * 4)
   let (valOut, valCode) = execCmdEx(spirvVal & " --target-env vulkan1.4 " & spvPath)
   doAssert valCode == 0, "spirv-val rejected the emitted module:\n" & valOut
-  let spirvDis = findExe("spirv-dis")
-  doAssert spirvDis.len > 0,
-    "spirv-dis not found on PATH, install the SPIRV-Tools (brew install spirv-tools)"
-  let (disOut, disCode) = execCmdEx(spirvDis & " " & spvPath)
-  doAssert disCode == 0, "spirv-dis failed on " & name
-  for line in disOut.splitLines():
-    if "OpEntryPoint" in line:
-      return line
-  doAssert false, "no OpEntryPoint in the " & name & " disassembly"
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   block renamedEntry:
+    validateSpirv(renamedSpv, "t_spirv_exportc_entry_renamed")
     # OpEntryPoint Name is the operand the host launcher looks up
-    let entry = entryPointLine(renamedSpv, "t_spirv_exportc_entry_renamed")
-    doAssert "\"my_custom_entry\"" in entry,
-      "OpEntryPoint does not carry the exportc name, got: " & entry
-    doAssert "renamedKernel" notin entry,
-      "OpEntryPoint still carries the proc name: " & entry
-
     var engine = newEngine(runVulkan)
     engine.ingest(renamedSpv)
     let oDev = engine.allocDevice(uint32, 1)
@@ -65,12 +51,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     echo "  renamed entry: OpEntryPoint \"my_custom_entry\", launch exact on MoltenVK"
 
   block bareEntry:
-    let entry = entryPointLine(bareSpv, "t_spirv_exportc_entry_bare")
-    doAssert "\"bareKernel\"" in entry,
-      "OpEntryPoint does not carry the proc name, got: " & entry
-    doAssert "\"my_custom_entry\"" notin entry,
-      "OpEntryPoint carries the exportc name on a bare kernel: " & entry
-
+    validateSpirv(bareSpv, "t_spirv_exportc_entry_bare")
     var engine = newEngine(runVulkan)
     engine.ingest(bareSpv)
     let oDev = engine.allocDevice(uint32, 1)

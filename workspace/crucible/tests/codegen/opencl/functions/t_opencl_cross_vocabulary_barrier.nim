@@ -17,10 +17,6 @@ const kernelCode = opencl:
     C[tid] = scratch[(tid + 1) mod 8]
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
-  # The zero-arg barrier must lower to the OpenCL flags barrier.
-  doAssert "barrier(CLK_LOCAL_MEM_FENCE)" in kernelCode,
-    "OpenCL barrier lowering missing:\n" & kernelCode
-
   var engine = newEngine(runOpenCL)
   engine.ingest(kernelCode)
   var res: array[8, uint32]

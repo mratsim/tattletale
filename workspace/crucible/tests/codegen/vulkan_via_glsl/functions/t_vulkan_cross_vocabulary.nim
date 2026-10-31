@@ -8,7 +8,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_glsl/functions/t_vulkan_cross_vocabulary.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const kernel2d = glsl:
@@ -35,11 +35,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "CUDA + OpenCL idioms agree; flat local is native; barrier runs":
       var engine = newEngine(runVulkan)
       engine.ingest(kernel2d)
-      # The generated GLSL source (the `glsl:` macro output) must carry
-      # the native flat-index spelling. The Vulkan engine's getArtifact
-      # returns compiled SPIR-V instead of source text, so the source is
-      # grepped directly.
-      check "gl_LocalInvocationIndex" in kernel2d
       let oDev = engine.allocDevice(uint32, 72)
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("crossVocab2d", oDev, ())
       var res: array[64 + 8, uint32]

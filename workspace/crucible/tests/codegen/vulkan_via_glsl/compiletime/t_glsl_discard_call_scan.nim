@@ -8,7 +8,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_glsl/compiletime/t_glsl_discard_call_scan.nim
 
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const discardScanGlsl = glsl:
@@ -20,9 +20,6 @@ const discardScanGlsl = glsl:
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   suite "GLSL - feature scan under discard":
-
-    test "a subgroup call under discard selects the subgroup extension":
-      check "#extension GL_KHR_shader_subgroup_basic : enable" in discardScanGlsl
 
     test "the discarded reduction does not stop the store, the kernel runs on the device":
       var engine = newEngine(runVulkan)

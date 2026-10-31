@@ -2,7 +2,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/cuda/serialization/t_cuda_address_space.nim
-import std/[strutils, unittest]
+import std/unittest
 import workspace/crucible
 
 const addressSpaceCuda = cuda:
@@ -17,10 +17,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     test "unannotated locals emit no qualifier, smem keeps __shared__, and run":
       var engine = newEngine(runCuda)
       engine.ingest(addressSpaceCuda)
-      let src = engine.getArtifact()
-      check "__local__" notin src
-      check "unsigned int x = 7;" in src
-      check "__shared__ unsigned int scratch[8];" in src
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("addressSpaceKernel", oDev, ())

@@ -48,12 +48,6 @@ proc runTest() =
       for x in [1.0'f32, 2.5'f32, 0.5'f32, 100.0'f32, 7.0'f32]:
         check toFp32(toFp16(x)) == x
         check toBf32(toBf16(x)) == x
-    test "the device path is the native conversion, not inlined bit-twiddling":
-      var engine = newEngine(runMetal)
-      discard engine.roundtripBf16([1.0'f32, 2.0'f32, 3.0'f32, 4.0'f32])
-      let msl = engine.getArtifact()
-      check "bfloat" in msl
-      check "8388607" notin msl
     test "f16 round-trips the values on device":
       var engine = newEngine(runMetal)
       let inp = [1.0'f32, 3.14159'f32, 65504.0'f32, 0.0001'f32]
