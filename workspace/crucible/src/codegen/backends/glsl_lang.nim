@@ -360,6 +360,9 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eAnd, eOr:
     let op = if e.kind == eAnd: "&&" else: "||"
     return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
+  of eTernary:
+    return "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
+      " : " & ctx.printExpr(e.elseE) & ")"
   of eBitNot:
     return "(~" & ctx.printExpr(e.unOperand) & ")"
   of eNeg:
@@ -612,7 +615,11 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
         spaces(ctx.indent * 2) & "[[unroll]]\n"
       else:
         ""
-      txt = directive & spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
+      let head = if s.loopCond != nil:
+        "while (" & ctx.printExpr(s.loopCond) & ") {\n"
+      else:
+        "for (;;) {\n"
+      txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
         spaces(ctx.indent * 2) & '}'
       if lExit.len > 0:
         i.inc  # exit label, consumed
@@ -727,6 +734,10 @@ proc registerExprRefBlocks(ctx: var PrintCtx, e: CirExpr) =
   of eAnd, eOr:
     ctx.registerExprRefBlocks(e.andLeft)
     ctx.registerExprRefBlocks(e.andRight)
+  of eTernary:
+    ctx.registerExprRefBlocks(e.cond)
+    ctx.registerExprRefBlocks(e.thenE)
+    ctx.registerExprRefBlocks(e.elseE)
   of eEq, eNeq, eLt, eLe:
     ctx.registerExprRefBlocks(e.a)
     ctx.registerExprRefBlocks(e.b)
@@ -759,6 +770,7 @@ proc registerStmtRefBlocks(ctx: var PrintCtx, ss: seq[CirStmt]) =
       ctx.registerStmtRefBlocks(s.thenBody)
       ctx.registerStmtRefBlocks(s.elseBody)
     of sLoop:
+      ctx.registerExprRefBlocks(s.loopCond)
       ctx.registerStmtRefBlocks(s.loopBody)
     of sCase:
       ctx.registerExprRefBlocks(s.selector)

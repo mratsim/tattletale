@@ -201,6 +201,7 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
       s.thenBody.substituteArgsStmts(subst)
       s.elseBody.substituteArgsStmts(subst)
     of sLoop:
+      s.loopCond.substituteArgsExpr(subst)
       s.loopBody.substituteArgsStmts(subst)
     of sCase:
       s.selector.substituteArgsExpr(subst)
@@ -586,6 +587,9 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
       return terr
     return rewriteDissolveStmts(fn, ctx, s.elseBody)
   of sLoop:
+    let cerr = rewriteDissolveExpr(fn, ctx, s.loopCond)
+    if cerr.len > 0:
+      return cerr
     return rewriteDissolveStmts(fn, ctx, s.loopBody)
   of sScope:
     return rewriteDissolveStmts(fn, ctx, s.scopeBody)
@@ -682,6 +686,7 @@ proc rewriteBoolReadsStmts(ss: var seq[CirStmt], boolParams: HashSet[string]) =
       rewriteBoolReadsStmts(s.thenBody, boolParams)
       rewriteBoolReadsStmts(s.elseBody, boolParams)
     of sLoop:
+      rewriteBoolReadsExpr(s.loopCond, boolParams)
       rewriteBoolReadsStmts(s.loopBody, boolParams)
     of sScope:
       rewriteBoolReadsStmts(s.scopeBody, boolParams)

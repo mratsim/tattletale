@@ -129,6 +129,8 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
     of sLoop:
       if profile.unrollAttr and s.unroll:
         f.controlFlow = true
+      if s.loopCond != nil:
+        scanExpr(s.loopCond, f, profile)
       scanStmts(s.loopBody, f, profile)
     of sScope:
       scanStmts(s.scopeBody, f, profile)
@@ -253,6 +255,8 @@ proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
       cudaScanStmts(s.thenBody, f)
       cudaScanStmts(s.elseBody, f)
     of sLoop:
+      if s.loopCond != nil:
+        cudaScanExpr(s.loopCond, f)
       cudaScanStmts(s.loopBody, f)
     of sScope:
       cudaScanStmts(s.scopeBody, f)

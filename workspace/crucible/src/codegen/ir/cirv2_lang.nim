@@ -11,8 +11,10 @@
 ## The shape encodes the normal form:
 ##
 ## - control flow is statement-based
-## - `loop` has no condition slot
-## - calls bind to their destination: a call exists only as a statement or as the RHS of `asgn`
+## - `loop` takes an optional condition, a nil loopCond keeps the conditionless
+##   shape that every target already emits
+## - a call is an ordinary expression node: the builders bind statement calls
+##   through `sCall` and value calls appear in any operand position
 ## - every typed operation states its type in the `(add Type a b)` discipline of the Leng grammar
 ##
 ## The frontend refuses a construct that it cannot lower. The validation passes
@@ -120,8 +122,15 @@ type
     origin*: NimNode
 
   CirExprKind* = enum
-    ## Expression vocabulary, Leng names. `eCall` exists so a call can bind
-    ## to its destination as the RHS of `asgn`. The call builders emit it in that position only.
+    ## Expression vocabulary, Leng names.
+    ##
+    ## `eCall` is an ordinary value node, statement-position calls stay `sCall`
+    ## and a call result may appear in any operand position:
+    ##
+    ## - a comparison operand
+    ## - an `and`/`or` operand
+    ## - a ternary branch
+    ## - a loop condition
     eNil
     eTrue
     eFalse
@@ -151,6 +160,7 @@ type
     eNeg
     eAnd
     eOr
+    eTernary
     eCast
     eConv
     eAddr
@@ -163,8 +173,9 @@ type
     ## A CIRv2 expression tree.
     ##
     ## Typed ops state their type in `opType` or the per-branch type field,
-    ## comparisons state their operand type and yield `bool`, and `and`/`or`
-    ## are pure bool operators over side-effect-free operands.
+    ## comparisons state their operand type and yield `bool`,
+    ## `ternary` states its own type,
+    ## and `and`/`or` combine bool operands into a bool result value.
     case kind*: CirExprKind
     of eNil:
       nilType*: CirType
@@ -218,6 +229,9 @@ type
       notOperand*: CirExpr
     of eAnd, eOr:
       andLeft*, andRight*: CirExpr
+    of eTernary:
+      ternType*: CirType
+      cond*, thenE*, elseE*: CirExpr
     of eCast, eConv:
       castType*: CirType
       castOperand*: CirExpr
@@ -279,7 +293,8 @@ type
     ##
     ## Control flow is statement-based:
     ## - `ite` takes a bool condition and two statement lists
-    ## - `loop` is conditionless: the shape has no condition slot
+    ## - `loop` takes an optional bool condition in `loopCond`, a nil loopCond
+    ##   keeps the conditionless shape that every target already emits
     ## - `lab`/`jmp` are forward-only and scoped, `scope` gives destructor discipline
     ## - a `var` states the memory class of its declaration in `space`, `const` ignores `space`
     ##   (`caThread` is per-thread registers and the unannotated default)
@@ -295,6 +310,9 @@ type
       cond*: CirExpr
       thenBody*, elseBody*: seq[CirStmt]
     of sLoop:
+      loopCond*: CirExpr
+      ## Only `whileS` sets `loopCond`. The loop stays structured, no label may target
+      ## into or out of a conditioned loop body.
       loopBody*: seq[CirStmt]
       unroll*: bool
       ## `{.unroll.}` statement in the loop body: every printer emits a full-unroll directive in front of the loop.
@@ -584,6 +602,8 @@ proc getExprType*(e: CirExpr): CirType =
     result = e.unType
   of eEq, eNeq, eLt, eLe, eNot, eAnd, eOr:
     result = CirType(kind: ctBool)
+  of eTernary:
+    result = e.ternType
   of eCast, eConv:
     result = e.castType
   of eAddr:
@@ -645,6 +665,7 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
     result = @[e.left, e.right]
   of eEq, eNeq, eLt, eLe: result = @[e.a, e.b]
   of eAnd, eOr: result = @[e.andLeft, e.andRight]
+  of eTernary: result = @[e.cond, e.thenE, e.elseE]
   of eNot: result = @[e.notOperand]
   of eNeg, eBitNot: result = @[e.unOperand]
   of eCast, eConv: result = @[e.castOperand]

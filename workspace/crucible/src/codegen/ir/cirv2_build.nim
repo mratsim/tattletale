@@ -9,9 +9,9 @@
 ##
 ## Builders produce well-shaped nodes by construction:
 ##
-## - typed ops get their type from the caller
+## - typed ops and ternaries get their type from the caller
 ## - comparisons derive their operand type from the first operand
-## - calls exist only as statements (`callS`) or destination-bound expressions (`callE`)
+## - statement calls go through `callS`
 ##
 ## A construct that the builders cannot express correctly has no node: build no such shape.
 
@@ -160,6 +160,15 @@ proc andE*(left, right: CirExpr): CirExpr =
 proc orE*(left, right: CirExpr): CirExpr =
   CirExpr(kind: eOr, andLeft: left, andRight: right)
 
+proc ternaryE*(ternType: CirType, cond, thenE, elseE: CirExpr): CirExpr =
+  ## A conditional value, `cond` selects between `thenE` and `elseE`.
+  ##
+  ## Args:
+  ## - `ternType` types the node and both branches
+  ## - printers emit the target's conditional-value form: a `?:` operator
+  ##   where one exists, `select(elseE, thenE, cond)` on WGSL
+  CirExpr(kind: eTernary, ternType: ternType, cond: cond, thenE: thenE, elseE: elseE)
+
 proc castE*(typ: CirType, operand: CirExpr): CirExpr =
   CirExpr(kind: eCast, castType: typ, castOperand: operand)
 
@@ -182,7 +191,8 @@ proc aconstrE*(typ: CirType, elems: varargs[CirExpr]): CirExpr =
   CirExpr(kind: eAconstr, acType: typ, elems: @elems)
 
 proc callE*(callee: CirExpr, args: varargs[CirExpr]): CirExpr =
-  ## A call bound to its destination: legal only as the RHS of `asgn`.
+  ## A call in value position: its result may sit in any operand slot
+  ## (see the `eCall` contract in cirv2_lang). Statement-position calls use `callS`.
   CirExpr(kind: eCall, callee: callee, args: @args)
 
 # Statement constructors
@@ -203,8 +213,19 @@ proc iteS*(cond: CirExpr, thenBody: seq[CirStmt], elseBody: seq[CirStmt] = @[]):
   CirStmt(kind: sIte, cond: cond, thenBody: thenBody, elseBody: elseBody)
 
 proc loopS*(loopBody: seq[CirStmt], unroll = false): CirStmt =
-  ## `unroll` marks a `{.unroll.}`-hinted loop: every printer emits a full-unroll directive in front of it.
+  ## A conditionless loop, `unroll` marks a `{.unroll.}`-hinted loop.
+  ## A set `unroll` makes every printer emit a full-unroll directive in front of the loop.
   CirStmt(kind: sLoop, loopBody: loopBody, unroll: unroll)
+
+proc whileS*(cond: CirExpr, loopBody: seq[CirStmt], unroll = false): CirStmt =
+  ## A loop re-testing `cond` before every iteration.
+  ##
+  ## Args:
+  ## - `cond` is an ordinary expression, calls may appear in it
+  ## - the body may not jump into or out of the loop by label
+  ## - the structured targets own the loop exits
+  doAssert cond != nil, "whileS: a conditioned loop takes a condition, use loopS"
+  CirStmt(kind: sLoop, loopCond: cond, loopBody: loopBody, unroll: unroll)
 
 proc rng*(lo, hi: int64): CirRange =
   CirRange(lo: lo, hi: hi)

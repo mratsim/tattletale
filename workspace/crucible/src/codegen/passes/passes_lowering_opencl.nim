@@ -143,6 +143,10 @@ proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
   of eAnd, eOr:
     wrapParamReads(e.andLeft, oldName, ptrSym)
     wrapParamReads(e.andRight, oldName, ptrSym)
+  of eTernary:
+    wrapParamReads(e.cond, oldName, ptrSym)
+    wrapParamReads(e.thenE, oldName, ptrSym)
+    wrapParamReads(e.elseE, oldName, ptrSym)
   of eCast, eConv:
     wrapParamReads(e.castOperand, oldName, ptrSym)
   of eAddr:
@@ -218,6 +222,10 @@ proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int) =
   of eAnd, eOr:
     addrWrapByrefArgs(e.andLeft, pre, tmpCount)
     addrWrapByrefArgs(e.andRight, pre, tmpCount)
+  of eTernary:
+    addrWrapByrefArgs(e.cond, pre, tmpCount)
+    addrWrapByrefArgs(e.thenE, pre, tmpCount)
+    addrWrapByrefArgs(e.elseE, pre, tmpCount)
   of eCast, eConv:
     addrWrapByrefArgs(e.castOperand, pre, tmpCount)
   of eAddr:
@@ -244,6 +252,7 @@ proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int) =
     addrWrapByrefStmts(s.thenBody, tmpCount)
     addrWrapByrefStmts(s.elseBody, tmpCount)
   of sLoop:
+    addrWrapByrefArgs(s.loopCond, pre, tmpCount)
     addrWrapByrefStmts(s.loopBody, tmpCount)
   of sCase:
     addrWrapByrefArgs(s.selector, pre, tmpCount)
@@ -331,6 +340,7 @@ proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =
       wrapParamReadsProc(st.thenBody, oldName, ptrSym)
       wrapParamReadsProc(st.elseBody, oldName, ptrSym)
     of sLoop:
+      wrapParamReads(st.loopCond, oldName, ptrSym)
       wrapParamReadsProc(st.loopBody, oldName, ptrSym)
     of sCase:
       wrapParamReads(st.selector, oldName, ptrSym)
@@ -388,6 +398,10 @@ proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
   of eAnd, eOr:
     retargetProcTypeSyms(e.andLeft, newFormals)
     retargetProcTypeSyms(e.andRight, newFormals)
+  of eTernary:
+    retargetProcTypeSyms(e.cond, newFormals)
+    retargetProcTypeSyms(e.thenE, newFormals)
+    retargetProcTypeSyms(e.elseE, newFormals)
   of eCast, eConv:
     retargetProcTypeSyms(e.castOperand, newFormals)
   of eAddr:
@@ -416,6 +430,7 @@ proc retargetProcTypeStmts(stmts: seq[CirStmt], newFormals: Table[string, seq[Ci
       retargetProcTypeStmts(st.thenBody, newFormals)
       retargetProcTypeStmts(st.elseBody, newFormals)
     of sLoop:
+      retargetProcTypeSyms(st.loopCond, newFormals)
       retargetProcTypeStmts(st.loopBody, newFormals)
     of sCase:
       retargetProcTypeSyms(st.selector, newFormals)

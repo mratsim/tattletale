@@ -237,6 +237,7 @@ proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
       s.thenBody.rewriteSpanUsesStmts(ctx, err)
       s.elseBody.rewriteSpanUsesStmts(ctx, err)
     of sLoop:
+      s.loopCond.rewriteSpanUsesExpr(ctx, err)
       s.loopBody.rewriteSpanUsesStmts(ctx, err)
     of sCase:
       s.selector.rewriteSpanUsesExpr(ctx, err)

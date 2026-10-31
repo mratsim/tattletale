@@ -29,9 +29,15 @@ import ./pass_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 
 proc directCalls(ss: seq[CirStmt], outp: var seq[CirExpr]) =
-  ## Call expressions of one statement list, a call binds to its destination:
-  ## the sites are statement calls plus the right-hand sides of assignments,
+  ## Call expressions of one statement list.
+  ##
+  ## A call value may appear in any operand position, including a loop condition
+  ## or a ternary branch.
+  ##
+  ## Sites collected: statement calls plus the right-hand sides of assignments,
   ## declarations and returns.
+  ##
+  ## A loop condition or a ternary branch is not visited yet.
   for s in ss:
     case s.kind
     of sCall:

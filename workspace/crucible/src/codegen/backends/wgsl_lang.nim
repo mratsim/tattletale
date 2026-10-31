@@ -316,6 +316,11 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eAnd, eOr:
     let op = if e.kind == eAnd: "&&" else: "||"
     return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
+  of eTernary:
+    # WGSL has no ternary operator: select(f, t, cond) returns t when cond is true, f when cond is false.
+    # select evaluates both branches eagerly, so a branch with side effects or a faulting read runs whatever the condition.
+    return "select(" & ctx.printExpr(e.elseE) & ", " & ctx.printExpr(e.thenE) &
+      ", " & ctx.printExpr(e.cond) & ")"
   of eBitNot:
     return "(~" & ctx.printExpr(e.unOperand) & ")"
   of eNeg:
@@ -545,7 +550,11 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
         spaces(ctx.indent * 2) & "// {.unroll.} requested but not honored on WebGPU\n"
       else:
         ""
-      txt = directive & spaces(ctx.indent * 2) & "loop {\n" & bodyTxt & "\n" &
+      let head = if s.loopCond != nil:
+        "while (" & ctx.printExpr(s.loopCond) & ") {\n"
+      else:
+        "loop {\n"
+      txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
         spaces(ctx.indent * 2) & '}'
       if lExit.len > 0:
         i.inc  # exit label, consumed

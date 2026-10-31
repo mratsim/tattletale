@@ -81,6 +81,7 @@ proc patchBoolReadsStmts(ss: var seq[CirStmt], boolVals, boolPtrs: HashSet[strin
       patchBoolReadsStmts(s.thenBody, boolVals, boolPtrs)
       patchBoolReadsStmts(s.elseBody, boolVals, boolPtrs)
     of sLoop:
+      patchBoolReadsExpr(s.loopCond, boolVals, boolPtrs)
       patchBoolReadsStmts(s.loopBody, boolVals, boolPtrs)
     of sScope:
       patchBoolReadsStmts(s.scopeBody, boolVals, boolPtrs)

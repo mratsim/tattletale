@@ -46,14 +46,18 @@ proc walkExprs*(e: CirExpr, visit: proc(e: CirExpr)) =
 proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirExpr)) =
   ## Walks one statement list through two visitors, either nil.
   ##
-  ## - `onExpr` sees every expression position of every statement kind:
-  ##   declaration initializers, assignment operands, branch conditions,
-  ##   case selectors, assume conditions, return values, discard values,
-  ##   `sAsm` and `sEmit` operands, call callees, call arguments
-  ## - `onStmt` sees every statement once, after its expression positions
-  ##   and after its nested statement lists
-  ## - nested bodies recurse: then and else branches, loop bodies,
-  ##   case branches and case else, scopes
+  ## - `onExpr` sees every expression position of every statement kind
+  ##
+  ## Visited positions:
+  ##
+  ## - declaration initializers and assignment operands
+  ## - branch and loop conditions, case selectors, assume conditions
+  ## - return and discard values, `sAsm` and `sEmit` operands
+  ## - call callees and call arguments
+  ##
+  ## `onStmt` sees every statement once, after its expression positions,
+  ## after its nested statement lists. Nested bodies recurse:
+  ## then/else branches, loop bodies, case branches and case else, scopes.
   ##
   ## The walk iterates a shallow copy of the statement list, so an insertion
   ## from `onStmt` does not disturb the iteration.
@@ -80,6 +84,7 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
       walkStmts(s.thenBody, onStmt, onExpr)
       walkStmts(s.elseBody, onStmt, onExpr)
     of sLoop:
+      slot(s.loopCond)
       walkStmts(s.loopBody, onStmt, onExpr)
     of sCase:
       slot(s.selector)
@@ -198,6 +203,11 @@ proc cloneExpr*(e: CirExpr): CirExpr =
   of eAnd, eOr:
     result.andLeft = cloneExpr(e.andLeft)
     result.andRight = cloneExpr(e.andRight)
+  of eTernary:
+    result.ternType = e.ternType
+    result.cond = cloneExpr(e.cond)
+    result.thenE = cloneExpr(e.thenE)
+    result.elseE = cloneExpr(e.elseE)
   of eNot:
     result.notOperand = cloneExpr(e.notOperand)
   of eNeg, eBitNot:
@@ -242,6 +252,7 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.thenBody = cloneStmts(s.thenBody)
       c.elseBody = cloneStmts(s.elseBody)
     of sLoop:
+      c.loopCond = cloneExpr(s.loopCond)
       c.loopBody = cloneStmts(s.loopBody)
       c.unroll = s.unroll
     of sLab:

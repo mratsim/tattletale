@@ -105,6 +105,10 @@ proc foldIdentitiesExpr(e: CirExpr) =
   of eAnd, eOr:
     foldIdentitiesExpr(e.andLeft)
     foldIdentitiesExpr(e.andRight)
+  of eTernary:
+    foldIdentitiesExpr(e.cond)
+    foldIdentitiesExpr(e.thenE)
+    foldIdentitiesExpr(e.elseE)
   of eNot:
     foldIdentitiesExpr(e.notOperand)
   of eNeg, eBitNot:
@@ -139,6 +143,7 @@ proc foldIdentitiesStmts(ss: var seq[CirStmt]) =
       foldIdentitiesStmts(s.thenBody)
       foldIdentitiesStmts(s.elseBody)
     of sLoop:
+      foldIdentitiesExpr(s.loopCond)
       foldIdentitiesStmts(s.loopBody)
     of sCase:
       foldIdentitiesExpr(s.selector)
@@ -205,6 +210,7 @@ proc collectLocalReads(stmts: seq[CirStmt], reads: var HashSet[string]) =
       collectLocalReads(s.thenBody, reads)
       collectLocalReads(s.elseBody, reads)
     of sLoop:
+      collectLocalReads(s.loopCond, reads)
       collectLocalReads(s.loopBody, reads)
     of sScope:
       collectLocalReads(s.scopeBody, reads)

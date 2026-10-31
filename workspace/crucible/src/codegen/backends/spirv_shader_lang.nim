@@ -618,6 +618,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
     result = CirType(kind: ctBool)
   of eNot: result = CirType(kind: ctBool)
   of eAnd, eOr: result = CirType(kind: ctBool)
+  of eTernary: result = e.ternType
   of eCast, eConv: result = e.castType
   of eAddr: result = e.addrType
   of eSizeof: result = cirUint32()
@@ -821,6 +822,8 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let v = ctx.emitExpr(fn, e.unOperand)
     ctx.builder.freshInst(OpNot, @[ctx.tyId(ctx.valueTy(t)), v])
   of eAnd:
+    # OpLogicalAnd/OpLogicalOr evaluate both operands, neither op short-circuits.
+    # SPIR-V has no short-circuit logical op, so operands must be effect-safe
     let l = ctx.emitExpr(fn, e.andLeft)
     let r = ctx.emitExpr(fn, e.andRight)
     ctx.builder.freshInst(OpLogicalAnd,
@@ -830,6 +833,14 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let r = ctx.emitExpr(fn, e.andRight)
     ctx.builder.freshInst(OpLogicalOr,
       @[ctx.tyId(spvScalar(CirType(kind: ctBool))), l, r])
+  of eTernary:
+    let condV = ctx.emitExpr(fn, e.cond)
+    let thenV = ctx.emitExpr(fn, e.thenE)
+    let elseV = ctx.emitExpr(fn, e.elseE)
+    let t = e.ternType
+    let thenC = ctx.convertValue(thenV, ctx.resolveExprType(fn, e.thenE), t)
+    let elseC = ctx.convertValue(elseV, ctx.resolveExprType(fn, e.elseE), t)
+    ctx.builder.opSelect(ctx.tyId(ctx.valueTy(t)), condV, thenC, elseC)
   of eCast:
     let srcTy = ctx.resolveExprType(fn, e.castOperand)
     doAssert scalarBits(srcTy) == scalarBits(e.castType), "cast of differing bit widths"
@@ -937,7 +948,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       vals.add v
     ctx.builder.freshInst(OpCompositeConstruct, @[arrTy] & vals)
   of eCall:
-    # a call binds to its destination as an asgn right-hand side
+    # a call value may sit in any operand position
     # value emission is the call itself
     ctx.emitCallValue(fn, e)
 
@@ -1305,8 +1316,15 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.builder.opBranch(headerLbl)
       ctx.builder.opLabelAt(headerLbl)
       fn.terminated = false
-      ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.unroll: lcUnroll else: lcNone)
-      ctx.builder.opBranch(bodyLbl)
+      # OpLoopMerge must immediately precede the branch instruction, so cond emission happens first in the header block
+      if s.loopCond != nil:
+        # Body block runs on true only, merge block is the loop exit, continue block loops back to the header
+        let condV = ctx.emitExpr(fn, s.loopCond)
+        ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.unroll: lcUnroll else: lcNone)
+        ctx.builder.opBranchConditional(condV, bodyLbl, mergeLbl)
+      else:
+        ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.unroll: lcUnroll else: lcNone)
+        ctx.builder.opBranch(bodyLbl)
       ctx.builder.opLabelAt(bodyLbl)
       fn.terminated = false
       fn.loopMerge = mergeLbl
@@ -1413,6 +1431,9 @@ proc scanCallExpr(e: CirExpr, calls: var seq[string]) =
   of eEq, eNeq, eLt, eLe: scanCallExpr(e.a, calls); scanCallExpr(e.b, calls)
   of eNot: scanCallExpr(e.notOperand, calls)
   of eAnd, eOr: scanCallExpr(e.andLeft, calls); scanCallExpr(e.andRight, calls)
+  of eTernary:
+    scanCallExpr(e.cond, calls); scanCallExpr(e.thenE, calls)
+    scanCallExpr(e.elseE, calls)
   of eCast, eConv: scanCallExpr(e.castOperand, calls)
   of eAddr: scanCallExpr(e.addrOperand, calls)
   of eOconstr:
@@ -1442,6 +1463,7 @@ proc scanCalls(ss: seq[CirStmt], calls: var seq[string]) =
       scanCalls(s.thenBody, calls)
       scanCalls(s.elseBody, calls)
     of sLoop:
+      scanCallExpr(s.loopCond, calls)
       scanCalls(s.loopBody, calls)
     of sScope:
       scanCalls(s.scopeBody, calls)

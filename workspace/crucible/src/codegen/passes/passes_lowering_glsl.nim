@@ -117,6 +117,7 @@ proc unwrapVarDerefsStmts(ss: var seq[CirStmt], varParams: HashSet[string]) =
       s.thenBody.unwrapVarDerefsStmts(varParams)
       s.elseBody.unwrapVarDerefsStmts(varParams)
     of sLoop:
+      s.loopCond.unwrapVarDerefsExpr(varParams)
       s.loopBody.unwrapVarDerefsStmts(varParams)
     of sCase:
       s.selector.unwrapVarDerefsExpr(varParams)
@@ -208,6 +209,9 @@ proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashS
       if eerr.len > 0:
         return eerr
     of sLoop:
+      let cerr = rewriteVarCallArgsExpr(fn, s.loopCond, varParams, procs)
+      if cerr.len > 0:
+        return cerr
       let lerr = rewriteVarCallArgsStmts(fn, s.loopBody, varParams, procs)
       if lerr.len > 0:
         return lerr
@@ -446,6 +450,9 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
       return terr
     return rewriteDissolveStmts(fn, ctx, s.elseBody)
   of sLoop:
+    let cerr = rewriteDissolveExpr(fn, ctx, s.loopCond)
+    if cerr.len > 0:
+      return cerr
     return rewriteDissolveStmts(fn, ctx, s.loopBody)
   of sScope:
     return rewriteDissolveStmts(fn, ctx, s.scopeBody)

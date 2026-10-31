@@ -51,7 +51,7 @@ proc holdsToOpenArrayCall(body: seq[CirStmt]): bool =
           s.elseBody.holdsToOpenArrayCall:
         return true
     of sLoop:
-      if s.loopBody.holdsToOpenArrayCall:
+      if s.loopCond.holdsToOpenArrayCall or s.loopBody.holdsToOpenArrayCall:
         return true
     of sCase:
       if s.selector.holdsToOpenArrayCall:
@@ -246,6 +246,31 @@ static:
   let emsg = exprSurvivor.runLowering()
   doAssert emsg.contains("span"),
     "the pass must refuse an expression stating a span type, got: [" & emsg & "]"
+
+  # ═══ a span in a loop condition refuses in the pass ═══
+  # A span symbol in a loop condition has no split length binding, refused by the split rewrite visit of the loop condition.
+  let condSurvivor = moduleD("condspan", @[], @[procD("g",
+    @[param("out", outT)], tVoid(), @[
+      whileS(sym("s", spanDev), @[
+        asgnS(patE(sym("out", outT), intLit(0, i32)), intLit(1, i32)),
+      ]),
+    ])])
+  condSurvivor.procs[0].isKernel = true
+  let cmsg = condSurvivor.runLowering()
+  doAssert cmsg.contains("span"),
+    "the pass must refuse a span in a loop condition, got: [" & cmsg & "]"
+
+  # A cast to a span type survives the split rewrite, so only the survivor guard's walker visit catches it.
+  let condCastSurvivor = moduleD("condcastspan", @[], @[procD("g",
+    @[param("out", outT)], tVoid(), @[
+      whileS(castE(spanDev, intLit(0, i32)), @[
+        asgnS(patE(sym("out", outT), intLit(0, i32)), intLit(1, i32)),
+      ]),
+    ])])
+  condCastSurvivor.procs[0].isKernel = true
+  let ccmsg = condCastSurvivor.runLowering()
+  doAssert ccmsg.contains("span"),
+    "the pass must refuse a span-typed expression in a loop condition, got: [" & ccmsg & "]"
 
   # ═══ a span-typed program-scope global refuses in the pass ═══
   let globSurvivor = moduleD("glob", @[], @[])

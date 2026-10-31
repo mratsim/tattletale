@@ -325,6 +325,9 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
     # value-position short-circuits into temps and the remainder prints directly
     let op = if e.kind == eAnd: "&&" else: "||"
     return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
+  of eTernary:
+    return "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
+      " : " & ctx.printExpr(e.elseE) & ")"
   of eBitNot:
     return "(~" & ctx.printExpr(e.unOperand) & ")"
   of eNeg:
@@ -521,7 +524,11 @@ proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): s
         spaces(ctx.indent * 2) & "#pragma clang loop unroll(full)\n"
       else:
         ""
-      txt = directive & spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
+      let head = if s.loopCond != nil:
+        "while (" & ctx.printExpr(s.loopCond) & ") {\n"
+      else:
+        "for (;;) {\n"
+      txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
         spaces(ctx.indent * 2) & '}'
       if lExit.len > 0:
         i.inc  # exit label, consumed

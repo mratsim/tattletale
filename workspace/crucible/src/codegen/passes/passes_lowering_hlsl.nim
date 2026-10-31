@@ -99,7 +99,8 @@ proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
           findNumWorkgroupsStmts(s.elseBody, coordTy):
         return true
     of sLoop:
-      if findNumWorkgroupsStmts(s.loopBody, coordTy):
+      if findNumWorkgroupsExpr(s.loopCond, coordTy) or
+          findNumWorkgroupsStmts(s.loopBody, coordTy):
         return true
     of sScope:
       if findNumWorkgroupsStmts(s.scopeBody, coordTy):
@@ -151,6 +152,7 @@ proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
       rewriteNumWorkgroupsStmts(s.thenBody, coordTy)
       rewriteNumWorkgroupsStmts(s.elseBody, coordTy)
     of sLoop:
+      rewriteNumWorkgroupsExpr(s.loopCond, coordTy)
       rewriteNumWorkgroupsStmts(s.loopBody, coordTy)
     of sScope:
       rewriteNumWorkgroupsStmts(s.scopeBody, coordTy)
@@ -486,6 +488,9 @@ proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string 
       return terr
     return rewriteDissolveStmts(fn, ctx, s.elseBody)
   of sLoop:
+    let cerr = rewriteDissolveExpr(fn, ctx, s.loopCond)
+    if cerr.len > 0:
+      return cerr
     return rewriteDissolveStmts(fn, ctx, s.loopBody)
   of sScope:
     return rewriteDissolveStmts(fn, ctx, s.scopeBody)

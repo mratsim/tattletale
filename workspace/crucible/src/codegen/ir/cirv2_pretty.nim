@@ -87,6 +87,9 @@ proc renderExpr(e: CirExpr): string =
   of eNot: result = "(not " & renderExpr(e.notOperand) & ")"
   of eAnd: result = "(and " & renderExpr(e.andLeft) & " " & renderExpr(e.andRight) & ")"
   of eOr: result = "(or " & renderExpr(e.andLeft) & " " & renderExpr(e.andRight) & ")"
+  of eTernary:
+    result = "(tern " & renderType(e.ternType) & " " & renderExpr(e.cond) &
+      " " & renderExpr(e.thenE) & " " & renderExpr(e.elseE) & ")"
   of eCast: result = "(cast " & renderType(e.castType) & " " & renderExpr(e.castOperand) & ")"
   of eConv: result = "(conv " & renderType(e.castType) & " " & renderExpr(e.castOperand) & ")"
   of eAddr: result = "(addr " & renderExpr(e.addrOperand) & ")"
@@ -150,7 +153,10 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
       b.renderStmtList(s.elseBody, "(else")
     b.close
   of sLoop:
-    b.open("(loop")
+    if s.loopCond != nil:
+      b.open("(loop while " & renderExpr(s.loopCond))
+    else:
+      b.open("(loop")
     for inner in s.loopBody:
       b.renderStmt(inner)
     b.close
