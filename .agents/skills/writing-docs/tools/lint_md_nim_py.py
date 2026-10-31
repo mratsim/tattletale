@@ -2203,8 +2203,8 @@ def _line_scan(raw, in_tq):
     Returns the code text with the comment removed, the net open-paren count
     outside string literals, and the outgoing triple-quote state.
     A triple-quoted literal spans lines: its interior is string data, so a `#`
-    inside it survives the cut and its parens stay uncounted, while the
-    closing quote run hands the state back to the caller.
+    inside it survives the cut and its parens stay uncounted.
+    The closing quote run hands the state back to the caller.
     """
     out = []
     i, n = 0, len(raw)
@@ -2297,8 +2297,8 @@ def nim_emitted_text_assert_checks(path, text, findings):
       side of `==` or `!=`, a membership test whose right side is a string
       literal list, and a triple-quoted literal (multi-line included) all
       match
-    - the left anchor keeps the legal shapes out: a plain identifier or a
-      loop variable on the left of `in` (`x in collected`,
+    - the left anchor keeps the legal shapes out: a plain identifier
+      or a loop variable on the left of `in` (`x in collected`,
       `for line in lines`) and a call with no literal in its argument
       (`parts.contains(pair.control)`) never match
     - a hit on a line carrying an assert keyword (doAssert, check, assert,
