@@ -10,8 +10,9 @@
 ## MSL lowering: per-target transforms for the Metal storage model,
 ## registered by the Metal pipeline and run before printing.
 ##
-##   kernel body → mslHoistProgramScopeConstants → mslHoistDeviceFnSmem
-##   → mslRewriteSmemLocals → mslThreadCoordinateBuiltins → printed MSL source
+##   kernel body → decomposeArrayAssign → mslHoistProgramScopeConstants
+##   → mslHoistDeviceFnSmem → mslRewriteSmemLocals → mslThreadCoordinateBuiltins
+##   → printed MSL source
 ##
 ## - `mslHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into `CirModule.globals`
 ##   in encounter order, the printer emits them as program-scope `constant`
@@ -47,6 +48,7 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_low_array_assign
 import ./passes_low_kernel_params
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -55,6 +57,7 @@ import ./passes_low_kernel_params
 
 func registerMslLoweringPasses*(reg: var PassRegistry) =
   ## Registers the MSL per-target lowering passes:
+  ## - `decomposeArrayAssign`: whole-array copies that MSL cannot express
   ## - the kernel struct-argument explosion, the flat resource target
   ## - `mslHoistProgramScopeConstants`, `mslHoistDeviceFnSmem`,
   ##   `mslRewriteSmemLocals`, `mslThreadCoordinateBuiltins`, in that order,
@@ -66,6 +69,7 @@ func registerMslLoweringPasses*(reg: var PassRegistry) =
   ## Order note: the smem hoist runs before the builtin threading.
   ## Each pass appends its parameters and matching call-site arguments last,
   ## keeping both orders consistent.
+  reg.registerDecomposeArrayAssign()
   registerExplodeKernelStructs(reg)
   reg.register("mslHoistProgramScopeConstants", pkTransform, phaseMain,
     "Relocates const_mem locals into the module's program scope",

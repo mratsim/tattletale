@@ -10,7 +10,8 @@
 ## OpenCL lowering: per-target transforms for the OpenCL C storage model,
 ## registered by the OpenCL pipeline and run before printing.
 ##
-##   kernel body → openclHoistProgramScopeConstants → printed OpenCL C source
+##   kernel body → decomposeArrayAssign → openclHoistProgramScopeConstants
+##   → printed OpenCL C source
 ##
 ## - `openclHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into
 ##   `CirModule.globals` in encounter order, every proc and scope depth covered,
@@ -34,6 +35,7 @@ import ../ir/cirv2_build
 import ./pass_datatypes
 import ./passes_low_kernel_params
 import ./pass_helpers
+import ./passes_low_array_assign
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -42,12 +44,14 @@ import ./pass_helpers
 func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   ## Registers the OpenCL per-target lowering passes:
   ##
+  ## - `decomposeArrayAssign`: whole-array copies that OpenCL C cannot express
   ## - the struct-argument explosion runs here, the engine binds one buffer
   ##   per pointer leaf in field order
   ## - `openclHoistProgramScopeConstants`, before printing
   ##
   ## Registration contract: the pass sits after the reserved-word rename,
   ## relocated declaration names match the renamed body references.
+  reg.registerDecomposeArrayAssign()
   registerExplodeKernelStructs(reg)
   reg.register("openclHoistProgramScopeConstants", pkTransform, phaseMain,
     "Relocates const_mem locals into the module's program scope",
