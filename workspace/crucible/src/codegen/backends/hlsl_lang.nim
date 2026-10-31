@@ -858,6 +858,7 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
 
 proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams: var HashSet[string], forwardDeclare: bool): string =
   ## `RetType name(params)` of one proc, buffers as resources, `var T` device parameters as `inout`.
+  ## The signature of an `{.inline.}` proc opens with the `inline ` qualifier.
   var buffers: seq[CirParam]
   ctx.classifyParams(fn, pushParams, buffers)
   if ctx.failing():
@@ -881,7 +882,9 @@ proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParam
   let ret = ctx.emitHlslScalar(fn.ret)
   if ctx.failing():
     return ""
-  result = ret & ' ' & fn.name & '(' & params.join(", ") & ')'
+  if fn.inline:
+    result = "inline "
+  result &= ret & ' ' & fn.name & '(' & params.join(", ") & ')'
   if forwardDeclare:
     result.add ';'
 

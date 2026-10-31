@@ -2257,7 +2257,7 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
 
 proc applyProcPragmas(ctx: var FrontendCtx, fn: NimNode, p: CirProc) =
   ## Reads the public pragma surface off a proc definition: `global` marks the compute entry point,
-  ## `inline` the splice mark, `exportc` the entry-point name override,
+  ## `inline` marks an `{.inline.}` device function, `exportc` renames the emitted entry point,
   ## `workgroup(x, y, z)` the baked launch shape. Other pragmas are legal and dropped.
   for prag in fn.pragma:
     case prag.kind
@@ -2266,11 +2266,7 @@ proc applyProcPragmas(ctx: var FrontendCtx, fn: NimNode, p: CirProc) =
       of "global":
         p.isKernel = true
       of "inline":
-        # an inline mark splices the body into its callers, a device function
-        # cannot take the thread builtins as attributed parameters
         p.inline = true
-      of "forceinline":
-        ctx.fail("forceinline was merged into inline; use inline")
       else:
         discard
     of nnkExprColonExpr, nnkCall, nnkCommand:

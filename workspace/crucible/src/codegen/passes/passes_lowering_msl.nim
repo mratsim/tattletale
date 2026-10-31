@@ -22,8 +22,9 @@
 ## - a const_mem local without an initializer refuses in the pass, a const_mem local
 ##   surviving outside the relocation refuses at the printer, which keeps a nil-init
 ##   shape guard on the relocated declarations
-## - a device-function smem local surviving the inline splice refuses in the pass,
-##   a smem initializer surviving the pass is discarded at the printer
+## - a device-function smem local refuses in the pass, only a kernel owns
+##   threadgroup storage
+## - a smem initializer surviving the pass is discarded at the printer
 
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -79,7 +80,6 @@ proc mslRewriteSmemLocals(m: CirModule): string =
   ##   `threadgroup` storage that Metal allocates per threadgroup,
   ##   no launch-time staging and no parameter
   ## - a device function's smem local refuses, only a kernel owns threadgroup storage
-  ##   and the inline splice already merged an inline callee's body into the calling kernel
   ## - an initializer on a `{.smem.}` local is discarded
   ##
   ## - the rewrite covers top-level body locals only, a nested one keeps

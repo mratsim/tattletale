@@ -26,10 +26,8 @@
 ## A builtin outside the five categories (a math intrinsic like `rsqrt`) keeps
 ## `none` in all five, its native name resolves in the printers' own tables.
 ##
-## Ordering: the pass runs in the legalization stage, before the inline splice.
-## The kernel-only-reads check there sees the typed kinds. A later ordering
-## would let a helper proc survive as a device function reading a builtin name
-## that no backend defines.
+## Ordering: the pass runs first in the legalization stage, so every later
+## stage dispatches on the typed kinds alone.
 
 import std/macros
 
@@ -75,8 +73,6 @@ static:
 func registerBuiltinKindAssignment*(reg: var PassRegistry) =
   ## Registers the builtin kind assignment pass.
   ##
-  ## Ordering:
-  ## - runs before the inline splice, the registration order encodes the dependency
   reg.register("builtinKindAssignment", pkTransform, phaseEarly,
     "Kind-assigns every builtin symbol from the canonical name tables",
     run = builtinKindAssignment)

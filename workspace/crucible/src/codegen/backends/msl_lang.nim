@@ -388,8 +388,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
   of sVar:
     if s.space == caThreadgroup:
       # kernel-scope threadgroup storage: the MSL lowering pass keeps only
-      # a kernel's top-level smem locals here, an inline device function's
-      # smem local merges into the calling kernel, any initializer is discarded
+      # a kernel's top-level smem locals here, a device function's smem local
+      # refuses in the pass, any initializer is discarded
       result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
       return
     if s.space == caConstant:
