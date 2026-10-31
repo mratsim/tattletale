@@ -1,8 +1,10 @@
 ## Hand-built CIRv2: bit-reinterpret casts refuse the widths a printer cannot emit.
 ##
-## Test that the CUDA printer refuses a bit cast of/to a 16-bit float and the GLSL
-## printer refuses a bit cast of/to a 64-bit float, each through its refusal string,
-## while the 32-bit pairs still emit the float-bits builtins.
+## Test that each printer refuses a cast it cannot emit and keeps the 32-bit pairs
+## printing:
+##
+## - CUDA refuses a bit cast of/to a 16-bit float, sole coverage of `__float_as_uint` lives here, CUDA has no runtime on this host
+## - GLSL refuses a bit cast of/to a 64-bit float, its 32-bit pair launches and readbacks both cast directions in t_glsl_bit_cast.nim
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -66,13 +68,11 @@ static:
     doAssert err.contains("bit cast to a 64-bit float has no GLSL emission"),
       "the GLSL printer must refuse the bit cast to a 64-bit float, got: " & err
 
-  block: # GLSL hazard negative: the 32-bit float pair still emits the builtin
+  block: # GLSL hazard negative: the 32-bit float pair still prints
     let kernel = procD("k", @[param("f", tFloat(32))], tVoid(), @[
       varD("x", tUint(32), castE(tUint(32), sym("f", tFloat(32)))),
       retS(),
     ])
     kernel.isKernel = true
-    let (src, err) = printGlslModule(moduleD("probe", @[], @[kernel]))
+    let (_, err) = printGlslModule(moduleD("probe", @[], @[kernel]))
     doAssert err.len == 0, "the 32-bit float bit cast must print: " & err
-    doAssert "floatBitsToUint(" in src,
-      "the 32-bit float bit cast must emit floatBitsToUint, got:\n" & src

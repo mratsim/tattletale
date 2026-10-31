@@ -127,7 +127,7 @@ static:
 
   # ═══ 8. a pattern write through a pointer to a constant array ═══
   # Base of the pattern: a `ptr` to a constant array. A pattern read names one element
-  # of the array the pointer names, so the write targets constant storage.
+  # of the array that the pointer names, so the write targets constant storage.
   block:
     let constArrP = tPtr(caConstant, tArray(4, f32))
     let kern = procD("k8", @[param("p", constArrP), param("out", devA)], tVoid(), @[
@@ -137,6 +137,27 @@ static:
     let err = moduleD("probe", @[], @[kern]).runValidationStage()
     doAssert err.contains("assignment into constant storage"),
       "the validation stage must refuse the pattern write through the constant array pointer, got: [" & err & "]"
+
+  # ═══ 9. a write that forward-references a shadowing local: known miss, accepted ═══
+  # Acceptance contract, per the collector's proc-granular resolution:
+  # - the write precedes the local's declaration line
+  # - the collector walks the whole proc body position-independently,
+  #   so the local joins the shadow set and the write resolves to it
+  # - the frontend cannot emit the shape, Nim refuses use before declaration
+  # - closing the miss needs a scope-aware collector, out of scope here
+  block:
+    let kern = procD("k9", @[param("out", devA)], tVoid(), @[
+      asgnS(sym("g", f32), fltLit(5.0, f32)),
+      varD("g", f32, fltLit(0.0, f32), caThread),
+      asgnS(patE(sym("out", devA), intLit(0, tInt(32))), sym("g", f32)),
+    ])
+    kern.isKernel = true
+    let m = moduleD("probe", @[], @[kern])
+    m.globals.add(varD("g", f32, fltLit(3.0, f32), caConstant))
+    let err = m.runValidationStage()
+    doAssert err.len == 0,
+      "the forward-referenced shadow write must stay legal under the accepted " &
+      "proc-granular resolution, got: [" & err & "]"
 
   # ═══ hazard negatives: mutable storage and constant reads stay legal ═══
   block:

@@ -671,7 +671,7 @@ func provenanceSpace*(e: CirExpr): CirAddrSpace =
   ## One walker serves both consumers:
   ##
   ## - the frontend stamps a pointer cast's target space from this derivation at the cast's birth
-  ## - the cast validation reads the same derivation over the printed IR
+  ## - the cast validation reads the same derivation over the module's expressions
   result = caDevice
   case e.kind
   of eSym:

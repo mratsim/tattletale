@@ -231,6 +231,9 @@ proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
 proc bindSmemCallSiteStmts(fn: CirProc, ss: seq[CirStmt], procs: Table[string, CirProc], hoisted: Table[string, seq[SmemArena]]): string =
   ## Binds the hoisted-arena arguments of every call in one statement list,
   ## nested bodies included. Returns "" when clean, else the first refusal.
+  ##
+  ## Binding a kernel call site synthesizes its arena declaration into `fn.body`.
+  ## The synthesized declaration binds no call, so the walk need not visit it.
   var owned = fn.ownedSmemNames()
   var err = ""
   let bindCall = proc(callee: CirExpr, args: var seq[CirExpr]) =

@@ -59,7 +59,7 @@ Rule table (rule | trigger | severity):
 | dump-identifier       | an identifier carrying dump in crucible or ceramic Nim code, dump mechanisms are debug-only and never committed, debugEcho inline, write at the call site, a macro can debugEcho result.toStrLit() | counted  |
 | crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
-| emitted-text-assert | a string literal containment or scan in tests/codegen Nim code, an assert-context hit asserts on the emitted shader source (violation), a non-assert hit is an advisory naming the shape, behavioral tests launch kernels and check readbacks | counted  |
+| emitted-text-assert | a string literal containment, scan, or equality in tests/codegen Nim code, an assert-context hit asserts on the emitted shader source (violation), a non-assert hit is an advisory naming the shape, behavioral tests launch kernels and check readbacks | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -248,40 +248,47 @@ SECTION_END_RE = re.compile(
     r"export|include)\b")
 
 # Emitted-text-assert rule (tests/codegen scope). Behavioral kernel tests
-# launch kernels and check readbacks. A string literal containment or scan
-# over the emitted shader source instead is what the testing rules ban.
+# launch kernels and check readbacks. A string literal containment, scan, or
+# equality against the emitted shader source is what the testing rules ban.
 #
 # Pin shapes:
-# - `"text" in expr` and `"text" notin expr`: a string literal next to the
-#   containment operators, an `&` concatenation that ends in a literal
-#   matches too (`prefix & " = OpTypeStruct" in line`), a raw string
-#   (`r"\bfoo" in src`) and a triple-quoted literal match as well
-# - `.contains("text")`, the bare proc form `contains(expr, "text")`, and a
-#   find/rfind/startsWith/endsWith call whose argument carries a string
-#   literal
+# - `"text" in expr` and `"text" notin expr`: a string literal
+#   next to the containment operators, an `&` concatenation ending in a literal
+#   matches too (`prefix & " = OpTypeStruct" in line`), and closing parens
+#   between the literal and the operator (`check (prefix & "x") in line`)
+# - `.contains("text")` and the bare proc form `contains(expr, "text")` match,
+#   the scan procs find, rfind, startsWith, endsWith, and count match too
+#   when the argument carries a string literal
+# - a string literal directly left of `==` or `!=`, or right of either operator
+#   (`check lines[3] == "iftmp = ((x + 1U) * 2U);"`)
 # - a membership test whose right side is a string literal list
 #   (`line in ["a;"]`)
-# - closing parens between the literal and the operator match too
-#   (`check (prefix & " = OpTypeStruct") in line`)
-# - a call wrapped across lines joins into one logical line first, so the
-#   literal on a continuation line still matches
+# - a literal inside a multi-line triple-quoted string: the logical-line join
+#   tracks the `"""` state across lines, the whole literal reaches the anchors
+# - a call wrapped across lines joins into one logical line first so that a literal on a continuation line still matches
 #
-# Tier: a hit on a line that also carries an assert keyword (doAssert, check,
-# assert, expect) is a violation, that line asserts on the emitted source.
-# A hit without one is an advisory naming the shape, a runtime dispatch like
-# `if "metal" in backendName` never asserts anything.
+# Tier: a hit on a line that also carries an assert keyword
+# (doAssert, check, assert, expect) is a violation, that line asserts on the
+# emitted source.
+# A hit without one is an advisory naming the shape, a runtime dispatch never
+# asserts anything (`if "metal" in backendName`, `if backend == "metal"`).
 #
-# Legal shapes the anchors keep out: membership of a plain identifier or a
-# loop variable (`x in collected`, `for line in lines`), a call whose
-# argument carries no literal (`parts.contains(pair.control)`), a numeric
-# literal list (`res[0] in [1'u32, 2'u32]`), a char argument
-# (`rest.find(' ')`).
+# Legal shapes the anchors keep out: a plain identifier or a loop variable
+# on the left of `in` (`x in collected`, `for line in lines`), a call
+# whose argument carries no literal (`parts.contains(pair.control)`,
+# `src.count(name)`), a numeric comparison (`res[0] == 1'u32`), a numeric literal
+# list (`res[0] in [1'u32, 2'u32]`), a char argument (`rest.find(' ')`), a
+# literal call argument left of the comparison (`runScale("k16") == @[16.0'f32]`,
+# the closing parens keep the anchor out).
 #
-# Known blind spot: a literal folded into an identifier before the test
-# (`let expected = "a" & "b"` then `doAssert expected in src`) hides the
-# literal from every anchor, such sites stay on the reviewer.
-# One string literal as the containment patterns see it: a triple-quoted
-# literal first, then a plain or raw single-quoted-run literal.
+# Known blind spots (such sites stay on the reviewer):
+# - a literal folded into an identifier before the test
+#   (`let expected = "a" & "b"` then `doAssert expected in src`,
+#   `doAssert msl == expectedMslText`) hides the literal from every anchor
+# - a literal folded into a parenthesized expression left of `==`
+#   (`check (head & "tail") == lines[0]`), the closing parens that keep the call-argument shape clean keep this shape out too
+# One string literal as the patterns see it: a triple-quoted literal first,
+# then a plain or raw single-quoted-run literal.
 _TEXT_PIN_LIT = (r'(?:\br)?"""(?:[^"]|"(?!""))*"""'
                  r'|(?:\br)?"(?:\\.|[^"\\])*"')
 
@@ -294,7 +301,13 @@ TEXT_PIN_IN_LIST_RE = re.compile(
 TEXT_PIN_CONTAINS_RE = re.compile(
     r'(?:\.\s*|(?<![\w.]))contains\s*\([^)]*"')
 TEXT_PIN_SCAN_RE = re.compile(
-    r'(?:\.\s*|(?<![\w.]))(find|rfind|startsWith|endsWith)\s*\([^)]*"')
+    r'(?:\.\s*|(?<![\w.]))(find|rfind|startsWith|endsWith|count)\s*\([^)]*"')
+# Literal-equality anchor: the literal must sit directly left of the operator,
+# closing parens keep a call argument out (`runScale("k16") == @[16.0'f32]`
+# stays clean). On the right the literal is the comparand, open parens
+# between operator and literal still match.
+TEXT_PIN_EQ_RE = re.compile(
+    r'(?:%s)\s*(?:==|!=)|(?:==|!=)\s*\(*\s*(?:%s)' % (_TEXT_PIN_LIT, _TEXT_PIN_LIT))
 TEXT_PIN_ASSERT_RE = re.compile(r'\b(?:doAssert|assert|check|expect)\b')
 
 # Temporal and history narration (the narration rule).
@@ -629,7 +642,7 @@ RULES = {
     "license-driveby": Rule("license-driveby", True,
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "emitted-text-assert": Rule("emitted-text-assert", True,
-                                "a string literal containment in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
+                                "a string literal containment, scan, or equality in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
     "diag-downgrade": Rule("diag-downgrade", True,
@@ -2184,16 +2197,29 @@ def check_license_driveby(path, text, findings):
             "the header or split the change"))
 
 
-def _code_part(raw):
-    """Returns the code text of one raw line with the comment removed.
+def _line_scan(raw, in_tq):
+    """Scans one raw line under the incoming triple-quote state.
 
-    A `#` starts a comment only outside a string literal, so an emitted-text
-    literal that carries `#` (`"#pragma unroll"`) survives the cut.
+    Returns the code text with the comment removed, the net open-paren count
+    outside string literals, and the outgoing triple-quote state. A
+    triple-quoted literal spans lines: its interior is string data, so a `#`
+    inside it survives the cut and its parens stay uncounted, while the
+    closing quote run hands the state back to the caller.
     """
     out = []
     i, n = 0, len(raw)
+    depth = 0
     in_str = False
     while i < n:
+        if in_tq:
+            if raw[i:i + 3] == '"""':
+                in_tq = False
+                out.append('"""')
+                i += 3
+                continue
+            out.append(raw[i])
+            i += 1
+            continue
         c = raw[i]
         if in_str:
             out.append(c)
@@ -2205,6 +2231,11 @@ def _code_part(raw):
                 in_str = False
             i += 1
             continue
+        if raw[i:i + 3] == '"""':
+            in_tq = True
+            out.append('"""')
+            i += 3
+            continue
         if c == '"':
             in_str = True
             out.append(c)
@@ -2212,33 +2243,13 @@ def _code_part(raw):
             continue
         if c == "#" and (i == 0 or raw[i - 1] in " \t#"):
             break
-        out.append(c)
-        i += 1
-    return "".join(out).rstrip()
-
-
-# Net open parenthesis and bracket count outside string literals in one
-# code line, the logical-line join reads it.
-def _paren_depth(code):
-    depth = 0
-    in_str = False
-    i, n = 0, len(code)
-    while i < n:
-        c = code[i]
-        if in_str:
-            if c == "\\":
-                i += 2
-                continue
-            if c == '"':
-                in_str = False
-        elif c == '"':
-            in_str = True
-        elif c in "([":
+        if c in "([":
             depth += 1
         elif c in ")]":
             depth -= 1
+        out.append(c)
         i += 1
-    return depth
+    return "".join(out).rstrip(), depth, in_tq
 
 
 # A malformed file never joins the rest of the file into one logical line.
@@ -2255,18 +2266,19 @@ def _logical_code_lines(text):
     buf = ""
     start = 0
     depth = 0
+    in_tq = False
     for i, raw in enumerate(text.splitlines(), 1):
-        code = _code_part(raw)
+        code, d, in_tq = _line_scan(raw, in_tq)
         if buf:
             buf += " " + code
-            depth += _paren_depth(code)
+            depth += d
         elif code.strip():
             buf = code
             start = i
-            depth = _paren_depth(code)
+            depth = d
         else:
             continue
-        if depth <= 0 or i - start + 1 >= _LOGICAL_JOIN_CAP:
+        if (depth <= 0 and not in_tq) or i - start + 1 >= _LOGICAL_JOIN_CAP:
             out.append((start, buf))
             buf = ""
             depth = 0
@@ -2276,13 +2288,15 @@ def _logical_code_lines(text):
 
 
 def nim_emitted_text_assert_checks(path, text, findings):
-    """Flags string literal containments and scans over emitted source in
+    """Flags string literal containments, scans, and equalities over emitted source in
     tests/codegen.
 
     - `"text" in expr`, `"text" notin expr`, `.contains("text")`, the bare
-      `contains(expr, "text")` form, a find/rfind/startsWith/endsWith call
-      with a string literal in its argument, a membership test whose right
-      side is a string literal list, and a triple-quoted literal all match
+      `contains(expr, "text")` form, a find/rfind/startsWith/endsWith/count
+      call with a string literal in its argument, a string literal on either
+      side of `==` or `!=`, a membership test whose right side is a string
+      literal list, and a triple-quoted literal (multi-line included) all
+      match
     - the left anchor keeps the legal shapes out: a plain identifier or a
       loop variable on the left of `in` (`x in collected`,
       `for line in lines`) and a call with no literal in its argument
@@ -2301,6 +2315,7 @@ def nim_emitted_text_assert_checks(path, text, findings):
         if not code.strip():
             continue
         hit = None
+        shape = "containment"
         m = TEXT_PIN_IN_RE.search(code)
         if m:
             op = "notin" if "notin" in m.group(0) else "in"
@@ -2314,19 +2329,24 @@ def nim_emitted_text_assert_checks(path, text, findings):
             if m:
                 hit = "%s(<literal>)" % m.group(1)
         if not hit:
+            m = TEXT_PIN_EQ_RE.search(code)
+            if m:
+                hit = "literal ==/!= emitted source"
+                shape = "equality"
+        if not hit:
             continue
         if TEXT_PIN_ASSERT_RE.search(code):
             findings.append(Finding(
                 path, start, "emitted-text-assert",
-                "string literal containment (%s) asserts on the emitted "
+                "string literal %s (%s) asserts on the emitted "
                 "source, delete the assertion and keep the launch and the "
-                "readback" % hit))
+                "readback" % (shape, hit)))
         else:
             findings.append(Finding(
                 path, start, "emitted-text-assert",
-                "string literal scan (%s) in tests/codegen code, confirm it "
+                "string literal %s (%s) in tests/codegen code, confirm it "
                 "does not assert on the emitted shader source, behavioral "
-                "tests launch kernels and check readbacks" % hit,
+                "tests launch kernels and check readbacks" % (shape, hit),
                 warning=True))
 
 

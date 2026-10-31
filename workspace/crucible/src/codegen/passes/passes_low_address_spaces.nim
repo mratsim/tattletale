@@ -67,7 +67,7 @@ proc wantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirTy
   ## Each `wanted[i]` re-types the formal's pointee to the argument's space whenever the argument names another space.
   ##
   ## Returns true when at least one pointer formal specializes.
-  # Callers pre-check the arity, `args` always covers every formal.
+  # Precondition: `args` covers every formal, `args.len == callee.params.len`.
   wanted.setLen(callee.params.len)
   for i in 0 ..< callee.params.len:
     wanted[i] = callee.params[i].typ
@@ -140,29 +140,31 @@ type
     queue: seq[CirProc]
     err: string
 
-proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirProc, ctx: InstantiateCtx): CirProc =
-  ## Rewrites one call site onto the instantiation its argument spaces select.
-  ## A first-use combination creates the clone and queues it for the driver's body walk.
-  ## Returns the instantiation, nil when the argument spaces match the formals
-  ## or when a name collision refuses the pass and fills `ctx.err`.
+proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirProc, ctx: InstantiateCtx) =
+  ## Rewrites one call site onto the instantiation its argument spaces select:
+  ##
+  ## - a first-use combination creates the clone and queues it for the driver's body walk
+  ## - the effect is the `calleeExpr` rewrite plus the `ctx` updates, nothing is returned
+  ## - a name collision refuses the pass, `ctx.err` receives the refusal text and the call site stays untouched
   var wanted: seq[CirType]
+  var instantiation: CirProc
   if not calleeProc.wantedParamTypes(args, wanted):
-    return nil
+    return
   let key = calleeProc.instKey(wanted)
   if ctx.clones.hasKey(key):
-    result = ctx.clones[key]
+    instantiation = ctx.clones[key]
   else:
     var name = calleeProc.name & "_" & base58Short(typeIdentityHash(key))
     if ctx.procs.hasKey(name):
       ctx.err = "instantiation name '" & name & "' is already taken by another proc of the module"
-      return nil
-    result = cloneCallee(calleeProc, wanted, name)
-    ctx.procs[name] = result
-    ctx.clones[key] = result
-    ctx.byBase.mgetOrPut(calleeProc.name, @[]).add result
-    ctx.queue.add result
-  calleeExpr.name = result.name
-  calleeExpr.typ = freshProcType(wanted, result.ret)
+      return
+    instantiation = cloneCallee(calleeProc, wanted, name)
+    ctx.procs[name] = instantiation
+    ctx.clones[key] = instantiation
+    ctx.byBase.mgetOrPut(calleeProc.name, @[]).add instantiation
+    ctx.queue.add instantiation
+  calleeExpr.name = instantiation.name
+  calleeExpr.typ = freshProcType(wanted, instantiation.ret)
 
 proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx) =
   ## Instantiates every call site in one statement list, calls nested inside expressions included.
@@ -180,13 +182,13 @@ proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx) =
     let calleeProc = ctx.procs.getOrDefault(e.callee.name)
     if calleeProc.isNil or e.args.len != calleeProc.params.len:
       return
-    discard e.callee.rewriteCallSite(e.args, calleeProc, ctx)
+    e.callee.rewriteCallSite(e.args, calleeProc, ctx)
   let onStmt = proc(s: CirStmt) =
     if ctx.err.len > 0 or s.kind != sCall:
       return
     let calleeProc = ctx.procs.getOrDefault(s.callCallee.name)
     if calleeProc != nil and s.callArgs.len == calleeProc.params.len:
-      discard s.callCallee.rewriteCallSite(s.callArgs, calleeProc, ctx)
+      s.callCallee.rewriteCallSite(s.callArgs, calleeProc, ctx)
   ss.walkStmts(onStmt, onExpr)
 
 proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
@@ -211,4 +213,3 @@ proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
     for c in ctx.byBase.getOrDefault(fn.name):
       placed.add c
   m.procs = placed
-  result = ""
