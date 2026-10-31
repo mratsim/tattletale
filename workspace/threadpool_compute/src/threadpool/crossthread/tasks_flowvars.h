@@ -294,7 +294,7 @@ static inline tpc_task* tpc_task_newLoopEnv(tpc_task* parent, tpc_scoped_barrier
     task->loopStart = start;
     task->loopStop = stop;
     task->loopStride = stride;
-    task->loopStepsLeft = ceilDiv_vartime(stop - start, stride);
+    task->loopStepsLeft = ceilDiv_vartime((int64_t)stop - start, stride);
     return task;
 }
 

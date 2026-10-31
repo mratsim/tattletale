@@ -15,9 +15,9 @@
 #include <stdint.h>
 
 #define UL_COMPARE_AND_WAIT 1u
-#define ULF_NO_ERRNO        0x00000001u
-#define ULF_WAKE_ALL        0x00000002u
-/* operation bits [15, 8] contain the flags for __ulock_wake
+#define ULF_NO_ERRNO        0x01000000u
+#define ULF_WAKE_ALL        0x00000100u
+/* generic flags live in bits [31, 24], the __ulock_wake flags in bits [15, 8]
  *
  * # obsolete names: UL_OSSPINLOCK = UL_COMPARE_AND_WAIT, UL_HANDOFFLOCK = UL_UNFAIR_LOCK
  */

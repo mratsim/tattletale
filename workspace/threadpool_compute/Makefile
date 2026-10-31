@@ -8,6 +8,7 @@
 CC       ?= cc
 AR       ?= ar
 CFLAGS   ?= -O2 -std=c11 -Wall -Wextra -Werror
+DEPFLAGS := -MMD -MP
 INCLUDES := -Isrc/threadpool -Iinclude
 LDLIBS   := -lpthread
 LIB      := build/libthreadpool_compute.a
@@ -23,8 +24,10 @@ all: $(TEST_BINS)
 
 $(LIB): $(RUNTIME)
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o build/threadpool_runtime.o
+	$(CC) $(CFLAGS) $(INCLUDES) $(DEPFLAGS) -c $< -o build/threadpool_runtime.o
 	$(AR) rcs $@ build/threadpool_runtime.o
+
+-include build/threadpool_runtime.d
 
 $(TEST_BINS): build/%: tests/%.c $(LIB)
 	@mkdir -p $(dir $@)

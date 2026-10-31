@@ -45,11 +45,13 @@ typedef struct tpc_queuebuf {
  * The owning thread enqueues and dequeues at the back
  * Foreign threads steal at the front.
  *
- * There is no memory reclamation scheme for simplicity
+ * The front and back indices are machine-word sized so the compare-exchange
+ * stays lock-free on every platform, a 64-bit index on 64-bit targets and
+ * a 32-bit index where the atomics are 32-bit.
  */
 typedef struct tpc_taskqueue {
-    _Alignas(64) _Atomic int32_t front;    /* Consumers - steal */
-    _Alignas(64) _Atomic int32_t back;     /* Producer  - push/pop */
+    _Alignas(64) _Atomic intptr_t front;   /* Consumers - steal */
+    _Alignas(64) _Atomic intptr_t back;    /* Producer  - push/pop */
     _Alignas(64) _Atomic(tpc_queuebuf*) buf;
     struct tpc_queuebuf* garbage;          /* retired buffers */
 } tpc_taskqueue;
@@ -71,7 +73,7 @@ typedef struct tpc_taskqueue {
  *                   on a deque the owner concurrently emptied.
  *                   Estimates stay undefined for thieves otherwise.
  */
-int32_t tpc_taskqueue_peek(tpc_taskqueue* tq);
+intptr_t tpc_taskqueue_peek(tpc_taskqueue* tq);
 
 /** Initialize a deque with an initial capacity of capPow2 slots. */
 void tpc_taskqueue_init(tpc_taskqueue* tq, int32_t capPow2);

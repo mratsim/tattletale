@@ -122,7 +122,10 @@ proc syncScopeWait*(sb: ptr ScopedBarrier) {.tpc, importc: "tpc_syncScopeWait".}
   ## Waits until the scope's descendant tasks complete
 
 proc completeFuture*(fv: ptr Flowvar, parentResult: pointer, resultSize: csize_t) {.tpc, importc: "tpc_completeFuture".}
-  ## Completes the flowvar, frees its task and copies the result out
+  ## Waits until the task behind the flowvar completes and copies
+  ## resultSize bytes from its result slot into parentResult.
+  ## Task memory outlives the call and flowvar_sync frees the task
+  ## after the copy, calling this alone leaks the allocation.
 
 # Spawn helpers
 # ------------------------------------------------------------

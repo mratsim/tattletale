@@ -101,6 +101,15 @@ Import with the `workspace` directory on the Nim path:
 ```nim
 import threadpool_compute
 
+type MulEnv = object
+  a, b: int32
+
+proc mulTask(env: pointer) {.cdecl.} =
+  let e = cast[ptr MulEnv](cast[int](env) + FlowvarHeaderSize)
+  let r = e.a * e.b
+  let self = cast[ptr Task](cast[ptr pointer](env)[])
+  task_readyWith(self, r.unsafeAddr, csize_t sizeof r)
+
 let tp = threadpool_new(8)
 var env = MulEnv(a: 6, b: 7)
 let f = spawn(mulTask, env)

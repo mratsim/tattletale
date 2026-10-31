@@ -66,7 +66,13 @@ int main(int argc, char** argv) {
     int32_t nthreads = tpc_topology_getNumThreadsOS();
     const char* env = getenv("CTT_NUM_THREADS");
     if (env != NULL) {
-        nthreads = atoi(env);
+        char* end = NULL;
+        long parsed = strtol(env, &end, 10);
+        if (end == env || *end != '\0' || parsed < 1) {
+            fprintf(stderr, "CTT_NUM_THREADS must be a positive integer, got \"%s\"\n", env);
+            return 1;
+        }
+        nthreads = (int32_t)parsed;
     }
     if (n < 1 || n > (int32_t)(sizeof(solutions) / sizeof(solutions[0]))) {
         fprintf(stderr, "n must be in [1, %zu]\n", sizeof(solutions) / sizeof(solutions[0]));

@@ -24,6 +24,8 @@ Rule table (rule | severity | trigger):
 | single-word-eol  | counted  | a 1-2 word stub line with reflow room on the previous line               |
 | wrap-fits        | counted  | a statement or signature wraps although it fits in 140 columns           |
 | brace-stmt       | counted  | a statement follows an opening brace on the same line                    |
+| doc-marker       | counted  | a doc comment uses /* where the secp256k1 shape wants /**                |
+| pointer-binding  | counted  | a pointer star binds to the name, the house rule binds it to the type    |
 | comment-the      | counted  | a maintainer comment opens on the definite article                       |
 | banned-vocab     | counted  | a blocklist word (the engine table)                                      |
 
@@ -31,10 +33,12 @@ Param-list layout, the secp256k1 shape:
 
     /** Serialize a pubkey object into a serialized byte sequence.
      *
-     *  Returns: 1 always.
-     *  Args:    ctx:    pointer to a context object.
-     *           out:    pointer to the output array.
+     *  Parameters:
+     *  Context: ctx:    pointer to a context object.
+     *  Out:     out:    pointer to the output array.
      *  In:      input:  pointer to the input array.
+     *
+     *  Returns: 1 always.
      */
 
 Usage:
@@ -195,10 +199,7 @@ def check_pointer_binding(path, text, findings):
                                 if line[m.end():].lstrip().split()
                                 else "name")))
 
-_DECL_TAIL_RE = re.compile(r"(?<!\w)(?:unsigned |const |struct |enum )*(void"
-                           r"|char|short|int|long|float|double|bool|size_t"
-                           r"|int[0-9]+_t|uint[0-9]+_t|[A-Za-z_][A-Za-z0-9_]*)"
-                           r"[^;{()]*\(")
+_DECL_NAME_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 
 
 def c_prose_lines(text):
@@ -301,7 +302,7 @@ def c_prose_lines(text):
 
 def _decl_is_void(source_lines, after_line):
     """Reads the declaration after a doc block. True when its return
-    type is void."""
+    type is plain void."""
     joined = []
     for raw in source_lines[after_line:after_line + 12]:
         joined.append(raw.strip())
@@ -309,8 +310,15 @@ def _decl_is_void(source_lines, after_line):
         if ";" in chunk or "{" in chunk:
             break
     decl = " ".join(joined)
-    m = _DECL_TAIL_RE.search(decl)
-    return bool(m) and m.group(1) == "void"
+    m = _DECL_NAME_RE.search(decl)
+    if m is None:
+        return False
+    # Return type: the word before the function name, a void* return
+    # reads as its own type
+    prefix = decl[:m.start(1)].rstrip()
+    if not prefix or prefix.endswith("*"):
+        return False
+    return re.split(r"[^A-Za-z0-9_]+", prefix)[-1] == "void"
 
 
 _SUB_LABELS = frozenset(("Context", "Out", "In/Out", "In"))
@@ -388,9 +396,18 @@ def check_param_lists(path, blocks, source_lines, findings):
                     sections.append(cur)
                     pe = _PARAM_ENTRY_RE.match(content)
                     if pe:
-                        cur["desc_col"] = content_col + len(pe.group(2)) \
+                        desc_col = content_col + len(pe.group(2)) \
                             + 1 + len(pe.group(3))
+                        cur["desc_col"] = desc_col
                         cur["entries"] += 1
+                        if shared["desc"] is None:
+                            shared["desc"] = desc_col
+                        elif desc_col != shared["desc"]:
+                            findings.append(Finding(
+                                path, n, "param-list-style",
+                                "the description column moved from %d to %d, "
+                                "all entries align in one column"
+                                % (shared["desc"], desc_col)))
                     elif not re.match(r"^[0-9]+:", content):
                         # free-text Returns content, not an entry list
                         cur["desc_col"] = "free"
@@ -853,11 +870,13 @@ def main(argv):
             text = fh.read()
         lint_c_family(os.path.relpath(f), text, findings)
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
+    violations = [fd for fd in findings if not fd.warning]
     for fd in findings:
-        print("%s:%d: %s: %s [violation]" % (fd.path, fd.line, fd.rule,
-                                             fd.reason))
-    print("%d findings: %d violations" % (len(findings), len(findings)))
-    return 1 if findings else 0
+        print("%s:%d: %s: %s [%s]" % (fd.path, fd.line, fd.rule, fd.reason,
+                                      "warning" if fd.warning else "violation"))
+    print("%d findings: %d violations, %d advisory warnings"
+          % (len(findings), len(violations), len(findings) - len(violations)))
+    return 1 if violations else 0
 
 
 if __name__ == "__main__":

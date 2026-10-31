@@ -51,7 +51,7 @@ static void queuebuf_garbageCollect(tpc_taskqueue* tq) {
  *  have to be saved before calling this procedure.
  *  It reads and writes the "tq.buf" and "tq.garbage"
  */
-static void queuebuf_grow(tpc_taskqueue* tq, tpc_queuebuf** buf, int32_t newCapacity, int32_t front, int32_t back) {
+static void queuebuf_grow(tpc_taskqueue* tq, tpc_queuebuf** buf, int32_t newCapacity, intptr_t front, intptr_t back) {
     /* Read -> Copy -> Update */
     tpc_queuebuf* fresh = queuebuf_new(newCapacity);
     for (int32_t i = front; i < back; i++) {
@@ -62,15 +62,16 @@ static void queuebuf_grow(tpc_taskqueue* tq, tpc_queuebuf** buf, int32_t newCapa
             memory_order_relaxed);
     }
     queuebuf_retire(tq, *buf);
-    /* publish globally */
-    atomic_store_explicit(&tq->buf, fresh, memory_order_relaxed);
+    /* publish globally, release pairs with the consume load of thieves
+     * so the copied slots are visible before the new buffer is */
+    atomic_store_explicit(&tq->buf, fresh, memory_order_release);
     /* publish locally */
     *buf = fresh;
 }
 
 void tpc_taskqueue_push(tpc_taskqueue* tq, tpc_task* item) {
-    int32_t back = atomic_load_explicit(&tq->back, memory_order_relaxed);
-    int32_t front = atomic_load_explicit(&tq->front, memory_order_acquire);
+    intptr_t back = atomic_load_explicit(&tq->back, memory_order_relaxed);
+    intptr_t front = atomic_load_explicit(&tq->front, memory_order_acquire);
     tpc_queuebuf* buf = atomic_load_explicit(&tq->buf, memory_order_relaxed);
 
     if (back - front > (int32_t)buf->capacity - 1) {
@@ -88,10 +89,10 @@ void tpc_taskqueue_push(tpc_taskqueue* tq, tpc_task* item) {
 }
 
 tpc_task* tpc_taskqueue_pop(tpc_taskqueue* tq) {
-    int32_t back = atomic_load_explicit(&tq->back, memory_order_relaxed) - 1;
+    intptr_t back = atomic_load_explicit(&tq->back, memory_order_relaxed) - 1;
     atomic_store_explicit(&tq->back, back, memory_order_relaxed);
     atomic_thread_fence(memory_order_seq_cst);
-    int32_t front = atomic_load_explicit(&tq->front, memory_order_relaxed);
+    intptr_t front = atomic_load_explicit(&tq->front, memory_order_relaxed);
     tpc_queuebuf* buf = atomic_load_explicit(&tq->buf, memory_order_relaxed);
 
     tpc_task* item = NULL;
@@ -100,7 +101,7 @@ tpc_task* tpc_taskqueue_pop(tpc_taskqueue* tq) {
         item = atomic_load_explicit(&buf->slots[back & (buf->capacity - 1)], memory_order_relaxed);
         if (front == back) {
             /* Single last element in queue. */
-            int32_t expected = front;
+            intptr_t expected = front;
             if (!atomic_compare_exchange_strong_explicit(&tq->front, &expected, front + 1, memory_order_seq_cst, memory_order_relaxed)) {
                 /* Failed race. */
                 item = NULL;
@@ -121,9 +122,9 @@ tpc_task* tpc_taskqueue_pop(tpc_taskqueue* tq) {
 }
 
 tpc_task* tpc_taskqueue_steal(uint32_t thiefID, tpc_taskqueue* tq) {
-    int32_t front = atomic_load_explicit(&tq->front, memory_order_acquire);
+    intptr_t front = atomic_load_explicit(&tq->front, memory_order_acquire);
     atomic_thread_fence(memory_order_seq_cst);
-    int32_t back = atomic_load_explicit(&tq->back, memory_order_acquire);
+    intptr_t back = atomic_load_explicit(&tq->back, memory_order_acquire);
 
     if (front >= back) {
         return NULL;
@@ -131,7 +132,7 @@ tpc_task* tpc_taskqueue_steal(uint32_t thiefID, tpc_taskqueue* tq) {
     /* Non-empty queue. */
     tpc_queuebuf* buf = atomic_load_explicit(&tq->buf, memory_order_consume);
     tpc_task* item = atomic_load_explicit(&buf->slots[front & (buf->capacity - 1)], memory_order_relaxed);
-    int32_t expected = front;
+    intptr_t expected = front;
     if (!atomic_compare_exchange_strong_explicit(&tq->front, &expected, front + 1, memory_order_seq_cst, memory_order_relaxed)) {
         /* Failed race. */
         return NULL;
@@ -140,9 +141,9 @@ tpc_task* tpc_taskqueue_steal(uint32_t thiefID, tpc_taskqueue* tq) {
     return item;
 }
 
-int32_t tpc_taskqueue_peek(tpc_taskqueue* tq) {
-    int32_t back = atomic_load_explicit(&tq->back, memory_order_relaxed);
-    int32_t front = atomic_load_explicit(&tq->front, memory_order_acquire);
+intptr_t tpc_taskqueue_peek(tpc_taskqueue* tq) {
+    intptr_t back = atomic_load_explicit(&tq->back, memory_order_relaxed);
+    intptr_t front = atomic_load_explicit(&tq->front, memory_order_acquire);
     return back >= front ? back - front : 0;
 }
 

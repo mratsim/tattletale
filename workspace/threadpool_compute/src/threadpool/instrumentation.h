@@ -3,7 +3,7 @@
  * A simple design-by-contract API
  * --------------------------------------------------------
  * Everything should be a template that doesn't produce any code
- * when CTT_DEBUG is not defined.
+ * when TPC_THREADPOOL_ASSERTS is not defined.
  * Those checks are controlled by a custom flag instead of
  * "--boundsChecks" or "--nilChecks" to decouple them from user code checks.
  * Furthermore, we want them to be very lightweight on performance
@@ -47,7 +47,7 @@
     #define tpc_debug_termination(...) ((void)0)
 #endif
 
-#if defined(TPC_THREADPOOL_ASSERTS) || !defined(NDEBUG)
+#ifdef TPC_THREADPOOL_ASSERTS
     #define tpc_preCondition(expr)                                        \
         do {                                                              \
             if (!(expr)) {                                                \

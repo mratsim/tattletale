@@ -2,6 +2,7 @@
 #include "threadpool.h"
 #include "primitives/futexes.h"
 #include "primitives/topology.h"
+#include "primitives/allocs.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -619,7 +620,7 @@ static int workerEntryFn(void* arg) {
 }
 
 tpc_threadpool* tpc_threadpool_new(int32_t numThreads) {
-    tpc_threadpool* tp = malloc(sizeof(*tp));
+    tpc_threadpool* tp = tpc_alignedAlloc(_Alignof(tpc_threadpool), sizeof(*tp));
     if (tp == NULL) {
         abort();
     }
@@ -627,9 +628,9 @@ tpc_threadpool* tpc_threadpool_new(int32_t numThreads) {
     tpc_barrier_init(&tp->barrier, (uint32_t)numThreads);
     tpc_eventcount_initialize(&tp->globalBackoff);
     tp->numThreads = numThreads;
-    tp->workerQueues = malloc((size_t)numThreads * sizeof(tpc_taskqueue));
+    tp->workerQueues = tpc_alignedAlloc(_Alignof(tpc_taskqueue), (size_t)numThreads * sizeof(tpc_taskqueue));
     tp->workers = malloc((size_t)numThreads * sizeof(thrd_t));
-    tp->workerSignals = malloc((size_t)numThreads * sizeof(*tp->workerSignals));
+    tp->workerSignals = tpc_alignedAlloc(_Alignof(struct tpc_worker_signal), (size_t)numThreads * sizeof(*tp->workerSignals));
     tp->workerArgs = malloc((size_t)numThreads * sizeof(*tp->workerArgs));
     if (tp->workerQueues == NULL || tp->workers == NULL || tp->workerSignals == NULL || tp->workerArgs == NULL) {
         abort();
@@ -643,7 +644,11 @@ tpc_threadpool* tpc_threadpool_new(int32_t numThreads) {
     for (int32_t i = 1; i < numThreads; i++) {
         tp->workerArgs[i].tp = tp;
         tp->workerArgs[i].id = i;
-        thrd_create(&tp->workers[i], workerEntryFn, &tp->workerArgs[i]);
+        if (thrd_create(&tp->workers[i], workerEntryFn, &tp->workerArgs[i]) != thrd_success) {
+            /* The barrier counts numThreads participants, a missing worker
+             * would hang the pool at startup */
+            abort();
+        }
     }
 
     setupWorker(ctx);
@@ -676,11 +681,11 @@ void tpc_threadpool_shutdown(tpc_threadpool* tp) {
         thrd_join(tp->workers[i], NULL);
     }
 
-    free(tp->workerSignals);
+    tpc_alignedFree(tp->workerSignals);
     free(tp->workers);
-    free(tp->workerQueues);
+    tpc_alignedFree(tp->workerQueues);
     free(tp->workerArgs);
-    free(tp);
+    tpc_alignedFree(tp);
 
     ctx->currentTask = NULL;
 }
