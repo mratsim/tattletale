@@ -119,7 +119,18 @@ proc emitMslScalar(t: CirType): string =
     result = emitMslScalar(t.pElem) & "*"
   of ctStruct:
     result = t.name
-  of ctVector, ctArray, ctProc:
+  of ctVector:
+    # coordinate builtins carry `ivec3`, so the builtin-threading
+    # parameters and whole-value reads print this MSL vector name
+    case t.vElem.kind
+    of ctInt, ctUint:
+      if t.vElem.bits == 32:
+        result = (if t.vElem.kind == ctInt: "int" else: "uint") & $t.vN
+      else:
+        result = ""
+    else:
+      result = ""
+  of ctArray, ctProc:
     result = ""
 
 
@@ -583,7 +594,16 @@ proc printProc(ctx: var PrintCtx, fn: CirProc): string =
     for p in fn.params:
       case p.typ.kind
       of ctAptr, ctPtr:
-        params.add emitMslPtr(p.typ, p.name)
+        # a threadgroup-space pointer parameter is a relocated smem arena,
+        # caller-owned storage (Metal rejects threadgroup allocation inside device functions)
+        # - an `aptr` over the element type prints a pointer:
+        #   `threadgroup T* name`
+        # - a `ptr` over the object type prints a reference:
+        #   `threadgroup T& name`
+        if p.typ.space == caThreadgroup and p.typ.kind == ctPtr:
+          params.add emitMslSmemParam(p)
+        else:
+          params.add emitMslPtr(p.typ, p.name)
       else:
         params.add emitMslType(p.typ, p.name, true)
   let ret = emitMslType(fn.ret, "", true)

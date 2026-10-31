@@ -448,6 +448,22 @@ let CoordBuiltinKindByName* {.compileTime.}: Table[string, CoordBuiltinKind] = {
   "thread_index_in_threadgroup": cbkThreadIndexInThreadgroup,
 }.toTable()
 
+## Canonical name of each coordinate builtin kind, "" for `cbkNone`.
+## Inverse of `CoordBuiltinKindByName`.
+##
+## Consumers that synthesize a coordinate-builtin reference read the name
+## from here: the Metal builtin-threading pass names its parameters
+## after the builtin.
+let CoordBuiltinCanonicalName* {.compileTime.}: array[CoordBuiltinKind, string] = [
+  cbkNone: "",
+  cbkThreadPositionInGrid: "thread_position_in_grid",
+  cbkThreadgroupPositionInGrid: "threadgroup_position_in_grid",
+  cbkThreadPositionInThreadgroup: "thread_position_in_threadgroup",
+  cbkThreadsPerThreadgroup: "threads_per_threadgroup",
+  cbkThreadgroupsPerGrid: "threadgroups_per_grid",
+  cbkThreadIndexInThreadgroup: "thread_index_in_threadgroup",
+]
+
 let SynchroBuiltinKindByName* {.compileTime.}: Table[string, SynchroBuiltinKind] = {
   "threadgroup_barrier": sbkThreadgroupBarrier,
   "threadgroup_barrier_device": sbkThreadgroupBarrierDevice,
