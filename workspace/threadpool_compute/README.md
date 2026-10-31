@@ -5,6 +5,11 @@ A C11 work-stealing threadpool with a macro frontend shaped after
 `spawn` everything, `sync` what you need,
 `parallelFor` for data parallel loops. One C file set, no dependencies beyond the platform, GCC and Clang only.
 
+## Goal
+
+GPU kernels will be lowered to C for CPU execution and they need a performant
+threadpool as a backend, so Constantine's threadpool was ported from Nim to C.
+
 ## Quick start
 
 ```c
@@ -110,25 +115,4 @@ word is the task self-pointer. `tests/t_nim_api.nim` runs the smoke test:
 nim c --path:../.. -r tests/t_nim_api.nim
 ```
 
-## Portability
-
-Linux parks on futexes, Darwin on ulock calls, Windows on `WaitOnAddress`.
-Makefile platform selection comes from `uname`.
-Macro frontend uses `typeof` and statement expressions, so GCC and Clang only.
-
-Scheduling is a child-stealing work pool: idle workers take tasks
-from other workers' deques and TPC_SYNC runs task work while waiting.
-Design notes and citations live in the source comments.
-
-## Benchmarks
-
-20 threads, best of 3, against constantine's Nim release binaries,
-built with `-d:release -d:danger` on one machine:
-
-| Benchmark | threadpool_compute | constantine |
-|---|---|---|
-| fib(40) | 308.8 ms | 278.0 ms |
-| fib(35) | 29.0 ms | 26.4 ms |
-| nqueens(13) | 85.2 ms | 97.1 ms |
-
-`make bench` builds the same benchmarks, results verified against known values.
+See also [DESIGN.md](DESIGN.md) and [RANDOM_PERMUTATIONS.md](RANDOM_PERMUTATIONS.md).
