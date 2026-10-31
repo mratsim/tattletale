@@ -1,7 +1,7 @@
 ## Constant-storage write validation
 ##
 ## Test that an assignment into constant storage is refused, with the proc
-## and target named, while thread and threadgroup writes stay legal
+## and target named, while shadowed names and thread or threadgroup writes stay legal
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -108,6 +108,35 @@ static:
     let err = m.runValidationStage()
     doAssert err.contains("assignment into constant storage"),
       "the validation stage must refuse the indexed write into the constant array, got: [" & err & "]"
+
+  # ═══ 7. a local declaration shadows a same-named constant global ═══
+  # Write target: the local's thread storage, the innermost declaration.
+  # Resolution must never refuse through the shadowed program-scope global.
+  block:
+    let kern = procD("k7", @[param("out", devA)], tVoid(), @[
+      varD("g", f32, fltLit(1.0, f32), caThread),
+      asgnS(sym("g", f32), fltLit(2.0, f32)),
+      asgnS(patE(sym("out", devA), intLit(0, tInt(32))), sym("g", f32)),
+    ])
+    kern.isKernel = true
+    let m = moduleD("probe", @[], @[kern])
+    m.globals.add(varD("g", f32, fltLit(3.0, f32), caConstant))
+    let err = m.runValidationStage()
+    doAssert err.len == 0,
+      "a write to a local shadowing a same-named constant global must stay legal: [" & err & "]"
+
+  # ═══ 8. a pattern write through a pointer to a constant array ═══
+  # Base of the pattern: a `ptr` to a constant array. A pattern read names one element
+  # of the array the pointer names, so the write targets constant storage.
+  block:
+    let constArrP = tPtr(caConstant, tArray(4, f32))
+    let kern = procD("k8", @[param("p", constArrP), param("out", devA)], tVoid(), @[
+      asgnS(patE(sym("p", constArrP), intLit(0, tInt(32))), fltLit(2.0, f32)),
+    ])
+    kern.isKernel = true
+    let err = moduleD("probe", @[], @[kern]).runValidationStage()
+    doAssert err.contains("assignment into constant storage"),
+      "the validation stage must refuse the pattern write through the constant array pointer, got: [" & err & "]"
 
   # ═══ hazard negatives: mutable storage and constant reads stay legal ═══
   block:

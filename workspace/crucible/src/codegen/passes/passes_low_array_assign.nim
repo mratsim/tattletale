@@ -63,14 +63,16 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
   ## - `sAsgn` whose left side is an array lvalue becomes the memcpy call
   ##
   ## An array constructor initializer stays: it prints as a braced init list.
-  ## A call right-hand side refuses: C-family targets cannot take the address
-  ## of a call result, a callee returning an array must write through a
-  ## pointer parameter instead.
+  ## A call initializer or a call right-hand side refuses, C-family targets cannot take the address of a call result.
+  ## A callee returning an array must write through a pointer parameter instead.
   var lowered: seq[CirStmt]
   for s in body.mitems:
     case s.kind
     of sVar:
       if s.declType.kind == ctArray and s.init != nil and s.init.kind != eAconstr:
+        if s.init.kind == eCall:
+          return "array declaration binds a call result, C-family targets" &
+            " cannot take the address of a call result; bind the call to a local first"
         lowered.add varD(s.name, s.declType, nil, s.space)
         lowered.add memcpyAssign(sym(s.name, s.declType), s.init, s.declType)
       else:

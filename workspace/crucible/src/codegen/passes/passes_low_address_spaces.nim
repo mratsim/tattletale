@@ -37,9 +37,10 @@
 ## instantiates against the callee's declared formals, so a self-recursive
 ## call resolves to the clone already keyed for its argument spaces.
 
-import std/[hashes, sets, tables]
+import std/tables
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
+import ../frontend/nim_type_resolvers
 import ./pass_datatypes
 import ./pass_helpers
 
@@ -60,18 +61,6 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 # Instantiation
 # ═══════════════════════════════════════════════════════════════════════
-
-proc base58Discriminator(key: string): string =
-  ## Base58 discriminator of an instantiation key: the suffix convention the frontend's instantiation names use.
-  var h = hash(key)
-  h = !$h
-  var x = uint64(h) and 0xFFFFFFFFFFFFFFFF'u64
-  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-  if x == 0:
-    return "1"
-  while x > 0:
-    result = alphabet[int(x mod 58)] & result
-    x = x div 58
 
 proc wantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirType]): bool =
   ## Computes the per-parameter types one call site selects.
@@ -145,7 +134,6 @@ type
     ## - `byBase` groups clones under their base callee for the placement loop
     ## - `queue` lists the procs whose bodies still need the call-site walk
     procs: Table[string, CirProc]
-    taken: HashSet[string]
     clones: Table[string, CirProc]
     byBase: Table[string, seq[CirProc]]
     queue: seq[CirProc]
@@ -161,13 +149,12 @@ proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirPro
   if ctx.clones.hasKey(key):
     result = ctx.clones[key]
   else:
-    var name = calleeProc.name & "_" & base58Discriminator(key)
-    while name in ctx.taken:
+    var name = calleeProc.name & "_" & base58Short(typeIdentityHash(key))
+    while ctx.procs.hasKey(name):
       # a discriminator collision over an existing proc name: rehash with a salt.
       # every rehash salts the key, so the loop stays bounded
-      name = calleeProc.name & "_" & base58Discriminator(key & "\x1f" & name)
+      name = calleeProc.name & "_" & base58Short(typeIdentityHash(key & "\x1f" & name))
     result = cloneCallee(calleeProc, wanted, name)
-    ctx.taken.incl name
     ctx.procs[name] = result
     ctx.clones[key] = result
     ctx.byBase.mgetOrPut(calleeProc.name, @[]).add result
@@ -175,27 +162,26 @@ proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirPro
   calleeExpr.name = result.name
   calleeExpr.typ = freshProcType(wanted, result.ret)
 
-proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx): string =
-  ## Instantiates every call site in one statement list, calls nested inside
-  ## expressions included. Returns "" when clean, else the first refusal.
-  var err = ""
+proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx) =
+  ## Instantiates every call site in one statement list, calls nested inside expressions included.
+  ##
+  ## The walk is infallible:
+  ##
+  ## - a callee outside the module leaves the call site untouched
+  ## - an arity mismatch leaves the call site untouched
+  ## - the printers and the verifier judge whatever shape survives
   let onExpr = proc(e: CirExpr) =
-    if err.len > 0:
-      return
     if e.kind == eCall and e.callee.kind == eSym:
       let calleeProc = ctx.procs.getOrDefault(e.callee.name)
       if calleeProc.isNil or e.args.len != calleeProc.params.len:
         return
       discard e.callee.rewriteCallSite(e.args, calleeProc, ctx)
   let onStmt = proc(s: CirStmt) =
-    if err.len > 0:
-      return
     if s.kind == sCall:
       let calleeProc = ctx.procs.getOrDefault(s.callCallee.name)
       if calleeProc != nil and s.callArgs.len == calleeProc.params.len:
         discard s.callCallee.rewriteCallSite(s.callArgs, calleeProc, ctx)
   ss.walkStmts(onStmt, onExpr)
-  return err
 
 proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
   ## Instantiates the module callees whose pointer arguments name another
@@ -205,13 +191,10 @@ proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
   var ctx = InstantiateCtx()
   for fn in m.procs:
     ctx.procs[fn.name] = fn
-    ctx.taken.incl fn.name
     ctx.queue.add fn
   var i = 0
   while i < ctx.queue.len:
-    let err = ctx.queue[i].body.instantiateCallSitesStmts(ctx)
-    if err.len > 0:
-      return err
+    ctx.queue[i].body.instantiateCallSitesStmts(ctx)
     i.inc
   # Clones insert after their base callee so the emitted proc order compiles declaration before use
   var placed: seq[CirProc]
@@ -220,4 +203,4 @@ proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
     for c in ctx.byBase.getOrDefault(fn.name):
       placed.add c
   m.procs = placed
-  return ""
+  result = ""

@@ -106,9 +106,14 @@ proc emitOpenclTypeBare(t: CirType): string =
     result = emitOpenclScalar(t)
 
 proc emitOpenclArrayDecl(t: CirType, ident: string): string =
-  ## OpenCL C declaration of an array local or field, the length moves
-  ## behind the identifier (`float ident[4]`).
-  emitOpenclScalar(t.aElem) & ' ' & ident & "[" & $t.aN & "]"
+  ## OpenCL C declaration of an array local or field, the lengths move behind the identifier
+  ## (`float ident[4]`, nested arrays stack every dimension `float ident[4][8]`).
+  var dims = ""
+  var leaf = t
+  while leaf.kind == ctArray:
+    dims &= "[" & $leaf.aN & "]"
+    leaf = leaf.aElem
+  emitOpenclScalar(leaf) & ' ' & ident & dims
 
 proc emitOpenclPtrField(t: CirType, ident: string): string =
   ## OpenCL C declaration of a pointer field or local, the address space qualifier leads.

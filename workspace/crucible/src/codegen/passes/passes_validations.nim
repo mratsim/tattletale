@@ -49,55 +49,6 @@ proc verifyPass(m: CirModule): string =
 # Address-space cast validation
 # ═══════════════════════════════════════════════════════════════════════
 
-type
-  Provenance = tuple[space: CirAddrSpace, named: bool]
-    ## Storage an expression's pointer provenance names:
-    ##
-    ## - `named` is false for a value with no pointer anywhere in its chain,
-    ##   a plain integer or an array value
-    ## - `caDevice` reads as the unprovenanced default then, matching the frontend's birth-space derivation
-
-proc ptrProvenance(e: CirExpr): Provenance =
-  ## Storage the pointer provenance of one expression names:
-  ##
-  ## - provenance survives element reads, field reads, value casts, and integer arithmetic over cast pointers
-  ## - the frontend's birth-space derivation walks the same chain when it stamps a cast's target space
-  if e.isNil:
-    return (caDevice, false)
-  case e.kind
-  of eSym:
-    let t = e.typ
-    if t != nil and t.kind in {ctPtr, ctAptr}:
-      return (t.space, true)
-    result = (caDevice, false)
-  of eDeref:
-    result = ptrProvenance(e.derefOperand)
-  of eAt:
-    result = ptrProvenance(e.atBase)
-  of ePat:
-    result = ptrProvenance(e.patBase)
-  of eDot:
-    let t = getExprType(e)
-    if t != nil and t.kind in {ctPtr, ctAptr}:
-      return (t.space, true)
-    result = ptrProvenance(e.dotBase)
-  of eCast, eConv:
-    let t = e.castType
-    if t != nil and t.kind in {ctPtr, ctAptr}:
-      return (t.space, true)
-    result = ptrProvenance(e.castOperand)
-  of eAddr:
-    let t = e.addrType
-    if t != nil and t.kind in {ctPtr, ctAptr}:
-      return (t.space, true)
-    result = (caDevice, false)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    result = ptrProvenance(e.left)
-    if not result.named:
-      result = ptrProvenance(e.right)
-  else:
-    result = (caDevice, false)
-
 proc spaceCastRejection(e: CirExpr, fnName: string): string =
   ## Rejection message of one cast or conversion whose pointer target names
   ## storage the operand's provenance does not, "" when the cast passes:
@@ -112,19 +63,18 @@ proc spaceCastRejection(e: CirExpr, fnName: string): string =
   let target = e.castType
   if target == nil or target.kind notin {ctPtr, ctAptr}:
     return ""
-  let (space, named) = ptrProvenance(e.castOperand)
-  if (named and space == target.space) or
-      (not named and target.space == caDevice):
+  let space = provenanceSpace(e.castOperand)
+  if space == target.space:
     return ""
   let construct = if e.kind == eCast: "cast" else: "conversion"
-  let detail = if named:
-    "the operand accesses " & $space & " storage, the target space is " &
-    $target.space & ". Cross-space pointer casts are never implicit: " &
-    "derive the pointer from storage of the target space"
-  else:
+  let detail = if space == caDevice:
     "the operand has no pointer provenance, the target space is " &
     $target.space & ". An integer names no storage: derive the pointer " &
     "from storage of the target space"
+  else:
+    "the operand accesses " & $space & " storage, the target space is " &
+    $target.space & ". Cross-space pointer casts are never implicit: " &
+    "derive the pointer from storage of the target space"
   result = "at " & fnName & ": cross-space " & construct & ": " & detail
 
 proc checkSpaceCastsStmts(ss: seq[CirStmt], fnName: string): string =
@@ -151,62 +101,86 @@ proc validateAddressSpaceCastsPass(m: CirModule): string =
 # Constant-storage write validation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectConstLocals(ss: seq[CirStmt], seeded: HashSet[string]): HashSet[string] =
-  ## Every `{.const_mem.}` local name of one statement list over `seeded`,
-  ## scopes and case branches included.
-  ##
-  ## The hoisting passes relocate these locals on most targets.
-  ## The CUDA bundle keeps them in-body, and a write to one refuses here.
-  var names = seeded
-  let collect = proc(s: CirStmt) =
-    if s.kind == sVar and s.space == caConstant:
-      names.incl s.name
-  ss.walkStmts(collect, nil)
-  return names
+type
+  ConstStorage = object
+    ## Name classes one constant-write check resolves a bare symbol against:
+    ##
+    ## - `constLocals`: the const-space locals of the checked statement list
+    ## - `otherLocals`: every parameter and every other local declaration, they shadow the program-scope globals of the same name
+    ## - `constGlobals`: the program-scope constants of the module
+    constLocals*: HashSet[string]
+    otherLocals*: HashSet[string]
+    constGlobals*: HashSet[string]
 
-proc constStorageTarget(e: CirExpr, constNames: HashSet[string]): string =
+proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStorage =
+  ## Classifies the declarations one proc's constant-write check resolves a bare symbol against:
+  ## the parameters first, then the local declarations of the body, nested scopes and case branches included.
+  ##
+  ## The hoisting passes relocate const-space locals on most targets.
+  ## The CUDA bundle keeps them in-body, and a write to one refuses here.
+  var found = ConstStorage(constGlobals: constGlobals)
+  for p in fn.params:
+    found.otherLocals.incl p.name
+  let collect = proc(s: CirStmt) =
+    if s.kind == sVar:
+      if s.space == caConstant:
+        found.constLocals.incl s.name
+      else:
+        found.otherLocals.incl s.name
+  fn.body.walkStmts(collect, nil)
+  return found
+
+proc constStorageTarget(e: CirExpr, storage: ConstStorage): string =
   ## Name of the constant-storage target an lvalue designates.
   ## Returns "" when the lvalue lives in another memory class or names no storage.
   ##
-  ## Chain resolution:
+  ## Resolution:
   ##
+  ## Bare symbols:
+  ##
+  ## - a const-space local is constant storage
+  ## - any other local declaration or parameter shadows the program-scope globals of the same name
+  ## - an undeclared name resolves against the program-scope globals
+  ##
+  ## Chains:
+  ##
+  ## - a write through a pointer or array pointer reads the pointer's space, the pointee may be an array or a scalar alike
   ## - an indexed or field write uses the base's storage
-  ## - a write through a pointer uses the pointer's address space
   if e.isNil:
     return ""
   case e.kind
   of eSym:
-    if e.name in constNames:
+    if e.name in storage.constLocals:
       return e.name
-  of eDeref:
-    let t = getExprType(e.derefOperand)
-    if t != nil and t.kind == ctPtr and t.space == caConstant:
-      let root = exprRootSym(e.derefOperand)
-      return if root != nil: root.name else: $e.derefOperand.kind
-  of ePat:
-    let t = getExprType(e.patBase)
-    if t != nil and t.kind == ctAptr and t.space == caConstant:
-      let root = exprRootSym(e.patBase)
-      return if root != nil: root.name else: $e.patBase.kind
+    if e.name in storage.otherLocals:
+      return ""
+    if e.name in storage.constGlobals:
+      return e.name
+  of eDeref, ePat:
+    let base = if e.kind == eDeref: e.derefOperand else: e.patBase
+    let t = getExprType(base)
+    if t != nil and t.kind in {ctPtr, ctAptr} and t.space == caConstant:
+      let root = exprRootSym(base)
+      return if root != nil: root.name else: $base.kind
   of eAt:
-    return constStorageTarget(e.atBase, constNames)
+    return constStorageTarget(e.atBase, storage)
   of eDot:
-    return constStorageTarget(e.dotBase, constNames)
+    return constStorageTarget(e.dotBase, storage)
   else:
     discard
   return ""
 
-proc constWriteRejection(lhs: CirExpr, fnName: string, constNames: HashSet[string]): string =
+proc constWriteRejection(lhs: CirExpr, fnName: string, storage: ConstStorage): string =
   ## Rejection message of one assignment into constant storage.
   ## Returns "" when the target lives in another memory class.
-  let target = constStorageTarget(lhs, constNames)
+  let target = constStorageTarget(lhs, storage)
   if target.len == 0:
     return ""
   result = "at " & fnName & ": assignment into constant storage: the target " &
     target & " lives in read-only program-scope memory. Globals are " &
     "read-only; pass mutable state as a pointer parameter"
 
-proc checkConstWritesStmts(ss: seq[CirStmt], fnName: string, constNames: HashSet[string]): string =
+proc checkConstWritesStmts(ss: seq[CirStmt], fnName: string, storage: ConstStorage): string =
   ## First assignment into constant storage in one statement list, walk order,
   ## nested bodies included. Only assignment targets are checked, reads of constant storage stay legal.
   var err = ""
@@ -214,7 +188,7 @@ proc checkConstWritesStmts(ss: seq[CirStmt], fnName: string, constNames: HashSet
     if err.len > 0:
       return
     if s.kind == sAsgn:
-      err = constWriteRejection(s.lhs, fnName, constNames)
+      err = constWriteRejection(s.lhs, fnName, storage)
   ss.walkStmts(check, nil)
   return err
 
@@ -226,8 +200,9 @@ proc validateConstantWritesPass(m: CirModule): string =
     if g.kind == sVar and g.space == caConstant:
       constGlobals.incl g.name
   for fn in m.procs:
-    let constNames = fn.body.collectConstLocals(constGlobals)
-    let err = fn.body.checkConstWritesStmts(fn.name, constNames)
+    let err = fn.body.checkConstWritesStmts(fn.name,
+      fn.collectConstStorage(constGlobals))
     if err.len > 0:
       return err
-  return m.globals.checkConstWritesStmts("global scope", constGlobals)
+  return m.globals.checkConstWritesStmts("global scope",
+    ConstStorage(constGlobals: constGlobals))

@@ -253,48 +253,6 @@ proc operandLiteralTypedAs(e: CirExpr, opType: CirType): CirExpr =
   else:
     e
 
-func provenanceSpace(e: CirExpr): CirAddrSpace =
-  ## Address space of the storage an expression's pointer provenance names:
-  ## the innermost pointer type along the access chain.
-  ##
-  ## - provenance survives value casts and integer arithmetic over cast pointers
-  ## - `caDevice` reads as no provenance
-  result = caDevice
-  case e.kind
-  of eSym:
-    let t = e.typ
-    if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
-  of eDeref, eAt, ePat:
-    # element reads live where the base's storage lives
-    let base = case e.kind
-      of eDeref: e.derefOperand
-      of eAt: e.atBase
-      else: e.patBase
-    if base != nil:
-      result = provenanceSpace(base)
-  of eDot:
-    let t = getExprType(e)
-    if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
-    elif e.dotBase != nil:
-      result = provenanceSpace(e.dotBase)
-  of eCast, eConv:
-    let t = e.castType
-    if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
-    elif e.castOperand != nil:
-      result = provenanceSpace(e.castOperand)
-  of eAddr:
-    if e.addrType != nil and e.addrType.kind in {ctPtr, ctAptr}:
-      result = e.addrType.space
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    result = provenanceSpace(e.left)
-    if result == caDevice:
-      result = provenanceSpace(e.right)
-  else:
-    discard
-
 func zeroValue(t: CirType): CirExpr =
   ## Zero value of a CIRv2 type:
   ##

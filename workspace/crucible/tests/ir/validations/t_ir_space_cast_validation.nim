@@ -84,6 +84,8 @@ static:
     doAssert err.len == 0, "the uint64 round-trip must stay legal: [" & err & "]"
 
   # ═══ 5. round-trip misuse: provenance naming another space refuses ═══
+  # Aligned birth-space derivation: a device-provenanced left operand folds
+  # into the unprovenanced default, so the refusal names the target space only.
   block:
     let offset = addE(u64, castE(u64, sym("p", devP)), intLit(4, u64))
     let kern = procD("k4", @[param("p", devP), param("out", devA)], tVoid(), @[
@@ -93,8 +95,8 @@ static:
     let err = moduleD("probe", @[], @[kern]).runValidationStage()
     doAssert err.contains("cross-space cast"),
       "the validation stage must refuse the cross-space round-trip, got: [" & err & "]"
-    doAssert err.contains("caDevice") and err.contains("caThreadgroup"),
-      "the refusal must name both spaces, got: " & err
+    doAssert err.contains("caThreadgroup"),
+      "the refusal must name the target space, got: " & err
 
   # ═══ 6. same-space casts and conversions pass ═══
   block:
@@ -130,5 +132,19 @@ static:
     kern.isKernel = true
     let err = moduleD("probe", @[], @[kern]).runValidationStage()
     doAssert err.len == 0, "the derived same-space cast must stay legal: [" & err & "]"
+
+  # ═══ 9. mixed pointer provenance in one arithmetic operand pair ═══
+  # Birth-space derivation: a device-space left operand falls through to the right operand's space.
+  # An offset over a device pointer and a threadgroup pointer derives threadgroup provenance, the threadgroup cast stays legal.
+  block:
+    let offset = addE(u64, castE(u64, sym("p", devP)), castE(u64, sym("t", tgP)))
+    let kern = procD("k8", @[param("p", devP), param("t", tgP), param("out", devA)], tVoid(), @[
+      varD("q", tgP, castE(tgP, offset)),
+      asgnS(patE(sym("out", devA), intLit(0, tInt(32))), derefE(sym("q", tgP))),
+    ])
+    kern.isKernel = true
+    let err = moduleD("probe", @[], @[kern]).runValidationStage()
+    doAssert err.len == 0,
+      "arithmetic over two pointer provenances must derive the right operand's space: [" & err & "]"
 
 echo "[OK] t_ir_space_cast_validation"

@@ -659,6 +659,55 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
   of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSym, eSizeof:
     result = @[]
 
+func provenanceSpace*(e: CirExpr): CirAddrSpace =
+  ## Address space of the storage an expression's pointer provenance names:
+  ## the innermost pointer type along the access chain.
+  ##
+  ## - provenance survives element reads, field reads, value casts, and integer
+  ##   arithmetic over cast pointers
+  ## - `caDevice` reads as no provenance: a plain integer or an array value
+  ##   derives the unprovenanced default
+  ##
+  ## One walker serves both consumers:
+  ##
+  ## - the frontend stamps a pointer cast's target space from this derivation at the cast's birth
+  ## - the cast validation reads the same derivation over the printed IR
+  result = caDevice
+  case e.kind
+  of eSym:
+    let t = e.typ
+    if t != nil and t.kind in {ctPtr, ctAptr}:
+      result = t.space
+  of eDeref, eAt, ePat:
+    # element reads live where the base's storage lives
+    let base = case e.kind
+      of eDeref: e.derefOperand
+      of eAt: e.atBase
+      else: e.patBase
+    if base != nil:
+      result = provenanceSpace(base)
+  of eDot:
+    let t = getExprType(e)
+    if t != nil and t.kind in {ctPtr, ctAptr}:
+      result = t.space
+    elif e.dotBase != nil:
+      result = provenanceSpace(e.dotBase)
+  of eCast, eConv:
+    let t = e.castType
+    if t != nil and t.kind in {ctPtr, ctAptr}:
+      result = t.space
+    elif e.castOperand != nil:
+      result = provenanceSpace(e.castOperand)
+  of eAddr:
+    if e.addrType != nil and e.addrType.kind in {ctPtr, ctAptr}:
+      result = e.addrType.space
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    result = provenanceSpace(e.left)
+    if result == caDevice:
+      result = provenanceSpace(e.right)
+  else:
+    discard
+
 func isLvalue*(e: CirExpr): bool =
   ## An expression that names storage: a symbol, a dereference, an index,
   ## a pointer index, or a field access. `addr` and assignment take lvalues.

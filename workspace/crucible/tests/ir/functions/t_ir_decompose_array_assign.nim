@@ -120,5 +120,15 @@ static:
   doAssert constrRhsErr.contains("not an lvalue"),
     "a whole-array assignment from a constructor must refuse, got: " & constrRhsErr
 
+  # refusal: a call initializer has no address to bind either
+  let callInitFn = procD("ke", @[param("output", outT)], tVoid(), @[
+    varD("a", arrT, callE(sym("make", tProcT(@[], arrT)))),
+    retS(),
+  ])
+  callInitFn.isKernel = true
+  let callInitErr = moduleD("probe4", @[], @[callInitFn]).runCudaLowering()
+  doAssert callInitErr.contains("call result"),
+    "an array declaration binding a call result must refuse, got: " & callInitErr
+
 echo "  OK — whole-array copies decompose into memcpy calls, constructor inits," &
   " struct and scalar assignments pass through, unaddressable shapes refuse"
