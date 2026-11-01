@@ -340,9 +340,6 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
     elif p.typ.kind in {ctPtr, ctAptr}:
       ctx.failSpv("kernel parameter " & p.name & " of pointer type")
     else:
-      if p.typ.kind == ctBool:
-        ctx.failSpv("bool kernel parameter " & p.name &
-          ", the 4-byte push convention has no bool member")
       let m = ctx.valueTy(p.typ)
       let l = std430Layout(m)
       if l.align < 4:

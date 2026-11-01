@@ -2,7 +2,7 @@
 ##
 ## Test that `spirv:` blocks over external object types, `{.device.}` procs,
 ## Function-storage accumulators, atomics, selection expressions and bool
-## comparisons emit binary SPIR-V accepted by `spirv-val --target-env vulkan1.4`
+## comparisons and narrow object leaves emit binary SPIR-V that `spirv-val` accepts
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -99,6 +99,17 @@ const fmaxSpv = spirv:
     for i in 0 ..< n:
       output[i] = max(x[i], 0.0'f32)
 
+# a narrower-than-32-bit object leaf packs under std430.
+# SPIR-V 1.5 storage covers 8-bit members over the vulkan1.4 environment
+type
+  Stats = object
+    count: uint32
+    flag: uint8
+
+const statsSpv = spirv:
+  proc statsKernel(output: ptr UncheckedArray[uint32], s: Stats) {.global.} =
+    output[0] = s.count + uint32(s.flag)
+
 proc runTest() =
   validateSpv(vec2Spv, "t_spirv_kernels_vec2")
   validateSpv(sumSpv, "t_spirv_kernels_sum")
@@ -118,6 +129,7 @@ proc runTest() =
   validateSpv(boolEqSpv, "t_spirv_kernels_bool_eq")
   # float max/min: the integer compare opcodes are illegal over float operands, floats lower through ordered float comparisons
   validateSpv(fmaxSpv, "t_spirv_kernels_fmax")
+  validateSpv(statsSpv, "t_spirv_kernels_stats_u8")
 
 when isMainModule:
   runTest()
