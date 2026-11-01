@@ -8,12 +8,6 @@
 ## Compute-tier emission shared by the CUDA C++, OpenCL C, GLSL and MSL printers:
 ## proc signatures and the module's struct declarations.
 ##
-## | proc                | contract                                                     |
-## | ------------------- | ------------------------------------------------------------ |
-## | printComputeSig     | one signature line: prefix, return, name, parameters         |
-## | printComputeProc    | one proc or kernel: signature, body, closing brace           |
-## | printComputeStructs | the module's struct declarations, C-family and typedef forms |
-##
 ## Each printer owns a `PrintCtx` (`ctx: var auto`) and supplies the target
 ## vocabulary as `mixin` procs beside it, matching the `print_common` pattern.
 ##
@@ -26,9 +20,6 @@ import ../ir/cirv2_lang
 import ./print_common
 
 proc printComputeSig*(ctx: var auto, fn: CirProc): string =
-  ## Signature text of one proc or kernel, without a body:
-  ## `<prefix><ret> <name>(<params>)`.
-  ##
   ## A kernel's name is its exportc override when one is set, else the proc name.
   ## The host runtime looks a kernel up by its emitted name.
   ## Returns "" once the walk recorded a refusal.
@@ -44,8 +35,6 @@ proc printComputeSig*(ctx: var auto, fn: CirProc): string =
     '(' & params.join(", ") & ")"
 
 proc printComputeProc*(ctx: var auto, fn: CirProc): string =
-  ## Text of one proc or kernel: signature, body, closing brace.
-  ##
   ## The body prints before the signature assembles: the MSL kernel signature
   ## appends the coordinate-builtin parameters that the body walk collects.
   ## Returns "" once the walk recorded a refusal.
