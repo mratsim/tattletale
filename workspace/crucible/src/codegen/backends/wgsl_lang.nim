@@ -54,7 +54,7 @@ type
     ## as-is (WGSL device functions take real pointer parameters).
     ## Only pointer locals refuse as values.
     builtins: OrderedSet[string]
-    ## Canonical coordinate builtin kinds the kernel body references, first-use order.
+    ## Canonical coordinate builtin names the kernel body references, first-use order.
     nimBoolNames: HashSet[string]
     ## Names whose storage binds as `NIM_BOOL`: kernel bool parameters,
     ## bool workgroup variables.

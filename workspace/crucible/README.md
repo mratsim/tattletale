@@ -2,7 +2,8 @@
 
 GPU kernel code generator: translates a subset of Nim into native GPU source for six backends:
 CUDA, OpenCL, Vulkan (GLSL), Vulkan (HLSL), WebGPU (WGSL), and Metal (MSL).
-The allowed subset is everything except `string`, `seq`, memory allocations, and IO/syscalls.
+The allowed subset is everything except `seq`, memory allocations, and IO/syscalls.
+String literals compile on the C-family targets, WGSL and HLSL refuse string values.
 
 ## What it is / what it isn't
 
@@ -34,7 +35,7 @@ not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
   `cuda_lang.nim`, `opencl_lang.nim`, `glsl_lang.nim`, `hlsl_lang.nim`, `wgsl_lang.nim`, `msl_lang.nim`.
 - **A pass pipeline.** Semantic work lives in named passes under [`src/codegen/passes/`](src/codegen/passes/),
   run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim).
-  Pass families: normalizations, legalizations, preprocessing, lowering, and validations.
+  Pass families: normalizations, preprocessing, lowering, and validations.
 - **Compile-time codegen.** The `cuda`/`opencl`/`glsl`/`hlsl`/`webgpu`/`metal` macros emit
   source at compile time through [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim).
 - **Tests.** IR-level tests under [`tests/ir/`](tests/ir/) plus auto-runnable suites per backend
@@ -136,7 +137,6 @@ workspace/crucible/
         pass_datatypes.nim        Pass/registry types, walk, runPasses
         pass_registry.nim         PassRegistry
         passes_normalizations.nim  Frontend-extraction passes
-        passes_legalizations.nim  Legalizations
         passes_preprocessing.nim  Preprocessing (incl. mangleNames, backend phases)
         passes_lowering.nim       Lowering (gtSpan -> ptr+len, etc.)
         passes_validations.nim    Pre/post validation passes
