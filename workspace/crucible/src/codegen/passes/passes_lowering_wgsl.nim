@@ -190,8 +190,10 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
   ## Forward declaration, nested statement lists recurse into each other.
 
 proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]): string =
-  ## A value-position call to a callee carrying a crossing pointer has no
-  ## statement form to splice into, so the pass refuses the call.
+  ## A call in value position cannot inline.
+  ## Only a void callee splices into statement position, a call whose result
+  ## feeds an expression has no destination for the inlined body's writes,
+  ## so the pass refuses the call.
   if e.isNil:
     return ""
   if e.kind == eCall and e.callee.kind == eSym:
@@ -199,7 +201,7 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
     if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
       return refuseAt(fn, "device function " & callee.name &
         " takes a pointer that cannot cross a WGSL function signature," &
-        " a value-position call has no statement form to inline into")
+        " a call in value position cannot inline")
   for ch in getExprChildren(e):
     let err = refuseValuePositionCalls(fn, ch, procs)
     if err.len > 0:

@@ -11,6 +11,9 @@
 
 import ./pass_datatypes
 import ./passes_norm_compound_assign
+import ./passes_norm_unroll
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
+  # bindCompoundAssignTemps runs first, its shared-tree detection compares references
   reg.registerCompoundAssignTemps()
+  reg.registerMarkExplicitUnrolls()
