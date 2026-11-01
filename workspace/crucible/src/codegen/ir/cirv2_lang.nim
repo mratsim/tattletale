@@ -386,15 +386,6 @@ type
     reached*: HashSet[string]
     ## `fn/param` keys reachable from `stored` over the argument-flow edges.
 
-  ParamClass* = object
-    ## Parameter classification of one proc, filled by the HLSL
-    ## parameter-classification analysis pass.
-    ##
-    ## - `push` names the scalar parameters that join the kernel push block
-    ## - `buffers` lists the buffer parameters in declaration order
-    push*: HashSet[string]
-    buffers*: seq[CirParam]
-
   CirModule* = ref object
     ## One CIRv2 module: nominal type declarations plus the proc set.
     name*: string
@@ -425,13 +416,6 @@ type
     ##   has no invalidation
     ## - the printer declares exactly these structs, in `types` declaration order,
     ##   and never scans for them itself
-    paramClasses*: Table[string, ParamClass]
-    ## Parameter classification of every proc by name, filled by the HLSL
-    ## parameter-classification analysis pass after its last transform.
-    ##
-    ## - valid only if no transform runs after the pass: the pass registry
-    ##   has no invalidation
-    ## - the printer reads the stored records, it never reclassifies
     refBlocks*: OrderedTable[string, CirType]
     ## GLSL buffer-reference blocks, block name -> pointee type.
     ## One entry per distinct block, in registration order.

@@ -36,8 +36,8 @@
 ##   binding to violate
 ##
 ## Shared:
-## - the parameter-classification analysis pass stores every proc's parameter
-##   classification in `CirModule.paramClasses`, the printer reads the records
+## - the printer classifies every proc's parameters at the signature-emission
+##   sites (`classifyParams`), no stored record
 ## - a whole-vector read of a 3-wide coordinate builtin refuses, components read
 ##   one by one, the scalar `thread_index_in_threadgroup` reads whole as `int(gidx)`
 ## - the dispatch grid size has no HLSL semantic: a `threadgroups_per_grid` read refuses,
@@ -118,10 +118,9 @@ type
     graph: CallGraph
     ## Stored call-graph record (`CirModule.callGraph`): the read-write classification of every buffer parameter.
     kernelPush: HashSet[string]
-    ## Push-constant parameter names of the module's kernel, from the stored
-    ## `CirModule.paramClasses` record the classification pass filled.
+    ## Push-constant parameter names of the module's kernel, from `classifyParams`.
     kernelBuffers: seq[CirParam]
-    ## Buffer parameters of the module's kernel, from the same record.
+    ## Buffer parameters of the module's kernel, from the same classification.
 
 const printerTarget = "hlsl"
 
@@ -675,6 +674,83 @@ proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
     result = "inline "
   result &= ret & ' ' & fn.name & '(' & params.join(", ") & ')'
 
+proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
+  ## Splits one proc's parameters into buffer resources and values:
+  ##
+  ## - kernels: values join the Push block, buffers take register ordinals
+  ## - device functions: values pass by value (a `var T` binds `inout`),
+  ##   buffers are unbound resource params
+  ##
+  ## Rejects the parameter shapes the HLSL resource model cannot bind:
+  ##
+  ## - the flavor selects the fvVulkan-only refusals, the buffer-element binding
+  ##   check and the bool push member
+  ## - classification runs at the signature-emission sites, so a module printed
+  ##   without the pipeline classifies exactly as one printed through it
+  for p in fn.params:
+    case p.typ.kind
+    of ctAptr:
+      if p.typ.space != caDevice:
+        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space &
+          " space, buffers address device memory")
+        return
+      if ctx.flavor == fvVulkan:
+        # element types are checked up front, the access emitter and the buffer-pointer typedef both read them
+        let (_, err) = bpElementStrideCheck(p.typ.pElem)
+        if err.len > 0:
+          ctx.fail(err)
+          return
+      buffers.add p
+    of ctPtr:
+      if p.typ.space == caThread:
+        if fn.isKernel:
+          ctx.fail("by-reference parameter " & p.name & " in kernel `" &
+            fn.name & "` has no binding, kernels take values and buffers")
+          return
+        # device function: the `inout` binding, reads and writes are direct
+        discard
+      else:
+        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.space &
+          " space has no binding")
+        return
+    of ctArray:
+      ctx.fail("array parameter " & p.name & " in `" & fn.name &
+        "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
+      return
+    of ctSpan:
+      ctx.fail("span parameter " & p.name & " in `" & fn.name &
+        "` has no HLSL binding, openArray spans split to pointer + length" &
+        " before printing")
+      return
+    of ctInt, ctUint:
+      if p.typ.bits != 32:
+        ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
+          "` is rejected: int64_t is a parse error in the HLSL frontend and" &
+          " uint64_t pulls the SPIR-V Int64 capability")
+        return
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctFloat:
+      if p.typ.bits == 16:
+        ctx.fail("float16 parameter " & p.name & " in `" & fn.name &
+          "`, float16 types are outside the HLSL subset")
+        return
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctBool:
+      if fn.isKernel:
+        if ctx.flavor == fvVulkan:
+          ctx.fail("bool parameter " & p.name & ", the fvVulkan push block has" &
+            " no bool member")
+          return
+        pushParams.incl(p.name)
+    of ctVoid, ctVector, ctStruct:
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctProc:
+      ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
+      return
+
 proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the HLSL walk:
   ##
@@ -695,12 +771,17 @@ proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
     ctx.pushParams = ctx.kernelPush
     ctx.workgroup = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
   else:
-    for p in fn.params:
-      if p.typ.kind == ctAptr:
-        ctx.bufferParams.incl(p.name)
-        ctx.addressParams[p.name] = p.typ
-        if ctx.graph.reached.contains(fn.name & "/" & p.name):
-          ctx.rwBuffers.incl(p.name)
+    # a device function's values pass by value, its push half stays empty
+    var devicePush: HashSet[string]
+    var deviceBuffers: seq[CirParam]
+    ctx.classifyParams(fn, devicePush, deviceBuffers)
+    if ctx.failing():
+      return
+    for p in deviceBuffers:
+      ctx.bufferParams.incl(p.name)
+      ctx.addressParams[p.name] = p.typ
+      if ctx.graph.reached.contains(fn.name & "/" & p.name):
+        ctx.rwBuffers.incl(p.name)
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `static const` declaration of one relocated const_mem local.
@@ -864,14 +945,11 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   if kernel.ret.kind != ctVoid:
     ctx.fail("kernel `" & kernel.name & "` must return void, got " & $kernel.ret.kind)
     return ("", ctx.err)
-  # stored records the printer reads, never rescans:
-  # call graph: the read-write classification of the buffer parameters
-  # parameter classification of the kernel: push members and buffer parameters
-  # both filled by their analysis passes after the last transform
   ctx.graph = m.callGraph
-  let kernelClass = m.paramClasses[kernel.name]
-  ctx.kernelPush = kernelClass.push
-  ctx.kernelBuffers = kernelClass.buffers
+  ctx.fnName = kernel.name
+  ctx.classifyParams(kernel, ctx.kernelPush, ctx.kernelBuffers)
+  if ctx.failing():
+    return ("", ctx.err)
   printShaderModule(ctx, m, kernel, "", {caConstant})
 
 proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
