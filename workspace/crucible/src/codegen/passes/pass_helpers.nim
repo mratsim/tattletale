@@ -7,21 +7,14 @@
 
 ## Shared pass helpers over CIRv2.
 ##
-## | Concern                    | Helpers                                                                       |
-## | -------------------------- | ----------------------------------------------------------------------------- |
-## | Walks                      | call-target collection, the shared statement and expression walk              |
-## | Chains                     | the root symbol of a dotted or indexed chain, declaration and clone utilities |
-## | Kernel parameters          | the leaf walk and the pointer-local explosion context                         |
-## | Rewrite and scan skeletons | the WGSL and HLSL pointer-local rewrite, the struct-reference scanner's walks |
-##
 ## Every pass file may import these, no pass owns them.
+## Rewrite helpers return the empty string when clean, else a refusal text naming the site.
 
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 
 proc exprRootSym*(e: CirExpr): CirExpr =
-  ## Symbol at the root of a dotted or indexed chain, nil otherwise.
   result = e
   while result != nil and result.kind in {eDot, ePat, eAt}:
     result = case result.kind
@@ -32,13 +25,10 @@ proc exprRootSym*(e: CirExpr): CirExpr =
     result = nil
 
 proc walkExprs*(e: CirExpr, visit: proc(e: CirExpr)) =
-  ## Pre-order walk over one expression tree, `visit` sees every node once.
-  ##
   ## Contract:
-  ## - `visit` runs on a node before the walk descends into the children
-  ## - a visitor may rewrite the node in place, expressions are shared refs
-  ## - the children are read after `visit`, a rewrite of the visited node
-  ##   steers the descent into the rewritten shape
+  ## - a visitor may rewrite the visited node in place, expressions are shared refs
+  ## - the children are read after the visit, so a rewrite steers the descent
+  ##   into the rewritten shape
   if e.isNil:
     return
   visit(e)
@@ -46,29 +36,13 @@ proc walkExprs*(e: CirExpr, visit: proc(e: CirExpr)) =
     walkExprs(ch, visit)
 
 proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirExpr)) =
-  ## Walks one statement list through two visitors, either nil.
+  ## Walks one statement list through two optional visitors.
   ##
-  ##   statement list → onStmt per statement → onExpr per expression position
-  ##
-  ## - `onExpr` sees every expression position of every statement kind
-  ##
-  ## Visited positions:
-  ##
-  ## - declaration initializers and assignment operands
-  ## - branch and loop conditions
-  ## - return and discard values, `sAsm` and `sEmit` operands
-  ## - call callees and call arguments
-  ##
-  ## `onStmt` sees every statement once, after its expression positions,
-  ## after its nested statement lists. Nested bodies recurse:
-  ## then/else branches, loop bodies.
-  ##
-  ## The walk iterates a shallow copy of the statement list, so an insertion
-  ## from `onStmt` does not disturb the iteration.
-  ##
-  ## Visitors return nothing. A visitor that refuses captures the refusal
-  ## in a variable and stops work once the variable is set, so the first
-  ## refusal in walk order wins.
+  ## Contract:
+  ## - `onStmt` runs last for a statement, after the expression visits and after the nested bodies recurse
+  ## - the walk iterates a shallow copy of the list, insertions made by `onStmt` do not disturb the iteration
+  ## - visitors return nothing: a refusing visitor records its refusal itself
+  ##   and stops work once recorded, so the first refusal in walk order wins
 
   proc slot(e: CirExpr) =
     if onExpr != nil:
@@ -108,13 +82,6 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
       onStmt(s)
 
 proc collectCallTargets*(stmts: seq[CirStmt], targets: var HashSet[string]) =
-  ## Collects every callee name appearing in the statement list.
-  ## Nested bodies are included.
-  ##
-  ## Contract:
-  ## - a statement-level call names its callee with a bare symbol,
-  ##   the statement visitor reads `s.callCallee` directly
-  ## - the expression visitor sees only the call nodes nested in expression positions
   var collected = targets
   let onExpr = proc(e: CirExpr) =
     if e.kind == eCall and e.callee.kind == eSym:
@@ -126,7 +93,6 @@ proc collectCallTargets*(stmts: seq[CirStmt], targets: var HashSet[string]) =
   targets = collected
 
 proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: string, typ: CirType]]) =
-  ## Every local declared in the statement list with its type, nested bodies included.
   var collected = locals
   let collect = proc(s: CirStmt) =
     if s.kind in {sVar, sConst}:
@@ -135,12 +101,9 @@ proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: str
   locals = collected
 
 proc walkTypeTree*(t: CirType, visit: proc(t: CirType), descendPtrs: bool = true) =
-  ## Pre-order walk over one type tree, `visit` sees every node once:
-  ## struct fields in field order, then array elements, vector elements, pointer targets.
-  ##
-  ## - `descendPtrs` names the target's pointer-recursion policy: a printer
-  ##   that names no type behind a pointer kind passes `false` and leaves
-  ##   the pointer targets unvisited
+  ## Contract:
+  ## - a printer that names no type behind a pointer kind passes `descendPtrs = false`
+  ##   and leaves the pointer targets unvisited
   ## - a collecting visitor cannot loop, value type trees are acyclic
   if t.isNil:
     return
@@ -160,9 +123,8 @@ proc walkTypeTree*(t: CirType, visit: proc(t: CirType), descendPtrs: bool = true
     discard
 
 proc singleKernel*(m: CirModule): CirProc =
-  ## Returns the module's kernel when the module has exactly one, nil otherwise.
-  ## A module without exactly one kernel contributes no kernel-side registrations.
-  ## Such a module refuses at the printer.
+  ## A module without exactly one kernel contributes no kernel-side registrations,
+  ## such a module refuses at the printer.
   for fn in m.procs:
     if fn.isKernel:
       if result != nil:
@@ -170,21 +132,9 @@ proc singleKernel*(m: CirModule): CirProc =
       result = fn
 
 proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: proc(e: CirExpr)) =
-  ## Statement walk of the struct-reference scanners.
-  ##
-  ##   statement → onDecl (var/const) → initializer walk unless onDecl refuses
-  ##
-  ## - every expression position goes through `onExpr`, one `walkExprs`
-  ##   per position
-  ## - `onDecl` takes each `var`/`const` declaration before its initializer
-  ##   walk and returns `false` to skip that walk when the declaration
-  ##   never prints on the target that refused it
-  ## - nested bodies recurse in source order, `onExpr` sees nodes pre-order
-  ##
-  ## Visited positions:
-  ##
-  ## - declaration types, assignment operands, conditions
-  ## - return values, discard values, call callees, call arguments
+  ## `onDecl` takes each `var`/`const` declaration and returns `false` to skip
+  ## that declaration's initializer walk, for a declaration that never prints
+  ## on the refusing target.
   for s in ss:
     case s.kind
     of sVar, sConst:
@@ -211,8 +161,8 @@ proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: pro
       discard
 
 proc cloneExpr*(e: CirExpr): CirExpr =
-  ## Deep copy of one expression: statements and expressions are ref objects,
-  ## so a splice renames its copy in place and the callee's own body never moves.
+  ## Deep copy: expressions are shared refs, a rewrite of the clone must not
+  ## reach the source tree.
   if e.isNil:
     return nil
   result = CirExpr(kind: e.kind)
@@ -288,7 +238,6 @@ proc cloneExpr*(e: CirExpr): CirExpr =
       result.args.add cloneExpr(a)
 
 proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
-  ## Deep copy of a statement list.
   for s in stmts:
     var c = CirStmt(kind: s.kind)
     case s.kind
@@ -331,7 +280,6 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
     result.add c
 
 func containsPtrDeep*(t: CirType): bool =
-  ## Returns true when `t` names a pointer directly, in a field, or nested.
   case t.kind
   of ctPtr, ctAptr:
     true
@@ -347,17 +295,12 @@ func containsPtrDeep*(t: CirType): bool =
 
 type
   CirParamLeaf* = object
-    ## One exploded kernel parameter: a pointer leaf or a whole value leaf.
+    ## `isBuffer` marks a pointer leaf that binds as a device buffer, a value leaf binds by value.
     name*: string
     typ*: CirType
     isBuffer*: bool
 
 proc leavesWalk(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
-  ## One step of the leaf walk.
-  ## - pointer leaves stay whole, `isBuffer` set
-  ## - structs holding pointers recurse under `name_field` names
-  ## - value structs and arrays cross whole
-  ## - an array leaf holding pointers refuses
   case t.kind
   of ctPtr, ctAptr:
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: true)
@@ -376,7 +319,6 @@ proc leavesWalk(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
 
 proc kernelParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
-  ## Returns the leaves of `t` in field order, as `leavesWalk` walks them.
   leavesWalk(t, name, result)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -405,13 +347,10 @@ type
       ## callee parameter types read them here.
 
 proc refuseAt*(fn: CirProc, detail: string): string =
-  ## Refusal text of one proc-scoped failure: `at <proc>: <detail>`.
-  ## The pass runner prefixes the pass name.
+  ## Text the pass runner prefixes with the pass name.
   "at " & fn.name & ": " & detail
 
 proc dottedPath*(e: CirExpr): string =
-  ## Dotted field path of a chain rooted at a symbol, "" otherwise:
-  ## `v` -> `v`, `v.inner.f` -> `v.inner.f`.
   if e.kind == eSym:
     return e.name
   if e.kind == eDot:
@@ -421,8 +360,7 @@ proc dottedPath*(e: CirExpr): string =
   return ""
 
 proc structRoot*(e: CirExpr): CirExpr =
-  ## Returns the symbol at the root of a pure dotted chain, nil otherwise.
-  ## Unlike `exprRootSym`, an indexed or pattern base stops this walk.
+  ## Unlike `exprRootSym`, an indexed or pattern base stops this walk, nil.
   result = e
   while result != nil and result.kind == eDot:
     result = result.dotBase
@@ -430,14 +368,12 @@ proc structRoot*(e: CirExpr): CirExpr =
     result = nil
 
 proc spliceSym*(e: CirExpr, name: string, typ: CirType) =
-  ## Splices one expression node into a plain symbol reference, in place.
-  ## Expressions are refs, so the rewrite applies to the node every sharer sees.
+  ## Expressions are shared refs, so a rewrite applies to the node every sharer sees.
   e[] = sym(name, typ)[]
 
 proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: CirType, c: CirExpr, target: string): string =
-  ## Records the field rewrites of one pointer-holding struct local whose object
-  ## construction binds leaf symbols. Nested constructions recurse.
-  ## Returns "" when clean, else the refusal.
+  ## Records the field rewrites of one pointer-holding struct local whose
+  ## object construction binds leaf symbols, nested constructions recurse.
   ##
   ## Args:
   ## - `path`: the dotted path the local is exploded under, `v` at the top
@@ -476,9 +412,6 @@ proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: 
   return ""
 
 proc explodeStructVarDecl*(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt, target: string): string =
-  ## `sVar` case for a pointer-holding struct local: the construction registers
-  ## its field rewrites and the local joins `ctx.structLocals`.
-  ## Returns "" when clean, else the refusal.
   if s.init == nil or s.init.kind != eOconstr:
     return refuseAt(fn, "struct local " & s.name &
       " without a construction, " & target & " has no pointer struct members")
@@ -492,19 +425,13 @@ proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
     target: string,
     ownArm: proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string): string =
   ## Shared skeleton of the WGSL and HLSL pointer-local expression rewrites.
-  ## Returns "" when clean, else the first refusal.
   ##
-  ## The skeleton owns the shapes both pointer models rewrite identically:
-  ##
-  ## - the bare-symbol refusals of the pointer-local explosion
-  ## - the bound-leaf splice of a dotted read through an exploded struct local
-  ## - the pointee splice of a deref whose operand stands for one
-  ##
-  ## A deref operand stands for its pointee as a bound alias or as a by-reference parameter.
-  ## A bound alias reads as the pointee local that its address-of binding recorded.
+  ## A deref operand stands for its pointee:
+  ## - a bound alias reads as the pointee local that the address-of binding recorded
+  ## - a by-reference parameter reads as the bare parameter itself
   ##
   ## `ownArm` handles every shape outside the skeleton, refusal set and recursion included.
-  ## `target` names the target in the refusal texts, `WGSL` or `HLSL`.
+  ## `target` is interpolated into the refusal texts.
   if e.isNil:
     return ""
   case e.kind
@@ -546,26 +473,24 @@ proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
 # ═══════════════════════════════════════════════════════════════════════
 
 proc freshProcType*(params: seq[CirType], ret: CirType): CirType =
-  ## A fresh proc type over `params`.
-  ##
-  ## Returns a `CirType` ref sharing nothing with the interned signature types:
+  ## A fresh proc type over `params`, sharing nothing with the interned signature types.
   ##
   ## - structurally identical call-site callee types share one `CirType` ref
-  ## - a call site re-typing its callee swaps the symbol type for this fresh copy, leaving the shared ref untouched
+  ## - a call site re-typing its callee swaps the symbol type for the fresh copy, so the shared ref of the other call sites stays untouched
   result = CirType(kind: ctProc)
   result.params = params
   result.ret = ret
 
 proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): string =
-  ## Relocates the `{.const_mem.}` locals of one statement list into `m.globals` in encounter order,
-  ## loop and branch bodies included, deleting the declarations from the list.
-  ## Returns "" when clean, else the first refusal.
+  ## Relocates the `{.const_mem.}` locals of one statement list into `m.globals`, deleting the declarations from the list.
   ##
-  ## Kernel and device-function locals relocate alike.
-  ## Program-scope constant storage is visible to all functions in every target running this walk.
-  ##
-  ## The initializer is required: a program-scope constant declaration has no other initialization site.
-  ## An initializer only the target's compiler can fold (a read of another local, say) prints verbatim and refuses there.
+  ## Contract:
+  ## - relocation is in encounter order, loop and branch bodies included
+  ## - kernel and device-function locals relocate alike: program-scope constant
+  ##   storage is visible to all functions in every target running this walk
+  ## - the initializer is required, a program-scope constant declaration has no
+  ##   other initialization site
+  ## - an initializer only the target's compiler can fold prints verbatim and refuses there (a read of another local, say)
   var i = 0
   while i < ss.len:
     let s = ss[i]
@@ -594,14 +519,11 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
   return ""
 
 proc hoistConstMemLocals*(m: CirModule): string =
-  ## Relocates every `{.const_mem.}` local of every proc into `m.globals` in encounter order,
-  ## loop and branch bodies included, dropping the declarations from their bodies.
-  ## Returns "" when clean, else the first refusal.
+  ## Relocates every `{.const_mem.}` local of every proc, see `hoistConstMemStmts`.
   ##
   ## Contract:
-  ## - the initializer is required, a const_mem local without one refuses
-  ## - runs after the reserved-word rename, relocated declaration names match
-  ##   the renamed body references
+  ## - runs after the reserved-word rename, so the relocated declaration names
+  ##   match the renamed body references
   for fn in m.procs:
     let err = hoistConstMemStmts(m, fn, fn.body)
     if err.len > 0:
