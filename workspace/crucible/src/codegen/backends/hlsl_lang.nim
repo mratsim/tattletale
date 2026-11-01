@@ -67,6 +67,8 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
 import ./print_common
+import ./print_compute
+import ./print_shaders
 import ./targets_rows
 
 type HlslFlavor* = enum
@@ -113,6 +115,13 @@ type
     procs: Table[string, CirProc]
     ## Module procs by name, by-reference call arguments read callee
     ## parameter types here.
+    graph: CallGraph
+    ## Stored call-graph record (`CirModule.callGraph`): the read-write classification of every buffer parameter.
+    kernelPush: HashSet[string]
+    ## Push-constant parameter names of the module's kernel, from the stored
+    ## `CirModule.paramClasses` record the classification pass filled.
+    kernelBuffers: seq[CirParam]
+    ## Buffer parameters of the module's kernel, from the same record.
 
 const printerTarget = "hlsl"
 
@@ -251,6 +260,18 @@ const CoordInputNames: array[CoordBuiltinKind, string] = [
 proc coordInputName(kind: CoordBuiltinKind): string =
   ## Synthesized main input variable of a coordinate builtin kind.
   CoordInputNames[kind]
+
+## Entry-input text per canonical coordinate builtin kind: the synthesized main input with its semantic.
+## "" for the kinds with no entry input: threads_per_threadgroup reads the workgroup literal.
+## threadgroups_per_grid materializes in the lowering pass.
+const hlslEntryInputs*: EntryInputRow = [
+  "",
+  "uint3 gid : SV_DispatchThreadID",
+  "uint3 groupId : SV_GroupID",
+  "uint3 groupThreadId : SV_GroupThreadID",
+  "",
+  "",
+  "uint gidx : SV_GroupIndex"]
 
 proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string): string =
   ## One coordinate-builtin component, cast to the canonical int the CIRv2 vocabulary reads.
@@ -603,7 +624,7 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   result = ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules
+# Procs and modules: shader-tier hooks over print_shaders
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
@@ -612,10 +633,25 @@ proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
   let resTy = if rw: "RWStructuredBuffer" else: "StructuredBuffer"
   result = resTy & "<" & ctx.emitHlslScalar(p.typ.pElem) & "> " & p.name
 
-proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, forwardDeclare: bool): string =
-  ## `RetType name(params)` of one proc, buffers as resources, `var T` device parameters as `inout`.
-  ## The signature of an `{.inline.}` proc opens with the `inline ` qualifier.
-  ## Parameter legality refuses in the classification pass, the printer reads the stored records.
+proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
+  ## Head of one proc, signature and open brace:
+  ##
+  ## - a device function: the bare `RetType name(params)` signature, buffers as resources, `var T` device parameters as `inout`
+  ##   an `{.inline.}` proc's signature opens with the `inline ` qualifier
+  ## - parameter legality refuses in the classification pass, the printer reads the stored records
+  ## - the entry kernel: the `[numthreads(...)]` attribute line, then `void <entry>(<entry inputs>)` over the body-walk semantics
+  ##   exportc renames the entry for the host runtime lookup, Vulkan ingest reads the name back from the `[numthreads]` line
+  ## - the kernel's open brace prints on its own line (HLSL's brace style), the body and the closing brace are the caller's
+  if fn.isKernel:
+    let wg = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
+    result = "[numthreads(" & $wg[0] & ", " & $wg[1] & ", " & $wg[2] & ")]\n"
+    # exportc renames a kernel entry for the host runtime lookup. Vulkan ingest reads
+    # back the entry name from the emitted `[numthreads]` line and passes it to dxc.
+    # Device functions keep the name their call sites reference, a bare kernel stays `main`.
+    let entryName = if fn.exportName.len > 0: fn.exportName else: "main"
+    result &= "void " & entryName & "(" &
+      emitEntryInputs(ctx.coordReads, hlslEntryInputs) & ")\n{\n"
+    return
   var params: seq[string]
   for p in fn.params:
     case p.typ.kind
@@ -624,7 +660,7 @@ proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, forwardDe
         # address value only: reads and writes construct the buffer pointer per access
         params.add "uint64_t " & p.name
       else:
-        let rw = graph.reached.contains(fn.name & "/" & p.name)
+        let rw = ctx.graph.reached.contains(fn.name & "/" & p.name)
         params.add ctx.emitResourceParam(p, rw)
     of ctPtr:
       params.add "inout " & ctx.emitHlslDecl(p.typ.pElem, p.name)
@@ -638,31 +674,45 @@ proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, forwardDe
   if fn.inline:
     result = "inline "
   result &= ret & ' ' & fn.name & '(' & params.join(", ") & ')'
-  if forwardDeclare:
-    result.add ';'
 
-proc printFn(ctx: var PrintCtx, fn: CirProc, graph: CallGraph): string =
-  ## One device function: signature, body, closing brace.
-  ctx.fnName = fn.name
-  ctx.indent = 0
-  ctx.isKernel = false
+proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
+  ## Per-proc state of the HLSL walk:
+  ##
+  ## - the entry kernel: push-constant parameters from the stored classification record, buffer parameters to their resource or address route
+  ## - a device function: its own buffer parameters, read-write classification from the stored call-graph record
+  ## - the kernel's workgroup sizes, the `threads_per_threadgroup` reads read the workgroup literal
+  ctx.isKernel = fn.isKernel
   ctx.pushParams = initHashSet[string]()
   ctx.bufferParams = initHashSet[string]()
   ctx.rwBuffers = initHashSet[string]()
   ctx.addressParams = initTable[string, CirType]()
-  for p in fn.params:
-    if p.typ.kind == ctAptr:
+  if fn.isKernel:
+    for p in ctx.kernelBuffers:
       ctx.bufferParams.incl(p.name)
       ctx.addressParams[p.name] = p.typ
-      if graph.reached.contains(fn.name & "/" & p.name):
+      if ctx.graph.reached.contains(fn.name & "/" & p.name):
         ctx.rwBuffers.incl(p.name)
-  let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
+    ctx.pushParams = ctx.kernelPush
+    ctx.workgroup = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
+  else:
+    for p in fn.params:
+      if p.typ.kind == ctAptr:
+        ctx.bufferParams.incl(p.name)
+        ctx.addressParams[p.name] = p.typ
+        if ctx.graph.reached.contains(fn.name & "/" & p.name):
+          ctx.rwBuffers.incl(p.name)
+
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope `static const` declaration of one relocated const_mem local.
+  ## dxc folds them at compile time, they take no register in the cbuffer layout.
+  if s.init == nil:
+    ctx.fail("const_mem local " & s.name & " without an initializer")
     return ""
-  let sig = ctx.emitFnSignature(fn, graph, forwardDeclare = false)
-  if ctx.failing():
-    return ""
-  return sig & " {\n" & bodyTxt & '\n' & "}"
+  if s.init.kind == eOconstr and s.declType.kind == ctStruct:
+    return "static const " & ctx.emitHlslDecl(s.declType, s.name) &
+      " = " & ctx.printBraceList(s.declType, s.init) & ";"
+  return "static const " & ctx.emitHlslDecl(s.declType, s.name) &
+    " = " & ctx.printExpr(s.init) & ";"
 
 proc emitStructDecls(ctx: var PrintCtx, refs: HashSet[string],
     byName: Table[string, CirType], emitted: var HashSet[string],
@@ -701,23 +751,102 @@ proc emitStructDecls(ctx: var PrintCtx, refs: HashSet[string],
       outp.add "  " & ctx.emitHlslDecl(f.typ, f.name) & ";\n"
   outp.add "};\n\n"
 
-proc emitMainInputs(ctx: PrintCtx): string =
-  ## Semantics for `main`, exactly the ones the kernel body reads.
-  var inputs: seq[string]
-  if cbkThreadPositionInGrid in ctx.coordReads:
-    inputs.add "uint3 " & coordInputName(cbkThreadPositionInGrid) & " : SV_DispatchThreadID"
-  if cbkThreadgroupPositionInGrid in ctx.coordReads:
-    inputs.add "uint3 " & coordInputName(cbkThreadgroupPositionInGrid) & " : SV_GroupID"
-  if cbkThreadPositionInThreadgroup in ctx.coordReads:
-    inputs.add "uint3 " & coordInputName(cbkThreadPositionInThreadgroup) & " : SV_GroupThreadID"
-  if cbkThreadIndexInThreadgroup in ctx.coordReads:
-    inputs.add "uint " & coordInputName(cbkThreadIndexInThreadgroup) & " : SV_GroupIndex"
-  result = inputs.join(", ")
+proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
+  ## Struct declarations for the referenced value structs in dependency order, member structs first, deduplicated by name.
+  ## The reference set is the stored record `CirModule.structRefs`, every struct the member recursion reaches is already in it.
+  let refs = m.structRefs
+  var byName: Table[string, CirType]
+  for t in m.types:
+    if t.kind == ctStruct:
+      byName[t.name] = t
+  var emitted = initHashSet[string]()
+  var refList: seq[string]
+  for name in refs:
+    refList.add name
+  for name in refList:
+    ctx.emitStructDecls(refs, byName, emitted, name, result)
+
+proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
+  ## Resource-binding section of the kernel, per flavor:
+  ##
+  ## - fvD3D12: register resources on one global ordinal, read-only `t`, read-write `u`, then the Push block on `b`
+  ## - fvVulkan: buffer-pointer aliases, then the `[[vk::push_constant]]` struct with every member offset locked to the launch-side packing
+  if ctx.flavor == fvVulkan:
+    # buffer-pointer aliases, one per element type in encounter order
+    var bpEmitted: HashSet[string]
+    for p in ctx.kernelBuffers:
+      let nm = emitBpName(p.typ.pElem)
+      if nm notin bpEmitted:
+        bpEmitted.incl nm
+        result &= "typedef vk::BufferPointer<" &
+          ctx.emitHlslScalar(p.typ.pElem) & "> " & nm & ";\n"
+    if bpEmitted.len > 0:
+      result &= "\n"
+    if kernel.params.len > 0:
+      # one member per kernel parameter in host pack order, every member offset
+      # locked with [[vk::offset]] to the launch-side packing, the grid member 16-byte aligned
+      result &= "struct Push {\n"
+      var off = 0
+      for p in kernel.params:
+        if p.typ.kind == ctAptr:
+          off = roundUpMultiple(off, 8)
+          result &= "  [[vk::offset(" & $off & ")]] uint64_t " & p.name & ";\n"
+          off.inc 8
+        elif p.name == "crucible_numworkgroups":
+          # materialized dispatch grid size, an int3 the engine stages
+          # on the 16-byte boundary the std430 vector rule gives it
+          off = roundUpMultiple(off, 16)
+          result &= "  [[vk::offset(" & $off & ")]] int3 " & p.name & ";\n"
+          off.inc 12
+        else:
+          let (size, align) = ctx.pushMemberExtent(p.typ, p.name)
+          if ctx.failing():
+            return ""
+          off = roundUpMultiple(off, align)
+          result &= "  [[vk::offset(" & $off & ")]] " &
+            ctx.emitHlslDecl(p.typ, p.name) & ";\n"
+          off.inc size
+        if ctx.failing():
+          return ""
+      result &= "};\n"
+      result &= "[[vk::push_constant]] Push push;\n"
+      result &= "\n"
+  else:
+    # one global register ordinal across the buffers, read-only `t`, read-write `u`, the Push block on `b`
+    var ordinal = 0
+    for p in ctx.kernelBuffers:
+      let rw = ctx.graph.reached.contains(kernel.name & "/" & p.name)
+      let reg = if rw: 'u' else: 't'
+      result &= ctx.emitResourceParam(p, rw) & " : register(" & reg &
+        $ordinal & ", space0);\n"
+      ordinal.inc
+    if ctx.kernelPush.len > 0:
+      result &= "struct Push {\n"
+      for p in kernel.params:
+        if p.name == "crucible_numworkgroups":
+          # materialized dispatch grid size, an int3 the engine stages
+          result &= "  int3 " & p.name & ";\n"
+        elif p.name in ctx.kernelPush:
+          result &= "  " & ctx.emitHlslDecl(p.typ, p.name) & ";\n"
+      result &= "};\n"
+      result &= "ConstantBuffer<Push> push : register(b" & $ordinal &
+        ", space0);\n"
+      result &= "\n"
+
+proc emitShaderFns(ctx: var PrintCtx, m: CirModule): string =
+  ## Device functions: forward declarations first, a call resolves to a definition emitted later through them.
+  let fns = moduleDeviceFns(m)
+  for fn in fns:
+    ctx.fnName = fn.name
+    result &= ctx.emitShaderSig(fn) & ";\n"
+  if fns.len > 0:
+    result &= "\n"
+  for fn in fns:
+    result &= ctx.printShaderProc(fn) & "\n\n"
 
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
-  ## Emits the full HLSL translation unit: struct declarations, the binding section,
-  ## the device function declarations and definitions, then `[numthreads]`,
-  ## then the kernel entry: `main`, or the `{.exportc: "name".}` override.
+  ## Emits the full HLSL translation unit: struct declarations, the binding section, the hoisted program-scope declarations,
+  ## the device function declarations and definitions, then `[numthreads]` and the kernel entry: `main`, or the `{.exportc: "name".}` override.
   ##
   ## - fvD3D12: register resources and the `ConstantBuffer` push block
   ## - fvVulkan: the `[[vk::push_constant]]` struct with every member offset locked
@@ -729,177 +858,21 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   for fn in m.procs:
     procsByName[fn.name] = fn
   ctx.procs = procsByName
-  var kernel: CirProc = nil
-  for fn in m.procs:
-    if fn.isKernel:
-      if kernel != nil:
-        ctx.fail("exactly one kernel per module, found at least two")
-        return ("", ctx.err)
-      kernel = fn
-  if kernel == nil:
-    ctx.fail("exactly one kernel per module, found none")
+  let kernel = selectShaderKernel(ctx, m)
+  if ctx.failing():
     return ("", ctx.err)
   if kernel.ret.kind != ctVoid:
     ctx.fail("kernel `" & kernel.name & "` must return void, got " & $kernel.ret.kind)
     return ("", ctx.err)
-
-  # read-write classification of the buffer parameters: the stored record
-  # computed by the call-graph analysis pass after the last transform
-  let graph = m.callGraph
-
-  # kernel resources: buffer parameters and Push members, read from the stored `CirModule.paramClasses` record the classification pass filled
-  ctx.fnName = kernel.name
+  # stored records the printer reads, never rescans:
+  # call graph: the read-write classification of the buffer parameters
+  # parameter classification of the kernel: push members and buffer parameters
+  # both filled by their analysis passes after the last transform
+  ctx.graph = m.callGraph
   let kernelClass = m.paramClasses[kernel.name]
-  let pushParams = kernelClass.push
-  let buffers = kernelClass.buffers
-
-  # struct declarations for the referenced value structs, dependency order, read from the stored `CirModule.structRefs` record
-  let refs = m.structRefs
-  var byName: Table[string, CirType]
-  for t in m.types:
-    if t.kind == ctStruct:
-      byName[t.name] = t
-  var emitted = initHashSet[string]()
-  var refList: seq[string]
-  for name in refs:
-    refList.add name
-  for name in refList:
-    ctx.emitStructDecls(refs, byName, emitted, name, result.src)
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # binding section: fvD3D12 register resources, fvVulkan push-constant struct with locked offsets
-  if ctx.flavor == fvVulkan:
-    # buffer-pointer aliases, one per element type in encounter order
-    var bpEmitted: HashSet[string]
-    for p in buffers:
-      let nm = emitBpName(p.typ.pElem)
-      if nm notin bpEmitted:
-        bpEmitted.incl nm
-        result.src &= "typedef vk::BufferPointer<" &
-          ctx.emitHlslScalar(p.typ.pElem) & "> " & nm & ";\n"
-    if bpEmitted.len > 0:
-      result.src &= "\n"
-    if kernel.params.len > 0:
-      # one member per kernel parameter in host pack order, every member offset
-      # locked with [[vk::offset]] to the launch-side packing, the grid member 16-byte aligned
-      result.src &= "struct Push {\n"
-      var off = 0
-      for p in kernel.params:
-        if p.typ.kind == ctAptr:
-          off = roundUpMultiple(off, 8)
-          result.src &= "  [[vk::offset(" & $off & ")]] uint64_t " & p.name & ";\n"
-          off.inc 8
-        elif p.name == "crucible_numworkgroups":
-          # materialized dispatch grid size, an int3 the engine stages
-          # on the 16-byte boundary the std430 vector rule gives it
-          off = roundUpMultiple(off, 16)
-          result.src &= "  [[vk::offset(" & $off & ")]] int3 " & p.name & ";\n"
-          off.inc 12
-        else:
-          let (size, align) = ctx.pushMemberExtent(p.typ, p.name)
-          if ctx.failing():
-            return ("", ctx.err)
-          off = roundUpMultiple(off, align)
-          result.src &= "  [[vk::offset(" & $off & ")]] " &
-            ctx.emitHlslDecl(p.typ, p.name) & ";\n"
-          off.inc size
-        if ctx.failing():
-          return ("", ctx.err)
-      result.src &= "};\n"
-      result.src &= "[[vk::push_constant]] Push push;\n"
-      result.src &= "\n"
-  else:
-    # one global register ordinal across the buffers, read-only `t`, read-write `u`, the Push block on `b`
-    var ordinal = 0
-    for p in buffers:
-      let rw = graph.reached.contains(kernel.name & "/" & p.name)
-      let reg = if rw: 'u' else: 't'
-      result.src &= ctx.emitResourceParam(p, rw) & " : register(" & reg &
-        $ordinal & ", space0);\n"
-      ordinal.inc
-    if pushParams.len > 0:
-      result.src &= "struct Push {\n"
-      for p in kernel.params:
-        if p.name == "crucible_numworkgroups":
-          # materialized dispatch grid size, an int3 the engine stages
-          result.src &= "  int3 " & p.name & ";\n"
-        elif p.name in pushParams:
-          result.src &= "  " & ctx.emitHlslDecl(p.typ, p.name) & ";\n"
-      result.src &= "};\n"
-      result.src &= "ConstantBuffer<Push> push : register(b" & $ordinal &
-        ", space0);\n"
-      result.src &= "\n"
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # file-scope `static const` declarations relocated into `m.globals` by the HLSL lowering pass,
-  # in encounter order: dxc folds them at compile time, they take no register
-  # in the cbuffer layout
-  var hoisted: seq[string]
-  for s in m.globals:
-    if s.kind == sVar and s.space == caConstant:
-      if s.init == nil:
-        ctx.fail("const_mem local " & s.name & " without an initializer")
-      elif s.init.kind == eOconstr and s.declType.kind == ctStruct:
-        hoisted.add "static const " & ctx.emitHlslDecl(s.declType, s.name) &
-          " = " & ctx.printBraceList(s.declType, s.init) & ";"
-      else:
-        hoisted.add "static const " & ctx.emitHlslDecl(s.declType, s.name) &
-          " = " & ctx.printExpr(s.init) & ";"
-  for d in hoisted:
-    result.src &= d & "\n"
-  if hoisted.len > 0:
-    result.src &= "\n"
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # forward declarations first, a call resolves to a definition emitted later through them
-  var fns: seq[CirProc]
-  for fn in m.procs:
-    if not fn.isKernel:
-      fns.add fn
-  for fn in fns:
-    ctx.fnName = fn.name
-    result.src &= ctx.emitFnSignature(fn, graph, forwardDeclare = true) & '\n'
-    if ctx.failing():
-      return ("", ctx.err)
-  if fns.len > 0:
-    result.src &= "\n"
-  for fn in fns:
-    result.src &= ctx.printFn(fn, graph) & "\n\n"
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # body before signature: the printer must know which inputs the body
-  # reads before it can write main's signature
-  ctx.fnName = kernel.name
-  ctx.indent = 0
-  ctx.isKernel = true
-  ctx.pushParams = pushParams
-  ctx.bufferParams = initHashSet[string]()
-  ctx.addressParams = initTable[string, CirType]()
-  for p in buffers:
-    ctx.bufferParams.incl(p.name)
-    ctx.addressParams[p.name] = p.typ
-  ctx.rwBuffers = initHashSet[string]()
-  for p in buffers:
-    if graph.reached.contains(kernel.name & "/" & p.name):
-      ctx.rwBuffers.incl(p.name)
-  ctx.workgroup = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1]
-                   else: kernel.workgroup)
-  let bodyTxt = ctx.printStmts(kernel.body)
-  if ctx.failing():
-    return ("", ctx.err)
-  result.src &= "[numthreads(" & $ctx.workgroup[0] & ", " & $ctx.workgroup[1] &
-    ", " & $ctx.workgroup[2] & ")]\n"
-  let inputs = ctx.emitMainInputs()
-  # exportc renames a kernel entry for the host runtime lookup. Vulkan ingest reads
-  # back the entry name from the emitted `[numthreads]` line and passes it to dxc.
-  # Device functions keep the name their call sites reference, a bare kernel stays `main`.
-  let entryName = if kernel.exportName.len > 0: kernel.exportName else: "main"
-  result.src &= "void " & entryName & "(" & inputs & ")\n{\n" & bodyTxt & "\n}\n"
-  return (result.src, "")
+  ctx.kernelPush = kernelClass.push
+  ctx.kernelBuffers = kernelClass.buffers
+  printShaderModule(ctx, m, kernel, "", {caConstant})
 
 proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
   ## Prints the module in `ctx` as HLSL source for `flavor`, the `backends_api` entry point.
