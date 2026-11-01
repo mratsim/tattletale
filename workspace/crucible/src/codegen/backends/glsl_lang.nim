@@ -543,10 +543,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow,
     lit: glslLitRow, row: glslScalarRow)
   ctx.layouts = m.layouts
-  var kernels: seq[CirProc]
-  for fn in m.procs:
-    if fn.isKernel:
-      kernels.add fn
+  let kernels = moduleKernels(m)
   if kernels.len == 0:
     ctx.fail("no kernel in the module")
     return ("", ctx.err)
@@ -613,10 +610,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     return ("", ctx.err)
 
   # forward declarations, then device function definitions, then the kernel
-  var fns: seq[CirProc]
-  for fn in m.procs:
-    if not fn.isKernel:
-      fns.add fn
+  let fns = moduleDeviceFns(m)
   for fn in fns:
     result.src &= printComputeSig(ctx, fn) & ";\n"
     if ctx.failing():
