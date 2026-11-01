@@ -97,7 +97,6 @@ macro codegenCuda(body: typed): string =
   # feature scan after the last transform: analysis results are valid only
   # if no transform runs after them (the registry never invalidates)
   reg.registerCudaFeatureScan()
-  reg.registerDeviceRecursionPass()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
@@ -190,7 +189,6 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   reg.registerSpirvLoweringPasses()
-  reg.registerDeviceRecursionPass()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
@@ -252,9 +250,8 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   reg.registerHlslLoweringPasses()
-  # check-only passes after the last transform: results are valid only
-  # if no transform runs after them (the registry never invalidates)
-  reg.registerDeviceRecursionPass()
+  # analysis passes after the last transform: analysis results are valid
+  # only if no transform runs after them (the registry never invalidates)
   reg.registerHlslCallGraphPass()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
