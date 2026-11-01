@@ -194,6 +194,9 @@ proc parseQwen35MoeConfig(json: JsonNode): Qwen35MoeConfig =
     $result.numHiddenLayers & "-layer stack")
 
 
+proc loadQwen35MoeConfig(path: string): Qwen35MoeConfig =
+  parseFile(path).parseQwen35MoeConfig()
+
 
 ################################################################################
 #                     Qwen3.5 MoE Model Assembly                               #
@@ -254,7 +257,7 @@ proc getDeviceKind(self: Qwen35MoeModel): DeviceKind =
   self.device
 
 proc loadQwen35MoeModelRaw(modelPath: string, device: DeviceKind): Qwen35MoeModel =
-  let config = parseFile(modelPath / "config.json").parseQwen35MoeConfig()
+  let config = loadQwen35MoeConfig(modelPath / "config.json")
   checkValue(config.hiddenAct == "silu",
     "[ttt] loadQwen35MoeModelRaw: unsupported hidden_act \"" &
     config.hiddenAct & "\", the routed block implements SiLU")

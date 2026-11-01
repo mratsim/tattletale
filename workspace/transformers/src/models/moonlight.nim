@@ -129,6 +129,9 @@ func parseMoonlightConfig(json: JsonNode): MoonlightConfig =
     "[ttt] MoonlightConfig: first_k_dense_replace " &
     $result.firstKDenseReplace & " outside 0.." & $result.numHiddenLayers)
 
+proc loadMoonlightConfig(path: string): MoonlightConfig =
+  parseFile(path).parseMoonlightConfig()
+
 ################################################################################
 #                        Moonlight Model Assembly                              #
 ################################################################################
@@ -227,7 +230,7 @@ proc loadMoonlightTokenizer(modelPath: string): BPETokenizer =
   loadTiktokenizer(modelPath / "tiktoken.model", MoonshotPatStrRegexp, specialTokens)
 
 proc loadMoonlightModelRaw(modelPath: string, device: DeviceKind): MoonlightModel =
-  let config = parseFile(modelPath / "config.json").parseMoonlightConfig()
+  let config = loadMoonlightConfig(modelPath / "config.json")
   checkValue(config.modelType == "deepseek_v3",
     "[ttt] loadMoonlightModelRaw: model_type \"" & config.modelType &
     "\" is not the deepseek_v3 template")

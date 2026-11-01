@@ -275,7 +275,7 @@ proc stepFor(c: JinjaRenderContext, n: int32) {.nimcall.} =
       scopeAt: scopeBase, filterLo: nd.filterLo, filterHi: nd.filterHi)
   lp.idx = 0
   bindTargets(c, n, lp.loopItem(0))
-  c.state.bindName(nd.loopName, JinjaVal(kind: vkLoop, lp: lp))
+  c.state.bindName(nd.loopName, loopVal(lp))
   if nd.child == NoLink:
     if nd.filterLo != NoLink:
       # Every item's clause runs, item 0's included, the keep decision
@@ -399,8 +399,8 @@ func stepMacroDef(c: JinjaRenderContext, n: int32) {.nimcall.} =
   if c.state.rows.len > 0 and c.state.rows[^1].kind == frMacro and c.state.rows[^1].node == n:
     closeMacroRow(c.state, c.state.rows.len - 1, c.state.rows[^1].retNode)
     return
-  c.state.bindName(nd.macroName,
-      JinjaVal(kind: vkMacro, mc: MacroVal(name: nd.macroName, body: nd.child, node: n)))
+  c.state.bindName(nd.macroName, macroVal(
+      MacroVal(name: nd.macroName, body: nd.child, node: n)))
   c.state.curNode = nd.succ
 
 const
