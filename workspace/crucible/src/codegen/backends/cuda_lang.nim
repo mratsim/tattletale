@@ -210,7 +210,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eSizeof:
     return "sizeof(" & emitCudaType(e.ofType, "", true) & ")"
   of eOconstr:
-    # braced init list `TypeName{val, ...}`, the functional-style cast form
+    # Braced init list: `TypeName{val, ...}`, the functional-style cast form
     # keeps the result a valid C++ expression, bare braced-init-lists are
     # not expressions and cannot be used with member access
     result = emitCudaType(e.ocType, "", true) & "{"
