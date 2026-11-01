@@ -404,6 +404,6 @@ proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
     (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf)
 
 proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
-  # WGSL keeps pointer parameters untouched: the pass needs no by-reference
+  # WGSL keeps pointer parameters untouched: the pass never emits a by-reference
   # context and no callee table
   ExplodeCtx()

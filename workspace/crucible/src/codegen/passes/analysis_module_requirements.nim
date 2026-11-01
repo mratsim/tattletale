@@ -41,7 +41,7 @@ type ScanProfile = object
   ## GLSL maps 8/16/64-bit integers, so their presence selects extension lines.
   fp16AsStorage: bool
   ## OpenCL stores fp16/bf16 values as 16-bit bit patterns in a `ushort`.
-  ## That storage needs no `cl_khr_fp16` extension, the opencl profile
+  ## That storage works without the `cl_khr_fp16` extension, the opencl profile
   ## skips the `fp16` detector.
   shuffleNames: bool
   ## GLSL maps `simd_shuffle`/`simd_shuffle_xor` to subgroup shuffles.

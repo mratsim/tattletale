@@ -131,7 +131,7 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
     return ""
   case callee.synchroBuiltin
   of sbkThreadgroupBarrier, sbkThreadgroupBarrierDevice:
-    # __syncthreads() already orders global memory, the device-scope barrier needs no separate instruction
+    # __syncthreads() already orders global memory, the device-scope barrier emits no separate instruction
     return "__syncthreads()"
   of sbkNone: discard
   case callee.reductionBuiltin

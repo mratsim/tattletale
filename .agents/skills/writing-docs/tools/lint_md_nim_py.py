@@ -529,6 +529,8 @@ BANNED = [
      "(carries stays legal as the content verb: an invocation carries the rows)"),
     (r"\blattice\b|\blattices\b",
      None, "use closed set of type kinds or name the kind"),
+    (r"\bneeds no\b",
+     None, "state the condition positively or name the mechanism"),
 ]
 
 LICENSE_SHAPE = re.compile(
@@ -3081,10 +3083,12 @@ BANNED_VOCAB_SELFTEST_CASES = (
     ("banned-vocab fact convicts (operator ban)", (
         ("src/codegen/backends/vocab_demo.nim",
          '## the fact is the width is 32.\n'
-         '## non-derivable facts only.\n'),
+         '## non-derivable facts only.\n'
+         '## this needs no extension.\n'),
     ), (
         ("src/codegen/backends/vocab_demo.nim", 1, "banned-vocab", False),
         ("src/codegen/backends/vocab_demo.nim", 2, "banned-vocab", False),
+        ("src/codegen/backends/vocab_demo.nim", 3, "banned-vocab", False),
     )),
 )
 
