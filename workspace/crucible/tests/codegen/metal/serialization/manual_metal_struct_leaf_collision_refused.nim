@@ -1,8 +1,7 @@
 ## Metal: a struct-argument leaf name colliding with a kernel name refuses at compile time.
 ##
 ## Test that a kernel whose struct parameter explodes to a leaf name a local already uses
-## dies in the struct explosion before any shader source is emitted.
-## The refusal names the pass, kernel, and leaf:
+## dies in the struct explosion before any shader source is emitted, naming the pass, kernel, and leaf:
 ##
 ##   Error: pass explodeGlobalStructWithPtrFields: kernel kern: leaf 'view_p' collides with an existing kernel parameter or local
 ##
