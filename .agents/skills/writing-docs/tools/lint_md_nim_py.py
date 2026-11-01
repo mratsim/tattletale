@@ -60,6 +60,10 @@ Rule table (rule | trigger | severity):
 | crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
 | emitted-text-assert | a string literal containment, scan, or equality in tests/codegen Nim code, an assert-context hit asserts on the emitted shader source (violation), a non-assert hit is an advisory naming the shape, behavioral tests launch kernels and check readbacks | counted  |
+| one-line-refusal    | a refusal message literal spanning more than one physical line or over 110 characters, keep the refusal on one line | counted  |
+| duplicate-refusal-coverage | a refusal message fingerprint refused at 2 or more sites (refusal calls plus genTargets refusal row literals), the human disposes the duplicate | counted  |
+| refusal-essay       | a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses | counted  |
+| refusal-density     | 6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -651,6 +655,14 @@ RULES = {
                              "a register proc defined below the first implementation in a passes file, registration lives at the top"),
     "section-banner": Rule("section-banner", True,
                            "a malformed section banner: orphan bar, title without top bar, or bar width off 71"),
+    "one-line-refusal": Rule("one-line-refusal", True,
+                             "a refusal message literal spanning more than one physical line or over 110 characters, keep the refusal on one line"),
+    "duplicate-refusal-coverage": Rule("duplicate-refusal-coverage", True,
+                                       "a refusal message fingerprint refused at 2 or more sites (refusal calls plus genTargets refusal row literals), the human disposes the duplicate"),
+    "refusal-essay": Rule("refusal-essay", True,
+                          "a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses, state the fact"),
+    "refusal-density": Rule("refusal-density", True,
+                            "6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory"),
 }
 
 
@@ -2350,6 +2362,468 @@ def nim_emitted_text_assert_checks(path, text, findings):
                 warning=True))
 
 
+# Refusal slop rules: one-line-refusal, duplicate-refusal-coverage, refusal-essay, refusal-density
+
+# A refusal call: fail, failing, error, or a proc whose name starts with refus.
+# An optional receiver such as ctx.fail may prefix the name.
+# Matching runs on string-blanked code.
+# A call name quoted inside a message literal never matches the rule.
+REFUSAL_CALL_RE = re.compile(r"(?:\w+\.)?\b(?:fail|failing|error|refus\w*)\s*\(")
+
+# A `refusal "text"` field in the genTargets row DSL: row data with a refusal
+# message the printer emits through ctx.fail. A duplicate-coverage site like
+# any call site.
+REFUSAL_FIELD_RE = re.compile(r'\brefusal\s+("(?:[^"\\]|\\.)*")')
+
+# Longest refusal message one physical line may carry, in characters.
+REFUSAL_MESSAGE_MAX = 110
+
+# Refusal calls one proc may carry before the density cap applies.
+REFUSAL_DENSITY_MAX = 6
+
+# Essay markers inside a refusal message: because, instead of, rather than, which means.
+ESSAY_MARKERS = (" because ", " instead of ", " rather than ", " which means ")
+
+# A leading "label: " address prefix ("genTargets: "), an address, not a clause.
+_ESSAY_LABEL_RE = re.compile(r"^[\w.-]+:\s+")
+
+# Clause boundaries in a refusal message: comma, explanation colon, conjunction join.
+_ESSAY_SPLIT_RE = re.compile(r",|:\s+|\band\b|\bor\b")
+
+# Target and filler words the duplicate fingerprint strips.
+# Two printers stating one case for two targets state one case twice.
+_REFUSAL_TARGET_WORDS = frozenset((
+    "wgsl", "hlsl", "glsl", "cuda", "opencl", "metal", "vulkan", "spirv",
+    "wgpu", "native"))
+_REFUSAL_STOP_WORDS = frozenset((
+    "the", "a", "an", "of", "in", "is", "are", "and", "or", "to", "for",
+    "has", "have", "no", "not", "only", "with", "as", "at", "on", "by",
+    "its", "it", "that", "this", "from", "into", "than", "then", "be",
+    "been", "was", "were", "does", "do", "can", "cannot", "may", "must",
+    "should", "would", "will"))
+
+# Density carve-out filename: the parse and ctor procs of the named file
+# are compile-time row validators.
+_REFUSAL_VALIDATOR_FILE = "targets_macros.nim"
+
+_NIM_STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+_TOP_LEVEL_DECL_RE = re.compile(
+    r"^(?:proc|func|macro|template|iterator|converter)\s+(\w+)")
+
+
+def _refusal_line_pairs(text):
+    """Per-line code views for the refusal scan.
+
+    Returns (code, masked) pairs, one per line:
+
+    - code: comments stripped, string contents kept (message extraction reads it)
+    - masked: string contents blanked at preserved offsets (depth walk reads it)
+    - triple-quote interior lines blank in both views
+    """
+    lines = text.splitlines()
+    mask = _nim_triple_quote_mask(lines)
+    out = []
+    for no, raw in enumerate(lines, 1):
+        code, _ = _strip_comment(raw)
+        masked = _blank_nim_strings(code)
+        if no in mask:
+            code = masked = ""
+        out.append((code, masked))
+    return out
+
+
+def _refusal_call_argument(pairs, no, start):
+    """Reads the argument text of the refusal call opening at line no,
+    column start. The opening paren is already consumed.
+
+    Returns the end line and the argument text.
+
+    Depth walks the masked lines, so a paren inside a message literal closes nothing there.
+
+    The literal text comes from the kept lines.
+
+    A call left open after 20 lines reads to the cap.
+
+    Malformed input joins no further argument text.
+    """
+    parts = []
+    depth = 1
+    pos = no
+    j = start
+    while pos <= len(pairs) and pos - no < 20:
+        code, masked = pairs[pos - 1]
+        close = None
+        for k in range(j, len(masked)):
+            ch = masked[k]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    close = k
+                    break
+        parts.append(code[j:close] if close is not None else code[j:])
+        if close is not None:
+            return pos, " ".join(parts)
+        pos += 1
+        j = 0
+    return pos - 1, " ".join(parts)
+
+
+def _refusal_proc_ranges(lines):
+    """Returns the (name, decl line, end line) spans of the top-level procs.
+    Funcs, macros, templates, iterators and converters get the same spans.
+
+    A span ends at the next top-level declaration or at end of file.
+    """
+    decls = []
+    for no, raw in enumerate(lines, 1):
+        m = _TOP_LEVEL_DECL_RE.match(raw)
+        if m:
+            decls.append((m.group(1), no))
+    out = []
+    for k, (name, no) in enumerate(decls):
+        end = decls[k + 1][1] - 1 if k + 1 < len(decls) else len(lines)
+        out.append((name, no, end))
+    return out
+
+
+def _refusal_fingerprint(message):
+    """Returns the duplicate-coverage key of one refusal message.
+
+    Key: the first 6 content words of the normalized text.
+
+    Normalization:
+
+    - lowercase, punctuation collapsed to spaces
+    - target names and filler words dropped
+    - interpolated identifiers dropped (the extraction already removed them)
+    - fingerprints collide across genuinely different refusals, a human
+      disposes each duplicate
+    """
+    low = re.sub(r"[^a-z0-9-]+", " ", message.lower())
+    words = [w for w in low.split()
+             if w not in _REFUSAL_TARGET_WORDS and w not in _REFUSAL_STOP_WORDS]
+    return " ".join(words[:6])
+
+
+def _refusal_essay_shape(message):
+    """Returns the essay shape of one refusal message, None for a plain
+    statement of the refusal.
+
+    A marker hit returns the marker. Otherwise a message chaining 3 or more
+    clauses returns the clause count.
+
+    Clause boundaries:
+
+    - the comma
+    - a colon opening an explanation
+    - a conjunction join between two claims
+    - a leading "label: " address prefix is stripped first ("genTargets: ")
+    """
+    for marker in ESSAY_MARKERS:
+        if marker in message:
+            return marker.strip()
+    body = _ESSAY_LABEL_RE.sub("", message, count=1)
+    clauses = [p for p in _ESSAY_SPLIT_RE.split(body) if p.strip()]
+    if len(clauses) >= 3:
+        return "%d clauses" % len(clauses)
+    return None
+
+
+def refusal_slop_files(entries, base=None, added_cache=None):
+    """Runs the refusal-slop rules over the .nim files of one lint run,
+    returns the sorted findings.
+
+    Args:
+
+    - entries: (path, text) pairs of the files lint() already read
+    - base: optional diff base commit, findings scope to its added lines
+    - added_cache: shared added-lines cache across one lint call
+
+    Returns the sorted findings, one finding per rule hit:
+
+    - one-line-refusal at each refusal call whose message literal spans
+      more than one physical line or exceeds 110 characters
+    - refusal-essay at each refusal call whose message shows an essay
+      marker or chains 3 or more clauses
+    - refusal-density at each proc with 6 or more refusal calls
+    - duplicate-refusal-coverage at each message site whose fingerprint
+      also fires at another site in the run. Message sites are refusal
+      calls and genTargets row literals. A human disposes each duplicate.
+
+    Density carve-outs report as advisories instead of violations:
+
+    - a compile-time row validator: the parse and ctor procs in targets_macros.nim
+    - all refusals sit on one line under a doc-stated contract
+
+    Tests, runtime and manual fixture files stay out of scope.
+    """
+    findings = []
+    corpus = []
+    scope = {}
+    for path, text in entries:
+        sp = str(path).replace("\\", "/")
+        if "/tests/" in sp or "/runtime/" in sp or "manual_" in sp:
+            continue
+        scope[path] = added_lines(path, base, added_cache) if base else None
+
+        def in_scope(added, no):
+            return added is None or no in added
+
+        added = scope[path]
+        pairs = _refusal_line_pairs(text)
+        lines = text.splitlines()
+        ranges = _refusal_proc_ranges(lines)
+        per_proc = {}
+        for no, (code, masked) in enumerate(pairs, 1):
+            for m in REFUSAL_CALL_RE.finditer(masked):
+                end, arg = _refusal_call_argument(pairs, no, m.end())
+                message = "".join(_NIM_STRING_RE.findall(arg))
+                proc = next((r for r in ranges if r[1] <= no <= r[2]), None)
+                if proc is not None:
+                    per_proc.setdefault(proc[1], []).append((no, end, message))
+                if not message or not in_scope(added, no):
+                    continue
+                span = end - no + 1
+                if span > 1 or len(message) > REFUSAL_MESSAGE_MAX:
+                    findings.append(Finding(
+                        path, no, "one-line-refusal",
+                        "refusal message of %d characters over %d physical "
+                        "lines, keep it on one line under %d"
+                        % (len(message), span, REFUSAL_MESSAGE_MAX)))
+                shape = _refusal_essay_shape(message)
+                if shape is not None:
+                    findings.append(Finding(
+                        path, no, "refusal-essay",
+                        "refusal message argues with %s, state the fact, "
+                        "the why lives in the row or the pass doc" % shape))
+                corpus.append((path, no, message))
+        # genTargets row literals join the duplicate corpus. Row data is
+        # never a call, so the line rules stay out of it.
+        for no, (code, _) in enumerate(pairs, 1):
+            for m in REFUSAL_FIELD_RE.finditer(code):
+                corpus.append((path, no, m.group(1)[1:-1]))
+        for name, decl, end in ranges:
+            sites = per_proc.get(decl, [])
+            if len(sites) < REFUSAL_DENSITY_MAX:
+                continue
+            if not (in_scope(added, decl)
+                    or any(in_scope(added, no) for no, _, _ in sites)):
+                continue
+            one_liners = all(e == s and len(msg) <= REFUSAL_MESSAGE_MAX
+                             for s, e, msg in sites)
+            doc = any(re.match(r"\s*##", lines[k]) for k in range(decl, end))
+            validator = (os.path.basename(sp) == _REFUSAL_VALIDATOR_FILE
+                         and (name.startswith(("parse", "gen"))
+                              or name.endswith("Ctor")))
+            if validator:
+                findings.append(Finding(
+                    path, decl, "refusal-density",
+                    "density: %d refusal sites — validator carve-out applied "
+                    "(compile-time row validator)" % len(sites), warning=True))
+            elif one_liners and doc:
+                findings.append(Finding(
+                    path, decl, "refusal-density",
+                    "density: %d refusal sites — validator carve-out applied "
+                    "(one-liners under a doc-stated contract)" % len(sites),
+                    warning=True))
+            else:
+                findings.append(Finding(
+                    path, decl, "refusal-density",
+                    "density: %d refusal sites in one proc, split the sites "
+                    "or move the facts to the shared validation" % len(sites)))
+    groups = {}
+    for path, no, message in corpus:
+        if message:
+            groups.setdefault(_refusal_fingerprint(message), []).append(
+                (path, no))
+    for sites in groups.values():
+        if len(sites) < 2:
+            continue
+        for i, (path, no) in enumerate(sites):
+            if not in_scope(scope.get(path), no):
+                continue
+            other = sites[0] if i else sites[1]
+            findings.append(Finding(
+                path, no, "duplicate-refusal-coverage",
+                "duplicate refusal coverage: the same fingerprint also fires "
+                "at %s:%d (%d sites), dispose the duplicate"
+                % (other[0], other[1], len(sites))))
+    findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
+    return findings
+
+
+# Refusal-slop fixtures: convicted specimens plus honest controls.
+#
+# Each case is (name, files, expected findings):
+#
+# - files: (relpath, text) pairs, analyzed in memory
+# - expected: (relpath, line, rule, warning) rows, sorted comparison
+# - convicted specimens must fire their rules
+# - honest one-liners must stay clean
+REFUSAL_SELFTEST_CASES = (
+    ("hlsl 64-bit essay (classifyParams specimen)", (
+        ("src/codegen/backends/hlsl_demo.nim", '''proc classifyDemo(ctx: var PrintCtx, fn: CirProc, p: CirParam) =
+  if p.typ.bits != 32:
+    ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
+      "` is rejected: int64_t is a parse error in the HLSL frontend and" &
+      " uint64_t pulls the SPIR-V Int64 capability")
+'''),
+    ), (
+        ("src/codegen/backends/hlsl_demo.nim", 3, "one-line-refusal", False),
+        ("src/codegen/backends/hlsl_demo.nim", 3, "refusal-essay", False),
+    )),
+    ("wgsl ptr-struct two-line message specimen", (
+        ("src/codegen/backends/wgsl_demo.nim", '''proc printDemo(ctx: var PrintCtx, e: CirExpr) =
+  if e.name notin ctx.paramNames:
+    ctx.fail("pointer local " & e.name & " used as a value, WGSL has no" &
+      " pointer values, the WGSL lowering pass rewrites pointer locals to their pointees")
+'''),
+    ), (
+        ("src/codegen/backends/wgsl_demo.nim", 3, "one-line-refusal", False),
+        ("src/codegen/backends/wgsl_demo.nim", 3, "refusal-essay", False),
+    )),
+    ("smem multi-line refusal specimen", (
+        ("src/codegen/backends/cuda_demo.nim", '''proc printVarDemo(ctx: var PrintCtx, s: CirVar) =
+  if s.init != nil:
+    ctx.fail("smem local " & s.name & " with an initializer, CUDA C++ forbids" &
+      " initializing __shared__ variables")
+'''),
+    ), (
+        ("src/codegen/backends/cuda_demo.nim", 3, "one-line-refusal", False),
+    )),
+    ("duplicate coverage across two printers", (
+        ("src/codegen/backends/glsl_barrier_demo.nim", '''proc printBuiltinDemo(ctx: var PrintCtx, e: CirExpr) =
+  ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
+'''),
+        ("src/codegen/backends/wgsl_barrier_demo.nim", '''proc printBuiltinDemo(ctx: var PrintCtx, e: CirExpr) =
+  ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
+'''),
+    ), (
+        ("src/codegen/backends/glsl_barrier_demo.nim", 2,
+         "duplicate-refusal-coverage", False),
+        ("src/codegen/backends/wgsl_barrier_demo.nim", 2,
+         "duplicate-refusal-coverage", False),
+    )),
+    ("genTargets row literal duplicate", (
+        ("src/codegen/backends/targets_rows_demo.nim", '''target demo:
+  bitcast:
+    rule srcKinds {ctFloat}, dstKinds {ctInt}, sameWidth, refusal "bit cast of a 64-bit float has no emission, only the 32-bit builtins"
+    rule srcKinds {ctInt}, dstKinds {ctFloat}, sameWidth, refusal "bit cast to a 64-bit float has no emission, only the 32-bit builtins"
+'''),
+    ), (
+        ("src/codegen/backends/targets_rows_demo.nim", 3,
+         "duplicate-refusal-coverage", False),
+        ("src/codegen/backends/targets_rows_demo.nim", 4,
+         "duplicate-refusal-coverage", False),
+    )),
+    ("density hard violation, six refusals, no doc", (
+        ("src/codegen/backends/dense_demo.nim", '''proc denseDemo(ctx: var PrintCtx, p: CirParam) =
+  case p.typ.kind
+  of ctInt:
+    ctx.fail("int parameter " & p.name & " has no form one")
+  of ctUint:
+    ctx.fail("uint parameter " & p.name & " has no form two")
+  of ctFloat:
+    ctx.fail("float parameter " & p.name & " has no form three")
+  of ctBool:
+    ctx.fail("bool parameter " & p.name & " has no form four")
+  of ctVector:
+    ctx.fail("vector parameter " & p.name & " has no form five")
+  else:
+    ctx.fail("parameter " & p.name & " has no form six")
+'''),
+    ), (
+        ("src/codegen/backends/dense_demo.nim", 1, "refusal-density", False),
+    )),
+    ("density validator carve-out (targets_macros parse proc)", (
+        ("src/codegen/backends/targets_macros.nim", '''proc parseDemoRows(node: NimNode, display: string) =
+  for entry in node:
+    if entry.kind != nnkBracket:
+      error("genTargets: expected a row in " & display)
+    if entry[0].kind != nnkStrLit:
+      error("genTargets: expected a name in " & display)
+    if entry[1].kind != nnkStrLit:
+      error("genTargets: expected a spelling in " & display)
+    if entry[2].kind != nnkIntLit:
+      error("genTargets: expected a width in " & display)
+    if entry.len < 4:
+      error("genTargets: expected a kind in " & display)
+    if entry.len > 5:
+      error("genTargets: unexpected trailing entries in " & display)
+'''),
+    ), (
+        ("src/codegen/backends/targets_macros.nim", 1, "refusal-density", True),
+    )),
+    ("density one-liner doc carve-out", (
+        ("src/codegen/backends/doc_demo.nim", '''proc checkDemoTypes(ctx: var PrintCtx, t: CirType) =
+  ## Validates the scalar kinds the target prints, one refusal per kind.
+  case t.kind
+  of ctInt:
+    ctx.fail("int has no form one")
+  of ctUint:
+    ctx.fail("uint has no form two")
+  of ctFloat:
+    ctx.fail("float has no form three")
+  of ctBool:
+    ctx.fail("bool has no form four")
+  of ctVector:
+    ctx.fail("vector has no form five")
+  else:
+    ctx.fail("kind has no form six")
+'''),
+    ), (
+        ("src/codegen/backends/doc_demo.nim", 1, "refusal-density", True),
+    )),
+    ("honest one-liners stay clean", (
+        ("src/codegen/backends/ok_demo.nim", '''proc okDemo(ctx: var PrintCtx, p: CirParam, fn: CirProc, t: CirType) =
+  if t.bits == 64:
+    ctx.fail("f64 unsupported")
+  if t.bits == 32:
+    ctx.fail("wgsl: no f64 — wgpu-native cannot request shader-f64")
+  ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
+  ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space & " space, buffers address device memory")
+'''),
+    ), (
+    )),
+    ("essay marker fires on a one-liner", (
+        ("src/codegen/backends/marker_demo.nim", '''proc markerDemo(ctx: var PrintCtx, lit: CirLit) =
+  ctx.fail("the u64 literal is not accepted here because the WGSL lexer has no form for it")
+'''),
+    ), (
+        ("src/codegen/backends/marker_demo.nim", 2, "refusal-essay", False),
+    )),
+)
+
+
+def refusal_selftest(quiet=False):
+    """Runs the refusal-slop fixtures through refusal_slop_files and prints
+    one PASS or FAIL line per case unless quiet.
+
+    Returns the failed case count, 0 means every convicted specimen fires
+    its rules and every honest one-liner stays clean.
+    """
+    failed = 0
+    for name, files, expected in REFUSAL_SELFTEST_CASES:
+        got = refusal_slop_files([(Path(p), t) for p, t in files])
+        rows = sorted((str(f.path), f.line, f.rule, f.warning) for f in got)
+        want = sorted(expected)
+        if rows == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in rows:
+                    print("  got      %s" % (row,))
+    return failed
+
+
 def scan(path, text, findings):
     """Runs every rule over one file's prose, appending to findings."""
     entries, meta = extract(path, text)
@@ -2731,6 +3205,7 @@ def lint(paths, base=None):
     """
     findings = []
     added_lines_cache = {}
+    refusal_inputs = []
     if base:
         findings.extend(changed_set_hygiene(base))
     for f in collect_files(paths):
@@ -2765,6 +3240,10 @@ def lint(paths, base=None):
             diagnostic_channel(f, text, findings, added)
             registration_top(f, text, findings, added)
             section_banner(f, text, findings, added)
+            refusal_inputs.append((f, text))
+    if refusal_inputs:
+        findings.extend(refusal_slop_files(refusal_inputs, base,
+                                           added_lines_cache))
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
 
@@ -3434,6 +3913,8 @@ def main(argv):
         base = args[i + 1]
         args = args[:i] + args[i + 2:]
     base = base or os.environ.get("DOC_LINT_BASE") or None
+    if "--selftest-refusal" in args:
+        return 1 if refusal_selftest() else 0
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]
         if not paths:
