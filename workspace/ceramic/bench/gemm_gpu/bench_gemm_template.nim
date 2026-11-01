@@ -52,7 +52,7 @@ proc smemGemmLoop*[TAcc, TA, TB, MT, NT, KT](
     mmaStep: static TiledMma[TAcc, TA, TB, MT, NT, 16],
     D, A, B: distinct TensorView, iters: int) =
   for _ in 0 ..< iters:
-    gemm_smem(mma, mmaStep, D, 1.0'f32, A, B, 0.0'f32, D)
+    matmul_smem(mma, mmaStep, D, A, B)
 
 func computeGemmFlops*(M, N, K: int): float64 =
   ## 2*M*N*K, one multiply-add per output element
@@ -96,7 +96,7 @@ proc benchCeramic*[E: HwEngine](engine: E, M, N, K, iters: int): auto =
   dHost
 
 proc benchSmemCeramic*[E: HwEngine](engine: E, M, N, K, iters: int): auto =
-  ## Benchmarks gemm_smem, the staged bf16 kernel:
+  ## Benchmarks the staged bf16 GEMM through matmul_smem:
   ##
   ## - `iters` timed launches of D = A·B, alpha = 1, beta = 0
   ## - bf16 in, f32 accumulate

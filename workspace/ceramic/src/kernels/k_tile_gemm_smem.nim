@@ -349,5 +349,8 @@ proc matmul_smem*[TAcc, TA, TB, MT, NT, KT](
     mma: static TiledMma[TAcc, TA, TB, MT, NT, KT],
     mmaStep: static TiledMma[TAcc, TA, TB, MT, NT, 16],
     D, A, B: distinct TensorView) =
-  ## D = A·B, same staging and launch mapping as gemm_smem.
+  ## D = A·B, same staging and launch mapping as gemm_smem:
+  ##
+  ## - D may stay uninitialized, equivalent to the alpha = 1, beta = 0
+  ##   gemm_smem call over C = D
   gemm_smem(mma, mmaStep, D, 1.0'f32, A, B, 0.0'f32, D)

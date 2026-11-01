@@ -268,6 +268,47 @@ proc checkGemmSmem[E: HwEngine, TIn](
     msg = "gemm_smem " & $M & "x" & $N & "x" & $K & " strides " & $aStrides &
           " " & $bStrides & " " & $cStrides)
 
+proc checkMatmulSmem[E: HwEngine, TIn](
+    rng: var Rand, engine: E, _: typedesc[TIn],
+    MT, NT, KT: static int, cs: GemmCase) =
+  ## matmul_smem equals gemm_smem(alpha = 1, beta = 0) bit for bit on the same operands
+  let (aShape, aStrides) = cs.A
+  let (bShape, bStrides) = cs.B
+  let (cShape, cStrides) = cs.C
+  let (M, N, K) = (aShape[0], bShape[0], aShape[1])
+  var
+    aHost = rng.randomHostTensor(TIn, aShape, aStrides)
+    bHost = rng.randomHostTensor(TIn, bShape, bStrides)
+    dGemm = makeHostTensor(float32, cShape, cStrides)
+    dMatmul = makeHostTensor(float32, cShape, cStrides)
+  # one device copy per launch, the bridge results are move-only
+  # C of the gemm launch takes its own bridge, beta = 0 never reads it
+  let
+    aGemmDev = engine.bridge(aHost)
+    bGemmDev = engine.bridge(bHost)
+    dGemmDev = engine.bridge(dGemm)
+    cGemmDev = engine.bridge(dGemm)
+    aMatmulDev = engine.bridge(aHost)
+    bMatmulDev = engine.bridge(bHost)
+    dMatmulDev = engine.bridge(dMatmul)
+  engine.launchDeviceFn gemm_smem(tiledMma(float32, TIn, TIn, MT, NT, KT),
+      tiledMma(float32, TIn, TIn, MT, NT, 16),
+      dGemmDev, 1.0'f32, aGemmDev, bGemmDev, 0.0'f32, cGemmDev) do:
+    grid = (ceil_div(M, warpsPerDim * MT), ceil_div(N, warpsPerDim * NT))
+    blk = (warpsPerBlock * threadsPerWarp, 1)
+  engine.launchDeviceFn matmul_smem(tiledMma(float32, TIn, TIn, MT, NT, KT),
+      tiledMma(float32, TIn, TIn, MT, NT, 16),
+      dMatmulDev, aMatmulDev, bMatmulDev) do:
+    grid = (ceil_div(M, warpsPerDim * MT), ceil_div(N, warpsPerDim * NT))
+    blk = (warpsPerBlock * threadsPerWarp, 1)
+  engine.copyToHostFromDevice(addr dGemm.data[0], dGemmDev.data, dGemm.len)
+  engine.copyToHostFromDevice(addr dMatmul.data[0], dMatmulDev.data, dMatmul.len)
+  for i in 0 ..< dGemm.len:
+    doAssert dGemm.data[i] == dMatmul.data[i],
+      "matmul_smem diverges from gemm_smem(alpha = 1, beta = 0) at flat " &
+      $i & ": " & $dGemm.data[i] & " vs " & $dMatmul.data[i]
+  echo "  OK (matmul_smem == gemm_smem, " & $M & "x" & $N & "x" & $K & ")"
+
 proc runGemmSmemChecks[E: HwEngine, TIn](
     rng: var Rand, engine: E, _: typedesc[TIn], MT, NT, KT: static int,
     cases: openArray[GemmCase], Iters: static int) =
@@ -300,6 +341,9 @@ proc main =
     (64, 64, 64), (100, 150, 200), (37, 61, 45), (128, 128, 128)))
   rng.runGemmSmemFuzz(engine, float16, 32, 32, 64, genGemmCases(
     (64, 64, 64), (100, 150, 200), (37, 61, 45), (128, 128, 128)))
+  # matmul_smem's entry point over one square and one ragged case
+  for cs in [GemmSmemHighlights[0], GemmSmemHighlights[4]]:
+    rng.checkMatmulSmem(engine, bfloat16, 32, 32, 64, cs)
 
 when isMainModule:
   main()
