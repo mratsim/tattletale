@@ -1,7 +1,7 @@
 ## WGSL and HLSL registry rows: genTargets lookup surface and values
 ##
 ## Test that the wgsl and hlsl registry rows pass the genTargets compile-time
-## checks and return the WGSL and HLSL printers' values in both HLSL flavors
+## checks and return the WGSL and HLSL printers' values
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -26,10 +26,10 @@ static:
     doAssert cell(scalar, ctVoid, 0).spelling == "void"
     doAssert cell(scalar, ctBool, 0).spelling == "bool"
     # WGSL has no 8/16-bit integer types: 32 and 64 bit are its only integer widths.
-    doAssert scalarCellRefusal(scalar, ctInt, 8) == $rcCapability
-    doAssert scalarCellRefusal(scalar, ctInt, 16) == $rcCapability
-    doAssert scalarCellRefusal(scalar, ctUint, 8) == $rcCapability
-    doAssert scalarCellRefusal(scalar, ctUint, 16) == $rcCapability
+    doAssert not cell(scalar, ctInt, 8).supported
+    doAssert not cell(scalar, ctInt, 16).supported
+    doAssert not cell(scalar, ctUint, 8).supported
+    doAssert not cell(scalar, ctUint, 16).supported
     doAssert cell(scalar, ctInt, 32).spelling == "i32"
     doAssert cell(scalar, ctInt, 64).spelling == "i64"
     doAssert cell(scalar, ctUint, 32).spelling == "u32"
@@ -62,73 +62,13 @@ static:
     doAssert kind.loop.unrollDirective == "// {.unroll.} requested but not honored on WebGPU"
     doAssert kind.loop.infiniteHead == "loop {\n"
     doAssert kind.loop.braceSameLine
-    # WGSL routes the ternary through select(f, t, cond)
-    doAssert kind.ternary == tfSelectCall
     doAssert not kind.foldsIteElse
     doAssert not kind.emitOperandRendersExpr
-    doAssert kind.asmForm == afRefuse
-    doAssert kind.constDecl == cdfLet
-    doAssert kind.constructor == cofCall
     doAssert kind.targetExprKinds == {eNil, eAt, ePat, eTernary}
 
     let conv = wgslConvRow()
     doAssert conv.builtinNames.len == 0
     doAssert conv.fpRefusals.len == 0
-
-    let coord = wgslCoordRow()
-    doAssert coord.cells.len == 6
-    for c in coord.cells:
-      # Refusal cell: threads_per_threadgroup states no read form
-      if c.whole != cwfRefuse:
-        doAssert c.componentCast == "i32"
-      case c.kind
-      of cbkThreadPositionInGrid:
-        doAssert c.paramName == "global_id"
-        doAssert c.paramType == "vec3<u32>"
-        doAssert c.paramAnnotation == "global_invocation_id"
-        doAssert c.whole == cwfVector
-        doAssert c.componentForm == ccField
-      of cbkThreadgroupPositionInGrid:
-        doAssert c.paramName == "workgroup_id"
-        doAssert c.paramAnnotation == "workgroup_id"
-        doAssert c.whole == cwfVector
-      of cbkThreadPositionInThreadgroup:
-        doAssert c.paramName == "local_invocation_id"
-        doAssert c.paramAnnotation == "local_invocation_id"
-        doAssert c.whole == cwfVector
-      of cbkThreadsPerThreadgroup:
-        # Refusal cell: WGSL exposes the threadgroup size only through @workgroup_size.
-        doAssert c.paramName == ""
-        doAssert c.paramType == ""
-        doAssert c.paramAnnotation == ""
-        doAssert c.whole == cwfRefuse
-      of cbkThreadgroupsPerGrid:
-        doAssert c.paramName == "num_workgroups"
-        doAssert c.paramAnnotation == "num_workgroups"
-        doAssert c.whole == cwfVector
-      of cbkThreadIndexInThreadgroup:
-        # Scalar builtin: every read composes the whole form int(param)
-        doAssert c.paramName == "local_invocation_index"
-        doAssert c.paramType == "u32"
-        doAssert c.paramAnnotation == "local_invocation_index"
-        doAssert c.whole == cwfCast
-        doAssert c.componentForm == ccWhole
-      of cbkNone:
-        doAssert false
-
-    let sig = wgslSigRow()
-    doAssert sig.entryLinkage == "fn "
-    doAssert sig.deviceFnLinkage == "fn "
-    # WGSL has no void type name, a void return emits no arrow
-    doAssert sig.voidRet == ""
-    doAssert sig.inlineLinkage == ""
-    doAssert sig.entryAttr == "@compute "
-    doAssert sig.workgroupAttr == "@workgroup_size($n, $n, $n)\n"
-    doAssert sig.workgroupDefault == [64, 1, 1]
-    doAssert sig.bindingPrefix == "@group(0) @binding($1)"
-    doAssert sig.groupPrefix == ""
-    # Kernel parameters become bindings and the signature takes only the coordinate parameters.
-    doAssert not sig.entryTakesParams
 
     let vec = wgslVectorRule()
     doAssert vec.context == vcEverywhere
@@ -145,15 +85,15 @@ static:
     doAssert scalar.cells.len == ScalarCellAxis.len
     doAssert cell(scalar, ctVoid, 0).spelling == "void"
     doAssert cell(scalar, ctBool, 0).spelling == "bool"
-    # 8/16-bit integers and int64_t are parse errors in the HLSL frontend
-    doAssert scalarCellRefusal(scalar, ctInt, 8) == $rcParseError
-    doAssert scalarCellRefusal(scalar, ctInt, 16) == $rcParseError
-    doAssert scalarCellRefusal(scalar, ctInt, 64) == $rcParseError
-    doAssert scalarCellRefusal(scalar, ctUint, 8) == $rcParseError
-    doAssert scalarCellRefusal(scalar, ctUint, 16) == $rcParseError
+    # 8/16-bit integers and int64_t are parse errors in the HLSL frontend,
     # uint64_t pulls the SPIR-V Int64 capability, float16 is outside the subset
-    doAssert scalarCellRefusal(scalar, ctUint, 64) == $rcOutsideSubset
-    doAssert scalarCellRefusal(scalar, ctFloat, 16) == $rcOutsideSubset
+    doAssert not cell(scalar, ctInt, 8).supported
+    doAssert not cell(scalar, ctInt, 16).supported
+    doAssert not cell(scalar, ctInt, 64).supported
+    doAssert not cell(scalar, ctUint, 8).supported
+    doAssert not cell(scalar, ctUint, 16).supported
+    doAssert not cell(scalar, ctUint, 64).supported
+    doAssert not cell(scalar, ctFloat, 16).supported
     doAssert cell(scalar, ctInt, 32).spelling == "int"
     doAssert cell(scalar, ctUint, 32).spelling == "uint"
     doAssert cell(scalar, ctFloat, 32).spelling == "float"
@@ -180,12 +120,8 @@ static:
     doAssert kind.loop.infiniteHead == "for (;;)\n"
     # HLSL is the only braceless-head target, its brace prints on the next line
     doAssert not kind.loop.braceSameLine
-    doAssert kind.ternary == tfQuestion
     doAssert kind.foldsIteElse
     doAssert kind.emitOperandRendersExpr
-    doAssert kind.asmForm == afRefuse
-    doAssert kind.constDecl == cdfConst
-    doAssert kind.constructor == cofMixed
     doAssert kind.targetExprKinds == {eNil, eAt, ePat, eDeref, eAddr}
 
     let conv = hlslConvRow()
@@ -193,50 +129,6 @@ static:
     doAssert conv.fpRefusals == @[
       "toFp16", "toFp32", "toBf16", "toBf32", "toFp8e4m3", "toFp8e5m2",
       "asFp16", "asU16"]
-
-    let coord = hlslCoordRow()
-    doAssert coord.cells.len == 6
-    for c in coord.cells:
-      doAssert c.paramAnnotation != "" or c.paramName == ""
-      case c.kind
-      of cbkThreadPositionInGrid:
-        doAssert c.paramName == "gid"
-        doAssert c.paramType == "uint3"
-        doAssert c.paramAnnotation == "SV_DispatchThreadID"
-        # whole-vector reads refuse, read the components one by one
-        doAssert c.whole == cwfRefuse
-        doAssert c.componentCast == "int"
-        doAssert c.componentForm == ccField
-      of cbkThreadgroupPositionInGrid:
-        doAssert c.paramName == "groupId"
-        doAssert c.paramAnnotation == "SV_GroupID"
-        doAssert c.whole == cwfRefuse
-      of cbkThreadPositionInThreadgroup:
-        doAssert c.paramName == "groupThreadId"
-        doAssert c.paramAnnotation == "SV_GroupThreadID"
-        doAssert c.whole == cwfRefuse
-      of cbkThreadsPerThreadgroup:
-        # components substitute the baked workgroup dimensions at emission
-        doAssert c.paramName == ""
-        doAssert c.paramAnnotation == ""
-        doAssert c.whole == cwfRefuse
-        doAssert c.componentCast == ""
-        doAssert c.componentForm == ccWorkgroupDim
-      of cbkThreadgroupsPerGrid:
-        # HLSL's lowering pass materializes the dispatch grid size
-        doAssert c.paramName == ""
-        doAssert c.paramAnnotation == ""
-        doAssert c.whole == cwfRefuse
-        doAssert c.componentCast == ""
-      of cbkThreadIndexInThreadgroup:
-        # Scalar builtin: every read composes the whole form int(gidx)
-        doAssert c.paramName == "gidx"
-        doAssert c.paramType == "uint"
-        doAssert c.paramAnnotation == "SV_GroupIndex"
-        doAssert c.whole == cwfCast
-        doAssert c.componentForm == ccWhole
-      of cbkNone:
-        doAssert false
 
     let vec = hlslVectorRule()
     doAssert vec.context == vcEverywhere
@@ -246,29 +138,4 @@ static:
       (ctFloat, 32, "float")]
     doAssert vec.lanes == @[2, 3, 4]
 
-    # Flavors change the binding section only and share one language body.
-    let d3d12 = hlslFvD3D12SigRow()
-    doAssert d3d12.entryLinkage == "void "
-    doAssert d3d12.deviceFnLinkage == ""
-    doAssert d3d12.inlineLinkage == "inline "
-    doAssert d3d12.voidRet == "void"
-    doAssert d3d12.workgroupAttr == "[numthreads($n, $n, $n)]\n"
-    doAssert d3d12.workgroupDefault == [256, 1, 1]
-    doAssert d3d12.entryAttr == ""
-    doAssert d3d12.bindingPrefix == ": register($1, space0)"
-    doAssert d3d12.groupPrefix == ""
-    doAssert not d3d12.entryTakesParams
-    let vulkan = hlslFvVulkanSigRow()
-    for field in [
-      (d3d12.entryLinkage, vulkan.entryLinkage),
-      (d3d12.inlineLinkage, vulkan.inlineLinkage),
-      (d3d12.voidRet, vulkan.voidRet),
-      (d3d12.workgroupAttr, vulkan.workgroupAttr),
-      (d3d12.entryAttr, vulkan.entryAttr),
-      (d3d12.groupPrefix, vulkan.groupPrefix)]:
-      doAssert field[0] == field[1]
-    doAssert d3d12.workgroupDefault == vulkan.workgroupDefault
-    doAssert d3d12.entryTakesParams == vulkan.entryTakesParams
-    # fvVulkan binds through the push-constant struct, no register form exists
-    doAssert vulkan.bindingPrefix == ""
-
+echo "[OK] t_ir_registry_wgsl_hlsl_rows"

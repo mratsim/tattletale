@@ -27,9 +27,7 @@ static:
   doAssert cell(scalar, ctUint, 64).spelling == "ulong"
   doAssert cell(scalar, ctFloat, 16).spelling == "half"
   doAssert cell(scalar, ctBool, 0).spelling == "bool"
-  doAssert cell(scalar, ctFloat, 64).supported == false
-  doAssert scalarCellRefusal(scalar, ctFloat, 64) == "rcCapability"
-  doAssert scalarCellRefusal(scalar, ctInt, 8) == ""
+  doAssert not cell(scalar, ctFloat, 64).supported
 
   let lit = mslLitRow()
   doAssert lit.int.u64Suffix == "ULL"
@@ -46,12 +44,8 @@ static:
   doAssert kind.loop.unrollDirective == "#pragma clang loop unroll(full)"
   doAssert kind.loop.infiniteHead == "for (;;) {\n"
   doAssert kind.loop.braceSameLine
-  doAssert kind.ternary == tfQuestion
   doAssert not kind.foldsIteElse
   doAssert not kind.emitOperandRendersExpr
-  doAssert kind.asmForm == afSpliceRaw
-  doAssert kind.constDecl == cdfConstexpr
-  doAssert kind.constructor == cofBraced
   doAssert kind.targetExprKinds == {}
 
   let conv = mslConvRow()
@@ -60,29 +54,6 @@ static:
   doAssert conv.builtinNames["toBf32"] == "float(as_type<bfloat>($1))"
   doAssert conv.builtinNames["asU16"] == "$1"
   doAssert conv.fpRefusals.len == 0
-
-  let coord = mslCoordRow()
-  doAssert coord.cells.len == 6
-  for c in coord.cells:
-    doAssert c.paramName == ""
-    doAssert c.componentCast == "int"
-    if c.kind == cbkThreadIndexInThreadgroup:
-      doAssert c.paramType == "uint"
-      doAssert c.whole == cwfParam
-    else:
-      doAssert c.paramType == "uint3"
-      doAssert c.whole == cwfVector
-
-  let sig = mslSigRow()
-  doAssert sig.entryLinkage == "kernel "
-  doAssert sig.deviceFnLinkage == ""
-  doAssert sig.inlineLinkage == "inline "
-  doAssert sig.voidRet == "void"
-  doAssert sig.workgroupAttr == ""
-  doAssert sig.workgroupDefault == [0, 0, 0]
-  doAssert sig.entryAttr == ""
-  doAssert sig.bindingPrefix == "[[buffer($1)]]"
-  doAssert sig.groupPrefix == ""
 
   let vec = mslVectorRule()
   doAssert vec.context == vcCoordinate

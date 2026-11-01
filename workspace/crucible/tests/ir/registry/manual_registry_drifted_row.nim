@@ -21,6 +21,4 @@ genTargets:
     lit: mslLitRow()
     kind: mslKindRow()
     conv: mslConvRow()
-    coord: mslCoordRow()
-    sig: mslSigRow()
     vector: mslVectorRule()

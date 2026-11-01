@@ -37,12 +37,6 @@ static:
     doAssert cell(scalar, ctFloat, 16).spelling == "half"
     doAssert cell(scalar, ctFloat, 32).spelling == "float"
     doAssert cell(scalar, ctFloat, 64).spelling == "double"
-    doAssert scalarCellRefusal(scalar, ctFloat, 16) == ""
-    doAssert scalarCellRefusal(scalar, ctInt, 8) == ""
-    # opencl is LP64 C like msl: the 8-bit and 64-bit signed names converge
-    let msl = mslScalarRow()
-    doAssert cell(scalar, ctInt, 8).spelling == cell(msl, ctInt, 8).spelling
-    doAssert cell(scalar, ctInt, 64).spelling == cell(msl, ctInt, 64).spelling
 
     let lit = openclLitRow()
     doAssert lit.int.u64Suffix == "ULL"
@@ -65,59 +59,13 @@ static:
     doAssert kind.loop.unrollDirective == "#pragma unroll"
     doAssert kind.loop.infiniteHead == "for (;;) {\n"
     doAssert kind.loop.braceSameLine
-    doAssert kind.ternary == tfQuestion
     doAssert not kind.foldsIteElse
     doAssert not kind.emitOperandRendersExpr
-    doAssert kind.asmForm == afRefuse
-    doAssert kind.constDecl == cdfConst
-    doAssert kind.constructor == cofBraced
     doAssert kind.targetExprKinds == {}
 
     let conv = openclConvRow()
     doAssert conv.builtinNames.len == 0
     doAssert conv.fpRefusals.len == 0
-
-    let coord = openclCoordRow()
-    doAssert coord.cells.len == 6
-    for c in coord.cells:
-      doAssert c.paramType == ""
-      doAssert c.componentCast == "int"
-      doAssert c.componentForm == ccDimCall
-      case c.kind
-      of cbkThreadPositionInGrid:
-        doAssert c.paramName == "get_global_id"
-        # whole-value reads of the coordinate vectors refuse, read the components
-        doAssert c.whole == cwfRefuse
-      of cbkThreadgroupPositionInGrid:
-        doAssert c.paramName == "get_group_id"
-        doAssert c.whole == cwfRefuse
-      of cbkThreadPositionInThreadgroup:
-        doAssert c.paramName == "get_local_id"
-        doAssert c.whole == cwfRefuse
-      of cbkThreadsPerThreadgroup:
-        doAssert c.paramName == "get_local_size"
-        doAssert c.whole == cwfRefuse
-      of cbkThreadgroupsPerGrid:
-        doAssert c.paramName == "get_num_groups"
-        doAssert c.whole == cwfRefuse
-      of cbkThreadIndexInThreadgroup:
-        # whole value is the x-major flat index, text the glue proc emits
-        doAssert c.paramName == ""
-        doAssert c.whole == cwfFlatIndex
-      of cbkNone:
-        doAssert false
-
-    let sig = openclSigRow()
-    doAssert sig.entryLinkage == "__kernel void "
-    doAssert sig.deviceFnLinkage == "static inline "
-    doAssert sig.inlineLinkage == "static inline "
-    doAssert sig.voidRet == "void"
-    doAssert sig.workgroupAttr == ""
-    doAssert sig.workgroupDefault == [0, 0, 0]
-    doAssert sig.entryAttr == ""
-    doAssert sig.bindingPrefix == ""
-    doAssert sig.groupPrefix == ""
-    doAssert sig.entryTakesParams
 
     let vec = openclVectorRule()
     doAssert vec.context == vcEverywhere
@@ -143,7 +91,6 @@ static:
     doAssert cell(scalar, ctFloat, 16).spelling == "float16_t"
     doAssert cell(scalar, ctFloat, 32).spelling == "float"
     doAssert cell(scalar, ctFloat, 64).spelling == "double"
-    doAssert scalarCellRefusal(scalar, ctFloat, 64) == ""
 
     let lit = glslLitRow()
     doAssert lit.int.u64Prefix == "uint64_t("
@@ -168,59 +115,13 @@ static:
     doAssert kind.loop.unrollDirective == "[[unroll]]"
     doAssert kind.loop.infiniteHead == "for (;;) {\n"
     doAssert kind.loop.braceSameLine
-    doAssert kind.ternary == tfQuestion
     doAssert not kind.foldsIteElse
     doAssert not kind.emitOperandRendersExpr
-    doAssert kind.asmForm == afRefuse
-    doAssert kind.constDecl == cdfConst
-    doAssert kind.constructor == cofCall
     doAssert kind.targetExprKinds == {eNil, eAt, ePat, eDeref, eAddr}
 
     let conv = glslConvRow()
     doAssert conv.builtinNames.len == 0
     doAssert conv.fpRefusals.len == 0
-
-    let coord = glslCoordRow()
-    doAssert coord.cells.len == 6
-    for c in coord.cells:
-      doAssert c.paramType == ""
-      doAssert c.componentCast == "int"
-      doAssert c.componentForm == ccField
-      case c.kind
-      of cbkThreadPositionInGrid:
-        doAssert c.paramName == "gl_GlobalInvocationID"
-        doAssert c.whole == cwfVector
-      of cbkThreadgroupPositionInGrid:
-        doAssert c.paramName == "gl_WorkGroupID"
-        doAssert c.whole == cwfVector
-      of cbkThreadPositionInThreadgroup:
-        doAssert c.paramName == "gl_LocalInvocationID"
-        doAssert c.whole == cwfVector
-      of cbkThreadsPerThreadgroup:
-        doAssert c.paramName == "gl_WorkGroupSize"
-        doAssert c.whole == cwfVector
-      of cbkThreadgroupsPerGrid:
-        doAssert c.paramName == "gl_NumWorkGroups"
-        doAssert c.whole == cwfVector
-      of cbkThreadIndexInThreadgroup:
-        doAssert c.paramName == "gl_LocalInvocationIndex"
-        doAssert c.whole == cwfCast
-      of cbkNone:
-        doAssert false
-
-    let sig = glslSigRow()
-    doAssert sig.entryLinkage == "void "
-    doAssert sig.deviceFnLinkage == ""
-    doAssert sig.inlineLinkage == ""
-    doAssert sig.voidRet == "void"
-    doAssert sig.workgroupAttr ==
-      "layout(local_size_x = $n, local_size_y = $n, local_size_z = $n) in;\n"
-    doAssert sig.workgroupDefault == [256, 1, 1]
-    doAssert sig.entryAttr == ""
-    doAssert sig.bindingPrefix == ""
-    doAssert sig.groupPrefix == ""
-    # GLSL kernels take zero parameters, they pack into the push-constant block
-    doAssert not sig.entryTakesParams
 
     let vec = glslVectorRule()
     doAssert vec.context == vcEverywhere

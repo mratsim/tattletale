@@ -13,7 +13,7 @@
 ##
 ## - block syntax: one `target <name>:` section per target key, one row expression per family.
 ##   A target with flavors keys its flavor-dependent families in a `target <name>(<flavor>):` section
-## - every one of the seven families resolves per target key, out of the key's own section
+## - every one of the five families resolves per target key, out of the key's own section
 ##   plus its target's flavorless base section. A family declared in both the base
 ##   and a flavor section of one target fails the compile
 ## - one invocation registers every target of its module, generated lookup proc names would collide across invocations
@@ -24,8 +24,8 @@ import std/macros
 import std/strutils
 import ./targets_registry
 
-const genFamilies*: array[7, string] = [
-  "scalar", "lit", "kind", "conv", "coord", "sig", "vector"]
+const genFamilies*: array[5, string] = [
+  "scalar", "lit", "kind", "conv", "vector"]
 
 proc rowTypeName(family: string): string {.compileTime.} =
   ## Schema type of one row family, "" for an unknown family.
@@ -34,8 +34,6 @@ proc rowTypeName(family: string): string {.compileTime.} =
   of "lit": "LitRow"
   of "kind": "KindRow"
   of "conv": "ConvRow"
-  of "coord": "CoordRow"
-  of "sig": "SigRow"
   of "vector": "VectorRule"
   else: ""
 
@@ -142,9 +140,6 @@ macro genTargets*(body: untyped) =
         checks.add quote do:
           checkScalarRow(`lookup`(), `display`)
         scalarEntries.add nnkPar.newTree(display, nnkCall.newTree(lookup))
-      elif family == "coord":
-        checks.add quote do:
-          checkCoordRow(`lookup`(), `display`)
   let togetherArgs = nnkBracket.newTree()
   for entry in scalarEntries:
     togetherArgs.add entry
