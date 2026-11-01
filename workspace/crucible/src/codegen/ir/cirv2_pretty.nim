@@ -147,11 +147,13 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
       b.renderStmtList(s.elseBody, "(else")
     b.close
   of sLoop:
-    if s.loopCond != nil:
-      b.open("(loop while " & renderExpr(s.loopCond))
-    else:
-      b.open("(loop")
+    b.open("(loop")
     for inner in s.loopBody:
+      b.renderStmt(inner)
+    b.close
+  of sWhile:
+    b.open("(while " & renderExpr(s.whileCond))
+    for inner in s.whileBody:
       b.renderStmt(inner)
     b.close
   of sRet:

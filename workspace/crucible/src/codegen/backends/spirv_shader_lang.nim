@@ -481,6 +481,8 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.hoistLocals(fn, s.elseBody)
     of sLoop:
       ctx.hoistLocals(fn, s.loopBody)
+    of sWhile:
+      ctx.hoistLocals(fn, s.whileBody)
     else:
       discard
 
@@ -1182,6 +1184,26 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
 
 proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt])
 
+proc emitLoopTail(ctx: var SpvLangCtx, fn: var SpvFnCtx, body: seq[CirStmt],
+    headerLbl, bodyLbl, contLbl, mergeLbl, savedMerge, savedCont: uint32) =
+  ## Body block, continue target and merge block of one loop statement, shared by every loop shape.
+  ctx.builder.opLabelAt(bodyLbl)
+  fn.terminated = false
+  fn.loopMerge = mergeLbl
+  fn.loopCont = contLbl
+  ctx.emitStmts(fn, body)
+  fn.loopMerge = savedMerge
+  fn.loopCont = savedCont
+  if fn.terminated:
+    ctx.failSpv("return inside a loop body, the continue target would be unreachable")
+    return
+  ctx.builder.opBranch(contLbl)
+  ctx.builder.opLabelAt(contLbl)
+  fn.terminated = false
+  ctx.builder.opBranch(headerLbl)
+  ctx.builder.opLabelAt(mergeLbl)
+  fn.terminated = false
+
 proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
   ## One statement list into the current basic block.
   for s in ss:
@@ -1260,31 +1282,27 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.builder.opBranch(headerLbl)
       ctx.builder.opLabelAt(headerLbl)
       fn.terminated = false
-      # OpLoopMerge must immediately precede the branch instruction, so cond emission happens first in the header block
-      if s.loopCond != nil:
-        # Body block runs on true only, merge block is the loop exit, continue block loops back to the header
-        let condV = ctx.emitExpr(fn, s.loopCond)
-        ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.unroll: lcUnroll else: lcNone)
-        ctx.builder.opBranchConditional(condV, bodyLbl, mergeLbl)
-      else:
-        ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.unroll: lcUnroll else: lcNone)
-        ctx.builder.opBranch(bodyLbl)
-      ctx.builder.opLabelAt(bodyLbl)
-      fn.terminated = false
-      fn.loopMerge = mergeLbl
-      fn.loopCont = contLbl
-      ctx.emitStmts(fn, s.loopBody)
-      fn.loopMerge = savedMerge
-      fn.loopCont = savedCont
-      if fn.terminated:
-        ctx.failSpv("return inside a loop body, the continue target would be unreachable")
-        return
-      ctx.builder.opBranch(contLbl)
-      ctx.builder.opLabelAt(contLbl)
-      fn.terminated = false
+      ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.unroll: lcUnroll else: lcNone)
+      ctx.builder.opBranch(bodyLbl)
+      ctx.emitLoopTail(fn, s.loopBody, headerLbl, bodyLbl, contLbl, mergeLbl,
+        savedMerge, savedCont)
+    of sWhile:
+      let headerLbl = ctx.builder.freshLabel()
+      let bodyLbl = ctx.builder.freshLabel()
+      let contLbl = ctx.builder.freshLabel()
+      let mergeLbl = ctx.builder.freshLabel()
+      let savedMerge = fn.loopMerge
+      let savedCont = fn.loopCont
       ctx.builder.opBranch(headerLbl)
-      ctx.builder.opLabelAt(mergeLbl)
+      ctx.builder.opLabelAt(headerLbl)
       fn.terminated = false
+      # cond emission sits in the header block so the back edge re-evaluates it every iteration
+      let condV = ctx.emitExpr(fn, s.whileCond)
+      # OpLoopMerge must immediately precede the branch instruction
+      ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.whileUnroll: lcUnroll else: lcNone)
+      ctx.builder.opBranchConditional(condV, bodyLbl, mergeLbl)
+      ctx.emitLoopTail(fn, s.whileBody, headerLbl, bodyLbl, contLbl, mergeLbl,
+        savedMerge, savedCont)
     of sRet:
       if fn.terminated:
         ctx.failSpv("a second return in one basic block")
@@ -1370,8 +1388,10 @@ proc scanCalls(ss: seq[CirStmt], calls: var seq[string]) =
       scanCalls(s.thenBody, calls)
       scanCalls(s.elseBody, calls)
     of sLoop:
-      scanCallExpr(s.loopCond, calls)
       scanCalls(s.loopBody, calls)
+    of sWhile:
+      scanCallExpr(s.whileCond, calls)
+      scanCalls(s.whileBody, calls)
     of sRet:
       if s.retVal != nil:
         scanCallExpr(s.retVal, calls)

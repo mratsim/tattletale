@@ -120,8 +120,10 @@ proc unwrapVarDerefsStmts(ss: var seq[CirStmt], varParams: HashSet[string]) =
       s.thenBody.unwrapVarDerefsStmts(varParams)
       s.elseBody.unwrapVarDerefsStmts(varParams)
     of sLoop:
-      s.loopCond.unwrapVarDerefsExpr(varParams)
       s.loopBody.unwrapVarDerefsStmts(varParams)
+    of sWhile:
+      s.whileCond.unwrapVarDerefsExpr(varParams)
+      s.whileBody.unwrapVarDerefsStmts(varParams)
     of sRet:
       s.retVal.unwrapVarDerefsExpr(varParams)
     of sDiscard:
@@ -203,12 +205,16 @@ proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashS
       if eerr.len > 0:
         return eerr
     of sLoop:
-      let cerr = rewriteVarCallArgsExpr(fn, s.loopCond, varParams, procs)
-      if cerr.len > 0:
-        return cerr
       let lerr = rewriteVarCallArgsStmts(fn, s.loopBody, varParams, procs)
       if lerr.len > 0:
         return lerr
+    of sWhile:
+      let cerr = rewriteVarCallArgsExpr(fn, s.whileCond, varParams, procs)
+      if cerr.len > 0:
+        return cerr
+      let werr = rewriteVarCallArgsStmts(fn, s.whileBody, varParams, procs)
+      if werr.len > 0:
+        return werr
     of sRet:
       let rerr = rewriteVarCallArgsExpr(fn, s.retVal, varParams, procs)
       if rerr.len > 0:
@@ -511,8 +517,10 @@ proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[Ci
       registerStmtRefBlocks(blocks, s.thenBody)
       registerStmtRefBlocks(blocks, s.elseBody)
     of sLoop:
-      registerExprRefBlocks(blocks, s.loopCond)
       registerStmtRefBlocks(blocks, s.loopBody)
+    of sWhile:
+      registerExprRefBlocks(blocks, s.whileCond)
+      registerStmtRefBlocks(blocks, s.whileBody)
     of sRet:
       registerExprRefBlocks(blocks, s.retVal)
     of sDiscard:

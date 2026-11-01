@@ -102,6 +102,11 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
       if err.len > 0:
         return err
       lowered.add s
+    of sWhile:
+      let err = decomposeArrayAssignStmts(s.whileBody)
+      if err.len > 0:
+        return err
+      lowered.add s
     else:
       lowered.add s
   body = lowered

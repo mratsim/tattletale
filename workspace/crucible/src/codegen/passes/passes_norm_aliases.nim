@@ -120,8 +120,10 @@ proc assignBuiltinKindsStmts(ss: var seq[CirStmt]) =
       assignBuiltinKindsStmts(s.thenBody)
       assignBuiltinKindsStmts(s.elseBody)
     of sLoop:
-      assignBuiltinKindsExpr(s.loopCond)
       assignBuiltinKindsStmts(s.loopBody)
+    of sWhile:
+      assignBuiltinKindsExpr(s.whileCond)
+      assignBuiltinKindsStmts(s.whileBody)
     of sRet:
       assignBuiltinKindsExpr(s.retVal)
     of sDiscard:

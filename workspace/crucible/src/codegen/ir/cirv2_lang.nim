@@ -11,8 +11,7 @@
 ## The shape encodes the normal form:
 ##
 ## - control flow is statement-based
-## - `loop` takes an optional condition, a nil loopCond keeps the conditionless
-##   shape that every target already emits
+## - the two loop shapes are two kinds: `sWhile` re-tests its condition, `sLoop` runs unconditionally
 ## - a call is an ordinary expression node: the builders bind statement calls
 ##   through `sCall` and value calls appear in any operand position
 ## - every typed operation states its type in the `(add Type a b)` discipline of the Leng grammar
@@ -261,6 +260,7 @@ type
     sAsgn
     sIte
     sLoop
+    sWhile
     sRet
     sDiscard
     sCall
@@ -272,8 +272,7 @@ type
     ##
     ## Control flow is statement-based:
     ## - `ite` takes a bool condition and two statement lists
-    ## - `loop` takes an optional bool condition in `loopCond`, a nil loopCond
-    ##   keeps the conditionless shape that every target already emits
+    ## - `loop` runs unconditionally, `while` re-tests its condition before every iteration
     ## - a `var` states the memory class of its declaration in `space`, `const` ignores `space`
     ##   (`caThread` is per-thread registers and the unannotated default)
     case kind*: CirStmtKind
@@ -288,13 +287,17 @@ type
       cond*: CirExpr
       thenBody*, elseBody*: seq[CirStmt]
     of sLoop:
-      loopCond*: CirExpr
-      ## Only `whileS` sets `loopCond`.
       loopBody*: seq[CirStmt]
       unroll*: bool
       ## `{.unroll.}` statement in the loop body: every printer emits a full-unroll directive in front of the loop.
       ## - Metal: `#pragma clang loop unroll(full)`
       ## - OpenCL: `#pragma unroll`
+    of sWhile:
+      whileCond*: CirExpr
+      ## Re-tested before every iteration.
+      whileBody*: seq[CirStmt]
+      whileUnroll*: bool
+      ## Same directive as `sLoop.unroll`: every printer emits a full-unroll directive in front of the loop.
     of sRet:
       retVal*: CirExpr
     of sDiscard:

@@ -101,8 +101,11 @@ proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
           findNumWorkgroupsStmts(s.elseBody, coordTy):
         return true
     of sLoop:
-      if findNumWorkgroupsExpr(s.loopCond, coordTy) or
-          findNumWorkgroupsStmts(s.loopBody, coordTy):
+      if findNumWorkgroupsStmts(s.loopBody, coordTy):
+        return true
+    of sWhile:
+      if findNumWorkgroupsExpr(s.whileCond, coordTy) or
+          findNumWorkgroupsStmts(s.whileBody, coordTy):
         return true
     of sRet:
       if s.retVal != nil and findNumWorkgroupsExpr(s.retVal, coordTy):
@@ -148,8 +151,10 @@ proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
       rewriteNumWorkgroupsStmts(s.thenBody, coordTy)
       rewriteNumWorkgroupsStmts(s.elseBody, coordTy)
     of sLoop:
-      rewriteNumWorkgroupsExpr(s.loopCond, coordTy)
       rewriteNumWorkgroupsStmts(s.loopBody, coordTy)
+    of sWhile:
+      rewriteNumWorkgroupsExpr(s.whileCond, coordTy)
+      rewriteNumWorkgroupsStmts(s.whileBody, coordTy)
     of sRet:
       rewriteNumWorkgroupsExpr(s.retVal, coordTy)
     of sDiscard:
@@ -558,6 +563,8 @@ proc scanStmtStructRefs(refs: var HashSet[string], ss: seq[CirStmt]) =
       scanStmtStructRefs(refs, s.elseBody)
     of sLoop:
       scanStmtStructRefs(refs, s.loopBody)
+    of sWhile:
+      scanStmtStructRefs(refs, s.whileBody)
     of sCall:
       for a in s.callArgs:
         if a.kind == eOconstr:

@@ -133,6 +133,9 @@ proc containsReturn(ss: seq[CirStmt]): bool =
     of sLoop:
       if s.loopBody.containsReturn:
         return true
+    of sWhile:
+      if s.whileBody.containsReturn:
+        return true
     else:
       discard
   return false
@@ -193,8 +196,10 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
       s.thenBody.substituteArgsStmts(subst)
       s.elseBody.substituteArgsStmts(subst)
     of sLoop:
-      s.loopCond.substituteArgsExpr(subst)
       s.loopBody.substituteArgsStmts(subst)
+    of sWhile:
+      s.whileCond.substituteArgsExpr(subst)
+      s.whileBody.substituteArgsStmts(subst)
     of sRet:
       s.retVal.substituteArgsExpr(subst)
     of sDiscard:
@@ -291,12 +296,16 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
         if eerr.len > 0:
           return eerr
       of sLoop:
-        let cerr = refuseValuePositionCalls(fn, s.loopCond, procs)
-        if cerr.len > 0:
-          return cerr
         let lerr = inlineInStmts(fn, s.loopBody, procs)
         if lerr.len > 0:
           return lerr
+      of sWhile:
+        let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
+        if cerr.len > 0:
+          return cerr
+        let werr = inlineInStmts(fn, s.whileBody, procs)
+        if werr.len > 0:
+          return werr
       of sRet:
         let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
         if rerr.len > 0:
@@ -516,8 +525,10 @@ proc rewriteBoolReadsStmts(ss: var seq[CirStmt], boolParams: HashSet[string]) =
       rewriteBoolReadsStmts(s.thenBody, boolParams)
       rewriteBoolReadsStmts(s.elseBody, boolParams)
     of sLoop:
-      rewriteBoolReadsExpr(s.loopCond, boolParams)
       rewriteBoolReadsStmts(s.loopBody, boolParams)
+    of sWhile:
+      rewriteBoolReadsExpr(s.whileCond, boolParams)
+      rewriteBoolReadsStmts(s.whileBody, boolParams)
     of sRet:
       rewriteBoolReadsExpr(s.retVal, boolParams)
     of sDiscard:
@@ -631,8 +642,10 @@ proc scanStmtStructs(needed: var HashSet[string], ss: seq[CirStmt]) =
       scanStmtStructs(needed, s.thenBody)
       scanStmtStructs(needed, s.elseBody)
     of sLoop:
-      scanExprStructs(needed, s.loopCond)
       scanStmtStructs(needed, s.loopBody)
+    of sWhile:
+      scanExprStructs(needed, s.whileCond)
+      scanStmtStructs(needed, s.whileBody)
     of sRet:
       scanExprStructs(needed, s.retVal)
     of sDiscard:

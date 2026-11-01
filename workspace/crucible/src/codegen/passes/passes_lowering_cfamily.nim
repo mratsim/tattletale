@@ -72,6 +72,10 @@ proc hoistProgramScopeLocalsCore(m: CirModule, smemInitReason: string): string =
           let loopErr = hoistConstMemStmts(m, fn, s.loopBody)
           if loopErr.len > 0:
             return loopErr
+        of sWhile:
+          let loopErr = hoistConstMemStmts(m, fn, s.whileBody)
+          if loopErr.len > 0:
+            return loopErr
         else:
           discard
         i.inc

@@ -252,8 +252,10 @@ proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int) =
     addrWrapByrefStmts(s.thenBody, tmpCount)
     addrWrapByrefStmts(s.elseBody, tmpCount)
   of sLoop:
-    addrWrapByrefArgs(s.loopCond, pre, tmpCount)
     addrWrapByrefStmts(s.loopBody, tmpCount)
+  of sWhile:
+    addrWrapByrefArgs(s.whileCond, pre, tmpCount)
+    addrWrapByrefStmts(s.whileBody, tmpCount)
   of sRet:
     addrWrapByrefArgs(s.retVal, pre, tmpCount)
   of sDiscard:
@@ -331,8 +333,10 @@ proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =
       wrapParamReadsProc(st.thenBody, oldName, ptrSym)
       wrapParamReadsProc(st.elseBody, oldName, ptrSym)
     of sLoop:
-      wrapParamReads(st.loopCond, oldName, ptrSym)
       wrapParamReadsProc(st.loopBody, oldName, ptrSym)
+    of sWhile:
+      wrapParamReads(st.whileCond, oldName, ptrSym)
+      wrapParamReadsProc(st.whileBody, oldName, ptrSym)
     of sRet:
       wrapParamReads(st.retVal, oldName, ptrSym)
     of sDiscard:
@@ -412,8 +416,10 @@ proc retargetProcTypeStmts(stmts: seq[CirStmt], newFormals: Table[string, seq[Ci
       retargetProcTypeStmts(st.thenBody, newFormals)
       retargetProcTypeStmts(st.elseBody, newFormals)
     of sLoop:
-      retargetProcTypeSyms(st.loopCond, newFormals)
       retargetProcTypeStmts(st.loopBody, newFormals)
+    of sWhile:
+      retargetProcTypeSyms(st.whileCond, newFormals)
+      retargetProcTypeStmts(st.whileBody, newFormals)
     of sRet:
       retargetProcTypeSyms(st.retVal, newFormals)
     of sDiscard:
