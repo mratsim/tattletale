@@ -5,33 +5,32 @@ AI coding tool guidelines for the Crucible codegen backend.
 ## Benchmarks
 
 Two benchmark families check compiler changes: compile time of the bench kernels and size of the emitted kernels.
-Both compare same-session against master.
-Absolute numbers do not reproduce across sessions because machine drift dominates.
-A bench without a master control tree measures nothing.
+Both compare same-session against the unmodified master checkout because machine drift dominates absolute numbers across sessions.
+A measurement without the master comparison measures nothing.
 
-### Compile time (T2c protocol)
+### Compile time
 
 ```bash
-# from each tree root: the branch worktree AND the main checkout at master
+# from the branch worktree AND from the main checkout at master, two trees
 /usr/bin/time -p nim cpp -d:release --hints:off --warnings:off \
-  --outdir:/tmp/bx_out/<tag> --nimcache:/tmp/bx_nc/<tag-fresh> \
+  --outdir:/tmp/bench_out/<tree> --nimcache:/tmp/bench_cache/<tree>-fresh \
   workspace/ceramic/bench/gemm_gpu/bench_gemm_metal.nim
 
-/usr/bin/time -p nim cpp -d:release -d:sdpaDtype=bf16 \
-  --hints:off --warnings:off \
-  --outdir:/tmp/bx_out/<tag> --nimcache:/tmp/bx_nc/<tag-fresh> \
+/usr/bin/time -p nim cpp -d:release -d:sdpaDtype=bf16 --hints:off --warnings:off \
+  --outdir:/tmp/bench_out/<tree> --nimcache:/tmp/bench_cache/<tree>-fresh \
   workspace/ceramic/bench/sdpa_gpu/bench_scaled_dot_product_attention_metal.nim
 ```
 
 | Rule | Detail |
 | --- | --- |
-| Runs | fresh nimcache per run, 3 runs per tree, interleaved branch and master, medians reported |
-| Flags | `--maxLoopIterationsVM` is banned for compile timing, it exists for the runtime benches |
-| Control | the master tree is mandatory in every batch, an A/B against the branch's own earlier commit can miss a regression that both variants share |
-| Chunking | one command runs one interleaved round of both kernels on both trees, the 3-round sweep fits the 300 s bash cap only chunked |
-| Reference | recorded master band on this machine (M4 Max): GEMM ~4.2 s, SDPA bf16 ~8.3 s |
+| Nimcache | fresh cache directory per run, the compiler reuses cached modules across runs and a warm cache hides the cost under test |
+| Runs | 3 runs per tree, alternate the trees (branch, master, branch, master), report each tree's median |
+| Master checkout | measure master in the same batch, always, comparing a branch only against its own earlier commit can miss a regression that both commits share |
+| Flags | never pass `--maxLoopIterationsVM` when measuring compile time, it exists for the runtime benches |
+| Shell timeout | one command runs one round of both kernels on both trees, a full 3-round sweep needs several commands to stay inside the 300 s cap |
+| Reference | on the M4 Max workstation, master compiles the GEMM bench in about 4.2 s and the SDPA bench in about 8.3 s |
 
-### Emitted code size (ceramic codegen_size)
+### Emitted code size
 
 ```bash
 # from the tattletale/ directory of each tree
@@ -40,18 +39,18 @@ nim ceramic_cgs runner=cgs_layout_compose dump=true
 
 | Fact | Detail |
 | --- | --- |
-| Runners | 11 under `workspace/ceramic/bench/codegen_size`: complement, make_layout_like, make_fragment_like, compose, coalesce, concat, divides, products, indexing, inverses, tensor_selectors |
-| Output | one `.msl` per kernel in `workspace/ceramic/bench/codegen_size/dumps/cur_kernels`, untracked files |
-| Comparison | diff the dump sets per tree, per-kernel and total lines, words, bytes |
-| Known breakage | 5 runners fail to compile identically on both sides: complement, make_layout_like, products, indexing, tensor_selectors (`crucibleCompileTarget` undeclared in `h_copy_dispatch.nim`), a pre-existing ceramic breakage, compare the 26 kernels that compile |
-| Delta rule | a byte delta names its mechanism |
+| Runners | 11 programs under `workspace/ceramic/bench/codegen_size`: complement, make_layout_like, make_fragment_like, compose, coalesce, concat, divides, products, indexing, inverses, tensor_selectors |
+| Output | each run writes one `.msl` file per kernel into `workspace/ceramic/bench/codegen_size/dumps/cur_kernels`, the dumps are untracked files |
+| Comparison | run the runners in both trees and compare the dump sets, per kernel and in total, by line, word, and byte counts |
+| Known breakage | 5 of the 11 runners fail to compile identically on both sides: complement, make_layout_like, products, indexing, tensor_selectors (`crucibleCompileTarget` undeclared in `h_copy_dispatch.nim`), a pre-existing ceramic breakage unrelated to crucible changes, compare only the 26 kernels that compile |
+| Delta rule | a size delta names the mechanism that produced it, a silent delta is not accepted |
 
 ## Emitted-output policy
 
 A compiler change answers four checks:
 
 - emitted output behaves the same, kernels launch and read back the expected results
-- compile time stays in the T2c band
+- compile time stays close to the master measurements from the Benchmarks section
 - runtime performance is unchanged
 - maintenance line count goes down
 
