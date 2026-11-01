@@ -1189,10 +1189,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     let stopV = ctx.lowerExpr(unwrapConv(stopNode))
     if ctx.resolver.err.len > 0:
       return @[]
-    let startT = startV
-    let stopT = stopV
     var stepV: CirExpr = nil
-    var stepT: CirExpr = nil
     var stepIsConst = true
     if stepNode.isNil:
       stepV = intLit(1, varType)
@@ -1210,8 +1207,6 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         stepIsConst = false
     if ctx.resolver.err.len > 0:
       return @[]
-    if stepIsConst:
-      stepT = stepV
     # a loop variable's Nim scope is the for statement, so the declaration
     # and the body share one scope
     ctx.pushScope()
@@ -1226,12 +1221,12 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     let bodyHoists = ctx.drainHoisted()
     ctx.popScope()
     let cmp = if inclusive:
-      leE(varSym, stopT)
+      leE(varSym, stopV)
     else:
-      ltE(varSym, stopT)
+      ltE(varSym, stopV)
     var incr: seq[CirStmt] = @[]
     if stepIsConst:
-      incr.add(asgnS(varSym, addE(varType, varSym, stepT)))
+      incr.add(asgnS(varSym, addE(varType, varSym, stepV)))
     else:
       # loop-variant step expressions lower inside the loop,
       # they re-evaluate at the continue point.
@@ -1239,11 +1234,10 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       let stepNow = ctx.lowerExpr(unwrapConv(stepNode))
       if ctx.resolver.err.len > 0:
         return @[]
-      let stepNowT = stepNow
-      incr.add(ctx.drainHoisted() & @[asgnS(varSym, addE(varType, varSym, stepNowT))])
+      incr.add(ctx.drainHoisted() & @[asgnS(varSym, addE(varType, varSym, stepNow))])
     var preamble = startHoists
     preamble.add(varD(varName, varType))
-    preamble.add(asgnS(varSym, startT))
+    preamble.add(asgnS(varSym, startV))
     result = preamble & @[whileS(cmp, bodyHoists & body & incr)]
   of nnkReturnStmt:
     var valueNode = n[0]

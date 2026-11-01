@@ -618,7 +618,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ##   exportc renames the entry for the host runtime lookup, Vulkan ingest reads the name back from the `[numthreads]` line
   ## - the kernel's open brace prints on its own line (HLSL's brace style) and the body and the closing brace are the caller's
   if fn.isKernel:
-    let wg = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
+    let wg = getWorkgroup(fn)
     result = "[numthreads(" & $wg[0] & ", " & $wg[1] & ", " & $wg[2] & ")]\n"
     # a bare kernel stays `main`, device functions keep the name their call sites reference
     let entryName = if fn.exportName.len > 0: fn.exportName else: "main"
@@ -712,7 +712,7 @@ proc prepProc(ctx: var PrintCtx, fn: CirProc) =
       if ctx.graph.reached.contains(fn.name & "/" & p.name):
         ctx.rwBuffers.incl(p.name)
     ctx.pushParams = ctx.kernelPush
-    ctx.workgroup = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
+    ctx.workgroup = getWorkgroup(fn)
   else:
     # a device function's values pass by value, its push half is empty
     var devicePush: HashSet[string]
