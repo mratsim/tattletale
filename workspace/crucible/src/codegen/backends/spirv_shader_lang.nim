@@ -100,7 +100,7 @@ proc isSpvScalarKind(t: CirType): bool =
   t.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat}
 
 proc spvTyKey(t: SpvTy): string =
-  ## Structural key, the type-identity memo for OpType* dedup.
+  ## Structural key, the type-identity cache for OpType* dedup.
   case t.kind
   of stkScalar:
     result = "s:" & $t.scalar.kind
@@ -169,8 +169,8 @@ type
   SpvLangCtx* = object
     builder*: SpvBuilder
     caps*: HashSet[uint32]
-    tyMemo*: Table[string, uint32]
-    structMemo*: Table[string, uint32]
+    tyCache*: Table[string, uint32]
+    structCache*: Table[string, uint32]
     builtins*: Table[uint32, tuple[varId, vecTy: uint32]]
     scalarBuiltins*: Table[uint32, uint32]
     interfaceVars*: seq[uint32]
@@ -255,10 +255,10 @@ proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
     return nil
 
 proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
-  ## SPIR-V type id of a value type, memoized on the structural key.
+  ## SPIR-V type id of a value type, cached on the structural key.
   let key = spvTyKey(t)
-  if ctx.tyMemo.hasKey(key):
-    return ctx.tyMemo[key]
+  if ctx.tyCache.hasKey(key):
+    return ctx.tyCache[key]
   case t.kind
   of stkScalar: result = ctx.scalarId(t.scalar)
   of stkVector:
@@ -267,19 +267,19 @@ proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
     doAssert t.len >= 1
     let elemId = ctx.tyId(t.elem)
     let lenId = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(t.len))
-    let memoKey: SpvMemoKey = (OpTypeArray, @[elemId, lenId])
-    if memoKey in ctx.builder.memo:
-      return ctx.builder.memo[memoKey]
-    result = ctx.builder.memoInst(OpTypeArray, @[elemId, lenId])
+    let instKey: SpvInstKey = (OpTypeArray, @[elemId, lenId])
+    if instKey in ctx.builder.instCache:
+      return ctx.builder.instCache[instKey]
+    result = ctx.builder.cachedInst(OpTypeArray, @[elemId, lenId])
     let e = std430Layout(t.elem)
     ctx.builder.emitDecorate(result, decArrayStride,
       @[uint32(roundUpMultiple(e.size, e.align))])
   of stkRuntimeArray:
     let elemId = ctx.tyId(t.relem)
-    let memoKey: SpvMemoKey = (OpTypeRuntimeArray, @[elemId])
-    if memoKey in ctx.builder.memo:
-      return ctx.builder.memo[memoKey]
-    result = ctx.builder.memoInst(OpTypeRuntimeArray, @[elemId])
+    let instKey: SpvInstKey = (OpTypeRuntimeArray, @[elemId])
+    if instKey in ctx.builder.instCache:
+      return ctx.builder.instCache[instKey]
+    result = ctx.builder.cachedInst(OpTypeRuntimeArray, @[elemId])
     let e = std430Layout(t.relem)
     ctx.builder.emitDecorate(result, decArrayStride,
       @[uint32(roundUpMultiple(e.size, e.align))])
@@ -288,15 +288,15 @@ proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
     for m in t.members:
       memberIds.add ctx.tyId(m)
     let offsets = std430Offsets(t.members)
-    var memoKey = "t:"
+    var structKey = "t:"
     for mid in memberIds:
-      memoKey &= $mid & ","
+      structKey &= $mid & ","
     for off in offsets:
-      memoKey &= $off & ","
+      structKey &= $off & ","
     if t.blockDecorated:
-      memoKey &= "B"
-    if ctx.structMemo.hasKey(memoKey):
-      return ctx.structMemo[memoKey]
+      structKey &= "B"
+    if ctx.structCache.hasKey(structKey):
+      return ctx.structCache[structKey]
     result = ctx.builder.module.allocId()
     var words = @[result]
     for mid in memberIds:
@@ -306,12 +306,12 @@ proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
       ctx.builder.emitMemberDecorate(result, uint32(i), decOffset, @[uint32(off)])
     if t.blockDecorated:
       ctx.builder.emitDecorate(result, decBlock)
-    ctx.structMemo[memoKey] = result
+    ctx.structCache[structKey] = result
   of stkPointer:
     if t.storage == scPhysicalStorageBuffer:
       ctx.caps.incl capPhysicalStorageBufferAddresses
     result = ctx.builder.tyPointer(t.storage, ctx.tyId(t.pointee))
-  ctx.tyMemo[key] = result
+  ctx.tyCache[key] = result
 
 type
   SpvPushBlock = object

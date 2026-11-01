@@ -415,12 +415,12 @@ func finalize(m: SpvModule): seq[uint32] =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvMemoKey = tuple[opcode: SpvOp, words: seq[uint32]]
+  SpvInstKey = tuple[opcode: SpvOp, words: seq[uint32]]
     ## Dedup key for a type or constant: opcode plus the operand words
 
   SpvBuilder = object
     module*: SpvModule
-    memo*: Table[SpvMemoKey, uint32]
+    instCache*: Table[SpvInstKey, uint32]
     scalarWidths*: Table[uint32, int]
       ## Bit width of every emitted OpTypeInt/OpTypeFloat, keyed by type id.
       ## OpConstant literal word counts derive from it
@@ -428,27 +428,27 @@ type
 func initSpvBuilder(): SpvBuilder =
   SpvBuilder(module: initSpvModule())
 
-func memoInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
-  let key: SpvMemoKey = (opcode, @operands)
-  if key in b.memo:
-    return b.memo[key]
+func cachedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
+  let key: SpvInstKey = (opcode, @operands)
+  if key in b.instCache:
+    return b.instCache[key]
   result = b.module.allocId()
   var words = @[result]
   for w in operands:
     words.add w
   b.module.emitInstSeq(ssTypesConstantsGlobals, opcode, words)
-  b.memo[key] = result
+  b.instCache[key] = result
 
-func memoTypedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
-  let key: SpvMemoKey = (opcode, @operands)
-  if key in b.memo:
-    return b.memo[key]
+func cachedTypedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
+  let key: SpvInstKey = (opcode, @operands)
+  if key in b.instCache:
+    return b.instCache[key]
   result = b.module.allocId()
   var words = @[operands[0], result]
   for i in 1 ..< operands.len:
     words.add operands[i]
   b.module.emitInstSeq(ssTypesConstantsGlobals, opcode, words)
-  b.memo[key] = result
+  b.instCache[key] = result
 
 func freshInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
   result = b.module.allocId()
@@ -498,10 +498,10 @@ func opVariable(b: var SpvBuilder, resultType, storageClass: uint32): uint32 =
   b.module.emitInstSeq(ssTypesConstantsGlobals, OpVariable, @[resultType, result, storageClass])
 
 func tyVoid(b: var SpvBuilder): uint32 =
-  b.memoInst(OpTypeVoid, @[])
+  b.cachedInst(OpTypeVoid, @[])
 
 func tyBool(b: var SpvBuilder): uint32 =
-  b.memoInst(OpTypeBool, @[])
+  b.cachedInst(OpTypeBool, @[])
 
 func recordScalarWidth(b: var SpvBuilder, ty: uint32, width: int) =
   b.scalarWidths[uint32(ty)] = width
@@ -511,24 +511,24 @@ func getScalarWidth(b: SpvBuilder, ty: uint32): int =
   b.scalarWidths[ty]
 
 func tyInt(b: var SpvBuilder, width: int, signedness: bool): uint32 =
-  result = b.memoInst(OpTypeInt, @[uint32(width), uint32(signedness)])
+  result = b.cachedInst(OpTypeInt, @[uint32(width), uint32(signedness)])
   b.recordScalarWidth(result, width)
 
 func tyFloat(b: var SpvBuilder, width: int): uint32 =
-  result = b.memoInst(OpTypeFloat, @[uint32(width)])
+  result = b.cachedInst(OpTypeFloat, @[uint32(width)])
   b.recordScalarWidth(result, width)
 
 func tyVector(b: var SpvBuilder, componentType: uint32, componentCount: int): uint32 =
-  b.memoInst(OpTypeVector, @[componentType, uint32(componentCount)])
+  b.cachedInst(OpTypeVector, @[componentType, uint32(componentCount)])
 
 func tyPointer(b: var SpvBuilder, storageClass, pointeeType: uint32): uint32 =
-  b.memoInst(OpTypePointer, @[storageClass, pointeeType])
+  b.cachedInst(OpTypePointer, @[storageClass, pointeeType])
 
 func tyFunction(b: var SpvBuilder, returnType: uint32, paramTypes: openArray[uint32]): uint32 =
   var ops = @[returnType]
   for p in paramTypes:
     ops.add p
-  b.memoInst(OpTypeFunction, ops)
+  b.cachedInst(OpTypeFunction, ops)
 
 func constUint(b: var SpvBuilder, ty: uint32, value: uint64): uint32 =
   ## Emits OpConstant holding the bit pattern of `value`:
@@ -536,16 +536,16 @@ func constUint(b: var SpvBuilder, ty: uint32, value: uint64): uint32 =
   ## - two words (low half first) for 64-bit types, even when the bit pattern
   ##   fits one word: the word count tracks the type width, never the value
   if b.getScalarWidth(ty) > 32:
-    b.memoTypedInst(OpConstant, @[ty, uint32(value), uint32(value shr 32)])
+    b.cachedTypedInst(OpConstant, @[ty, uint32(value), uint32(value shr 32)])
   else:
     let width = b.getScalarWidth(ty)
     let mask = (1'u64 shl uint64(width)) - 1
     doAssert value <= mask, "constant bit pattern overflows the " & $width & "-bit type " & $ty
-    b.memoTypedInst(OpConstant, @[ty, uint32(value)])
+    b.cachedTypedInst(OpConstant, @[ty, uint32(value)])
 
 func constBool(b: var SpvBuilder, ty: uint32, value: bool): uint32 =
   let op = if value: OpConstantTrue else: OpConstantFalse
-  b.memoTypedInst(op, @[ty])
+  b.cachedTypedInst(op, @[ty])
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Function body
