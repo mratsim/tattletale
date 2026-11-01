@@ -284,10 +284,6 @@ func floatVal(f: float64): JinjaVal = JinjaVal(kind: vkFloat, f: f)
 func strVal(s: string): JinjaVal = JinjaVal(kind: vkStr, s: s)
 func seqVal(xs: seq[JinjaVal]): JinjaVal = JinjaVal(kind: vkSeq, xs: SeqVal(items: xs))
 func dictVal(d: DictVal): JinjaVal = JinjaVal(kind: vkDict, d: d)
-func nsVal(d: DictVal): JinjaVal = JinjaVal(kind: vkNs, d: d)
-func loopVal(lp: LoopState): JinjaVal = JinjaVal(kind: vkLoop, lp: lp)
-func macroVal(mc: MacroVal): JinjaVal = JinjaVal(kind: vkMacro, mc: mc)
-func callVal(pc: DeferredMacroCall): JinjaVal = JinjaVal(kind: vkCall, pc: pc)
 func rangeVal(start, stop, step: int64): JinjaVal =
   ## Returns the lazy range value over `start`, `stop` and `step`.
   JinjaVal(kind: vkRange, r: RangeVal(start: start, stop: stop, step: step))

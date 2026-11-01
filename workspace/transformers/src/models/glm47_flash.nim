@@ -143,9 +143,6 @@ func parseGlm47Config(json: JsonNode): Glm47Config =
     "[ttt] Glm47Config: first_k_dense_replace " &
     $result.firstKDenseReplace & " outside 0.." & $result.numHiddenLayers)
 
-proc loadGlm47Config(path: string): Glm47Config =
-  parseFile(path).parseGlm47Config()
-
 ################################################################################
 #                        GLM-4.7-Flash Model Assembly                          #
 ################################################################################
@@ -203,7 +200,7 @@ func getDeviceKind(self: Glm47Model): DeviceKind =
   self.device
 
 proc loadGlm47ModelRaw(modelPath: string, device: DeviceKind): Glm47Model =
-  let config = loadGlm47Config(modelPath / "config.json")
+  let config = parseFile(modelPath / "config.json").parseGlm47Config()
   checkValue(config.modelType == "glm4_moe_lite",
     "[ttt] loadGlm47ModelRaw: model_type \"" & config.modelType &
     "\" is not the glm4_moe_lite template")

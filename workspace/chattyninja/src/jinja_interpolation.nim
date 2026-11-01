@@ -508,7 +508,7 @@ func argDict(tmpl: CompiledTemplate, args: var Args): DictVal =
 func namespaceGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   ## `namespace(field=init, ...)`:
   ##   the mutable mapping `{% set ns.field = ... %}` mutates in place.
-  nsVal(argDict(c.tmpl, args))
+  JinjaVal(kind: vkNs, d: argDict(c.tmpl, args))
 
 func rangeGlobal(c: JinjaRenderContext, lo, hi: int, args: var Args): JinjaVal =
   ## `range(a, b, step)`, the lazy bounds value, elements computing per index, never materializing.
@@ -765,7 +765,7 @@ proc postfix(c: JinjaRenderContext, cx: var Cx, v: JinjaVal): JinjaVal =
         if cx.dry:
           undefinedVal()
         elif v.kind == vkMacro:
-          callVal(DeferredMacroCall(mc: v.mc, args: a))
+          JinjaVal(kind: vkCall, pc: DeferredMacroCall(mc: v.mc, args: a))
         else:
           raise jinjaErr("only a macro is callable, this is a " & $v.kind, callLo)
     elif isPunct(cx, "|"):
