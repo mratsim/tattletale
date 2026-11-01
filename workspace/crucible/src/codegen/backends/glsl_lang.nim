@@ -614,7 +614,6 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full GLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow,
     lit: glslLitRow, row: glslScalarRow)
-  ctx.layouts = m.layouts
   let kernels = moduleKernels(m)
   if kernels.len == 0:
     ctx.fail("no kernel in the module")
