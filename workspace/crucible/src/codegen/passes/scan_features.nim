@@ -125,12 +125,11 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
       scanExpr(s.cond, f, profile)
       scanStmts(s.thenBody, f, profile)
       scanStmts(s.elseBody, f, profile)
-    of sLoop:
-      if profile.unrollAttr and s.unroll:
+    of sWhile:
+      if profile.unrollAttr and s.whileUnroll:
         f.controlFlow = true
-      if s.loopCond != nil:
-        scanExpr(s.loopCond, f, profile)
-      scanStmts(s.loopBody, f, profile)
+      scanExpr(s.whileCond, f, profile)
+      scanStmts(s.whileBody, f, profile)
     of sRet:
       if s.retVal != nil:
         scanExpr(s.retVal, f, profile)
@@ -188,8 +187,8 @@ proc wgslScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
     of sIte:
       wgslScanStmts(s.thenBody, f)
       wgslScanStmts(s.elseBody, f)
-    of sLoop:
-      wgslScanStmts(s.loopBody, f)
+    of sWhile:
+      wgslScanStmts(s.whileBody, f)
     of sRet:
       if s.retVal != nil:
         wgslScanType(getExprType(s.retVal), f)
@@ -247,10 +246,9 @@ proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
       cudaScanExpr(s.cond, f)
       cudaScanStmts(s.thenBody, f)
       cudaScanStmts(s.elseBody, f)
-    of sLoop:
-      if s.loopCond != nil:
-        cudaScanExpr(s.loopCond, f)
-      cudaScanStmts(s.loopBody, f)
+    of sWhile:
+      cudaScanExpr(s.whileCond, f)
+      cudaScanStmts(s.whileBody, f)
     of sRet:
       cudaScanExpr(s.retVal, f)
     of sDiscard:

@@ -127,8 +127,8 @@ proc bindStmtTemps(b: var TempBinder, body: var seq[CirStmt]) =
       b.bindStmtTemps(s.thenBody)
       b.bindStmtTemps(s.elseBody)
       lowered.add(s)
-    of sLoop:
-      b.bindStmtTemps(s.loopBody)
+    of sWhile:
+      b.bindStmtTemps(s.whileBody)
       lowered.add(s)
     else:
       lowered.add(s)

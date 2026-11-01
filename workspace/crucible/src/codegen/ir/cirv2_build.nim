@@ -156,9 +156,20 @@ proc ternaryE*(ternType: CirType, cond, thenE, elseE: CirExpr): CirExpr =
   ## A conditional value, `cond` selects between `thenE` and `elseE`.
   ##
   ## Args:
-  ## - `ternType` types the node and both branches
-  ## - printers emit the target's conditional-value form: a `?:` operator
-  ##   where one exists, `select(elseE, thenE, cond)` on WGSL
+  ## - `ternType` types the node, both branches state it as their own type.
+  ##   Printers emit the target's conditional-value form:
+  ##   `?:` where one exists, `select(elseE, thenE, cond)` on WGSL, `OpSelect` on SPIR-V.
+  ##   Branch values must already carry `ternType`.
+  doAssert cond != nil and thenE != nil and elseE != nil,
+    "ternaryE: a conditional value takes a condition and two branches"
+  let thenT = getExprType(thenE)
+  doAssert thenT != nil and sameType(thenT, ternType),
+    "ternaryE: the then branch's type does not match the conditional type," &
+    " convert the branch at the construction site"
+  let elseT = getExprType(elseE)
+  doAssert elseT != nil and sameType(elseT, ternType),
+    "ternaryE: the else branch's type does not match the conditional type," &
+    " convert the branch at the construction site"
   CirExpr(kind: eTernary, ternType: ternType, cond: cond, thenE: thenE, elseE: elseE)
 
 proc castE*(typ: CirType, operand: CirExpr): CirExpr =
@@ -204,13 +215,13 @@ proc asgnS*(lhs, rhs: CirExpr): CirStmt =
 proc iteS*(cond: CirExpr, thenBody: seq[CirStmt], elseBody: seq[CirStmt] = @[]): CirStmt =
   CirStmt(kind: sIte, cond: cond, thenBody: thenBody, elseBody: elseBody)
 
-proc whileS*(cond: CirExpr, loopBody: seq[CirStmt], unroll = false): CirStmt =
+proc whileS*(cond: CirExpr, whileBody: seq[CirStmt], unroll = false): CirStmt =
   ## A loop re-testing `cond` before every iteration.
   ##
   ## Args:
   ## - `cond` is an ordinary expression, calls may appear in it
-  doAssert cond != nil, "whileS: a conditioned loop takes a condition"
-  CirStmt(kind: sLoop, loopCond: cond, loopBody: loopBody, unroll: unroll)
+  doAssert cond != nil, "whileS: a conditioned loop takes a condition, use loopS"
+  CirStmt(kind: sWhile, whileCond: cond, whileBody: whileBody, whileUnroll: unroll)
 
 proc retS*(retVal: CirExpr = nil): CirStmt =
   CirStmt(kind: sRet, retVal: retVal)

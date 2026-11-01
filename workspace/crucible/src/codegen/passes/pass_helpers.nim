@@ -83,9 +83,9 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
       slot(s.cond)
       walkStmts(s.thenBody, onStmt, onExpr)
       walkStmts(s.elseBody, onStmt, onExpr)
-    of sLoop:
-      slot(s.loopCond)
-      walkStmts(s.loopBody, onStmt, onExpr)
+    of sWhile:
+      slot(s.whileCond)
+      walkStmts(s.whileBody, onStmt, onExpr)
     of sRet:
       slot(s.retVal)
     of sDiscard:
@@ -191,9 +191,8 @@ proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: pro
       s.cond.walkExprs(onExpr)
       scanStmtRefs(s.thenBody, onDecl, onExpr)
       scanStmtRefs(s.elseBody, onDecl, onExpr)
-    of sLoop:
-      s.loopCond.walkExprs(onExpr)
-      scanStmtRefs(s.loopBody, onDecl, onExpr)
+    of sWhile:
+      scanStmtRefs(s.whileBody, onDecl, onExpr)
     of sRet:
       s.retVal.walkExprs(onExpr)
     of sDiscard:
@@ -249,9 +248,9 @@ proc patchBoolStmts(ss: seq[CirStmt], vals, ptrs: HashSet[string],
       s.cond.rewriteRead(vals, ptrs)
       patchBoolStmts(s.thenBody, vals, ptrs, rewriteRead, rewriteStore)
       patchBoolStmts(s.elseBody, vals, ptrs, rewriteRead, rewriteStore)
-    of sLoop:
-      s.loopCond.rewriteRead(vals, ptrs)
-      patchBoolStmts(s.loopBody, vals, ptrs, rewriteRead, rewriteStore)
+    of sWhile:
+      s.whileCond.rewriteRead(vals, ptrs)
+      patchBoolStmts(s.whileBody, vals, ptrs, rewriteRead, rewriteStore)
     of sRet:
       s.retVal.rewriteRead(vals, ptrs)
     of sDiscard:
@@ -386,10 +385,10 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.cond = cloneExpr(s.cond)
       c.thenBody = cloneStmts(s.thenBody)
       c.elseBody = cloneStmts(s.elseBody)
-    of sLoop:
-      c.loopCond = cloneExpr(s.loopCond)
-      c.loopBody = cloneStmts(s.loopBody)
-      c.unroll = s.unroll
+    of sWhile:
+      c.whileCond = cloneExpr(s.whileCond)
+      c.whileBody = cloneStmts(s.whileBody)
+      c.whileUnroll = s.whileUnroll
     of sRet:
       c.retVal = cloneExpr(s.retVal)
     of sCall:
@@ -609,8 +608,8 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
       let elseErr = hoistConstMemStmts(m, fn, s.elseBody)
       if elseErr.len > 0:
         return elseErr
-    of sLoop:
-      let loopErr = hoistConstMemStmts(m, fn, s.loopBody)
+    of sWhile:
+      let loopErr = hoistConstMemStmts(m, fn, s.whileBody)
       if loopErr.len > 0:
         return loopErr
     else:

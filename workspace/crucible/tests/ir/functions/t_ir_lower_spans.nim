@@ -50,8 +50,8 @@ proc holdsToOpenArrayCall(body: seq[CirStmt]): bool =
       if s.cond.holdsToOpenArrayCall or s.thenBody.holdsToOpenArrayCall or
           s.elseBody.holdsToOpenArrayCall:
         return true
-    of sLoop:
-      if s.loopCond.holdsToOpenArrayCall or s.loopBody.holdsToOpenArrayCall:
+    of sWhile:
+      if s.whileCond.holdsToOpenArrayCall or s.whileBody.holdsToOpenArrayCall:
         return true
     of sRet:
       if s.retVal.holdsToOpenArrayCall:

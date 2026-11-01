@@ -100,9 +100,9 @@ proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
           findNumWorkgroupsStmts(s.thenBody, coordTy) or
           findNumWorkgroupsStmts(s.elseBody, coordTy):
         return true
-    of sLoop:
-      if findNumWorkgroupsExpr(s.loopCond, coordTy) or
-          findNumWorkgroupsStmts(s.loopBody, coordTy):
+    of sWhile:
+      if findNumWorkgroupsExpr(s.whileCond, coordTy) or
+          findNumWorkgroupsStmts(s.whileBody, coordTy):
         return true
     of sRet:
       if s.retVal != nil and findNumWorkgroupsExpr(s.retVal, coordTy):
@@ -147,9 +147,9 @@ proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
       rewriteNumWorkgroupsExpr(s.cond, coordTy)
       rewriteNumWorkgroupsStmts(s.thenBody, coordTy)
       rewriteNumWorkgroupsStmts(s.elseBody, coordTy)
-    of sLoop:
-      rewriteNumWorkgroupsExpr(s.loopCond, coordTy)
-      rewriteNumWorkgroupsStmts(s.loopBody, coordTy)
+    of sWhile:
+      rewriteNumWorkgroupsExpr(s.whileCond, coordTy)
+      rewriteNumWorkgroupsStmts(s.whileBody, coordTy)
     of sRet:
       rewriteNumWorkgroupsExpr(s.retVal, coordTy)
     of sDiscard:

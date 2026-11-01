@@ -166,13 +166,13 @@ template registerExplodePointerLocals*(reg: var PassRegistry, passName,
         let eerr = explodeWalk(fn, ctx, s.elseBody)
         if eerr.len > 0:
           return eerr
-      of sLoop:
-        let cerr = rewritePointerExpr(fn, ctx, s.loopCond)
+      of sWhile:
+        let cerr = rewritePointerExpr(fn, ctx, s.whileCond)
         if cerr.len > 0:
           return cerr
-        let lerr = explodeWalk(fn, ctx, s.loopBody)
-        if lerr.len > 0:
-          return lerr
+        let werr = explodeWalk(fn, ctx, s.whileBody)
+        if werr.len > 0:
+          return werr
       of sRet:
         let rerr = rewritePointerExpr(fn, ctx, s.retVal)
         if rerr.len > 0:

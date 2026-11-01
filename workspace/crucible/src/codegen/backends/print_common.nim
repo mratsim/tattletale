@@ -15,8 +15,8 @@
 ## | emitVectorComponent             | vector component letters (`F0`..`F3` to `x`..`w`)                                                    |
 ## | emitLiteral                     | literal token forms of one target, over its lit and scalar rows                                      |
 ## | printCast                       | one bit reinterpret through the target's cast rules, unmatched casts keep the conversion form        |
-## | LoopStyle, printLoopText        | loop text of one target: unroll directive, head, brace style                                         |
-## | printStmtList                   | statement-list walk: sLoop through `printLoopText`, others through `printStmt`                       |
+## | LoopStyle, printWhileText       | loop text of one target: unroll directive, head, brace style                                         |
+## | printStmtList                   | statement-list walk: sWhile through `printWhileText`, others through `printStmt`                     |
 ## | printStmts                      | statement-list walk with the target's kind-row loop style                                            |
 ## | printStmt                       | dispatch: shared variants inline, target policy via printVar/printConst/printAsgn/printCall/printAsm |
 ## | printExpr                       | expression dispatch: shared branches inline, target kinds via printTargetExpr, default routes inline |
@@ -291,30 +291,33 @@ template printCast*(ctx: var auto, e: CirExpr, rules: openArray[CastRule], dstNa
     else:
       ctx.printConv(e)
 
-proc printLoopText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
-  ## Returns the text of one `sLoop` statement: the unroll directive,
-  ## then the loop head with its indented body.
-  ##
-  ## The body recurses through `ctx.printStmts`, the head condition
-  ## prints through `ctx.printExpr`.
-  mixin printStmts, printExpr
+proc printLoopBodyText(ctx: var auto, body: seq[CirStmt], unroll: bool, head: string, style: LoopStyle): string =
+  ## Returns the text of one loop: the unroll directive, then the loop head
+  ## given as `head`, with the body indented under it.
+  mixin printStmts
   ctx.indent.inc
-  let bodyTxt = ctx.printStmts(s.loopBody)
+  let bodyTxt = ctx.printStmts(body)
   ctx.indent.dec
   let pad = spaces(ctx.indent * 2)
-  let directive = if s.unroll and style.unrollDirective.len > 0:
+  let directive = if unroll and style.unrollDirective.len > 0:
     pad & style.unrollDirective & "\n"
   else:
     ""
-  let cond = ctx.printExpr(s.loopCond)
-  let head = if style.braceSameLine:
-    "while (" & cond & ") {\n"
-  else:
-    "while (" & cond & ")\n"
   result = directive & pad & head
   if not style.braceSameLine:
     result &= pad & "{\n"
   result &= bodyTxt & "\n" & pad & '}'
+
+proc printWhileText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
+  ## Returns the text of one `sWhile` statement: the unroll directive, then the `while (cond)` head.
+  ## `cond` prints through `ctx.printExpr`.
+  mixin printExpr
+  let condTxt = ctx.printExpr(s.whileCond)
+  let head = if style.braceSameLine:
+    "while (" & condTxt & ") {\n"
+  else:
+    "while (" & condTxt & ")\n"
+  printLoopBodyText(ctx, s.whileBody, s.whileUnroll, head, style)
 
 proc printIteElse*(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
   ## Else tail of an `sIte` statement, appended after its then branch.
@@ -457,7 +460,7 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
       result &= " else " & ctx.printStmt(s.elseBody[0])
     else:
       result &= ctx.printIteElse(s.elseBody, pad)
-  of sLoop:
+  of sWhile:
     # loops print through printStmtList
     result = ""
   of sRet:
@@ -506,13 +509,14 @@ proc printCall*(ctx: var auto, s: CirStmt): string =
 proc printStmtList*(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string =
   ## Prints one statement list, one line per printed statement:
   ##
-  ## - `sLoop`: `printLoopText` with the target's `style`
+  ## - `sWhile`: `printWhileText`, with the target's `style`
   ## - every other statement: `ctx.printStmt`, an empty text drops out
   ## - printed lines join with a newline separator
   var lines: seq[string]
   for s in stmts:
-    let txt = if s.kind == sLoop: printLoopText(ctx, s, style)
-              else: ctx.printStmt(s)
+    let txt = case s.kind
+      of sWhile: printWhileText(ctx, s, style)
+      else: ctx.printStmt(s)
     if txt.len > 0:
       lines.add txt
   return lines.join("\n")

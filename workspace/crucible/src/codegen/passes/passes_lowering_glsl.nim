@@ -182,13 +182,13 @@ proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashS
       let eerr = rewriteVarCallArgsStmts(fn, s.elseBody, varParams, procs)
       if eerr.len > 0:
         return eerr
-    of sLoop:
-      let cerr = rewriteVarCallArgsExpr(fn, s.loopCond, varParams, procs)
+    of sWhile:
+      let cerr = rewriteVarCallArgsExpr(fn, s.whileCond, varParams, procs)
       if cerr.len > 0:
         return cerr
-      let lerr = rewriteVarCallArgsStmts(fn, s.loopBody, varParams, procs)
-      if lerr.len > 0:
-        return lerr
+      let werr = rewriteVarCallArgsStmts(fn, s.whileBody, varParams, procs)
+      if werr.len > 0:
+        return werr
     of sRet:
       let rerr = rewriteVarCallArgsExpr(fn, s.retVal, varParams, procs)
       if rerr.len > 0:

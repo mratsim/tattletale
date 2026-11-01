@@ -130,8 +130,8 @@ proc containsReturn(ss: seq[CirStmt]): bool =
     of sIte:
       if s.thenBody.containsReturn or s.elseBody.containsReturn:
         return true
-    of sLoop:
-      if s.loopBody.containsReturn:
+    of sWhile:
+      if s.whileBody.containsReturn:
         return true
     else:
       discard
@@ -196,9 +196,9 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
       s.cond.substituteArgsExpr(subst)
       s.thenBody.substituteArgsStmts(subst)
       s.elseBody.substituteArgsStmts(subst)
-    of sLoop:
-      s.loopCond.substituteArgsExpr(subst)
-      s.loopBody.substituteArgsStmts(subst)
+    of sWhile:
+      s.whileCond.substituteArgsExpr(subst)
+      s.whileBody.substituteArgsStmts(subst)
     of sRet:
       s.retVal.substituteArgsExpr(subst)
     of sDiscard:
@@ -294,13 +294,13 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
         let eerr = inlineInStmts(fn, s.elseBody, procs)
         if eerr.len > 0:
           return eerr
-      of sLoop:
-        let cerr = refuseValuePositionCalls(fn, s.loopCond, procs)
+      of sWhile:
+        let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
         if cerr.len > 0:
           return cerr
-        let lerr = inlineInStmts(fn, s.loopBody, procs)
-        if lerr.len > 0:
-          return lerr
+        let werr = inlineInStmts(fn, s.whileBody, procs)
+        if werr.len > 0:
+          return werr
       of sRet:
         let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
         if rerr.len > 0:

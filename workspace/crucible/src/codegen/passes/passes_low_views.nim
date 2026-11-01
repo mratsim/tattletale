@@ -240,9 +240,9 @@ proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
       s.cond.rewriteSpanUsesExpr(ctx, err)
       s.thenBody.rewriteSpanUsesStmts(ctx, err)
       s.elseBody.rewriteSpanUsesStmts(ctx, err)
-    of sLoop:
-      s.loopCond.rewriteSpanUsesExpr(ctx, err)
-      s.loopBody.rewriteSpanUsesStmts(ctx, err)
+    of sWhile:
+      s.whileCond.rewriteSpanUsesExpr(ctx, err)
+      s.whileBody.rewriteSpanUsesStmts(ctx, err)
     of sRet:
       s.retVal.rewriteSpanUsesExpr(ctx, err)
     of sDiscard:
@@ -281,8 +281,8 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
         thenErr = decomposeSpanBindings(s.elseBody, ctx)
       if thenErr.len > 0:
         return thenErr
-    of sLoop:
-      let loopErr = decomposeSpanBindings(s.loopBody, ctx)
+    of sWhile:
+      let loopErr = decomposeSpanBindings(s.whileBody, ctx)
       if loopErr.len > 0:
         return loopErr
     else:
