@@ -244,7 +244,8 @@ genTargets:
     # OpenCL C is LP64 C: `char` and `long` name the 8-bit and 64-bit signed widths, as on msl.
     # Bool prints as `int` to match the launch ABI.
     scalar void "void", bool "int", i8 "char", i16 "short", i32 "int", i64 "long",
-      u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", f32 "float", f64 "double"
+      u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "ushort", bf16 "ushort",
+      f32 "float", f64 "double"
     lit u64Suffix "ULL", u32Suffix "U", i64Suffix "LL", narrowCast true,
       f16Prefix "(half)", f32Suffix "f", nilToken "0",
       inf16 "(half)INFINITY", negInf16 "(half)-INFINITY", nan16 "(half)NAN",
@@ -261,12 +262,12 @@ genTargets:
     bitcast:
       rule srcKinds {ctFloat}, dstKinds {ctInt, ctUint}, sameWidth, "as_$2($1)"
       rule srcKinds {ctInt, ctUint}, dstKinds {ctFloat}, sameWidth, "as_$2($1)"
-    # `{.builtin.}` fp16 conversions resolve to the OpenCL C cast forms,
-    # `float16` has a first-class `half` identity and `asFp16`/`asU16`
-    # reinterpret through the `as_` builtins.
-    # `bfloat16` and fp8 conversions stay outside: no OpenCL C native exists.
-    # `{.builtin.}` names pass through and refuse at OpenCL compile time.
-    conv toFp16 "(half)($1)", toFp32 "(float)($1)", asFp16 "as_half($1)", asU16 "as_ushort($1)"
+    # fp16 and bf16 values store their 16-bit bit pattern in a `ushort`,
+    # OpenCL C has no native half storage outside the fp16 extension.
+    # `{.builtin.}` conversion names emit unchanged, the caller's module
+    # defines their bodies.
+    conv toFp16 "toFp16($1)", toFp32 "toFp32($1)", toBf16 "toBf16($1)", toBf32 "toBf32($1)",
+      asFp16 "as_half($1)", asU16 "as_ushort($1)"
 
   target glsl:
     # 8, 16 and 64-bit names compile behind the explicit-arithmetic-types extensions the module emits.

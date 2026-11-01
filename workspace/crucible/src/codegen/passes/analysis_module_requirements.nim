@@ -39,6 +39,10 @@ type ScanProfile = object
   ##   collects the kind into the `reductions` set
   intWidths: bool
   ## GLSL maps 8/16/64-bit integers, so their presence selects extension lines.
+  fp16AsStorage: bool
+  ## OpenCL stores fp16/bf16 values as 16-bit bit patterns in a `ushort`.
+  ## That storage needs no `cl_khr_fp16` extension, the opencl profile
+  ## skips the `fp16` detector.
   shuffleNames: bool
   ## GLSL maps `simd_shuffle`/`simd_shuffle_xor` to subgroup shuffles.
   unrollAttr: bool
@@ -55,7 +59,7 @@ const glslProfile = ScanProfile(
 
 const openclProfile = ScanProfile(
   intWidths: false, shuffleNames: false, unrollAttr: false,
-  atomicFloatViaPattern: true)
+  atomicFloatViaPattern: true, fp16AsStorage: true)
 
 const wgslProfile = ScanProfile(
   intWidths: false, shuffleNames: false, unrollAttr: false,
@@ -75,7 +79,7 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
   of ctFloat:
     if t.bits == 64:
       f.fp64 = true
-    if t.bits == 16:
+    if t.bits == 16 and not profile.fp16AsStorage:
       f.fp16 = true
   of ctInt, ctUint:
     if profile.intWidths:

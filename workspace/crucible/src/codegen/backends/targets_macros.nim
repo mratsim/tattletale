@@ -129,6 +129,10 @@ proc checkCellNames(all: seq[tuple[display: string, cells: seq[ParsedCell]]]) {.
   ##   the data is explicit per target
   ## - bool cells are exempt: OpenCL prints bool locals as `int` to match
   ##   the 4-byte launch ABI
+  ## - a 16-bit float or bf16 cell may share its name with a 16-bit integer
+  ##   cell or with the other 16-bit float cell
+  ##   OpenCL stores fp16/bf16 values as 16-bit bit patterns in a `ushort`,
+  ##   the shape v1 emitted
   for i in 0 ..< all.len:
     for a in 0 ..< all[i].cells.len:
       let ca = all[i].cells[a]
@@ -140,6 +144,10 @@ proc checkCellNames(all: seq[tuple[display: string, cells: seq[ParsedCell]]]) {.
               ScalarCellAxis[all[j].cells[b].idx].kind == ctBool:
             continue
           let cb = all[j].cells[b]
+          if ScalarCellAxis[ca.idx].width == 16 and ScalarCellAxis[cb.idx].width == 16 and
+              ({ScalarCellAxis[ca.idx].kind, ScalarCellAxis[cb.idx].kind} -
+               {ctFloat, ctBf16, ctInt, ctUint} == {}):
+            continue
           if i == j:
             error("genTargets: name '" & ca.spelling & "' denotes two cells of " &
               all[i].display & ", " & cellKey(ca.idx) & " and " & cellKey(cb.idx), cb.node)
