@@ -180,7 +180,6 @@ proc wgslBuiltinParam(kind: CoordBuiltinKind): WgslBuiltinParam =
     ("", "", "")
 
 proc wgslCoordComponent(kind: CoordBuiltinKind, field: string): string =
-  ## WGSL read of one canonical coordinate builtin component, "" for a non-component field.
   case field
   of "x", "y", "z":
     let p = wgslBuiltinParam(kind)
@@ -190,8 +189,6 @@ proc wgslCoordComponent(kind: CoordBuiltinKind, field: string): string =
     result = ""
 
 proc wgslWholeVector(kind: CoordBuiltinKind): string =
-  ## WGSL read of a canonical coordinate builtin whole: the i32 vector
-  ## composed from the u32 parameter components.
   let p = wgslBuiltinParam(kind)
   result = "vec3<i32>(i32(" & p.param & ".x), i32(" & p.param & ".y), i32(" &
     p.param & ".z))"
@@ -634,7 +631,6 @@ proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
       result &= ctx.emitWgslStruct(t) & "\n\n"
 
 proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
-  ## Kernel parameter bindings, one `@group(0) @binding(i)` per parameter in host `store` packing order, output first.
   ## The per-parameter policy is `emitBinding`.
   for i, p in kernel.params:
     result &= ctx.emitBinding(p, i) & "\n"
@@ -642,7 +638,6 @@ proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
     result &= "\n"
 
 proc emitShaderFns(ctx: var PrintCtx, m: CirModule): string =
-  ## Device functions in encounter order.
   for fn in moduleDeviceFns(m):
     result &= ctx.printShaderProc(fn) & "\n\n"
 
