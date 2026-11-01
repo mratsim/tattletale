@@ -41,7 +41,7 @@ type TempBinder = object
   used: HashSet[string]
   fresh: int
 
-proc tempName(b: var TempBinder): string =
+proc claimTempName(b: var TempBinder): string =
   while true:
     let candidate = if b.fresh == 0: "lhs_val" else: "lhs_val_" & $b.fresh
     b.fresh.inc
@@ -66,7 +66,7 @@ proc tempBinderFor(fn: CirProc): TempBinder =
 proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
   ## The operand evaluates once, both use sites read the temp.
   let typ = getExprType(e)
-  let name = b.tempName()
+  let name = b.claimTempName()
   let tmp = sym(name, typ)
   hoists.add(varD(name, typ))
   hoists.add(asgnS(tmp, e))

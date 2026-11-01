@@ -65,7 +65,7 @@ proc openclHoistProgramScopeConstants(m: CirModule): string =
 # Large-struct params as hidden pointers
 # ═══════════════════════════════════════════════════════════════════════
 
-func cirSizeBytes(t: CirType): int =
+func computeCirSizeBytes(t: CirType): int =
   ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
   case t.kind
   of ctInt, ctUint, ctFloat:
@@ -75,19 +75,19 @@ func cirSizeBytes(t: CirType): int =
   of ctPtr, ctAptr:
     result = 8
   of ctArray:
-    result = t.aN * cirSizeBytes(t.aElem)
+    result = t.aN * computeCirSizeBytes(t.aElem)
   of ctVector:
-    result = t.vN * cirSizeBytes(t.vElem)
+    result = t.vN * computeCirSizeBytes(t.vElem)
   of ctStruct:
     result = 0
     for f in t.fields:
-      result += cirSizeBytes(f.typ)
+      result += computeCirSizeBytes(f.typ)
   of ctVoid, ctProc, ctSpan:
     result = 0
 
 func isLargeStruct(t: CirType): bool =
   ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
-  t != nil and t.kind == ctStruct and cirSizeBytes(t) >= 24
+  t != nil and t.kind == ctStruct and computeCirSizeBytes(t) >= 24
 
 proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
   ## Expressions are refs, so the rewrite applies to the node every sharer sees.

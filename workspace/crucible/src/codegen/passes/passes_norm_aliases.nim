@@ -37,7 +37,7 @@ import ../../builtins/builtins_atomics
 import ../ir/cirv2_lang
 import ./pass_datatypes
 
-macro builtinSymNames(syms: varargs[typed]): untyped =
+macro getBuiltinSymNames(syms: varargs[typed]): untyped =
   ## Args:
   ## - `syms`: the `{.builtin.}` catalog lets and procs, generic procs included
   ##   (an overload choice unwraps to its first candidate)
@@ -53,27 +53,27 @@ macro builtinSymNames(syms: varargs[typed]): untyped =
 static:
   ## Cross-check: every canonical catalog builtin resolves in the IR name tables,
   ## a catalog rename without the table update fails at compile time.
-  for n in builtinSymNames(thread_position_in_grid, threadgroup_position_in_grid,
+  for n in getBuiltinSymNames(thread_position_in_grid, threadgroup_position_in_grid,
       thread_position_in_threadgroup, threads_per_threadgroup,
       threadgroups_per_grid, thread_index_in_threadgroup):
     doAssert coordBuiltinKind(n) != cbkNone
-  for n in builtinSymNames(threadgroup_barrier, threadgroup_barrier_device):
+  for n in getBuiltinSymNames(threadgroup_barrier, threadgroup_barrier_device):
     doAssert synchroBuiltinKind(n) != sbkNone
-  for n in builtinSymNames(reduceAdd, reduceMax):
+  for n in getBuiltinSymNames(reduceAdd, reduceMax):
     doAssert reductionBuiltinKind(n) != rbkNone
-  for n in builtinSymNames(atomicFetchAdd):
+  for n in getBuiltinSymNames(atomicFetchAdd):
     doAssert atomicsBuiltinKind(n) != abkNone
-  for n in builtinSymNames(simd_shuffle, simd_shuffle_xor):
+  for n in getBuiltinSymNames(simd_shuffle, simd_shuffle_xor):
     doAssert shuffleBuiltinKind(n) != shkNone
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerBuiltinKindAssignment*(reg: var PassRegistry) =
-  reg.register("builtinKindAssignment", pkTransform,
+func registerAssignBuiltinKindsPass*(reg: var PassRegistry) =
+  reg.register("assignBuiltinKinds", pkTransform,
     "Kind-assigns every builtin symbol from the canonical name tables",
-    run = builtinKindAssignment)
+    run = assignBuiltinKindsPass)
 
 # ═══════════════════════════════════════════════════════════════════════
 # The pass
@@ -123,6 +123,6 @@ proc assignBuiltinKindsStmts(ss: var seq[CirStmt]) =
     else:
       discard
 
-proc builtinKindAssignment(m: CirModule): string =
+proc assignBuiltinKindsPass(m: CirModule): string =
   for fn in m.procs:
     fn.body.assignBuiltinKindsStmts()

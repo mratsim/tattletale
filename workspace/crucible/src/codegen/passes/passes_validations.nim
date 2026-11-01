@@ -121,7 +121,7 @@ proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStora
   fn.body.walkStmts(collect, nil)
   return found
 
-proc constStorageTarget(e: CirExpr, storage: ConstStorage): string =
+proc resolveConstStorageTarget(e: CirExpr, storage: ConstStorage): string =
   ## Name of the constant-storage target an lvalue designates.
   ## Returns "" when the lvalue is in another memory class or has no storage.
   ##
@@ -155,9 +155,9 @@ proc constStorageTarget(e: CirExpr, storage: ConstStorage): string =
       let root = exprRootSym(base)
       return if root != nil: root.name else: $base.kind
   of eAt:
-    return constStorageTarget(e.atBase, storage)
+    return resolveConstStorageTarget(e.atBase, storage)
   of eDot:
-    return constStorageTarget(e.dotBase, storage)
+    return resolveConstStorageTarget(e.dotBase, storage)
   else:
     discard
   return ""
@@ -165,7 +165,7 @@ proc constStorageTarget(e: CirExpr, storage: ConstStorage): string =
 proc constWriteRejection(lhs: CirExpr, fnName: string, storage: ConstStorage): string =
   ## Rejection message of one assignment into constant storage.
   ## Returns "" when the target lives in another memory class.
-  let target = constStorageTarget(lhs, storage)
+  let target = resolveConstStorageTarget(lhs, storage)
   if target.len == 0:
     return ""
   result = "at " & fnName & ": assignment into constant storage: the target " &

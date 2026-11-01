@@ -252,7 +252,7 @@ proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CoordBuiltinKind] =
   ss.walkStmts(nil, collect)
   return kinds
 
-proc builtinParamType(kind: CoordBuiltinKind): CirType =
+proc getBuiltinParamType(kind: CoordBuiltinKind): CirType =
   ## Builtins carry the canonical `ivec3` type, so the printer emits an `int3` constructor for whole-value reads of the standing-in parameter.
   if kind == cbkThreadIndexInThreadgroup:
     tInt(32)
@@ -272,7 +272,7 @@ proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[CoordBuiltinKin
   needs[fn.name] = kinds
   return true
 
-proc sortedCoordKinds(kinds: HashSet[CoordBuiltinKind]): seq[CoordBuiltinKind] =
+proc sortCoordKinds(kinds: HashSet[CoordBuiltinKind]): seq[CoordBuiltinKind] =
   ## Needed kinds in declaration order, which also fixes the parameter order.
   for kind in CoordBuiltinKind:
     if kind != cbkNone and kind in kinds:
@@ -288,7 +288,7 @@ proc appendCoordParam(fn: CirProc, kind: CoordBuiltinKind): string =
       return "at " & fn.name & ": parameter " & name &
         " is named like the coordinate builtin the function needs," &
         " the call sites cannot supply both"
-  fn.params.add(param(name, builtinParamType(kind)))
+  fn.params.add(param(name, getBuiltinParamType(kind)))
   return ""
 
 proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
@@ -302,20 +302,20 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
   ##   as the bare name
   if callee.kind != eSym or not needs.hasKey(callee.name):
     return ""
-  let calleeKinds = sortedCoordKinds(needs[callee.name])
+  let calleeKinds = sortCoordKinds(needs[callee.name])
   if callee.typ.kind == ctProc and
       callee.typ.params.len == calleeProc.params.len - calleeKinds.len:
     # one extension per callee symbol, call sites can share the node
     var extra: seq[CirType]
     for kind in calleeKinds:
-      extra.add(builtinParamType(kind))
+      extra.add(getBuiltinParamType(kind))
     callee.typ = extendedProcType(callee.typ, extra)
   for kind in calleeKinds:
     if fn.isKernel:
-      args.add(sym(CoordBuiltinCanonicalName[kind], builtinParamType(kind),
+      args.add(sym(CoordBuiltinCanonicalName[kind], getBuiltinParamType(kind),
         builtin = true, coordBuiltin = kind))
     else:
-      args.add(sym(CoordBuiltinCanonicalName[kind], builtinParamType(kind)))
+      args.add(sym(CoordBuiltinCanonicalName[kind], getBuiltinParamType(kind)))
   return ""
 
 proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
@@ -373,7 +373,7 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
   for fn in m.procs:
     if fn.isKernel:
       continue
-    for kind in sortedCoordKinds(needs[fn.name]):
+    for kind in sortCoordKinds(needs[fn.name]):
       let err = fn.appendCoordParam(kind)
       if err.len > 0:
         return err
