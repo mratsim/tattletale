@@ -97,8 +97,6 @@ func deriveStructName*(n: NimNode): string =
   of nnkBracketExpr:
     result = deriveStructName(n[0])
     if n.len == 2:
-      # a single argument contributes its short form, a static integer joins
-      # without a separator and any other argument stays out of the base
       let short = scalarShortName(n[1])
       if short.len > 0:
         result.add("_" & short)
@@ -145,7 +143,6 @@ proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
       return 0
     case n[0].strVal
     of "..":
-      # an array index range, with the array length computed as hi - lo + 1
       result = b - a + 1
     of "+": result = a + b
     of "-": result = a - b
