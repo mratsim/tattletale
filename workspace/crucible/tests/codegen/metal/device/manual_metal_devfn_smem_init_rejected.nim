@@ -1,5 +1,8 @@
 ## Metal: a device function's `{.smem.}` var refuses an initializer, a hoisted `{.smem.}` arena takes no initializer.
 ##
+## - v1 printed `threadgroup T x = init` verbatim in any proc
+## - Metal rejects an initialized `threadgroup` variable: v1's emission is invalid MSL
+##
 ## Test that a device function declaring a `{.smem.}` local with an initializer refuses in `mslHoistDeviceFnSmem`.
 ## The arena hoists to a threadgroup reference parameter, an initializer on it has no target form.
 ##

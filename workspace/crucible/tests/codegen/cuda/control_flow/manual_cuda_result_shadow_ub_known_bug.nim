@@ -1,15 +1,16 @@
-## NVRTC: `var result` inside if/else branches (local shadows)
+## CUDA: known bug, `return result` under if/else shadowing emits `return ;`.
 ##
-## `var result` inside if/else branches creates LOCAL shadows that
-## go out of scope. The outer `return result` refers to the implicit
-## `result` (zero-initialized), expected to return 0.
+## A `var result` inside if/else branches creates LOCAL shadows that go out of scope.
+## The outer `return result` reads the implicit outer `result`, never assigned, expected 0.
 ##
-## NOTE: `return result` currently generates `return ;` (no value) due
-## to a pre-existing codegen bug. The `result` variable is never declared
-## at the outer scope. Results happen to be 0 on Blackwell but are
-## technically UB and may differ on other hardware.
+## Known bug, recorded until fixed:
+## - `return result` generates `return ;` (no value): the outer `result` is
+##   never declared at the outer scope
+## - the readback is 0 on Blackwell, UB by the C standard, may differ on other
+##   hardware
+## - a known-bug record, NOT refusal coverage
 ##
-## Run with: nim c -r workspace/crucible/tests/codegen/cuda/control_flow/manual_cuda_reject_result_ifelse_shadow.nim
+## Run with: nim c -r workspace/crucible/tests/codegen/cuda/control_flow/manual_cuda_result_shadow_ub_known_bug.nim
 import std/strformat
 import workspace/crucible
 

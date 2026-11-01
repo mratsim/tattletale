@@ -7,6 +7,9 @@
 
 ## WebGPU: a pointer-holding struct refuses at the WGSL declaration site.
 ##
+## - v1 rendered `ptr<...>` struct members
+## - WGSL has no pointer struct members: v1's emission is invalid WGSL
+##
 ## Test that a struct type carrying a pointer field refuses, even when the WGSL
 ## lowering dissolves its only use into per-field leaf rewrites and no emitted
 ## declaration references it:

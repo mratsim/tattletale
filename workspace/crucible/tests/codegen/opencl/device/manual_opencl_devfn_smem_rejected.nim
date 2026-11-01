@@ -1,5 +1,8 @@
 ## OpenCL: a device function's `{.smem.}` local refuses, `__local` is kernel storage.
 ##
+## - v1 printed `__local` in device-function bodies verbatim
+## - `__local` is kernel storage in OpenCL C: v1's emission is invalid OpenCL C
+##
 ## Test that a device function declaring a `{.smem.}` local refuses at codegen.
 ## OpenCL has no device-function `__local` storage, only kernel bodies print `__local` legally.
 ##

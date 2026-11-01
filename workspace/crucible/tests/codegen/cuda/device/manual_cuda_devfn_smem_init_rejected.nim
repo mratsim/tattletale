@@ -1,5 +1,8 @@
 ## CUDA: a device function's `{.smem.}` local refuses an initializer, CUDA C++ forbids initializing `__shared__` variables.
 ##
+## - v1 emitted `__shared__ T x = init` verbatim in any proc
+## - nvcc rejects an initialized `__shared__` declaration: v1's emission is invalid C++
+##
 ## Test that a device function declaring a `{.smem.}` local with an initializer refuses at codegen.
 ## An initializer-less `__shared__` local in a device function is legal CUDA C++ and emits.
 ##

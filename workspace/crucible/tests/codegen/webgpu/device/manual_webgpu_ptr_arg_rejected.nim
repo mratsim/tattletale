@@ -1,6 +1,9 @@
 ## WebGPU launches reject raw pointer args at compile time: kernel pointer
 ## params bind as storage buffers, only WGPUBuffer values cross the serializer.
 ##
+## - v1 rendered the pointer type in its signature machinery
+## - the v1 module reads `o` with no parameter declared: broken WGSL
+##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
