@@ -141,9 +141,9 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid, ctBool:
-    result = scalarName(hlslScalarRow, t)
+    result = getScalarName(hlslScalarRow, t)
   of ctInt, ctUint, ctFloat:
-    result = scalarName(hlslScalarRow, t)
+    result = getScalarName(hlslScalarRow, t)
     if result.len == 0:
       case t.kind
       of ctInt:
@@ -154,7 +154,7 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
         ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
   of ctVector:
     let elem = emitHlslScalar(ctx, t.vElem)
-    result = vectorName(hlslVectorRule, hlslScalarRow, t)
+    result = getVectorName(hlslVectorRule, hlslScalarRow, t)
     if result.len == 0:
       ctx.fail("vector of " & (if elem.len > 0: elem else: $t.vElem.kind) &
         "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
@@ -204,7 +204,7 @@ proc bpElementStrideCheck*(elem: CirType): tuple[stride: int, err: string] =
     result = (0, "buffer element of " & $elem.kind & " type has no fvVulkan binding," &
       " the element envelope is 32-bit integers, float and double")
 
-proc bpElementStride(ctx: var PrintCtx, elem: CirType): int =
+proc getBpElementStride(ctx: var PrintCtx, elem: CirType): int =
   ## Address arithmetic indexes buffers by this stride.
   let (stride, err) = bpElementStrideCheck(elem)
   if err.len > 0:
@@ -256,7 +256,7 @@ const CoordInputNames: array[CoordBuiltinKind, string] = [
   "", "gid", "groupId", "groupThreadId", "", "", "gidx",
 ]
 
-proc coordInputName(kind: CoordBuiltinKind): string =
+proc getCoordInputName(kind: CoordBuiltinKind): string =
   CoordInputNames[kind]
 
 ## Entry-input text per canonical coordinate builtin kind: the synthesized main input with its semantic.
@@ -285,9 +285,9 @@ proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string
       ctx.fail("no component " & field & " on threads_per_threadgroup")
     result = $ctx.workgroup[i]
   of cbkThreadIndexInThreadgroup:
-    result = "int(" & coordInputName(kind) & ")"
+    result = "int(" & getCoordInputName(kind) & ")"
   else:
-    result = "int(" & coordInputName(kind) & "." & field & ")"
+    result = "int(" & getCoordInputName(kind) & "." & field & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -406,7 +406,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
         return ""
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         ctx.coordReads.incl(e.coordBuiltin)
-        return "int(" & coordInputName(e.coordBuiltin) & ")"
+        return "int(" & getCoordInputName(e.coordBuiltin) & ")"
       ctx.fail("whole-vector read of a coordinate builtin is outside the" &
         " HLSL subset, read the components one by one")
       return ""
@@ -427,7 +427,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     if ctx.flavor == fvVulkan and base.kind == eSym and
         ctx.addressParams.hasKey(base.name):
       let elem = ctx.addressParams[base.name].pElem
-      let stride = ctx.bpElementStride(elem)
+      let stride = ctx.getBpElementStride(elem)
       if ctx.failing():
         return ""
       return emitBpName(elem) & "(" & ctx.printExpr(base) &

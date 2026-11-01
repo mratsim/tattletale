@@ -56,15 +56,15 @@ static:
   for n in getBuiltinSymNames(thread_position_in_grid, threadgroup_position_in_grid,
       thread_position_in_threadgroup, threads_per_threadgroup,
       threadgroups_per_grid, thread_index_in_threadgroup):
-    doAssert coordBuiltinKind(n) != cbkNone
+    doAssert getCoordBuiltinKind(n) != cbkNone
   for n in getBuiltinSymNames(threadgroup_barrier, threadgroup_barrier_device):
-    doAssert synchroBuiltinKind(n) != sbkNone
+    doAssert getSynchroBuiltinKind(n) != sbkNone
   for n in getBuiltinSymNames(reduceAdd, reduceMax):
-    doAssert reductionBuiltinKind(n) != rbkNone
+    doAssert getReductionBuiltinKind(n) != rbkNone
   for n in getBuiltinSymNames(atomicFetchAdd):
-    doAssert atomicsBuiltinKind(n) != abkNone
+    doAssert getAtomicsBuiltinKind(n) != abkNone
   for n in getBuiltinSymNames(simd_shuffle, simd_shuffle_xor):
-    doAssert shuffleBuiltinKind(n) != shkNone
+    doAssert getShuffleBuiltinKind(n) != shkNone
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -80,11 +80,11 @@ func registerAssignBuiltinKindsPass*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc assignBuiltinKinds(e: CirExpr) =
-  e.coordBuiltin = coordBuiltinKind(e.name)
-  e.synchroBuiltin = synchroBuiltinKind(e.name)
-  e.reductionBuiltin = reductionBuiltinKind(e.name)
-  e.atomicsBuiltin = atomicsBuiltinKind(e.name)
-  e.shuffleBuiltin = shuffleBuiltinKind(e.name)
+  e.coordBuiltin = getCoordBuiltinKind(e.name)
+  e.synchroBuiltin = getSynchroBuiltinKind(e.name)
+  e.reductionBuiltin = getReductionBuiltinKind(e.name)
+  e.atomicsBuiltin = getAtomicsBuiltinKind(e.name)
+  e.shuffleBuiltin = getShuffleBuiltinKind(e.name)
 
 proc assignBuiltinKindsExpr(e: CirExpr) =
   ## Expressions are refs, so the assignment applies to the shared node.

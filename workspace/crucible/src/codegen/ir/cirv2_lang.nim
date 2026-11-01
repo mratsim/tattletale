@@ -476,24 +476,24 @@ let ShuffleBuiltinKindByName* {.compileTime.}: Table[string, ShuffleBuiltinKind]
   "simd_shuffle_xor": shkSimdShuffleXor,
 }.toTable()
 
-proc coordBuiltinKind*(name: string): CoordBuiltinKind =
+proc getCoordBuiltinKind*(name: string): CoordBuiltinKind =
   ## Returns the coordinate builtin kind of a canonical name, `cbkNone` for every
   ## other name (locals, math intrinsics, shadowing symbols).
   CoordBuiltinKindByName.getOrDefault(name, cbkNone)
 
-proc synchroBuiltinKind*(name: string): SynchroBuiltinKind =
+proc getSynchroBuiltinKind*(name: string): SynchroBuiltinKind =
   ## Returns the synchronization builtin kind of a canonical name, `sbkNone` otherwise.
   SynchroBuiltinKindByName.getOrDefault(name, sbkNone)
 
-proc reductionBuiltinKind*(name: string): ReductionBuiltinKind =
+proc getReductionBuiltinKind*(name: string): ReductionBuiltinKind =
   ## Returns the reduction builtin kind of a canonical name, `rbkNone` otherwise.
   ReductionBuiltinKindByName.getOrDefault(name, rbkNone)
 
-proc atomicsBuiltinKind*(name: string): AtomicsBuiltinKind =
+proc getAtomicsBuiltinKind*(name: string): AtomicsBuiltinKind =
   ## Returns the atomic builtin kind of a canonical name, `abkNone` otherwise.
   AtomicsBuiltinKindByName.getOrDefault(name, abkNone)
 
-proc shuffleBuiltinKind*(name: string): ShuffleBuiltinKind =
+proc getShuffleBuiltinKind*(name: string): ShuffleBuiltinKind =
   ## Returns the shuffle builtin kind of a canonical name, `shkNone` otherwise.
   ShuffleBuiltinKindByName.getOrDefault(name, shkNone)
 

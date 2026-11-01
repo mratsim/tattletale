@@ -60,7 +60,7 @@ proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
 
 proc emitMslScalar(t: CirType): string =
   ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
-  bareName(mslScalarRow, mslVectorRule, t)
+  getBareName(mslScalarRow, mslVectorRule, t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## MSL declaration text of `t` with `ident` appended, the shared C declarator
@@ -79,9 +79,9 @@ proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: strin
   let inner = t.pElem
   if inner.kind == ctArray:
     return qualifier & sep & cDecl(row, rule, target, inner, "(*" & ident & ")", true)
-  return qualifier & sep & bareName(row, rule, inner) & "* " & ident
+  return qualifier & sep & getBareName(row, rule, inner) & "* " & ident
 
-proc mslPtrQualifier(space: AddressSpace): string =
+proc getMslPtrQualifier(space: AddressSpace): string =
   ## MSL qualifier before a pointer declaration or cast, one word per space.
   case space
   of caThread: "thread"
@@ -93,7 +93,7 @@ proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
   ptrField(mslScalarRow, mslVectorRule, printerTarget,
-    mslPtrQualifier(t.space), t, ident)
+    getMslPtrQualifier(t.space), t, ident)
 
 proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## MSL declaration text of one struct member: a pointer member names
@@ -174,7 +174,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   let t = e.castType
   var castTyp = emitMslType(t, "", true)
   if t.kind in {ctPtr, ctAptr}:
-    castTyp = mslPtrQualifier(t.space) & ' ' & castTyp
+    castTyp = getMslPtrQualifier(t.space) & ' ' & castTyp
   return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
 
 

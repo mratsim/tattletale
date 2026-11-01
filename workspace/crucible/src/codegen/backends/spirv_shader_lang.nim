@@ -153,7 +153,7 @@ proc std430Layout(t: SpvTy): SpvLayout =
   of stkPointer:
     SpvLayout(size: 8, align: 8)
 
-proc std430Offsets(members: seq[SpvTy]): seq[int] =
+proc computeStd430Offsets(members: seq[SpvTy]): seq[int] =
   var off = 0
   for m in members:
     let ml = std430Layout(m)
@@ -192,7 +192,7 @@ proc failSpv(ctx: var SpvLangCtx, what: string) =
   if ctx.err.len == 0:
     ctx.err = "SPIR-V backend does not support: " & what
 
-proc scalarId(ctx: var SpvLangCtx, t: CirType): uint32 =
+proc resolveScalarId(ctx: var SpvLangCtx, t: CirType): uint32 =
   case t.kind
   of ctVoid: ctx.builder.tyVoid()
   of ctBool: ctx.builder.tyBool()
@@ -256,19 +256,19 @@ proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
     ctx.failSpv("CirType outside the SPIR-V subset: " & $t.kind)
     return nil
 
-proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
+proc resolveTyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
   ## SPIR-V type id of a value type, cached on the structural key.
   let key = spvTyKey(t)
   if ctx.tyCache.hasKey(key):
     return ctx.tyCache[key]
   case t.kind
-  of stkScalar: result = ctx.scalarId(t.scalar)
+  of stkScalar: result = ctx.resolveScalarId(t.scalar)
   of stkVector:
-    result = ctx.builder.tyVector(ctx.tyId(t.vElem), t.vN)
+    result = ctx.builder.tyVector(ctx.resolveTyId(t.vElem), t.vN)
   of stkArray:
     doAssert t.len >= 1
-    let elemId = ctx.tyId(t.elem)
-    let lenId = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(t.len))
+    let elemId = ctx.resolveTyId(t.elem)
+    let lenId = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(t.len))
     let instKey: SpvInstKey = (OpTypeArray, @[elemId, lenId])
     if instKey in ctx.builder.instCache:
       return ctx.builder.instCache[instKey]
@@ -277,7 +277,7 @@ proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
     ctx.builder.emitDecorate(result, decArrayStride,
       @[uint32(roundUpMultiple(e.size, e.align))])
   of stkRuntimeArray:
-    let elemId = ctx.tyId(t.relem)
+    let elemId = ctx.resolveTyId(t.relem)
     let instKey: SpvInstKey = (OpTypeRuntimeArray, @[elemId])
     if instKey in ctx.builder.instCache:
       return ctx.builder.instCache[instKey]
@@ -288,8 +288,8 @@ proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
   of stkStruct:
     var memberIds: seq[uint32]
     for m in t.members:
-      memberIds.add ctx.tyId(m)
-    let offsets = std430Offsets(t.members)
+      memberIds.add ctx.resolveTyId(m)
+    let offsets = computeStd430Offsets(t.members)
     result = ctx.builder.module.allocId()
     var words = @[result]
     for mid in memberIds:
@@ -302,7 +302,7 @@ proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
   of stkPointer:
     if t.storage == scPhysicalStorageBuffer:
       ctx.caps.incl capPhysicalStorageBufferAddresses
-    result = ctx.builder.tyPointer(t.storage, ctx.tyId(t.pointee))
+    result = ctx.builder.tyPointer(t.storage, ctx.resolveTyId(t.pointee))
   ctx.tyCache[key] = result
 
 type
@@ -339,10 +339,10 @@ proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
   else:
     ctx.valueTy(p.typ)
 
-proc bdaPointerTy(ctx: var SpvLangCtx, elemTy: CirType): uint32 =
+proc resolveBdaPointerTy(ctx: var SpvLangCtx, elemTy: CirType): uint32 =
   ## Physical storage buffer pointer type of a buffer reference
   ## the `valueTy` shape of the matching `aptr` type.
-  ctx.tyId(ctx.valueTy(CirType(kind: ctAptr, space: caDevice, pElem: elemTy)))
+  ctx.resolveTyId(ctx.valueTy(CirType(kind: ctAptr, space: caDevice, pElem: elemTy)))
 
 proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
   ## One OpTypeStruct push block in parameter order, offsets are the host
@@ -380,20 +380,20 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
           $l.size & " bytes), narrow members need SPIR-V 1.5 storage capabilities")
       members.add m
   result.members = members
-  result.offsets = std430Offsets(members)
+  result.offsets = computeStd430Offsets(members)
   var blockTy: SpvTy = spvStruct(members)
   result.byteSize = std430Layout(blockTy).size
-  result.structTy = ctx.tyId(blockTy)
+  result.structTy = ctx.resolveTyId(blockTy)
   ctx.builder.emitDecorate(result.structTy, decBlock)
   result.ptrTy = ctx.builder.tyPointer(scPushConstant, result.structTy)
   result.varId = ctx.builder.opVariable(result.ptrTy, scPushConstant)
 
-proc builtinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+proc declareBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   ## Input-storage builtin variable for a vector coordinate builtin,
   ## the OpEntryPoint interface lists it.
   if ctx.builtins.hasKey(builtin):
     return ctx.builtins[builtin].varId
-  let vecTy = ctx.builder.tyVector(ctx.scalarId(cirUint32()), 3)
+  let vecTy = ctx.builder.tyVector(ctx.resolveScalarId(cirUint32()), 3)
   let ptrTy = ctx.builder.tyPointer(scInput, vecTy)
   let varId = ctx.builder.opVariable(ptrTy, scInput)
   ctx.builder.emitDecorate(varId, decBuiltIn, @[builtin])
@@ -406,12 +406,12 @@ proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32
 proc loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int, target: CirType): uint32 =
   ## One coordinate-builtin component, cast to the canonical int type
   ## the CIRv2 vocabulary reads.
-  let varId = ctx.builtinInput(builtin)
+  let varId = ctx.declareBuiltinInput(builtin)
   let v = ctx.builder.opLoad(ctx.builtins[builtin].vecTy, varId)
-  let raw = ctx.builder.opCompositeExtract(ctx.scalarId(cirUint32()), v, @[component])
+  let raw = ctx.builder.opCompositeExtract(ctx.resolveScalarId(cirUint32()), v, @[component])
   ctx.convertValue(raw, cirUint32(), target)
 
-proc coordBuiltinInput(ctx: var SpvLangCtx, kind: CoordBuiltinKind): uint32 =
+proc getCoordBuiltinEnumerant(ctx: var SpvLangCtx, kind: CoordBuiltinKind): uint32 =
   ## Canonical coordinate vocabulary mapped onto the BuiltIn enumerants.
   case kind
   of cbkThreadPositionInGrid: result = biGlobalInvocationId
@@ -423,10 +423,10 @@ proc coordBuiltinInput(ctx: var SpvLangCtx, kind: CoordBuiltinKind): uint32 =
   of cbkNone:
     ctx.failSpv("not a coordinate builtin kind")
 
-proc scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
+proc declareScalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if ctx.scalarBuiltins.hasKey(builtin):
     return ctx.scalarBuiltins[builtin]
-  let u32Ty = ctx.scalarId(cirUint32())
+  let u32Ty = ctx.resolveScalarId(cirUint32())
   let ptrTy = ctx.builder.tyPointer(scInput, u32Ty)
   let varId = ctx.builder.opVariable(ptrTy, scInput)
   ctx.builder.emitDecorate(varId, decBuiltIn, @[builtin])
@@ -436,8 +436,8 @@ proc scalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
 
 proc loadScalarBuiltin(ctx: var SpvLangCtx, builtin: uint32, target: CirType): uint32 =
   ## Flat thread index, cast to the canonical int type the CIRv2 reads.
-  let varId = ctx.scalarBuiltinInput(builtin)
-  let raw = ctx.builder.opLoad(ctx.scalarId(cirUint32()), varId)
+  let varId = ctx.declareScalarBuiltinInput(builtin)
+  let raw = ctx.builder.opLoad(ctx.resolveScalarId(cirUint32()), varId)
   ctx.convertValue(raw, cirUint32(), target)
 
 proc flushCapabilities(ctx: var SpvLangCtx) =
@@ -501,7 +501,7 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       else:
         let vt = ctx.valueTy(s.declType)
         let varId = ctx.builder.opVariableFn(
-          ctx.builder.tyPointer(scFunction, ctx.tyId(vt)))
+          ctx.builder.tyPointer(scFunction, ctx.resolveTyId(vt)))
         fn.locals[s.name] = varId
         fn.localTys[s.name] = s.declType
     of sConst:
@@ -514,28 +514,28 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
     else:
       discard
 
-proc constId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
+proc resolveConstId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
   ## Constant id of a literal, or the registered const name.
   case e.kind
   of eIntLit:
-    let tyId = ctx.tyId(spvScalar(e.litType))
+    let tyId = ctx.resolveTyId(spvScalar(e.litType))
     let width = ctx.builder.getScalarWidth(tyId)
     let mask =
       if width >= 64: not 0'u64
       else: (1'u64 shl uint64(width)) - 1
     ctx.builder.constUint(tyId, uint64(e.value) and mask)
   of eFloatLit:
-    let tyId = ctx.tyId(spvScalar(e.fLitType))
+    let tyId = ctx.resolveTyId(spvScalar(e.fLitType))
     let width = ctx.builder.getScalarWidth(tyId)
     if width == 32:
       ctx.builder.constUint(tyId, uint64(cast[uint32](e.fValue.float32)))
     else:
       ctx.builder.constUint(tyId, cast[uint64](e.fValue))
   of eTrue:
-    let boolTy = ctx.tyId(spvScalar(CirType(kind: ctBool)))
+    let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     ctx.builder.constBool(boolTy, true)
   of eFalse:
-    let boolTy = ctx.tyId(spvScalar(CirType(kind: ctBool)))
+    let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     ctx.builder.constBool(boolTy, false)
   of eSym:
     if fn.consts.hasKey(e.name):
@@ -546,7 +546,7 @@ proc constId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
     ctx.failSpv("literal expected, got expression kind " & $e.kind)
     0
 
-proc scalarBits(t: CirType): int =
+proc getScalarBits(t: CirType): int =
   ## Bit width of a scalar type, 0 for widthless kinds.
   if t == nil:
     return 0
@@ -560,7 +560,7 @@ proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32 =
   if source == nil or to == nil:
     ctx.failSpv("scalar conversion with a missing operand type")
     return 0
-  if source.kind == to.kind and scalarBits(source) == scalarBits(to):
+  if source.kind == to.kind and getScalarBits(source) == getScalarBits(to):
     return v
   let fFloat = source.kind == ctFloat
   let tFloat = to.kind == ctFloat
@@ -568,37 +568,37 @@ proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32 =
   let tInt = to.kind in {ctInt, ctUint}
   if to.kind == ctBool and not fFloat:
     # bool reads as truthiness, any nonzero integer means true
-    let zero = ctx.builder.constUint(ctx.scalarId(source), 0)
+    let zero = ctx.builder.constUint(ctx.resolveScalarId(source), 0)
     return ctx.builder.freshInst(OpINotEqual,
-      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), v, zero])
+      @[ctx.resolveTyId(spvScalar(CirType(kind: ctBool))), v, zero])
   if source.kind == ctBool and tInt:
-    let boolTy = ctx.tyId(spvScalar(CirType(kind: ctBool)))
-    let one = ctx.builder.constUint(ctx.scalarId(to), 1)
-    let zero = ctx.builder.constUint(ctx.scalarId(to), 0)
-    return ctx.builder.opSelect(ctx.scalarId(to),
+    let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
+    let one = ctx.builder.constUint(ctx.resolveScalarId(to), 1)
+    let zero = ctx.builder.constUint(ctx.resolveScalarId(to), 0)
+    return ctx.builder.opSelect(ctx.resolveScalarId(to),
       ctx.builder.freshInst(OpLogicalEqual, @[boolTy, v,
         ctx.builder.constBool(boolTy, true)]), one, zero)
   if fInt and tInt:
-    if scalarBits(source) == scalarBits(to):
-      return ctx.builder.freshInst(OpBitcast, @[ctx.scalarId(to), v])
+    if getScalarBits(source) == getScalarBits(to):
+      return ctx.builder.freshInst(OpBitcast, @[ctx.resolveScalarId(to), v])
     if to.kind == ctInt:
-      return ctx.builder.freshInst(OpSConvert, @[ctx.scalarId(to), v])
-    return ctx.builder.freshInst(OpUConvert, @[ctx.scalarId(to), v])
+      return ctx.builder.freshInst(OpSConvert, @[ctx.resolveScalarId(to), v])
+    return ctx.builder.freshInst(OpUConvert, @[ctx.resolveScalarId(to), v])
   if fInt and tFloat:
     if source.kind == ctInt:
-      return ctx.builder.freshInst(OpConvertSToF, @[ctx.scalarId(to), v])
-    return ctx.builder.freshInst(OpConvertUToF, @[ctx.scalarId(to), v])
+      return ctx.builder.freshInst(OpConvertSToF, @[ctx.resolveScalarId(to), v])
+    return ctx.builder.freshInst(OpConvertUToF, @[ctx.resolveScalarId(to), v])
   if fFloat and tInt:
     if to.kind == ctInt:
-      return ctx.builder.freshInst(OpConvertFToS, @[ctx.scalarId(to), v])
-    return ctx.builder.freshInst(OpConvertFToU, @[ctx.scalarId(to), v])
+      return ctx.builder.freshInst(OpConvertFToS, @[ctx.resolveScalarId(to), v])
+    return ctx.builder.freshInst(OpConvertFToU, @[ctx.resolveScalarId(to), v])
   if fFloat and tFloat:
-    return ctx.builder.freshInst(OpFConvert, @[ctx.scalarId(to), v])
-  ctx.failSpv("no scalar conversion " & $source.kind & $scalarBits(source) &
-    " -> " & $to.kind & $scalarBits(to))
+    return ctx.builder.freshInst(OpFConvert, @[ctx.resolveScalarId(to), v])
+  ctx.failSpv("no scalar conversion " & $source.kind & $getScalarBits(source) &
+    " -> " & $to.kind & $getScalarBits(to))
   0
 
-proc memberIndex(t: CirType, name: string): int =
+proc findMemberIndex(t: CirType, name: string): int =
   ## Member index of a named struct field or a vector component
   ## (`F0`/`F1`/...), -1 when absent.
   if t.kind == ctStruct:
@@ -660,13 +660,13 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
   of eDot:
     let t = ctx.resolveExprType(fn, e.dotBase)
     if t != nil and t.kind == ctStruct:
-      let i = memberIndex(t, e.fieldName)
+      let i = findMemberIndex(t, e.fieldName)
       if i >= 0:
         result = t.fields[i].typ
       else:
         ctx.failSpv("no field " & e.fieldName & " on " & t.name)
     elif t != nil and t.kind == ctVector:
-      let i = memberIndex(t, e.fieldName)
+      let i = findMemberIndex(t, e.fieldName)
       if i >= 0:
         result = t.vElem
       else:
@@ -697,7 +697,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): tuple[ptrId:
 
 proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
 
-proc binopInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
+proc getBinopInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
   ## SPIR-V opcode of an arithmetic or comparison operator.
   ## OpNop marks an operator outside the supported set, the caller records it.
   let isFloat = operandTy.kind == ctFloat
@@ -731,7 +731,7 @@ proc binopInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
                     elif signed: OpSLessThanEqual else: OpULessThanEqual)
   else: result = OpNop
 
-proc cmpInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
+proc getCmpInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
   ## Comparison opcode, the CIRv2 comparison vocabulary is eq/neq/lt/le,
   ## OpNop when the operator is outside the supported set.
   case name
@@ -754,10 +754,10 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     return 0
   case e.kind
   of eNil:
-    let t = ctx.tyId(ctx.valueTy(e.nilType))
+    let t = ctx.resolveTyId(ctx.valueTy(e.nilType))
     ctx.builder.freshInst(OpUndef, @[t])
   of eIntLit, eFloatLit, eTrue, eFalse:
-    ctx.constId(fn, e)
+    ctx.resolveConstId(fn, e)
   of eSym:
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
@@ -773,13 +773,13 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       return fn.bdaParams[e.name]
     if fn.locals.hasKey(e.name):
       let t = fn.localTys.getOrDefault(e.name, ctx.resolveExprType(fn, e))
-      return ctx.builder.opLoad(ctx.tyId(ctx.valueTy(t)), fn.locals[e.name])
+      return ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(t)), fn.locals[e.name])
     if fn.ptrTargets.hasKey(e.name):
       # a pointer-typed local, its value is the pointee variable's address
       return fn.ptrTargets[e.name]
     if fn.addrParams.hasKey(e.name):
       let t = ctx.resolveExprType(fn, e)
-      return ctx.builder.opLoad(ctx.tyId(ctx.valueTy(t)), fn.addrParams[e.name])
+      return ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(t)), fn.addrParams[e.name])
     ctx.failSpv("unknown symbol " & e.name & " in " & fn.name)
     0
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
@@ -799,11 +799,11 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       of eBitAnd: "&"
       of eBitOr: "|"
       else: "xor"
-    let inst = ctx.binopInst(opName, opTy)
+    let inst = ctx.getBinopInst(opName, opTy)
     if inst == OpNop:
       ctx.failSpv("binary operator " & opName)
       return 0
-    ctx.builder.freshInst(inst, @[ctx.tyId(ctx.valueTy(opTy)), li, ri])
+    ctx.builder.freshInst(inst, @[ctx.resolveTyId(ctx.valueTy(opTy)), li, ri])
   of eEq, eNeq, eLt, eLe:
     let opTy = e.cmpType
     let l = ctx.emitExpr(fn, e.a)
@@ -815,33 +815,33 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       of eNeq: "!="
       of eLt: "<"
       else: "<="
-    let inst = ctx.cmpInst(name, opTy)
+    let inst = ctx.getCmpInst(name, opTy)
     if inst == OpNop:
       ctx.failSpv("comparison operator " & name)
       return 0
     ctx.builder.freshInst(inst,
-      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), li, ri])
+      @[ctx.resolveTyId(spvScalar(CirType(kind: ctBool))), li, ri])
   of eNot:
     let v = ctx.emitExpr(fn, e.notOperand)
     ctx.builder.freshInst(OpLogicalNot,
-      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), v])
+      @[ctx.resolveTyId(spvScalar(CirType(kind: ctBool))), v])
   of eNeg:
     let t = ctx.resolveExprType(fn, e.unOperand)
     let v = ctx.emitExpr(fn, e.unOperand)
     let inst = (if t.kind == ctFloat: OpFNegate else: OpSNegate)
-    ctx.builder.freshInst(inst, @[ctx.tyId(ctx.valueTy(t)), v])
+    ctx.builder.freshInst(inst, @[ctx.resolveTyId(ctx.valueTy(t)), v])
   of eAnd:
     # OpLogicalAnd/OpLogicalOr evaluate both operands, neither op short-circuits.
     # SPIR-V has no short-circuit logical op, so operands must be effect-safe
     let l = ctx.emitExpr(fn, e.andLeft)
     let r = ctx.emitExpr(fn, e.andRight)
     ctx.builder.freshInst(OpLogicalAnd,
-      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), l, r])
+      @[ctx.resolveTyId(spvScalar(CirType(kind: ctBool))), l, r])
   of eOr:
     let l = ctx.emitExpr(fn, e.andLeft)
     let r = ctx.emitExpr(fn, e.andRight)
     ctx.builder.freshInst(OpLogicalOr,
-      @[ctx.tyId(spvScalar(CirType(kind: ctBool))), l, r])
+      @[ctx.resolveTyId(spvScalar(CirType(kind: ctBool))), l, r])
   of eTernary:
     let condV = ctx.emitExpr(fn, e.cond)
     let thenV = ctx.emitExpr(fn, e.thenE)
@@ -849,12 +849,12 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let t = e.ternType
     let thenC = ctx.convertValue(thenV, ctx.resolveExprType(fn, e.thenE), t)
     let elseC = ctx.convertValue(elseV, ctx.resolveExprType(fn, e.elseE), t)
-    ctx.builder.opSelect(ctx.tyId(ctx.valueTy(t)), condV, thenC, elseC)
+    ctx.builder.opSelect(ctx.resolveTyId(ctx.valueTy(t)), condV, thenC, elseC)
   of eCast:
     let srcTy = ctx.resolveExprType(fn, e.castOperand)
-    doAssert scalarBits(srcTy) == scalarBits(e.castType), "cast of differing bit widths"
+    doAssert getScalarBits(srcTy) == getScalarBits(e.castType), "cast of differing bit widths"
     let v = ctx.emitExpr(fn, e.castOperand)
-    ctx.builder.freshInst(OpBitcast, @[ctx.tyId(ctx.valueTy(e.castType)), v])
+    ctx.builder.freshInst(OpBitcast, @[ctx.resolveTyId(ctx.valueTy(e.castType)), v])
   of eConv:
     let srcTy = ctx.resolveExprType(fn, e.castOperand)
     let v = ctx.emitExpr(fn, e.castOperand)
@@ -865,19 +865,19 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     ptrId
   of eSizeof:
     let l = std430Layout(ctx.valueTy(e.ofType))
-    ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(l.size))
+    ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(l.size))
   of eDeref:
     # load through a pointer value: the operand evaluates to a pointer
     let ptrVal = ctx.emitExpr(fn, e.derefOperand)
     let pt = ctx.resolveExprType(fn, e)
-    ctx.builder.opLoad(ctx.tyId(ctx.valueTy(pt)), ptrVal)
+    ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(pt)), ptrVal)
   of eAt, ePat:
     let (ptrId, pointee, isBda, _) = ctx.emitLhsPtr(fn, e)
     if isBda:
       let elemAlign = uint32(std430Layout(ctx.valueTy(pointee)).align)
-      ctx.builder.opLoadAligned(ctx.tyId(ctx.valueTy(pointee)), ptrId, elemAlign)
+      ctx.builder.opLoadAligned(ctx.resolveTyId(ctx.valueTy(pointee)), ptrId, elemAlign)
     else:
-      ctx.builder.opLoad(ctx.tyId(ctx.valueTy(pointee)), ptrId)
+      ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(pointee)), ptrId)
   of eDot:
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone and
         e.dotBase.coordBuiltin != cbkThreadIndexInThreadgroup:
@@ -893,18 +893,18 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       if comp < 0:
         return 0
       let compTy = ctx.resolveExprType(fn, e)
-      return ctx.loadBuiltinComponent(ctx.coordBuiltinInput(e.dotBase.coordBuiltin),
+      return ctx.loadBuiltinComponent(ctx.getCoordBuiltinEnumerant(e.dotBase.coordBuiltin),
         comp, compTy)
     let baseTy = ctx.resolveExprType(fn, e.dotBase)
     if baseTy != nil and baseTy.kind == ctVector:
-      let i = memberIndex(baseTy, e.fieldName)
+      let i = findMemberIndex(baseTy, e.fieldName)
       if i < 0:
         ctx.failSpv("no component " & e.fieldName & " on the vector")
         return 0
       let v = ctx.emitExpr(fn, e.dotBase)
-      ctx.builder.opCompositeExtract(ctx.tyId(ctx.valueTy(baseTy.vElem)), v, @[i])
+      ctx.builder.opCompositeExtract(ctx.resolveTyId(ctx.valueTy(baseTy.vElem)), v, @[i])
     elif baseTy != nil and baseTy.kind == ctStruct:
-      let i = memberIndex(baseTy, e.fieldName)
+      let i = findMemberIndex(baseTy, e.fieldName)
       if i < 0:
         ctx.failSpv("no field " & e.fieldName & " on " & baseTy.name)
         return 0
@@ -916,9 +916,9 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
         # Push composite stores a u32 word for the field. Extract the word
         # and coerce to the bool value the body reads.
         let raw = ctx.builder.opCompositeExtract(
-          ctx.tyId(spvScalar(cirUint32())), v, @[i])
+          ctx.resolveTyId(spvScalar(cirUint32())), v, @[i])
         return ctx.convertValue(raw, cirUint32(), fieldTy)
-      ctx.builder.opCompositeExtract(ctx.tyId(ctx.valueTy(fieldTy)),
+      ctx.builder.opCompositeExtract(ctx.resolveTyId(ctx.valueTy(fieldTy)),
         v, @[i])
     else:
       # dot base is a pointer-valued symbol: access chain through it
@@ -929,23 +929,23 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       if rootTy == nil or rootTy.kind != ctPtr:
         ctx.failSpv("field access through a non-pointer: " & e.dotBase.name)
         return 0
-      let i = memberIndex(rootTy.pElem, e.fieldName)
+      let i = findMemberIndex(rootTy.pElem, e.fieldName)
       if i < 0:
         ctx.failSpv("no field " & e.fieldName & " on " & rootTy.pElem.name)
         return 0
       let ptrVal = ctx.emitExpr(fn, e.dotBase)
       let memberPtrTy = ctx.builder.tyPointer(scFunction,
-        ctx.tyId(ctx.valueTy(rootTy.pElem.fields[i].typ)))
-      let idx0 = ctx.builder.constUint(ctx.scalarId(cirUint32()), 0)
+        ctx.resolveTyId(ctx.valueTy(rootTy.pElem.fields[i].typ)))
+      let idx0 = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), 0)
       let memberPtr = ctx.builder.opAccessChain(memberPtrTy, ptrVal, @[idx0])
-      ctx.builder.opLoad(ctx.tyId(ctx.valueTy(rootTy.pElem.fields[i].typ)),
+      ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(rootTy.pElem.fields[i].typ)),
         memberPtr)
   of eOconstr:
     let structTy = ctx.valueTy(e.ocType)
-    let structId = ctx.tyId(structTy)
+    let structId = ctx.resolveTyId(structTy)
     var members: seq[uint32]
     for f in e.kvFields:
-      let fi = memberIndex(e.ocType, f.name)
+      let fi = findMemberIndex(e.ocType, f.name)
       doAssert fi >= 0, "constructor field " & f.name & " not on " & e.ocType.name
       let v = ctx.emitExpr(fn, f.value)
       let ft = ctx.resolveExprType(fn, f.value)
@@ -958,7 +958,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
         members.add v
     ctx.builder.freshInst(OpCompositeConstruct, @[structId] & members)
   of eAconstr:
-    let arrTy = ctx.tyId(ctx.valueTy(e.acType))
+    let arrTy = ctx.resolveTyId(ctx.valueTy(e.acType))
     var vals: seq[uint32]
     for el in e.elems:
       let v = ctx.emitExpr(fn, el)
@@ -998,13 +998,13 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     if rootTy == nil or rootTy.kind != ctStruct:
       ctx.failSpv("field write on a non-struct local")
       return
-    let i = memberIndex(rootTy, e.fieldName)
+    let i = findMemberIndex(rootTy, e.fieldName)
     if i < 0:
       ctx.failSpv("no field " & e.fieldName & " on " & rootTy.name)
       return
     let memberPtrTy = ctx.builder.tyPointer(scFunction,
-      ctx.tyId(ctx.valueTy(rootTy.fields[i].typ)))
-    let idx0 = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(i))
+      ctx.resolveTyId(ctx.valueTy(rootTy.fields[i].typ)))
+    let idx0 = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(i))
     let ptrId = ctx.builder.opAccessChain(memberPtrTy, fn.locals[e.dotBase.name],
       @[idx0])
     result = (ptrId, rootTy.fields[i].typ, false, false)
@@ -1022,8 +1022,8 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.patIndex), cirInt32())
       let elemTy = baseTy.pElem
       let elemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
-        ctx.tyId(ctx.valueTy(elemTy)))
-      let idx0 = ctx.builder.constUint(ctx.scalarId(cirUint32()), 0)
+        ctx.resolveTyId(ctx.valueTy(elemTy)))
+      let idx0 = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), 0)
       let ptrId = ctx.builder.opAccessChain(elemPtrTy,
         ctx.emitExpr(fn, e.patBase), @[idx0, idxInt])
       return (ptrId, elemTy, true, false)
@@ -1033,7 +1033,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.patIndex), cirInt32())
       let elemTy = baseTy.pElem
       let elemPtrTy = ctx.builder.tyPointer(scFunction,
-        ctx.tyId(ctx.valueTy(elemTy)))
+        ctx.resolveTyId(ctx.valueTy(elemTy)))
       let ptrId = ctx.builder.opAccessChain(elemPtrTy,
         ctx.emitExpr(fn, e.patBase), @[idxInt])
       return (ptrId, elemTy, false, false)
@@ -1065,7 +1065,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
         if innerTy == nil or innerTy.kind != ctStruct:
           chainOk = false
           break
-        let mi = memberIndex(innerTy, walk.fieldName)
+        let mi = findMemberIndex(innerTy, walk.fieldName)
         if mi < 0:
           chainOk = false
           break
@@ -1078,10 +1078,10 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       let idxVal = ctx.emitExpr(fn, e.atIndex)
       let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.atIndex), cirInt32())
       let elemPtrTy = ctx.builder.tyPointer(scFunction,
-        ctx.tyId(ctx.valueTy(arrTy.aElem)))
+        ctx.resolveTyId(ctx.valueTy(arrTy.aElem)))
       var idxs: seq[uint32]
       for mi in memberIdxs:
-        idxs.add ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(mi))
+        idxs.add ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(mi))
       idxs.add idxInt
       let ptrId = ctx.builder.opAccessChain(elemPtrTy, rootVar, idxs)
       result = (ptrId, arrTy.aElem, false, false)
@@ -1096,7 +1096,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       if baseTy.kind == ctArray: baseTy.aElem
       else: baseTy.pElem
     let elemPtrTy = ctx.builder.tyPointer(scFunction,
-      ctx.tyId(ctx.valueTy(elemTy)))
+      ctx.resolveTyId(ctx.valueTy(elemTy)))
     if baseTy.kind == ctArray:
       if e.atBase.kind != eSym or not fn.locals.hasKey(e.atBase.name):
         ctx.failSpv("array element write outside a local array")
@@ -1109,8 +1109,8 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
         ctx.failSpv("array element access through a " & $baseTy.space & " pointer")
         return
       let devElemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
-        ctx.tyId(ctx.valueTy(elemTy)))
-      let idx0 = ctx.builder.constUint(ctx.scalarId(cirUint32()), 0)
+        ctx.resolveTyId(ctx.valueTy(elemTy)))
+      let idx0 = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), 0)
       let basePtr = ctx.emitExpr(fn, e.atBase)
       let ptrId = ctx.builder.opAccessChain(devElemPtrTy, basePtr, @[idx0, idxInt])
       result = (ptrId, elemTy, true, false)
@@ -1139,9 +1139,9 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       ctx.failSpv("reduceAdd lowers f32 only")
       return 0
     ctx.caps.incl capGroupNonUniformArithmetic
-    let scopeSub = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeSubgroup))
+    let scopeSub = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeSubgroup))
     return ctx.builder.freshInst(OpGroupNonUniformFAdd,
-      @[ctx.tyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
+      @[ctx.resolveTyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
   if e.callee.kind == eSym and e.callee.shuffleBuiltin != shkNone:
     doAssert e.args.len == 2, "simd_shuffle takes a value and a lane index"
     let v = ctx.emitExpr(fn, e.args[0])
@@ -1153,10 +1153,10 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     # Invocation Id and Mask take the unsigned width the grammar demands
     let laneU = ctx.convertValue(lane, ctx.resolveExprType(fn, e.args[1]), cirUint32())
     ctx.caps.incl capGroupNonUniformShuffle
-    let scopeSub = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeSubgroup))
+    let scopeSub = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeSubgroup))
     let op = if e.callee.shuffleBuiltin == shkSimdShuffle: OpGroupNonUniformShuffle
              else: OpGroupNonUniformShuffleXor
-    return ctx.builder.freshInst(op, @[ctx.tyId(spvScalar(resTy)), scopeSub, v, laneU])
+    return ctx.builder.freshInst(op, @[ctx.resolveTyId(spvScalar(resTy)), scopeSub, v, laneU])
   if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
     doAssert e.args.len == 2, "atomicFetchAdd takes a pointer and a value"
     if e.args[0].kind != eAddr or e.args[0].addrOperand.kind != ePat:
@@ -1177,11 +1177,11 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     ctx.caps.incl capAtomicFloat32AddEXT
     if "SPV_EXT_shader_atomic_float_add" notin ctx.exts:
       ctx.exts.add "SPV_EXT_shader_atomic_float_add"
-    let scopeDev = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeDevice))
-    let sem = ctx.builder.constUint(ctx.scalarId(cirUint32()),
+    let scopeDev = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeDevice))
+    let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()),
       uint64(semUniformMemory or semAcquireRelease))
     return ctx.builder.freshInst(OpAtomicFAddEXT,
-      @[ctx.tyId(spvScalar(elemTy)), ptrId, scopeDev, sem, value])
+      @[ctx.resolveTyId(spvScalar(elemTy)), ptrId, scopeDev, sem, value])
   case name
   of "max", "min":
     doAssert e.args.len == 2, name & " takes two arguments"
@@ -1198,12 +1198,12 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
                   (if signed: OpSGreaterThan else: OpUGreaterThan)
                 else:
                   (if signed: OpSLessThan else: OpULessThan)
-    let boolTy = ctx.tyId(spvScalar(CirType(kind: ctBool)))
+    let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     let cond = ctx.builder.freshInst(cmpOp, @[boolTy, a, b])
-    return ctx.builder.opSelect(ctx.tyId(spvScalar(opTy)), cond, a, b)
+    return ctx.builder.opSelect(ctx.resolveTyId(spvScalar(opTy)), cond, a, b)
   if e.callee.synchroBuiltin == sbkThreadgroupBarrier:
-    let scopeDev = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(scopeDevice))
-    let sem = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(semAcquireRelease))
+    let scopeDev = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeDevice))
+    let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(semAcquireRelease))
     discard ctx.builder.freshInst(OpControlBarrier, @[scopeDev, scopeDev, sem])
     return 0
   # a device function call
@@ -1216,7 +1216,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   for a in e.args:
     args.add ctx.emitExpr(fn, a)
   return ctx.builder.freshInst(OpFunctionCall,
-    @[ctx.tyId(ctx.valueTy(retTy)), fnId] & args)
+    @[ctx.resolveTyId(ctx.valueTy(retTy)), fnId] & args)
 
 proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt])
 
@@ -1260,7 +1260,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
     of sConst:
       # a compile-time literal binding, reads use the constant id
       if s.init != nil and s.init.kind in {eIntLit, eFloatLit, eTrue, eFalse}:
-        fn.consts[s.name] = ctx.constId(fn, s.init)
+        fn.consts[s.name] = ctx.resolveConstId(fn, s.init)
       else:
         ctx.failSpv("const " & s.name & " initializer outside the literal set")
     of sAsgn:
@@ -1426,14 +1426,14 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
   ## pass by value.
   let retTyId =
     if procNode.ret.kind == ctVoid: ctx.builder.tyVoid()
-    else: ctx.tyId(ctx.valueTy(procNode.ret))
+    else: ctx.resolveTyId(ctx.valueTy(procNode.ret))
   var paramTyIds: seq[uint32]
   for p in procNode.params:
     if p.typ.kind == ctPtr:
       # a var parameter: the caller passes the address of a local
-      paramTyIds.add ctx.builder.tyPointer(scFunction, ctx.tyId(ctx.valueTy(p.typ.pElem)))
+      paramTyIds.add ctx.builder.tyPointer(scFunction, ctx.resolveTyId(ctx.valueTy(p.typ.pElem)))
     else:
-      paramTyIds.add ctx.tyId(ctx.valueTy(p.typ))
+      paramTyIds.add ctx.resolveTyId(ctx.valueTy(p.typ))
   let fnTy = ctx.builder.tyFunction(retTyId, paramTyIds)
   result = ctx.builder.opFunction(retTyId, fnTy)
   var fn: SpvFnCtx = SpvFnCtx(name: "device fn " & procNode.name)
@@ -1495,19 +1495,19 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   for i, p in kernel.params:
     if p.typ.kind == ctAptr:
       # u64 device address in the push block, converted to a buffer pointer
-      let u64Ty = ctx.tyId(spvScalar(cirUint64()))
+      let u64Ty = ctx.resolveTyId(spvScalar(cirUint64()))
       let slotPtrTy = ctx.builder.tyPointer(scPushConstant, u64Ty)
-      let memberIdx = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(i))
+      let memberIdx = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
       let devAddr = ctx.builder.opLoad(u64Ty, slot)
-      let pointeeTyId = ctx.bdaPointerTy(p.typ.pElem)
+      let pointeeTyId = ctx.resolveBdaPointerTy(p.typ.pElem)
       fn.bdaParams[p.name] = ctx.builder.opConvertUToPtr(pointeeTyId, devAddr)
     else:
       let memberTy = ctx.pushMemberTy(p)
-      let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))
-      let memberIdx = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(i))
+      let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.resolveTyId(memberTy))
+      let memberIdx = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
-      let loaded = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
+      let loaded = ctx.builder.opLoad(ctx.resolveTyId(memberTy), slot)
       # A bool push member stores a u32 word.
       # Coercing here means every body read of the parameter sees a bool value.
       if p.typ.kind == ctStruct:

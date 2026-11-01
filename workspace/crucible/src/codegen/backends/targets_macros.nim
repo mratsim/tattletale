@@ -64,20 +64,20 @@ const genFieldSections = [
   ## A row names the section field in the row object and the type of the constructor nested there.
   ## The "" section is the row's own fields, an unknown field is a compile error.
 
-proc familyRow(family: string): tuple[suffix: string, required: bool] {.compileTime.} =
+proc getFamilyRow(family: string): tuple[suffix: string, required: bool] {.compileTime.} =
   ## Table row of one DSL family, ("", false) for an unknown family.
   for f in genFamilies:
     if f[0] == family:
       return (f[1], f[2])
 
-proc cellIndex(tok: string): int {.compileTime.} =
+proc findCellIndex(tok: string): int {.compileTime.} =
   ## Index of a cell token in `ScalarCellAxis`, -1 when unknown.
   for i, axis in ScalarCellAxis:
     if axis.tok == tok:
       return i
   return -1
 
-proc sectionKey(n: NimNode): tuple[target, flavor: string] {.compileTime.} =
+proc parseSectionKey(n: NimNode): tuple[target, flavor: string] {.compileTime.} =
   ## Target key of one section header, `target <name>:` or `target <name>(<flavor>):`.
   if n.kind == nnkIdent:
     result = ($n, "")
@@ -86,7 +86,7 @@ proc sectionKey(n: NimNode): tuple[target, flavor: string] {.compileTime.} =
   else:
     error("genTargets: expected a 'target <name>:' or 'target <name>(<flavor>):' section header", n)
 
-proc keyNames(key: tuple[target, flavor: string]): tuple[display, suffix: string] {.compileTime.} =
+proc getKeyNames(key: tuple[target, flavor: string]): tuple[display, suffix: string] {.compileTime.} =
   ## Two renderings of one target key. `display` names the key in check messages, `suffix` prefixes the generated lookup names.
   if key.flavor == "":
     result = (key.target, key.target)
@@ -103,13 +103,13 @@ type
     ## One parsed cell: its `ScalarCellAxis` index, type name, and the node
     ## the name checks anchor.
 
-proc cellPair(arg: NimNode, display: string): ParsedCell {.compileTime.} =
+proc parseCellPair(arg: NimNode, display: string): ParsedCell {.compileTime.} =
   ## One `cell "name"` entry, also the vector-element form: a bare cell
   ## states an empty prefix there.
   if arg.kind == nnkIdent:
-    result = (cellIndex($arg), "", arg)
+    result = (findCellIndex($arg), "", arg)
   elif arg.kind == nnkCommand and arg.len == 2 and arg[1].kind == nnkStrLit:
-    result = (cellIndex($arg[0]), arg[1].strVal, arg[1])
+    result = (findCellIndex($arg[0]), arg[1].strVal, arg[1])
   else:
     error("genTargets: expected a 'cell \"name\"' entry in " & display, arg)
   if result.idx < 0:
@@ -272,7 +272,7 @@ proc vectorCtor(entries: seq[NimNode], display: string): NimNode {.compileTime.}
     case $entry[0]
     of "elems":
       for arg in entry[1 ..^ 1]:
-        let c = cellPair(arg, display)
+        let c = parseCellPair(arg, display)
         let axis = ScalarCellAxis[c.idx]
         elems.add nnkPar.newTree(ident $axis.kind, newLit axis.width, newLit c.spelling)
     of "lanes":
@@ -356,18 +356,18 @@ macro genTargets*(body: untyped) =
   for section in body:
     if section.kind != nnkCommand or section.len != 3 or $section[0] != "target":
       error("genTargets: expected a 'target <name>:' section", section)
-    let key = sectionKey(section[1])
+    let key = parseSectionKey(section[1])
     if key in keys:
-      error("genTargets: duplicate target section '" & keyNames(key).display & "'", section)
+      error("genTargets: duplicate target section '" & getKeyNames(key).display & "'", section)
     keys.add key
-    let display = keyNames(key).display
+    let display = getKeyNames(key).display
     var seen: seq[string]
     for fam in section[2]:
       if fam[0].kind != nnkIdent or (fam.kind != nnkCommand and
           (fam.kind != nnkCall or fam[1].kind != nnkStmtList)):
         error("genTargets: expected a '<family> ...' row in target " & display, fam)
       let family = $fam[0]
-      let suffix = familyRow(family).suffix
+      let suffix = getFamilyRow(family).suffix
       if suffix == "":
         error("genTargets: unknown row family '" & family & "' in target " & display, fam)
       if family in seen:
@@ -393,7 +393,7 @@ macro genTargets*(body: untyped) =
                 entry[1][0].kind != nnkIdent or entry[1][1].kind != nnkStrLit:
               error("genTargets: expected a 'refused <cell> \"reason\"' entry in " &
                 display, entry)
-            let idx = cellIndex($entry[1][0])
+            let idx = findCellIndex($entry[1][0])
             if idx < 0:
               error("genTargets: unknown cell '" & $entry[1][0] & "' in " & display, entry[1][0])
             if '\n' in entry[1][1].strVal:
@@ -404,7 +404,7 @@ macro genTargets*(body: untyped) =
             refusedIdxs.add idx
             refused.add (idx, entry[1][1])
             continue
-          let c = cellPair(entry, display)
+          let c = parseCellPair(entry, display)
           if c.spelling.len == 0:
             error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' of " &
               display & " takes a type name, a refused cell is omitted", entry)
@@ -439,7 +439,7 @@ macro genTargets*(body: untyped) =
       else:
         discard
       result.add nnkConstSection.newTree(nnkConstDef.newTree(
-        nnkPostfix.newTree(ident"*", ident(keyNames(key).suffix & suffix)),
+        nnkPostfix.newTree(ident"*", ident(getKeyNames(key).suffix & suffix)),
         newEmptyNode(), ctor))
     for f in genFamilies:
       if f[2] and f[0] notin seen:

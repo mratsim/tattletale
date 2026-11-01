@@ -87,18 +87,18 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     if ctx.storageBoolSpelling:
       result = "NIM_BOOL"
     else:
-      result = scalarName(wgslScalarRow, t)
+      result = getScalarName(wgslScalarRow, t)
   of ctVoid:
-    result = scalarName(wgslScalarRow, t)
+    result = getScalarName(wgslScalarRow, t)
   of ctInt, ctUint:
-    result = scalarName(wgslScalarRow, t)
+    result = getScalarName(wgslScalarRow, t)
     if result.len == 0:
       if t.bits == 64:
         ctx.fail("i64/u64 need the shader-int64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit integers have no WGSL type, only 32")
   of ctFloat:
-    result = scalarName(wgslScalarRow, t)
+    result = getScalarName(wgslScalarRow, t)
     if result.len == 0:
       if t.bits == 64:
         ctx.fail("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
@@ -106,7 +106,7 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
         ctx.fail($t.bits & "-bit floats have no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
-    result = vectorName(wgslVectorRule, wgslScalarRow, t)
+    result = getVectorName(wgslVectorRule, wgslScalarRow, t)
     if result.len == 0 and elem.len > 0:
       ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, only 2..4-wide vectors have a name")
   of ctStruct:
@@ -143,7 +143,7 @@ type WgslBuiltinParam = tuple[attribute, param, wgslType: string]
   ## - `param`: the identifier the kernel body reads.
   ## - `wgslType`: the WGSL type (scalar for the flat thread index).
 
-proc wgslBuiltinParam(kind: CoordBuiltinKind): WgslBuiltinParam =
+proc getWgslBuiltinParam(kind: CoordBuiltinKind): WgslBuiltinParam =
   ## Returns the WGSL parameter of a canonical coordinate builtin kind, an empty tuple when none exists.
   ## `threads_per_threadgroup` is absent, WGSL exposes the threadgroup size
   ## only as the `@workgroup_size` entry-point attribute, the printer refuses a read.
@@ -164,25 +164,25 @@ proc wgslBuiltinParam(kind: CoordBuiltinKind): WgslBuiltinParam =
 proc wgslCoordComponent(kind: CoordBuiltinKind, field: string): string =
   case field
   of "x", "y", "z":
-    let p = wgslBuiltinParam(kind)
+    let p = getWgslBuiltinParam(kind)
     if p.attribute.len > 0:
       result = "i32(" & p.param & "." & field & ")"
   else:
     result = ""
 
 proc wgslWholeVector(kind: CoordBuiltinKind): string =
-  let p = wgslBuiltinParam(kind)
+  let p = getWgslBuiltinParam(kind)
   result = "vec3<i32>(i32(" & p.param & ".x), i32(" & p.param & ".y), i32(" &
     p.param & ".z))"
 
 const wgslEntryInputs*: EntryInputRow = block:
   ## WGSL entry-input text per canonical coordinate builtin kind: the `@builtin(...)` parameter the entry signature declares.
   ##
-  ## - built from the `wgslBuiltinParam` table, one text per kind that has a parameter
+  ## - built from the `getWgslBuiltinParam` table, one text per kind that has a parameter
   ## - "" for kinds without a WGSL builtin: `threads_per_threadgroup` reads refuse, WGSL has only the `@workgroup_size` attribute
   var row: EntryInputRow
   for kind in CoordBuiltinKind:
-    let p = wgslBuiltinParam(kind)
+    let p = getWgslBuiltinParam(kind)
     if p.attribute.len > 0:
       row[kind] = "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
   row
@@ -277,7 +277,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
         return ""
       ctx.builtins.incl(e.coordBuiltin)
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
-        return "i32(" & wgslBuiltinParam(e.coordBuiltin).param & ")"
+        return "i32(" & getWgslBuiltinParam(e.coordBuiltin).param & ")"
       return wgslWholeVector(e.coordBuiltin)
     return e.name
   of eAt, ePat:

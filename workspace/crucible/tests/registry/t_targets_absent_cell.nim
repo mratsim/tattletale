@@ -40,9 +40,9 @@ genTargets:
         dstKinds {ctInt, ctUint, ctFloat}, sameWidth, "as_type<$2>($1)"
 
 proc runTest() =
-  doAssert scalarName(mslScalarRow, tFloat(64)) == "",
+  doAssert getScalarName(mslScalarRow, tFloat(64)) == "",
     "an absent cell has no type name"
-  doAssert scalarName(mslScalarRow, tFloat(32)) == "float",
+  doAssert getScalarName(mslScalarRow, tFloat(32)) == "float",
     "the stated cells keep their names"
   doAssert cDecl(mslScalarRow, mslVectorRule, "msl", tFloat(64), "x", false) ==
     "<msl: no f64, double has no Apple GPU support>",

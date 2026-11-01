@@ -23,18 +23,18 @@ static:
         doAssert c.spelling.len > 0, "a stated cell names its type"
         doAssert (c.kind, c.width) notin seen, "each cell stated once"
         seen.add (c.kind, c.width)
-    doAssert scalarName(mslScalarRow, tFloat(16)) == "half"
-    doAssert scalarName(mslScalarRow, tInt(64)) == "long"
-    doAssert scalarName(cudaScalarRow, tInt(64)) == "long long"
-    doAssert scalarName(openclScalarRow, tBool()) == "int"
-    doAssert scalarName(openclScalarRow, tFloat(32)) == "float"
-    doAssert scalarName(wgslScalarRow, tInt(32)) == "i32"
-    doAssert scalarName(hlslScalarRow, tUint(32)) == "uint"
-    # absent cells refuse, scalarName returns no name and cDecl prints the refusal
-    doAssert scalarName(wgslScalarRow, tInt(8)) == ""
-    doAssert scalarName(hlslScalarRow, tFloat(16)) == ""
-    doAssert scalarName(mslScalarRow, tFloat(64)) == ""
-    doAssert scalarName(cudaScalarRow, tFloat(16)) == "__half"
+    doAssert getScalarName(mslScalarRow, tFloat(16)) == "half"
+    doAssert getScalarName(mslScalarRow, tInt(64)) == "long"
+    doAssert getScalarName(cudaScalarRow, tInt(64)) == "long long"
+    doAssert getScalarName(openclScalarRow, tBool()) == "int"
+    doAssert getScalarName(openclScalarRow, tFloat(32)) == "float"
+    doAssert getScalarName(wgslScalarRow, tInt(32)) == "i32"
+    doAssert getScalarName(hlslScalarRow, tUint(32)) == "uint"
+    # absent cells refuse, getScalarName returns no name and cDecl prints the refusal
+    doAssert getScalarName(wgslScalarRow, tInt(8)) == ""
+    doAssert getScalarName(hlslScalarRow, tFloat(16)) == ""
+    doAssert getScalarName(mslScalarRow, tFloat(64)) == ""
+    doAssert getScalarName(cudaScalarRow, tFloat(16)) == "__half"
     doAssert cDecl(mslScalarRow, mslVectorRule, "msl", tFloat(64), "x", false) ==
       "<msl: no f64, double has no Apple GPU support>"
     doAssert cDecl(cudaScalarRow, cudaVectorRule, "cuda", tFloat(16), "x", false) ==
@@ -74,12 +74,12 @@ static:
     doAssert "asU16" in hlslConvFpRefusals
 
   block: # vector rules: each target's real coverage
-    doAssert vectorName(glslVectorRule, glslScalarRow, tVec(4, tFloat(32))) == "vec4"
-    doAssert vectorName(glslVectorRule, glslScalarRow, tVec(2, tUint(32))) == "uvec2"
-    doAssert vectorName(wgslVectorRule, wgslScalarRow, tVec(4, tFloat(32))) == "vec4<f32>"
-    doAssert vectorName(mslVectorRule, mslScalarRow, tVec(3, tInt(32))) == "int3"
-    doAssert vectorName(cudaVectorRule, cudaScalarRow, tVec(4, tFloat(32))) == ""
-    doAssert vectorName(hlslVectorRule, hlslScalarRow, tVec(2, tFloat(32))) == "float2"
+    doAssert getVectorName(glslVectorRule, glslScalarRow, tVec(4, tFloat(32))) == "vec4"
+    doAssert getVectorName(glslVectorRule, glslScalarRow, tVec(2, tUint(32))) == "uvec2"
+    doAssert getVectorName(wgslVectorRule, wgslScalarRow, tVec(4, tFloat(32))) == "vec4<f32>"
+    doAssert getVectorName(mslVectorRule, mslScalarRow, tVec(3, tInt(32))) == "int3"
+    doAssert getVectorName(cudaVectorRule, cudaScalarRow, tVec(4, tFloat(32))) == ""
+    doAssert getVectorName(hlslVectorRule, hlslScalarRow, tVec(2, tFloat(32))) == "float2"
 
   block: # bitcast rules: first-match coverage
     doAssert cudaCastRules[0].spelling == "__float_as_uint($1)"
