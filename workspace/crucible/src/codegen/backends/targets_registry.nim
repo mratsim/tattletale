@@ -22,7 +22,8 @@
 ## | vector | VectorRule | a target's real vector coverage               |
 ##
 ## `genTargets` (targets_macros) parses row blocks into these types and generates one lookup proc per family and target.
-## Checks run at registration as one compile-time block: full (kind, width) coverage per key, refused cells with a reason class.
+## Checks run at registration as one compile-time block: full (kind, width) coverage per key, refused cells with a reason class,
+## cross-target name collisions, and the ledgered cross-target divergences.
 ## A missing or drifted row is a compile error.
 
 import std/tables
@@ -147,6 +148,9 @@ type
     ## Bare parameter reference, a scalar builtin converts implicitly.
     cwfRefuse
     ## Whole-value reads refuse.
+    cwfFlatIndex
+    ## Whole-value read composes the x-major flat thread index from the target's
+    ## vector builtins. The glue proc emits the text.
 
   CoordCell* = object
     ## One coordinate builtin kind's static data of one target.
@@ -245,8 +249,13 @@ proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
 
 proc checkScalarRowsTogether*(
     rows: openArray[tuple[name: string, row: ScalarRow]]) {.compileTime.} =
-  ## Cross-target scalar check: a name two targets share must denote the same (kind, width) cell.
-  ## Divergent names for one cell are explicit data (msl `char`/`long` against cuda `signed char`/`long long`).
+  ## Cross-target scalar check:
+  ##
+  ## - a name two targets share must denote the same (kind, width) cell
+  ## - divergent names for one cell are explicit data, msl `char`/`long` against
+  ##   cuda `signed char`/`long long`
+  ## - ledgered divergences are checked by `checkScalarDivergences`
+  ##
   ## Returns after catching a name that drifted onto a cell of another width or kind.
   ## Raises `AssertionDefect` naming both targets at compile time.
   for i in 0 ..< rows.len:
@@ -260,6 +269,37 @@ proc checkScalarRowsTogether*(
               "name '" & a.spelling & "' denotes (" & $a.kind & ", " &
               $a.width & ") on " & rows[i].name & " but (" & $b.kind & ", " &
               $b.width & ") on " & rows[j].name
+
+proc checkScalarDivergences*(
+    rows: openArray[tuple[name: string, row: ScalarRow]],
+    divergent: openArray[tuple[a, b: string, kind: CirTypeKind, width: int]]) {.compileTime.} =
+  ## Divergence ledger over target pairs: a ledgered cell keeps different names
+  ## on the two targets.
+  ##
+  ## - the ledger records that the pair names a cell on purpose differently,
+  ##   msl `char`/`long` against cuda `signed char`/`long long`
+  ##   (the LP64/LLP64 `long` hazard)
+  ## - the ledger stores no names, so the check cannot ossify row values
+  ##
+  ## Raises `AssertionDefect` at compile time when a ledgered cell has no name
+  ## on one target or one shared name on both targets.
+  ##
+  ## Usage: `checkScalarDivergences([("msl", mslScalarRow()), ("cuda", cudaScalarRow())], ledger)`
+  for d in divergent:
+    var spellings: array[2, string]
+    for entry in rows:
+      let slot = if entry.name == d.a: 0 elif entry.name == d.b: 1 else: 2
+      if slot < 2:
+        for c in entry.row.cells:
+          if c.kind == d.kind and c.width == d.width:
+            spellings[slot] = c.spelling
+    doAssert spellings[0].len > 0 and spellings[1].len > 0,
+      "target pair (" & d.a & ", " & d.b & "): ledgered cell (" & $d.kind & ", " &
+      $d.width & ") has no name on " & (if spellings[0].len == 0: d.a else: d.b)
+    doAssert spellings[0] != spellings[1],
+      "target pair (" & d.a & ", " & d.b & "): cell (" & $d.kind & ", " &
+      $d.width & ") is ledgered as divergent but both targets name it '" &
+      spellings[0] & "'"
 
 proc checkCoordRow*(row: CoordRow, target: string) {.compileTime.} =
   ## Registration check over one target's coordinate row.
