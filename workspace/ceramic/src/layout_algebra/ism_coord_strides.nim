@@ -37,7 +37,7 @@ func `===`*(a: CoordStride, b: tuple): bool {.inline.} =
 #   NimNode helpers and syntactic sugar
 # ═══════════════════════════════════════════════════════════════
 
-proc unwrapTypedesc(n: NimNode): NimNode
+proc unwrapTypedesc*(n: NimNode): NimNode
 
 macro `+`*[A: CoordStride, B: CoordStride](a: A, b: B): untyped =
   let ta = a.getTypeInst[1]
@@ -427,7 +427,7 @@ func csCanMerge*(a, b: CoordStrideDescriptor, s: int): bool {.compileTime.} =
   of caMulti:
     b.kind == caMulti and csScaledEq(a.coeffs, b.coeffs, s)
 
-proc unwrapTypedesc(n: NimNode): NimNode =
+proc unwrapTypedesc*(n: NimNode): NimNode =
   var t = n.getTypeInst
   if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "typeDesc":
     t = t[1]

@@ -157,6 +157,34 @@ macro crd2idx*(layout: Layout, coord: IntOrIntTuple): auto =
     crd2idxImpl(c2, sh2, st2)
   result.add getAst(crd2idxDelegate(coord, sh, st))
 
+macro crd2idx*(layout: Layout, coord: CoordStride): auto =
+  ## Evaluates the layout at a coordinate stride, the basis atom
+  ## `scale@path`.
+  ##
+  ## A coordinate stride's coefficient tuple embeds in the coordinate
+  ## space:
+  ##
+  ## - `crd2idx(L, 16@1) == crd2idx(L, (0, 16))`, same inner product
+  ##
+  ## Reached when composing a layout with a tiler whose stride leaves
+  ## are basis atoms, e.g. the MMA atom threadmaps: the composed stride
+  ## is evaluated at one point.
+  ##
+  ## Args:
+  ## - `layout`: the layout to evaluate
+  ## - `coord`: the coordinate stride (basis atom), its coefficient
+  ##   tuple is read off the type
+  ##
+  ## Returns:
+  ## - the linear offset, `sum(coeff[k] * stride[k])` over the layout's
+  ##   dimensions
+  let coeffs = coord.unwrapTypedesc()
+  result = newStmtList()
+  let (sh, st) = result.destructureLayout(layout)
+  template crd2idxCSDelegate(c2, sh2, st2) =
+    crd2idxImpl(c2, sh2, st2)
+  result.add getAst(crd2idxCSDelegate(coeffs, sh, st))
+
 template idx2crd*(layout: Layout, idx: int or Int): untyped =
   idx2crd_gpu(layout, idx)
 

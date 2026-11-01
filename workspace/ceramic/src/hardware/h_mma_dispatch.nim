@@ -57,6 +57,17 @@ func operandClause(names: openArray[string], clause: string): string =
     if i > 0: result.add ", "
     result.add "\"" & clause & "\"(`" & name & "`)"
 
+func mmaOperandWidth(operandType: string): int {.compileTime.} =
+  ## Elements per .b32 mma.sync operand register, by operand dtype:
+  ## PTX packs 16-bit operands two-per-register, 8-bit four-per-register,
+  ## 32-bit (tf32) one-per-register.
+  case operandType
+  of "tf32": 1
+  of "f16", "bf16": 2
+  of "s8", "e4m3", "e5m2": 4
+  else:
+    error("unsupported mma.sync operand dtype: " & operandType)
+
 func buildNvidiaMmaAsm*(instr: string, dNames, aNames, bNames: openArray[string], accType: string): string =
   ## GCC extended-asm builder for one Nvidia MMA instruction,
   ## D = A·B + D accumulated in place: the C operand is the D registers,
@@ -64,10 +75,11 @@ func buildNvidiaMmaAsm*(instr: string, dNames, aNames, bNames: openArray[string]
   ##
   ## Expected input:
   ##   - `instr`: the mma.sync.aligned.* instruction string
-  ##   - `dNames`/`aNames`/`bNames`: the staged scalars' names, one
-  ##     register per value, in the atom's per-lane value order
-  ##   - `accType`: the accumulator register element type name, the A/B
-  ##     operands are always packed uint32 registers
+  ##   - `dNames`: the staged accumulator scalars' names, one per value,
+  ##     in the atom's per-lane value order
+  ##   - `aNames`/`bNames`: the packed .b32 A/B operand register names,
+  ##     one name per register, staged as uint32 locals by gemm_mma
+  ##   - `accType`: the accumulator register element type name
   ## Output: one extended-asm statement string.
   let vc = dNames.len
   let va = aNames.len
@@ -234,7 +246,47 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[typed]): untyped =
     for i in 0 ..< dV:
       if cNames[i] != dNames[i]:
         result.add nnkAsgn.newTree(scalars[i], scalars[dV + aV + bV + i])
-    let asmStr = buildNvidiaMmaAsm(instr, dNames, aNames, bNames, accType)
+    # PTX mma.sync A/B operands are packed .b32 registers holding two
+    # 16-bit values, the low half carrying the smaller k element.
+    # Each packed register stages as a uint32 local and the asm statement
+    # references it by bare name: the asm lowering resolves backticked
+    # names against the enclosing scope, keeping redeclarations across
+    # gemm_atom expansions correct
+    let packedWidth = mmaOperandWidth(constStr(atom, "aType"))
+    doAssert (aV + bV) mod packedWidth == 0,
+      "gemm_mma: mma operand values must pack into whole registers, got " &
+      $(aV + bV) & " values of width " & $packedWidth
+    var aRegs, bRegs: seq[string]
+    for i in countup(0, aV - 1, packedWidth):
+      case packedWidth
+      of 1:
+        # one value per register: the staged scalar is the register
+        aRegs.add($scalars[dV + i])
+      of 2:
+        let lo = scalars[dV + i]
+        let hi = scalars[dV + i + 1]
+        let regIdent = ident("aReg" & $(i div 2))
+        result.add quote do:
+          var `regIdent`: uint32 =
+            cast[uint32](`lo`) or (cast[uint32](`hi`) shl 16)
+        aRegs.add($regIdent)
+      else:
+        error("gemm_mma: register packing unimplemented for width " & $packedWidth)
+    for i in countup(0, bV - 1, packedWidth):
+      case packedWidth
+      of 1:
+        bRegs.add($scalars[dV + aV + i])
+      of 2:
+        let lo = scalars[dV + aV + i]
+        let hi = scalars[dV + aV + i + 1]
+        let regIdent = ident("bReg" & $(i div 2))
+        result.add quote do:
+          var `regIdent`: uint32 =
+            cast[uint32](`lo`) or (cast[uint32](`hi`) shl 16)
+        bRegs.add($regIdent)
+      else:
+        error("gemm_mma: register packing unimplemented for width " & $packedWidth)
+    let asmStr = buildNvidiaMmaAsm(instr, dNames, aRegs, bRegs, accType)
     result.add newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr))
   # labeled block: the Metal printer emits braces only for labeled blocks,
   # multiple calls in one function scope must not collide on the staged scalar names
