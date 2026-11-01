@@ -51,7 +51,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerMslHoistProgramScopeConstants*(reg: var PassRegistry) =
-  ## A const_mem local without an initializer refuses in the pass.
   reg.register("mslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = mslHoistProgramScopeConstants
@@ -84,15 +83,6 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mslHoistProgramScopeConstants(m: CirModule): string =
-  ## Relocates the `{.const_mem.}` locals of every proc into `m.globals` in encounter order,
-  ## the declarations dropped from their bodies.
-  ##
-  ## Contract:
-  ## - every proc and scope depth covered, a device-function or nested-scope
-  ##   local relocates like a kernel-top-level one
-  ## - the initializer is required, a const_mem local without one refuses
-  ## - runs after the reserved-word rename, relocated declaration names match
-  ##   the renamed body references
   hoistConstMemLocals(m)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -100,8 +90,6 @@ proc mslHoistProgramScopeConstants(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc extendedProcType(t: CirType, extra: seq[CirType]): CirType =
-  ## A fresh proc type with `extra` appended to the parameters.
-  ##
   ## Callee types are interned, structurally identical signatures share one
   ## `CirType` ref: an in-place extension would leak into every proc and call
   ## site carrying the signature, so each call site takes a fresh extended copy.
@@ -122,7 +110,6 @@ type
     ##   the object
 
 proc hoistSmemLocal(fn: CirProc, s: CirStmt, arenas: var seq[SmemArena]): string =
-  ## Hoists one `{.smem.}` local into a threadgroup pointer parameter.
   ## The arena is the caller's storage to lend, an initializer on it refuses.
   if s.init != nil:
     return "at " & fn.name & ": smem local " & s.name &
@@ -135,11 +122,6 @@ proc hoistSmemLocal(fn: CirProc, s: CirStmt, arenas: var seq[SmemArena]): string
   arenas.add((s.name, s.declType, typ))
 
 proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]): string =
-  ## Hoists the `{.smem.}` locals of one device function into threadgroup
-  ## pointer parameters:
-  ##
-  ## - the declarations drop from the body
-  ## - an initializer on a hoisted local refuses
   var i = 0
   while i < fn.body.len:
     let s = fn.body[i]
@@ -153,11 +135,7 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]): string =
   return ""
 
 proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
-  ## Rewrites one expression node that reads a hoisted array arena, in place:
-  ##
-  ## - arena-symbol references retype to the `aptr` parameter type
-  ## - an `at` over the symbol becomes a `pat` and the printed text stays `scratch[i]`
-  ##
+  ## An `at` over a hoisted array arena becomes a `pat`, the printed text stays `scratch[i]`.
   ## Expressions are refs, so the rewrite applies to every sharer.
   if e.kind == eSym and arenaTypes.hasKey(e.name):
     e.typ = arenaTypes[e.name]
@@ -170,8 +148,6 @@ proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
     e.patIndex = idx
 
 proc rewriteArenaReadsStmts(ss: seq[CirStmt], arenaTypes: Table[string, CirType]) =
-  ## Retypes the reads of a hoisted array arena across one statement list,
-  ## nested bodies included.
   ss.walkStmts(nil, proc(e: CirExpr) =
     e.rewriteArenaReads(arenaTypes))
 
@@ -186,8 +162,6 @@ proc ownedSmemNames(fn: CirProc): HashSet[string] =
 proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
                   args: var seq[CirExpr],
                   arenas: seq[SmemArena], owned: var HashSet[string]): string =
-  ## Appends one argument per hoisted arena of the callee to one call site:
-  ##
   ## - a matching-name `{.smem.}` local in the caller supplies the argument,
   ##   an array arena decays to its element pointer in the emitted source,
   ##   an object arena binds by reference
@@ -218,9 +192,6 @@ proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
   return ""
 
 proc bindSmemCallSiteStmts(fn: CirProc, ss: seq[CirStmt], procs: Table[string, CirProc], hoisted: Table[string, seq[SmemArena]]): string =
-  ## Binds the hoisted-arena arguments of every call in one statement list,
-  ## nested bodies included. Returns "" when clean, else the first refusal.
-  ##
   ## Binding a kernel call site synthesizes its arena declaration into `fn.body`.
   ## The synthesized declaration binds no call, so the walk need not visit it.
   var owned = fn.ownedSmemNames()
@@ -240,13 +211,7 @@ proc bindSmemCallSiteStmts(fn: CirProc, ss: seq[CirStmt], procs: Table[string, C
   return err
 
 proc mslHoistDeviceFnSmem(m: CirModule): string =
-  ## Hoists the `{.smem.}` locals of every device function to threadgroup
-  ## reference parameters and binds the call sites.
-  ##
-  ## - the caller owns the arena: a kernel without a matching local gets one
-  ##   synthesized into its body, a device-function caller without one refuses
-  ## - runs before `mslRewriteSmemLocals`, which keeps the kernel-owned arenas
-  ##   in-body
+  ## Runs before `mslRewriteSmemLocals`, which keeps the kernel-owned arenas in-body.
   var hoisted = initTable[string, seq[SmemArena]]()
   for fn in m.procs:
     if fn.isKernel:
@@ -277,13 +242,10 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc collectCoordReads(e: CirExpr, kinds: var HashSet[CoordBuiltinKind]) =
-  ## Collects the coordinate builtin kind one expression node reads.
   if e.kind == eSym and e.coordBuiltin != cbkNone:
     kinds.incl(e.coordBuiltin)
 
 proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CoordBuiltinKind] =
-  ## Collects the coordinate builtin kinds read across one statement list,
-  ## nested bodies included.
   var kinds: HashSet[CoordBuiltinKind]
   let collect = proc(e: CirExpr) =
     e.collectCoordReads(kinds)
@@ -291,11 +253,7 @@ proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CoordBuiltinKind] =
   return kinds
 
 proc builtinParamType(kind: CoordBuiltinKind): CirType =
-  ## Parameter type standing in for one coordinate builtin:
-  ##
-  ## - an `int3` for the vector coordinates: the builtins carry the canonical
-  ##   `ivec3` type and the printer emits an `int3` constructor for whole-value reads
-  ## - an `int` for the flat thread index
+  ## Builtins carry the canonical `ivec3` type, so the printer emits an `int3` constructor for whole-value reads of the standing-in parameter.
   if kind == cbkThreadIndexInThreadgroup:
     tInt(32)
   else:
@@ -321,7 +279,6 @@ proc sortedCoordKinds(kinds: HashSet[CoordBuiltinKind]): seq[CoordBuiltinKind] =
       result.add(kind)
 
 proc appendCoordParam(fn: CirProc, kind: CoordBuiltinKind): string =
-  ## Appends the parameter standing in for one coordinate builtin to a device function.
   ## A parameter takes the builtin's canonical name so the body's
   ## builtin-marked reads print that name unchanged, in a kernel the name
   ## binds to the attributed parameter, in a device function to this parameter.
@@ -337,9 +294,7 @@ proc appendCoordParam(fn: CirProc, kind: CoordBuiltinKind): string =
 proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
                          args: var seq[CirExpr],
                          needs: Table[string, HashSet[CoordBuiltinKind]]): string =
-  ## Appends the builtin arguments of one call site, one argument per needed
-  ## builtin in the callee's parameter order, and grows the callee symbol's
-  ## proc type to match.
+  ## One argument per needed builtin in the callee's parameter order, the callee symbol's proc type grows to match.
   ##
   ## - a kernel forwards the builtin-marked symbol: the printer then emits
   ##   the builtin read and the kernel signature gains the attributed parameter
@@ -366,9 +321,6 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
 proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
                                     procs: Table[string, CirProc],
                                     needs: Table[string, HashSet[CoordBuiltinKind]]): string =
-  ## Appends the builtin arguments of every call site in one statement list,
-  ## calls nested inside expressions included.
-  ## Returns "" when clean, else the first refusal.
   var err = ""
   let onExpr = proc(e: CirExpr) =
     if err.len > 0:
@@ -386,8 +338,6 @@ proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
   return err
 
 proc mslThreadCoordinateBuiltins(m: CirModule): string =
-  ## Threads the coordinate builtins down to the device functions as parameters.
-  ##
   ## - every device function gains one parameter per transitively needed coordinate builtin in builtin-kind declaration order
   ## - a kernel body is untouched, it reads the builtins it forwards directly
   ## - Metal only: the builtins stay legal reads inside device functions on other targets, so the pass is not registered there
@@ -438,22 +388,15 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mslRewriteSmemLocals(m: CirModule): string =
-  ## Rewrites the `{.smem.}` locals of every proc, nested bodies included:
+  ## A kernel keeps its `{.smem.}` local in its body, top-level or nested:
   ##
-  ## - a kernel keeps the local in its body, top-level or nested: the printer
-  ##   emits kernel-scope `threadgroup` storage, allocated per threadgroup
-  ##   by Metal, no launch-time staging and no parameter
-  ## - a device function's smem local refuses, only a kernel owns
-  ##   threadgroup storage
-  ##   smem local → kernel: stays in body as threadgroup storage → device function: refuse
+  ## - the printer emits kernel-scope `threadgroup` storage, allocated per
+  ##   threadgroup by Metal, no launch-time staging and no parameter
+  ## - a device function's smem local refuses, only a kernel owns threadgroup storage
   ##
-  ## - the hoist drains the locals it covers, this walk catches a survivor
-  ##   at any depth
-  ## - the initializer rewrite ran earlier, a surviving local has no
-  ##   initializer
-  ##
-  ## - the pass runs after the reserved-word rename, so the kept locals use
-  ##   the renamed names their body already references
+  ## - the hoist drains the locals it covers, this walk catches a survivor at any depth
+  ## - the initializer rewrite ran earlier, a surviving local has no initializer
+  ## - the pass runs after the reserved-word rename, so the kept locals use the renamed names their body already references
   for fn in m.procs:
     var err = ""
     let kernel = fn.isKernel
