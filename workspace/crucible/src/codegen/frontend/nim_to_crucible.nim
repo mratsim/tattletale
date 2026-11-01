@@ -1168,15 +1168,18 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     return ctx.drainHoisted() & @[asgnS(lhs, rhsT)]
   of nnkInfix:
     # compound assignment lowers in statement position as an infix:
-    # primitive-scalar operands take the primitive arithmetic, any other `op=`
-    # (`qk -.= m_ij` over register tiles) resolves to its overloaded proc
-    # and lowers as a var-target call in statement position
+    # a user-defined `op=` lowers as the proc's var-target call,
+    # a system compound form lowers as primitive scalar arithmetic
     let op = n[0].strVal
-    # compound assignment lowers as primitive arithmetic on two primitive scalars.
-    # An overloaded operand (register tile, element-wise `op=` proc)
-    # lowers as the proc's call instead
-    var scalar = false
-    if n[0].kind in {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
+    if op in ["+=", "-=", "*=", "/="]:
+      # user operator vs system form, read off the callee definition:
+      # system compound ops are Inc/Dec magics or generic procs,
+      # a user overload is a plain proc of the module
+      let impl = resolveCallCallee(n[0]).getImpl()
+      if impl.kind in {nnkProcDef, nnkFuncDef} and not isGenericDef(impl):
+        return ctx.lowerVoidCall(n)
+      # a generic callee may still be a user operator over an aggregate:
+      # operand kinds decide, a non-scalar target lowers as the call
       let lt = ctx.resolver.resolveCirType(n[1].getTypeInst())
       let rt = ctx.resolver.resolveCirType(n[2].getTypeInst())
       if ctx.resolver.err.len > 0:
@@ -1184,28 +1187,27 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         # a statement-position call path needs a clean channel
         return @[]
       let lp = if lt != nil and lt.kind == ctPtr: lt.pElem else: lt
-      scalar = isScalarType(lp) and isScalarType(rt)
-    if op in ["+=", "-=", "*=", "/="] and scalar:
-      var lhs = ctx.lowerExpr(n[1])
-      if ctx.resolver.err.len > 0:
-        return @[]
-      # this lowering dereferences a var-returning `[]` call's element address, and the assignment target is the location behind it
-      if lhs.kind == eAddr:
-        lhs = lhs.addrOperand
-      elif lhs.kind == eSym and getExprType(lhs) != nil and
-          getExprType(lhs).kind == ctPtr:
-        # a var parameter carries its location through a pointer and the compound assignment operates on the pointee
-        lhs = derefE(lhs)
-      let rhs = ctx.lowerOperandExpr(n[2])
-      if ctx.resolver.err.len > 0:
-        return @[]
-      let opType = getExprType(lhs)
-      let rhsOp = operandLiteralTypedAs(rhs, opType)
-      # target and arithmetic share one tree reference
-      # a desugared `op=` left-hand side evaluates exactly once in Nim
-      # temp-binding normalization splits the reads of a call-bearing target
-      let arith = arithExpr(op[0 ..< op.len - 1], opType, lhs, rhsOp)
-      return ctx.drainHoisted() & @[asgnS(lhs, arith)]
+      if isScalarType(lp) and isScalarType(rt):
+        var lhs = ctx.lowerExpr(n[1])
+        if ctx.resolver.err.len > 0:
+          return @[]
+        # this lowering dereferences a var-returning `[]` call's element address, and the assignment target is the location behind it
+        if lhs.kind == eAddr:
+          lhs = lhs.addrOperand
+        elif lhs.kind == eSym and getExprType(lhs) != nil and
+            getExprType(lhs).kind == ctPtr:
+          # a var parameter carries its location through a pointer and the compound assignment operates on the pointee
+          lhs = derefE(lhs)
+        let rhs = ctx.lowerOperandExpr(n[2])
+        if ctx.resolver.err.len > 0:
+          return @[]
+        let opType = getExprType(lhs)
+        let rhsOp = operandLiteralTypedAs(rhs, opType)
+        # target and arithmetic share one tree reference
+        # a desugared `op=` left-hand side evaluates exactly once in Nim
+        # temp-binding normalization splits the reads of a call-bearing target
+        let arith = arithExpr(op[0 ..< op.len - 1], opType, lhs, rhsOp)
+        return ctx.drainHoisted() & @[asgnS(lhs, arith)]
     return ctx.lowerVoidCall(n)
   of nnkIfStmt:
     var branches: seq[tuple[cond, body: NimNode]] = @[]
