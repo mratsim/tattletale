@@ -27,7 +27,7 @@
 ##
 ## - a formal declaring threadgroup or constant storage: its space names
 ##   the storage the callee declares, never a provenance the call site picks
-## - a callee outside the module: a builtin such as `__builtin_memcpy` carries
+## - a callee outside the module: a builtin such as `__builtin_memcpy` has
 ##   a nominal formal space. The printers re-space it at the call site
 ##
 ## Every C-family bundle registers the pass. The SPIR-V encoder derives

@@ -298,9 +298,9 @@ genTargets:
     vector:
       elems f16 "f16vec", f32 "vec", f64 "dvec", i32 "ivec", u32 "uvec", bool "bvec"
       lanes 2, 3, 4
-    # Core GLSL floatBits builtins cover the 32-bit float pairs, a wider float
-    # pair has no native form, a constructor call numerically converts and loses the bits.
-    # A same-width integer pair uses the conversion form.
+    # Core GLSL floatBits builtins cover the 32-bit float and integer bit casts,
+    # a wider float pair has no native form, a constructor call numerically converts
+    # and loses the bits. A same-width integer pair uses the conversion form.
     bitcast:
       rule srcKinds {ctFloat}, srcWidths {32}, dstKinds {ctUint}, sameWidth, "floatBitsToUint($1)"
       rule srcKinds {ctFloat}, srcWidths {32}, dstKinds {ctInt}, sameWidth, "floatBitsToInt($1)"
@@ -315,7 +315,7 @@ genTargets:
     # wgpu-native exposes no WGPUFeatureName to request either.
     scalar void "void", bool "bool", i32 "i32", u32 "u32", f16 "f16", f32 "f32"
     # Bare integer and float literals are abstract and work in any typed context,
-    # u32 carries the `u` suffix, f16 the `h`, f32 bare.
+    # u32 needs the `u` suffix, f16 the `h` suffix, f32 bare.
     # WGSL has no infinity or NaN literal: the 16 and 32-bit IEEE-754 bit patterns
     # go through `bitcast` from the unsigned integer of the same width.
     # Nil literals: the shared walk refuses them.
