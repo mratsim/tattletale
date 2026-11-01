@@ -10,7 +10,8 @@
 ## - call-target collection and the shared statement and expression walk
 ## - the root symbol of a dotted or indexed chain, declaration and clone utilities
 ## - the kernel-parameter leaf walk and the pointer-local explosion context
-## - the struct-reference scanner's walks, the bool-storage scaffold
+## - the WGSL and HLSL pointer-local expression rewrite's shared skeleton
+## - the struct-reference scanner's walks
 ##
 ## Every pass file may import these, no pass owns them.
 
@@ -481,6 +482,59 @@ proc explodeStructVarDecl*(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt, target:
     return err
   ctx.structLocals.incl(s.name)
   return ""
+
+proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
+    target: string,
+    ownArm: proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string): string =
+  ## Shared skeleton of the WGSL and HLSL pointer-local expression rewrites.
+  ## Returns "" when clean, else the first refusal.
+  ##
+  ## The skeleton owns the shapes both pointer models rewrite identically:
+  ##
+  ## - the bare-symbol refusals of the pointer-local explosion
+  ## - the bound-leaf splice of a dotted read through an exploded struct local
+  ## - the pointee splice of a deref whose operand stands for one
+  ##
+  ## A deref operand stands for its pointee as a bound alias or as a by-reference parameter.
+  ## A bound alias reads as the pointee local that its address-of binding recorded.
+  ##
+  ## `ownArm` handles every shape outside the skeleton, refusal set and recursion included.
+  ## `target` names the target in the refusal texts, `WGSL` or `HLSL`.
+  if e.isNil:
+    return ""
+  case e.kind
+  of eSym:
+    if e.name in ctx.structLocals:
+      return refuseAt(fn, "struct local " & e.name &
+        " used whole, " & target & " has no pointer struct members, read the fields")
+    if e.name in ctx.pendingPtrs:
+      return refuseAt(fn, "pointer local " & e.name &
+        " read before its address-of binding")
+    if e.name in ctx.aliasOf:
+      return refuseAt(fn, "pointer local " & e.name &
+        " used as a value, " & target & " has no pointer values")
+    return ""
+  of eDot:
+    let root = structRoot(e)
+    if root != nil and root.name in ctx.structLocals:
+      let path = dottedPath(e)
+      if ctx.leafOf.hasKey(path):
+        let leaf = ctx.leafOf[path]
+        e.spliceSym(leaf.sym, leaf.typ)
+        return ""
+    return ownArm(fn, ctx, e)
+  of eDeref:
+    let op = e.derefOperand
+    if op.kind == eSym:
+      if op.name in ctx.aliasOf:
+        e.spliceSym(ctx.aliasOf[op.name], op.typ.pElem)
+        return ""
+      if op.name in ctx.byRefParams:
+        e.spliceSym(op.name, op.typ.pElem)
+        return ""
+    return ownArm(fn, ctx, e)
+  else:
+    return ownArm(fn, ctx, e)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Const_mem locals to program scope

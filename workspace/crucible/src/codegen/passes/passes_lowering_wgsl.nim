@@ -352,33 +352,13 @@ proc inlinePointerParamCalls(m: CirModule): string =
 # Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
 
-proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  ## Rewrites one expression in place for the WGSL pointer model.
-  ## Returns "" when clean, else the first refusal.
-  if e.isNil:
-    return ""
+proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string
+  ## Forward declaration, expressions recurse into themselves.
+
+proc wgslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
+  ## WGSL rewrite shapes outside the shared rewrite skeleton.
   case e.kind
-  of eSym:
-    if e.name in ctx.structLocals:
-      return refuseAt(fn, "struct local " & e.name &
-        " used whole, WGSL has no pointer struct members, read the fields")
-    if e.name in ctx.pendingPtrs:
-      return refuseAt(fn, "pointer local " & e.name &
-        " read before its address-of binding")
-    if e.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & e.name &
-        " used as a value, WGSL has no pointer values")
-    return ""
   of eDot:
-    # an exact bound path splices to its leaf symbol here, one node rewrite
-    # replaces the whole dotted read
-    let root = structRoot(e)
-    if root != nil and root.name in ctx.structLocals:
-      let path = dottedPath(e)
-      if ctx.leafOf.hasKey(path):
-        let leaf = ctx.leafOf[path]
-        e.spliceSym(leaf.sym, leaf.typ)
-        return ""
     let err = rewritePointerExpr(fn, ctx, e.dotBase)
     if err.len > 0:
       return err
@@ -386,10 +366,6 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
   of eDeref:
     let op = e.derefOperand
     if op.kind == eSym:
-      if op.name in ctx.aliasOf:
-        # pointee stands in for the pointer, the deref unwraps to it
-        e.spliceSym(ctx.aliasOf[op.name], op.typ.pElem)
-        return ""
       if op.name in ctx.pendingPtrs:
         return refuseAt(fn, "pointer local " & op.name &
           " read before its address-of binding")
@@ -397,18 +373,19 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
         return refuseAt(fn, "deref of exploded struct local " & op.name &
           ", WGSL has no pointer struct members")
     return rewritePointerExpr(fn, ctx, op)
-  of eAddr:
-    for ch in getExprChildren(e):
-      let err = rewritePointerExpr(fn, ctx, ch)
-      if err.len > 0:
-        return err
-    return ""
   else:
     for ch in getExprChildren(e):
       let err = rewritePointerExpr(fn, ctx, ch)
       if err.len > 0:
         return err
     return ""
+
+proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
+  ## Rewrites one expression in place for the WGSL pointer model.
+  ## Returns "" when clean, else the first refusal.
+  ## The shared skeleton owns the symbol refusals plus the bound-leaf and pointee splices.
+  ## `wgslPointerArm` handles every shape outside the skeleton.
+  rewritePointerExprShared(fn, ctx, e, "WGSL", wgslPointerArm)
 
 proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   ## `sVar` case: a pointer local pends for its address-of binding or binds its pointee,
@@ -469,7 +446,6 @@ proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
   ExplodeCtx()
 
 
-## - `wgslHoistProgramScopeLocals`:# ═══════════════════════════════════════════════════════════════════════
 # Struct-reference registration
 # ═══════════════════════════════════════════════════════════════════════
 
