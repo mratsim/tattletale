@@ -190,16 +190,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     of "simd_shuffle_xor":
       # xor masks cast to `uint`: the Nim `int` literal does not match the intrinsic's parameter type
       return "sub_group_shuffle_xor(" & args[0] & ", (uint)(" & args[1] & "))"
-    of "min", "max", "abs":
-      if call.args.len > 0:
-        let at = getExprType(call.args[0])
-        if at != nil and at.kind == ctFloat:
-          # float operands map to the f-prefixed OpenCL names, integer operands use the plain names
-          let mapped = case call.callee.name
-            of "max": "fmax"
-            of "min": "fmin"
-            else: "fabs"
-          return mapped & "(" & args.join(", ") & ")"
     of "atomicFetchAdd":
       let pt = getAtomicOperandPtr(call.args[0])
       if pt == nil or pt.pElem == nil:
@@ -233,6 +223,9 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       ctx.fail("barrier is a statement, a value-position barrier is outside the OpenCL subset")
       return ""
     else:
+      let mathTxt = mathBuiltinCallText(openclMathBuiltinNames, call, args)
+      if mathTxt.len > 0:
+        return mathTxt
       if openclConvBuiltinNames.hasKey(call.callee.name):
         return openclConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""

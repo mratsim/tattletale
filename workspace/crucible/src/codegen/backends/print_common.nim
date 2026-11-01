@@ -401,6 +401,23 @@ proc printCallText*(ctx: var auto, e: CirExpr, args: seq[string], builtinTxt: st
     else: ctx.printExpr(e.callee)
   calleeName & "(" & args.join(", ") & ")"
 
+proc mathBuiltinCallText*(names: Table[(string, int), string], call: CirExpr, args: seq[string]): string =
+  ## Native text of a `{.builtin.}` scalar-math call whose target name differs
+  ## from the canonical name (`<target>MathBuiltinNames`), "" otherwise.
+  ##
+  ## - only a single float operand selects the mapped name, an integer operand
+  ##   or a width absent from the table keeps the canonical name
+  ## - a user proc that shares a builtin's name stays an ordinary call
+  if call.callee.kind != eSym or not call.callee.builtin or call.args.len != 1:
+    return ""
+  let at = getExprType(call.args[0])
+  if at == nil or at.kind != ctFloat:
+    return ""
+  let name = names.getOrDefault((call.callee.name, at.bits), "")
+  if name.len == 0:
+    return ""
+  return name & "(" & args.join(", ") & ")"
+
 proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## Prints one structured expression.
   ##
