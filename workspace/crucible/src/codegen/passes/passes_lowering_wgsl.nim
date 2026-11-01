@@ -66,7 +66,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
-  ## Registers the WGSL pointer-local explosion pass over the shared walk.
   registerExplodePointerLocals(reg, "wgslExplodePointerLocals",
     "Rewrites pointer locals to their pointees and pointer-holding struct" &
     " locals to their leaf symbols",
@@ -74,14 +73,12 @@ func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
     explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
 func registerWgslHoistProgramScopeLocals*(reg: var PassRegistry) =
-  ## Registers the WGSL program-scope hoist: the rewritten aliases plus
-  ## the relocated declarations use the renamed names that their body already references.
+  ## Rewritten aliases and relocated declarations use the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "wgslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope")
 
 func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
-  ## Registers the pointer-param call inlining pass.
   reg.register("wgslInlinePointerParamCalls", pkTransform,
     "Inlines calls whose pointer arguments cannot cross a WGSL function" &
     " signature",
@@ -92,7 +89,6 @@ func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc crossesWgslSignature(t: CirType): bool =
-  ## Returns true when the parameter type has no WGSL function-parameter form.
   ## WGSL function signatures accept values and `ptr<function>` pointers only,
   ## so a buffer reference and a pointer in any other address space refuse.
   if t.isNil:
@@ -111,10 +107,7 @@ proc hasCrossingPointerParam(fn: CirProc): bool =
       return true
 
 proc containsReturn(ss: seq[CirStmt]): bool =
-  ## Returns true when a `return` statement appears in the statement list:
-  ##
-  ## - nested bodies count
-  ## - the frontend's trailing `return` of a void body does not count, the caller drops it before splicing
+  ## A frontend trailing void-body `return` does not count here: the caller drops it before splicing.
   for s in ss:
     case s.kind
     of sRet:
@@ -158,8 +151,8 @@ proc callsCrossingCalleeTransitively(fn: CirProc, procs: Table[string, CirProc],
   return false
 
 proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
-  ## Replaces every symbol named in `subst` with its call-site argument, in place.
-  ## One substitution pass covers every parameter: the spliced argument is not re-walked, its symbols belong to the caller.
+  ## One substitution pass covers every parameter: the spliced argument is not
+  ## re-walked, its symbols belong to the caller.
   ## Expressions are refs, the rewrite applies to the node every sharer sees.
   if e.isNil:
     return
@@ -172,11 +165,9 @@ proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
     ch.substituteArgsExpr(subst)
 
 proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
-  ## Statement-walk overload of `substituteArgsExpr`, nested bodies included.
-  ##
-  ## The walk stays hand-rolled. A substitution splices the call argument
-  ## into the symbol node and must not re-walk the spliced content: its symbols belong to the caller.
-  ## A shared walk descends into the rewritten node and would substitute a second parameter inside the argument.
+  ## Hand-rolled walk: a substitution splices the call argument into the symbol node
+  ## and never re-walks the spliced content, its symbols belong to the caller.
+  ## A shared walk would descend into the rewritten node and substitute a second parameter inside the argument.
   for s in mitems(ss):
     case s.kind
     of sVar, sConst:
@@ -207,7 +198,7 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
 
 proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]): string =
   ## A value-position call to a callee carrying a crossing pointer has no
-  ## statement form to splice into, so the call refuses. Returns "" when clean.
+  ## statement form to splice into, so the call refuses.
   if e.isNil:
     return ""
   if e.kind == eCall and e.callee.kind == eSym:
@@ -223,8 +214,6 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
   return ""
 
 proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string =
-  ## Splices one inlinable call into the statement list at its position, then recurses into the nested bodies.
-  ## Returns "" when clean, else the refusal.
   var i = 0
   while i < ss.len:
     let s = ss[i]
@@ -307,21 +296,12 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
   return ""
 
 proc inlinePointerParamCalls(m: CirModule): string =
-  ## Inlines the statement calls whose callee takes a non-crossable pointer:
-  ##
-  ## - a non-crossable pointer is a buffer reference, or a pointer whose address space is not the function space
-  ## - the callee body splices over the call with every argument substituted
-  ##   at its parameter's uses
-  ## - the inlined callee drops from the module
-  ## - calls whose pointer arguments all live in the function space keep real calls
-  ##
-  ## Returns "" when clean, else the first refusal.
-  ##
   ## Placement contract:
-  ## - the pass runs after the pointer-local explosion pass
-  ## - spliced bodies therefore carry no pointer locals
-  ## - the pass runs after the per-address-space callee instantiation
-  ## - a formal re-spaced by its call sites refuses here exactly when the re-spaced signature could not print
+  ## - the pass runs after the pointer-local explosion pass, spliced bodies
+  ##   therefore carry no pointer locals
+  ## - the pass runs after the per-address-space callee instantiation, a formal
+  ##   re-spaced by its call sites refuses here exactly when the re-spaced
+  ##   signature could not print
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
     procs[fn.name] = fn
@@ -356,7 +336,6 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
 proc wgslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  ## WGSL rewrite shapes outside the shared rewrite skeleton.
   case e.kind
   of eDot:
     let err = rewritePointerExpr(fn, ctx, e.dotBase)
@@ -381,16 +360,9 @@ proc wgslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
     return ""
 
 proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  ## Rewrites one expression in place for the WGSL pointer model.
-  ## Returns "" when clean, else the first refusal.
-  ## The shared skeleton owns the symbol refusals plus the bound-leaf and pointee splices.
-  ## `wgslPointerArm` handles every shape outside the skeleton.
   rewritePointerExprShared(fn, ctx, e, "WGSL", wgslPointerArm)
 
 proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  ## `sVar` case: a pointer local pends for its address-of binding or binds its pointee,
-  ## a pointer-holding struct local registers its field rewrites,
-  ## anything else rewrites the initializer.
   if s.declType.kind in {ctPtr, ctAptr}:
     if s.init == nil:
       ctx.pendingPtrs.incl(s.name)
@@ -405,9 +377,6 @@ proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   return rewritePointerExpr(fn, ctx, s.init)
 
 proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  ## `sAsgn` case: a pointer local binds exactly once, a pointer parameter
-  ## of the proc in flight keeps its assignment untouched.
-  ## Anything else rewrites both operands.
   if s.lhs.kind == eSym and s.lhs.typ != nil and
       s.lhs.typ.kind in {ctPtr, ctAptr}:
     if s.lhs.name notin ctx.pendingPtrs and s.lhs.name notin ctx.aliasOf:
@@ -431,18 +400,17 @@ proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   return rewritePointerExpr(fn, ctx, s.rhs)
 
 proc explodeDropsVar(s: CirStmt, ctx: ExplodeCtx): bool =
-  ## A pointer local and an exploded struct local drop from their list.
   s.declType.kind in {ctPtr, ctAptr} or
     (s.declType.kind == ctStruct and s.declType.containsPtrDeep)
 
 proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
-  ## A pointer-local binding drops from its list, a pointer parameter's
-  ## assignment stays in place.
   s.lhs.kind == eSym and s.lhs.typ != nil and
     s.lhs.typ.kind in {ctPtr, ctAptr} and
     (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf)
 
 proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
+  # WGSL keeps pointer parameters untouched: the pass needs no by-reference
+  # context and no callee table
   ExplodeCtx()
 
 
@@ -450,7 +418,6 @@ proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerTypeStructs(needed: var HashSet[string], t: CirType) =
-  ## Registers the struct names reachable from `t`: object fields, array elements, vector elements, pointer targets.
   var refs = needed
   walkTypeTree(t, proc(tt: CirType) =
     if tt.kind == ctStruct:
@@ -458,11 +425,7 @@ proc registerTypeStructs(needed: var HashSet[string], t: CirType) =
   needed = refs
 
 proc scanBareTypeStructs(needed: var HashSet[string], t: CirType) =
-  ## Registers the struct names one emitted WGSL type name covers:
-  ##
-  ## - an array's element name recurses
-  ## - a struct name registers
-  ## - pointer kinds print no type name themselves
+  ## Pointer kinds print no type name themselves.
   case t.kind
   of ctArray:
     scanBareTypeStructs(needed, t.aElem)
@@ -474,8 +437,6 @@ proc scanBareTypeStructs(needed: var HashSet[string], t: CirType) =
 proc scanExprStructs(needed: var HashSet[string], e: CirExpr) =
   ## Registers the struct names one expression node's printed form names:
   ## a cast or conversion target type, a constructor type.
-  ##
-  ## The scanner walks the children with `walkExprs`.
   if e.isNil:
     return
   case e.kind
@@ -489,12 +450,10 @@ proc scanExprStructs(needed: var HashSet[string], e: CirExpr) =
     discard
 
 proc scanStmtStructs(needed: var HashSet[string], ss: seq[CirStmt]) =
-  ## Registers the struct names the printed forms of one statement list name.
-  ##
-  ## - a `var` declaration registers its type only where the printer emits
-  ##   the declaration: a relocated space survivor or a pointer-shaped
-  ##   local refuses before any type name prints. The shared walk skips
-  ##   its initializer with the declaration
+  ## Contract:
+  ## - a `var` declaration registers its type only at a printer-emitted declaration:
+  ##   a relocated space survivor or a pointer-shaped local refuses before a type name prints
+  ## - the shared walk skips the initializer of a refused declaration
   var refs = needed
   proc onDecl(s: CirStmt): bool =
     if s.kind == sVar:
@@ -510,10 +469,6 @@ proc scanStmtStructs(needed: var HashSet[string], ss: seq[CirStmt]) =
   needed = refs
 
 proc closeStructRefs(byName: Table[string, CirType], needed: var HashSet[string], name: string) =
-  ## Adds the struct-typed members of `name`'s declaration, recursively:
-  ##
-  ## - array dimensions unwrap, a struct member behind an array registers
-  ## - a name without a declaration in the module expands to nothing
   let t = byName.getOrDefault(name, nil)
   if t == nil:
     return
@@ -528,22 +483,8 @@ proc closeStructRefs(byName: Table[string, CirType], needed: var HashSet[string]
 proc wgslScanStructRefs(m: CirModule): string =
   ## Registers the struct names the printer declares into `m.structRefs`:
   ##
-  ## The registered names:
-  ##
-  ## - the type trees of the kernel's parameters and the relocated
-  ##   program-scope declarations
-  ## - the closure over struct-typed members, array dimensions unwrapped
-  ##
-  ## The emitted WGSL text names these sites:
-  ##
-  ## - local declaration types
-  ## - cast and conversion target types
-  ## - constructor types
-  ## - signature types: device-function parameters and returns, pointer-parameter pointees
-  ##
-  ## The pass runs after the last transform: the walked declarations and bodies are final.
-  ## The pass registry never invalidates a stored record. A module that lacks exactly one
-  ## kernel contributes no kernel-side registrations. Such a module refuses at the printer.
+  ## Runs after the last transform: the walked declarations and bodies are final.
+  ## The pass registry never invalidates a stored record.
   let kernel = m.singleKernel()
   if kernel != nil:
     for p in kernel.params:
@@ -579,10 +520,7 @@ proc wgslScanStructRefs(m: CirModule): string =
   return ""
 
 proc registerWgslStructRefPass*(reg: var PassRegistry) =
-  ## Registers the WGSL struct-reference analysis pass:
-  ##
-  ## - the pass fills `CirModule.structRefs` with the struct names the printer declares, closure included
-  ## - the printer declares exactly the stored names, it never scans for struct references itself
+  ## Printer contract: it declares exactly the stored names and never scans for struct references itself.
   reg.register("wgslScanStructRefs", pkAnalysis,
     "Registers the struct names the printer declares, the closure over" &
     " struct-typed members included",
