@@ -1,5 +1,7 @@
 ## CUDA: a whole-array assignment binding a call result refuses at compile time.
 ##
+## v1 emitted `__builtin_memcpy(&a, &f(), sizeof(a))`: the address of an rvalue is invalid C++.
+##
 ## Test that an array assignment whose right side is a device call
 ## dies in the array-assign decomposition before any shader is emitted, naming the pass:
 ##

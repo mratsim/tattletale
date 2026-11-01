@@ -1,5 +1,8 @@
 ## OpenCL: an assignment into `{.const_mem.}` storage refuses at compile time.
 ##
+## v1 had no constant-write check: the assignment reached the emitted `__constant`
+## global and died in the OpenCL toolchain with no crucible diagnostic.
+##
 ## Test that an assignment to a `{.const_mem.}` local in a kernel body
 ## dies in the constant-write validation before any shader is emitted, naming the kernel and the target:
 ##
