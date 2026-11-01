@@ -31,6 +31,14 @@ kernel docs, Lean comments, test file headers, and commit messages.
 
 ## Golden rules
 
+0. **Scale comment density with complexity.** Simple, obvious code earns
+   no comment. Intricate invariants, lifecycles, and non-obvious contracts
+   earn dense ones. Uniform terseness is as wrong as uniform verbosity:
+   the density tracks the difficulty of the code, never a fixed cap.
+0b. **Internal functions never get a paraphrase.** A comment on an internal proc
+   may not restate its name, its parameters, or narrate obvious code.
+   It earns its place only through what the code cannot say: a usage contract,
+   a design ruling, an external constraint, or non-trivial control flow.
 1. **Think who is your audience.** A *user* gets `##` docs on correct use, never a drowning in how it is done.
 2. **Think who is your audience, part two.** A *maintainer* gets
    `#` comments in industry-standard jargon. A CS undergraduate is the comprehension floor.
