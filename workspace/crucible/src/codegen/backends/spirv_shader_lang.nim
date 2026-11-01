@@ -179,6 +179,9 @@ type
     emitting*: HashSet[string]
     fnTypes*: Table[string, CirType]
       ## proc name -> value type of its CirProc, the fn-value-type lookup
+    pushBoolFields*: HashSet[string]
+      ## Kernel struct parameters whose direct bool fields map to u32 words
+      ## in the push block, field reads coerce back to bool
     err*: string
 
 proc initSpvLangCtx(): SpvLangCtx =
@@ -311,6 +314,19 @@ type
     offsets*: seq[int]
     byteSize*: int
 
+func hasBoolLeaf(t: CirType): bool =
+  ## True when a bool leaf hides anywhere inside `t`: a struct field tree
+  ## or an array element chain.
+  case t.kind
+  of ctBool: true
+  of ctStruct:
+    for f in t.fields:
+      if f.typ.hasBoolLeaf:
+        return true
+    false
+  of ctArray: t.aElem.hasBoolLeaf
+  else: false
+
 proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
   ## One push-block member per kernel parameter, in parameter order.
   ## A device array pointer contributes its u64 device address and everything
@@ -343,7 +359,21 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
     elif p.typ.kind in {ctPtr, ctAptr}:
       ctx.failSpv("kernel parameter " & p.name & " of pointer type")
     else:
-      let m = ctx.pushMemberTy(p)
+      var m = ctx.pushMemberTy(p)
+      if p.typ.kind == ctStruct:
+        # Push blocks have no bool member. A direct bool field maps to a u32
+        # storage word. A bool leaf nested inside a struct or array refuses,
+        # no mapped extraction form exists for it.
+        for i, f in p.typ.fields:
+          if f.typ.kind == ctBool:
+            m.members[i] = spvScalar(cirUint32())
+          elif f.typ.kind == ctStruct and f.typ.hasBoolLeaf:
+            ctx.failSpv("push member " & p.name & " field " & f.name &
+              " nests a bool inside a struct, only a direct bool field maps" &
+              " to a u32 push word")
+          elif f.typ.kind == ctArray and f.typ.aElem.kind == ctBool:
+            ctx.failSpv("push member " & p.name & " field " & f.name &
+              " is a bool array, only a direct bool field maps to a u32 push word")
       let l = std430Layout(m)
       if l.align < 4:
         ctx.failSpv("push member " & p.name & " is narrower than 32 bits (" &
@@ -880,7 +910,15 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
         return 0
       # dot base is a value: composite extract, no storage
       let v = ctx.emitExpr(fn, e.dotBase)
-      ctx.builder.opCompositeExtract(ctx.tyId(ctx.valueTy(baseTy.fields[i].typ)),
+      let fieldTy = baseTy.fields[i].typ
+      if e.dotBase.kind == eSym and e.dotBase.name in ctx.pushBoolFields and
+          fieldTy.kind == ctBool:
+        # Push composite stores a u32 word for the field. Extract the word
+        # and coerce to the bool value the body reads.
+        let raw = ctx.builder.opCompositeExtract(
+          ctx.tyId(spvScalar(cirUint32())), v, @[i])
+        return ctx.convertValue(raw, cirUint32(), fieldTy)
+      ctx.builder.opCompositeExtract(ctx.tyId(ctx.valueTy(fieldTy)),
         v, @[i])
     else:
       # dot base is a pointer-valued symbol: access chain through it
@@ -1472,6 +1510,10 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
       let loaded = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
       # A bool push member stores a u32 word.
       # Coercing here means every body read of the parameter sees a bool value.
+      if p.typ.kind == ctStruct:
+        for f in p.typ.fields:
+          if f.typ.kind == ctBool:
+            ctx.pushBoolFields.incl p.name
       fn.params[p.name] = if p.typ.kind == ctBool:
         ctx.convertValue(loaded, cirUint32(), CirType(kind: ctBool))
       else:

@@ -11,7 +11,8 @@
 ## Kernel parameter bindings, one `@group(0) @binding(i)` per parameter in host `store` packing order, output first:
 ## - device buffers declare `var<storage, read_write> name: array<T>;`, the engine binds them writable
 ## - scalars and value structs declare `var<storage, read> name: T;`, packed into the 256-byte-aligned scratch buffer
-## - a bool scalar binds as the `NIM_BOOL` alias of `u32` (bool is not host-shareable in WGSL storage)
+## - a bool scalar or bool struct field binds as the `NIM_BOOL` alias of `u32`
+##   (bool is not host-shareable in WGSL storage)
 ## - reads of `NIM_BOOL` storage coerce to bool, writes coerce to NIM_BOOL
 ## - the kernel signature takes only `@builtin(...)` coordinate parameters, first-use order
 ##
@@ -343,6 +344,11 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
         ctx.fail("no vector component " & e.fieldName)
         return ""
       return ctx.printExpr(e.dotBase) & "." & comp
+    if bt != nil and bt.kind == ctStruct:
+      for f in bt.fields:
+        if f.name == e.fieldName and f.typ.kind == ctBool:
+          # field stores a NIM_BOOL word, body reads expect bool
+          return "bool(" & ctx.printExpr(e.dotBase) & "." & e.fieldName & ")"
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
   of eTernary:
     # WGSL's select, the ternary route:
@@ -364,7 +370,14 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     for i, kvv in e.kvFields:
       if i > 0:
         result.add ", "
-      result.add ctx.printExpr(kvv.value)
+      var fieldIsBool = false
+      for f in e.ocType.fields:
+        if f.name == kvv.name:
+          fieldIsBool = f.typ.kind == ctBool
+      if fieldIsBool:
+        result.add "NIM_BOOL(" & ctx.printExpr(kvv.value) & ")"
+      else:
+        result.add ctx.printExpr(kvv.value)
     result.add ")"
   of eAconstr:
     # constructor-call form
@@ -429,8 +442,14 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
     return ""
   if s.lhs.kind == eSym and s.lhs.name in ctx.nimBoolNames:
     # storage is a u32 word, assigned values are bool
-    result = pad & s.lhs.name & " = NIM_BOOL(" & ctx.printExpr(s.rhs) & ");"
-    return ""
+    return pad & s.lhs.name & " = NIM_BOOL(" & ctx.printExpr(s.rhs) & ");"
+  if s.lhs.kind == eDot:
+    let bt = getExprType(s.lhs.dotBase)
+    if bt != nil and bt.kind == ctStruct:
+      for f in bt.fields:
+        if f.name == s.lhs.fieldName and f.typ.kind == ctBool:
+          return pad & ctx.printExpr(s.lhs.dotBase) & "." & s.lhs.fieldName &
+            " = NIM_BOOL(" & ctx.printExpr(s.rhs) & ");"
   var lhsBase = CirExpr(nil)
   if s.lhs.kind == eAt:
     lhsBase = s.lhs.atBase
@@ -438,8 +457,9 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
     lhsBase = s.lhs.patBase
   if lhsBase != nil and lhsBase.kind == eSym and
       lhsBase.name in ctx.nimBoolNames:
-    result = pad & ctx.printExpr(s.lhs) & " = NIM_BOOL(" & ctx.printExpr(s.rhs) & ");"
-    return ""
+    let idx = if s.lhs.kind == eAt: s.lhs.atIndex else: s.lhs.patIndex
+    return pad & lhsBase.name & "[" & ctx.printExpr(idx) &
+      "] = NIM_BOOL(" & ctx.printExpr(s.rhs) & ");"
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
 proc printCall(ctx: var PrintCtx, s: CirStmt): string =
@@ -519,15 +539,14 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
     return ""
   of ctStruct:
     for f in p.typ.fields:
-      let ft = (if f.typ.kind == ctVector: f.typ.vElem else: f.typ)
       if f.typ.kind == ctVector:
         ctx.fail("kernel parameter " & p.name & " field " & f.name &
           " is a vector, the WGSL storage layout of vectors (16-byte alignment" &
           " for 3-component vectors) does not match the host packing")
         return ""
-      if ft.kind == ctBool:
+      if f.typ.kind == ctArray and f.typ.aElem.kind == ctBool:
         ctx.fail("kernel parameter " & p.name & " field " & f.name &
-          " is a bool, bool is not host-shareable in WGSL storage")
+          " is a bool array, only a scalar bool field maps to a NIM_BOOL word")
         return ""
     if p.typ.containsPtrDeep:
       ctx.fail("kernel parameter " & p.name &
@@ -552,9 +571,9 @@ proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
     result &= "  _padding: u32,\n"
   else:
     for f in t.fields:
-      var field = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
-      if f.typ.kind == ctArray:
-        field = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
+      ctx.storageBoolSpelling = f.typ.kind == ctBool
+      let field = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
+      ctx.storageBoolSpelling = false
       result &= "  " & field & ",\n"
   result &= '}'
 
@@ -588,9 +607,16 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
 
   # `enable f16` from the stored module feature scan
   # (`CirModule.features`, filled by the feature-scan pass)
+  # NIM_BOOL appears in interface storage names and in bool fields of declared structs
+  var usesNimBool = ctx.nimBoolNames.len > 0
+  for t in m.types:
+    if t.kind == ctStruct:
+      for f in t.fields:
+        if f.typ.kind == ctBool:
+          usesNimBool = true
   if m.features.fp16:
     result.src = "enable f16;\n\n"
-  if ctx.nimBoolNames.len > 0:
+  if usesNimBool:
     result.src &= "alias NIM_BOOL = u32;\n\n"
 
   # device functions first, their bodies register the structs they reference
