@@ -149,23 +149,6 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   else:
     return ""
 
-proc cudaMathCallText(call: CirExpr, args: seq[string]): string =
-  ## CUDA text of a `{.builtin.}` scalar-math call whose CUDA name differs
-  ## from the canonical name (`cudaMathBuiltinNames`), "" otherwise.
-  ##
-  ## - only a single float operand selects the mapped name, the printer keeps
-  ##   the canonical name for an integer operand or a width outside the table
-  ## - a user proc that shares a builtin's name stays an ordinary call
-  if call.callee.kind != eSym or not call.callee.builtin or call.args.len != 1:
-    return ""
-  let at = getExprType(call.args[0])
-  if at == nil or at.kind != ctFloat:
-    return ""
-  let name = cudaMathBuiltinNames.getOrDefault((call.callee.name, at.bits), "")
-  if name.len == 0:
-    return ""
-  return name & "(" & args.join(", ") & ")"
-
 proc cudaConvCallText(call: CirExpr, args: seq[string]): string =
   ## CUDA text of a `{.builtin.}` fp16 conversion call whose canonical name
   ## maps to a cuda_fp16.h native (`cudaConvBuiltinNames`), "" otherwise.
@@ -225,7 +208,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     let args = printCallArgs(ctx, e)
     var builtinTxt = emitBuiltinCall(e.callee, args)
     if builtinTxt.len == 0:
-      builtinTxt = cudaMathCallText(e, args)
+      builtinTxt = mathBuiltinCallText(cudaMathBuiltinNames, e, args)
     if builtinTxt.len == 0:
       builtinTxt = cudaConvCallText(e, args)
     return printCallText(ctx, e, args, builtinTxt)

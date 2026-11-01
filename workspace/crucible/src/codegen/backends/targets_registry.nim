@@ -261,6 +261,10 @@ genTargets:
     bitcast:
       rule srcKinds {ctFloat}, dstKinds {ctInt, ctUint}, sameWidth, "as_$2($1)"
       rule srcKinds {ctInt, ctUint}, dstKinds {ctFloat}, sameWidth, "as_$2($1)"
+    # `{.builtin.}` scalar-math calls map to the f-prefixed OpenCL natives
+    # for float operands, v1's NimGpuNumericBuiltinsFnNames data.
+    math max 32 "fmax", max 64 "fmax", min 32 "fmin", min 64 "fmin",
+      abs 32 "fabs", abs 64 "fabs"
     # fp16 and bf16 values store their 16-bit bit pattern in a `ushort`,
     # OpenCL C has no native half storage outside the fp16 extension.
     # `{.builtin.}` conversion names emit unchanged, the caller's module
