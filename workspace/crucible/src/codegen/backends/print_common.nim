@@ -343,7 +343,7 @@ proc printEmitOperand*(ctx: var auto, op: CirExpr): string =
     op.name
 
 proc printCallArgs*(ctx: var auto, e: CirExpr): seq[string] =
-  ## Printed texts of one `eCall`'s arguments in order, the plain expression form.
+  ## Printed texts of one `eCall`'s arguments in order, in the plain expression form.
   ## A printer with per-argument policy prints its own argument texts.
   mixin printExpr
   for a in e.args:
@@ -363,7 +363,7 @@ proc printCallText*(ctx: var auto, e: CirExpr, args: seq[string], builtinTxt: st
 proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## Prints one structured expression.
   ##
-  ## - shared variants emit here: the operator branches, the literal head
+  ## - shared variants emit here: the operator branches and the literal head
   ##   through `emitLiteral` over the context's lit and scalar rows
   ## - the call skeleton prints through `printCallArgs` and `printCallText`
   ## - the kinds a printer emits itself route to its `printTargetExpr`,
@@ -430,9 +430,8 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
   ## Prints one structured statement.
   ##
   ## Shared variants emit here: `sIte`, `sRet`, `sDiscard`, `sEmit`.
-  ## A loop prints through
-  ## `printLoopText` off `printStmtList`. Per-target policy resolves
-  ## at instantiation through the printer's own procs:
+  ## A loop prints through `printWhileText` off `printStmtList`.
+  ## Per-target policy resolves at instantiation through the printer's own procs:
   ##
   ## - `printVar`, `printConst`: storage-class refusals and declaration text
   ## - `printAsgn`: assignment policy, pointer rebinds and buffer writes
@@ -472,7 +471,7 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
     result = ""
   of sEmit:
     # `{.emit.}` raw source: verbatim text spliced with the operand text,
-    # no terminator appended, the text supplies its own terminators
+    # no terminator appended as the text supplies its own terminators
     var text = ""
     for i, part in s.emitParts:
       text.add(part)
@@ -481,7 +480,7 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
     result = pad & text
 
 proc printAsgn*(ctx: var auto, s: CirStmt): string =
-  ## One assignment, the plain form `lhs = rhs;`.
+  ## One assignment in the plain form `lhs = rhs;`.
   ##
   ## - a printer with assignment policy over pointer rebinds, buffer writes
   ##   or constructor assignments defines `printAsgn` itself
