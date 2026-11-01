@@ -377,7 +377,7 @@ type
     ## Strictest member alignment in bytes, at least 1.
 
   CallGraph* = object
-    ## Call graph over the device functions of one module, the stored record of the target's call-graph analysis pass.
+    ## Call graph over the device functions of one module, filled by the target's call-graph analysis pass.
     ##
     ## - `reached` marks every `fn/param` key stored through its proc directly or through a transitive callee
     ## - a buffer parameter whose `fn/param` key is in `reached` is read-write
@@ -387,7 +387,7 @@ type
     ## `fn/param` keys reachable from `stored` over the argument-flow edges.
 
   ParamClass* = object
-    ## Parameter classification of one proc, the stored record of the HLSL
+    ## Parameter classification of one proc, filled by the HLSL
     ## parameter-classification analysis pass.
     ##
     ## - `push` names the scalar parameters that join the kernel push block
@@ -477,20 +477,24 @@ let CoordBuiltinCanonicalName* {.compileTime.}: array[CoordBuiltinKind, string] 
   cbkThreadIndexInThreadgroup: "thread_index_in_threadgroup",
 ]
 
+## Barrier builtin canonical name -> kind.
 let SynchroBuiltinKindByName* {.compileTime.}: Table[string, SynchroBuiltinKind] = {
   "threadgroup_barrier": sbkThreadgroupBarrier,
   "threadgroup_barrier_device": sbkThreadgroupBarrierDevice,
 }.toTable()
 
+## Reduction builtin canonical name -> kind.
 let ReductionBuiltinKindByName* {.compileTime.}: Table[string, ReductionBuiltinKind] = {
   "reduceAdd": rbkReduceAdd,
   "reduceMax": rbkReduceMax,
 }.toTable()
 
+## Atomic builtin canonical name -> kind.
 let AtomicsBuiltinKindByName* {.compileTime.}: Table[string, AtomicsBuiltinKind] = {
   "atomicFetchAdd": abkAtomicFetchAdd,
 }.toTable()
 
+## Shuffle builtin canonical name -> kind.
 let ShuffleBuiltinKindByName* {.compileTime.}: Table[string, ShuffleBuiltinKind] = {
   "simd_shuffle": shkSimdShuffle,
   "simd_shuffle_xor": shkSimdShuffleXor,
@@ -729,7 +733,7 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   ##
   ## One walker serves both consumers:
   ##
-  ## - the frontend stamps a pointer cast's target space from this derivation at the cast's birth
+  ## - the frontend sets a pointer cast's target space from this derivation when it builds the cast
   ## - the cast validation reads the same derivation over the module's expressions
   result = caDevice
   case e.kind
