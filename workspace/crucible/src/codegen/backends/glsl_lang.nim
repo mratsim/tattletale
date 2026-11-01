@@ -536,7 +536,11 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   var hoisted: seq[string]
   for s in m.globals:
     if s.kind == sVar and s.space == caThreadgroup:
-      hoisted.add emitSmemDecl(s.declType, s.name)
+      if s.init != nil:
+        ctx.fail("smem local " & s.name &
+          " with an initializer, GLSL shared variables take only a null initializer")
+      else:
+        hoisted.add emitSmemDecl(s.declType, s.name)
     elif s.kind == sVar and s.space == caConstant:
       if s.init == nil:
         ctx.fail("const_mem local " & s.name & " without an initializer")

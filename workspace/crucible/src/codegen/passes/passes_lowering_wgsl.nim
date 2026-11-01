@@ -88,7 +88,8 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   )
   registerCfamilyHoistProgramScopeLocals(reg, "wgslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
-    " program scope", "WGSL workgroup variables are zero-initialized")
+    " program scope", smemInitRefuse,
+    "WGSL workgroup variables are zero-initialized")
   reg.registerInstantiateAddressSpaceGenerics()
   reg.register("wgslInlinePointerParamCalls", pkTransform,
     "Inlines calls whose pointer arguments cannot cross a WGSL function" &
