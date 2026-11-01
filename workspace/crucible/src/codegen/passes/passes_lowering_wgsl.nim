@@ -550,25 +550,13 @@ proc rewriteBoolKernelParamReads(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerTypeStructs(needed: var HashSet[string], t: CirType) =
-  ## Registers the struct names reachable from `t`:
-  ##
-  ## - through object fields, array elements, vector elements and pointer
-  ##   targets
-  if t.isNil:
-    return
-  case t.kind
-  of ctStruct:
-    needed.incl(t.name)
-    for f in t.fields:
-      registerTypeStructs(needed, f.typ)
-  of ctArray:
-    registerTypeStructs(needed, t.aElem)
-  of ctVector:
-    registerTypeStructs(needed, t.vElem)
-  of ctPtr, ctAptr:
-    registerTypeStructs(needed, t.pElem)
-  else:
-    discard
+  ## Registers the struct names reachable from `t`: object fields, array elements, vector elements, pointer targets.
+  var refs = needed
+  proc inclStruct(tt: CirType) =
+    if tt.kind == ctStruct:
+      refs.incl(tt.name)
+  walkTypeTree(t, inclStruct)
+  needed = refs
 
 proc scanBareTypeStructs(needed: var HashSet[string], t: CirType) =
   ## Registers the struct names one emitted WGSL type name covers:
@@ -585,64 +573,42 @@ proc scanBareTypeStructs(needed: var HashSet[string], t: CirType) =
     discard
 
 proc scanExprStructs(needed: var HashSet[string], e: CirExpr) =
-  ## Registers the struct names the printed form of one expression names:
-  ## a cast or conversion target type, a constructor type. Every other kind
-  ## recurses into its children.
+  ## Registers the struct names one expression node's printed form names:
+  ## a cast or conversion target type, a constructor type.
+  ##
+  ## The scanner walks the children with `walkExprs`.
   if e.isNil:
     return
   case e.kind
   of eCast, eConv:
     scanBareTypeStructs(needed, e.castType)
-    scanExprStructs(needed, e.castOperand)
   of eOconstr:
     scanBareTypeStructs(needed, e.ocType)
-    for kvf in e.kvFields:
-      scanExprStructs(needed, kvf.value)
   of eAconstr:
     scanBareTypeStructs(needed, e.acType)
-    for el in e.elems:
-      scanExprStructs(needed, el)
   else:
-    for ch in getExprChildren(e):
-      scanExprStructs(needed, ch)
+    discard
 
 proc scanStmtStructs(needed: var HashSet[string], ss: seq[CirStmt]) =
   ## Registers the struct names the printed forms of one statement list name.
   ##
   ## - a `var` declaration registers its type only where the printer emits
   ##   the declaration: a relocated space survivor or a pointer-shaped
-  ##   local refuses before any type name prints
-  for s in ss:
-    case s.kind
-    of sVar:
-      if s.space notin {caThreadgroup, caConstant, caDevice} and
-          s.declType.kind notin {ctPtr, ctAptr} and
-          not (s.declType.kind == ctStruct and s.declType.containsPtrDeep):
-        scanBareTypeStructs(needed, s.declType)
-        scanExprStructs(needed, s.init)
-    of sConst:
-      scanBareTypeStructs(needed, s.declType)
-      scanExprStructs(needed, s.init)
-    of sAsgn:
-      scanExprStructs(needed, s.lhs)
-      scanExprStructs(needed, s.rhs)
-    of sIte:
-      scanExprStructs(needed, s.cond)
-      scanStmtStructs(needed, s.thenBody)
-      scanStmtStructs(needed, s.elseBody)
-    of sLoop:
-      scanExprStructs(needed, s.loopCond)
-      scanStmtStructs(needed, s.loopBody)
-    of sRet:
-      scanExprStructs(needed, s.retVal)
-    of sDiscard:
-      scanExprStructs(needed, s.discardVal)
-    of sCall:
-      scanExprStructs(needed, s.callCallee)
-      for a in s.callArgs:
-        scanExprStructs(needed, a)
-    of sAsm, sEmit:
-      discard
+  ##   local refuses before any type name prints. The shared walk skips
+  ##   its initializer with the declaration
+  var refs = needed
+  proc onDecl(s: CirStmt): bool =
+    if s.kind == sVar:
+      if s.space in {caThreadgroup, caConstant, caDevice} or
+          s.declType.kind in {ctPtr, ctAptr} or
+          (s.declType.kind == ctStruct and s.declType.containsPtrDeep):
+        return false
+    scanBareTypeStructs(refs, s.declType)
+    true
+  proc onExpr(e: CirExpr) =
+    scanExprStructs(refs, e)
+  ss.scanStmtRefs(onDecl, onExpr)
+  needed = refs
 
 proc closeStructRefs(byName: Table[string, CirType], needed: var HashSet[string], name: string) =
   ## Adds the struct-typed members of `name`'s declaration, recursively:
@@ -679,13 +645,8 @@ proc wgslScanStructRefs(m: CirModule): string =
   ## The pass runs after the last transform: the walked declarations and bodies are final.
   ## The pass registry never invalidates a stored record. A module that lacks exactly one
   ## kernel contributes no kernel-side registrations. Such a module refuses at the printer.
-  var kernel: CirProc = nil
-  var kernelCount = 0
-  for fn in m.procs:
-    if fn.isKernel:
-      inc kernelCount
-      kernel = fn
-  if kernelCount == 1:
+  let kernel = m.singleKernel()
+  if kernel != nil:
     for p in kernel.params:
       registerTypeStructs(m.structRefs, p.typ)
   for s in m.globals:
@@ -705,7 +666,7 @@ proc wgslScanStructRefs(m: CirModule): string =
         scanBareTypeStructs(m.structRefs, p.typ)
     if fn.ret.kind != ctVoid:
       scanBareTypeStructs(m.structRefs, fn.ret)
-  if kernelCount == 1:
+  if kernel != nil:
     scanStmtStructs(m.structRefs, kernel.body)
   var byName: Table[string, CirType]
   for t in m.types:

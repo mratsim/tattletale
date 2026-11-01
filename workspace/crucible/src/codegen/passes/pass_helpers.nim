@@ -8,10 +8,9 @@
 ## Shared pass helpers over CIRv2.
 ##
 ## - call-target collection and the shared statement and expression walk
-## - the root symbol of a dotted or indexed chain
-## - declaration and clone utilities
-## - the kernel-parameter leaf walk
-## - the pointer-local explosion context and its leaf registration
+## - the root symbol of a dotted or indexed chain, declaration and clone utilities
+## - the kernel-parameter leaf walk and the pointer-local explosion context
+## - the struct-reference scanner's type walk, statement walk and kernel count
 ##
 ## Every pass file may import these, no pass owns them.
 
@@ -130,6 +129,81 @@ proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: str
       collected.add((name: s.name, typ: s.declType))
   stmts.walkStmts(collect, nil)
   locals = collected
+
+proc walkTypeTree*(t: CirType, visit: proc(t: CirType), descendPtrs: bool = true) =
+  ## Pre-order walk over one type tree, `visit` sees every node once:
+  ## struct fields in field order, then array elements, vector elements, pointer targets.
+  ##
+  ## - `descendPtrs` names the target's pointer-recursion policy: a printer
+  ##   that names no type behind a pointer kind passes `false` and leaves
+  ##   the pointer targets unvisited
+  ## - a collecting visitor cannot loop, value type trees are acyclic
+  if t.isNil:
+    return
+  visit(t)
+  case t.kind
+  of ctStruct:
+    for f in t.fields:
+      walkTypeTree(f.typ, visit, descendPtrs)
+  of ctArray:
+    walkTypeTree(t.aElem, visit, descendPtrs)
+  of ctVector:
+    walkTypeTree(t.vElem, visit, descendPtrs)
+  of ctPtr, ctAptr:
+    if descendPtrs:
+      walkTypeTree(t.pElem, visit, descendPtrs)
+  else:
+    discard
+
+proc singleKernel*(m: CirModule): CirProc =
+  ## Returns the module's kernel when the module has exactly one, nil otherwise.
+  ## A module without exactly one kernel contributes no kernel-side registrations.
+  ## Such a module refuses at the printer.
+  for fn in m.procs:
+    if fn.isKernel:
+      if result != nil:
+        return nil
+      result = fn
+
+proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: proc(e: CirExpr)) =
+  ## Statement walk of the struct-reference scanners.
+  ##
+  ## - every expression position goes through `onExpr`, one `walkExprs`
+  ##   per position
+  ## - `onDecl` takes each `var`/`const` declaration before its initializer
+  ##   walk and returns `false` to skip that walk when the declaration
+  ##   never prints on the target that refused it
+  ## - nested bodies recurse in source order, `onExpr` sees nodes pre-order
+  ##
+  ## Visited positions:
+  ##
+  ## - declaration types, assignment operands, conditions
+  ## - return values, discard values, call callees, call arguments
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      if onDecl(s):
+        s.init.walkExprs(onExpr)
+    of sAsgn:
+      s.lhs.walkExprs(onExpr)
+      s.rhs.walkExprs(onExpr)
+    of sIte:
+      s.cond.walkExprs(onExpr)
+      scanStmtRefs(s.thenBody, onDecl, onExpr)
+      scanStmtRefs(s.elseBody, onDecl, onExpr)
+    of sLoop:
+      s.loopCond.walkExprs(onExpr)
+      scanStmtRefs(s.loopBody, onDecl, onExpr)
+    of sRet:
+      s.retVal.walkExprs(onExpr)
+    of sDiscard:
+      s.discardVal.walkExprs(onExpr)
+    of sCall:
+      s.callCallee.walkExprs(onExpr)
+      for a in s.callArgs:
+        a.walkExprs(onExpr)
+    of sAsm, sEmit:
+      discard
 
 proc cloneExpr*(e: CirExpr): CirExpr =
   ## Deep copy of one expression: statements and expressions are ref objects,

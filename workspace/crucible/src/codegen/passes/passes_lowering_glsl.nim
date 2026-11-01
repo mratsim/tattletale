@@ -423,23 +423,12 @@ proc registerTypeRefBlocks(blocks: var OrderedTable[string, CirType], t: CirType
   ## Registers the buffer-reference blocks of every device pointer
   ## reachable from the type tree, through pointer targets and array
   ## elements and object fields, dedup by reference-block name.
-  if t.isNil:
-    return
-  case t.kind
-  of ctAptr:
-    registerRefBlock(blocks, t.pElem)
-    registerTypeRefBlocks(blocks, t.pElem)
-  of ctPtr:
-    registerTypeRefBlocks(blocks, t.pElem)
-  of ctArray:
-    registerTypeRefBlocks(blocks, t.aElem)
-  of ctVector:
-    registerTypeRefBlocks(blocks, t.vElem)
-  of ctStruct:
-    for f in t.fields:
-      registerTypeRefBlocks(blocks, f.typ)
-  else:
-    discard
+  var found = blocks
+  proc registerAptr(tt: CirType) =
+    if tt.kind == ctAptr:
+      registerRefBlock(found, tt.pElem)
+  walkTypeTree(t, registerAptr)
+  blocks = found
 
 proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr) =
   ## Registers the buffer-reference blocks reachable from one expression:
@@ -497,32 +486,15 @@ proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr
 
 proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[CirStmt]) =
   ## Registers the buffer-reference blocks reachable from one statement list.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      if s.declType.kind == ctAptr:
-        registerRefBlock(blocks, s.declType.pElem)
-      registerExprRefBlocks(blocks, s.init)
-    of sAsgn:
-      registerExprRefBlocks(blocks, s.lhs)
-      registerExprRefBlocks(blocks, s.rhs)
-    of sIte:
-      registerExprRefBlocks(blocks, s.cond)
-      registerStmtRefBlocks(blocks, s.thenBody)
-      registerStmtRefBlocks(blocks, s.elseBody)
-    of sLoop:
-      registerExprRefBlocks(blocks, s.loopCond)
-      registerStmtRefBlocks(blocks, s.loopBody)
-    of sRet:
-      registerExprRefBlocks(blocks, s.retVal)
-    of sDiscard:
-      registerExprRefBlocks(blocks, s.discardVal)
-    of sCall:
-      registerExprRefBlocks(blocks, s.callCallee)
-      for a in s.callArgs:
-        registerExprRefBlocks(blocks, a)
-    of sAsm, sEmit:
-      discard
+  var found = blocks
+  proc onDecl(s: CirStmt): bool =
+    if s.declType.kind == ctAptr:
+      registerRefBlock(found, s.declType.pElem)
+    true
+  proc onExpr(e: CirExpr) =
+    registerExprRefBlocks(found, e)
+  ss.scanStmtRefs(onDecl, onExpr)
+  blocks = found
 
 proc glslRegisterRefBlocks(m: CirModule): string =
   ## Registers every buffer-reference block that the printer will declare,
