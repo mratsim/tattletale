@@ -5092,6 +5092,15 @@ def stmt_inline(path, text, findings, added):
             path, no, "stmt-inline",
             "a statement keyword carries its body on the same line, put the "
             "body on the next line"))
+    for no in sorted(added or range(1, len(text.splitlines()) + 1)):
+        code, comment_only = _strip_comment(text.splitlines()[no - 1])
+        if comment_only or "not compiles" not in _blank_nim_strings(code):
+            continue
+        findings.append(Finding(
+            path, no, "negative-compile",
+            "a doAssert not compiles assertion, banned: refusals surface as "
+            "loud compile-time errors, pin behavior with an end-to-end "
+            "kernel test instead"))
 
 
 BANNER_BAR_RE = re.compile(r"^# ═+$")
@@ -5179,12 +5188,6 @@ def tile_phase(path, text, findings, added):
                     path, no, "semicolons",
                     "a `;` on a Nim code line, split the statement or "
                     "use comma-separated single-line params"))
-            if "not compiles" in _blank_nim_strings(code):
-                findings.append(Finding(
-                    path, no, "negative-compile",
-                    "a doAssert not compiles assertion, banned: refusals "
-                    "surface as loud compile-time errors, pin behavior with "
-                    "an end-to-end kernel test instead"))
         if added and "tests/codegen/ir/" in _rel(path):
             findings.append(Finding(
                 path, min(added), "closed-ir-tests",
