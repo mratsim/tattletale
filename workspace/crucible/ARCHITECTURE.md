@@ -79,8 +79,8 @@ The macro in [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim) reco
 It delegates to a typed macro that runs four steps:
 
 1. `lowerCirv2` lowers the typed body to a `CirModule`, a refusal becomes a compile-time error
-2. a `PassRegistry` registers the shared stages, then the target's rename, lowering, and analysis bundles, then validation
-3. `runPasses` executes the registry in registration order, a refusal becomes a compile-time error
+2. `buildPipeline` materializes the target's pipeline from the table in `gpu_compiler.nim`, one ordered column per target
+3. `runPasses` executes the registry in that order, a refusal becomes a compile-time error
 4. `backends_api.codegen` prints the module with the target's printer, `spirv` encodes binary words instead
 
 ```mermaid
@@ -103,10 +103,10 @@ Divergence starts at the reserved-word rename.
 | Legalization    | `registerLegalizationPasses`        | `builtinKindAssignment`, kind-assigns every builtin symbol from the canonical name tables      |
 | Normalization   | `registerNormalizationPasses`       | `bindCompoundAssignTemps`, binds the call-bearing targets of compound assignments into temps   |
 | Shared lowering | `registerSharedLoweringPasses`      | `lowerSpans`, splits `openArray` spans into pointer + length pairs                             |
-| Reserved rename | `registerRenameReservedIdentifiers` | one pass per text target, the target's reserved-word set as data                               |
-| Target lowering | `register<target>LoweringPasses`    | the target's storage-model transforms, table below                                             |
-| Analysis        | per-target registrations            | the target's feature scan, struct layouts, call graph, or binding records                      |
-| Validation      | `registerValidationPostPasses`      | `validateAddressSpaceCasts`, `validateConstantWrites`, check-only, every bundle runs them last |
+| Reserved rename | one table row per text target       | `registerRenameReservedIdentifiers` with the target's reserved-word set as data                |
+| Target lowering | one table row per pass              | the target's storage-model transforms, table below                                             |
+| Analysis        | one table row per pass              | the target's feature scan, struct layouts, call graph, or binding records                      |
+| Validation      | `registerValidationPostPasses`      | `validateAddressSpaceCasts`, `validateConstantWrites`, check-only, every column runs them last |
 
 ### Pass records
 
@@ -118,7 +118,8 @@ Divergence starts at the reserved-word rename.
 | `CirPass`   | Name, kind, description, `run` over the module                                                                                   |
 | `runPasses` | Executes the registry in registration order, refuses a `pkTransform` registered after a `pkAnalysis`, returns the first refusal   |
 
-Registration order is execution order, there is no scheduler.
+The table in `gpu_compiler.nim` is the single source of execution order:
+one ordered column per target, row position is execution position, no scheduler.
 A pass run takes the module in place and returns its refusal: `""` when clean, else the first refusal.
 The refusal channel is pure strings, no exceptions cross the pipeline.
 
@@ -145,6 +146,14 @@ Notes on the shared passes:
 - `instantiateAddressSpaceGenerics` specializes module callees whose pointer arguments name another address space than the formal
   One variant prints per space, every text target except SPIR-V registers the pass
 
+CUDA registers no pipeline pass of its own, its storage model lives around the table:
+
+- the frontend materializes every `var T` call argument as an address-of over the lvalue
+  Nim sem rejects a computed value for a `var T` parameter before anything reaches CIRv2
+- by-value array parameters decay to `const T name[]` at the printer
+- the printer owns the warp-reduce templates, the braced init lists, the coordinate arithmetic
+  It also owns the qualifier set, kernel linkage, and the barrier and atomic names
+
 ## Analysis-last invariant
 
 The pass registry has no invalidation: a pass runs once, in registration order.
@@ -155,7 +164,7 @@ The printer reads the stored records from `CirModule` and never rescans:
 `features`, `layouts`, `callGraph`, `structRefs`, `paramClasses`, `refBlocks`.
 
 `runPasses` refuses a transform registered after an analysis.
-The analysis-last placement itself is the registration sequence in `gpu_compiler.nim`, one bundle per target.
+The analysis-last placement itself is the table's column shape in `gpu_compiler.nim`, analysis rows close every column that has them.
 
 ## Printers
 
@@ -237,8 +246,9 @@ Every test launches through `engine.launchKernel()` or `engine.launchDeviceFn()`
 ### Adding a pass
 
 1. Implement the transform or check over `CirModule` in a file under `src/codegen/passes/`, file-local.
-2. Register it from the owning stage bundle with name, kind, description, and `run`.
-3. Keep implementations file-local. The `register*` proc is the only public surface of a passes file.
+2. Give it a `register*` proc with name, kind, description, and `run`.
+   Implementations stay file-local, the `register*` proc is the only public surface of a passes file.
+3. Add the register proc to every target's table column that runs the pass, in execution position.
 4. Verify the behavior end to end: a kernel test through the public API which
    launches and reads back, plus a per-backend test when output changes.
 
@@ -248,7 +258,7 @@ Every test launches through `engine.launchKernel()` or `engine.launchDeviceFn()`
 | --- | --- |
 | Printer | Add a printer under `src/codegen/backends/`, import `print_common`, state the target's rows in `targets_rows.nim` |
 | Dispatch | Add the `Backend` value in `backends_api.nim` and the `codegen<Target>` macro in `gpu_compiler.nim` |
-| Bundles | Register the target's rename, lowering, analysis, and validation bundles in `gpu_compiler.nim`, in that order |
+| Pipeline | Add the target's ordered column to the table in `gpu_compiler.nim`: rename, lowering, analysis, and validation rows in execution position |
 | Runtime | Add the platform session (`src/runtime/backends/`), the engine facade (`src/runtime/engines/`), the raw bindings (`src/abis/`), and the `BackendKind` value in `ast_datatypes.nim` |
 | Tests | Add a `tests/codegen/<backend>/` suite, a target that cannot auto-run gets `manual_` files |
 
