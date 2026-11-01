@@ -148,7 +148,7 @@ proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
       return 0
     case n[0].strVal
     of "..":
-      # an array index range, the array length is hi - lo + 1
+      # an array index range, with the array length computed as hi - lo + 1
       result = b - a + 1
     of "+": result = a + b
     of "-": result = a - b
@@ -268,8 +268,8 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   let canon = followAliasHead(canonicalTypeNode(n))
   # one instantiation per pointer-space combination over the fields:
   # threadgroup-pointer constructions instantiate a struct that is separate
-  # from the device instantiation. The canonical text never decides identity,
-  # it names the struct the first registration emits.
+  # from the device instantiation. Identity comes from the pointer-space key,
+  # and the canonical text only names the struct the first registration emits.
   var nameKey = canon.repr
   for name, spc in valueSpaces:
     if spc != caDevice:
@@ -284,7 +284,7 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
     base58Short(typeIdentityHash(nameKey)), fields)
   # One struct per structure: the same type reached through two type texts
   # (a formal's instance and a body's literal, say) must resolve to one struct,
-  # a call boundary passes it under one name.
+  # each call passes the struct under one name across the boundary.
   #
   # - the first registration names the struct
   # - an equal structure returns the registered instance
@@ -313,7 +313,7 @@ func constrHasTypeElem(t: NimNode): bool =
     let first = if t.kind == nnkObjConstr: 1 else: 0
     for i in first ..< t.len:
       let e = t[i]
-      # a named field's name is constructor vocabulary, the value decides
+      # a named field's name is constructor vocabulary and the value decides
       let v = if e.kind == nnkExprColonExpr: e[1] else: e
       if constrHasTypeElem(v):
         return true
@@ -387,10 +387,10 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     # a missing return type is void
     return tVoid()
   if n.kind in {nnkStmtListType, nnkStmtListExpr}:
-    # an inline type or value block, the resolved node is its last child
+    # an inline type or value block, with the resolved node as its last child
     return r.resolveCirType(n[^1], ptrSpace)
   if n.kind == nnkCall:
-    # a macro call in type position (`tile(T, layout)`), the type is the macro's instantiated result
+    # a macro call in type position (`tile(T, layout)`), resolving to the macro's instantiated result
     return r.resolveCirType(n.getTypeInst(), ptrSpace)
   case n.typeKind
   of ntyBool:
@@ -430,7 +430,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     else:
       result = tPtr(ptrSpace, r.resolveCirType(pointee, ptrSpace))
   of ntyVar:
-    # `var T` parameters travel as thread pointers, the closure never
+    # `var T` parameters travel as thread pointers, and the closure never
     # passes them by reference across the device boundary
     result = tPtr(caThread, r.resolveCirType(n[0], caThread))
   of ntyAlias:
@@ -445,7 +445,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
       arr = n.getTypeImpl()
     arr.expectKind(nnkBracketExpr)
     if arr[1].kind == nnkIdent:
-      # a named const length: the implementation tree keeps the name, the instantiation tree gives the value
+      # a named const length: the implementation tree keeps the name while the instantiation tree gives the value
       arr = arr.getTypeInst()
       arr.expectKind(nnkBracketExpr)
     let len = r.evalConstInt(arr[1])
@@ -453,7 +453,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
       return nil
     result = tArray(int(len), r.resolveCirType(arr[2], ptrSpace))
   of ntyEnum:
-    # enums lower as their 32-bit storage, the type kinds have no enum entry
+    # enums lower as their 32-bit storage and the type kinds have no enum entry
     result = tUint(32)
   of ntyDistinct:
     let marked = builtinDistinctScalar(n)
