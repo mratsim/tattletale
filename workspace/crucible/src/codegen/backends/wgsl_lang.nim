@@ -226,7 +226,7 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =

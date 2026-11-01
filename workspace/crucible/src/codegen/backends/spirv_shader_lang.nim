@@ -33,7 +33,7 @@ import std/[algorithm, sets, strutils, tables, macros]
 import ../ir/cirv2_lang
 import ./spirv_encoder {.all.}
 import ../ir/ast_datatypes
-import ./emit_common
+import ./print_common
 
 template spvRefuse(what: string) =
   error("SPIR-V backend does not support: " & what)

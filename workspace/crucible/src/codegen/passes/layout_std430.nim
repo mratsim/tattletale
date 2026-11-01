@@ -44,7 +44,7 @@
 
 import std/tables
 import ../ir/cirv2_lang
-import ../backends/emit_common
+import ../backends/print_common
 import ./pass_datatypes
 
 # ═══════════════════════════════════════════════════════════════════════
