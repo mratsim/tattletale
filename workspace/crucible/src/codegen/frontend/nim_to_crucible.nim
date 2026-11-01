@@ -51,6 +51,8 @@ type
     moduleGlobals: seq[CirStmt]
     ## Program-scope declarations in encounter order, `m.globals` of the module.
     nameCounts: Table[string, int]
+    ## Emitted names already issued in the proc under translation:
+    ## program-scope names seed it and the uniquer suffixes past every entry.
     hoisted: seq[CirStmt]
     ## Statements hoisted in front of the statement being lowered.
 
@@ -70,14 +72,17 @@ proc drainHoisted(ctx: var FrontendCtx): seq[CirStmt] =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc uniqueName(ctx: var FrontendCtx, base: string): string =
-  ## Per-proc unique CIRv2 name: the sanitized base, suffixed when reused.
+  ## Per-proc unique CIRv2 name: the sanitized base, suffixed past every name
+  ## already issued in the proc, user-declared or synthetic alike, so an issued
+  ## name never doubles as a later declaration's emitted name.
   let clean = sanitizeIdent(base)
-  if ctx.nameCounts.hasKey(clean):
-    ctx.nameCounts[clean].inc
-    result = clean & "_" & $ctx.nameCounts[clean]
-  else:
-    ctx.nameCounts[clean] = 0
-    result = clean
+  var candidate = clean
+  var suffix = 0
+  while ctx.nameCounts.hasKey(candidate):
+    inc suffix
+    candidate = clean & "_" & $suffix
+  ctx.nameCounts[candidate] = suffix
+  result = candidate
 
 proc pushScope(ctx: var FrontendCtx) =
   ctx.scopes.add(initTable[string, CirExpr]())
@@ -596,8 +601,13 @@ proc lowerNestedTernary(ctx: var FrontendCtx,
 proc buildBranchBody(ctx: var FrontendCtx, bodyNode: NimNode, dest: CirExpr): seq[CirStmt] =
   ## One branch body: plain statements, or the expression form assigning
   ## `dest` from the branch's value.
+  ## The body nests one scope: a branch-local shadows an outer local only
+  ## inside the branch.
+  ctx.pushScope()
   if dest.isNil:
-    return ctx.lowerStmt(bodyNode)
+    result = ctx.lowerStmt(bodyNode)
+    ctx.popScope()
+    return
   var body: NimNode = bodyNode
   if body.kind != nnkStmtList:
     body = nnkStmtList.newTree(bodyNode)
@@ -609,7 +619,9 @@ proc buildBranchBody(ctx: var FrontendCtx, bodyNode: NimNode, dest: CirExpr): se
     else:
       stmts.add(ctx.lowerStmt(c))
   if ctx.failing():
+    ctx.popScope()
     return @[]
+  ctx.popScope()
   return stmts & ctx.drainHoisted() & @[asgnS(dest, value)]
 
 proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode, dest: CirExpr): seq[CirStmt] =
@@ -1353,7 +1365,9 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     let cond = ctx.lowerExpr(n[0])
     if ctx.failing():
       return @[]
+    ctx.pushScope()
     let body = ctx.lowerStmt(n[1])
+    ctx.popScope()
     if ctx.failing():
       return @[]
     return @[whileS(cond, body)]
@@ -1446,14 +1460,19 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       return @[]
     if stepIsConst:
       stepT = operandLiteralTypedAs(stepV, varType)
+    # a loop variable's Nim scope is the for statement, so the declaration
+    # and the body nest one scope
+    ctx.pushScope()
     ctx.declareLocal(vars, sym(varName, varType))
     let varSym = sym(varName, varType)
     # start/stop/step hoists queued so far belong to the preamble, the body's own hoists drain per statement inside it
     let startHoists = ctx.drainHoisted()
     let body = ctx.lowerStmtBody(n[^1])
     if ctx.failing():
+      ctx.popScope()
       return @[]
     let bodyHoists = ctx.drainHoisted()
+    ctx.popScope()
     let cmp = if inclusive:
       leE(varSym, stopT)
     else:
@@ -1525,7 +1544,9 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       ctx.fail("labeled block: break out of blocks is outside the supported set")
       return @[]
     # a label no `break label` targets is dead, the block lowers as its body
-    return ctx.lowerStmt(n[1])
+    ctx.pushScope()
+    result = ctx.lowerStmt(n[1])
+    ctx.popScope()
   of nnkBreakStmt:
     ctx.fail("break: unsupported in device code, restructure the loop condition")
     return @[]
@@ -1650,6 +1671,8 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
       ctx.declareLocal(formal[j], psym)
   let ret = ctx.retType
   if ret.kind != ctVoid:
+    # Nim lets a non-void proc declare its own `result`, that local suffixes
+    ctx.nameCounts["result"] = 0
     let rsym = sym("result", ret)
     ctx.declareLocal("result", rsym)
     result.add(varD("result", ret))
@@ -1694,6 +1717,9 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let savedSpaces = ctx.localSpaces
   ctx.fnName = cirName
   ctx.nameCounts = initTable[string, int]()
+  # program-scope names are issued before any proc lowers, a local never takes one
+  for g in ctx.moduleScope.keys:
+    ctx.nameCounts[g] = 0
   ctx.scopes = @[ctx.moduleScope]
   ctx.localSpaces = @[ctx.moduleSpaces]
   ctx.retType = ctx.resolver.resolveCirType(formals[0])
@@ -1740,6 +1766,9 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   ctx.hoisted = @[]
   ctx.fnName = cirName
   ctx.nameCounts = initTable[string, int]()
+  # program-scope names are issued before any proc lowers, a local never takes one
+  for g in ctx.moduleScope.keys:
+    ctx.nameCounts[g] = 0
   ctx.scopes = @[ctx.moduleScope]
   ctx.localSpaces = @[ctx.moduleSpaces]
   ctx.retType = ctx.resolver.resolveCirType(formals[0])
@@ -1783,9 +1812,13 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
-  ## Lowers the typed macro body to CIRv2, returning the module and "" when clean,
-  ## else the first refusal message. The constant-shell fold runs on this output.
-  ## The body is a block of kernel proc defs, or the single `{.global.}` wrapper
+  ## Lowers the typed macro body to CIRv2.
+  ##
+  ## Returns:
+  ##   the module and "" when clean, else the first refusal message.
+  ##   The constant-shell fold runs on this output.
+  ##
+  ## `bodyIn` is a block of kernel proc defs, or the single `{.global.}` wrapper
   ## proc of a launchDeviceFn call.
   var ctx = FrontendCtx()
   ctx.pushScope()
