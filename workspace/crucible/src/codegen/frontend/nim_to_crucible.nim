@@ -429,6 +429,27 @@ proc isBodilessMagic(callee: NimNode): bool =
       return false
   return true
 
+proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
+  ## Callee symbol of a call to a harvested or builtin proc:
+  ## - the registry entry registers or reads
+  ## - a body-less callee harvests
+  ## - a builtin keeps its canonical native name
+  ##
+  ## An instantiation hash would name a proc the backend never defines.
+  ## Builtin-marking the callee symbol lets the alias canonicalization
+  ## pass kind-assign from the canonical tables.
+  let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
+  let entry = ctx.registerOrGet(calleeSym)
+  if ctx.failing():
+    return nil
+  if not calleeBuiltin and not entry.hasBody:
+    ctx.harvestProc(calleeSym, entry.name)
+    if ctx.failing():
+      return nil
+  let calleeName = if calleeBuiltin: calleeSym.strVal
+                   else: entry.name
+  return sym(calleeName, entry.fnType, calleeBuiltin)
+
 proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirExpr =
   ## A value-producing call as a call expression: the use site nests the call
   ## into its operator tree.
@@ -524,25 +545,15 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
       if ctx.failing():
         return nil
       return callE(sym(calleeSym.strVal, fnType, true), args)
-  let entry = ctx.registerOrGet(calleeSym)
-  if ctx.failing():
-    return nil
   # a bodiless magic took the primitive path above
   # every other callee harvests, a magic with a Nim body (like `max`) lowers through it
-  let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
-  if not calleeBuiltin and not entry.hasBody:
-    ctx.harvestProc(calleeSym, entry.name)
-    if ctx.failing():
-      return nil
+  let calleeExpr = ctx.harvestedCallee(calleeSym)
+  if ctx.failing():
+    return nil
   let args = ctx.lowerCallArgs(calleeSym, call)
   if ctx.failing():
     return nil
-  # a builtin callee emits the canonical native name, an instantiation hash would
-  # name a proc the backend never defines. Builtin-marking the callee symbol
-  # lets the alias canonicalization pass kind-assign from the canonical tables
-  let calleeName = if calleeBuiltin: calleeSym.strVal
-                   else: entry.name
-  return callE(sym(calleeName, entry.fnType, calleeBuiltin), args)
+  return callE(calleeExpr, args)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expression translation
@@ -1151,23 +1162,16 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.fail("call callee " & callee.repr & " is not a proc symbol")
     return @[]
   let calleeSym = resolveCallCallee(callee)
-  let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
   if isBodilessMagic(callee):
     ctx.fail("magic call " & callee.repr & " in statement position without a destination")
     return @[]
-  let entry = ctx.registerOrGet(calleeSym)
+  let calleeExpr = ctx.harvestedCallee(calleeSym)
   if ctx.failing():
     return @[]
-  let calleeName = if calleeBuiltin: calleeSym.strVal
-                   else: entry.name
-  if not calleeBuiltin and not entry.hasBody:
-    ctx.harvestProc(calleeSym, entry.name)
-    if ctx.failing():
-      return @[]
   let args = ctx.lowerCallArgs(calleeSym, n)
   if ctx.failing():
     return @[]
-  return ctx.drainHoisted() & @[callS(sym(calleeName, entry.fnType, calleeBuiltin), args)]
+  return ctx.drainHoisted() & @[callS(calleeExpr, args)]
 
 proc collectAddressSpace(ctx: var FrontendCtx, nameNode: NimNode): AddressSpace =
   ## Memory class of a local declaration: the pragma list decides.
