@@ -1,0 +1,286 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Declarative registry of the text printers' target data.
+##
+## A row is a const object of plain data: strings, bools, ints, enums and tables of those.
+## No field stores a proc or a placeholder whose value depends on a body walk.
+##
+## | family | row        | contents                                      |
+## | ------ | ---------- | --------------------------------------------- |
+## | scalar | ScalarRow  | type names and support cells by (kind, width) |
+## | lit    | LitRow     | literal token forms                           |
+## | kind   | KindRow    | walk policy: loops, ternary, asm, routing set |
+## | space  | SpaceRow   | address-space qualifiers per context          |
+## | conv   | ConvRow    | conversion name tables                        |
+## | coord  | CoordRow   | coordinate builtin forms                      |
+## | sig    | SigRow     | signature static parts, keyed per flavor      |
+## | vector | VectorRule | a target's real vector coverage               |
+##
+## `genTargets` (targets_macros) parses row blocks into these types and generates one lookup proc per family and target.
+## Checks run at registration as one compile-time block: full (kind, width) coverage per key, refused cells with a reason class.
+## A missing or drifted row is a compile error.
+
+import std/tables
+import ../ir/cirv2_lang
+import ./emit_common
+
+type
+  ReasonClass* = enum
+    ## Static class of a refused registry cell.
+    ## A printer's refusal message composes at the refusal site from this class.
+    rcNone
+    ## Marks a supported cell.
+    rcParseError
+    ## No parser form for the type at all.
+    rcCapability
+    ## Target language lacks the capability the type needs.
+    rcOutsideSubset
+    ## Target language has the type, this compiler's subset excludes it.
+
+  ScalarCell* = object
+    ## One (kind, width) cell of a scalar row.
+    kind*: CirTypeKind
+    width*: int
+    ## Bit width, 0 for the widthless kinds (void, bool).
+    spelling*: string
+    ## Type name the target prints, "" for a refused cell.
+    supported*: bool
+    reasonClass*: ReasonClass
+    ## Static class of the refusal, `rcNone` for a supported cell.
+
+  ScalarRow* = object
+    ## Scalar type names of one target by (kind, width) cell.
+    ## Every cell of `ScalarCellAxis` appears exactly once per target.
+    ## Widths name different C types on different hosts: 64-bit `long` on LP64 hosts, 32-bit on LLP64 hosts.
+    ## Each target states its own names, no cell inherits a name from another target.
+    cells*: seq[ScalarCell]
+
+  LitRow* = object
+    ## Literal token forms of one target.
+    ## No exponent or hex-float fields: no printer handles either form.
+    int*: IntLitTokens
+    f16Prefix*, f16Suffix*: string
+    f32Suffix*: string
+    f64Prefix*, f64Suffix*: string
+    nilToken*: string
+    nonFinite*: FloatLitTokens
+
+  AsmForm* = enum
+    ## Inline assembly policy of one target.
+    afWrap
+    ## Text wrapped in `asm(...)`.
+    afSpliceRaw
+    ## Text spliced into the output verbatim.
+    afRefuse
+    ## Inline assembly refused.
+
+  TernaryForm* = enum
+    ## Conditional expression form of one target.
+    tfQuestion
+    ## `cond ? then : else`
+    tfSelectCall
+    ## `select(else, then, cond)`
+
+  ConstDeclForm* = enum
+    ## Local constant declaration keyword of one target.
+    cdfConstexpr
+    cdfConst
+    cdfLet
+
+  ConstructorForm* = enum
+    ## Aggregate construction form of one target.
+    cofBraced
+    ## Braced init `{a, b}`.
+    cofCall
+    ## Constructor call `Type(a, b)`.
+    cofMixed
+    ## Vector calls plus flat braces, HLSL's split form.
+
+  KindRow* = object
+    ## Per-target policy where the shared expression and statement walks branch on target.
+    ## No for-range, switch or sizeof field: no printer emits the first two, sizeof routes per target through `printTargetExpr`.
+    loop*: LoopStyle
+    ternary*: TernaryForm
+    foldsIteElse*: bool
+    ## A single-statement else body folds into an `else if` chain.
+    emitOperandRendersExpr*: bool
+    ## A `{.emit.}` operand renders as an expression when true, splices its symbol name when false.
+    asmForm*: AsmForm
+    constDecl*: ConstDeclForm
+    constructor*: ConstructorForm
+    targetExprKinds*: set[CirExprKind]
+    ## Optional expression kinds the printer routes through its own `printTargetExpr` proc.
+    ## Eight common kinds route unconditionally and are not members of this set.
+
+  SpaceRow* = object
+    ## Address-space qualifiers of one target, in the contexts its printer uses.
+    ## Qualifiers are bare names, emission sites add separators, a context the target does not have stays "".
+    ptrQualifier*: array[CirAddrSpace, string]
+    ## Qualifier before a pointer type in declarations and casts.
+    localPrefix*: array[CirAddrSpace, string]
+    ## Qualifier before a local variable's declared type.
+    kernelParamScalar*: string
+    ## Qualifier on a kernel's by-reference scalar parameters.
+    kernelParamPointer*: string
+    ## Qualifier on a kernel's pointer parameters.
+    smemParam*: string
+    ## Qualifier on a parameter carrying relocated shared-memory storage.
+
+  ConvRow* = object
+    ## Name tables of one target: conversion data that is a pure name-to-text mapping.
+    ## Conversions needing operand type analysis or multi-statement emission stay procedural in the printers.
+    builtinNames*: Table[string, string]
+    ## `{.builtin.}` numeric conversion name to call text, `$1` stands for the call's argument list.
+    fpRefusals*: seq[string]
+    ## `{.builtin.}` fp-conversion names the target refuses.
+
+  CoordWholeForm* = enum
+    ## Whole-value read form of a coordinate builtin.
+    cwfVector
+    ## Whole-vector constructor form.
+    cwfParam
+    ## Bare parameter reference, a scalar builtin converts implicitly.
+    cwfRefuse
+    ## Whole-value reads refuse.
+
+  CoordCell* = object
+    ## One coordinate builtin kind's static data of one target.
+    kind*: CoordBuiltinKind
+    paramName*: string
+    ## Attributed parameter's identifier, "" for the canonical builtin name.
+    ## Names are kind-static, never body-dependent.
+    paramType*: string
+    ## Attributed parameter's type name, "" when the target has no form for the kind.
+    whole*: CoordWholeForm
+    componentCast*: string
+    ## Type a component read casts to, "" for none.
+
+  CoordRow* = object
+    ## Coordinate builtin data of one target.
+    ## Whole-vector forms interpolate the parameter name at emission time in the glue procs, never in the row.
+    cells*: seq[CoordCell]
+
+  SigRow* = object
+    ## Static parts of a target's function signatures.
+    ## Parameter-list emission is procedural, parameters depend on the body walk, none of it is row data.
+    ## Keyed per flavor where a target has flavors.
+    entryLinkage*: string
+    ## Prefix before the return type of a kernel entry.
+    deviceFnLinkage*: string
+    ## Prefix before the return type of a plain device function.
+    inlineLinkage*: string
+    ## Prefix before the return type of an inline device function.
+    voidRet*: string
+    ## Name of the void return type, "" emits no return type.
+    workgroupAttr*: string
+    ## Workgroup-size attribute form, one `$n` placeholder per dimension, "" when the target does not bake it into the shader.
+    workgroupDefault*: array[3, int]
+    ## Workgroup size baked in when the kernel declares none, read only when `workgroupAttr` is non-empty.
+    entryAttr*: string
+    ## Entry-point attribute prefix, "" when the target has none.
+    bindingPrefix*: string
+    ## Resource binding form, `$1` stands for the binding slot, "" when the target has no binding form.
+    groupPrefix*: string
+    ## Binding group form, `$1` stands for the group, "" when absent.
+
+  VectorContext* = enum
+    ## Where a target's printer emits vector types.
+    vcNone
+    vcCoordinate
+    ## Only in coordinate-builtin context.
+    vcEverywhere
+
+  VectorRule* = object
+    ## A target's real vector coverage, as its printer emits it today.
+    context*: VectorContext
+    elems*: seq[tuple[kind: CirTypeKind, width: int]]
+    ## Element types the target names, empty for `vcNone`.
+    lanes*: seq[int]
+    ## Lane counts the target emits.
+
+const ScalarCellAxis*: array[13, tuple[kind: CirTypeKind, width: int]] = [
+  (ctVoid, 0), (ctBool, 0),
+  (ctInt, 8), (ctInt, 16), (ctInt, 32), (ctInt, 64),
+  (ctUint, 8), (ctUint, 16), (ctUint, 32), (ctUint, 64),
+  (ctFloat, 16), (ctFloat, 32), (ctFloat, 64)]
+
+proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
+  ## Registration checks over one target's scalar row:
+  ##
+  ## - every cell of `ScalarCellAxis` appears exactly once, a second row for an existing cell fails the compile
+  ## - a supported cell has a type name and no reason class, a refused cell has a reason class and no name
+  ## - a type name denotes at most one cell
+  ##
+  ## Raises `AssertionDefect` at compile time on the first violated check.
+  for axisCell in ScalarCellAxis:
+    var count = 0
+    for c in row.cells:
+      if c.kind == axisCell.kind and c.width == axisCell.width:
+        inc count
+    doAssert count == 1, "target " & target & ": scalar cell (" &
+      $axisCell.kind & ", " & $axisCell.width & ") appears " & $count &
+      " times, exactly once required"
+  for c in row.cells:
+    if c.supported:
+      doAssert c.reasonClass == rcNone and c.spelling.len > 0,
+        "target " & target & ": supported cell (" & $c.kind & ", " & $c.width &
+        ") needs a name and no reason class"
+    else:
+      doAssert c.reasonClass != rcNone and c.spelling.len == 0,
+        "target " & target & ": refused cell (" & $c.kind & ", " & $c.width &
+        ") needs a reason class and no name"
+  for i, a in row.cells:
+    if a.spelling.len == 0:
+      continue
+    for j in i + 1 ..< row.cells.len:
+      doAssert row.cells[j].spelling != a.spelling,
+        "target " & target & ": name '" & a.spelling & "' denotes two cells, (" &
+        $a.kind & ", " & $a.width & ") and (" & $row.cells[j].kind & ", " &
+        $row.cells[j].width & ")"
+
+proc checkScalarRowsTogether*(
+    rows: openArray[tuple[name: string, row: ScalarRow]]) {.compileTime.} =
+  ## Cross-target scalar check: a name two targets share must denote the same (kind, width) cell.
+  ## Divergent names for one cell are explicit data (msl `char`/`long` against cuda `signed char`/`long long`).
+  ## Returns after catching a name that drifted onto a cell of another width or kind.
+  ## Raises `AssertionDefect` naming both targets at compile time.
+  for i in 0 ..< rows.len:
+    for j in i + 1 ..< rows.len:
+      for a in rows[i].row.cells:
+        if a.spelling.len == 0:
+          continue
+        for b in rows[j].row.cells:
+          if b.spelling == a.spelling:
+            doAssert a.kind == b.kind and a.width == b.width,
+              "name '" & a.spelling & "' denotes (" & $a.kind & ", " &
+              $a.width & ") on " & rows[i].name & " but (" & $b.kind & ", " &
+              $b.width & ") on " & rows[j].name
+
+proc checkCoordRow*(row: CoordRow, target: string) {.compileTime.} =
+  ## Registration check over one target's coordinate row.
+  ## Every coordinate builtin kind except `cbkNone` appears exactly once.
+  ## Raises `AssertionDefect` at compile time on the first missing or duplicate kind.
+  for k in CoordBuiltinKind:
+    if k == cbkNone:
+      continue
+    var count = 0
+    for c in row.cells:
+      if c.kind == k:
+        inc count
+    doAssert count == 1, "target " & target & ": coordinate builtin " & $k &
+      " appears " & $count & " times, exactly once required"
+
+proc scalarCellRefusal*(row: ScalarRow, kind: CirTypeKind, width: int): string =
+  ## Returns the refusal class of one (kind, width) cell as text, "" for a supported cell.
+  ## A refusal message interpolating runtime values composes at the refusal site from this class.
+  ##
+  ## Usage: `let reason = scalarCellRefusal(row, ctFloat, 64)` tests fp64 support.
+  for c in row.cells:
+    if c.kind == kind and c.width == width:
+      return if c.supported: "" else: $c.reasonClass
+  return "<missing cell>"
