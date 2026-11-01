@@ -676,62 +676,15 @@ proc printFn(ctx: var PrintCtx, fn: CirProc, graph: CallGraph): string =
     return ""
   return sig & " {\n" & bodyTxt & '\n' & "}"
 
-proc registerStructRefs(ctx: var PrintCtx, t: CirType, refs: var HashSet[string]) =
-  ## Records the struct type names reachable from `t`, through fields,
-  ## array elements and vector elements.
-  if t.isNil:
-    return
-  case t.kind
-  of ctStruct:
-    if t.name in refs:
-      return
-    refs.incl(t.name)
-    for f in t.fields:
-      ctx.registerStructRefs(f.typ, refs)
-  of ctArray:
-    ctx.registerStructRefs(t.aElem, refs)
-  of ctVector:
-    ctx.registerStructRefs(t.vElem, refs)
-  else:
-    discard
-
-proc scanStmtStructRefs(ctx: var PrintCtx, ss: seq[CirStmt], refs: var HashSet[string]) =
-  ## Records the struct types that the statement tree references: declaration types,
-  ## construction types and cast result types.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      ctx.registerStructRefs(s.declType, refs)
-      if s.init != nil:
-        if s.init.kind == eOconstr:
-          ctx.registerStructRefs(s.init.ocType, refs)
-        if s.init.kind == eCall:
-          for a in s.init.args:
-            if a.kind == eOconstr:
-              ctx.registerStructRefs(a.ocType, refs)
-    of sAsgn:
-      if s.rhs != nil and s.rhs.kind == eOconstr:
-        ctx.registerStructRefs(s.rhs.ocType, refs)
-    of sIte:
-      ctx.scanStmtStructRefs(s.thenBody, refs)
-      ctx.scanStmtStructRefs(s.elseBody, refs)
-    of sLoop:
-      ctx.scanStmtStructRefs(s.loopBody, refs)
-    of sScope:
-      ctx.scanStmtStructRefs(s.scopeBody, refs)
-    of sCall:
-      for a in s.callArgs:
-        if a.kind == eOconstr:
-          ctx.registerStructRefs(a.ocType, refs)
-    of sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
-      discard
-
-proc emitStructDecls(ctx: var PrintCtx, refs: var HashSet[string],
+proc emitStructDecls(ctx: var PrintCtx, refs: HashSet[string],
     byName: Table[string, CirType], emitted: var HashSet[string],
     name: string, outp: var string) =
   ## Emits one struct definition, member structs first, deduplicated by name.
-  ## HLSL resolves types at their declaration site, a referenced struct
-  ## holding a pointer refuses, HLSL structs cannot take resources.
+  ##
+  ## - HLSL resolves types at their declaration site, a referenced struct
+  ##   holding a pointer refuses, HLSL structs cannot take resources
+  ## - the reference set is the stored record `CirModule.structRefs`, every
+  ##   struct the member recursion reaches is already in it
   if name in emitted or name notin refs:
     return
   let t = byName.getOrDefault(name, nil)
@@ -747,11 +700,8 @@ proc emitStructDecls(ctx: var PrintCtx, refs: var HashSet[string],
     if f.typ.kind == ctStruct:
       ctx.emitStructDecls(refs, byName, emitted, f.typ.name, outp)
     elif f.typ.kind == ctArray:
-      ctx.registerStructRefs(f.typ, refs)
       if f.typ.aElem.kind == ctStruct:
         ctx.emitStructDecls(refs, byName, emitted, f.typ.aElem.name, outp)
-    elif f.typ.kind == ctVector:
-      ctx.registerStructRefs(f.typ, refs)
   if ctx.failing():
     return
   outp.add "struct " & name & " {\n"
@@ -815,21 +765,8 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   let pushParams = kernelClass.push
   let buffers = kernelClass.buffers
 
-  # struct declarations for the referenced value structs, dependency order
-  var refs = initHashSet[string]()
-  for p in kernel.params:
-    if p.name != "crucible_numworkgroups":
-      ctx.registerStructRefs(p.typ, refs)
-  for fn in m.procs:
-    if fn.isKernel:
-      continue
-    ctx.registerStructRefs(fn.ret, refs)
-    for p in fn.params:
-      ctx.registerStructRefs(p.typ, refs)
-    ctx.scanStmtStructRefs(fn.body, refs)
-  ctx.scanStmtStructRefs(kernel.body, refs)
-  # relocated const_mem declarations, struct-typed ones included
-  ctx.scanStmtStructRefs(m.globals, refs)
+  # struct declarations for the referenced value structs, dependency order, read from the stored `CirModule.structRefs` record
+  let refs = m.structRefs
   var byName: Table[string, CirType]
   for t in m.types:
     if t.kind == ctStruct:

@@ -27,6 +27,9 @@
 ##
 ## `hlslClassifyParams` fills `CirModule.paramClasses` with one classification
 ## record per proc, one registration per flavor.
+##
+## `hlslScanStructRefs` fills `CirModule.structRefs` with the struct types
+## the printer declares, every struct reachable through fields included.
 ## - dxc folds the relocated declarations at compile time, they take no register
 ##   in the `$Globals`/cbuffer layout and they are visible to all functions
 
@@ -621,3 +624,105 @@ proc registerHlslParamClassPass*(reg: var PassRegistry, flavor: HlslFlavor) =
   of fvVulkan:
     reg.register("hlslClassifyParams", pkAnalysis, phaseMain, description,
       run = classifyFvVulkan)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Struct-reference registration
+# ═══════════════════════════════════════════════════════════════════════
+
+proc registerStructRefs(refs: var HashSet[string], t: CirType) =
+  ## Records the struct type names reachable from `t`, through fields,
+  ## array elements and vector elements.
+  if t.isNil:
+    return
+  case t.kind
+  of ctStruct:
+    if t.name in refs:
+      return
+    refs.incl(t.name)
+    for f in t.fields:
+      registerStructRefs(refs, f.typ)
+  of ctArray:
+    registerStructRefs(refs, t.aElem)
+  of ctVector:
+    registerStructRefs(refs, t.vElem)
+  else:
+    discard
+
+proc scanStmtStructRefs(refs: var HashSet[string], ss: seq[CirStmt]) =
+  ## Records the struct types that the statement tree references: declaration types,
+  ## construction types and cast result types.
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      registerStructRefs(refs, s.declType)
+      if s.init != nil:
+        if s.init.kind == eOconstr:
+          registerStructRefs(refs, s.init.ocType)
+        if s.init.kind == eCall:
+          for a in s.init.args:
+            if a.kind == eOconstr:
+              registerStructRefs(refs, a.ocType)
+    of sAsgn:
+      if s.rhs != nil and s.rhs.kind == eOconstr:
+        registerStructRefs(refs, s.rhs.ocType)
+    of sIte:
+      scanStmtStructRefs(refs, s.thenBody)
+      scanStmtStructRefs(refs, s.elseBody)
+    of sLoop:
+      scanStmtStructRefs(refs, s.loopBody)
+    of sScope:
+      scanStmtStructRefs(refs, s.scopeBody)
+    of sCall:
+      for a in s.callArgs:
+        if a.kind == eOconstr:
+          registerStructRefs(refs, a.ocType)
+    of sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
+      discard
+
+proc hlslScanStructRefs(m: CirModule): string =
+  ## Records the struct types the printer declares into `m.structRefs`:
+  ##
+  ## - the kernel's parameter types, the materialized dispatch-grid parameter excepted, its type is a vector
+  ## - every device function's return and parameter types and body
+  ## - the kernel body
+  ## - the relocated const_mem declarations, struct-typed ones included
+  ##
+  ## The registration walk recurses through fields, array elements and vector elements,
+  ## so every struct the printer's declaration recursion reaches is already in the record.
+  ##
+  ## A module without exactly one kernel contributes no kernel-side registrations. Such a module refuses at the printer.
+  ## The pass runs after the last transform, the record it stores never invalidates.
+  var kernel: CirProc = nil
+  var kernelCount = 0
+  for fn in m.procs:
+    if fn.isKernel:
+      inc kernelCount
+      kernel = fn
+  if kernelCount == 1:
+    for p in kernel.params:
+      if p.name != "crucible_numworkgroups":
+        registerStructRefs(m.structRefs, p.typ)
+  for fn in m.procs:
+    if fn.isKernel:
+      continue
+    registerStructRefs(m.structRefs, fn.ret)
+    for p in fn.params:
+      registerStructRefs(m.structRefs, p.typ)
+    scanStmtStructRefs(m.structRefs, fn.body)
+  if kernelCount == 1:
+    scanStmtStructRefs(m.structRefs, kernel.body)
+  # relocated const_mem declarations, struct-typed ones included
+  scanStmtStructRefs(m.structRefs, m.globals)
+  return ""
+
+proc registerHlslStructRefPass*(reg: var PassRegistry) =
+  ## Registers the HLSL struct-reference analysis pass:
+  ##
+  ## - the pass fills `CirModule.structRefs` with the struct types the printer declares, every struct reachable through fields included
+  ## - the printer declares exactly the stored names and scans for nothing itself
+  reg.register("hlslScanStructRefs", pkAnalysis, phaseMain,
+    "Records the struct types the printer declares, every struct reachable" &
+    " through fields and element types included",
+    run = hlslScanStructRefs
+  )
