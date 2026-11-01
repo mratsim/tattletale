@@ -1,8 +1,7 @@
 ## CUDA: an array declaration binding a call result refuses at compile time.
 ##
 ## Test that an array declaration whose initializer is a device call
-## dies in the array-assign decomposition before any shader is emitted.
-## The refusal names the pass:
+## dies in the array-assign decomposition before any shader is emitted, naming the pass:
 ##
 ##   Error: pass decomposeArrayAssign: in proc kern: array declaration binds a call result
 ##

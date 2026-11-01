@@ -1,8 +1,7 @@
 ## CUDA: a whole-array assignment from a constructor refuses at compile time.
 ##
 ## Test that an array assignment whose right side is an array constructor
-## dies in the array-assign decomposition before any shader is emitted.
-## The refusal names the pass:
+## dies in the array-assign decomposition before any shader is emitted, naming the pass:
 ##
 ##   Error: pass decomposeArrayAssign: in proc kern: whole-array assignment right-hand side is not an lvalue
 ##
