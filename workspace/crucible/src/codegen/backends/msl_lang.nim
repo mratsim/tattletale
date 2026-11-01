@@ -224,10 +224,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements
-# ═══════════════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════════════
 # Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =

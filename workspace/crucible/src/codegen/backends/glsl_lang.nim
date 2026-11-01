@@ -217,10 +217,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     return glslConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 
-# ═══════════════════════════════════════════════════════════════════════
-# Statements
-# ═══════════════════════════════════════════════════════════════════════
-
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## GLSL text of the kinds in `targetExprKinds`.

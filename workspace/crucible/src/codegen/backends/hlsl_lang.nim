@@ -380,10 +380,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       return ""
   return ""
 
-# ═══════════════════════════════════════════════════════════════════════
-# Statements
-# ═══════════════════════════════════════════════════════════════════════
-
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## HLSL text of the kinds in `targetExprKinds`.
