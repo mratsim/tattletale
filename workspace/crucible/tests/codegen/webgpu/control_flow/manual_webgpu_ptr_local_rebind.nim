@@ -1,7 +1,7 @@
 ## WebGPU: a pointer local rebound inside a branch refuses at compile time.
 ##
 ## Test that a pointer local rebound inside an `if` refuses to compile
-## with the pointer-local dissolve refusal.
+## with the pointer-local binding refusal.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

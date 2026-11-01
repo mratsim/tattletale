@@ -10,12 +10,13 @@
 ## WGSL lowering: per-target transforms for the WGSL storage model,
 ## registered by the WebGPU pipeline and run before printing.
 ##
-##   kernel body → explodeKernelStructs → wgslDissolvePointerLocals → wgslRewriteBoolKernelParamReads → wgslHoistProgramScopeLocals → wgslInlinePointerParamCalls
+##   kernel body → explodeGlobalStructWithPtrFields → wgslExplodePointerLocals → wgslRewriteBoolKernelParamReads → wgslHoistProgramScopeLocals → wgslInlinePointerParamCalls
 ##   → wgslScanStructRefs → printed WGSL source
 ##
-## - `explodeKernelStructs`: kernel parameters of struct type with pointer fields
-##   expand into flat ptr/scalar leaf parameters, WebGPU is a flat resource target
-## - `wgslDissolvePointerLocals`: pointer locals dissolve into their pointee,
+## - `explodeGlobalStructWithPtrFields`: kernel parameters of struct type
+##   carrying pointer fields expand into flat ptr/scalar leaf parameters
+##   (WebGPU is a flat resource target)
+## - `wgslExplodePointerLocals`: pointer locals rewrite to their pointee,
 ##   pointer-holding struct locals into per-field leaf rewrites,
 ##   reads through an alias rewrite to the pointee or leaf symbol
 ## - `wgslRewriteBoolKernelParamReads`: reads of the kernel's bool parameters
@@ -49,7 +50,7 @@
 ##   refuses in the pass (WGSL workgroup variables are zero-initialized),
 ##   the printer keeps both shape guards on the relocated declarations
 ## - a pointer local read as a value or before its address-of binding,
-##   a pointer local rebound to a second pointee, a dissolved struct local
+##   a pointer local rebound to a second pointee, an exploded struct local
 ##   used whole or read through an unbound field path
 ##   refuse in the pass
 ##
@@ -62,7 +63,7 @@ import ../ir/cirv2_build
 import ./pass_datatypes
 import ./passes_lowering_cfamily
 import ./passes_low_address_spaces
-import ./passes_low_kernel_params
+import ./passes_low_pointers
 import ./pass_helpers
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -73,14 +74,14 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   ## Registers the WGSL per-target lowering passes:
   ##
   ## - the kernel struct-argument explosion, WebGPU is a flat resource target
-  ## - `wgslDissolvePointerLocals`, `wgslRewriteBoolKernelParamReads`, `wgslHoistProgramScopeLocals`, in that order, before printing
+  ## - `wgslExplodePointerLocals`, `wgslRewriteBoolKernelParamReads`, `wgslHoistProgramScopeLocals`, in that order, before printing
   ##
   ## Registration contract: the passes sit after the reserved-word rename.
-  ## The dissolved aliases and the relocated declarations use the renamed names
+  ## The rewritten aliases and the relocated declarations use the renamed names
   ## that their body already references, and a const_mem initializer reading a bool
   ## kernel parameter is patched before the relocation moves it out of the body.
-  registerExplodeKernelStructs(reg)
-  wgslRegisterDissolvePointerLocals(reg)
+  registerExplodeStructWithPtrFields(reg)
+  wgslRegisterExplodePointerLocals(reg)
   reg.register("wgslRewriteBoolKernelParamReads", pkTransform, phaseMain,
     "Rewrites reads of the kernel's bool parameters to name != 0u comparisons",
     run = rewriteBoolKernelParamReads
@@ -234,7 +235,7 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
   if e.kind == eCall and e.callee.kind == eSym:
     let callee = procs.getOrDefault(e.callee.name)
     if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
-      return dissolveFail(fn, "device function " & callee.name &
+      return refuseAt(fn, "device function " & callee.name &
         " takes a pointer that cannot cross a WGSL function signature," &
         " a value-position call has no statement form to inline into")
   for ch in getExprChildren(e):
@@ -253,7 +254,7 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
       let callee = procs.getOrDefault(s.callCallee.name)
       if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
         if callee.ret.kind != ctVoid:
-          return dissolveFail(fn, "device function " & callee.name &
+          return refuseAt(fn, "device function " & callee.name &
             " takes a pointer that cannot cross a WGSL function signature" &
             " and returns a value, only void device functions inline")
         var body = cloneStmts(callee.body)
@@ -262,16 +263,16 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
           # semantics-preserving at the splice position
           body.setLen(body.len - 1)
         if body.containsReturn:
-          return dissolveFail(fn, "device function " & callee.name &
+          return refuseAt(fn, "device function " & callee.name &
             " takes a pointer that cannot cross a WGSL function signature," &
             " its body must not return, a spliced return would exit the caller")
         for a in s.callArgs:
           if a.containsCall:
-            return dissolveFail(fn, "call argument of " & callee.name &
+            return refuseAt(fn, "call argument of " & callee.name &
               " contains a call, inlining would re-evaluate it")
         var seen: HashSet[string]
         if callee.callsCrossingCalleeTransitively(procs, seen):
-          return dissolveFail(fn, "device function " & callee.name &
+          return refuseAt(fn, "device function " & callee.name &
             " takes a pointer that cannot cross a WGSL function signature" &
             " and reaches one through its calls, inlining would not terminate")
         var subst = initTable[string, CirExpr]()
@@ -358,7 +359,8 @@ proc inlinePointerParamCalls(m: CirModule): string =
   ## Returns "" when clean, else the first refusal.
   ##
   ## Placement contract:
-  ## - the pass runs after the dissolve pass, so the spliced bodies carry no pointer locals
+  ## - the pass runs after the pointer-local explosion pass
+  ## - spliced bodies therefore carry no pointer locals
   ## - the pass runs after the per-address-space callee instantiation
   ## - a formal re-spaced by its call sites refuses here exactly when the re-spaced signature could not print
   var procs = initTable[string, CirProc]()
@@ -388,93 +390,10 @@ proc inlinePointerParamCalls(m: CirModule): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Pointer dissolution
+# Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
 
-type
-  DissolveLeaf = tuple[sym: string, typ: CirType]
-    ## One dissolved field read: the leaf symbol standing in for it plus
-    ## the leaf type.
-
-  DissolveCtx = object
-    pendingPtrs: HashSet[string]
-    ## Pointer locals awaiting their address-of binding, a read refuses.
-    aliasOf: Table[string, string]
-    ## Pointer local -> pointee local. One binding dissolves the pair, a rebinding refuses.
-    structLocals: HashSet[string]
-    ## Pointer-holding struct locals dissolved into field rewrites, a whole-value use refuses.
-    leafOf: Table[string, DissolveLeaf]
-    ## Dotted field path of a dissolved struct local -> the leaf symbol bound
-    ## by the object construction: `v.data` -> the symbol bound to `data`,
-    ## `v.inner.f` -> the symbol bound to the nested `f`.
-
-proc dissolveFail(fn: CirProc, detail: string): string =
-  "at " & fn.name & ": " & detail
-
-proc toPlainSym(name: string, typ: CirType): CirExpr =
-  ## Every dissolved read rewrites to the symbol this proc returns.
-  result = CirExpr(kind: eSym, name: name, typ: typ, builtin: false,
-    coordBuiltin: cbkNone, synchroBuiltin: sbkNone,
-    reductionBuiltin: rbkNone, atomicsBuiltin: abkNone)
-
-proc spliceSym(e: CirExpr, leaf: DissolveLeaf) =
-  ## Splices one expression node into a plain symbol reference, in place.
-  ## Expressions are refs, the rewrite applies to the node every sharer sees.
-  e.kind = eSym
-  e.name = leaf.sym
-  e.typ = leaf.typ
-  e.builtin = false
-  e.coordBuiltin = cbkNone
-  e.synchroBuiltin = sbkNone
-  e.reductionBuiltin = rbkNone
-  e.atomicsBuiltin = abkNone
-
-proc structRoot(e: CirExpr): CirExpr =
-  ## Symbol at the root of a dotted chain, nil when the expression is
-  ## neither a symbol nor a dotted chain over one.
-  result = e
-  while result != nil and result.kind == eDot:
-    result = result.dotBase
-  if result != nil and result.kind != eSym:
-    result = nil
-
-proc dottedPath(e: CirExpr): string =
-  ## Dotted field path of a chain rooted at a symbol, "" otherwise:
-  ## `v` -> `v`, `v.inner.f` -> `v.inner.f`.
-  if e.kind == eSym:
-    return e.name
-  if e.kind == eDot:
-    let base = dottedPath(e.dotBase)
-    if base.len > 0:
-      return base & "." & e.fieldName
-  return ""
-
-proc registerDissolvedStruct(fn: CirProc, ctx: var DissolveCtx, path: string, t: CirType, c: CirExpr): string =
-  ## Records the field rewrites of one pointer-holding struct local whose
-  ## object construction binds leaf symbols, nested constructions recurse.
-  ## Returns "" when clean, else the refusal.
-  if c.kind != eOconstr:
-    return dissolveFail(fn, "struct local " & path &
-      " initializer is not a construction, WGSL has no pointer struct members")
-  for kvv in c.kvFields:
-    var ft: CirType = nil
-    for f in t.fields:
-      if f.name == kvv.name:
-        ft = f.typ
-    if ft.isNil:
-      return dissolveFail(fn, "field " & kvv.name & " is not on " & t.name)
-    if kvv.value.kind == eOconstr:
-      let err = registerDissolvedStruct(fn, ctx, path & "." & kvv.name, ft, kvv.value)
-      if err.len > 0:
-        return err
-    elif kvv.value.kind == eSym:
-      ctx.leafOf[path & "." & kvv.name] = (kvv.value.name, kvv.value.typ)
-    else:
-      return dissolveFail(fn, "field " & path & "." & kvv.name &
-        " initializer is not a leaf symbol, WGSL has no pointer struct members")
-  return ""
-
-proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string =
+proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
   ## Rewrites one expression in place for the WGSL pointer model.
   ## Returns "" when clean, else the first refusal.
   if e.isNil:
@@ -482,13 +401,13 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string 
   case e.kind
   of eSym:
     if e.name in ctx.structLocals:
-      return dissolveFail(fn, "struct local " & e.name &
+      return refuseAt(fn, "struct local " & e.name &
         " used whole, WGSL has no pointer struct members, read the fields")
     if e.name in ctx.pendingPtrs:
-      return dissolveFail(fn, "pointer local " & e.name &
+      return refuseAt(fn, "pointer local " & e.name &
         " read before its address-of binding")
     if e.name in ctx.aliasOf:
-      return dissolveFail(fn, "pointer local " & e.name &
+      return refuseAt(fn, "pointer local " & e.name &
         " used as a value, WGSL has no pointer values")
     return ""
   of eDot:
@@ -498,9 +417,10 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string 
     if root != nil and root.name in ctx.structLocals:
       let path = dottedPath(e)
       if ctx.leafOf.hasKey(path):
-        e.spliceSym(ctx.leafOf[path])
+        let leaf = ctx.leafOf[path]
+        e.spliceSym(leaf.sym, leaf.typ)
         return ""
-    let err = rewriteDissolveExpr(fn, ctx, e.dotBase)
+    let err = rewritePointerExpr(fn, ctx, e.dotBase)
     if err.len > 0:
       return err
     return ""
@@ -509,29 +429,29 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string 
     if op.kind == eSym:
       if op.name in ctx.aliasOf:
         # pointee stands in for the pointer, the deref unwraps to it
-        e.spliceSym((ctx.aliasOf[op.name], op.typ.pElem))
+        e.spliceSym(ctx.aliasOf[op.name], op.typ.pElem)
         return ""
       if op.name in ctx.pendingPtrs:
-        return dissolveFail(fn, "pointer local " & op.name &
+        return refuseAt(fn, "pointer local " & op.name &
           " read before its address-of binding")
       if op.name in ctx.structLocals:
-        return dissolveFail(fn, "deref of dissolved struct local " & op.name &
+        return refuseAt(fn, "deref of exploded struct local " & op.name &
           ", WGSL has no pointer struct members")
-    return rewriteDissolveExpr(fn, ctx, op)
+    return rewritePointerExpr(fn, ctx, op)
   of eAddr:
     for ch in getExprChildren(e):
-      let err = rewriteDissolveExpr(fn, ctx, ch)
+      let err = rewritePointerExpr(fn, ctx, ch)
       if err.len > 0:
         return err
     return ""
   else:
     for ch in getExprChildren(e):
-      let err = rewriteDissolveExpr(fn, ctx, ch)
+      let err = rewritePointerExpr(fn, ctx, ch)
       if err.len > 0:
         return err
     return ""
 
-proc dissolveVarDecl(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
+proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   ## `sVar` case: a pointer local pends for its address-of binding or binds its pointee,
   ## a pointer-holding struct local registers its field rewrites,
   ## anything else rewrites the initializer.
@@ -541,21 +461,14 @@ proc dissolveVarDecl(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
     elif s.init.kind == eAddr and s.init.addrOperand.kind == eSym:
       ctx.aliasOf[s.name] = s.init.addrOperand.name
     else:
-      return dissolveFail(fn, "pointer local " & s.name &
+      return refuseAt(fn, "pointer local " & s.name &
         " without an address-of binding, WGSL has no pointer locals")
     return ""
   if s.declType.kind == ctStruct and s.declType.containsPtrDeep:
-    if s.init == nil or s.init.kind != eOconstr:
-      return dissolveFail(fn, "struct local " & s.name &
-        " without a construction, WGSL has no pointer struct members")
-    let err = registerDissolvedStruct(fn, ctx, s.name, s.declType, s.init)
-    if err.len > 0:
-      return err
-    ctx.structLocals.incl(s.name)
-    return ""
-  return rewriteDissolveExpr(fn, ctx, s.init)
+    return explodeStructVarDecl(fn, ctx, s, "WGSL")
+  return rewritePointerExpr(fn, ctx, s.init)
 
-proc dissolveAsgn(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
+proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   ## `sAsgn` case: a pointer local binds exactly once, a pointer parameter
   ## of the proc in flight keeps its assignment untouched.
   ## Anything else rewrites both operands.
@@ -563,38 +476,46 @@ proc dissolveAsgn(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
       s.lhs.typ.kind in {ctPtr, ctAptr}:
     if s.lhs.name notin ctx.pendingPtrs and s.lhs.name notin ctx.aliasOf:
       # a pointer parameter of the proc in flight, never touched by the pass
-      let rerr = rewriteDissolveExpr(fn, ctx, s.rhs)
+      let rerr = rewritePointerExpr(fn, ctx, s.rhs)
       if rerr.len > 0:
         return rerr
       return ""
     if s.lhs.name in ctx.aliasOf:
-      return dissolveFail(fn, "pointer local " & s.lhs.name &
+      return refuseAt(fn, "pointer local " & s.lhs.name &
         " rebound, WGSL has no pointer values")
     if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
-      return dissolveFail(fn, "pointer local " & s.lhs.name &
+      return refuseAt(fn, "pointer local " & s.lhs.name &
         " rebound to a non-address value, WGSL has no pointer values")
     ctx.pendingPtrs.excl(s.lhs.name)
     ctx.aliasOf[s.lhs.name] = s.rhs.addrOperand.name
     return ""
-  let lerr = rewriteDissolveExpr(fn, ctx, s.lhs)
+  let lerr = rewritePointerExpr(fn, ctx, s.lhs)
   if lerr.len > 0:
     return lerr
-  return rewriteDissolveExpr(fn, ctx, s.rhs)
+  return rewritePointerExpr(fn, ctx, s.rhs)
 
-proc dissolveDropsVar(s: CirStmt, ctx: DissolveCtx): bool =
-  ## A pointer local and a dissolved struct local drop from their list.
+proc explodeDropsVar(s: CirStmt, ctx: ExplodeCtx): bool =
+  ## A pointer local and an exploded struct local drop from their list.
   s.declType.kind in {ctPtr, ctAptr} or
     (s.declType.kind == ctStruct and s.declType.containsPtrDeep)
 
-proc dissolveDropsAsgn(s: CirStmt, ctx: DissolveCtx): bool =
+proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
   ## A pointer-local binding drops from its list, a pointer parameter's
   ## assignment stays in place.
   s.lhs.kind == eSym and s.lhs.typ != nil and
     s.lhs.typ.kind in {ctPtr, ctAptr} and
     (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf)
 
-proc newDissolveCtx(m: CirModule, fn: CirProc): DissolveCtx =
-  DissolveCtx()
+proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
+  ExplodeCtx()
+
+proc wgslRegisterExplodePointerLocals(reg: var PassRegistry) =
+  ## Registers the WGSL pointer-local explosion pass over the shared walk.
+  registerExplodePointerLocals(reg, "wgslExplodePointerLocals",
+    "Rewrites pointer locals to their pointees and pointer-holding struct" &
+    " locals to their leaf symbols",
+    newExplodeCtx, explodeVarDecl, explodeAsgn,
+    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Bool kernel parameter reads
@@ -609,7 +530,7 @@ proc rewriteBoolReadsExpr(e: CirExpr, boolParams: HashSet[string]) =
     return
   if e.kind == eSym and e.name in boolParams:
     let paramType = e.typ
-    let param = toPlainSym(e.name, paramType)
+    let param = sym(e.name, paramType)
     e.kind = eNeq
     e.cmpType = paramType
     e.a = param
@@ -664,15 +585,6 @@ proc rewriteBoolKernelParamReads(m: CirModule): string =
       continue
     fn.body.rewriteBoolReadsStmts(boolParams)
   return ""
-
-proc wgslRegisterDissolvePointerLocals(reg: var PassRegistry) =
-  ## Expands the shared dissolve template with the WGSL module-local procs.
-  registerCfamilyDissolvePointerLocals(reg, "wgslDissolvePointerLocals",
-    "Dissolves pointer locals and pointer-holding struct locals into their" &
-    " pointees and leaf symbols",
-    DissolveCtx, newDissolveCtx, dissolveVarDecl, dissolveAsgn,
-    dissolveDropsVar, dissolveDropsAsgn, rewriteDissolveExpr)
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Struct-reference registration

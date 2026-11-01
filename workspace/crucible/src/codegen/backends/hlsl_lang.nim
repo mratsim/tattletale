@@ -46,7 +46,7 @@
 ##
 ## Addressing, memory classes, jumps:
 ## - HLSL has no pointer values: pointer locals, pointer-holding struct locals,
-##   `var` parameter derefs all dissolve in the HLSL lowering pass,
+##   `var` parameter derefs all unwrap in the HLSL lowering pass,
 ##   anything pointer shaped reaching the printer refuses
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the HLSL lowering pass,
 ##   file-scope `static const` output, a smem, device-space or surviving
@@ -466,9 +466,9 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("bare dereference has no emission, HLSL has no pointer values")
     return ""
   of eAddr:
-    # refused, buffers are index-only resources and locals dissolve to their pointee
+    # refused, buffers are index-only resources and locals rewrite to their pointee
     ctx.fail("address-of has no HLSL form, buffers are index-only resources" &
-      " and locals dissolve to their pointee")
+      " and locals rewrite to their pointee")
     return ""
   of eCast:
     return ctx.printCast(e)
@@ -528,7 +528,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   let pad = spaces(ctx.indent * 2)
   if s.declType.kind in {ctPtr, ctAptr}:
     ctx.fail("pointer local " & s.name & ", HLSL has no pointer values," &
-      " the HLSL lowering pass dissolves pointer locals")
+      " the HLSL lowering pass rewrites pointer locals to their pointees")
     return ""
   if s.space == caThreadgroup:
     ctx.fail("local " & s.name & " in threadgroup space, HLSL has no" &
@@ -693,7 +693,7 @@ proc emitStructDecls(ctx: var PrintCtx, refs: HashSet[string],
     return
   if t.containsPtrDeep:
     ctx.fail("struct " & name & " holds a pointer, HLSL structs cannot hold" &
-      " resources, the HLSL lowering pass dissolves pointer-holding locals")
+      " resources, the HLSL lowering pass rewrites pointer-holding locals to their fields")
     return
   emitted.incl name
   for f in t.fields:

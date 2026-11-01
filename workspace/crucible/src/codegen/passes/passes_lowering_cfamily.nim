@@ -7,14 +7,11 @@
 
 {.experimental: "codeReordering".}
 
-## Shared C-family lowering: pointer-local dissolution plus program-scope hoisting.
+## Shared C-family lowering: program-scope hoisting.
 ## One registration template per pass, one registration call per target.
 ##
-## - `registerCfamilyDissolvePointerLocals`: registers the shared statement walk
-##   over the pointer dissolution. The instantiating module expands
-##   the template with its dissolve context type and its six module-local procs,
-##   every refusal is raised there.
 ## - `registerCfamilyHoistProgramScopeLocals`: registers the smem and const_mem relocation.
+## The pointer-local explosion walk lives in passes_low_pointers.
 ##   `smemInitReason` is the target's refusal reason for a smem local with an initializer,
 ##   "" when the target accepts one.
 
@@ -105,109 +102,3 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
     run = proc(m: CirModule): string {.nimcall.} =
       hoistProgramScopeLocalsCore(m, smemInitReason)
   )
-
-# ═══════════════════════════════════════════════════════════════════════
-# Pointer dissolution
-# ═══════════════════════════════════════════════════════════════════════
-
-template registerCfamilyDissolvePointerLocals*(reg: var PassRegistry, passName: string, description: string,
-    DissolveCtx: typedesc, newDissolveCtx, dissolveVarDecl, dissolveAsgn,
-    dissolveDropsVar, dissolveDropsAsgn, rewriteDissolveExpr: untyped) =
-  ## Registers the pointer-local dissolution pass over the shared statement walk.
-  ## Every refusal is raised by the instantiating module's own procs,
-  ## the walk only recurses, rewrites and drops.
-  ##
-  ## Args:
-  ## - `reg`, `passName`, `description`: the registry entry
-  ## - `DissolveCtx`: the target module's dissolve context type
-  ## - `newDissolveCtx(m, fn)`: the context of one proc, the `var T` parameter
-  ##   and callee-table setup included
-  ## - `dissolveVarDecl` / `dissolveAsgn`: the `sVar` and `sAsgn` variants,
-  ##   binding and rebinding refusals included, plus the drop predicates
-  ##   `dissolveDropsVar` / `dissolveDropsAsgn` and the expression rewrite
-  ##   `rewriteDissolveExpr(fn, ctx, e)`
-  # Each target module expands the template through a file-private forwarding
-  # proc placed after the machinery, one that passes the six module-local procs
-  # as explicit template arguments.
-  # codeReordering keeps the registration call at the module top.
-  # Pass order: the dissolved aliases use the renamed names their body already references, the pass sits after the reserved-word rename.
-  proc dissolveWalk(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string =
-    ## Rewrites one statement list in place and drops the dissolved declarations.
-    ## Returns "" when clean, else the first refusal.
-    var i = 0
-    while i < ss.len:
-      let s = ss[i]
-      var drops = false
-      case s.kind
-      of sVar:
-        let err = dissolveVarDecl(fn, ctx, s)
-        if err.len > 0:
-          return err
-        drops = dissolveDropsVar(s, ctx)
-      of sAsgn:
-        let err = dissolveAsgn(fn, ctx, s)
-        if err.len > 0:
-          return err
-        drops = dissolveDropsAsgn(s, ctx)
-      of sConst:
-        let err = rewriteDissolveExpr(fn, ctx, s.init)
-        if err.len > 0:
-          return err
-      of sIte:
-        let cerr = rewriteDissolveExpr(fn, ctx, s.cond)
-        if cerr.len > 0:
-          return cerr
-        let terr = dissolveWalk(fn, ctx, s.thenBody)
-        if terr.len > 0:
-          return terr
-        let eerr = dissolveWalk(fn, ctx, s.elseBody)
-        if eerr.len > 0:
-          return eerr
-      of sLoop:
-        let cerr = rewriteDissolveExpr(fn, ctx, s.loopCond)
-        if cerr.len > 0:
-          return cerr
-        let lerr = dissolveWalk(fn, ctx, s.loopBody)
-        if lerr.len > 0:
-          return lerr
-      of sScope:
-        let serr = dissolveWalk(fn, ctx, s.scopeBody)
-        if serr.len > 0:
-          return serr
-      of sAssume:
-        let aerr = rewriteDissolveExpr(fn, ctx, s.assumeCond)
-        if aerr.len > 0:
-          return aerr
-      of sRet:
-        let rerr = rewriteDissolveExpr(fn, ctx, s.retVal)
-        if rerr.len > 0:
-          return rerr
-      of sDiscard:
-        let derr = rewriteDissolveExpr(fn, ctx, s.discardVal)
-        if derr.len > 0:
-          return derr
-      of sCall:
-        let tmp = CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
-        let err = rewriteDissolveExpr(fn, ctx, tmp)
-        s.callCallee = tmp.callee
-        s.callArgs = tmp.args
-        if err.len > 0:
-          return err
-      of sCase, sAsm, sEmit:
-        discard
-      if drops:
-        ss.delete(i)
-        continue
-      i.inc
-    return ""
-  proc dissolvePointerLocals(m: CirModule): string {.nimcall.} =
-    ## Dissolves the pointer locals of every proc into their pointees, in place.
-    ## Returns "" when clean, else the first refusal.
-    for fn in m.procs:
-      var ctx = newDissolveCtx(m, fn)
-      let err = dissolveWalk(fn, ctx, fn.body)
-      if err.len > 0:
-        return err
-    return ""
-  reg.register(passName, pkTransform, phaseMain, description,
-    run = dissolvePointerLocals)

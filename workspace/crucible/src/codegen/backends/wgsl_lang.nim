@@ -15,7 +15,7 @@
 ## - the kernel signature takes only `@builtin(...)` coordinate parameters, first-use order
 ##
 ## Addressing, memory classes, jumps:
-## - a pointer local or pointer-holding struct local refuses, the WGSL lowering pass dissolves the shapes into pointees and leaf symbols
+## - a pointer local or pointer-holding struct local refuses: the WGSL lowering pass rewrites the shapes into pointees and leaf symbols
 ## - a smem/const_mem kernel local relocates into `CirModule.globals`, the WGSL lowering pass owns the relocation
 ## - struct declarations emit for the referenced value structs only, one declaration per entry of `CirModule.structRefs`.
 ##   The struct-reference pass fills that record after the last transform, and a pointer-holding struct refuses
@@ -214,7 +214,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   return ""
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Declaration text of one local, the init stays with the caller.
-  ## A pointer-typed local refuses earlier, the WGSL lowering pass dissolves it.
+  ## A pointer-typed local refuses earlier: the WGSL lowering pass rewrites it.
   result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -232,13 +232,13 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     # entry-point parameters, names pass through
     if e.typ != nil and e.typ.kind == ctPtr and e.name notin ctx.paramNames:
       ctx.fail("pointer local " & e.name & " used as a value, WGSL has no" &
-        " pointer values, the WGSL lowering pass dissolves pointer locals")
+        " pointer values, the WGSL lowering pass rewrites pointer locals to their pointees")
       return ""
     if e.typ != nil and e.typ.kind == ctStruct and e.typ.containsPtrDeep and
         e.name notin ctx.paramNames:
       ctx.fail("struct local " & e.name &
         " used whole, WGSL has no pointer struct members, the WGSL lowering" &
-        " pass dissolves it into its fields")
+        " pass rewrites it into its fields")
       return ""
     if e.coordBuiltin != cbkNone:
       if not ctx.inKernel:
@@ -353,11 +353,11 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
     return ""
   elif s.declType.kind in {ctPtr, ctAptr}:
     ctx.fail("pointer local " & s.name & ", WGSL has no pointer values," &
-      " the WGSL lowering pass dissolves pointer locals")
+      " the WGSL lowering pass rewrites pointer locals to their pointees")
     return ""
   elif s.declType.kind == ctStruct and s.declType.containsPtrDeep:
     ctx.fail("struct local " & s.name & ", WGSL has no pointer struct" &
-      " members, the WGSL lowering pass dissolves pointer locals")
+      " members, the WGSL lowering pass rewrites pointer locals to their pointees")
     return ""
   else:
     result = pad & "var " & ctx.emitLocalDecl(s)
@@ -377,7 +377,7 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr and
       s.lhs.name notin ctx.paramNames:
     ctx.fail("pointer local " & s.lhs.name & " rebound, WGSL has no" &
-      " pointer values, the WGSL lowering pass dissolves pointer locals")
+      " pointer values, the WGSL lowering pass rewrites pointer locals to their pointees")
     return ""
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
