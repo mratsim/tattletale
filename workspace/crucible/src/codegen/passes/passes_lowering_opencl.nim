@@ -246,30 +246,8 @@ proc openclLowerByrefParams(m: CirModule): string =
 
 proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =
   ## Applies the param-read deref wrap over every statement of a body.
-  for st in stmts:
-    case st.kind
-    of sAsgn:
-      wrapParamReads(st.lhs, oldName, ptrSym)
-      wrapParamReads(st.rhs, oldName, ptrSym)
-    of sIte:
-      wrapParamReads(st.cond, oldName, ptrSym)
-      wrapParamReadsProc(st.thenBody, oldName, ptrSym)
-      wrapParamReadsProc(st.elseBody, oldName, ptrSym)
-    of sLoop:
-      wrapParamReads(st.loopCond, oldName, ptrSym)
-      wrapParamReadsProc(st.loopBody, oldName, ptrSym)
-    of sRet:
-      wrapParamReads(st.retVal, oldName, ptrSym)
-    of sDiscard:
-      wrapParamReads(st.discardVal, oldName, ptrSym)
-    of sCall:
-      for a in st.callArgs.mitems:
-        wrapParamReads(a, oldName, ptrSym)
-      wrapParamReads(st.callCallee, oldName, ptrSym)
-    of sVar, sConst:
-      wrapParamReads(st.init, oldName, ptrSym)
-    of sAsm, sEmit:
-      discard
+  stmts.walkStmts(nil, proc(e: CirExpr) =
+    e.wrapParamReads(oldName, ptrSym))
 
 proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
   ## Points a call-site callee symbol's proc type at the rewritten formals.

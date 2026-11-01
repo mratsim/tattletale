@@ -181,6 +181,10 @@ proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
 
 proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
   ## Statement-walk overload of `substituteArgsExpr`, nested bodies included.
+  ##
+  ## The walk stays hand-rolled. A substitution splices the call argument
+  ## into the symbol node and must not re-walk the spliced content: its symbols belong to the caller.
+  ## A shared walk descends into the rewritten node and would substitute a second parameter inside the argument.
   for s in mitems(ss):
     case s.kind
     of sVar, sConst:

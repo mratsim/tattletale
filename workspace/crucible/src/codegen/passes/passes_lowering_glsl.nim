@@ -106,32 +106,12 @@ proc unwrapVarDerefsExpr(e: CirExpr, varParams: HashSet[string]) =
     for ch in getExprChildren(e):
       ch.unwrapVarDerefsExpr(varParams)
 
-proc unwrapVarDerefsStmts(ss: var seq[CirStmt], varParams: HashSet[string]) =
+proc unwrapVarDerefsStmts(ss: seq[CirStmt], varParams: HashSet[string]) =
   ## Statement-walk overload of `unwrapVarDerefsExpr`, nested bodies included.
-  for s in mitems(ss):
-    case s.kind
-    of sVar, sConst:
-      s.init.unwrapVarDerefsExpr(varParams)
-    of sAsgn:
-      s.lhs.unwrapVarDerefsExpr(varParams)
-      s.rhs.unwrapVarDerefsExpr(varParams)
-    of sIte:
-      s.cond.unwrapVarDerefsExpr(varParams)
-      s.thenBody.unwrapVarDerefsStmts(varParams)
-      s.elseBody.unwrapVarDerefsStmts(varParams)
-    of sLoop:
-      s.loopCond.unwrapVarDerefsExpr(varParams)
-      s.loopBody.unwrapVarDerefsStmts(varParams)
-    of sRet:
-      s.retVal.unwrapVarDerefsExpr(varParams)
-    of sDiscard:
-      s.discardVal.unwrapVarDerefsExpr(varParams)
-    of sCall:
-      s.callCallee.unwrapVarDerefsExpr(varParams)
-      for a in mitems(s.callArgs):
-        a.unwrapVarDerefsExpr(varParams)
-    of sAsm, sEmit:
-      discard
+  ## The shared walk covers every expression position, the deref unwrap
+  ## splices symbols in place.
+  ss.walkStmts(nil, proc(e: CirExpr) =
+    e.unwrapVarDerefsExpr(varParams))
 
 proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]): string =
   ## Rewrites the call arguments of one expression tree:
