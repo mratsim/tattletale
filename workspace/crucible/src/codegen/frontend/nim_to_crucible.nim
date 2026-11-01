@@ -1047,17 +1047,14 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       else:
         ctx.fail("if expression: unexpected branch " & $c.kind)
         return nil
-    # a branch nests into a ternary value only when every branch value is
-    # call-free, including the else body.
-    # a call in a branch value binds a temp bound inside its taken branch,
-    # call-bearing branches take the statement form
+    # a branch nests into a ternary value when it is a single expression,
+    # statement-bearing branches take the statement form
     var simple = true
     for br in branches:
-      if isStmtBody(branchValueExpr(br.body)) or containsCall(branchValueExpr(br.body)):
+      if isStmtBody(branchValueExpr(br.body)):
         simple = false
         break
-    if simple and not isStmtBody(branchValueExpr(elseBody)) and
-        not containsCall(branchValueExpr(elseBody)):
+    if simple and not isStmtBody(branchValueExpr(elseBody)):
       return lowerNestedTernary(ctx, branches, elseBody, 0, resType)
     let tmpName = ctx.uniqueName("iftmp")
     ctx.declareLocal(tmpName, sym(tmpName, resType))
