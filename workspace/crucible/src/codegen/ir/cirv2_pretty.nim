@@ -44,6 +44,7 @@ proc renderType(t: CirType): string =
   case t.kind
   of ctVoid: result = "(void)"
   of ctBool: result = "(bool)"
+  of ctString: result = "(string)"
   of ctInt: result = "(i " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
   of ctUint: result = "(u " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
   of ctFloat: result = "(f " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
@@ -71,6 +72,7 @@ proc renderExpr(e: CirExpr): string =
   of eSym: result = e.name
   of eIntLit: result = $e.value
   of eFloatLit: result = $e.fValue
+  of eStrLit: result = "(\"" & e.sValue & "\")"
   of eDeref: result = "(deref " & renderExpr(e.derefOperand) & ")"
   of eAt: result = "(at " & renderExpr(e.atBase) & " " & renderExpr(e.atIndex) & ")"
   of ePat: result = "(pat " & renderExpr(e.patBase) & " " & renderExpr(e.patIndex) & ")"

@@ -385,14 +385,15 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 
 proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
   ## Parameter declaration of one kernel or device-function parameter.
-  ## A raw `ptr` parameter is legal C between device functions, the printer refuses it on a kernel.
+  ## A kernel's `ptr T` parameter binds a device buffer, the engine serializes
+  ## it through the same pointer-leaf form as a `ptr UncheckedArray[T]` parameter.
   block:
     let missing = getUnnamedScalarCell(openclScalarNames, p.typ)
     if missing != nil:
       ctx.fail(scalarRefusal(printerTarget, openclScalarNames, missing))
       return ""
   case p.typ.kind
-  of ctAptr:
+  of ctAptr, ctPtr:
     let (qualifier, ident) = case p.typ.space
       of caDevice: ("__global ", "restrict " & p.name)
       of caThreadgroup: ("__local ", p.name)
@@ -400,12 +401,6 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
       of caThread: ("", p.name)
     result = qualifier &
       cDecl(openclScalarNames, openclVectorRule, printerTarget, p.typ, ident, true)
-  of ctPtr:
-    if isKernel:
-      ctx.fail("kernel parameter " & p.name &
-        " of pointer type, the engine binds device buffers and values")
-      return ""
-    result = cDecl(openclScalarNames, openclVectorRule, printerTarget, p.typ, p.name, true)
   of ctArray:
     ctx.fail("array parameter " & p.name &
       ", OpenCL C array parameters decay to pointers, the engine packs the value")

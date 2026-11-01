@@ -136,6 +136,20 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
+proc refuseHlslScalarName(ctx: var PrintCtx, t: CirType): void =
+  ## Refusal side of the leaf-name lookup, the width exists in Nim, HLSL names only the subset.
+  case t.kind
+  of ctInt:
+    ctx.fail("int" & $t.bits & " has no HLSL type name")
+  of ctUint:
+    ctx.fail("uint" & $t.bits & " has no HLSL type name")
+  of ctFloat:
+    ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
+  of ctBf16:
+    ctx.fail("bfloat16 has no HLSL type name, bfloat16 types are outside the HLSL subset")
+  else:
+    discard
+
 proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
@@ -144,15 +158,9 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   of ctInt, ctUint, ctFloat:
     result = getScalarName(hlslScalarNames, t)
     if result.len == 0:
-      case t.kind
-      of ctInt:
-        ctx.fail("int" & $t.bits & " has no HLSL type name")
-      of ctUint:
-        ctx.fail("uint" & $t.bits & " has no HLSL type name")
-      else:
-        ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
+      refuseHlslScalarName(ctx, t)
   of ctBf16:
-    ctx.fail("bfloat16 has no HLSL type name, bfloat16 types are outside the HLSL subset")
+    refuseHlslScalarName(ctx, t)
   of ctVector:
     let elem = emitHlslScalar(ctx, t.vElem)
     result = getVectorName(hlslVectorRule, hlslScalarNames, t)
@@ -161,6 +169,8 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
         "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
   of ctStruct:
     result = t.name
+  of ctString:
+    ctx.fail("string has no HLSL type name")
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
@@ -672,6 +682,9 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
           ctx.fail(err)
           return
       buffers.add p
+    of ctString:
+      # HLSL has no string type name, the scalar-name lookup refuses it
+      discard
     of ctPtr:
       if p.typ.space == caThread:
         if fn.isKernel:

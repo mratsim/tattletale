@@ -209,6 +209,8 @@ func zeroValue(t: CirType): CirExpr =
     result = convE(t, fltLit(0.0, tFloat(32)))
   of ctBool:
     result = falseE()
+  of ctString:
+    result = strLit("")
   of ctPtr, ctAptr:
     result = nilE(t)
   of ctArray:
@@ -1024,11 +1026,10 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     ctx.hoisted.add(@[varD(tmpName, resType)] & stmts)
     return sym(tmpName, resType)
   of nnkStrLit, nnkRStrLit, nnkTripleStrLit:
-    ctx.fail("string literal: GPU kernels carry no strings")
-    return nil
-  of nnkCharLit:
-    ctx.fail("char literal: outside the supported set")
-    return nil
+    # a string literal is C string text: nnkStrLit escapes it, the raw string
+    # forms carry their text verbatim, the printers add the quotes
+    let text = if n.kind == nnkStrLit: n.strVal.escape("", "") else: n.strVal
+    return strLit(text)
   else:
     ctx.fail("expression construct not supported: " & $n.kind & " " & n.repr)
     return nil

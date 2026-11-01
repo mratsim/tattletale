@@ -99,7 +99,7 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
   of ctBf16:
     # no target needs a module feature for bfloat16
     discard
-  of ctVoid, ctBool, ctProc, ctSpan:
+  of ctVoid, ctBool, ctProc, ctSpan, ctString:
     discard
 
 proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, profile: ScanProfile) =

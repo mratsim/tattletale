@@ -411,6 +411,10 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     result = tFloat(32)
   of ntyFloat, ntyFloat64:
     result = tFloat(64)
+  of ntyString:
+    # a string literal's type. Only the C-family targets carry a type name
+    # for it (`const char*`), the wgsl and hlsl printers refuse the name.
+    result = tString()
   of ntyPtr:
     let pointee = n[0]
     if pointee.typeKind == ntyUncheckedArray:

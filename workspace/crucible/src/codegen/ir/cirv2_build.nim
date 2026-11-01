@@ -80,6 +80,13 @@ proc intLit*(value: int64, typ: CirType): CirExpr =
 proc fltLit*(value: float64, typ: CirType): CirExpr =
   CirExpr(kind: eFloatLit, fValue: value, fLitType: typ)
 
+proc tString*(): CirType =
+  CirType(kind: ctString)
+
+proc strLit*(value: string): CirExpr =
+  ## One C string literal, its text as the target prints it between quotes.
+  CirExpr(kind: eStrLit, sValue: value)
+
 proc nilE*(typ: CirType): CirExpr =
   CirExpr(kind: eNil, nilType: typ)
 

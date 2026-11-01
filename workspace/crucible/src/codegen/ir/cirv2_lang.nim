@@ -49,6 +49,7 @@ type
     ## re-derived by passes.
     ctVoid
     ctBool
+    ctString
     ctInt
     ctUint
     ctFloat
@@ -94,7 +95,7 @@ type
     of ctProc:
       params*: seq[CirType]
       ret*: CirType
-    of ctVoid, ctBool:
+    of ctVoid, ctBool, ctString:
       discard
 
   CirExprKind* = enum
@@ -113,6 +114,7 @@ type
     eSym
     eIntLit
     eFloatLit
+    eStrLit
     eDeref
     eAt
     ePat
@@ -167,6 +169,8 @@ type
     of eFloatLit:
       fValue*: float64
       fLitType*: CirType
+    of eStrLit:
+      sValue*: string
     of eDeref:
       derefOperand*: CirExpr
     of eAt:
@@ -392,7 +396,7 @@ proc structuralEqual*(a, b: CirType): bool =
   if a.kind != b.kind:
     return false
   case a.kind
-  of ctVoid, ctBool:
+  of ctVoid, ctBool, ctString:
     result = true
   of ctInt, ctUint, ctFloat, ctBf16:
     result = a.bits == b.bits
@@ -433,7 +437,7 @@ proc sameType*(a, b: CirType): bool =
   if a.kind != b.kind:
     return false
   case a.kind
-  of ctVoid, ctBool:
+  of ctVoid, ctBool, ctString:
     result = true
   of ctInt, ctUint, ctFloat, ctBf16:
     result = a.bits == b.bits
@@ -473,6 +477,8 @@ proc getExprType*(e: CirExpr): CirType =
     result = e.litType
   of eFloatLit:
     result = e.fLitType
+  of eStrLit:
+    result = CirType(kind: ctString)
   of eNil:
     result = e.nilType
   of eTrue, eFalse:
@@ -539,6 +545,7 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
   case e.kind
   of eAt: result = @[e.atBase, e.atIndex]
   of ePat: result = @[e.patBase, e.patIndex]
+  of eStrLit: discard
   of eDot: result = @[e.dotBase]
   of eDeref: result = @[e.derefOperand]
   of eAddr: result = @[e.addrOperand]
