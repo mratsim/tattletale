@@ -17,12 +17,21 @@ import std/strutils
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/passes_lowering
+import workspace/crucible/src/codegen/passes/passes_low_array_assign
+import workspace/crucible/src/codegen/passes/passes_low_pointers
+import workspace/crucible/src/codegen/passes/passes_low_address_spaces
 import workspace/crucible/src/codegen/passes/passes_lowering_msl
 
 proc runLowering(m: CirModule): string =
   var reg = PassRegistry.new()
   reg.registerSharedLoweringPasses()
-  reg.registerMslLoweringPasses()
+  reg.registerDecomposeArrayAssign()
+  registerExplodeStructWithPtrFields(reg)
+  reg.registerMslHoistProgramScopeConstants()
+  reg.registerMslHoistDeviceFnSmem()
+  reg.registerMslRewriteSmemLocals()
+  reg.registerMslThreadCoordinateBuiltins()
+  reg.registerInstantiateAddressSpaceGenerics()
   result = m.runPasses(reg)
 
 proc holdsToOpenArrayCall(e: CirExpr): bool =

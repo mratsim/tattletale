@@ -1,6 +1,6 @@
 ## Hand-built CIRv2: the CUDA reserved-identifier rename registration.
 ##
-## Test that the registered CUDA lowering passes rename an identifier
+## Test that the CUDA reserved-identifier rename pass renames an identifier
 ## colliding with the execution-space qualifiers the CUDA-C++ emitter writes:
 ## a local named `__shared__` emits as `__shared___nim`.
 ##
@@ -11,11 +11,15 @@
 
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_registry
-import workspace/crucible/src/codegen/passes/passes_lowering_cuda
+import workspace/crucible/src/codegen/passes/passes_low_array_assign
+import workspace/crucible/src/codegen/passes/passes_low_reserved
+import workspace/crucible/src/codegen/passes/passes_low_address_spaces
 
 proc runCudaLowering(m: CirModule): string =
   var reg = PassRegistry.new()
-  reg.registerCudaLoweringPasses()
+  reg.registerDecomposeArrayAssign()
+  reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
+  reg.registerInstantiateAddressSpaceGenerics()
   result = m.runPasses(reg)
 
 static:

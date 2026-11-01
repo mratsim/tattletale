@@ -1,6 +1,6 @@
 ## Hand-built CIRv2: the whole-array assignment decomposition registration.
 ##
-## Test that the registered CUDA lowering passes rewrite every whole-array
+## Test that the CUDA lowering passes rewrite every whole-array
 ## copy into a `__builtin_memcpy(&dst, &src, sizeof(T))` call and refuse
 ## the shapes the form cannot express:
 ##
@@ -18,11 +18,15 @@
 import std/strutils
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_registry
-import workspace/crucible/src/codegen/passes/passes_lowering_cuda
+import workspace/crucible/src/codegen/passes/passes_low_array_assign
+import workspace/crucible/src/codegen/passes/passes_low_reserved
+import workspace/crucible/src/codegen/passes/passes_low_address_spaces
 
 proc runCudaLowering(m: CirModule): string =
   var reg = PassRegistry.new()
-  reg.registerCudaLoweringPasses()
+  reg.registerDecomposeArrayAssign()
+  reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
+  reg.registerInstantiateAddressSpaceGenerics()
   result = m.runPasses(reg)
 
 proc isMemcpyCall(s: CirStmt, dst, src: string, arrType: CirType): bool =

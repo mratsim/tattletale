@@ -7,11 +7,8 @@
 
 {.experimental: "codeReordering".}
 
-## OpenCL lowering: per-target transforms for the OpenCL C storage model,
-## registered by the OpenCL pipeline and run before printing.
-##
-##   kernel body → decomposeArrayAssign → openclHoistProgramScopeConstants
-##   → printed OpenCL C source
+## OpenCL lowering: per-target transforms for the OpenCL C storage model.
+## The pipeline table in `gpu_compiler.nim` declares the registration order.
 ##
 ## - `openclHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into
 ##   `CirModule.globals` in encounter order, every proc and scope depth covered,
@@ -35,34 +32,26 @@ import ../ir/cirv2_build
 import ./pass_datatypes
 import ./passes_low_pointers
 import ./pass_helpers
-import ./passes_low_address_spaces
-import ./passes_low_array_assign
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerOpenclLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the OpenCL per-target lowering passes:
-  ##
-  ## - `decomposeArrayAssign`: whole-array copies that OpenCL C cannot express
-  ## - the struct-argument explosion runs here, the engine binds one buffer
-  ##   per pointer leaf in field order
-  ## - `openclHoistProgramScopeConstants`, before printing
-  ##
-  ## Registration contract: the pass sits after the reserved-word rename,
-  ## relocated declaration names match the renamed body references.
-  reg.registerDecomposeArrayAssign()
-  registerExplodeStructWithPtrFields(reg)
+func registerOpenclHoistProgramScopeConstants*(reg: var PassRegistry) =
+  ## Registers the const_mem program-scope hoist:
+  ## - the pass refuses a const_mem local without an initializer
+  ## - the printer keeps a nil-init shape guard on the relocated declarations
   reg.register("openclHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = openclHoistProgramScopeConstants
   )
+
+func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
+  ## Registers the by-reference parameter lowering pass.
   reg.register("lowerByrefParams", pkTransform,
     "Passes large structs to device functions as hidden thread pointers",
     run = openclLowerByrefParams
   )
-  reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
 # Const_mem locals to program-scope constants

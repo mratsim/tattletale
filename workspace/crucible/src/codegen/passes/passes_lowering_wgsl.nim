@@ -62,7 +62,6 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./passes_lowering_cfamily
-import ./passes_low_address_spaces
 import ./passes_low_pointers
 import ./pass_helpers
 
@@ -70,27 +69,32 @@ import ./pass_helpers
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerWgslLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the WGSL per-target lowering passes:
-  ##
-  ## - the kernel struct-argument explosion, WebGPU is a flat resource target
-  ## - `wgslExplodePointerLocals`, `wgslRewriteBoolKernelParamReads`, `wgslHoistProgramScopeLocals`, in that order, before printing
-  ##
-  ## Registration contract: the passes sit after the reserved-word rename.
-  ## The rewritten aliases and the relocated declarations use the renamed names
-  ## that their body already references, and a const_mem initializer reading a bool
-  ## kernel parameter is patched before the relocation moves it out of the body.
-  registerExplodeStructWithPtrFields(reg)
-  wgslRegisterExplodePointerLocals(reg)
+func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
+  ## Registers the WGSL pointer-local explosion pass over the shared walk.
+  registerExplodePointerLocals(reg, "wgslExplodePointerLocals",
+    "Rewrites pointer locals to their pointees and pointer-holding struct" &
+    " locals to their leaf symbols",
+    newExplodeCtx, explodeVarDecl, explodeAsgn,
+    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
+
+func registerWgslRewriteBoolKernelParamReads*(reg: var PassRegistry) =
+  ## Registers the bool kernel-parameter read rewrite: a const_mem initializer
+  ## reading a bool kernel parameter is patched before the hoist relocates it.
   reg.register("wgslRewriteBoolKernelParamReads", pkTransform,
     "Rewrites reads of the kernel's bool parameters to name != 0u comparisons",
     run = rewriteBoolKernelParamReads
   )
+
+func registerWgslHoistProgramScopeLocals*(reg: var PassRegistry) =
+  ## Registers the WGSL program-scope hoist: the rewritten aliases plus
+  ## the relocated declarations use the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "wgslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope", smemInitRefuse,
     "WGSL workgroup variables are zero-initialized")
-  reg.registerInstantiateAddressSpaceGenerics()
+
+func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
+  ## Registers the pointer-param call inlining pass.
   reg.register("wgslInlinePointerParamCalls", pkTransform,
     "Inlines calls whose pointer arguments cannot cross a WGSL function" &
     " signature",
@@ -477,13 +481,6 @@ proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
 proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
   ExplodeCtx()
 
-proc wgslRegisterExplodePointerLocals(reg: var PassRegistry) =
-  ## Registers the WGSL pointer-local explosion pass over the shared walk.
-  registerExplodePointerLocals(reg, "wgslExplodePointerLocals",
-    "Rewrites pointer locals to their pointees and pointer-holding struct" &
-    " locals to their leaf symbols",
-    newExplodeCtx, explodeVarDecl, explodeAsgn,
-    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Bool kernel parameter reads

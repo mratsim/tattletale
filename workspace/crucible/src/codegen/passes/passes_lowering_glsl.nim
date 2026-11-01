@@ -7,11 +7,8 @@
 
 {.experimental: "codeReordering".}
 
-## GLSL lowering: per-target transforms for the GLSL storage model,
-## registered by the GLSL pipeline and run before printing.
-##
-##   kernel body → glslQualifyVarParams → glslExplodePointerLocals → glslHoistProgramScopeLocals
-##   → glslRegisterRefBlocks → printed GLSL source
+## GLSL lowering: per-target transforms for the GLSL storage model.
+## The pipeline table in `gpu_compiler.nim` declares the registration order.
 ##
 ## GLSL has no function-storage addressing, a local cannot be addressed.
 ## Threadgroup and constant-storage locals must live at program scope:
@@ -47,30 +44,35 @@ import ../backends/glsl_lang
 import ./pass_datatypes
 import ./pass_helpers
 import ./passes_lowering_cfamily
-import ./passes_low_address_spaces
 import ./passes_low_pointers
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerGlslLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the GLSL per-target lowering passes:
-  ## - `glslExplodePointerLocals` then `glslHoistProgramScopeLocals`, in that order, before printing
-  ##
-  ## Registration contract: the passes sit after the reserved-word rename,
-  ## and the relocated declarations use the renamed names that their body already references.
+func registerGlslQualifyVarParams*(reg: var PassRegistry) =
+  ## Registers the var-parameter qualification pass.
   reg.register("glslQualifyVarParams", pkTransform,
     "Retypes var parameters to their pointee, unwraps their body derefs and" &
     " the call-site address arguments",
     run = qualifyVarParams
   )
-  glslRegisterExplodePointerLocals(reg)
+
+func registerGlslExplodePointerLocals*(reg: var PassRegistry) =
+  ## Registers the GLSL pointer-local explosion pass over the shared walk.
+  registerExplodePointerLocals(reg, "glslExplodePointerLocals",
+    "Rewrites pointer locals to their pointee locals, reads through the" &
+    " alias to the pointee symbol",
+    newExplodeCtx, explodeVarDecl, explodeAsgn,
+    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
+
+func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
+  ## Registers the GLSL program-scope hoist: the relocated declarations use
+  ## the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope", smemInitRefuse,
     "GLSL shared variables take only a null initializer")
-  reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
 # var-parameter qualification
@@ -375,13 +377,6 @@ proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
 proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
   ExplodeCtx()
 
-proc glslRegisterExplodePointerLocals(reg: var PassRegistry) =
-  ## Registers the GLSL pointer-local explosion pass over the shared walk.
-  registerExplodePointerLocals(reg, "glslExplodePointerLocals",
-    "Rewrites pointer locals to their pointee locals, reads through the" &
-    " alias to the pointee symbol",
-    newExplodeCtx, explodeVarDecl, explodeAsgn,
-    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Buffer-reference block registration

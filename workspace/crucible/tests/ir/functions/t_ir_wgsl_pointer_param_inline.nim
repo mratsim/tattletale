@@ -18,10 +18,17 @@ import std/[sets, strutils]
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/passes_lowering_wgsl {.all.}
+import workspace/crucible/src/codegen/passes/passes_low_pointers
+import workspace/crucible/src/codegen/passes/passes_low_address_spaces
 
 proc runWgslLowering(m: CirModule): string =
   var reg = PassRegistry.new()
-  reg.registerWgslLoweringPasses()
+  registerExplodeStructWithPtrFields(reg)
+  reg.registerWgslExplodePointerLocals()
+  reg.registerWgslRewriteBoolKernelParamReads()
+  reg.registerWgslHoistProgramScopeLocals()
+  reg.registerInstantiateAddressSpaceGenerics()
+  reg.registerWgslInlinePointerParamCalls()
   result = m.runPasses(reg)
 
 proc procNamed(m: CirModule, name: string): CirProc =

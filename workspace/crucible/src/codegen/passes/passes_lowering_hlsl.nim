@@ -40,28 +40,35 @@ import ../backends/hlsl_lang
 import ./pass_datatypes
 import ./pass_helpers
 import ./passes_low_pointers
-import ./passes_low_address_spaces
-import ./passes_low_reserved
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerHlslLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the HLSL per-target lowering passes in the order
-  ## materialization -> dissolution -> reserved-word renaming -> printing.
+func registerHlslMaterializeNumWorkgroups*(reg: var PassRegistry) =
+  ## Registers the materialized dispatch-grid pass.
   reg.register("hlslMaterializeNumWorkgroups", pkTransform,
     "Rewrites threadgroups_per_grid reads to the materialized trailing" &
     " kernel parameter the engine stages",
     run = materializeNumWorkgroups
   )
-  hlslRegisterExplodePointerLocals(reg)
-  reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
+
+func registerHlslExplodePointerLocals*(reg: var PassRegistry) =
+  ## Registers the HLSL pointer-local explosion pass over the shared walk.
+  registerExplodePointerLocals(reg, "hlslExplodePointerLocals",
+    "Rewrites pointer locals, pointer-holding struct locals and var" &
+    " parameters to the HLSL storage model",
+    newExplodeCtx, explodeVarDecl, explodeAsgn,
+    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
+
+func registerHlslHoistProgramScopeConstants*(reg: var PassRegistry) =
+  ## Registers the HLSL const_mem program-scope hoist:
+  ## - dxc folds the relocated declarations at compile time
+  ## - no register in the `$Globals`/cbuffer layout, visible to all functions
   reg.register("hlslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = hlslHoistProgramScopeConstants
   )
-  reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
 # The materialized dispatch-grid parameter
@@ -383,13 +390,6 @@ proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
     if p.typ.kind == ctPtr and p.typ.space == caThread:
       result.byRefParams.incl(p.name)
 
-proc hlslRegisterExplodePointerLocals(reg: var PassRegistry) =
-  ## Registers the HLSL pointer-local explosion pass over the shared walk.
-  registerExplodePointerLocals(reg, "hlslExplodePointerLocals",
-    "Rewrites pointer locals, pointer-holding struct locals and var" &
-    " parameters to the HLSL storage model",
-    newExplodeCtx, explodeVarDecl, explodeAsgn,
-    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Const_mem locals to program-scope constants

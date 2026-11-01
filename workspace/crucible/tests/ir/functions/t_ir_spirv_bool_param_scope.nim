@@ -17,7 +17,7 @@ proc retype(m: CirModule): tuple[m: CirModule, err: string] =
   ## Runs the SPIR-V bool retype pass over `m` through the registry.
   var reg = PassRegistry.new()
   reg.registerBuiltinKindAssignment()
-  reg.registerSpirvLoweringPasses()
+  reg.registerSpirvPatchBoolToI32()
   let err = m.runPasses(reg)
   result = (m, err)
 

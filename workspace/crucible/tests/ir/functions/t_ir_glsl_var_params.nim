@@ -18,10 +18,14 @@ import std/[sets, strutils]
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/passes_lowering_glsl {.all.}
+import workspace/crucible/src/codegen/passes/passes_low_address_spaces
 
 proc runGlslLowering(m: CirModule): string =
   var reg = PassRegistry.new()
-  reg.registerGlslLoweringPasses()
+  reg.registerGlslQualifyVarParams()
+  reg.registerGlslExplodePointerLocals()
+  reg.registerGlslHoistProgramScopeLocals()
+  reg.registerInstantiateAddressSpaceGenerics()
   result = m.runPasses(reg)
 
 proc varParamProc(name: string, params: seq[CirParam], body: seq[CirStmt]): CirProc =
