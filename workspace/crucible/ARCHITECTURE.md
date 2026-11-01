@@ -152,7 +152,7 @@ src/
                                     resolveOverloadedOperators,
                                     deadCodeElimination,
                                     deEmbedForRangeAdjustment, mangleNames
-      passes_optimizations.nim      max/min folding, constant-shell elimination.
+      passes_optimizations.nim      max/min folding, dead-local elimination.
       passes_lowering.nim           gtSpan -> ptr + len, compile-time parameter
                                     pruning, memcpy decomposition.
       passes_validations.nim        Pre/post validation (e.g. warnUnassigned).
@@ -224,7 +224,7 @@ Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in 
    | pre-validation | well-formedness of the freshly built IR |
    | legalization | Nim-only constructs (if-expressions, block expressions, index/deref shapes) become backend-neutral IR |
    | normalization | names and call shapes canonicalized, mangleNames last |
-   | optimization | max/min folding, constant-shell elimination |
+   | optimization | max/min folding, dead-local elimination |
    | shared lowering | spans become ptr + len, memcpy decomposition, no frontend constructs survive |
    | post-validation | the codegen boundary, no block expressions remain |
 

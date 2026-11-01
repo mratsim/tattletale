@@ -1820,7 +1820,6 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
   ##
   ## Returns:
   ##   the module and "" when clean, else the first refusal message.
-  ##   The constant-shell fold runs on this output.
   ##
   ## `bodyIn` is a block of kernel proc defs, or the single `{.global.}` wrapper
   ## proc of a launchDeviceFn call.

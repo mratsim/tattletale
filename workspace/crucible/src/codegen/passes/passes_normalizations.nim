@@ -11,10 +11,8 @@
 
 import ./pass_datatypes
 import ./passes_norm_compound_assign
-import ./passes_norm_shell_fold
 import ./passes_norm_unroll
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
   reg.registerCompoundAssignTemps()
   reg.registerMarkExplicitUnrolls()
-  reg.registerShellFolding()
