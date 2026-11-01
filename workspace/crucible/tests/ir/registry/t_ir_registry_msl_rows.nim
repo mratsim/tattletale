@@ -98,7 +98,7 @@ static:
 
   let vec = mslVectorRule()
   doAssert vec.context == vcCoordinate
-  doAssert vec.elems == @[(ctInt, 32), (ctUint, 32)]
+  doAssert vec.elems == @[(ctInt, 32, ""), (ctUint, 32, "")]
   doAssert vec.lanes == @[2, 3, 4]
 
 echo "[OK] t_ir_registry_msl_rows"

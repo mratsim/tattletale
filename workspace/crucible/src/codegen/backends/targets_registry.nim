@@ -131,6 +131,9 @@ type
     ## Qualifier on a kernel's pointer parameters.
     smemParam*: string
     ## Qualifier on a parameter carrying relocated shared-memory storage.
+    kernelParamPointerRestrict*: bool = false
+    ## Restrict qualifier on a kernel's device-space pointer parameter
+    ## (`__global T* restrict p`), a function-parameter qualifier in OpenCL C.
 
   ConvRow* = object
     ## Name tables of one target: conversion data that is a pure name-to-text mapping.
@@ -151,18 +154,31 @@ type
     cwfFlatIndex
     ## Whole-value read composes the x-major flat thread index from the target's
     ## vector builtins. The glue proc emits the text.
+    cwfCast
+    ## Whole-value read wraps a reference to the cell's name in the cell's cast
+    ## (`int(gl_LocalInvocationIndex)`).
+
+  CoordComponentForm* = enum
+    ## Form of one coordinate component read.
+    ccField
+    ## Field access on the referenced name (`name.x`).
+    ccDimCall
+    ## Call with the component's dimension as a literal argument
+    ## (`get_global_id(0)`).
 
   CoordCell* = object
     ## One coordinate builtin kind's static data of one target.
     kind*: CoordBuiltinKind
     paramName*: string
-    ## Attributed parameter's identifier, "" for the canonical builtin name.
+    ## Identifier a read references: an attributed parameter's name or a native builtin name, "" for the canonical builtin name.
     ## Names are kind-static, never body-dependent.
     paramType*: string
     ## Attributed parameter's type name, "" when the target has no form for the kind.
     whole*: CoordWholeForm
     componentCast*: string
     ## Type a component read casts to, "" for none.
+    componentForm*: CoordComponentForm = ccField
+    ## Form of the cell's component reads.
 
   CoordRow* = object
     ## Coordinate builtin data of one target.
@@ -191,6 +207,10 @@ type
     ## Resource binding form, `$1` stands for the binding slot, "" when the target has no binding form.
     groupPrefix*: string
     ## Binding group form, `$1` stands for the group, "" when absent.
+    entryTakesParams*: bool = true
+    ## True when the entry signature takes the kernel's parameter list.
+    ## False when the parameters pack elsewhere and the signature takes none
+    ## (GLSL's push-constant block).
 
   VectorContext* = enum
     ## Where a target's printer emits vector types.
@@ -202,8 +222,10 @@ type
   VectorRule* = object
     ## A target's real vector coverage, as its printer emits it today.
     context*: VectorContext
-    elems*: seq[tuple[kind: CirTypeKind, width: int]]
-    ## Element types the target names, empty for `vcNone`.
+    elems*: seq[tuple[kind: CirTypeKind, width: int, prefix: string]]
+    ## Element types the target names, with the vector name's prefix.
+    ## The name composes as `prefix & $laneCount`, an empty prefix composes
+    ## the element's scalar name from the scalar row. Empty for `vcNone`.
     lanes*: seq[int]
     ## Lane counts the target emits.
 
@@ -218,7 +240,8 @@ proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
   ##
   ## - every cell of `ScalarCellAxis` appears exactly once, a second row for an existing cell fails the compile
   ## - a supported cell has a type name and no reason class, a refused cell has a reason class and no name
-  ## - a type name denotes at most one cell
+  ## - a type name denotes at most one cell, a bool cell's name may repeat another
+  ##   cell's name (OpenCL prints bool locals as `int` for the 4-byte launch ABI)
   ##
   ## Raises `AssertionDefect` at compile time on the first violated check.
   for axisCell in ScalarCellAxis:
@@ -239,9 +262,11 @@ proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
         "target " & target & ": refused cell (" & $c.kind & ", " & $c.width &
         ") needs a reason class and no name"
   for i, a in row.cells:
-    if a.spelling.len == 0:
+    if a.spelling.len == 0 or a.kind == ctBool:
       continue
     for j in i + 1 ..< row.cells.len:
+      if row.cells[j].kind == ctBool:
+        continue
       doAssert row.cells[j].spelling != a.spelling,
         "target " & target & ": name '" & a.spelling & "' denotes two cells, (" &
         $a.kind & ", " & $a.width & ") and (" & $row.cells[j].kind & ", " &
@@ -255,6 +280,7 @@ proc checkScalarRowsTogether*(
   ## - divergent names for one cell are explicit data, msl `char`/`long` against
   ##   cuda `signed char`/`long long`
   ## - ledgered divergences are checked by `checkScalarDivergences`
+  ## - a bool cell's name may repeat a non-bool cell's name, see `checkScalarRow`
   ##
   ## Returns after catching a name that drifted onto a cell of another width or kind.
   ## Raises `AssertionDefect` naming both targets at compile time.
@@ -265,6 +291,8 @@ proc checkScalarRowsTogether*(
           continue
         for b in rows[j].row.cells:
           if b.spelling == a.spelling:
+            if a.kind == ctBool or b.kind == ctBool:
+              continue
             doAssert a.kind == b.kind and a.width == b.width,
               "name '" & a.spelling & "' denotes (" & $a.kind & ", " &
               $a.width & ") on " & rows[i].name & " but (" & $b.kind & ", " &
