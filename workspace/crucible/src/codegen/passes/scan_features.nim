@@ -270,12 +270,6 @@ proc cudaScanFeatures(m: CirModule): string {.nimcall.} =
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-proc glslRun(m: CirModule): string {.nimcall.} =
-  scanModuleFeatures(m, m.features, glslProfile)
-
-proc openclRun(m: CirModule): string {.nimcall.} =
-  scanModuleFeatures(m, m.features, openclProfile)
-
 proc registerGlslFeatureScan*(reg: var PassRegistry) =
   ## Registers the GLSL feature scan over CIRv2 modules.
   ##
@@ -288,7 +282,8 @@ proc registerGlslFeatureScan*(reg: var PassRegistry) =
   reg.register("glslScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the GLSL extension block maps:" &
     " float and integer widths, subgroups, shuffles, atomic float, unroll loops",
-    run = glslRun)
+    run = proc(m: CirModule): string {.nimcall.} =
+      scanModuleFeatures(m, m.features, glslProfile))
 
 proc registerOpenclFeatureScan*(reg: var PassRegistry) =
   ## Registers the OpenCL feature scan over CIRv2 modules.
@@ -303,7 +298,8 @@ proc registerOpenclFeatureScan*(reg: var PassRegistry) =
   reg.register("openclScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the OpenCL pragma block maps:" &
     " float widths, subgroups, atomic float",
-    run = openclRun)
+    run = proc(m: CirModule): string {.nimcall.} =
+      scanModuleFeatures(m, m.features, openclProfile))
 
 proc registerWgslFeatureScan*(reg: var PassRegistry) =
   ## Registers the WGSL feature scan over CIRv2 modules.

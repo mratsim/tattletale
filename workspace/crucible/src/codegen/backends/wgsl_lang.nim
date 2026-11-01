@@ -22,7 +22,7 @@
 ## - a pointer local or pointer-holding struct local refuses: the WGSL lowering pass rewrites the shapes into pointees and leaf symbols
 ## - the WGSL lowering pass relocates a smem/const_mem kernel local into `CirModule.globals`
 ## - struct declarations emit for the referenced value structs only, one declaration per entry of `CirModule.structRefs`.
-##   The struct-reference pass fills that record after the last transform, and a pointer-holding struct refuses
+##   the struct-reference pass fills that record, and a pointer-holding struct refuses
 ## - a loop prints `while (cond)` (WGSL's `while` takes a condition),
 ##   an unrolled loop notes the unroll directive has no WGSL form
 
@@ -38,15 +38,15 @@ import ../passes/layout_std430
 type
   PrintCtx = object
     fnName: string
-    ## First refusal of the walk, "" while clean.
     err: string
+    ## First refusal of the walk, "" while clean.
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
     lit: LitRow
     ## Literal token forms of the target. The shared literal head reads them.
     row: ScalarRow
-    ## Scalar row of the target. The narrow integer cast names its type from it..
+    ## Scalar row of the target. The narrow integer cast names its type from it.
     inKernel: bool
     ## False inside a device function, a device function reading a coordinate builtin refuses.
     paramNames: HashSet[string]
@@ -54,7 +54,7 @@ type
     ## as-is (WGSL device functions take real pointer parameters).
     ## Only pointer locals refuse as values.
     builtins: OrderedSet[CoordBuiltinKind]
-    ## Canonical coordinate builtin names the kernel body references, first-use order.
+    ## Canonical coordinate builtin kinds the kernel body references, first-use order.
     layouts: Table[string, StructLayout]
     ## Stored struct layouts of the module, which the layout pass filled.
     nimBoolNames: HashSet[string]
