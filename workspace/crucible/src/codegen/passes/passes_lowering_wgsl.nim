@@ -144,9 +144,9 @@ proc callsCrossingCalleeTransitively(fn: CirProc, procs: Table[string, CirProc],
   return false
 
 proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
+  ## Replaces every symbol named in `subst` with its call-site argument, in place.
   ## One substitution pass covers every parameter: the spliced argument is not
   ## re-walked, its symbols belong to the caller.
-  ## Expressions are refs, the rewrite applies to the node every sharer sees.
   if e.isNil:
     return
   if e.kind == eSym:
@@ -158,6 +158,7 @@ proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
     ch.substituteArgsExpr(subst)
 
 proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
+  ## Statement-walk overload of `substituteArgsExpr`.
   ## Hand-rolled walk: a substitution splices the call argument into the symbol node
   ## and never re-walks the spliced content, its symbols belong to the caller.
   ## A shared walk would descend into the rewritten node and substitute a second parameter inside the argument.
@@ -200,8 +201,7 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
     let callee = procs.getOrDefault(e.callee.name)
     if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
       return refuseAt(fn, "device function " & callee.name &
-        " takes a pointer that cannot cross a WGSL function signature," &
-        " a call in value position cannot inline")
+        " takes a pointer that cannot cross a WGSL signature, the call is in value position")
   for ch in getExprChildren(e):
     let err = refuseValuePositionCalls(fn, ch, procs)
     if err.len > 0:
@@ -217,8 +217,7 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
       if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
         if callee.ret.kind != ctVoid:
           return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL function signature" &
-            " and returns a value, only void device functions inline")
+            " takes a pointer that cannot cross a WGSL signature, only a void callee inlines")
         var body = cloneStmts(callee.body)
         if body.len > 0 and body[^1].kind == sRet and body[^1].retVal == nil:
           # an implicit fall-through return of the frontend, dropping it is
@@ -226,8 +225,7 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
           body.setLen(body.len - 1)
         if body.containsReturn:
           return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL function signature," &
-            " its body must not return, a spliced return would exit the caller")
+            " takes a pointer that cannot cross a WGSL signature, the body must not return")
         for a in s.callArgs:
           if a.containsCall:
             return refuseAt(fn, "call argument of " & callee.name &
@@ -235,8 +233,7 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
         var seen: HashSet[string]
         if callee.callsCrossingCalleeTransitively(procs, seen):
           return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL function signature" &
-            " and reaches one through its calls, inlining would not terminate")
+            " takes a pointer that cannot cross a WGSL signature, its call chain reaches one too")
         var subst = initTable[string, CirExpr]()
         for j, p in callee.params:
           subst[p.name] = s.callArgs[j]

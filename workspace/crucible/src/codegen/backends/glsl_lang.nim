@@ -45,7 +45,7 @@ type
     lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
     scalarNames: ScalarNames
-    ## Scalar names of the target. The narrow integer cast takes its type name from them.
+    ## Scalar names of the target. The narrow integer cast names its type from them.
 
 const printerTarget = "glsl"
 
@@ -167,8 +167,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
-  ## One conversion, the constructor-call form: a reference type constructs
-  ## from its element type.
+  ## A reference type constructs from its element type.
   let t = e.castType
   if t.kind in {ctAptr, ctPtr}:
     return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
@@ -198,7 +197,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     # atomicFetchAdd prints its own arguments, a pre-print into the shared arg list would print each argument twice
     return ctx.printGlslAtomicFetchAdd(call.args)
   if call.callee.kind == eSym:
-    # builtin vocabulary dispatches on the typed kinds, never on names
     case call.callee.reductionBuiltin
     of rbkReduceAdd:
       return "subgroupAdd(" & args.join(", ") & ")"
@@ -208,7 +206,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   if call.callee.kind == eSym:
     case call.callee.shuffleBuiltin
     of shkSimdShuffle:
-      # subgroupShuffle takes the subgroup-relative index as `uint`. A plain cast
+      # subgroupShuffle's index parameter is `uint`, a plain cast
       # compiles without GL_NV_explicit_typecast
       return "subgroupShuffle(" & args[0] & ", uint(" & args[1] & "))"
     of shkSimdShuffleXor:
@@ -227,8 +225,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## GLSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    # a pointer-value refusal, coordinate builtins take component casts,
-    # names pass through
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return "int(gl_LocalInvocationIndex)"
@@ -239,8 +235,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ""
     return e.name
   of eAt, ePat:
-    # reference blocks index their storage element, arrays index plainly,
-    # pointers and untyped bases refuse
     let base = if e.kind == eAt: e.atBase else: e.patBase
     let idx = if e.kind == eAt: e.atIndex else: e.patIndex
     let idxTxt = ctx.printExpr(idx)
@@ -259,8 +253,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the GLSL subset")
     return ""
   of eDot:
-    # coordinate-builtin dots cast to the canonical int, vector dots return
-    # their field letter, other dots return base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       # a component of an unsigned GLSL builtin, cast to the canonical int
       return "int(" & getGlslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
@@ -272,7 +264,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
   of eDeref:
-    # a reference block reads its storage element, pointers and untyped operands refuse
     let op = e.derefOperand
     let ot = getExprType(op)
     if ot != nil and ot.kind == ctAptr:
@@ -283,7 +274,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) & " operand is outside the GLSL subset")
     return ""
   of eAddr:
-    # a buffer element's address is the indexed reference access, the printer refuses anything else
+    # a buffer element's address is its indexed reference access
     if e.addrOperand.kind == ePat:
       return ctx.printExpr(e.addrOperand)
     ctx.fail("address of a local is outside the GLSL subset")
@@ -320,7 +311,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration: pointer and storage-class refusals, then the declaration text.
+  ## One local declaration.
   let pad = spaces(ctx.indent * 2)
   if s.declType.kind == ctPtr:
     ctx.fail("pointer local " & s.name & ", GLSL has no function-storage" &
@@ -357,7 +348,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   result &= ";"
 
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local constant declaration, the `const` form.
+  ## One local constant declaration.
   block:
     let missing = getUnnamedScalarCell(glslScalarNames, s.declType)
     if missing != nil:
@@ -368,7 +359,7 @@ proc printConst(ctx: var PrintCtx, s: CirStmt): string =
     s.name & " = " & ctx.printExpr(s.init) & ";"
 
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
-  ## One assignment: the pointer-rebind refusal, then the assignment text.
+  ## One assignment.
   let pad = spaces(ctx.indent * 2)
   if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
     ctx.fail("pointer local " & s.lhs.name & " rebound, GLSL has no" &
@@ -377,7 +368,7 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
 proc printCall(ctx: var PrintCtx, s: CirStmt): string =
-  ## One call statement: the barrier and atomic vocabulary, then the plain call form.
+  ## One call statement.
   let pad = spaces(ctx.indent * 2)
   if s.callCallee.kind == eSym and
       s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
@@ -399,7 +390,6 @@ proc printCall(ctx: var PrintCtx, s: CirStmt): string =
     result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
-  ## One inline assembly statement: refused, the text names the target.
   ctx.fail("inline assembly has no GLSL form")
   result = ""
 
@@ -426,7 +416,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
       result.add emitGlslParam(p.typ, p.name, p.varParam)
 
 proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
-  ## GLSL linkage prefix: none, GLSL knows no linkage qualifiers.
+  ## GLSL linkage prefix: none, GLSL has no linkage qualifiers.
   ""
 
 proc emitSmemDecl(t: CirType, name: string): string =
@@ -439,8 +429,7 @@ proc emitSmemDecl(t: CirType, name: string): string =
 
 proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `const` declaration of one hoisted const_mem local.
-  ## Shape guard: the lowering pass refuses an initializer-less const_mem
-  ## local before relocation, this check fails loudly on a malformed node.
+  ## The lowering pass refuses an initializer-less const_mem local before relocation, this check fails on a malformed node.
   if s.init == nil:
     ctx.fail("const_mem local " & s.name & " without an initializer")
     return ""
@@ -453,9 +442,6 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated storage local.
-  ##
-  ## - a threadgroup local declares bare `shared` storage
-  ## - a constant local declares `const`, the printer refuses an initializer-less one
   if s.space == caThreadgroup:
     return emitSmemDecl(s.declType, s.name)
   if s.init == nil:
@@ -523,8 +509,7 @@ proc pushConstLayoutRejection(kernels: seq[CirProc]): string =
     return "multi-kernel GLSL sources share one push-constant block, all kernels " &
       "must declare the same ordered params, got kernel `" & k.name & "` (" &
       k.params.paramsText & ") vs kernel `" & reference.name & "` (" &
-      referenceParams & "): a launch serializes its args at offsets another " &
-      "kernel reads as different members"
+      referenceParams & ")"
   return ""
 
 

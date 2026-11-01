@@ -90,6 +90,7 @@ func isLargeStruct(t: CirType): bool =
   t != nil and t.kind == ctStruct and computeCirSizeBytes(t) >= 24
 
 proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
+  ## Rewrites every read of the by-value parameter `oldName` into a deref of the hidden pointer `ptrSym`.
   ## Expressions are refs, so the rewrite applies to the node every sharer sees.
   ## The walk descends into the spliced read's children, `ptrSym` never matches
   ## `oldName`, so the rewrite terminates.
@@ -208,7 +209,7 @@ proc openclLowerByrefParams(m: CirModule): string =
   return ""
 
 proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
-  ## Symbols name no children, one visit per node covers the tree.
+  ## Points a call-site callee symbol's proc type at the rewritten formals.
   if e.isNil:
     return
   proc retarget(e: CirExpr) =

@@ -48,7 +48,7 @@ type
     ## Integer literal token chosen by signedness and width:
     ## `prefix & $value & suffix`.
     ##
-    ## - 64-bit widths take `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
+    ## - 64-bit widths use `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
     ## - 32-bit unsigned takes `u32Suffix`, 32-bit signed prints bare
     ## - narrow (8/16-bit) widths print bare or, per `narrowCast`, as a cast
     ##   to the scalar type name from the target's scalar names
@@ -77,7 +77,7 @@ type
 
   ScalarNames* = object
     ## Scalar type names of one target by (kind, width) cell.
-    ## The table lists the cells the target names, an omitted cell refuses at the lookup.
+    ## The table lists the cells the target names, the lookup refuses an omitted cell.
     cells*: seq[ScalarCell]
     refusals*: seq[tuple[kind: CirTypeKind, width: int, reason: string]]
     ## One-line refusal reason per omitted cell the table documents.
@@ -184,13 +184,11 @@ genTargets:
     # and Metal's compiler rejects it
     conv toFp16 "half($1)", toFp32 "float($1)", toBf16 "(bfloat)($1)",
       toBf32 "(float)($1)", asFp16 "as_type<half>($1)", asU16 "as_type<ushort>($1)"
-    # Coordinate builtins carry `ivec3`, so the builtin-threading parameters
-    # and whole-value reads print this vector name: 32-bit int/uint elements only.
     vector:
       elems i32, u32
       lanes 2, 3, 4
-    # Same-width scalar pairs reinterpret through MSL's `as_type<T>`.
-    # Pointer casts and width changes keep the conversion form.
+    # MSL's `as_type<T>` reinterprets a same-width scalar pair.
+    # Pointer casts and width changes use the conversion form.
     bitcast:
       rule srcKinds {ctInt, ctUint, ctFloat, ctBf16}, srcWidths {8, 16, 32, 64},
         dstKinds {ctInt, ctUint, ctFloat, ctBf16}, sameWidth, "as_type<$2>($1)"
@@ -205,14 +203,14 @@ genTargets:
       inf32 "INFINITY", negInf32 "-INFINITY", nan32 "NAN",
       inf64 "INFINITY", negInf64 "-INFINITY", nan64 "NAN"
     kind unrollDirective "#pragma unroll", braceSameLine true
-    # CUDA names no vector types, every vector refuses at its declaration.
+    # CUDA has no vector types, the printer refuses a vector at its declaration.
     vector ()
     # `{.builtin.}` scalar-math calls keyed by (canonical name, operand bit width):
     #
     # - a float operand maps to the CUDA name: CUDA's device `abs` is
     #   integer-only, a bare `abs(-2.5f)` silently computes `-2`
-    # - widths absent from the table keep the canonical name, `exp2` over
-    #   `double` is a CUDA native
+    # - the printer keeps the canonical name for a width absent from the table,
+    #   `exp2` over `double` is a CUDA native
     math abs 32 "fabsf", abs 64 "fabs", exp2 32 "exp2f"
     # `{.builtin.}` fp16 and bf16 conversions resolve to the cuda_fp16.h and cuda_bf16.h native calls:
     # `float16` has a first-class `__half` identity, both `asFp16`/`asU16` entries map to the half bit builtins.
@@ -221,12 +219,12 @@ genTargets:
     conv toFp16 "__float2half($1)", toFp32 "__half2float($1)",
       asFp16 "__ushort_as_half($1)", asU16 "__half_as_ushort($1)",
       toBf16 "__float2bfloat16($1)", toBf32 "__bfloat162float($1)"
-    # Float/integer bit reinterprets print as intrinsics, a C-style cast
-    # numerically converts and loses the bit pattern. Pairs of same-width integers
-    # use the conversion form, a modular cast preserves every bit.
+    # Intrinsics cover the float/integer bit reinterprets, a C-style cast
+    # numerically converts and loses the bit pattern. A same-width integer
+    # pair uses the conversion form, a modular cast preserves every bit.
     # `__half_as_ushort`/`__ushort_as_half` and `__bfloat16_as_ushort`/`__ushort_as_bfloat16`
     # cover the 16-bit float bit-cast directions.
-    # Signed 16-bit reinterprets share the unsigned native, and the implicit
+    # Unsigned natives cover the signed 16-bit reinterprets, the implicit
     # C conversion preserves the bit pattern.
     bitcast:
       rule srcKinds {ctFloat}, srcWidths {32}, dstKinds {ctUint}, sameWidth, "__float_as_uint($1)"
@@ -242,7 +240,7 @@ genTargets:
 
   target opencl:
     # OpenCL C is LP64 C: `char` and `long` name the 8-bit and 64-bit signed widths, as on msl.
-    # Bool prints as `int` to match the launch ABI.
+    # This row prints bool as `int` to match the launch ABI.
     scalar void "void", bool "int", i8 "char", i16 "short", i32 "int", i64 "long",
       u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "ushort", bf16 "ushort",
       f32 "float", f64 "double"
@@ -258,7 +256,7 @@ genTargets:
       elems void, bool, i8, i16, i32, i64, u8, u16, u32, u64, f16, f32, f64
       lanes 2, 3, 4, 8, 16
     # A C-style cast between float and integer types converts the value.
-    # A same-width pair reinterprets through the OpenCL C `as_` builtin instead.
+    # OpenCL C's `as_` builtins reinterpret a same-width pair instead.
     bitcast:
       rule srcKinds {ctFloat}, dstKinds {ctInt, ctUint}, sameWidth, "as_$2($1)"
       rule srcKinds {ctInt, ctUint}, dstKinds {ctFloat}, sameWidth, "as_$2($1)"
@@ -291,8 +289,8 @@ genTargets:
     # `{.builtin.}` fp16 conversions resolve to the GLSL native call text,
     # `float16` has a first-class `float16_t` identity and `asFp16`/`asU16`
     # reinterpret through the float16 bit-level builtins.
-    # `bfloat16` and fp8 conversions stay outside: no GLSL native exists.
-    # `{.builtin.}` names pass through and refuse at glslang compile time.
+    # `bfloat16` and fp8 conversions are outside the table: no GLSL native exists.
+    # `{.builtin.}` names outside the table emit unchanged and fail at glslang compile time.
     conv toFp16 "float16_t($1)", toFp32 "float($1)", asFp16 "uint16BitsToFloat16($1)",
       asU16 "float16BitsToUint16($1)"
     kind unrollDirective "[[unroll]]", braceSameLine true,
@@ -300,9 +298,9 @@ genTargets:
     vector:
       elems f16 "f16vec", f32 "vec", f64 "dvec", i32 "ivec", u32 "uvec", bool "bvec"
       lanes 2, 3, 4
-    # Core GLSL floatBits builtins cover the 32-bit float pairs, a wider float
-    # pair refuses: a constructor call numerically converts and loses the bits.
-    # Same-width integer pairs keep the conversion form.
+    # Core GLSL floatBits builtins cover the 32-bit float and integer bit casts,
+    # a wider float pair has no native form, a constructor call numerically converts
+    # and loses the bits. A same-width integer pair uses the conversion form.
     bitcast:
       rule srcKinds {ctFloat}, srcWidths {32}, dstKinds {ctUint}, sameWidth, "floatBitsToUint($1)"
       rule srcKinds {ctFloat}, srcWidths {32}, dstKinds {ctInt}, sameWidth, "floatBitsToInt($1)"
@@ -312,12 +310,12 @@ genTargets:
       rule srcKinds {ctInt, ctUint}, dstKinds {ctFloat}, sameWidth, refusal "no native 64-bit float bit cast"
 
   target wgsl:
-    # Absent cells refuse at the lookup (emitWgslScalar): WGSL has no 8/16-bit integer types.
+    # emitWgslScalar refuses an absent cell, WGSL has no 8/16-bit integer types.
     # 64-bit integer and float cells need the shader-int64 and shader-f64 device features.
     # wgpu-native exposes no WGPUFeatureName to request either.
     scalar void "void", bool "bool", i32 "i32", u32 "u32", f16 "f16", f32 "f32"
     # Bare integer and float literals are abstract and work in any typed context,
-    # u32 gains the `u` suffix, f16 the `h`, f32 prints bare.
+    # u32 needs the `u` suffix, f16 the `h` suffix, f32 bare.
     # WGSL has no infinity or NaN literal: the 16 and 32-bit IEEE-754 bit patterns
     # go through `bitcast` from the unsigned integer of the same width.
     # Nil literals: the shared walk refuses them.
@@ -338,12 +336,12 @@ genTargets:
     # `{.builtin.}` fp16 conversions resolve to the WGSL native call text,
     # `float16` has a first-class `f16` identity and `asFp16`/`asU16`
     # reinterpret through `bitcast`.
-    # `bfloat16` and fp8 conversions stay outside: no WGSL native exists.
-    # `{.builtin.}` names pass through and refuse at wgpu parse time.
+    # `bfloat16` and fp8 conversions are outside the table: no WGSL native exists.
+    # `{.builtin.}` names outside the table emit unchanged and fail at wgpu parse time.
     conv toFp16 "f16($1)", toFp32 "f32($1)", asFp16 "bitcast<f16>($1)", asU16 "bitcast<u16>($1)"
 
   target hlsl:
-    # Absent cells refuse at the lookup (emitHlslScalar): the 8/16-bit and 64-bit integer
+    # emitHlslScalar refuses an absent cell, the 8/16-bit and 64-bit integer
     # types are frontend parse errors or capability rejections. The float16 cell is
     # outside the subset.
     scalar void "void", bool "bool", i32 "int", u32 "uint", f32 "float", f64 "double"
@@ -358,14 +356,13 @@ genTargets:
       nan64 "asdouble(0u, 0x7ff80000u)"
     kind unrollDirective "[unroll]", braceSameLine false, foldsIteElse true,
       emitOperandRendersExpr true, targetExprKinds {eNil, eAt, ePat, eDeref, eAddr}
-    # `{.builtin.}` fp16/bf16/fp8 conversion calls refuse: the frontend erases
-    # half-width types to 16-bit storage before printing, so the call name is the only signal the printer can match.
+    # printBuiltinCall refuses the fp16/bf16/fp8 conversion builtins (the frontend erases half-width types, the call name is the only signal).
     refusals toFp16, toFp32, toBf16, toBf32, toFp8e4m3, toFp8e5m2, asFp16, asU16
     vector:
       elems bool "bool", i32 "int", u32 "uint", f32 "float"
       lanes 2, 3, 4
     # Only the 32-bit asint/asuint/asfloat reinterprets are HLSL bit-cast forms,
-    # every other bit cast refuses.
+    # printCast's refusal rule covers every other bit cast.
     bitcast:
       rule srcAny, dstKinds {ctInt}, dstWidths {32}, "asint($1)"
       rule srcAny, dstKinds {ctUint}, dstWidths {32}, "asuint($1)"

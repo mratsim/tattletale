@@ -46,7 +46,7 @@ type
     lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
     scalarNames: ScalarNames
-    ## Scalar names of the target. The narrow integer cast takes its type name from them.
+    ## Scalar names of the target. The narrow integer cast names its type from them.
     inKernel: bool
     ## False inside a device function, the printer refuses a device function reading a coordinate builtin.
     paramNames: HashSet[string]
@@ -193,8 +193,7 @@ const wgslEntryInputs*: EntryInputs = block:
 # abstract and work in any typed context, u32 gains the `u` suffix, f16 the `h`.
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
-  ## One numeric conversion in the constructor-call form: WGSL has no bool
-  ## constructor and no bool-to-numeric conversion.
+  ## WGSL has no bool constructor and no bool-to-numeric conversion.
   if e.castType.kind == ctBool:
     ctx.fail("conversion to bool, WGSL has no bool constructor")
     return ""
@@ -208,8 +207,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   ## Returns the WGSL text of an expression-position builtin call,
   ## "" when `call.callee` is not a builtin.
   if call.callee.kind == eSym:
-    # builtin vocabulary dispatches on the typed kinds, never on names,
-    # `rsqrt` is a name case for the printer, a math intrinsic outside the four categories
+    # `rsqrt` is a math intrinsic outside the four typed categories, the name case below maps it to inverseSqrt
     case call.callee.reductionBuiltin
     of rbkReduceAdd:
       return "subgroupAdd(" & args.join(", ") & ")"
@@ -225,8 +223,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     if call.callee.synchroBuiltin != sbkNone:
       ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
       return ""
-  # a math intrinsic reroutes only when the callee IS the builtin
-  # a user proc that shares the name stays an ordinary call
+  # a user proc that shares a builtin's name prints as an ordinary call, the name case applies only when the callee is the builtin
   if call.callee.kind == eSym and call.callee.builtin:
     case call.callee.name
     of "rsqrt":
@@ -238,7 +235,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   return ""
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Declaration text of one local, whose init the caller emits.
-  ## The WGSL lowering pass refuses a pointer-typed local early: the pass rewrites it.
   result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -249,16 +245,12 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## WGSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eFloatLit:
-    # a 64-bit non-finite float has no token in the lit tokens:
-    # - `bitcast<f64>` requires the shader-f64 device feature the runtime cannot request
-    # - every bitcast operand form fails, a u32-suffixed 64-bit literal is a parse error
+    # every bitcast<f64> operand form fails, a u32-suffixed 64-bit literal is a parse error
     if e.fValue.classify in {fcInf, fcNegInf, fcNan} and e.fLitType.bits == 64:
       ctx.fail("a 64-bit non-finite float has no WGSL token, bitcast<f64> needs the unrequestable shader-f64 feature")
       return ""
     return emitLiteral(e, ctx.lit, ctx.scalarNames)
   of eSym:
-    # coordinate builtins are entry-point parameters, names pass through,
-    # pointer-value and whole-pointer-struct reads refuse in the lowering pass
     if e.typ != nil and e.typ.kind == ctBool and e.name in ctx.nimBoolNames:
       # storage is a u32 word, body reads expect bool
       return "bool(" & e.name & ")"
@@ -275,7 +267,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return wgslWholeVector(e.coordBuiltin)
     return e.name
   of eAt, ePat:
-    # a pointer local indexes through an explicit dereference
     let base = if e.kind == eAt: e.atBase else: e.patBase
     let idx = if e.kind == eAt: e.atIndex else: e.patIndex
     let idxTxt = ctx.printExpr(idx)
@@ -294,8 +285,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "bool(" & baseTxt & ")"
     return baseTxt
   of eDot:
-    # coordinate-builtin dots return the canonical component token, vector dots return
-    # their field letter, other dots return base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       if not ctx.inKernel:
         ctx.fail("a device function reads " & e.dotBase.name & ", WGSL coordinate builtins are entry-point parameters")
@@ -322,9 +311,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
           return "bool(" & ctx.printExpr(e.dotBase) & "." & e.fieldName & ")"
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
   of eTernary:
-    # Ternary via WGSL's select:
-    # - `select(f, t, cond)` yields t when cond is true, f when cond is false
-    # - both branches evaluate eagerly, a faulting read in either branch runs whatever the condition
+    # select(f, t, cond) puts the false value first, both branches evaluate
+    # eagerly and a faulting read in either branch runs whatever the condition
     return "select(" & ctx.printExpr(e.elseE) & ", " & ctx.printExpr(e.thenE) &
       ", " & ctx.printExpr(e.cond) & ")"
   of eCast:
@@ -364,13 +352,9 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 
 
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration: storage-class refusals, then the declaration text.
-  ## Pointer locals and pointer-holding struct locals never reach here: the WGSL lowering pass
-  ## rewrites the shapes into pointees and leaf symbols.
+  ## One local declaration.
   let pad = spaces(ctx.indent * 2)
   if s.space == caThreadgroup:
-    # WGSL lowering pass hoists threadgroup locals to `CirModule.globals`,
-    # a survivor here was never relocated
     ctx.fail("local " & s.name & " in threadgroup space, the WGSL lowering" &
       " pass hoists threadgroup locals to program scope")
     return ""
@@ -389,13 +373,13 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
     result &= ";"
 
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local constant declaration in the `let` form.
+  ## One local constant declaration.
   let pad = spaces(ctx.indent * 2)
   result = pad & "let " & s.name & ": " &
     ctx.emitWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
 
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
-  ## One assignment: the NIM_BOOL storage mappings, then the assignment text.
+  ## One assignment.
   let pad = spaces(ctx.indent * 2)
   if s.lhs.kind == eSym and s.lhs.name in ctx.nimBoolNames:
     # storage is a u32 word, assigned values are bool
@@ -420,7 +404,7 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
 proc printCall(ctx: var PrintCtx, s: CirStmt): string =
-  ## One call statement: the barrier vocabulary, then the plain call form.
+  ## One call statement.
   let pad = spaces(ctx.indent * 2)
   var parts: seq[string]
   parts.add ctx.printExpr(s.callCallee)
@@ -437,7 +421,6 @@ proc printCall(ctx: var PrintCtx, s: CirStmt): string =
     result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
-  ## One inline assembly statement: refused.
   ctx.fail("inline assembly has no WGSL form")
   result = ""
 
@@ -446,10 +429,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc prepProc(ctx: var PrintCtx, fn: CirProc) =
-  ## Per-proc state of the WGSL walk:
-  ##
-  ## - the parameter names, whose pointer reads print as-is: WGSL device functions take real pointer parameters, only pointer locals refuse
-  ## - the kernel flag, the printer refuses a coordinate-builtin read outside the entry
   ctx.paramNames = HashSet[string]()
   for p in fn.params:
     ctx.paramNames.incl p.name
@@ -481,11 +460,8 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
     result &= " -> " & ctx.emitWgslTypeBare(fn.ret)
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
-  ## Program-scope declaration text of one relocated storage local:
-  ##
-  ## - a threadgroup local declares `var<workgroup>` storage, no initializer survives relocation (the rewrite ran before printing)
-  ## - a bool workgroup variable stores as the NIM_BOOL alias of u32
-  ## - a constant local declares `const` with its initializer
+  ## Program-scope declaration text of one relocated storage local.
+  ## No initializer survives relocation, the rewrite ran before printing.
   if s.space == caThreadgroup:
     ctx.storageBoolSpelling = true
     let ty = ctx.emitWgslTypeBare(s.declType)
@@ -529,8 +505,7 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
       ctx.emitWgslTypeBare(p.typ) & ";"
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## WGSL declaration text of one struct member: `name: type`, a bool member
-  ## stores as NIM_BOOL, a pointer-holding member refuses.
+  ## WGSL declaration text of one struct member, a bool member stores as NIM_BOOL and the printer refuses a pointer-holding one.
   if f.typ.containsPtrDeep:
     ctx.fail("struct " & t.name & " holds a pointer, WGSL has no pointer struct members")
     return ""
@@ -553,7 +528,6 @@ const wgslModuleShape = ModuleShape(
   printsReduceTemplates: false)
 
 proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
-  ## Per-parameter policy: `emitBinding` over the module's one kernel.
   for i, p in kernels[0].params:
     result &= ctx.emitBinding(p, i) & "\n"
   if result.len > 0:
@@ -582,8 +556,6 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   let kernel = getEntryKernel(ctx, m)
   if ctx.failing():
     return ("", ctx.err)
-  # names whose storage binds as NIM_BOOL: kernel bool parameters and bool workgroup variables
-  # reads coerce to bool, writes coerce to NIM_BOOL (see the module header)
   for p in kernel.params:
     if p.typ.kind == ctBool:
       ctx.nimBoolNames.incl p.name

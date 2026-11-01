@@ -279,7 +279,7 @@ proc sortCoordKinds(kinds: HashSet[CoordBuiltinKind]): seq[CoordBuiltinKind] =
       result.add(kind)
 
 proc appendCoordParam(fn: CirProc, kind: CoordBuiltinKind): string =
-  ## A parameter takes the builtin's canonical name so the body's
+  ## A parameter uses the builtin's canonical name so the body's
   ## builtin-marked reads print that name unchanged, in a kernel the name
   ## binds to the attributed parameter, in a device function to this parameter.
   let name = CoordBuiltinCanonicalName[kind]
@@ -396,7 +396,7 @@ proc mslRewriteSmemLocals(m: CirModule): string =
   ## - the pass refuses a device function's smem local, only a kernel owns
   ##   threadgroup storage
   ##
-  ## - the hoist drains the locals it covers, this walk catches a survivor at any depth
+  ## - the hoist drains the locals it covers, this walk refuses one remaining at any depth
   ## - the initializer rewrite ran earlier, a surviving local has no initializer
   ## - the pass runs after the reserved-word rename, so the kept locals use the renamed names their body already references
   for fn in m.procs:

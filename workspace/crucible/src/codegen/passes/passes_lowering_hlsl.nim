@@ -261,8 +261,8 @@ proc hlslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
             callee.params[i].typ.space == caThread:
           # `inout` binding: the call site passes the variable itself
           if a.kind == eAddr and a.addrOperand.kind == eSym:
-            # address-of over a variable argument: the `inout` binding
-            # takes the variable itself, the printer emits the variable
+            # address-of over a variable argument: the `inout` parameter
+            # binds the variable itself, the printer emits the variable
             # name at the call site
             if a.addrOperand.name in ctx.aliasOf or a.addrOperand.name in ctx.pendingPtrs:
               return refuseAt(fn, "pointer local " & a.addrOperand.name &

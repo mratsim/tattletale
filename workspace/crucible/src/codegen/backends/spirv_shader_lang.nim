@@ -1150,7 +1150,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     if resTy == nil or resTy.kind notin {ctInt, ctUint, ctFloat, ctBool}:
       ctx.failSpv("simd_shuffle lowers scalars only")
       return 0
-    # Invocation Id and Mask take the unsigned width the grammar demands
+    # Invocation Id and Mask use the unsigned width the grammar demands
     let laneU = ctx.convertValue(lane, ctx.resolveExprType(fn, e.args[1]), cirUint32())
     ctx.caps.incl capGroupNonUniformShuffle
     let scopeSub = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeSubgroup))

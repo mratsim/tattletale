@@ -400,7 +400,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## - the kinds a printer emits itself route to its `printTargetExpr`,
   ##   named by its `targetExprKinds` set
   ## - a target that lists `eNil` refuses the nil literal here, one home for the refusing targets
-  ## - subscript, dereference, address-of and ternary kinds without a target route take the shared default forms below
+  ## - the shared default forms below cover subscript, dereference, address-of and ternary kinds without a target route
   mixin printExpr, printTargetExpr
   if ctx.failing():
     return ""
@@ -437,7 +437,6 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   of eNot:
     return "(!" & ctx.printExpr(e.notOperand) & ")"
   of eAnd, eOr:
-    # C-family operators short-circuit, operands may carry calls
     let op = if e.kind == eAnd: "&&" else: "||"
     return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
   of eTernary, eAt, ePat, eDeref, eAddr:
@@ -722,7 +721,7 @@ proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   ##
   ## Contract:
   ##
-  ## - the body prints before the head assembles: a shader entry head names
+  ## - the body prints before the head assembles: a shader entry head lists
   ##   the coordinate-builtin inputs the body walk collected
   ## - a kernel head carries its own open brace in the target's placement
   ## - a device function head is the bare signature, this proc opens the body

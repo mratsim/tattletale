@@ -42,7 +42,7 @@ type
     lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
     scalarNames: ScalarNames
-    ## Scalar names of the target. The narrow integer cast takes its type name from them.
+    ## Scalar names of the target. The narrow integer cast names its type from them.
     inKernel: bool
     ## False inside a device function: `__local` and `__constant` locals are
     ## kernel-only storage, the pass refuses a device function declaring one.
@@ -177,7 +177,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   ## Returns the OpenCL C text of an expression-position builtin call,
   ## "" when `call.callee` is not a builtin.
   if call.callee.kind == eSym:
-    # builtin vocabulary dispatches on the typed kinds, never on names
     case call.callee.reductionBuiltin
     of rbkReduceAdd:
       return "sub_group_reduce_add(" & args.join(", ") & ")"
@@ -195,7 +194,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     of shkNone: discard
   if call.callee.kind == eSym and call.callee.builtin and
       call.callee.name in ["min", "max", "abs"] and call.args.len > 0:
-    # float operands take the f-prefixed OpenCL names, integer operands keep the plain names
     let at = getExprType(call.args[0])
     if at != nil and at.kind == ctFloat:
       let mapped = case call.callee.name
@@ -230,8 +228,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       ctx.fail("atomicFetchAdd on " & emitOpenclScalar(pt.pElem) &
         ", only 32-bit int/uint/float pointees")
       return ""
-    # atomic_fetch_add acts on `atomic_*` pointees: cast the raw
-    # qualified pointer at the call site
+    # atomic_fetch_add requires `atomic_*` pointees, the raw qualified pointer casts at the call site
     return "atomic_fetch_add((volatile " & qualifier & " " & atomicTy & "*)" &
       ctx.printExpr(call.args[0]) & ", " & ctx.printExpr(call.args[1]) & ")"
   if call.callee.kind == eSym and call.callee.synchroBuiltin != sbkNone:
@@ -242,8 +239,9 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     return openclConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 proc emitLocalDecl(s: CirStmt): string =
-  ## Declaration text of one local, the array form appends the length to the name, the init remains with the caller.
-  ## Pointer types include the address-space qualifier in their own text, the caller adds no storage prefix (OpenCL rejects a doubled qualifier).
+  ## Declaration text of one local, the init remains with the caller.
+  ## Pointer types include the address-space qualifier in their own text,
+  ## the caller adds no storage prefix (OpenCL rejects a doubled qualifier).
   if s.declType.kind == ctArray:
     result = emitOpenclArrayDecl(s.declType, s.name)
   elif s.declType.kind in {ctPtr, ctAptr}:
@@ -267,8 +265,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ""
     return e.name
   of eDot:
-    # coordinate-builtin dots return the canonical component token, vector dots return
-    # their field letter, and every other dot returns base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       let mapped = openclCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
       if mapped.len == 0:
@@ -288,12 +284,11 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eConv:
     return ctx.printConv(e)
   of eSizeof:
-    # an array type names through the declaration form, the bare-name composer `emitTypeBare` prints "" for an array leaf
     if e.ofType.kind == ctArray:
       return "sizeof(" & emitOpenclArrayDecl(e.ofType, "") & ")"
     return "sizeof(" & emitTypeBare(e.ofType) & ")"
   of eOconstr:
-    # C99 compound literal, a bare braced init list cannot be member-accessed
+    # a bare braced init list cannot be member-accessed in C99
     if e.kvFields.len == 0:
       # a zero-field struct, the padding member zero-initializes
       return "(" & emitTypeBare(e.ocType) & "){0}"
@@ -304,8 +299,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(kvv.value)
     result.add "}"
   of eAconstr:
-    # plain braces, OpenCL C has no array compound-literal cast,
-    # object constructions cast `(Type){...}`
+    # OpenCL C has no array compound-literal cast, the braces print bare
     let bare = emitTypeBare(e.acType)
     result = if bare.len > 0: "(" & bare & "){" else: "{"
     for i, el in e.elems:
@@ -321,7 +315,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 
 
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration: storage-class refusals, the address-space qualifier, then the declaration text.
+  ## One local declaration.
   block:
     let missing = getUnnamedScalarCell(openclScalarNames, s.declType)
     if missing != nil:
@@ -360,13 +354,13 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
     result &= ";"
 
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local constant declaration, the `const` form.
+  ## One local constant declaration.
   let pad = spaces(ctx.indent * 2)
   result = pad & "const " & emitTypeBare(s.declType) & ' ' &
     s.name & " = " & ctx.printExpr(s.init) & ";"
 
 proc printCall(ctx: var PrintCtx, s: CirStmt): string =
-  ## One call statement: the barrier vocabulary, then the plain call form.
+  ## One call statement.
   let pad = spaces(ctx.indent * 2)
   var parts: seq[string]
   parts.add ctx.printExpr(s.callCallee)
@@ -383,7 +377,6 @@ proc printCall(ctx: var PrintCtx, s: CirStmt): string =
     result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
-  ## One inline assembly statement: refused, the text names the target.
   ctx.fail("inline assembly has no OpenCL C form")
   result = ""
 
@@ -394,7 +387,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
   ## Parameter declaration of one kernel or device-function parameter.
   ## A raw `ptr` parameter is legal C between device functions, the printer refuses it on a kernel.
-  ## The engine binds device buffers and values, never raw pointers.
   block:
     let missing = getUnnamedScalarCell(openclScalarNames, p.typ)
     if missing != nil:
@@ -434,9 +426,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
 proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
   ## OpenCL C linkage prefix of one proc or kernel.
   ##
-  ## - a kernel is `__kernel`
-  ## - a device function is `static inline`: C99 linkage that keeps the name
-  ##   file-local to the program
+  ## A device function is `static inline`, C99 internal linkage keeps the name file-local to the program.
   if fn.isKernel:
     return "__kernel "
   return "static inline "
@@ -465,8 +455,6 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ctx.emitConstDecl(s)
 
 proc prepProc(ctx: var PrintCtx, fn: CirProc) =
-  ## Per-proc state of the OpenCL walk: `__local` and `__constant` locals are
-  ## kernel-only storage, `printVar` refuses them inside a device function.
   ctx.inKernel = fn.isKernel
 
 const openclModuleShape = ModuleShape(

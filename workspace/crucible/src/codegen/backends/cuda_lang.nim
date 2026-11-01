@@ -44,9 +44,9 @@ type
     lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
     scalarNames: ScalarNames
-    ## Scalar names of the target. The narrow integer cast takes its type name from them.
+    ## Scalar names of the target. The narrow integer cast names its type from them.
     inKernel: bool
-    ## False inside a device function. Its smem local owns no storage, the printer refuses an initializer there.
+    ## False inside a device function, the printer refuses a `__shared__` initializer there.
 
 const printerTarget = "cuda"
 
@@ -110,7 +110,6 @@ proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: st
     else:
       result = "(int)(threadIdx." & field & ")"
   of cbkThreadPositionInGrid:
-    # whole-value reads return the name, component reads emit the flattened index
     if whole:
       result = name
     else:
@@ -181,7 +180,6 @@ proc cudaConvCallText(call: CirExpr, args: seq[string]): string =
   return name % args.join(", ")
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
-  ## One numeric conversion, the C-style cast form.
   let t = e.castType
   return "(" & emitCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
 
@@ -190,12 +188,10 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## CUDA text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    # a coordinate builtin returns its CUDA token, other names return unchanged
     if e.coordBuiltin != cbkNone:
       return cudaCoordToken(e.coordBuiltin, e.name, true, "", e.typ)
     return e.name
   of eDot:
-    # coordinate-component dots return the CUDA token, a dereferenced base emits parenthesized
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       return cudaCoordToken(e.dotBase.coordBuiltin, e.dotBase.name, false,
         e.fieldName, e.dotBase.typ)
@@ -220,7 +216,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(kv.value)
     result.add "}"
   of eAconstr:
-    # every element casts to the element type
     result = "{"
     for i, el in e.elems:
       if i > 0:
@@ -247,9 +242,6 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   ## One local declaration: kernel-scope shared storage and storage-class refusals, then the declaration text.
   let pad = spaces(ctx.indent * 2)
   if s.space == caThreadgroup:
-    # kernel-scope shared storage in `__shared__` form,
-    # NVRTC allocates it per threadgroup
-    # a device function's smem local owns no storage, the printer refuses an initializer on it
     # kernel-body initializers rewrote to stores before printing
     if s.init != nil and not ctx.inKernel:
       ctx.fail("smem local " & s.name &
@@ -259,8 +251,6 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
       emitCudaType(s.declType, s.name, false) & ";"
     return
   if s.space == caConstant:
-    # program-scope storage belongs to CirModule.globals, a survivor here
-    # was never relocated
     ctx.fail("local " & s.name & " in constant space, CUDA constant storage" &
       " is program scope only")
     return ""
@@ -315,10 +305,7 @@ proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ## CUDA parameter texts of one proc or kernel, in declaration order.
   ##
-  ## - pointers print `T* name` (the engine binds device buffers and values)
-  ## - a kernel's by-value array parameter is const-qualified: the array
-  ##   decays to a pointer and is read-only
-  ## - every other parameter prints the plain declarator form
+  ## A kernel's by-value array parameter is const-qualified: the array decays to a pointer and is read-only.
   for p in fn.params:
     case p.typ.kind
     of ctAptr, ctPtr:
@@ -333,11 +320,6 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
 
 proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
   ## CUDA linkage prefix of one proc or kernel.
-  ##
-  ## - a kernel is `extern "C" __global__`: the kernel keeps its unmangled
-  ##   name that the host runtime looks up
-  ## - a device function is `__device__`, plus the force-inline qualifier
-  ##   under `{.inline.}`
   if fn.isKernel:
     return "extern \"C\" __global__ "
   if fn.inline:
@@ -349,7 +331,6 @@ proc emitTypeBare(t: CirType): string =
   emitCudaType(t, "", true)
 
 proc prepProc(ctx: var PrintCtx, fn: CirProc) =
-  ## Per-proc state of the CUDA walk: the kernel flag switches on the smem-initializer refusal in `printVar`.
   ctx.inKernel = fn.isKernel
 
 const cudaModuleShape = ModuleShape(

@@ -321,7 +321,7 @@ proc registerOrGet(ctx: var FrontendCtx, calleeSym: NimNode): ProcEntry =
   ## First registration derives the proc type once and claims the emitted name.
   ## Later calls read the entry.
   ##
-  ## A `{.builtin.}` callee carries its canonical native name at the call site. The entry stores its type only.
+  ## A `{.builtin.}` callee maps to its canonical native name at the call site. The entry stores its type only.
   let id = getProcIdentity(calleeSym)
   if ctx.procRegistry.hasKey(id):
     result = ctx.procRegistry[id]
@@ -393,7 +393,7 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   ## Callee symbol of a call to a harvested or builtin proc:
   ## - the registry entry registers or reads
   ## - a body-less callee harvests
-  ## - a builtin carries its canonical native name
+  ## - a builtin maps to its canonical native name
   ##
   ## An instantiation hash would name a proc the backend never defines.
   ## Builtin-marking the callee symbol lets the alias canonicalization
@@ -1083,6 +1083,8 @@ proc collectAddressSpace(ctx: var FrontendCtx, nameNode: NimNode): AddressSpace 
       ctx.fail("unexpected pragma " & p.repr & " on a local declaration")
 
 proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
+  ## Lowers one Nim statement body to CIRv2 statements in source order.
+  ## Hoisted statements drained from the context prepend to the body's own statements.
   if ctx.resolver.err.len > 0:
     return @[]
   if n.isNil:
@@ -1123,8 +1125,8 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
             return @[]
           if value.kind == eOconstr and typ != nil and typ.kind == ctStruct and
               value.ocType.kind == ctStruct:
-            # a constructor value carries the struct type it instantiates,
-            # its declaration takes that type, and the field address spaces
+            # a constructor value is typed by the struct it instantiates,
+            # its declaration uses that type, and the field address spaces
             # come from the value's provenance
             typ = value.ocType
           elif typ != nil and typ.kind in {ctPtr, ctAptr} and
