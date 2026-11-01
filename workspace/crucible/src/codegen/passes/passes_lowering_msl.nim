@@ -20,8 +20,8 @@
 ## - `mslHoistDeviceFnSmem`: a device function's `{.smem.}` local hoists
 ##   to a threadgroup reference parameter, Metal supports no threadgroup
 ##   allocation in device functions
-## - `mslRewriteSmemLocals`: a kernel's top-level `{.smem.}` local stays
-##   in-body as kernel-scope `threadgroup` storage
+## - `mslRewriteSmemLocals`: a kernel's `{.smem.}` local at any body depth
+##   stays in-body as kernel-scope `threadgroup` storage
 ## - `mslThreadCoordinateBuiltins`: coordinate builtins thread down to device
 ##   functions as parameters (Metal rejects them outside kernel functions)
 ##
@@ -445,30 +445,33 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mslRewriteSmemLocals(m: CirModule): string =
-  ## Rewrites the top-level `{.smem.}` locals of every proc:
+  ## Rewrites the `{.smem.}` locals of every proc, nested bodies included:
   ##
-  ## - a kernel keeps the local in its body: the printer emits kernel-scope
-  ##   `threadgroup` storage that Metal allocates per threadgroup,
-  ##   no launch-time staging and no parameter
-  ## - a device function's smem local refuses, only a kernel owns threadgroup storage, the hoist covers top-level and one-scope-deep locals
+  ## - a kernel keeps the local in its body, top-level or nested: the printer
+  ##   emits kernel-scope `threadgroup` storage, allocated per threadgroup
+  ##   by Metal, no launch-time staging and no parameter
+  ## - a device function's smem local refuses, only a kernel owns
+  ##   threadgroup storage
+  ## - the hoist drains the locals it covers, this walk catches a survivor
+  ##   at any depth
   ## - an initializer on a `{.smem.}` local is discarded
   ##
-  ## - the rewrite covers top-level body locals only, a nested one keeps
-  ##   its declaration and prints in place
   ## - the pass runs after the reserved-word rename: the kept locals carry
   ##   the renamed names their body already references
   for fn in m.procs:
-    var i = 0
-    while i < fn.body.len:
-      let s = fn.body[i]
-      if s.kind == sVar and s.space == caThreadgroup:
-        if fn.isKernel:
-          s.init = nil
-          i.inc
-        else:
-          return "at " & fn.name & ": smem local " & s.name &
-            " in a device function, only a kernel allocates" &
-            " threadgroup storage"
-      else:
-        i.inc
+    var err = ""
+    let kernel = fn.isKernel
+    let procName = fn.name
+    let onStmt = proc(s: CirStmt) =
+      if s.kind != sVar or s.space != caThreadgroup:
+        return
+      if kernel:
+        s.init = nil
+      elif err.len == 0:
+        err = "at " & procName & ": smem local " & s.name &
+          " in a device function, only a kernel allocates" &
+          " threadgroup storage"
+    fn.body.walkStmts(onStmt, nil)
+    if err.len > 0:
+      return err
   return ""
