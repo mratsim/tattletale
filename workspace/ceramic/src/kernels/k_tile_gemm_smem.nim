@@ -98,14 +98,18 @@ template stageSmemTile*(stageWords: untyped, src: TensorView, tid: int, stageRow
   ##
   ## Args:
   ## - stageRows, stageK: the tile shape, 64 staging threads copy it,
-  ##   8 chunks of 8 k-contiguous elements per staging thread
+  ##   8 chunks of 8 elements per staging thread
   ## - rowOrigin, kOrigin: the global coordinates of the tile origin
   ## - rowBound, kBound: the tensor bounds.
   ##   Out-of-bounds chunks zero-fill through the src-size operand
   ##   that the async copy applies
   ##
-  ## `src` is k-major over the tile: tile element (k, row) reads
-  ## `src` at row `rowOrigin + row`, column `kOrigin + k`.
+  ## Stage element (row, k) reads `src` at global coordinate
+  ## (rowOrigin + row, kOrigin + k) through the operand's layout.
+  ##
+  ## - a fully in-bounds, k-contiguous (k stride 1) and 16-byte-aligned
+  ##   chunk moves as one 16-byte async copy
+  ## - a k-strided or misaligned chunk copies elementwise via crd2idx
   const
     chunkElems = 8
     chunkWords = 4
@@ -115,6 +119,8 @@ template stageSmemTile*(stageWords: untyped, src: TensorView, tid: int, stageRow
   let
     elems = cast[ptr UncheckedArray[typeof(src.data[0])]](stageWords)
     zeroVal = zero(typeof(src.data[0]))
+    lay = src.getLayout()
+    kStride = lay.stride[1]
   const atom = getCopyAsyncAtom(uint32)
   # Participation guard: both staging calls run on all 128 threads,
   # one with the thread id and one with the id shifted down 64 lanes,
@@ -130,23 +136,25 @@ template stageSmemTile*(stageWords: untyped, src: TensorView, tid: int, stageRow
       let rowIn = rowOrigin + rc < rowBound
       let dstChunk = make_view(addr stageWords[wordBase + elemOff div 2],
                                make_layout((chunkWords,)))
+      let srcFlat = lay.crd2idx((rowOrigin + rc, kOrigin + kc * chunkElems))
       if not rowIn:
         # outside the row bounds: zero-fill, no global read
         copyIf(atom, dstChunk, dstChunk, false, chunkWords)
-      elif kIn == chunkElems:
-        # fully in bounds: one async chunk, the gmem side re-viewed as words
-        let srcFlat = src.getLayout().crd2idx(
-          (rowOrigin + rc, kOrigin + kc * chunkElems))
+      elif kIn == chunkElems and kStride == 1 and
+          srcFlat mod 8 == 0:
+        # fully in bounds, k-contiguous and the chunk 16-byte aligned:
+        # one async chunk, the gmem side re-viewed as words
         let srcChunk = make_view(
           cast[ptr UncheckedArray[uint32]](addr src.data[srcFlat]),
           make_layout((chunkWords,)))
         copyIf(atom, dstChunk, srcChunk, true, chunkWords)
       elif kIn > 0:
-        # K-tail chunk: the in-bounds prefix copies, the rest zeroes
-        let srcFlat = src.getLayout().crd2idx(
-          (rowOrigin + rc, kOrigin + kc * chunkElems))
+        # K-tail chunk, or a full chunk that is k-strided or misaligned:
+        # elementwise copy of the in-bounds prefix through the layout,
+        # zero-fill for the rest
         for j in 0 ..< kIn:
-          elems[wordBase * 2 + elemOff + j] = src.data[srcFlat + j]
+          elems[wordBase * 2 + elemOff + j] = src.data[lay.crd2idx(
+            (rowOrigin + rc, kOrigin + kc * chunkElems + j))]
         for j in kIn ..< chunkElems:
           elems[wordBase * 2 + elemOff + j] = zeroVal
       else:
@@ -160,6 +168,10 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
   ## D = alpha·A·B + beta·C over (BM, BN) block tiles, each one staged
   ## in shared memory. Beta = 0 skips the C read.
   ## D may stay uninitialized.
+  ##
+  ## Staging takes the 16-byte async-copy chunk only where the operand
+  ## is k-contiguous and the chunk 16-byte aligned. Operands that are
+  ## k-strided or misaligned stage elementwise through their layout.
   ##
   ## Args:
   ## - mma: the warp tile schedule. A 2x2 warp grid covers one block
