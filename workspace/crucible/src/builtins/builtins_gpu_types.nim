@@ -42,7 +42,7 @@ func `-`*(a: bfloat16): bfloat16 {.inline.} =
 #  Low-precision float conversions: host fallback bodies and dispatch
 # ═══════════════════════════════════════════════════════════════════════
 #
-# builtins_type_conversions_fallback carries the host fallback bodies,
+# builtins_type_conversions_fallback provides the host fallback bodies,
 # re-exported here. Device calls lower to the conv rows' native conversions.
 
 import ./builtins_type_conversions_fallback

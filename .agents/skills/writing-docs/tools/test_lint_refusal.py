@@ -25,11 +25,13 @@ def test_refusal_rules():
     """
 
     failed = (lint_md_nim_py.refusal_selftest(quiet=True)
-              + lint_md_nim_py.agent_verb_selftest(quiet=True))
+              + lint_md_nim_py.agent_verb_selftest(quiet=True)
+              + lint_md_nim_py.banned_vocab_selftest(quiet=True))
     assert failed == 0, "%d fixture case(s) failed" % failed
 
 
 if __name__ == "__main__":
     failed = (lint_md_nim_py.refusal_selftest()
-              + lint_md_nim_py.agent_verb_selftest())
+              + lint_md_nim_py.agent_verb_selftest()
+              + lint_md_nim_py.banned_vocab_selftest())
     sys.exit(1 if failed else 0)
