@@ -1,6 +1,6 @@
 ##
 ## Vulkan: entry-point parse with a void-returning device helper.
-## parseEntryPoint must return the first kernel's name, never a device-helper name.
+## Entry-point resolution must return the first kernel's name, never a device-helper name.
 ## Each kernel opens with its own `layout(local_size_x ...) in;` preamble.
 ## Entry point resolution anchors on that preamble, not on the first bare `void `.
 ##

@@ -68,13 +68,13 @@ proc ingest*(engine: VulkanEngine, source: string) =
              source.splitLines()[0])
 
 proc ingestGlsl(engine: VulkanEngine, glsl: string) =
-  engine.entryPoint = parseEntryPoint(glsl)
+  engine.entryPoint = findFirstFunctionName(glsl, "layout(local_size_x", "void ")
   engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(glsl)
   engine.isHlsl = false
 
 proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
-  engine.entryPoint = parseHlslEntryPoint(hlsl)
+  engine.entryPoint = findFirstFunctionName(hlsl, "[numthreads(", "void ")
   engine.spirv = compileHlslToSpirvViaDxc(hlsl, engine.entryPoint)
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
@@ -237,16 +237,6 @@ proc findFirstFunctionName(src: string, preamble, marker: string): string =
   if name.len == 0:
     name = "main"
   name
-
-proc parseEntryPoint(glsl: string): string =
-  ## Reads the first entry function after the local-size layout: the kernel entry name
-  ## in the emitted GLSL source and in the compiled OpEntryPoint.
-  findFirstFunctionName(glsl, "layout(local_size_x", "void ")
-
-proc parseHlslEntryPoint(hlsl: string): string =
-  ## Reads the entry function after the `[numthreads(...)]` attribute: the kernel entry
-  ## name in the emitted HLSL source and in the compiled OpEntryPoint.
-  findFirstFunctionName(hlsl, "[numthreads(", "void ")
 
 proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
