@@ -45,9 +45,6 @@
 ##   a pointer local rebound to a second pointee, an exploded struct local
 ##   used whole or read through an unbound field path
 ##   refuse in the pass
-##
-## Shapes that reach the printer untouched keep only the type-based
-## pointer-local refusals there.
 
 import std/[sets, tables]
 import ../ir/cirv2_lang

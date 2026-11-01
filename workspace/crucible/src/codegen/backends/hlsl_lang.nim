@@ -45,9 +45,9 @@
 ##   staged at launch as a descriptor-route uniform on fvD3D12, as a push block member on fvVulkan
 ##
 ## Addressing, memory classes, jumps:
-## - HLSL has no pointer values: pointer locals, pointer-holding struct locals,
-##   `var` parameter derefs all unwrap in the HLSL lowering pass,
-##   the printer refuses anything pointer shaped reaching it
+## - HLSL has no pointer values: the HLSL lowering pass unwraps pointer locals,
+##   pointer-holding struct locals and `var` parameter derefs, and it refuses
+##   every pointer shape it cannot unwrap
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the HLSL lowering pass,
 ##   file-scope `static const` output, the printer refuses a smem,
 ##   device-space or surviving constant-space local
@@ -147,13 +147,9 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
     if result.len == 0:
       case t.kind
       of ctInt:
-        ctx.fail("int" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
-          " are parse errors and int64_t is a parse error in the HLSL frontend," &
-          " 64-bit integers are rejected")
+        ctx.fail("int" & $t.bits & " has no HLSL type name")
       of ctUint:
-        ctx.fail("uint" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
-          " are parse errors and uint64_t pulls the SPIR-V Int64 capability," &
-          " 64-bit integers are rejected")
+        ctx.fail("uint" & $t.bits & " has no HLSL type name")
       else:
         ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
   of ctVector:
@@ -225,8 +221,7 @@ proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size,
     let w = t.bits div 8
     result = (w, w)
   of ctBool:
-    ctx.fail("bool push member " & label & ", the fvVulkan push block has no" &
-      " bool member")
+    ctx.fail("bool push member " & label & ", the fvVulkan push block has no bool member")
   of ctVector:
     let w = t.vElem.bits div 8
     result = (w * t.vN, w)
@@ -382,8 +377,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       return ""
     of shkNone: discard
     if call.callee.builtin and call.callee.name in hlslConvFpRefusals:
-      ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8" &
-        " conversion builtins are outside the HLSL subset")
+      ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8 conversion builtins are outside the HLSL subset")
       return ""
   return ""
 
@@ -472,15 +466,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
         return ""
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
-  of eDeref:
-    # refused, HLSL has no pointer values
-    ctx.fail("bare dereference has no emission, HLSL has no pointer values")
-    return ""
-  of eAddr:
-    # refused, buffers are index-only resources and locals rewrite to their pointee
-    ctx.fail("address-of has no HLSL form, buffers are index-only resources" &
-      " and locals rewrite to their pointee")
-    return ""
   of eCast:
     return ctx.printCast(e, hlslCastRules, emitHlslTypeBare(ctx, e.castType))
   of eConv:
@@ -535,11 +520,15 @@ proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, l
 # Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration: pointer and storage-class refusals, then the declaration text with its initializer.
+  ## One local declaration:
+  ## - the buffer-local refusal and the storage-class refusals
+  ## - the declaration text with its initializer
+  ##
+  ## Thread-space pointer locals never reach here: the HLSL lowering pass
+  ## rewrites them to their pointees.
   let pad = spaces(ctx.indent * 2)
-  if s.declType.kind in {ctPtr, ctAptr}:
-    ctx.fail("pointer local " & s.name & ", HLSL has no pointer values," &
-      " the HLSL lowering pass rewrites pointer locals to their pointees")
+  if s.declType.kind == ctAptr:
+    ctx.fail("buffer local " & s.name & " has no HLSL binding, buffers are kernel parameters")
     return ""
   if s.space == caThreadgroup:
     ctx.fail("local " & s.name & " in threadgroup space, HLSL has no" &
@@ -680,18 +669,15 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
   ## - device functions: values pass by value (a `var T` binds `inout`),
   ##   buffers are unbound resource params
   ##
-  ## Rejects the parameter shapes the HLSL resource model cannot bind:
-  ##
-  ## - the flavor selects the fvVulkan-only refusals, the buffer-element binding
-  ##   check and the bool push member
-  ## - classification runs at the signature-emission sites, so a module printed
-  ##   without the pipeline classifies exactly as one printed through it
+  ## Classification runs at the signature-emission sites, so a module printed
+  ## without the pipeline classifies exactly as one printed through it.
+  ## Parameters whose scalar-row cell is absent (the 64-bit integers and float16)
+  ## refuse at the declaration emission on the row-lookup channel.
   for p in fn.params:
     case p.typ.kind
     of ctAptr:
       if p.typ.space != caDevice:
-        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space &
-          " space, buffers address device memory")
+        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space & " space, buffers address device memory")
         return
       if ctx.flavor == fvVulkan:
         # element types are checked up front, the access emitter and the buffer-pointer typedef both read them
@@ -703,53 +689,23 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
     of ctPtr:
       if p.typ.space == caThread:
         if fn.isKernel:
-          ctx.fail("by-reference parameter " & p.name & " in kernel `" &
-            fn.name & "` has no binding, kernels take values and buffers")
+          ctx.fail("by-reference parameter " & p.name & " in kernel `" & fn.name & "` has no binding")
           return
         # device function: the `inout` binding, reads and writes are direct
         discard
       else:
-        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.space &
-          " space has no binding")
+        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.space & " space has no binding")
         return
     of ctArray:
-      ctx.fail("array parameter " & p.name & " in `" & fn.name &
-        "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
+      ctx.fail("array parameter " & p.name & " in `" & fn.name & "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
       return
-    of ctSpan:
-      ctx.fail("span parameter " & p.name & " in `" & fn.name &
-        "` has no HLSL binding, openArray spans split to pointer + length" &
-        " before printing")
-      return
-    of ctInt, ctUint:
-      if p.typ.bits != 32:
-        ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
-          "` is rejected: int64_t is a parse error in the HLSL frontend and" &
-          " uint64_t pulls the SPIR-V Int64 capability")
-        return
-      if fn.isKernel:
-        pushParams.incl(p.name)
-    of ctFloat:
-      if p.typ.bits == 16:
-        ctx.fail("float16 parameter " & p.name & " in `" & fn.name &
-          "`, float16 types are outside the HLSL subset")
-        return
-      if fn.isKernel:
-        pushParams.incl(p.name)
-    of ctBool:
-      if fn.isKernel:
-        if ctx.flavor == fvVulkan:
-          ctx.fail("bool parameter " & p.name & ", the fvVulkan push block has" &
-            " no bool member")
-          return
-        pushParams.incl(p.name)
-    of ctVoid, ctVector, ctStruct:
+    of ctInt, ctUint, ctFloat, ctBool, ctVoid, ctVector, ctStruct, ctSpan:
+      # spans split to pointer + length in the shared lowering, none reaches the printer
       if fn.isKernel:
         pushParams.incl(p.name)
     of ctProc:
       ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
       return
-
 proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the HLSL walk:
   ##
@@ -805,8 +761,7 @@ proc emitStructDecls(ctx: var PrintCtx, byName: Table[string, CirType], emitted:
     ctx.fail("struct " & name & " is referenced but has no declaration")
     return
   if t.containsPtrDeep:
-    ctx.fail("struct " & name & " holds a pointer, HLSL structs cannot hold" &
-      " resources, the HLSL lowering pass rewrites pointer-holding locals to their fields")
+    ctx.fail("struct " & name & " holds a pointer, HLSL structs cannot hold resources")
     return
   emitted.incl name
   for f in t.fields:

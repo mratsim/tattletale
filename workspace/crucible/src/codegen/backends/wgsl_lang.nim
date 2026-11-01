@@ -19,7 +19,8 @@
 ## - the kernel signature takes only `@builtin(...)` coordinate parameters, first-use order
 ##
 ## Addressing, memory classes, jumps:
-## - the WGSL lowering pass refuses a pointer local or pointer-holding struct local: it rewrites the shapes into pointees and leaf symbols
+## - the WGSL lowering pass rewrites pointer locals into their pointees,
+##   pointer-holding struct locals into their leaf symbols
 ## - the WGSL lowering pass relocates a smem/const_mem kernel local into `CirModule.globals`
 ## - struct declarations emit for every struct of `CirModule.types` in declaration order,
 ##   a dissolved one included, an unused declaration is legal WGSL, the printer refuses a pointer-holding struct
@@ -79,11 +80,8 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## WGSL name of a non-array leaf type, "" when the caller composes the name.
   ## A struct name registers the struct for reference-driven emission.
   ##
-  ## 64-bit leaves refuse:
-  ## - i64/u64 require the shader-int64 device feature
-  ## - f64 requires the shader-f64 device feature
-  ## - the vendored wgpu-native exposes no WGPUFeatureName for either, so no
-  ##   request can enable them
+  ## 64-bit leaves refuse: their device features exist but the vendored
+  ## wgpu-native exposes no WGPUFeatureName to request them.
   case t.kind
   of ctBool:
     if ctx.storageBoolSpelling:
@@ -96,26 +94,21 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     result = scalarName(wgslScalarRow, t)
     if result.len == 0:
       if t.bits == 64:
-        ctx.fail("64-bit integers have no WGSL emission: WGSL requires the" &
-          " shader-int64 device feature for i64/u64, the vendored wgpu-native" &
-          " has no WGPUFeatureName to request it")
+        ctx.fail("i64/u64 need the shader-int64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit integers have no WGSL type, only 32")
   of ctFloat:
     result = scalarName(wgslScalarRow, t)
     if result.len == 0:
       if t.bits == 64:
-        ctx.fail("64-bit floats have no WGSL emission: WGSL requires the" &
-          " shader-f64 device feature for f64, the vendored wgpu-native has" &
-          " no WGPUFeatureName to request it")
+        ctx.fail("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit floats have no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
     result = vectorName(wgslVectorRule, wgslScalarRow, t)
     if result.len == 0 and elem.len > 0:
-      ctx.fail("vector of " & elem & "x" & $t.vN &
-        " has no WGSL type name, only 2..4-wide vectors have a name")
+      ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, only 2..4-wide vectors have a name")
   of ctStruct:
     result = t.name
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
@@ -134,22 +127,11 @@ proc emitWgslTypeBare(ctx: var PrintCtx, t: CirType): string =
     result = ctx.emitWgslScalar(t)
 
 proc emitWgslPtrType(ctx: var PrintCtx, t: CirType): string =
-  ## WGSL pointer type of a `ptr` local or device-function parameter,
-  ## the address space leads, storage pointers declare the access mode.
+  ## WGSL pointer type of a device-function `var T` parameter: `ptr<function, T>`,
+  ## the only pointer form a signature takes. The call inlining removes every
+  ## device function whose pointers cannot cross a WGSL function signature.
   let elem = ctx.emitWgslTypeBare(t.pElem)
-  case t.space
-  of caThread:
-    result = "ptr<function, " & elem & ">"
-  of caThreadgroup:
-    result = "ptr<workgroup, " & elem & ">"
-  of caDevice:
-    if t.kind == ctAptr:
-      ctx.fail("device array pointer type has no WGSL form, the binding is the array itself")
-      return ""
-    result = "ptr<storage, " & elem & ", read_write>"
-  of caConstant:
-    ctx.fail("pointer to constant space, WGSL consts have no address")
-    return ""
+  result = "ptr<function, " & elem & ">"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
@@ -217,8 +199,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One numeric conversion in the constructor-call form: WGSL has no bool
   ## constructor and no bool-to-numeric conversion.
   if e.castType.kind == ctBool:
-    ctx.fail("conversion to bool, WGSL has no bool constructor, compare" &
-      " against zero")
+    ctx.fail("conversion to bool, WGSL has no bool constructor")
     return ""
   let bt = getExprType(e.castOperand)
   if bt != nil and bt.kind == ctBool:
@@ -242,8 +223,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       # WGSL atomics cover i32/u32 on atomic<T> storage types only,
       # f32 atomics do not exist, and the atomic<T> retype of the binding
       # is a declaration-site change the printer does not make
-      ctx.fail("atomicFetchAdd has no WGSL form, WGSL atomics cover i32/u32" &
-        " pointees through atomic<T> storage types only")
+      ctx.fail("atomicFetchAdd has no WGSL form, WGSL atomics cover i32/u32 pointees through atomic<T> storage types only")
       return ""
     if call.callee.synchroBuiltin != sbkNone:
       ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
@@ -279,36 +259,21 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     # - `bitcast<f64>` requires the shader-f64 device feature the runtime cannot request
     # - every bitcast operand form fails, a u32-suffixed 64-bit literal is a parse error
     if e.fValue.classify in {fcInf, fcNegInf, fcNan} and e.fLitType.bits == 64:
-      ctx.fail("a 64-bit non-finite float has no WGSL emission: bitcast<f64>" &
-        " requires the shader-f64 device feature, the vendored wgpu-native" &
-        " has no WGPUFeatureName to request it")
+      ctx.fail("a 64-bit non-finite float has no WGSL token, bitcast<f64> needs the unrequestable shader-f64 feature")
       return ""
     return emitLiteral(e, ctx.lit, ctx.row)
   of eSym:
-    # pointer-value and whole-struct refusals, coordinate builtins are
-    # entry-point parameters, names pass through
-    if e.typ != nil and e.typ.kind == ctPtr and e.name notin ctx.paramNames:
-      ctx.fail("pointer local " & e.name & " used as a value, WGSL has no" &
-        " pointer values, the WGSL lowering pass rewrites pointer locals to their pointees")
-      return ""
-    if e.typ != nil and e.typ.kind == ctStruct and e.typ.containsPtrDeep and
-        e.name notin ctx.paramNames:
-      ctx.fail("struct local " & e.name &
-        " used whole, WGSL has no pointer struct members, the WGSL lowering" &
-        " pass rewrites it into its fields")
-      return ""
+    # coordinate builtins are entry-point parameters, names pass through,
+    # pointer-value and whole-pointer-struct reads refuse in the lowering pass
     if e.typ != nil and e.typ.kind == ctBool and e.name in ctx.nimBoolNames:
       # storage is a u32 word, body reads expect bool
       return "bool(" & e.name & ")"
     if e.coordBuiltin != cbkNone:
       if not ctx.inKernel:
-        ctx.fail("coordinate builtin " & e.name &
-          " in a device function, WGSL builtins are entry-point parameters")
+        ctx.fail("coordinate builtin " & e.name & " in a device function, WGSL builtins are entry-point parameters")
         return ""
       if e.coordBuiltin == cbkThreadsPerThreadgroup:
-        ctx.fail("threads_per_threadgroup has no WGSL builtin: WGSL has only" &
-          " the @workgroup_size attribute, the threadgroup size is not" &
-          " addressable from WGSL")
+        ctx.fail("threads_per_threadgroup has no WGSL builtin, WGSL has only the @workgroup_size attribute")
         return ""
       ctx.builtins.incl(e.coordBuiltin)
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
@@ -339,15 +304,12 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     # takes its letter, names pass through
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       if not ctx.inKernel:
-        ctx.fail("coordinate builtin " & e.dotBase.name &
-          " in a device function, WGSL builtins are entry-point parameters")
+        ctx.fail("a device function reads " & e.dotBase.name & ", WGSL coordinate builtins are entry-point parameters")
         return ""
       let mapped = wgslCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
       if mapped.len == 0:
         if e.dotBase.coordBuiltin == cbkThreadsPerThreadgroup:
-          ctx.fail("threads_per_threadgroup has no WGSL builtin: WGSL has only" &
-            " the @workgroup_size attribute, the threadgroup size is not" &
-            " addressable from WGSL")
+          ctx.fail("threads_per_threadgroup reads refuse on WGSL, only the @workgroup_size attribute exists")
         else:
           ctx.fail("no coordinate component " & e.fieldName)
         return ""
@@ -412,7 +374,9 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 
 
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration: storage-class and pointer-shape refusals, then the declaration text.
+  ## One local declaration: storage-class refusals, then the declaration text.
+  ## Pointer locals and pointer-holding struct locals never reach here: the WGSL lowering pass
+  ## rewrites the shapes into pointees and leaf symbols.
   let pad = spaces(ctx.indent * 2)
   if s.space == caThreadgroup:
     # WGSL lowering pass hoists threadgroup locals to `CirModule.globals`,
@@ -428,14 +392,6 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
     ctx.fail("local " & s.name & " in device space, WGSL locals are" &
       " function or workgroup")
     return ""
-  elif s.declType.kind in {ctPtr, ctAptr}:
-    ctx.fail("pointer local " & s.name & ", WGSL has no pointer values," &
-      " the WGSL lowering pass rewrites pointer locals to their pointees")
-    return ""
-  elif s.declType.kind == ctStruct and s.declType.containsPtrDeep:
-    ctx.fail("struct local " & s.name & ", WGSL has no pointer struct" &
-      " members, the WGSL lowering pass rewrites pointer locals to their pointees")
-    return ""
   else:
     result = pad & "var " & ctx.emitLocalDecl(s)
     if s.init != nil:
@@ -449,13 +405,8 @@ proc printConst(ctx: var PrintCtx, s: CirStmt): string =
     ctx.emitWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
 
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
-  ## One assignment: the pointer-rebind refusal, then the assignment text.
+  ## One assignment: the NIM_BOOL storage mappings, then the assignment text.
   let pad = spaces(ctx.indent * 2)
-  if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr and
-      s.lhs.name notin ctx.paramNames:
-    ctx.fail("pointer local " & s.lhs.name & " rebound, WGSL has no" &
-      " pointer values, the WGSL lowering pass rewrites pointer locals to their pointees")
-    return ""
   if s.lhs.kind == eSym and s.lhs.name in ctx.nimBoolNames:
     # storage is a u32 word, assigned values are bool
     return pad & s.lhs.name & " = NIM_BOOL(" & ctx.printExpr(s.rhs) & ");"
@@ -518,8 +469,7 @@ proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
   ## Head of one proc, signature and open brace:
   ##
   ## - a device function: the bare `fn name(params) -> ret` signature, a void return emits no arrow (WGSL has no `void` type name)
-  ## - a pointer parameter takes the `ptr<space, T>` form
-  ## - the pass refuses a device pointer parameter: the call sites have no pointer form for a storage binding
+  ## - a pointer parameter takes the `ptr<function, T>` form
   ## - the entry kernel: `@compute @workgroup_size(...)` attribute lines, then `fn <entry>(<entry inputs>)` over the body-walk inputs
   ##   exportc renames the entry for the host runtime lookup.
   if fn.isKernel:
@@ -532,11 +482,6 @@ proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
   var params: seq[string]
   for p in fn.params:
     case p.typ.kind
-    of ctAptr:
-      ctx.fail("device pointer parameter " & p.name & " in device function " &
-        fn.name & ", WGSL device functions take no buffer pointers, the" &
-        " call sites have no pointer form for a storage binding")
-      return ""
     of ctPtr:
       params.add p.name & ": " & ctx.emitWgslPtrType(p.typ)
     else:
@@ -569,10 +514,6 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
   let attr = "@group(0) @binding(" & $i & ") "
   case p.typ.kind
   of ctAptr:
-    if p.typ.space != caDevice:
-      ctx.fail("kernel parameter " & p.name & " in " & $p.typ.space &
-        " space, the WebGPU engine binds device buffers only")
-      return ""
     result = attr & "var<storage, read_write> " & p.name & ": array<" &
       ctx.emitWgslTypeBare(p.typ.pElem) & ">;"
   of ctPtr:
@@ -594,10 +535,6 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
         ctx.fail("kernel parameter " & p.name & " field " & f.name &
           " is a bool array, only a scalar bool field maps to a NIM_BOOL word")
         return ""
-    if p.typ.containsPtrDeep:
-      ctx.fail("kernel parameter " & p.name &
-        " holds a pointer, the parameter explosion removes those before printing")
-      return ""
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitWgslTypeBare(p.typ) & ";"
   of ctBool:
@@ -609,8 +546,7 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
 proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
   ## One struct declaration, WGSL requires at least one member.
   if t.containsPtrDeep:
-    ctx.fail("struct " & t.name &
-      " holds a pointer, WGSL has no pointer struct members")
+    ctx.fail("struct " & t.name & " holds a pointer, WGSL has no pointer struct members")
     return ""
   result = "struct " & t.name & " {\n"
   if t.fields.len == 0:
