@@ -87,7 +87,7 @@ It delegates to a typed macro that runs four steps:
 flowchart LR
     B["Nim kernel body"] --> F["frontend/nim_to_crucible<br/>lowerCirv2"]
     F --> M["CirModule"]
-    M --> P["PassRegistry<br/>legalize - normalize - lower - analyze - validate"]
+    M --> P["PassRegistry<br/>normalize - lower - analyze - validate"]
     P --> M2["CirModule, final form"]
     M2 --> PR["printers backends/*_lang<br/>+ spirv encoder"]
     PR --> S["CUDA C++ / OpenCL C / GLSL /<br/>WGSL / MSL / HLSL / SPIR-V words"]
@@ -95,13 +95,12 @@ flowchart LR
 
 ### Stages
 
-Every target registers the first three stages identically.
+Every target registers the first two stages identically.
 Divergence starts at the reserved-word rename.
 
 | Stage           | Registration                        | Passes                                                                                         |
 | ---             | ---                                 | ---                                                                                            |
-| Legalization    | `registerLegalizationPasses`        | `builtinKindAssignment`, kind-assigns every builtin symbol from the canonical name tables      |
-| Normalization   | `registerNormalizationPasses`       | `bindCompoundAssignTemps`, binds the call-bearing targets of compound assignments into temps   |
+| Normalization   | `registerNormalizationPasses`       | `settleExprForms`, settles literal use-site types, the bool operator domain and constructor field order; `bindCompoundAssignTemps`, binds the call-bearing targets of compound assignments into temps |
 | Shared lowering | `registerSharedLoweringPasses`      | `lowerSpans`, splits `openArray` spans into pointer + length pairs                             |
 | Reserved rename | one table row per text target       | `registerRenameReservedIdentifiers` with the target's reserved-word set as data                |
 | Target lowering | one table row per pass              | the target's storage-model transforms, table below                                             |
