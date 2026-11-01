@@ -16,13 +16,12 @@
 ## | LitRow     | literal token forms                           |
 ## | KindRow    | walk policy: loops, else folding, routing set |
 ## | VectorRule | a target's real vector coverage               |
+## | CastRule   | one bit-reinterpret coverage rule             |
 ##
-## Each target's rows are plain constants in `targets_rows.nim`.
-## The printer that needs a row reads it directly, a missing row is a compile
-## error at that call site.
-##
-## The scalar rows carry one compile-time check block over all six targets,
-## see `checkScalarRowsTogether`.
+## Targets state their rows in the `genTargets:` DSL of `targets_rows.nim`.
+## The macro in `targets_macros.nim` validates each row against these types
+## during compilation and generates one lookup per row family.
+## A row missing the schema fails the compile at the row definition.
 
 import ../ir/cirv2_lang
 
@@ -51,7 +50,6 @@ type
     i64Prefix*, i64Suffix*: string
     narrowCast*: bool
 
-
   LoopStyle* = object
     ## Loop text of one printer target:
     ##
@@ -74,8 +72,6 @@ type
   ScalarRow* = object
     ## Scalar type names of one target by (kind, width) cell.
     ## Every cell of `ScalarCellAxis` appears exactly once per target.
-    ## Widths name different C types on different hosts: 64-bit `long` on LP64 hosts, 32-bit on LLP64 hosts.
-    ## Each target states its own names, no cell inherits a name from another target.
     cells*: seq[ScalarCell]
 
   LitRow* = object
@@ -140,60 +136,15 @@ type
     sameWidth*: bool
     spelling*, refusal*: string
 
-const ScalarCellAxis*: array[13, tuple[kind: CirTypeKind, width: int]] = [
-  (ctVoid, 0), (ctBool, 0),
-  (ctInt, 8), (ctInt, 16), (ctInt, 32), (ctInt, 64),
-  (ctUint, 8), (ctUint, 16), (ctUint, 32), (ctUint, 64),
-  (ctFloat, 16), (ctFloat, 32), (ctFloat, 64)]
-
-proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
-  ## Compile-time checks over one target's scalar row:
+const ScalarCellAxis*: array[13, tuple[tok: string, kind: CirTypeKind, width: int]] = [
+  ("void", ctVoid, 0), ("bool", ctBool, 0),
+  ("i8", ctInt, 8), ("i16", ctInt, 16), ("i32", ctInt, 32), ("i64", ctInt, 64),
+  ("u8", ctUint, 8), ("u16", ctUint, 16), ("u32", ctUint, 32), ("u64", ctUint, 64),
+  ("f16", ctFloat, 16), ("f32", ctFloat, 32), ("f64", ctFloat, 64)]
+  ## (kind, width) cells with the DSL token naming each cell.
+  ## Every scalar row and vector element row keys its entries to this axis.
   ##
-  ## - every cell of `ScalarCellAxis` appears exactly once, a second row for an existing cell fails the compile
-  ## - a type name denotes at most one cell, a bool cell's name may repeat another
-  ##   cell's name (OpenCL prints bool locals as `int` for the 4-byte launch ABI)
-  ##
-  ## Raises `AssertionDefect` at compile time on the first violated check.
-  for axisCell in ScalarCellAxis:
-    var count = 0
-    for c in row.cells:
-      if c.kind == axisCell.kind and c.width == axisCell.width:
-        inc count
-    doAssert count == 1, "target " & target & ": scalar cell (" &
-      $axisCell.kind & ", " & $axisCell.width & ") appears " & $count &
-      " times, exactly once required"
-  for i, a in row.cells:
-    if a.spelling.len == 0 or a.kind == ctBool:
-      continue
-    for j in i + 1 ..< row.cells.len:
-      if row.cells[j].kind == ctBool:
-        continue
-      doAssert row.cells[j].spelling != a.spelling,
-        "target " & target & ": name '" & a.spelling & "' denotes two cells, (" &
-        $a.kind & ", " & $a.width & ") and (" & $row.cells[j].kind & ", " &
-        $row.cells[j].width & ")"
-
-proc checkScalarRowsTogether*(
-    rows: openArray[tuple[name: string, row: ScalarRow]]) {.compileTime.} =
-  ## Cross-target scalar check:
-  ##
-  ## - a name two targets share must denote the same (kind, width) cell
-  ## - divergent names for one cell are explicit per-target data, msl `char`/`long`
-  ##   against cuda `signed char`/`long long`
-  ## - a bool cell's name may repeat a non-bool cell's name, see `checkScalarRow`
-  ##
-  ## Returns after catching a name that drifted onto a cell of another width or kind.
-  ## Raises `AssertionDefect` naming both targets at compile time.
-  for i in 0 ..< rows.len:
-    for j in i + 1 ..< rows.len:
-      for a in rows[i].row.cells:
-        if a.spelling.len == 0:
-          continue
-        for b in rows[j].row.cells:
-          if b.spelling == a.spelling:
-            if a.kind == ctBool or b.kind == ctBool:
-              continue
-            doAssert a.kind == b.kind and a.width == b.width,
-              "name '" & a.spelling & "' denotes (" & $a.kind & ", " &
-              $a.width & ") on " & rows[i].name & " but (" & $b.kind & ", " &
-              $b.width & ") on " & rows[j].name
+  ## - widths name different C types on different hosts, 64-bit `long`
+  ##   on LP64 hosts against 32-bit on LLP64 hosts
+  ## - each target states its own names, one cell never inherits another
+  ##   target's name
