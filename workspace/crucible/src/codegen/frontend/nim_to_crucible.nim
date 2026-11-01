@@ -635,7 +635,6 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
   ## An elif chain nests one `ite` per branch, first match wins.
   ## Else statements sit innermost.
   ## Every branch body of the expression form assigns `dest`.
-  ## A two-branch select over one scalar local folds into one conditional-value assignment, with the boundary in the check below.
   var tail: seq[CirStmt] = @[]
   if not elseBody.isNil:
     tail = ctx.buildBranchBody(elseBody, dest)
@@ -653,26 +652,6 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
       return @[]
     tail = condHoists & @[iteS(cond, body, tail)]
   result = tail
-  # select re-fusion: one `ite` whose then and else bodies each hold a single
-  # assignment to the same scalar local becomes one conditional-value assignment.
-  # Both variants of a conditional value evaluate, in WGSL's `select` and the C-family `?:` alike.
-  # A call in the condition or in either value keeps the statement form: a call may write memory or synchronize.
-  # Elif chains, no-else ifs, multi-statement bodies and non-scalar
-  # destinations never match the shape tested here.
-  if result.len == 1 and result[0].kind == sIte:
-    let branch = result[0]
-    if branch.thenBody.len == 1 and branch.elseBody.len == 1 and
-        branch.thenBody[0].kind == sAsgn and branch.elseBody[0].kind == sAsgn and
-        branch.thenBody[0].lhs.kind == eSym and branch.elseBody[0].lhs.kind == eSym and
-        branch.thenBody[0].lhs.name == branch.elseBody[0].lhs.name:
-      let destSym = branch.thenBody[0].lhs
-      let destType = getExprType(destSym)
-      if destType != nil and isScalarType(destType) and
-          not hasCallDeep(branch.cond) and
-          not hasCallDeep(branch.thenBody[0].rhs) and
-          not hasCallDeep(branch.elseBody[0].rhs):
-        result = @[asgnS(destSym, ternaryE(destType, branch.cond,
-          branch.thenBody[0].rhs, branch.elseBody[0].rhs))]
 
 proc lowerSplicedStmt(ctx: var FrontendCtx, c: NimNode): seq[CirStmt] =
   ## One non-final child of an expression block, a statement of the spliced expansion,
@@ -878,11 +857,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let base = ctx.lowerExpr(n[0])
     if ctx.failing():
       return nil
-    if base.kind == eOconstr:
-      # a field read of a construction is the field's value, no runtime temporary materializes
-      for f in base.kvFields:
-        if f.name == sanitizeIdent(n[1].strVal):
-          return f.value
     return dotE(base, sanitizeIdent(n[1].strVal))
   of nnkInfix:
     # operators: arithmetic and bitwise directly, comparisons normalize into four kinds, `>` and `>=` swap operands
@@ -1246,9 +1220,6 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         ctx.declareLocal(nameNode, sym(cirName, typ), spc)
         if value.isNil:
           result.add(hoists & @[varD(cirName, typ, nil, spc)])
-        elif value.kind == eCall:
-          result.add(hoists & @[varD(cirName, typ, nil, spc),
-              asgnS(sym(cirName, typ), value)])
         else:
           result.add(hoists & @[varD(cirName, typ, value, spc)])
   of nnkConstSection:
