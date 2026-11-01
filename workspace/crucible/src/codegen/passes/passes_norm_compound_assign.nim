@@ -64,7 +64,6 @@ proc tempBinderFor(fn: CirProc): TempBinder =
   result.used = collected
 
 proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
-  ## Binds one call-bearing operand into a fresh temp, returns the temp symbol.
   ## The operand evaluates once, both use sites read the temp.
   let typ = getExprType(e)
   let name = b.tempName()
@@ -74,7 +73,6 @@ proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): C
   return tmp
 
 proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
-  ## Binds each call-bearing operand of an lvalue tree into a fresh temp.
   ## Only operand positions bind: the lvalue spine (`x`, `x[i]`, `x.f`) stays structural.
   ## An operand temp is legal on every target, an address temp is not:
   ## GLSL rewrites pointer locals to their pointees and keeps no function storage.
@@ -96,7 +94,7 @@ proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: Cir
   of eDeref:
     e.derefOperand = b.bindCallBearingOperands(hoists, e.derefOperand)
   else:
-    # unreachable: the guard above admits only the four spine kinds, and this branch keeps the case total
+    # unreachable: the guard above admits only the four spine kinds
     discard
   return e
 
@@ -105,9 +103,7 @@ proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: Cir
 # ═══════════════════════════════════════════════════════════════════════
 
 proc isSharedArithTarget(s: CirStmt): bool =
-  ## True for the compound-assign emission: the assignment target and the arithmetic
-  ## read are the same tree reference.
-  ## A target call the user wrote twice lowers to two distinct trees and never matches.
+  ## A target call the user wrote twice lowers to two distinct trees, so the reference-identity match never fires on it.
   if s.rhs.kind notin {eAdd, eSub, eMul, eDiv}:
     return false
   result = not s.rhs.left.isNil and s.rhs.left == s.lhs
