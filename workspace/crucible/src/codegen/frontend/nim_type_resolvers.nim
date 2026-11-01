@@ -34,6 +34,32 @@ proc fail*(r: var CirTypeResolver, detail: string) =
   if r.err.len == 0:
     r.err = "cirv2 frontend: " & detail
 
+func builtinDistinctScalar(n: NimNode): CirType =
+  ## CIRv2 identity of a `{.builtin.}` low-precision float type.
+  ## The `{.builtin.}` marking is the type's identity: an unmarked distinct
+  ## erases to its storage base and loses the float format.
+  ## - `float16` resolves as the 16-bit float cell, a first-class float identity
+  ## - `bfloat16` and the fp8 formats name no type beyond raw bits, values
+  ##   travel in the storage width
+  ## Nil when `n` is not one of the marked types.
+  if n.kind != nnkSym or n.symKind != nskType:
+    return nil
+  let impl = n.getImpl()
+  if impl.kind != nnkTypeDef or impl[0].kind != nnkPragmaExpr or
+      impl[0][1].kind != nnkPragma:
+    return nil
+  var marked = false
+  for p in impl[0][1]:
+    if p.kind in {nnkSym, nnkIdent} and p.strVal == "builtin":
+      marked = true
+  if not marked:
+    return nil
+  case n.strVal
+  of "float16": tFloat(16)
+  of "bfloat16": tUint(16)
+  of "fp8e4m3", "fp8e5m2": tUint(8)
+  else: nil
+
 func scalarShortName(n: NimNode): string =
   ## Short name of a builtin scalar type node used as a generic argument.
   ## `float32` renders `f32`, Nim `int` renders `i32`.
@@ -430,7 +456,11 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     # enums lower as their 32-bit storage, the type kinds have no enum entry
     result = tUint(32)
   of ntyDistinct:
-    result = r.resolveCirType(n.getTypeImpl()[0], ptrSpace)
+    let marked = builtinDistinctScalar(n)
+    if marked != nil:
+      result = marked
+    else:
+      result = r.resolveCirType(n.getTypeImpl()[0], ptrSpace)
   of ntyProc:
     result = r.resolveProcType(n.getTypeInst())
   of ntyTypeDesc:
