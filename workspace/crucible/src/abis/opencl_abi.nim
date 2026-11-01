@@ -256,10 +256,6 @@ proc finish*(
   command_queue: Pcommand_queue
 ): TClResult {.importc: "clFinish", dynlib: ClLib.}
 
-proc flush*(
-  command_queue: Pcommand_queue
-): TClResult {.importc: "clFlush", dynlib: ClLib.}
-
 # ═══════════════════════════════════════════════════════════════════════
 # Context & Queue Release
 # ═══════════════════════════════════════════════════════════════════════

@@ -8,7 +8,11 @@
 {.experimental: "codeReordering".}
 
 ## OpenCL lowering: per-target transforms for the OpenCL C storage model.
-## The pipeline table in `gpu_compiler.nim` declares the registration order.
+## The pipeline table in `gpu_compiler.nim` declares the registration order:
+##
+##   legalize → normalize → lowerSpans → openclReservedIdentifiers → decomposeArrayAssign
+##   → explodeGlobalStructWithPtrFields → smemInitRewrite → openclHoistProgramScopeConstants
+##   → lowerByrefParams → instantiateAddressSpaceGenerics → openclScanModuleFeatures → validation
 ##
 ## - `openclHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into
 ##   `CirModule.globals` in encounter order, every proc and scope depth covered,
@@ -21,7 +25,7 @@
 ## declaration the printer emits directly.
 ##
 ## Refusal homes:
-## - a const_mem local without an initializer refuses in the pass, the printer
+## - a const_mem local without an initializer refuses in the pass and the printer
 ##   keeps a nil-init shape guard on the relocated declarations
 ## - a const_mem local surviving outside the relocation refuses at the printer,
 ##   the walk covers every proc and scope
@@ -38,7 +42,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerOpenclHoistProgramScopeConstants*(reg: var PassRegistry) =
-  ## Registers the const_mem program-scope hoist:
   ## - the pass refuses a const_mem local without an initializer
   ## - the printer keeps a nil-init shape guard on the relocated declarations
   reg.register("openclHoistProgramScopeConstants", pkTransform,
@@ -47,7 +50,6 @@ func registerOpenclHoistProgramScopeConstants*(reg: var PassRegistry) =
   )
 
 func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
-  ## Registers the by-reference parameter lowering pass.
   reg.register("lowerByrefParams", pkTransform,
     "Passes large structs to device functions as hidden thread pointers",
     run = openclLowerByrefParams
@@ -58,8 +60,8 @@ func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc openclHoistProgramScopeConstants(m: CirModule): string =
-  ## Relocates the `{.const_mem.}` locals of every proc into `m.globals`.
-  ## Encounter order, the declarations dropped from their bodies.
+  ## Relocates the `{.const_mem.}` locals of every proc into `m.globals`,
+  ## in encounter order, dropping the declarations from their bodies.
   ##
   ## Contract:
   ## - every proc and scope depth covered, a device-function or nested-scope
@@ -75,7 +77,7 @@ proc openclHoistProgramScopeConstants(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 func cirSizeBytes(t: CirType): int =
-  ## Byte size of a CIRv2 type, the C layout:
+  ## Byte size of a CIRv2 type under the C layout:
   ## scalars from their bits, arrays elementwise, structs fieldwise,
   ## pointers one machine word.
   case t.kind
@@ -97,12 +99,12 @@ func cirSizeBytes(t: CirType): int =
     result = 0
 
 func isLargeStruct(t: CirType): bool =
-  ## True when the struct passes by hidden const reference: the threshold is 24 bytes, the C backend's 3-pointer rule.
+  ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
   t != nil and t.kind == ctStruct and cirSizeBytes(t) >= 24
 
 proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
   ## Rewrites every read of the by-value param `oldName` into a deref of the hidden pointer `ptrSym`, in place over the expression tree.
-  ## Expressions are refs, the rewrite applies to the node every sharer sees.
+  ## Expressions are refs, so the rewrite applies to the node every sharer sees.
   ##
   ## The rewritten read splices to `deref(ptrSym)` and the walk descends
   ## into the spliced node's children: `ptrSym` names the hidden pointer
@@ -120,7 +122,7 @@ proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int) =
   ## pointer and the argument is still the struct value.
   ##
   ## A non-lvalue argument (a call result, a constructor) copies first into
-  ## a fresh local: `&` of a temporary is invalid C, the copy is an lvalue.
+  ## a fresh local: `&` of a temporary is invalid C, so the copy provides the lvalue.
   ##
   ## - the hoisted declarations run in front of the statement
   ## - nested calls hoist first, every reference reads a computed temp
@@ -200,7 +202,7 @@ proc openclLowerByrefParams(m: CirModule): string =
   ## Rewrites a large struct (24 bytes or more) passed by value to a device
   ## function into a hidden thread pointer.
   ##
-  ## - the formal re-types, the body's reads deref
+  ## - the formal re-types to the hidden pointer and the body's reads deref
   ## - call sites pass the address
   ## - kernels keep their ABI
   ##

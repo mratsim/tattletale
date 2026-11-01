@@ -63,7 +63,8 @@ template check*(res: TClResult) =
 proc listPlatforms(): seq[Pplatform_id] =
   var platformCount: cl_uint
   let res = getPlatformIDs(0, nil, platformCount.addr)
-  if res != SUCCESS: return
+  if res != SUCCESS:
+    return
   if platformCount > 0:
     result = newSeq[Pplatform_id](platformCount.int)
     check getPlatformIDs(platformCount, result[0].addr, nil)

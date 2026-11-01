@@ -7,13 +7,13 @@
 
 ## Curated public surface of crucible.
 ##
-## | Section       | Symbols                                                                                                                             |
-## | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                                       |
-## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                                          |
+## | Section       | Symbols                                                                                                               |
+## | ------------- | --------------------------------------------------------------------------------------------------------------------- |
+## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
+## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
-## | Geometry      | `Dim3`, `dim3`                                                                                                                      |
-## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                                       |
+## | Geometry      | `Dim3`, `dim3`                                                                                                        |
+## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                         |
 
 import
   ./codegen/gpu_compiler,

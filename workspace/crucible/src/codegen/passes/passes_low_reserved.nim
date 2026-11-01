@@ -13,7 +13,7 @@
 ## An identifier colliding with a target reserved word takes the `_nim` suffix
 ## at every emitted site, so the printers never rename. A target whose language
 ## reserves the double-underscore identifier head additionally prefixes every
-## `__`-prefixed name (WGSL: `wgsl_`), the suffix applies first:
+## `__`-prefixed name (WGSL: `wgsl_`), with the suffix applied first:
 ##
 ## - fn names, call sites, params and their body references
 ## - locals (var/const) and their body references
@@ -147,8 +147,7 @@ const CudaReserved* = [
 # ═══════════════════════════════════════════════════════════════════════
 
 template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: string, reserved: untyped, doubleUnderscorePrefix: string = "") =
-  ## Registers the reserved-keyword renaming for one target, the run order
-  ## name-matching passes -> reserved renaming -> printing.
+  ## Run order: name-matching passes -> reserved renaming -> printing.
   ##
   ## Args:
   ## - `passName`: the registry key, one registration per target
@@ -172,7 +171,7 @@ func safeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: 
   ## else the renamed form:
   ##
   ## - a reserved word takes the `_nim` suffix
-  ## - a surviving `__` head gains `doubleUnderscorePrefix` in front, the suffix applies first
+  ## - a surviving `__` head gains `doubleUnderscorePrefix` in front, with the suffix applied first
   var safe = if name in reserved: name & "_nim" else: name
   if doubleUnderscorePrefix.len > 0 and safe.startsWith("__"):
     safe = doubleUnderscorePrefix & safe
@@ -180,7 +179,7 @@ func safeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: 
 
 proc renameFieldAccesses(e: CirExpr, fieldRenames, symRenames: Table[string, string]) =
   ## Renames field accesses and symbol references through the maps, in place.
-  ## Expressions are refs, the rename applies to the shared node.
+  ## Expressions are refs, so the rename applies to the shared node.
   if e.isNil:
     return
   case e.kind
@@ -194,7 +193,7 @@ proc renameFieldAccesses(e: CirExpr, fieldRenames, symRenames: Table[string, str
     renameFieldAccesses(e.dotBase, fieldRenames, symRenames)
     return
   of eOconstr:
-    # constructed field names take the struct fields' renames, the member values walk through the children below
+    # constructed field names take the struct fields' renames, while the member values walk through the children below
     for f in mitems(e.kvFields):
       if fieldRenames.hasKey(f.name):
         f.name = fieldRenames[f.name]
@@ -266,7 +265,7 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
       if safe != p.name:
         symRenames[p.name] = safe
         p.name = safe
-    # declare-then-rename: the walk reads the maps, the declarations feed them
+    # declare-then-rename: the declarations feed the maps that the body walk reads
     var decls: seq[tuple[name: string, safe: string]]
     for s in fn.body.mitems:
       case s.kind

@@ -38,8 +38,6 @@ type
     isHlsl: bool
     caches: VulkanCaches
 
-template backendKind(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
-
 proc newVulkanEngine*(): VulkanEngine =
   let vctx = newVulkanContext()
   VulkanEngine(
@@ -82,7 +80,7 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
   engine.isHlsl = true
 
 proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
-  ## Ingests a ready-made SPIR-V module, the artifact of a `spirv:` block.
+  ## Ingests a ready-made SPIR-V module produced by a `spirv:` block.
   const spvMagic = 0x07230203'u32
   resetCaches(engine)
   if spirv.len < 5 or spirv[0] != spvMagic:
@@ -101,7 +99,7 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   engine.isHlsl = false
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
-  ## Ingested GLSL source, the ingest-if-differs identity
+  ## Ingested GLSL source for the ingest-if-differs identity
   engine.source
 
 func getSpirV*(engine: VulkanEngine): seq[uint32] {.inline.} =
@@ -356,7 +354,8 @@ proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: s
                  [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
                  nil, 0, descSet)
 
-  # Sets and pools are per-launch and die once runKernel's fence wait returns, the pipeline outlives them in the engine's pipeline cache
+  # Sets and pools are per-launch and die once runKernel's fence wait returns,
+  # and the pipeline outlives them in the engine's pipeline cache
   engine.ctx.destroyDescriptorPool(pool)
   engine.ctx.destroyDescriptorSetLayout(setLayout)
 

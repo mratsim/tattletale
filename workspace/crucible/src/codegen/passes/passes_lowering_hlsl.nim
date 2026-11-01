@@ -225,33 +225,15 @@ proc rewritePointerChildren(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): strin
       return err
   return ""
 
-proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  ## Rewrites one expression in place for the HLSL pointer model.
-  ## Returns "" when clean, else the first refusal.
-  if e.isNil:
-    return ""
+proc hlslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
+  ## HLSL rewrite shapes outside the shared rewrite skeleton.
   case e.kind
-  of eSym:
-    if e.name in ctx.structLocals:
-      return refuseAt(fn, "struct local " & e.name &
-        " used whole, HLSL has no pointer struct members, read the fields")
-    if e.name in ctx.pendingPtrs:
-      return refuseAt(fn, "pointer local " & e.name &
-        " read before its address-of binding")
-    if e.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & e.name &
-        " used as a value, HLSL has no pointer values")
-    return ""
   of eDot:
     proc spliceExplodedRead(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, root: CirExpr): string =
-      ## One read through an exploded struct local: a bound leaf splices here,
-      ## a read continuing into a bound leaf's own value rewrites the inner chain node,
-      ## a deeper bound leaf defers to its own node, anything else refuses.
+      ## One unbound read through an exploded struct local.
+      ## A read continuing into a bound leaf's own value rewrites the inner chain node.
+      ## A deeper bound leaf defers to its own node, anything else refuses.
       let path = dottedPath(e)
-      if ctx.leafOf.hasKey(path):
-        let leaf = ctx.leafOf[path]
-        e.spliceSym(leaf.sym, leaf.typ)
-        return ""
       if ctx.hasLeafPrefix(path):
         return rewritePointerExpr(fn, ctx, e.dotBase)
       if not ctx.hasDeeperField(path):
@@ -278,13 +260,6 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
       if err.len > 0:
         return err
       return refuseAt(fn, "deref of a non-symbol, HLSL has no pointer values")
-    if op.name in ctx.byRefParams or op.name in ctx.aliasOf:
-      # an `inout` binding of a parameter, or the pointee of an exploded
-      # pointer local: the symbol stands for its pointee, an exploded alias
-      # takes the pointee local's own name
-      let name = if op.name in ctx.aliasOf: ctx.aliasOf[op.name] else: op.name
-      e.spliceSym(name, op.typ.pElem)
-      return ""
     return refuseAt(fn, "deref of " & op.name &
       ", no pointee: HLSL has no pointer values")
   of eAddr:
@@ -329,6 +304,13 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
     return rewritePointerChildren(fn, ctx, e)
   else:
     return rewritePointerChildren(fn, ctx, e)
+
+proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
+  ## Rewrites one expression in place for the HLSL pointer model.
+  ## Returns "" when clean, else the first refusal.
+  ## The shared skeleton owns the symbol refusals plus the bound-leaf and pointee splices.
+  ## `hlslPointerArm` handles every shape outside the skeleton.
+  rewritePointerExprShared(fn, ctx, e, "HLSL", hlslPointerArm)
 
 proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   ## `sVar` case: a pointer local binds its pointee or pends for a later

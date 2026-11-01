@@ -16,9 +16,9 @@ import workspace/crucible/src/runtime/engines/metal_api
 import workspace/crucible/src/runtime/launch/launch_kernel {.all.}
 import workspace/crucible/src/runtime/launch/launch_serialization {.all.}
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   DeviceFnSugar*[E: HwEngine] = object
@@ -41,9 +41,9 @@ func langName(n: NimNode): string =
   name
 
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Bridge construction
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 func makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
   DeviceFnSugar[E](engine: engine)
@@ -51,16 +51,18 @@ func makeDeviceFnSugar[E: HwEngine](engine: E): DeviceFnSugar[E] {.inline.} =
 func base58(h: int): string =
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
   var x = uint64(h)
-  if x == 0: return "1"
+  if x == 0:
+    return "1"
   while x > 0:
     result = alphabet[int(x mod 58)] & result
     x = x div 58
 
 macro bridge(engine: HwEngine, lang: static string, node: untyped): untyped =
-  ## Defers the generated global function generation
-  ## so that it happens in a `device` environment.
-  ## This allows functions that depend on `ccGetBackend`
-  ## to correctly resolve the target backend and not resolve the CPU host.
+  ## Defers the generated global function generation into a `device` environment:
+  ##
+  ## - functions depending on `ccGetBackend` resolve the target backend,
+  ##   never the CPU host
+  ##
   ## On VulkanEngine `lang` picks the ingestion language: SPIR-V words
   ## (default), GLSL through glslangValidator or HLSL through dxc.
   let metalCg = bindSym"metal"
@@ -107,8 +109,10 @@ func isDeviceMemType(t: NimNode): bool =
 func getElemType(formal: NimNode): NimNode =
   formal.expectKind(nnkPtrTy)
   let p = formal[0]
-  if p.kind == nnkBracketExpr and p[0].eqIdent("UncheckedArray"): p[1]
-  else: p
+  if p.kind == nnkBracketExpr and p[0].eqIdent("UncheckedArray"):
+    p[1]
+  else:
+    p
 
 func assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
   if formal.kind != nnkPtrTy:
@@ -129,7 +133,8 @@ func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
   case impl.kind
   of nnkObjectTy:
     let rec = impl[^1]
-    if rec.kind != nnkRecList: return
+    if rec.kind != nnkRecList:
+      return
     for f in rec:
       f.expectKind(nnkIdentDefs)
       if isDeviceMemType(f[^2]):
@@ -213,7 +218,7 @@ func buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
     for j in 0 ..< f.len - 2:
       formalNames.add(f[j])
       formalTypes.add(f[^2])
-  # identity: the callee, the compile-time values, the runtime parameter types
+  # identity: the callee, its compile-time values and the runtime parameter types
   var h = hash($kernel)
   var kcall = ident($kernel).newCall()
   var params = nnkFormalParams.newTree(newEmptyNode())
@@ -221,7 +226,7 @@ func buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
   var vi = 0
   for i in 0 ..< formalTypes.len:
     if si >= statics.len and vi >= values.len:
-      # The rest are default values
+      # values beyond the given formals are defaults
       break
     if isCompileTime(formalTypes[i]):
       let v = statics[si]
@@ -289,7 +294,7 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
   for i in 1 ..< values.len:
     argsN.add(values[i])
   let langLit = newLit(lang)
-  # words compare on VulkanEngine only, the text routes go through getArtifact
+  # words compare on VulkanEngine only, with text routes going through getArtifact
   let wordsRoute = sameType(engine.getTypeInst(), bindSym"VulkanEngine") and lang == "spirv"
   let ingestN = if wordsRoute:
     quote do:
@@ -359,9 +364,9 @@ macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN
     else:
       result.add(a)
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 macro launchDeviceFn*[E](engine: E): DeviceFnSugar[E] =
   ## Chevron form accessor for device-fn launches.
@@ -451,7 +456,7 @@ macro `>>`*(proxy: DeviceFnProxy, call: untyped): untyped =
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
   doAssert callNode.kind == nnkCall, "launchDeviceFn: expected fn(args...), got " & callNode.repr
-  # the lang travels on the proxy type as a static string, the `<<` chevron bakes it there
+  # lang travels on the proxy type as a static string, baked in by the `<<` chevron
   let t = proxy.getTypeInst()
   var lang = "spirv"
   if t.len > 2:

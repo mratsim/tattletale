@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Shared leaf: the launch modules, the engines and the public API import it.
+## Shared leaf. Launch modules, engines, and the public API import it.
 ## DeviceMem and the per-backend buffer release share this module.
 ## Type and allocator live in one scope, like the stdlib's memalloc and seqs_v2.
 ## Each release proc is private and never re-exported.

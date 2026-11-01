@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Pass machinery over CIRv2: the pass record, the registry, and the runner.
+## Pass machinery over CIRv2: pass record, registry, and runner.
 ##
 ## A pass run takes the module in place and returns its refusal:
 ## "" when clean, else the first refusal.
@@ -34,13 +34,14 @@ type
     donePasses*: HashSet[string]
 
 func register*(reg: var PassRegistry, name: string, kind: PassKind, description: string, run: proc(m: CirModule): string {.nimcall.}) =
+  ## Appends the pass to the registry, `runPasses` executes passes in registration order.
   reg.passes.add CirPass(name: name, kind: kind, description: description, run: run)
 
 proc runPasses*(m: CirModule, reg: var PassRegistry): string =
   ## Runs the registered passes in registration order.
   ##
   ## Contract:
-  ## - a transform registered after an analysis refuses, the analysis records
+  ## - a transform registered after an analysis refuses, as the analysis records
   ##   on the module (features, layouts, call graph, ref blocks) would go stale
   ## - the printers read the analysis records, they never rescan
   ## - returns "" when the whole pipeline is clean, else the first refusal

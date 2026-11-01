@@ -11,53 +11,74 @@ import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/engines/engines_common
 import workspace/crucible/src/runtime/backends/runtime_utils
 
-# ═════════════════════════════════════════════════════════════════════════
+## Launch-argument layout and packing: compile-time binding of Nim launch
+## values to device bytes, runtime packing of that layout.
+##
+## - Nim int/uint lower to 4 bytes, bools pack per backend word
+## - phantom/static types occupy zero bytes
+## - `bindArgs` computes the layout, `serialize`/`packFrom` write the bytes
+
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Compile-time binding
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 func argWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
   ## Crucible-lowered byte width of scalar `T`
-  when T is int|uint|enum: 4
-  elif T is bool: (when backend == bkCuda: 1 else: 4)
-  else: sizeof(T)
+  when T is int|uint|enum:
+    4
+  elif T is bool:
+    when backend == bkCuda:
+      1
+    else:
+      4
+  else:
+    sizeof(T)
 
 func isStaticArg[T](_: typedesc[T]): bool {.compileTime.} =
   ## True when the value lives in the type (phantom objects like Int[V]), so it occupies no runtime bytes
   when T is object|tuple:
     for f in fields(default(T)):
-      if not isStaticArg(typeof(f)): return false
+      if not isStaticArg(typeof(f)):
+        return false
     result = true
   elif T is array:
     result = default(T).len == 0 or isStaticArg(typeof(default(T)[0]))
-  else: result = false
+  else:
+    result = false
 
 func hasBufferLeaf*[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
-  ## True when `T` holds a pointer, handle or DeviceMem anywhere
-  when T is H or T is DeviceMem or T is ptr or T is pointer: true
+  ## True when `T` contains a pointer, handle or DeviceMem anywhere
+  when T is H or T is DeviceMem or T is ptr or T is pointer:
+    true
   elif T is object|tuple:
     for f in fields(default(T)):
-      if hasBufferLeaf(typeof(f), H): return true
+      if hasBufferLeaf(typeof(f), H):
+        return true
     result = false
   elif T is array:
     result = default(T).len > 0 and hasBufferLeaf(typeof(default(T)[0]), H)
-  else: result = false
+  else:
+    result = false
 
 func hasBoolLeaf[T](_: typedesc[T]): bool {.compileTime.} =
-  ## True when `T` holds a bool anywhere. GLSL block layout gives every
-  ## boundary bool a 4-byte std430 word while a Nim bool is 1 byte, so
-  ## arrays that contain bools cannot pack as raw Nim bytes on GLSL.
-  when T is bool: true
+  ## True when `T` contains a bool anywhere. GLSL block layout gives every
+  ## boundary bool a 4-byte std430 word, while a Nim bool is 1 byte.
+  ## Arrays that contain bools cannot pack as raw Nim bytes on GLSL.
+  when T is bool:
+    true
   elif T is object|tuple:
     for f in fields(default(T)):
-      if hasBoolLeaf(typeof(f)): return true
+      if hasBoolLeaf(typeof(f)):
+        return true
     result = false
   elif T is array:
     result = default(T).len > 0 and hasBoolLeaf(typeof(default(T)[0]))
-  else: result = false
+  else:
+    result = false
 
 func blobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
-  ## True when every non-leaf field of `T` is trivially copyable: the backend
-  ## store flattens leaves individually, the wrapper is never copyMem'd whole.
+  ## True when every non-leaf field of `T` is trivially copyable: the backend store
+  ## flattens leaves individually, and the wrapper is never copyMem'd whole.
   when T is object|tuple:
     for f in fields(default(T)):
       when typeof(f) is H or typeof(f) is DeviceMem or typeof(f) is ptr or typeof(f) is pointer:
@@ -71,9 +92,10 @@ func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
   backend in {bkMetal, bkWebGPU, bkOpenCL}
 
 func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
-  ## Device size and alignment, phantom/static types excluded,
-  ##  Nim int/uint lowered to 4 bytes
-  when T is DeviceMem: result = (8, 8)  # the device address slot
+  ## Device size and alignment of `T` on `backend`: phantom and static types
+  ## contribute zero bytes, Nim int/uint lower to 4 bytes
+  when T is DeviceMem:
+    result = (8, 8)  # 8 bytes, one device address slot
   elif T is object|tuple:
     when isStaticArg(T):
       result = (0, 1)
@@ -86,8 +108,7 @@ func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, 
       result.size = round_multiple_up(result.size, result.align)
   elif T is array:
     when backend == bkGlsl and hasBoolLeaf(T):
-      # one 4-byte std430 word per bool, array elements stride at the device
-      # element layout, never Nim's 1-byte bool
+      # one 4-byte std430 word per bool, array elements stride at the device element layout, never Nim's 1-byte bool
       let el = deviceLayout(typeof(default(T)[0]), backend)
       result = (default(T).len * el.size, el.align)
     else:
@@ -98,24 +119,31 @@ func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, 
 
 func argCount[T, H](_: typedesc[T], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
   ## Device args one launch value delivers
-  when T is H or T is DeviceMem or T is ptr or T is pointer: 1
+  when T is H or T is DeviceMem or T is ptr or T is pointer:
+    1
   elif T is object|tuple:
-    when isStaticArg(T): 0
+    when isStaticArg(T):
+      0
     elif hasBufferLeaf(T, H) and explodesStructArgs(backend):
       for f in fields(default(T)):
         result += argCount(typeof(f), H, backend)
-    else: 1
-  elif T is array: 1
-  else: 1
+    else:
+      1
+  elif T is array:
+    1
+  else:
+    1
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Runtime packing
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc putBytes[T](dst: var openArray[byte], off: int, v: T, w: int) {.inline.} =
-  ## One scalar lowered to `w` bytes, wider values truncate to 32-bit
+  ## One scalar lowered to `w` bytes: Nim int/uint narrow to 32-bit and every
+  ## other narrowing asserts
   when T is bool:
-    if w == 1: dst[off] = byte(v)
+    if w == 1:
+      dst[off] = byte(v)
     else:
       let x = int32(v)
       copyMem(dst[off].addr, x.unsafeAddr, 4)
@@ -146,8 +174,7 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
       off = round_multiple_up(off, a)
   elif T is array:
     when backend == bkGlsl and hasBoolLeaf(T):
-      # element-wise packing, one 4-byte std430 word per bool, same as the
-      # scalar argWidth rule
+      # element-wise packing, one 4-byte std430 word per bool, same as the scalar argWidth rule
       let a = deviceLayout(T, backend).align
       off = round_multiple_up(off, a)
       for el in v:
@@ -202,9 +229,9 @@ macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedes
       `store`(`ctx`, `v`, `pos`)
       inc `pos`
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
   result = argCount(O, H, backend)

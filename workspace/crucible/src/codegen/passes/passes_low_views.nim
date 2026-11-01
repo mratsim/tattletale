@@ -41,8 +41,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerLowerSpans*(reg: var PassRegistry) =
-  ## Registers the openArray span split of the lowering stage.
-  ##
   ## Placement contract: the shared lowering stage, before every per-target transform,
   ## so the per-address-space callee instantiation sees the split
   ## pointer + length call sites.
@@ -59,7 +57,7 @@ type
   SpanSig = object
     paramIdx: int
     ptrTyp: CirType
-    ## Element pointer the span splits to, the span's own space.
+    ## Element pointer the span splits to, in the span's own space.
     lenTyp: CirType
 
   SpanSigs = Table[string, seq[SpanSig]]
@@ -83,7 +81,7 @@ proc collectSpanSigs(m: CirModule): SpanSigs =
 
 proc splitSpanParams(fn: CirProc, sigs: seq[SpanSig]) =
   ## Replaces every span parameter of `fn` with its pointer + length pair,
-  ## the pointer keeps the parameter's name, the length is `<name>_len`.
+  ## the pointer keeps the parameter's name and the length is `<name>_len`.
   var newParams: seq[CirParam]
   var sigIdx = 0
   for i, p in fn.params:
@@ -120,7 +118,7 @@ type
     sigs: SpanSigs
     ## Span parameters of every module proc, keyed by callee name.
     procs: Table[string, CirProc]
-    ## Module procs by name, the split signatures a call site adopts.
+    ## Module procs by name, each with the split signatures its call sites adopt.
     lenNames: HashSet[string]
     ## Span names of the proc under rewrite with a length binding:
     ## split parameters and decomposed view bindings.
@@ -354,9 +352,9 @@ proc survivingSpanRejection(fn: CirProc): string =
   ## - a span nested under another type
   ## - an expression whose type resolves to a span
   ##
-  ## Walk gaps the guard must still catch:
+  ## Positions the rewrite skips, which the guard still checks:
   ##
-  ## - `sAsm` and `sEmit` operands, positions the rewrite walk skips
+  ## - `sAsm` and `sEmit` operands
   for p in fn.params:
     if typeHoldsSpan(p.typ):
       return "parameter " & p.name & " keeps an openArray span"

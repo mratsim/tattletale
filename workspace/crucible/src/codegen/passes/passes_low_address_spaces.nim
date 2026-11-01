@@ -48,7 +48,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
-  ## Registers the per-address-space callee instantiation pass of the lowering stage.
   ## Registration position: after the target's other lowering transforms,
   ## whose rewrites append parameters and call-site arguments by callee name
   ## over the declared call graph.
@@ -85,16 +84,6 @@ proc instKey(callee: CirProc, wanted: seq[CirType]): string =
   for i in 0 ..< callee.params.len:
     if not sameType(wanted[i], callee.params[i].typ):
       result.add "\x1f" & $i & "\x1f" & $wanted[i].space
-
-proc freshProcType(params: seq[CirType], ret: CirType): CirType =
-  ## A fresh proc type over `params`.
-  ##
-  ## Call-site callee types are interned: structurally identical signatures
-  ## share one `CirType` ref. A call site that re-types its callee replaces
-  ## the symbol type with this fresh copy, leaving the shared ref untouched.
-  result = CirType(kind: ctProc)
-  result.params = params
-  result.ret = ret
 
 proc retypeSymsExpr(e: CirExpr, name: string, typ: CirType) =
   ## Retypes the symbol named `name` in place.

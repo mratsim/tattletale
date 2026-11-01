@@ -9,18 +9,20 @@
 ## table-driven over the closed set of type kinds.
 ##
 ## Kernel parameter bindings, one `@group(0) @binding(i)` per parameter in host `store` packing order, output first:
-## - device buffers declare `var<storage, read_write> name: array<T>;`, the engine binds them writable
+## - device buffers declare `var<storage, read_write> name: array<T>;`, bound writable by the engine
 ## - scalars and value structs declare `var<storage, read> name: T;`, packed into the 256-byte-aligned scratch buffer
 ## - a bool scalar or bool struct field binds as the `NIM_BOOL` alias of `u32`
 ##   (bool is not host-shareable in WGSL storage)
+##
+## Bool storage and the kernel signature:
 ## - reads of `NIM_BOOL` storage coerce to bool, writes coerce to NIM_BOOL
 ## - the kernel signature takes only `@builtin(...)` coordinate parameters, first-use order
 ##
 ## Addressing, memory classes, jumps:
 ## - a pointer local or pointer-holding struct local refuses: the WGSL lowering pass rewrites the shapes into pointees and leaf symbols
-## - a smem/const_mem kernel local relocates into `CirModule.globals`, the WGSL lowering pass owns the relocation
+## - the WGSL lowering pass relocates a smem/const_mem kernel local into `CirModule.globals`
 ## - struct declarations emit for the referenced value structs only, one declaration per entry of `CirModule.structRefs`.
-##   The struct-reference pass fills that record after the last transform, and a pointer-holding struct refuses
+##   the struct-reference pass fills that record, and a pointer-holding struct refuses
 ## - a loop prints `while (cond)` (WGSL's `while` takes a condition),
 ##   an unrolled loop notes the unroll directive has no WGSL form
 
@@ -36,15 +38,15 @@ import ../passes/layout_std430
 type
   PrintCtx = object
     fnName: string
-    ## First refusal of the walk, "" while clean.
     err: string
+    ## First refusal of the walk, "" while clean.
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
     lit: LitRow
     ## Literal token forms of the target. The shared literal head reads them.
     row: ScalarRow
-    ## Scalar row of the target. The narrow integer cast names its type from it..
+    ## Scalar row of the target. The narrow integer cast names its type from it.
     inKernel: bool
     ## False inside a device function, a device function reading a coordinate builtin refuses.
     paramNames: HashSet[string]
@@ -52,9 +54,9 @@ type
     ## as-is (WGSL device functions take real pointer parameters).
     ## Only pointer locals refuse as values.
     builtins: OrderedSet[CoordBuiltinKind]
-    ## Canonical coordinate builtin names the kernel body references, first-use order.
+    ## Canonical coordinate builtin kinds the kernel body references, first-use order.
     layouts: Table[string, StructLayout]
-    ## Stored struct layouts of the module, the layout pass filled them.
+    ## Stored struct layouts of the module, which the layout pass filled.
     nimBoolNames: HashSet[string]
     ## Names whose storage binds as `NIM_BOOL`: kernel bool parameters,
     ## bool workgroup variables.
@@ -118,7 +120,7 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     result = ""
 
 proc emitWgslTypeBare(ctx: var PrintCtx, t: CirType): string =
-  ## WGSL name of `t` with no identifier, the form of casts and constructors.
+  ## WGSL name of `t` with no identifier, in the form that casts and constructors use.
   case t.kind
   of ctArray:
     let elem = ctx.emitWgslTypeBare(t.aElem)
@@ -186,7 +188,7 @@ proc wgslCoordComponent(kind: CoordBuiltinKind, field: string): string =
     result = ""
 
 proc wgslWholeVector(kind: CoordBuiltinKind): string =
-  ## WGSL read of a canonical coordinate builtin whole, the i32 vector
+  ## WGSL read of a canonical coordinate builtin whole: the i32 vector
   ## composed from the u32 parameter components.
   let p = wgslBuiltinParam(kind)
   result = "vec3<i32>(i32(" & p.param & ".x), i32(" & p.param & ".y), i32(" &
@@ -201,7 +203,7 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
 # abstract and work in any typed context, u32 gains the `u` suffix, f16 the `h`.
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
-  ## One numeric conversion, the constructor-call form: WGSL has no bool
+  ## One numeric conversion in the constructor-call form: WGSL has no bool
   ## constructor and no bool-to-numeric conversion.
   if e.castType.kind == ctBool:
     ctx.fail("conversion to bool, WGSL has no bool constructor, compare" &
@@ -247,7 +249,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     return wgslConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
-  ## Declaration text of one local, the init stays with the caller.
+  ## Declaration text of one local, whose init the caller emits.
   ## A pointer-typed local refuses earlier: the WGSL lowering pass rewrites it.
   result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
 
@@ -354,7 +356,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
           return "bool(" & ctx.printExpr(e.dotBase) & "." & e.fieldName & ")"
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
   of eTernary:
-    # WGSL's select, the ternary route:
+    # Ternary via WGSL's select:
     # - `select(f, t, cond)` yields t when cond is true, f when cond is false
     # - both branches evaluate eagerly, a faulting read in either branch runs whatever the condition
     return "select(" & ctx.printExpr(e.elseE) & ", " & ctx.printExpr(e.thenE) &
@@ -430,7 +432,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
     result &= ";"
 
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local constant declaration, the `let` form.
+  ## One local constant declaration in the `let` form.
   let pad = spaces(ctx.indent * 2)
   result = pad & "let " & s.name & ": " &
     ctx.emitWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
@@ -483,7 +485,7 @@ proc printCall(ctx: var PrintCtx, s: CirStmt): string =
     result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
-  ## One inline assembly statement: refused, the text names the target.
+  ## One inline assembly statement: refused.
   ctx.fail("inline assembly has no WGSL form")
   result = ""
 
@@ -657,7 +659,7 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   var hoisted: seq[string]
   for s in m.globals:
     if s.kind == sVar and s.space == caThreadgroup:
-      # no initializer survives relocation, the rewrite ran before printing
+      # no initializer survives relocation, as the rewrite ran before printing
       ctx.storageBoolSpelling = true
       let ty = ctx.emitWgslTypeBare(s.declType)
       ctx.storageBoolSpelling = false
@@ -705,6 +707,6 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
 
 
 proc codegen*(ctx: var GpuContext): string =
-  ## Prints the module in `ctx` as WGSL source, the `backends_api` entry point.
+  ## `backends_api` entry point: prints the module in `ctx` as WGSL source.
   ## A printer refusal is a compile error naming the construct.
   codegenModule(printWgslModule(ctx.module))

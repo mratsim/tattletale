@@ -21,9 +21,6 @@
 ## - `emitComputePrefix(fn)`: linkage prefix (`__global__`, `__kernel`, ...)
 ## - `emitComputeRet(t)`: return type name or declaration text
 ## - `emitComputeStructField(struct, field)`: one struct member's declaration text
-##
-## The body prints before the signature assembles: the MSL kernel signature
-## appends the coordinate-builtin parameters that the body walk collects.
 
 import ../ir/cirv2_lang
 import ./print_common

@@ -14,17 +14,17 @@ import workspace/crucible/src/runtime/engines/webgpu_api
 import workspace/crucible/src/runtime/engines/metal_api
 import workspace/crucible/src/runtime/launch/launch_serialization {.all.}
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 type
   LaunchSugar*[E] = object
     engine: E
     cfg: LaunchConfig
 
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
   ## Chevron accessor: bare access returns chevron sugar.
   ## - Chevrons:
   ##   `engine.launchKernel<<(16, 16), (32, 8)>>("k", out, (a, b))`

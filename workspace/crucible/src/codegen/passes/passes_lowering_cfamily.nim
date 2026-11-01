@@ -10,8 +10,8 @@
 ## Shared C-family lowering: program-scope hoisting.
 ## One registration template per pass, one registration call per target.
 ##
-## - `registerCfamilyHoistProgramScopeLocals`: registers the smem and const_mem relocation.
-## The pointer-local explosion walk lives in passes_low_pointers.
+## passes_low_pointers owns the pointer-local explosion walk.
+##
 ## - `registerSmemInitRewrite`: an initializer on a `{.smem.}` local rewrites
 ##   into a bare declaration plus element- or member-wise store statements,
 ##   legal in every target's storage model
@@ -26,7 +26,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerSmemInitRewrite*(reg: var PassRegistry) =
-  ## Registers the smem-initializer rewrite shared by every target.
   reg.register("smemInitRewrite", pkTransform,
     "Rewrites smem initializers into a bare declaration plus" &
     " element- or member-wise stores",
@@ -46,12 +45,12 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ##   or device-function one stays in place and refuses at the printer
   ## - the initializer rewrite ran earlier, a relocated smem local has no
   ##   initializer
-  ## - the const_mem relocation covers every proc and scope depth, the shared
+  ## - the const_mem relocation covers every proc and scope depth, a shared
   ##   const_mem walk recurses into the nested scopes at their encounter position,
-  ##   a const_mem initializer is required, the printer emits it
+  ##   a const_mem initializer is required, which the printer emits
   ##   from the relocated node
-  ## - runs after the reserved-word rename, the relocated declarations use
-  ##   the renamed names that their body already references
+  ## - runs after the reserved-word rename:
+  ##   every relocated declaration uses the renamed names that its body already references
   for fn in m.procs:
     var i = 0
     while i < fn.body.len:
@@ -88,10 +87,7 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
         i.inc
   return ""
 
-template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName: string,
-    description: string) =
-  ## Registers the program-scope hoist for one target.
-  ##
+template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName: string, description: string) =
   ## Args:
   ## - `passName`: the registry key, one of `glslHoistProgramScopeLocals`
   ##   and `wgslHoistProgramScopeLocals`
@@ -110,7 +106,7 @@ proc smemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt
   ##
   ## - an array constructor: one indexed store per element
   ## - an object constructor: one field store per member
-  ## - anything else: one whole-value store, the scalar shape
+  ## - anything else: one whole-value store in the scalar shape
   let base = sym(name, declType)
   if init.kind == eAconstr and declType.kind == ctArray:
     for i, el in init.elems:
@@ -123,7 +119,7 @@ proc smemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt
 
 proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
   ## Splits every initialized `{.smem.}` declaration in one statement list:
-  ## the bare declaration stays, the store statements take its position.
+  ## the bare declaration stays and the store statements take its position.
   ## Nested branch and loop bodies recurse.
   ## Returns "" when clean, else the first refusal.
   var i = 0
@@ -172,8 +168,8 @@ proc rewriteSmemInits(m: CirModule): string =
   ##
   ## - a device function's smem local: its storage belongs to the caller,
   ##   the ownership refusals stay in charge
-  ## - a program-scope `{.smem.}` var in `m.globals`, the frontend's direct
-  ##   module path: the initializer strips, stores insert at every kernel's entry
+  ## - a program-scope `{.smem.}` var that the frontend's direct module path puts
+  ##   in `m.globals`: the initializer strips, stores insert at every kernel's entry
   ## - program-scope workgroup storage is fresh per workgroup, so every kernel
   ##   observes the declared values
   for fn in mitems(m.procs):

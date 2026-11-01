@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/Apache-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Engine API surface: the HwEngine concept, the backend dispatch, the engines' API re-exports.
+## Engine API surface: HwEngine concept, backend dispatch, and the engines' API re-exports.
 
 import workspace/crucible/src/runtime/engines/engines_common
 import workspace/crucible/src/runtime/engines/cuda_api

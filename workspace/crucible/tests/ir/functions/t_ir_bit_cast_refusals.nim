@@ -1,10 +1,12 @@
 ## Hand-built CIRv2: bit-reinterpret casts refuse the widths a printer cannot emit.
 ##
-## Test that each printer refuses a cast it cannot emit, while the 32-bit pairs
-## keep printing:
+## Test that each printer refuses the widths it cannot bit-reinterpret:
 ##
-## - CUDA refuses a bit cast of/to a 16-bit float, sole coverage of `__float_as_uint` lives here, CUDA has no runtime on this host
-## - GLSL refuses a bit cast of/to a 64-bit float, its 32-bit pair launches and readbacks both cast directions
+## - CUDA refuses a bit cast of/to a 16-bit float, its `__half` forms
+##   stay unwired there, sole `__float_as_uint` coverage lives here
+## - GLSL refuses a bit cast of/to a 64-bit float, its 32-bit pair launches
+##   and readbacks both cast directions
+## - this host has no CUDA runtime, CUDA coverage here is IR-level
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -24,7 +26,7 @@ static:
     ])
     kernel.isKernel = true
     let (_, err) = printCudaModule(moduleD("probe", @[], @[kernel]))
-    doAssert err.contains("bit cast of a 16-bit float has no CUDA emission"),
+    doAssert err.contains("bit cast of a 16-bit float is unwired"),
       "the CUDA printer must refuse the 16-bit float bit cast, got: " & err
 
   block: # CUDA: a 16-bit float target has no bit-reinterpret intrinsic
@@ -34,7 +36,7 @@ static:
     ])
     kernel.isKernel = true
     let (_, err) = printCudaModule(moduleD("probe", @[], @[kernel]))
-    doAssert err.contains("bit cast to a 16-bit float has no CUDA emission"),
+    doAssert err.contains("bit cast to a 16-bit float is unwired"),
       "the CUDA printer must refuse the bit cast to a 16-bit float, got: " & err
 
   block: # CUDA hazard negative: the 32-bit float pair still emits the intrinsic

@@ -20,7 +20,7 @@ type
     destroyBuffer: proc(device: VkDevice, buffer: VkBuffer, pAllocator: pointer) {.cdecl.}
     freeMemory: proc(device: VkDevice, memory: VkDeviceMemory, pAllocator: pointer) {.cdecl.}
 
-  # Not in the vendored ABI — the C struct is {stageFlags: uint32, offset, size}
+  # Not in the vendored ABI: the C struct is {stageFlags: uint32, offset, size}
   VkPushConstantRange = object
     stageFlags: uint32
     offset: uint32
@@ -68,20 +68,21 @@ template check*(res: VkResult) =
     quit 1
 
 proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer =
-  ## Call vkGetInstanceProcAddr to load a Vulkan function pointer.
-  ## Pass `nil` for `instance` to get instance-level functions
-  ## before creating the instance.
-  let fn = cast[
-    proc(instance: VkInstance, name: cstring): pointer {.cdecl.}
-  ](ctx.getProcAddr)
-  if fn == nil: return nil
+  ## Loads a Vulkan function pointer through `vkGetInstanceProcAddr`.
+  ##
+  ## - `instance = nil` requests instance-level functions before
+  ##   the instance exists
+  ## - returns the function pointer, `nil` when the loader has no such name
+  let fn = cast[proc(instance: VkInstance, name: cstring): pointer {.cdecl.}](ctx.getProcAddr)
+  if fn == nil:
+    return nil
   fn(instance, name)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Vulkan loader
 # ═══════════════════════════════════════════════════════════════════════
-# vkGetInstanceProcAddr suffices for every other function:
-# the loader handles ICD discovery, interface negotiation, and dispatch internally.
+# vkGetInstanceProcAddr suffices for every other function, since the loader
+# handles ICD discovery, interface negotiation and dispatch internally.
 
 proc `=copy`(dst: var VulkanContextObj, src: VulkanContextObj) {.error:
     "VulkanContext is ref-only, copy the ref not the object".}
@@ -116,8 +117,8 @@ proc `=destroy`(c: var VulkanContextObj) =
 
 
 proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
-  # macOS: dyld does not search /opt/homebrew/lib by default, so dlopen by
-  # name misses the Homebrew loader. Try the name first, then the Homebrew
+  # macOS: dyld's default search path omits /opt/homebrew/lib, so a dlopen
+  # by name misses the Homebrew loader. Try the name first, then the Homebrew
   # path (LunarG SDK installs are handled later if needed).
   when defined(macosx):
     result.lib = loadLib(vk.VulkanLib)
@@ -139,19 +140,18 @@ proc deviceProps(ctx: VulkanContext, dev: VkPhysicalDevice): VkPhysicalDevicePro
   ## Read VkPhysicalDeviceProperties via a padded buffer. The ABI struct is
   ## truncated to the fields we read (apiVersion..deviceName), but the driver
   ## writes the FULL struct including the ~3KB limits/sparseProperties.
-  let vkgpd = cast[
-    proc(physicalDevice: VkPhysicalDevice,
-         pProperties: ptr VkPhysicalDeviceProperties) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkGetPhysicalDeviceProperties"))
+  let vkgpd = cast[proc(physicalDevice: VkPhysicalDevice,
+    pProperties: ptr VkPhysicalDeviceProperties) {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkGetPhysicalDeviceProperties"))
   if vkgpd != nil:
     var propsBuf: array[4096, byte]
     vkgpd(dev, cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr))
     result = cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr)[]
 
 proc deviceName*(ctx: VulkanContext, dev: VkPhysicalDevice): string =
-  ## The physical device name (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
+  ## Physical device name of `dev` (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   for c in deviceProps(ctx, dev).deviceName:
-    if c == '\0': break
+    if c == '\0':
+      break
     result.add c
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -169,10 +169,8 @@ proc newVulkanContext*(): VulkanContext =
   ](gpaRaw)
 
   # Load vkCreateInstance via GPA(NULL, name), pre-instance
-  let vkCreateInstance = cast[
-    proc(pCreateInfo: ptr VkInstanceCreateInfo,
-         pAllocator: pointer,
-         pInstance: ptr VkInstance): VkResult {.cdecl.}
+  let vkCreateInstance = cast[proc(pCreateInfo: ptr VkInstanceCreateInfo,
+    pAllocator: pointer, pInstance: ptr VkInstance): VkResult {.cdecl.}
   ](gpaFn(nil, "vkCreateInstance"))
   if vkCreateInstance == nil:
     failLoud("Cannot load vkCreateInstance")
@@ -202,10 +200,8 @@ proc newVulkanContext*(): VulkanContext =
   template gpa(name: cstring): pointer = gpaFn(result.instance, name)
 
   # Enumerate physical devices
-  var ep = cast[
-    proc(instance: VkInstance, pPhysicalDeviceCount: ptr uint32,
-         pPhysicalDevices: ptr VkPhysicalDevice): VkResult {.cdecl.}
-  ](gpa("vkEnumeratePhysicalDevices"))
+  var ep = cast[proc(instance: VkInstance, pPhysicalDeviceCount: ptr uint32,
+    pPhysicalDevices: ptr VkPhysicalDevice): VkResult {.cdecl.}](gpa("vkEnumeratePhysicalDevices"))
   var devCount: uint32 = 0
   check ep(result.instance, devCount.addr, nil)
   if devCount == 0:
@@ -214,17 +210,15 @@ proc newVulkanContext*(): VulkanContext =
   check ep(result.instance, devCount.addr, devices[0].addr)
 
   # Queue families
-  var gpqfp = cast[
-    proc(physicalDevice: VkPhysicalDevice,
-         pQueueFamilyPropertyCount: ptr uint32,
-         pQueueFamilyProperties: pointer) {.cdecl.}
-  ](gpa("vkGetPhysicalDeviceQueueFamilyProperties"))
+  var gpqfp = cast[proc(physicalDevice: VkPhysicalDevice,
+    pQueueFamilyPropertyCount: ptr uint32,
+    pQueueFamilyProperties: pointer) {.cdecl.}](gpa("vkGetPhysicalDeviceQueueFamilyProperties"))
   var gpdf2 = cast[
     proc(physicalDevice: VkPhysicalDevice, pFeatures: ptr VkPhysicalDeviceFeatures2): void {.cdecl.}
   ](gpa("vkGetPhysicalDeviceFeatures2"))
   # Software renderers (Mesa Xe KMD) can enumerate first and fail vkMapMemory,
   # prefer a discrete GPU with a compute queue
-  let initCtx = result   # nested proc shadows `result` — capture the ctx
+  let initCtx = result   # this nested proc shadows `result` and captures the ctx
   proc deviceScore(dev: VkPhysicalDevice): tuple[score: int, name: string] =
     let props = deviceProps(initCtx, dev)
     let name = deviceName(initCtx, dev)
@@ -241,7 +235,7 @@ proc newVulkanContext*(): VulkanContext =
     if not hasCompute:
       # A graphics-only device dispatches on queue family 0 and fails there
       return (-1, name)
-    # Kernel launches pass BDA pointers, the device must enable the feature
+    # Kernel launches pass BDA pointers, so the device must enable the feature
     var bdaFeat = VkPhysicalDeviceBufferDeviceAddressFeatures(
       sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES)
     var f2 = VkPhysicalDeviceFeatures2(
@@ -281,12 +275,9 @@ proc newVulkanContext*(): VulkanContext =
       break
 
   # Create device
-  var cd = cast[
-    proc(physicalDevice: VkPhysicalDevice,
-         pCreateInfo: ptr VkDeviceCreateInfo,
-         pAllocator: pointer,
-         pDevice: ptr VkDevice): VkResult {.cdecl.}
-  ](gpa("vkCreateDevice"))
+  var cd = cast[proc(physicalDevice: VkPhysicalDevice,
+    pCreateInfo: ptr VkDeviceCreateInfo, pAllocator: pointer,
+    pDevice: ptr VkDevice): VkResult {.cdecl.}](gpa("vkCreateDevice"))
   var qprio: cfloat = 1.0
   var qci = VkDeviceQueueCreateInfo(
     sType: VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -317,17 +308,13 @@ proc newVulkanContext*(): VulkanContext =
   check cd(result.physicalDevice, dci.addr, nil, result.device.addr)
 
   # Get compute queue
-  var gdq = cast[
-    proc(device: VkDevice, queueFamilyIndex: uint32,
-         queueIndex: uint32, pQueue: ptr VkQueue) {.cdecl.}
-  ](gpa("vkGetDeviceQueue"))
+  var gdq = cast[proc(device: VkDevice, queueFamilyIndex: uint32,
+    queueIndex: uint32, pQueue: ptr VkQueue) {.cdecl.}](gpa("vkGetDeviceQueue"))
   gdq(result.device, result.queueFamilyIndex, 0, result.queue.addr)
 
   # Command pool
-  var ccpool = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkCommandPoolCreateInfo,
-         pAllocator: pointer,
-         pCommandPool: ptr VkCommandPool): VkResult {.cdecl.}
+  var ccpool = cast[proc(device: VkDevice, pCreateInfo: ptr VkCommandPoolCreateInfo,
+    pAllocator: pointer, pCommandPool: ptr VkCommandPool): VkResult {.cdecl.}
   ](gpa("vkCreateCommandPool"))
   var cpc = VkCommandPoolCreateInfo(
     sType: VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -357,26 +344,17 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
   result.destroyBuffer = cast[
     proc(device: VkDevice, buffer: VkBuffer, pAllocator: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyBuffer"))
-  result.freeMemory = cast[
-    proc(device: VkDevice, memory: VkDeviceMemory, pAllocator: pointer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkFreeMemory"))
+  result.freeMemory = cast[proc(device: VkDevice, memory: VkDeviceMemory,
+    pAllocator: pointer) {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkFreeMemory"))
 
-  let vkCreateBuffer = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkBufferCreateInfo,
-         pAllocator: pointer, pBuffer: ptr VkBuffer): VkResult {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkCreateBuffer"))
-  let vkGetBufferMemoryRequirements = cast[
-    proc(device: VkDevice, buffer: VkBuffer,
-         pMemoryRequirements: ptr VkMemoryRequirements) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkGetBufferMemoryRequirements"))
-  let vkAllocateMemory = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkMemoryAllocateInfo,
-         pAllocator: pointer, pMemory: ptr VkDeviceMemory): VkResult {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkAllocateMemory"))
-  let vkBindBufferMemory = cast[
-    proc(device: VkDevice, buffer: VkBuffer, memory: VkDeviceMemory,
-         memoryOffset: VkDeviceSize): VkResult {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkBindBufferMemory"))
+  let vkCreateBuffer = cast[proc(device: VkDevice, pCreateInfo: ptr VkBufferCreateInfo,
+    pAllocator: pointer, pBuffer: ptr VkBuffer): VkResult {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkCreateBuffer"))
+  let vkGetBufferMemoryRequirements = cast[proc(device: VkDevice, buffer: VkBuffer,
+    pMemoryRequirements: ptr VkMemoryRequirements) {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkGetBufferMemoryRequirements"))
+  let vkAllocateMemory = cast[proc(device: VkDevice, pCreateInfo: ptr VkMemoryAllocateInfo,
+    pAllocator: pointer, pMemory: ptr VkDeviceMemory): VkResult {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkAllocateMemory"))
+  let vkBindBufferMemory = cast[proc(device: VkDevice, buffer: VkBuffer,
+    memory: VkDeviceMemory, memoryOffset: VkDeviceSize): VkResult {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkBindBufferMemory"))
 
   var bci = VkBufferCreateInfo(
     sType: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -393,20 +371,20 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
   var memReq: VkMemoryRequirements
   vkGetBufferMemoryRequirements(ctx.device, result.handle, memReq.addr)
 
-  let vkGetPhysicalDeviceMemoryProperties = cast[
-    proc(physicalDevice: VkPhysicalDevice,
-         pMemoryProperties: ptr VkPhysicalDeviceMemoryProperties) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkGetPhysicalDeviceMemoryProperties"))
+  let vkGetPhysicalDeviceMemoryProperties = cast[proc(physicalDevice: VkPhysicalDevice,
+    pMemoryProperties: ptr VkPhysicalDeviceMemoryProperties) {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkGetPhysicalDeviceMemoryProperties"))
   var memProps: VkPhysicalDeviceMemoryProperties
   vkGetPhysicalDeviceMemoryProperties(ctx.physicalDevice, memProps.addr)
 
-  # Find memory type — inline loop, no closure (avoids Nim capture issues).
+  # Find memory type: an inline loop, no closure (avoids Nim capture issues).
   # Preference:
   #  1. DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT (integrated/ReBAR)
   #  2. HOST_VISIBLE | HOST_COHERENT (discrete via PCIe BAR)
   #  3. HOST_VISIBLE only
-  #  4. Unspecified flags (driver-declared host-accessible, e.g. llvmpipe)
-  #  5. DEVICE_LOCAL only (VRAM) — cannot be vkMapMemory'd; last resort
+  #
+  # Last resorts:
+  #  4. Unspecified flags (driver-declared host-accessible, for example llvmpipe)
+  #  5. DEVICE_LOCAL only (VRAM), not mappable from host
   var memTypeIdx = high(uint32)
   var devLocalOnly = high(uint32)
   for i in 0'u32 ..< memProps.memoryTypeCount:
@@ -441,8 +419,8 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
       cast[uint32](VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) == 0 and
      (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
       cast[uint32](VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) != 0:
-    # Only a DEVICE_LOCAL-only type matched: vkMapMemory (used by
-    # writeBuffer/readBuffer) fails on it with VK_ERROR_MEMORY_MAP_FAILED.
+    # Only a DEVICE_LOCAL-only type matched: vkMapMemory hits
+    # VK_ERROR_MEMORY_MAP_FAILED on it, and writeBuffer/readBuffer use vkMapMemory.
     # Some drivers (e.g. broken/experimental Vulkan in containers, Mesa Xe KMD)
     # report only DEVICE_LOCAL types.
     var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
@@ -546,7 +524,7 @@ proc createPipeline*(ctx: var VulkanContext, shaderModule: VkShaderModule,
   ## Compute pipeline over a shader module.
   ##
   ## Default layout: push constants only, buffers bind by device address (BDA).
-  ## With `setLayout` the layout carries that descriptor set, the dispatch binds it (runKernel's `descriptorSet`).
+  ## With `setLayout` the layout includes that descriptor set, and the dispatch binds it (runKernel's `descriptorSet`).
   ##
   ## Returns: the pipeline, `=destroy` releases the pipeline and its layout.
   ## runKernel checks its `descriptorSet` and `pushConstSize` arguments against the recorded
@@ -616,7 +594,7 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   ##
   ## With `descriptorSet` that set binds as set 0 against the pipeline layout, which must carry the matching set layout.
   ##
-  ## Returns: nothing, the fence wait blocks until the dispatch completes.
+  ## Returns nothing. The fence wait blocks until the dispatch completes.
   ##
   ## Precondition: `descriptorSet` is given iff the pipeline was created with a setLayout,
   ## and `pushConstSize` matches the pipeline's recorded push-constant range.
@@ -656,11 +634,8 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   let vkDestroyFence = cast[
     proc(device: VkDevice, fence: VkFence, pAllocator: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyFence"))
-  let vkFreeCommandBuffers = cast[
-    proc(device: VkDevice, commandPool: VkCommandPool,
-         commandBufferCount: uint32,
-         pCommandBuffers: ptr VkCommandBuffer) {.cdecl.}
-  ](ctx.gpaAddr(ctx.instance, "vkFreeCommandBuffers"))
+  let vkFreeCommandBuffers = cast[proc(device: VkDevice, commandPool: VkCommandPool,
+    commandBufferCount: uint32, pCommandBuffers: ptr VkCommandBuffer) {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkFreeCommandBuffers"))
 
   var allocInfo = VkCommandBufferAllocateInfo(
     sType: VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,

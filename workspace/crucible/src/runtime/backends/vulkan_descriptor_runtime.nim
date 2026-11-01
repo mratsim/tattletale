@@ -15,7 +15,7 @@ proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32, unifor
   ##   in declaration order, matching the printer's register(tN/uN, space0) numbering
   ## - bindings bindingCount ..< bindingCount + uniformCount: UNIFORM_BUFFER,
   ##   matching the printer's register(bN, space0) ordinals for the scalar
-  ##   ConstantBuffer blocks, the first block sits after all buffers
+  ##   ConstantBuffer blocks, and the first block sits after all buffers
   let vkCreateDescriptorSetLayout = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkDescriptorSetLayoutCreateInfo,
          pAllocator: pointer,
@@ -98,15 +98,15 @@ proc allocateDescriptorSet*(ctx: VulkanContext, pool: VkDescriptorPool, setLayou
   check vkAllocateDescriptorSets(ctx.device, allocInfo.addr, result.addr)
 
 proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffers: openArray[VulkanBuffer], bindingCount: uint32, uniforms: openArray[VulkanBuffer] = []) =
-  ## One write per binding: binding i covers the whole i-th buffer, the uniform buffers
-  ## write bindings bindingCount ..< bindingCount + uniforms.len.
+  ## One write per binding: binding i covers the whole i-th buffer.
+  ## Uniform buffers write bindings bindingCount ..< bindingCount + uniforms.len.
   ##
   ## Precondition:
   ## - `buffers` enumerates the kernel's buffer parameters in declaration order,
   ##   binding i writes the i-th buffer, matching the printer's register(tN/uN, space0) numbering
   ## - `uniforms` enumerates the kernel's scalar ConstantBuffer blocks in declaration order,
   ##   binding bindingCount + j writes the j-th block, matching the printer's
-  ##   register(bN, space0) ordinals, the first block after all buffers
+  ##   register(bN, space0) ordinals, with the first block after all buffers
   ## - `bindingCount` is the set layout's storage-binding count from createDescriptorSetLayout:
   ##   fewer buffers leaves bindings unwritten (reads hit stale device state),
   ##   more writes bindings the layout does not declare
