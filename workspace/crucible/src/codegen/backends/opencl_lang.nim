@@ -61,7 +61,7 @@ proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
   leafName(openclScalarRow, openclVectorRule, t)
 
-proc emitOpenclTypeBare(t: CirType): string =
+proc emitTypeBare(t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
   bareName(openclScalarRow, openclVectorRule, t)
 
@@ -84,7 +84,7 @@ proc emitOpenclPtrField(t: CirType, ident: string): string =
     of caConstant: "__constant"
     of caDevice: "__global"
   let sep = if qualifier.len > 0: " " else: ""
-  result = qualifier & sep & emitOpenclTypeBare(t) & ' ' & ident
+  result = qualifier & sep & emitTypeBare(t) & ' ' & ident
 
 proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## OpenCL C declaration text of one struct member.
@@ -100,7 +100,7 @@ proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string 
         " in " & $f.typ.space & " space, only device pointers nest in structs")
       return ""
     return emitOpenclPtrField(f.typ, f.name)
-  return emitOpenclTypeBare(f.typ) & ' ' & f.name
+  return emitTypeBare(f.typ) & ' ' & f.name
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
@@ -169,7 +169,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   let target = if e.castType.kind in {ctPtr, ctAptr}:
       emitOpenclPtrField(e.castType, "").strip()
     else:
-      emitOpenclTypeBare(e.castType)
+      emitTypeBare(e.castType)
   return "(" & target & ")" & ctx.printExpr(e.castOperand)
 
 
@@ -249,7 +249,7 @@ proc emitLocalDecl(s: CirStmt): string =
   elif s.declType.kind in {ctPtr, ctAptr}:
     result = emitOpenclPtrField(s.declType, s.name)
   else:
-    result = emitOpenclTypeBare(s.declType) & ' ' & s.name
+    result = emitTypeBare(s.declType) & ' ' & s.name
 
 # ═══════════════════════════════════════════════════════════════════════
 # Statements: per-target policy arms, the shared dispatch lives in print_common
@@ -290,16 +290,16 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eConv:
     return ctx.printConv(e)
   of eSizeof:
-    # an array type names through the declaration form, the bare-name composer `emitOpenclTypeBare` prints "" for an array leaf
+    # an array type names through the declaration form, the bare-name composer `emitTypeBare` prints "" for an array leaf
     if e.ofType.kind == ctArray:
       return "sizeof(" & emitOpenclArrayDecl(e.ofType, "") & ")"
-    return "sizeof(" & emitOpenclTypeBare(e.ofType) & ")"
+    return "sizeof(" & emitTypeBare(e.ofType) & ")"
   of eOconstr:
     # C99 compound literal, a bare braced init list cannot be member-accessed
     if e.kvFields.len == 0:
       # a zero-field struct, the padding member zero-initializes
-      return "(" & emitOpenclTypeBare(e.ocType) & "){0}"
-    result = "(" & emitOpenclTypeBare(e.ocType) & "){"
+      return "(" & emitTypeBare(e.ocType) & "){0}"
+    result = "(" & emitTypeBare(e.ocType) & "){"
     for i, kvv in e.kvFields:
       if i > 0:
         result.add ", "
@@ -308,7 +308,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eAconstr:
     # plain braces, OpenCL C has no array compound-literal cast,
     # object constructions cast `(Type){...}`
-    let bare = emitOpenclTypeBare(e.acType)
+    let bare = emitTypeBare(e.acType)
     result = if bare.len > 0: "(" & bare & "){" else: "{"
     for i, el in e.elems:
       if i > 0:
@@ -360,7 +360,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
   ## One local constant declaration, the `const` form.
   let pad = spaces(ctx.indent * 2)
-  result = pad & "const " & emitOpenclTypeBare(s.declType) & ' ' &
+  result = pad & "const " & emitTypeBare(s.declType) & ' ' &
     s.name & " = " & ctx.printExpr(s.init) & ";"
 
 proc printCall(ctx: var PrintCtx, s: CirStmt): string =
@@ -410,13 +410,13 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
       ctx.fail("kernel parameter " & p.name &
         " of pointer type, the engine binds device buffers and values")
       return ""
-    result = emitOpenclTypeBare(p.typ) & ' ' & p.name
+    result = emitTypeBare(p.typ) & ' ' & p.name
   of ctArray:
     ctx.fail("array parameter " & p.name &
       ", OpenCL C array parameters decay to pointers, the engine packs the value")
     return ""
   else:
-    result = emitOpenclTypeBare(p.typ) & ' ' & p.name
+    result = emitTypeBare(p.typ) & ' ' & p.name
 
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ## OpenCL C parameter texts of one proc or kernel, in declaration order,
@@ -434,10 +434,6 @@ proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
     return "__kernel "
   return "static inline "
 
-proc emitComputeRet(ctx: var PrintCtx, t: CirType): string =
-  ## OpenCL C name of a return type, no identifier.
-  emitOpenclTypeBare(t)
-
 proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `__constant` declaration of a const_mem local.
   if s.declType.kind == ctArray:
@@ -449,7 +445,7 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
       result &= " = {" & elems.join(", ") & "};"
       return
   else:
-    result = "__constant " & emitOpenclTypeBare(s.declType) & ' ' & s.name
+    result = "__constant " & emitTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =

@@ -19,7 +19,7 @@
 ##
 ## - `emitComputeParams(fn)`: printed parameter texts, in declaration order
 ## - `emitComputePrefix(fn)`: linkage prefix (`__global__`, `__kernel`, ...)
-## - `emitComputeRet(t)`: return type name or declaration text
+## - `emitTypeBare(t)`: return type name, no identifier
 ## - `emitComputeStructField(struct, field)`: one struct member's declaration text
 ##
 ## The body prints before the signature assembles: the MSL kernel signature
@@ -37,13 +37,13 @@ proc printComputeSig*(ctx: var auto, fn: CirProc): string =
   ## Returns "" once the walk recorded a refusal.
   ##
   ##   printComputeSig(ctx, fn)  # "static inline float f(float x)" on OpenCL C
-  mixin emitComputeParams, emitComputePrefix, emitComputeRet
+  mixin emitComputeParams, emitComputePrefix, emitTypeBare
   ctx.fnName = fn.name
   let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
   let params = ctx.emitComputeParams(fn)
   if ctx.failing():
     return ""
-  result = ctx.emitComputePrefix(fn) & ctx.emitComputeRet(fn.ret) & ' ' & name &
+  result = ctx.emitComputePrefix(fn) & emitTypeBare(fn.ret) & ' ' & name &
     '(' & params.join(", ") & ")"
 
 proc printComputeProc*(ctx: var auto, fn: CirProc): string =

@@ -316,8 +316,8 @@ proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
     return "__forceinline__ __device__ "
   return "__device__ "
 
-proc emitComputeRet(ctx: var PrintCtx, t: CirType): string =
-  ## CUDA declaration text of a return type, no identifier.
+proc emitTypeBare(t: CirType): string =
+  ## CUDA C++ name of `t` with no identifier, as casts and sizeof print it.
   emitCudaType(t, "", true)
 
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =

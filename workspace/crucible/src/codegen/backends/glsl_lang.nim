@@ -61,12 +61,12 @@ proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
   leafName(glslScalarRow, glslVectorRule, t)
 
-proc emitGlslTypeBare(t: CirType): string =
+proc emitTypeBare(t: CirType): string =
   ## GLSL name of `t` with no identifier, array dimensions composed into
   ## the name (`float[4]`), the form of casts and constructors.
   case t.kind
   of ctArray:
-    result = emitGlslTypeBare(t.aElem) & "[" & $t.aN & "]"
+    result = emitTypeBare(t.aElem) & "[" & $t.aN & "]"
   else:
     result = emitGlslScalar(t)
 
@@ -74,7 +74,7 @@ proc refTypeName*(t: CirType): string =
   ## Returns the GLSL name of the buffer-reference block binding `t`.
   ## A pointer renders as its reference block type. The GLSL ref-block
   ## analysis pass dedups blocks by this name.
-  result = "Ref_" & emitGlslTypeBare(t).multiReplace(
+  result = "Ref_" & emitTypeBare(t).multiReplace(
     (" ", "_"), ("[", ""), ("]", ""), (",", "_"), ("(", ""), (")", ""))
 
 proc emitGlslRefBlockMember(ctx: var PrintCtx, pointee: CirType): string =
@@ -110,7 +110,7 @@ proc emitGlslParam(t: CirType, name: string, varParam: bool): string =
   if t.kind == ctArray:
     result = binding & emitGlslScalar(t.aElem) & ' ' & name & "[" & $t.aN & "]"
   else:
-    result = binding & emitGlslTypeBare(t) & ' ' & name
+    result = binding & emitTypeBare(t) & ' ' & name
 
 proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## GLSL declaration text of one struct member: a buffer pointer member is
@@ -119,7 +119,7 @@ proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string 
     return emitGlslScalar(f.typ.aElem) & ' ' & f.name & "[" & $f.typ.aN & "]"
   if f.typ.kind in {ctAptr, ctPtr}:
     return ctx.emitGlslPtrDecl(f.typ, f.name)
-  return emitGlslTypeBare(f.typ) & ' ' & f.name
+  return emitTypeBare(f.typ) & ' ' & f.name
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
@@ -169,7 +169,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   let t = e.castType
   if t.kind in {ctAptr, ctPtr}:
     return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
-  return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
+  return emitTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
 
 
 proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
@@ -300,7 +300,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       "function-storage addressing; only the address of a buffer element")
     return ""
   of eCast:
-    return ctx.printCast(e, glslCastRules, emitGlslTypeBare(e.castType))
+    return ctx.printCast(e, glslCastRules, emitTypeBare(e.castType))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:
@@ -308,8 +308,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eOconstr:
     # constructor-call form, a zero-field struct's padding member zero-initializes
     if e.kvFields.len == 0:
-      return emitGlslTypeBare(e.ocType) & "(0)"
-    result = emitGlslTypeBare(e.ocType) & "("
+      return emitTypeBare(e.ocType) & "(0)"
+    result = emitTypeBare(e.ocType) & "("
     for i, kvv in e.kvFields:
       if i > 0:
         result.add ", "
@@ -317,7 +317,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     result.add ")"
   of eAconstr:
     # constructor-call form
-    result = emitGlslTypeBare(e.acType) & "("
+    result = emitTypeBare(e.acType) & "("
     for i, el in e.elems:
       if i > 0:
         result.add ", "
@@ -360,7 +360,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
     decl = emitGlslScalar(s.declType.aElem) & ' ' & s.name &
       "[" & $s.declType.aN & "]"
   else:
-    decl = emitGlslTypeBare(s.declType) & ' ' & s.name
+    decl = emitTypeBare(s.declType) & ' ' & s.name
   result = pad & decl
   if s.init != nil:
     result &= " = " & ctx.printExpr(s.init)
@@ -369,7 +369,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
   ## One local constant declaration, the `const` form.
   let pad = spaces(ctx.indent * 2)
-  result = pad & "const " & emitGlslTypeBare(s.declType) & ' ' &
+  result = pad & "const " & emitTypeBare(s.declType) & ' ' &
     s.name & " = " & ctx.printExpr(s.init) & ";"
 
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
@@ -434,17 +434,13 @@ proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
   ## GLSL linkage prefix: none, GLSL knows no linkage qualifiers.
   ""
 
-proc emitComputeRet(ctx: var PrintCtx, t: CirType): string =
-  ## GLSL name of a return type, no identifier.
-  emitGlslTypeBare(t)
-
 proc emitSmemDecl(t: CirType, name: string): string =
   ## Program-scope `shared` declaration of a threadgroup local.
   if t.kind == ctArray:
     result = "shared " & emitGlslScalar(t.aElem) & ' ' & name &
       "[" & $t.aN & "];"
   else:
-    result = "shared " & emitGlslTypeBare(t) & ' ' & name & ";"
+    result = "shared " & emitTypeBare(t) & ' ' & name & ";"
 
 proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `const` declaration of one hoisted const_mem local.
@@ -457,7 +453,7 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
     result = "const " & emitGlslScalar(s.declType.aElem) & ' ' & s.name &
       "[" & $s.declType.aN & "]"
   else:
-    result = "const " & emitGlslTypeBare(s.declType) & ' ' & s.name
+    result = "const " & emitTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
@@ -599,7 +595,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
           " of array type, arrays do not pack into the push block")
         decl = ""
       else:
-        decl = emitGlslTypeBare(p.typ) & ' ' & p.name
+        decl = emitTypeBare(p.typ) & ' ' & p.name
       if decl notin pushDecls:
         pushDecls.add decl
   if ctx.failing():
