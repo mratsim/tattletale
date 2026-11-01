@@ -82,7 +82,8 @@ proc emitOpenclPtrField(t: CirType, ident: string): string =
     of caConstant: "__constant"
     of caDevice: "__global"
   let sep = if qualifier.len > 0: " " else: ""
-  result = qualifier & sep & emitTypeBare(t) & ' ' & ident
+  result = qualifier & sep &
+    cDecl(openclScalarNames, openclVectorRule, printerTarget, t, ident, true)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## OpenCL C declaration text of one struct member.
@@ -394,22 +395,19 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
       return ""
   case p.typ.kind
   of ctAptr:
-    let inner = emitOpenclScalar(p.typ.pElem)
-    case p.typ.space
-    of caDevice:
-      result = "__global " & inner & "* restrict " & p.name
-    of caThreadgroup:
-      result = "__local " & inner & "* " & p.name
-    of caConstant:
-      result = "__constant " & inner & "* " & p.name
-    of caThread:
-      result = inner & "* " & p.name
+    let (qualifier, ident) = case p.typ.space
+      of caDevice: ("__global ", "restrict " & p.name)
+      of caThreadgroup: ("__local ", p.name)
+      of caConstant: ("__constant ", p.name)
+      of caThread: ("", p.name)
+    result = qualifier &
+      cDecl(openclScalarNames, openclVectorRule, printerTarget, p.typ, ident, true)
   of ctPtr:
     if isKernel:
       ctx.fail("kernel parameter " & p.name &
         " of pointer type, the engine binds device buffers and values")
       return ""
-    result = emitTypeBare(p.typ) & ' ' & p.name
+    result = cDecl(openclScalarNames, openclVectorRule, printerTarget, p.typ, p.name, true)
   of ctArray:
     ctx.fail("array parameter " & p.name &
       ", OpenCL C array parameters decay to pointers, the engine packs the value")

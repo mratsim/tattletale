@@ -192,15 +192,23 @@ proc cDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirType, id
   ##   also fires when pointer stars or array dimensions wrap the absent cell
   ##
   ##   result = cDecl(cudaScalarNames, cudaVectorRule, "cuda", t, "buf", false)
+  ##   # `ptr array[4, float32]` with the ident "v": "float (*v)[4]",
+  ##   # the empty-ident cast form: "float (*)[4]"
   if t.kind == ctArray:
     if ident.len == 0 and not allowEmptyIdent:
       return "<" & target & ": array needs an identifier>"
   let missing = getUnnamedScalarCell(names, t)
   if missing != nil:
     return scalarRefusal(target, names, missing)
+  if t.kind in {ctPtr, ctAptr} and t.pElem.kind == ctArray:
+    # array dimensions bind behind the identifier, one pointer star inside the parenthesized declarator
+    return cDecl(names, rule, target, t.pElem, "(" & '*' & ident & ")",
+      allowEmptyIdent)
   if t.kind == ctArray:
     if t.aElem.kind == ctArray:
-      return cDecl(names, rule, target, t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
+      # a pointer declarator is already parenthesized (`(*ident)`), one more parenthesized layer would print `((*ident))`
+      let declarator = if ident.startsWith('('): ident else: "(" & ident & ")"
+      return cDecl(names, rule, target, t.aElem, declarator & "[" & $t.aN & "]",
         allowEmptyIdent)
     return getBareName(names, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
   result = getBareName(names, rule, t)
