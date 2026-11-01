@@ -135,6 +135,7 @@ proc settleExprFormsPass(m: CirModule): string =
           # bool domain: the logical form, `xor` prints as the != comparison
           let a = e.left
           let b = e.right
+          let t = e.opType
           case e.kind
           of eBitAnd:
             e.kind = eAnd
@@ -146,7 +147,7 @@ proc settleExprFormsPass(m: CirModule): string =
             e.andRight = b
           else:
             e.kind = eNeq
-            e.cmpType = e.opType
+            e.cmpType = t
             e.a = a
             e.b = b
         else:
