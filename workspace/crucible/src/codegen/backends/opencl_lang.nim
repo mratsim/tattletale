@@ -55,7 +55,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-# OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
   getLeafName(openclScalarRow, openclVectorRule, t)

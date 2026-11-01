@@ -48,7 +48,6 @@ func `-`*(a: bfloat16): bfloat16 {.inline.} =
 import ./builtins_type_conversions_fallback
 export builtins_type_conversions_fallback
 
-# High-level element conversion, thin dispatch over the primitives above.
 template to*(src: float32, T: typedesc[float16]): float16 = toFp16(src)
 template to*(src: float32, T: typedesc[bfloat16]): bfloat16 = toBf16(src)
 template to*(src: float32, T: typedesc[fp8e4m3]): fp8e4m3 = toFp8e4m3(src)
