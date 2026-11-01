@@ -17,7 +17,8 @@
 ## Addressing, memory classes, jumps:
 ## - a pointer local or pointer-holding struct local refuses, the WGSL lowering pass dissolves the shapes into pointees and leaf symbols
 ## - a smem/const_mem kernel local relocates into `CirModule.globals`, the WGSL lowering pass owns the relocation
-## - struct declarations emit for the referenced value structs only, a referenced pointer-holding struct refuses
+## - struct declarations emit for the referenced value structs only, one declaration per entry of `CirModule.structRefs`.
+##   The struct-reference pass fills that record after the last transform, and a pointer-holding struct refuses
 ## - a loop prints `while (cond)`, a conditionless loop prints `loop {`
 ##   (WGSL's `while` takes a condition), an unrolled loop notes the unroll
 ##   directive has no WGSL form
@@ -49,8 +50,6 @@ type
     ## Only pointer locals refuse as values.
     builtins: OrderedSet[CoordBuiltinKind]
     ## Canonical coordinate builtin names the kernel body references, first-use order.
-    neededStructs: HashSet[string]
-    ## Struct type names referenced by the emitted declarations and expressions.
     layouts: Table[string, StructLayout]
     ## Stored struct layouts of the module, the layout pass filled them.
 
@@ -79,7 +78,6 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
       ctx.fail("vector of " & elem & "x" & $t.vN &
         " has no WGSL type name, only 2..4-wide vectors have a name")
   of ctStruct:
-    ctx.neededStructs.incl(t.name)
     result = t.name
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
@@ -437,25 +435,6 @@ proc printFn(ctx: var PrintCtx, fn: CirProc): string =
   let arrow = if fn.ret.kind == ctVoid: "" else: " -> " & ctx.emitWgslTypeBare(fn.ret)
   return sig & arrow & " {\n" & bodyTxt & '\n' & "}"
 
-proc registerTypeStructs(ctx: var PrintCtx, t: CirType) =
-  ## Registers the struct names reachable from `t`, the reference-driven struct
-  ## emission works from the parameter and declaration types.
-  if t.isNil:
-    return
-  case t.kind
-  of ctStruct:
-    ctx.neededStructs.incl(t.name)
-    for f in t.fields:
-      ctx.registerTypeStructs(f.typ)
-  of ctArray:
-    ctx.registerTypeStructs(t.aElem)
-  of ctVector:
-    ctx.registerTypeStructs(t.vElem)
-  of ctPtr, ctAptr:
-    ctx.registerTypeStructs(t.pElem)
-  else:
-    discard
-
 proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
   ## `@group(0) @binding(i)` declaration of one kernel parameter in host `store` packing order:
   ## - device buffers bind writable storage, `var<storage, read_write>`
@@ -541,13 +520,6 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   for p in kernel.params:
     ctx.paramNames.incl p.name
 
-  for p in kernel.params:
-    ctx.registerTypeStructs(p.typ)
-  # relocated const_mem declarations, struct-typed ones included
-  for s in m.globals:
-    if s.kind in {sVar, sConst}:
-      ctx.registerTypeStructs(s.declType)
-
   # `enable f16` from the stored module feature scan
   # (`CirModule.features`, filled by the feature-scan pass)
   if m.features.fp16:
@@ -603,25 +575,11 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   if ctx.failing():
     return ("", ctx.err)
 
-  # struct declarations for the referenced value structs, the closure over
-  # their struct-typed members included, pointer-holding structs refuse
-  var toEmit = ctx.neededStructs
-  var changed = true
-  while changed:
-    changed = false
-    for t in m.types:
-      if t.kind == ctStruct and t.name in toEmit:
-        for f in t.fields:
-          var ft = f.typ
-          while ft != nil and ft.kind in {ctArray}:
-            ft = ft.aElem
-          if ft != nil and ft.kind == ctStruct and ft.name notin toEmit:
-            toEmit.incl(ft.name)
-            changed = true
+  # struct declarations for the referenced value structs, one per entry of the `CirModule.structRefs` record filled by the struct-reference pass
   for t in m.types:
     if t.kind != ctStruct:
       continue
-    if t.name notin toEmit:
+    if t.name notin m.structRefs:
       continue
     result.src &= ctx.emitWgslStruct(t) & "\n\n"
   if ctx.failing():

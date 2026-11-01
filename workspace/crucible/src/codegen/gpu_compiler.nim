@@ -220,6 +220,7 @@ macro codegenWebGpu(body: typed): string =
   reg.registerWgslLoweringPasses()
   # analysis passes after the last transform: analysis results are valid
   # only if no transform runs after them (the registry never invalidates)
+  reg.registerWgslStructRefPass()
   reg.registerWgslFeatureScan()
   reg.registerWgslLayoutPass()
   reg.registerValidationPostPasses()
