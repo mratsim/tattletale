@@ -474,7 +474,7 @@ genTargets:
     kind: KindRow(
       loop: LoopStyle(
         unrollDirective: "[unroll]",
-        infiniteHead: "for (;;)",
+        infiniteHead: "for (;;)\n",
         braceSameLine: false),
       ternary: tfQuestion,
       foldsIteElse: true,

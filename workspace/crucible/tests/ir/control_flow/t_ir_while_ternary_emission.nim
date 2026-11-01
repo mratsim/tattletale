@@ -143,8 +143,9 @@ static:
     "opencl keeps the conditionless loop form"
   doAssert printGlslModule(plainM).src.contains("for (;;) {"),
     "glsl keeps the conditionless loop form"
-  doAssert printHlslModule(plainM).src.contains("for (;;)\n"),
-    "hlsl keeps the conditionless loop head without a brace, the brace is on its own line"
+  doAssert printHlslModule(plainM).src.contains(
+      "for (;;)\n{\n  output[i] = i;\n  i = (i + 1u);\n}"),
+    "hlsl prints the conditionless head, the open brace on its own line under it"
   doAssert printWgslModule(plainM).src.contains("loop {"),
     "wgsl keeps the conditionless loop form"
 

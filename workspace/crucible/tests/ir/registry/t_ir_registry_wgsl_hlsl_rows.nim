@@ -195,7 +195,7 @@ static:
 
     let kind = hlslKindRow()
     doAssert kind.loop.unrollDirective == "[unroll]"
-    doAssert kind.loop.infiniteHead == "for (;;)"
+    doAssert kind.loop.infiniteHead == "for (;;)\n"
     # HLSL is the only braceless-head target, its brace prints on the next line
     doAssert not kind.loop.braceSameLine
     doAssert kind.ternary == tfQuestion

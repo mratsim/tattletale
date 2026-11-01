@@ -622,25 +622,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ctx.fail("inline assembly has no HLSL form")
   result = ""
 
-proc foldsIteElse(ctx: var PrintCtx): bool =
-  ## A single-`sIte` else body prints as `else if`, the elif chain form.
-  true
-
-proc printEmitOperand(ctx: var PrintCtx, op: CirExpr): string =
-  ## Returns the rendered expression as the `{.emit.}` operand text.
-  ## A push-block scalar qualifies as `push.name` under
-  ## the expression policy of the target printer.
-  ctx.printExpr(op)
-
-const hlslLoopStyle = LoopStyle(
-  unrollDirective: "[unroll]",
-  infiniteHead: "for (;;)\n",
-  braceSameLine: false)
-
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list, the shared walk with the HLSL loop style.
-  printStmtList(ctx, stmts, hlslLoopStyle)
-
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
