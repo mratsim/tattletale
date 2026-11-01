@@ -259,20 +259,15 @@ proc getFormalParams(fn: NimNode): NimNode =
   return nil
 
 proc resolveCallCallee(callee: NimNode): NimNode =
-  ## Callee symbol of a sem-checked call. Overload resolution runs before
-  ## the macro sees the call. A resolved call names the symbol sem picked,
-  ## a surviving choice node names sem's pick as its first candidate.
+  ## Sem's pick: overload resolution ran before the macro, so a choice
+  ## node's first candidate is the resolved symbol.
   if callee.kind in {nnkOpenSymChoice, nnkClosedSymChoice} and callee.len > 0:
     return callee[0]
   return callee
 
 proc getProcBody(fn: NimNode): NimNode =
-  ## Body of a proc definition node: the trailing statement list when present,
-  ## otherwise the trailing statement boxed into one, a single-statement body
-  ## has no statement-list wrapper.
-  ##
-  ## A value-returning proc appends its `result` symbol as an extra trailing
-  ## child and the skip loop removes it.
+  ## Statement list of a proc definition, boxing a single-statement body.
+  ## Skips the trailing `result` symbol child value-returning procs carry.
   var i = fn.len - 1
   while i >= 0 and fn[i].kind == nnkSym:
     i.dec
