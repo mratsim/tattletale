@@ -110,6 +110,18 @@ const cudaKindRow* = KindRow(
 const cudaVectorRule* = VectorRule()
 ## CUDA names no vector types, every vector refuses at its declaration.
 
+# `{.builtin.}` scalar-math calls keyed by (canonical name, operand bit width):
+#
+# - a float operand maps to the CUDA name: CUDA's device `abs` is
+#   integer-only, a bare `abs(-2.5f)` silently computes `-2`
+# - widths absent from the table keep the canonical name, `exp2` over
+#   `double` is a CUDA native
+const cudaMathBuiltinNames* = {
+  ("abs", 32): "fabsf",
+  ("abs", 64): "fabs",
+  ("exp2", 32): "exp2f",
+}.toTable()
+
 # Float/integer bit reinterprets print as intrinsics, a C-style cast
 # numerically converts and loses the bit pattern. A 16-bit float pair has no
 # intrinsic and refuses. Same-width integer pairs keep the conversion form,

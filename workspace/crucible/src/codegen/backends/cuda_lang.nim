@@ -152,6 +152,23 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   of shkNone: discard
   return ""
 
+proc cudaMathCallText(call: CirExpr, args: seq[string]): string =
+  ## CUDA text of a `{.builtin.}` scalar-math call whose CUDA name differs
+  ## from the canonical name (`cudaMathBuiltinNames`), "" otherwise.
+  ##
+  ## - only a single float operand selects the mapped name, an integer
+  ##   operand or a width outside the table keeps the canonical name
+  ## - a user proc that shares a builtin's name stays an ordinary call
+  if call.callee.kind != eSym or not call.callee.builtin or call.args.len != 1:
+    return ""
+  let at = getExprType(call.args[0])
+  if at == nil or at.kind != ctFloat:
+    return ""
+  let name = cudaMathBuiltinNames.getOrDefault((call.callee.name, at.bits), "")
+  if name.len == 0:
+    return ""
+  return name & "(" & args.join(", ") & ")"
+
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One numeric conversion, the C-style cast form.
   let t = e.castType
@@ -202,7 +219,10 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     result.add "}"
   of eCall:
     let args = printCallArgs(ctx, e)
-    return printCallText(ctx, e, args, emitBuiltinCall(e.callee, args))
+    var builtinTxt = emitBuiltinCall(e.callee, args)
+    if builtinTxt.len == 0:
+      builtinTxt = cudaMathCallText(e, args)
+    return printCallText(ctx, e, args, builtinTxt)
   else:
     # dispatcher sends only the kinds above, anything else is a routing bug
     ctx.fail("expression kind " & $e.kind & " has no CUDA emission")
