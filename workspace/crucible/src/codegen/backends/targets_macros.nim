@@ -414,8 +414,7 @@ macro genTargets*(body: untyped) =
             continue
           let c = parseCellPair(entry, display)
           if c.spelling.len == 0:
-            error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' of " &
-              display & " takes a type name, a refused cell is omitted", entry)
+            error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' of " & display & " needs a type name, a refused cell is omitted", entry)
           if c.idx in seenCells:
             error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok &
               "' appears twice in " & display, entry)
