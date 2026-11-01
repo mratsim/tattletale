@@ -524,7 +524,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
       return nil
     var scalar = true
     for p in fnType.params:
-      if p.kind notin {ctBool, ctInt, ctUint, ctFloat}:
+      if not isScalarType(p):
         scalar = false
         break
     if scalar:
@@ -560,7 +560,7 @@ proc isBuiltinScalar(ctx: var FrontendCtx, n: NimNode): bool =
   let t = ctx.resolver.resolveCirType(n.getTypeInst())
   if ctx.failing():
     return false
-  return t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat}
+  return isScalarType(t)
 
 func branchValueExpr(n: NimNode): NimNode =
   result = n
@@ -658,7 +658,7 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
         branch.thenBody[0].lhs.name == branch.elseBody[0].lhs.name:
       let destSym = branch.thenBody[0].lhs
       let destType = getExprType(destSym)
-      if destType != nil and destType.kind in {ctBool, ctInt, ctUint, ctFloat} and
+      if destType != nil and isScalarType(destType) and
           not hasCallDeep(branch.cond) and
           not hasCallDeep(branch.thenBody[0].rhs) and
           not hasCallDeep(branch.elseBody[0].rhs):
@@ -1319,9 +1319,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         # a statement-position call path needs a clean channel
         return @[]
       let lp = if lt != nil and lt.kind == ctPtr: lt.pElem else: lt
-      proc isScalar(t: CirType): bool =
-        t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat}
-      scalar = isScalar(lp) and isScalar(rt)
+      scalar = isScalarType(lp) and isScalarType(rt)
     if op in ["+=", "-=", "*=", "/="] and scalar:
       var lhs = ctx.lowerExpr(n[1])
       if ctx.failing():
