@@ -11,7 +11,7 @@
 ## registered by the WebGPU pipeline and run before printing.
 ##
 ##   kernel body → explodeGlobalStructWithPtrFields → wgslExplodePointerLocals → wgslHoistProgramScopeLocals → wgslInlinePointerParamCalls
-##   → wgslScanStructRefs → printed WGSL source
+##   → printed WGSL source
 ##
 ## - `explodeGlobalStructWithPtrFields`: kernel parameters of struct type
 ##   carrying pointer fields expand into flat ptr/scalar leaf parameters
@@ -22,10 +22,6 @@
 ## - `wgslHoistProgramScopeLocals`: `{.smem.}` and `{.const_mem.}` kernel
 ##   locals relocate into `CirModule.globals` in kernel-body order,
 ##   the printer emits them at module scope, top-level kernel-body locals only
-##
-## `wgslScanStructRefs` fills `CirModule.structRefs` with the struct names
-## that the printer declares: parameter type trees, declaration type trees,
-## struct names the emitted WGSL text names, and the struct-member closure.
 ##
 ## `wgslInlinePointerParamCalls` runs last:
 ##
@@ -444,147 +440,3 @@ proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
 
 proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
   ExplodeCtx()
-
-
-# Struct-reference registration
-# ═══════════════════════════════════════════════════════════════════════
-
-proc registerTypeStructs(needed: var HashSet[string], t: CirType) =
-  ## Registers the struct names reachable from `t`: object fields, array elements, vector elements, pointer targets.
-  var refs = needed
-  walkTypeTree(t, proc(tt: CirType) =
-    if tt.kind == ctStruct:
-      refs.incl(tt.name))
-  needed = refs
-
-proc scanBareTypeStructs(needed: var HashSet[string], t: CirType) =
-  ## Registers the struct names one emitted WGSL type name covers:
-  ##
-  ## - an array's element name recurses
-  ## - a struct name registers
-  ## - pointer kinds print no type name themselves
-  case t.kind
-  of ctArray:
-    scanBareTypeStructs(needed, t.aElem)
-  of ctStruct:
-    needed.incl(t.name)
-  else:
-    discard
-
-proc scanExprStructs(needed: var HashSet[string], e: CirExpr) =
-  ## Registers the struct names one expression node's printed form names:
-  ## a cast or conversion target type, a constructor type.
-  ##
-  ## The scanner walks the children with `walkExprs`.
-  if e.isNil:
-    return
-  case e.kind
-  of eCast, eConv:
-    scanBareTypeStructs(needed, e.castType)
-  of eOconstr:
-    scanBareTypeStructs(needed, e.ocType)
-  of eAconstr:
-    scanBareTypeStructs(needed, e.acType)
-  else:
-    discard
-
-proc scanStmtStructs(needed: var HashSet[string], ss: seq[CirStmt]) =
-  ## Registers the struct names the printed forms of one statement list name.
-  ##
-  ## - a `var` declaration registers its type only where the printer emits
-  ##   the declaration: a relocated space survivor or a pointer-shaped
-  ##   local refuses before any type name prints. The shared walk skips
-  ##   its initializer with the declaration
-  var refs = needed
-  proc onDecl(s: CirStmt): bool =
-    if s.kind == sVar:
-      if s.space in {caThreadgroup, caConstant, caDevice} or
-          s.declType.kind in {ctPtr, ctAptr} or
-          (s.declType.kind == ctStruct and s.declType.containsPtrDeep):
-        return false
-    scanBareTypeStructs(refs, s.declType)
-    true
-  proc onExpr(e: CirExpr) =
-    scanExprStructs(refs, e)
-  ss.scanStmtRefs(onDecl, onExpr)
-  needed = refs
-
-proc closeStructRefs(byName: Table[string, CirType], needed: var HashSet[string], name: string) =
-  ## Adds the struct-typed members of `name`'s declaration, recursively:
-  ##
-  ## - array dimensions unwrap, a struct member behind an array registers
-  ## - a name without a declaration in the module expands to nothing
-  let t = byName.getOrDefault(name, nil)
-  if t == nil:
-    return
-  for f in t.fields:
-    var ft = f.typ
-    while ft != nil and ft.kind == ctArray:
-      ft = ft.aElem
-    if ft != nil and ft.kind == ctStruct and ft.name notin needed:
-      needed.incl(ft.name)
-      closeStructRefs(byName, needed, ft.name)
-
-proc wgslScanStructRefs(m: CirModule): string =
-  ## Registers the struct names the printer declares into `m.structRefs`:
-  ##
-  ## The registered names:
-  ##
-  ## - the type trees of the kernel's parameters and the relocated
-  ##   program-scope declarations
-  ## - the closure over struct-typed members, array dimensions unwrapped
-  ##
-  ## The emitted WGSL text names these sites:
-  ##
-  ## - local declaration types
-  ## - cast and conversion target types
-  ## - constructor types
-  ## - signature types: device-function parameters and returns, pointer-parameter pointees
-  ##
-  ## The pass runs after the last transform: the walked declarations and bodies are final.
-  ## The pass registry never invalidates a stored record. A module that lacks exactly one
-  ## kernel contributes no kernel-side registrations. Such a module refuses at the printer.
-  let kernel = m.singleKernel()
-  if kernel != nil:
-    for p in kernel.params:
-      registerTypeStructs(m.structRefs, p.typ)
-  for s in m.globals:
-    if s.kind in {sVar, sConst}:
-      registerTypeStructs(m.structRefs, s.declType)
-  for fn in m.procs:
-    if fn.isKernel:
-      continue
-    scanStmtStructs(m.structRefs, fn.body)
-    for p in fn.params:
-      case p.typ.kind
-      of ctPtr:
-        scanBareTypeStructs(m.structRefs, p.typ.pElem)
-      of ctAptr:
-        discard
-      else:
-        scanBareTypeStructs(m.structRefs, p.typ)
-    if fn.ret.kind != ctVoid:
-      scanBareTypeStructs(m.structRefs, fn.ret)
-  if kernel != nil:
-    scanStmtStructs(m.structRefs, kernel.body)
-  var byName: Table[string, CirType]
-  for t in m.types:
-    if t.kind == ctStruct:
-      byName[t.name] = t
-  var pending: seq[string]
-  for name in m.structRefs:
-    pending.add name
-  for name in pending:
-    closeStructRefs(byName, m.structRefs, name)
-  return ""
-
-proc registerWgslStructRefPass*(reg: var PassRegistry) =
-  ## Registers the WGSL struct-reference analysis pass:
-  ##
-  ## - the pass fills `CirModule.structRefs` with the struct names the printer declares, closure included
-  ## - the printer declares exactly the stored names, it never scans for struct references itself
-  reg.register("wgslScanStructRefs", pkAnalysis,
-    "Registers the struct names the printer declares, the closure over" &
-    " struct-typed members included",
-    run = wgslScanStructRefs
-  )
