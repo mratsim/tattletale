@@ -41,7 +41,7 @@ import ./passes/passes_lowering_msl
 import ./passes/passes_lowering_cuda
 import ./passes/passes_lowering_opencl
 import ./passes/layout_std430
-import ./passes/callgraph_analysis
+import ./passes/analysis_hlsl
 import ./passes/scan_features
 import ./passes/passes_validations
 import ./passes/passes_low_reserved

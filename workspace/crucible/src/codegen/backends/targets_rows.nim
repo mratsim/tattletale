@@ -12,8 +12,6 @@
 ##
 ## - HLSL keys its signature row per flavor (`fvD3D12`, `fvVulkan`), every other family
 ##   is target-wide: the flavor changes the binding section only
-## - printers do not read the rows yet, registry consumer tests verify each row
-##   against the printer behavior it restates
 
 import std/tables
 import ../ir/cirv2_lang
@@ -56,12 +54,6 @@ genTargets:
       asmForm: afSpliceRaw,
       constDecl: cdfConstexpr,
       constructor: cofBraced)
-    space: SpaceRow(
-      ptrQualifier: ["thread", "threadgroup", "constant", "device"],
-      localPrefix: ["", "threadgroup", "", ""],
-      kernelParamScalar: "constant",
-      kernelParamPointer: "device",
-      smemParam: "threadgroup")
     # `{.builtin.}` numeric conversions resolve to the MSL native call text,
     # each entry a format string whose `$1` stands for the call's argument list.
     # CIRv2 has no fp16 or bf16 type kind,
@@ -137,16 +129,6 @@ genTargets:
       asmForm: afWrap,
       constDecl: cdfConstexpr,
       constructor: cofBraced)
-    # CUDA has one generic address space: pointers, kernel parameters,
-    # plain locals print unqualified. Kernel-scope shared storage prefixes
-    # `__shared__`. Program-scope `__constant__` storage is module assembly,
-    # not a row context.
-    space: SpaceRow(
-      ptrQualifier: ["", "", "", ""],
-      localPrefix: ["", "__shared__", "", ""],
-      kernelParamScalar: "",
-      kernelParamPointer: "",
-      smemParam: "")
     conv: ConvRow()
     # CUDA's coordinate builtins are implicit variables (blockIdx, threadIdx, ...),
     # no attributed parameter exists. Component reads cast to int.
@@ -209,19 +191,6 @@ genTargets:
       asmForm: afRefuse,
       constDecl: cdfConst,
       constructor: cofBraced)
-    # Pointer declarations lead the address-space qualifier, single underscore:
-    # `__global`, `__local`, `__constant`. Private pointers stay unqualified.
-    # `restrict` is a function-parameter qualifier, a kernel's device pointer parameter takes it.
-    # Shared locals prefix `__local`, private locals prefix `__private`.
-    # Both prefixes apply to non-pointer locals only, a pointer type includes its own qualifier.
-    # Program-scope `__constant` storage is module assembly, not a row context.
-    space: SpaceRow(
-      ptrQualifier: ["", "__local", "__constant", "__global"],
-      localPrefix: ["__private", "__local", "", ""],
-      kernelParamScalar: "",
-      kernelParamPointer: "",
-      kernelParamPointerRestrict: true,
-      smemParam: "")
     conv: ConvRow()
     # OpenCL C names vectors by appending the lane count to the scalar name
     # (`float4`, `uchar3`), legal lengths 2, 3, 4, 8, 16.
@@ -301,16 +270,6 @@ genTargets:
       constDecl: cdfConst,
       constructor: cofCall,
       targetExprKinds: {eNil, eAt, ePat, eDeref, eAddr})
-    # A buffer pointer prints as its reference-block handle, no space qualifier.
-    # Locals print unqualified, every other address space refuses in the printer.
-    # Kernel parameters pack into the push-constant block with no qualifier.
-    # Layout-block prefixes are module assembly and pass territory, not address-space contexts.
-    space: SpaceRow(
-      ptrQualifier: ["", "", "", ""],
-      localPrefix: ["", "", "", ""],
-      kernelParamScalar: "",
-      kernelParamPointer: "",
-      smemParam: "")
     conv: ConvRow()
     # All six coordinate builtins are native GLSL names.
     # Whole-value reads of the vector builtins compose the int vector from int-cast components.
@@ -385,20 +344,6 @@ genTargets:
       constDecl: cdfLet,
       constructor: cofCall,
       targetExprKinds: {eNil, eAt, ePat, eTernary})
-    # Address-space words sit inside the pointer type (`ptr<storage, T>`), no qualifier precedes the type.
-    # Storage pointers declare the access mode, array pointers refuse the pointer form (the binding is the array).
-    # Locals print unqualified `var`, pointer locals refuse at the site, and WGSL has no `<uniform>` class.
-    space: SpaceRow(
-      ptrQualifier: ["", "", "", ""],
-      localPrefix: ["", "", "", ""],
-      kernelParamScalar: "",
-      kernelParamPointer: "",
-      smemParam: "",
-      ptrSpace: ["function", "workgroup", "", "storage"],
-      ptrAccessMode: "read_write",
-      declVarPrefix: "var<workgroup>",
-      bindingVarPrefix: "var<storage, read>",
-      bindingBufferPrefix: "var<storage, read_write>")
     conv: ConvRow()
     # One `@builtin(...)` kernel parameter exists per referenced coordinate builtin,
     # kernel bodies read the parameter name. Whole-value reads compose the i32
@@ -491,15 +436,6 @@ genTargets:
       constDecl: cdfConst,
       constructor: cofMixed,
       targetExprKinds: {eNil, eAt, ePat, eDeref, eAddr})
-    # HLSL has no address-space qualifiers: pointer, threadgroup and device-space
-    # refuse at the site. Const_mem locals hoist to file-scope `static const` module assembly.
-    # Kernel values pack into the push block.
-    space: SpaceRow(
-      ptrQualifier: ["", "", "", ""],
-      localPrefix: ["", "", "", ""],
-      kernelParamScalar: "",
-      kernelParamPointer: "",
-      smemParam: "")
     # `{.builtin.}` fp16/bf16/fp8 conversion calls refuse: the frontend erases
     # half-width types to 16-bit storage before printing, so the call name is the only signal the printer can match.
     conv: ConvRow(

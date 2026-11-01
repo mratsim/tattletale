@@ -69,8 +69,8 @@ proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: strin
   ## Declaration text of a pointer or array pointer with its address-space qualifier:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
   ##
-  ## - `qualifier`: the space word from the target's `SpaceRow.ptrQualifier`,
-  ##   "" when the target qualifies no space
+  ## - `qualifier`: the MSL pointer space qualifier, "" never occurs on MSL
+  ##   (all four address spaces carry a qualifier)
   ## - an array pointee takes the identifier into the parenthesized declarator
   let sep = if qualifier.len > 0: " " else: ""
   let inner = t.pElem
@@ -78,11 +78,19 @@ proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: strin
     return qualifier & sep & cDecl(row, rule, target, inner, "(*" & ident & ")", true)
   return qualifier & sep & bareName(row, rule, inner) & "* " & ident
 
+proc mslPtrQualifier(space: AddressSpace): string =
+  ## MSL qualifier before a pointer declaration or cast, one word per space.
+  case space
+  of caThread: "thread"
+  of caThreadgroup: "threadgroup"
+  of caConstant: "constant"
+  of caDevice: "device"
+
 proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
   ptrField(mslScalarRow(), mslVectorRule(), printerTarget,
-    mslSpaceRow().ptrQualifier[t.space], t, ident)
+    mslPtrQualifier(t.space), t, ident)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -155,7 +163,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   let t = e.castType
   var castTyp = emitMslType(t, "", true)
   if t.kind in {ctPtr, ctAptr}:
-    castTyp = mslSpaceRow().ptrQualifier[t.space] & ' ' & castTyp
+    castTyp = mslPtrQualifier(t.space) & ' ' & castTyp
   return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
 
 proc printCast(ctx: var PrintCtx, e: CirExpr): string =

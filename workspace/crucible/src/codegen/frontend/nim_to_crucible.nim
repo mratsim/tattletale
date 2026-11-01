@@ -43,10 +43,10 @@ type
     claimedNames: Table[string, uint64]
     ## Emitted proc name to the owning identity: definitions and harvests share one name space, a second claimant of a base suffixes.
     scopes: seq[Table[string, CirExpr]]
-    localSpaces: seq[Table[string, CirAddrSpace]]
+    localSpaces: seq[Table[string, AddressSpace]]
     ## Nim symbol name to CIRv2 symbol, innermost scope last.
     moduleScope: Table[string, CirExpr]
-    moduleSpaces: Table[string, CirAddrSpace]
+    moduleSpaces: Table[string, AddressSpace]
     ## Program-scope declarations, visible from every proc body, a fresh proc's scope tables seed from these.
     moduleGlobals: seq[CirStmt]
     ## Program-scope declarations in encounter order, `m.globals` of the module.
@@ -88,7 +88,7 @@ proc uniqueName(ctx: var FrontendCtx, base: string): string =
 
 proc pushScope(ctx: var FrontendCtx) =
   ctx.scopes.add(initTable[string, CirExpr]())
-  ctx.localSpaces.add(initTable[string, CirAddrSpace]())
+  ctx.localSpaces.add(initTable[string, AddressSpace]())
 
 proc popScope(ctx: var FrontendCtx) =
   ctx.scopes.del(ctx.scopes.high)
@@ -773,7 +773,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return fltLit(operand.fValue, typ)
     if typ.kind in {ctPtr, ctAptr}:
       # a pointer conversion keeps its operand's storage space, the target type names the pointee
-      typ = typ.withSpace(provenanceSpace(operand))
+      typ = typ.withAddressSpace(resolveAddressSpace(operand))
     return convE(typ, operand)
   of nnkCast:
     var typ = ctx.resolver.resolveCirType(n[0])
@@ -785,7 +785,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if typ.kind in {ctPtr, ctAptr}:
       # a pointer cast keeps its operand's storage space: the target type
       # names the pointee, the space derives from the value's provenance
-      typ = typ.withSpace(provenanceSpace(operand))
+      typ = typ.withAddressSpace(resolveAddressSpace(operand))
     return castE(typ, operand)
   of nnkHiddenDeref, nnkDerefExpr:
     let base = ctx.lowerExpr(n[0])
@@ -996,7 +996,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
     var fields: seq[CirKv] = @[]
-    var valueSpaces = initTable[string, CirAddrSpace]()
+    var valueSpaces = initTable[string, AddressSpace]()
     for i in 1 ..< n.len:
       n[i].expectKind(nnkExprColonExpr)
       if n[i][1].kind == nnkEmpty:
@@ -1008,7 +1008,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         return nil
       let fieldName = sanitizeIdent(n[i][0].strVal)
       # a pointer-typed field instantiates under the space its value proves
-      valueSpaces[fieldName] = provenanceSpace(v)
+      valueSpaces[fieldName] = resolveAddressSpace(v)
       fields.add(kv(fieldName, v))
     let typ = ctx.resolver.resolveStructType(n.getTypeInst(), valueSpaces)
     if ctx.failing():
@@ -1179,14 +1179,14 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     return @[]
   return ctx.drainHoisted() & @[callS(sym(calleeName, entry.fnType, calleeBuiltin), args)]
 
-proc resolveLocalSpace(ctx: var FrontendCtx, nameNode: NimNode): CirAddrSpace =
+proc collectAddressSpace(ctx: var FrontendCtx, nameNode: NimNode): AddressSpace =
   ## Memory class of a local declaration: the pragma list decides.
   ## `smem` means threadgroup, `const_mem` constant, `rmem` or unannotated registers.
   result = caThread
   if nameNode.kind != nnkPragmaExpr:
     return
   var seen = false
-  template setSpace(spc: CirAddrSpace) =
+  template setSpace(spc: AddressSpace) =
     if seen:
       ctx.fail("multiple address-space pragmas on one local")
     seen = true
@@ -1242,7 +1242,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       let initNode = defs[^1]
       for j in 0 ..< defs.len - 2:
         let nameNode = defs[j]
-        let spc = ctx.resolveLocalSpace(nameNode)
+        let spc = ctx.collectAddressSpace(nameNode)
         if ctx.failing():
           return @[]
         let nimName = if nameNode.kind == nnkPragmaExpr: nameNode[0].strVal
@@ -1880,7 +1880,7 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
             let name = bareName.repr
             let space =
               block:
-                var spc = ctx.resolveLocalSpace(nameN)
+                var spc = ctx.collectAddressSpace(nameN)
                 if spc == caThread:
                   # program scope has no per-thread storage, unannotated is constant
                   spc = caConstant

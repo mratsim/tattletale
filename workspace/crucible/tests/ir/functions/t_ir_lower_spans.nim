@@ -95,7 +95,7 @@ static:
   let outT = tAptr(caDevice, f32)
   let arrT = tArray(8, f32)
 
-  proc toOpenArrayE(base: CirExpr, space: CirAddrSpace, first, last: int64): CirExpr =
+  proc toOpenArrayE(base: CirExpr, space: AddressSpace, first, last: int64): CirExpr =
     ## A `toOpenArray(base, first, last)` call over `base`, the construction form the frontend emits for the span split pass to consume.
     callE(sym("toOpenArray", tProcT(getExprType(base), i32, i32,
         tSpan(space, f32))),

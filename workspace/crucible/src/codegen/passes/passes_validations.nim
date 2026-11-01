@@ -52,7 +52,7 @@ proc spaceCastRejection(e: CirExpr, fnName: string): string =
   let target = e.castType
   if target == nil or target.kind notin {ctPtr, ctAptr}:
     return ""
-  let space = provenanceSpace(e.castOperand)
+  let space = resolveAddressSpace(e.castOperand)
   if space == target.space:
     return ""
   let construct = if e.kind == eCast: "cast" else: "conversion"

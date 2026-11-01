@@ -30,7 +30,7 @@ proc close(b: var RenderBuf) =
 
 proc renderStmt(b: var RenderBuf, s: CirStmt)
 
-proc getSpaceName(s: CirAddrSpace): string =
+proc getSpaceName(s: AddressSpace): string =
   case s
   of caThread: "thread"
   of caThreadgroup: "threadgroup"
