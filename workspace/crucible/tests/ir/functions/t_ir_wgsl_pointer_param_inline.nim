@@ -25,7 +25,6 @@ proc runWgslLowering(m: CirModule): string =
   var reg = PassRegistry.new()
   registerExplodeStructWithPtrFields(reg)
   reg.registerWgslExplodePointerLocals()
-  reg.registerWgslRewriteBoolKernelParamReads()
   reg.registerWgslHoistProgramScopeLocals()
   reg.registerInstantiateAddressSpaceGenerics()
   reg.registerWgslInlinePointerParamCalls()

@@ -49,7 +49,6 @@ import ./passes/passes_low_reserved
 import ./passes/passes_low_pointers
 import ./passes/passes_low_array_assign
 import ./passes/passes_low_address_spaces
-import ./passes/passes_lowering_spirv
 import ./backends/backends_api
 import ./ir/cirv2_pretty
 from ./backends/hlsl_lang import HlslFlavor, fvD3D12, fvVulkan
@@ -129,9 +128,6 @@ proc attachGlslHoistLocals(reg: var PassRegistry, flavor: HlslFlavor) =
 proc attachWgslExplodePointerLocals(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerWgslExplodePointerLocals()
 
-proc attachWgslBoolReads(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerWgslRewriteBoolKernelParamReads()
-
 proc attachWgslHoistLocals(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerWgslHoistProgramScopeLocals()
 
@@ -146,9 +142,6 @@ proc attachHlslExplodePointerLocals(reg: var PassRegistry, flavor: HlslFlavor) =
 
 proc attachHlslHoistConst(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerHlslHoistProgramScopeConstants()
-
-proc attachSpirvPatchBool(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerSpirvPatchBoolToI32()
 
 proc attachGlslRefBlocks(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerGlslRefBlockPass()
@@ -237,7 +230,7 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       attachLegalize, attachNormalize, attachLowerSpans,
       attachRenameWgsl,
       attachExplodeStructs, attachWgslExplodePointerLocals,
-      attachWgslBoolReads, attachWgslHoistLocals, attachSpaceGenerics,
+      attachWgslHoistLocals, attachSpaceGenerics,
       attachWgslInlinePointerCalls,
       attachWgslStructRefs, attachWgslScan, attachWgslLayout,
       attachValidate,
@@ -256,7 +249,6 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
     ctSpirvShader: @[
       attachLegalize, attachNormalize, attachLowerSpans,
       # No rename and no address-space callee instantiation: the encoder consumes typed words.
-      attachSpirvPatchBool,
       attachValidate,
     ],
   ]

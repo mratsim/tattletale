@@ -313,10 +313,13 @@ type
 
 proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
   ## One push-block member per kernel parameter, in parameter order.
-  ## A device array pointer contributes its u64 device address
-  ## and everything else its value type.
+  ## A device array pointer contributes its u64 device address and everything
+  ## else its value type. A bool parameter contributes its unsigned 32-bit
+  ## storage word: the push convention has no bool member.
   if p.typ.kind == ctAptr:
     spvScalar(cirUint64())
+  elif p.typ.kind == ctBool:
+    spvScalar(cirUint32())
   else:
     ctx.valueTy(p.typ)
 
@@ -340,10 +343,7 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
     elif p.typ.kind in {ctPtr, ctAptr}:
       ctx.failSpv("kernel parameter " & p.name & " of pointer type")
     else:
-      if p.typ.kind == ctBool:
-        ctx.failSpv("bool kernel parameter " & p.name &
-          ", the 4-byte push convention has no bool member")
-      let m = ctx.valueTy(p.typ)
+      let m = ctx.pushMemberTy(p)
       let l = std430Layout(m)
       if l.align < 4:
         ctx.failSpv("push member " & p.name & " is narrower than 32 bits (" &
@@ -1469,7 +1469,13 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
       let slotPtrTy = ctx.builder.tyPointer(scPushConstant, ctx.tyId(memberTy))
       let memberIdx = ctx.builder.constUint(ctx.scalarId(cirUint32()), uint64(i))
       let slot = ctx.builder.opAccessChain(slotPtrTy, push.varId, @[memberIdx])
-      fn.params[p.name] = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
+      let loaded = ctx.builder.opLoad(ctx.tyId(memberTy), slot)
+      # A bool push member stores a u32 word.
+      # Coercing here means every body read of the parameter sees a bool value.
+      fn.params[p.name] = if p.typ.kind == ctBool:
+        ctx.convertValue(loaded, cirUint32(), CirType(kind: ctBool))
+      else:
+        loaded
   ctx.emitStmts(fn, kernel.body)
   if not fn.terminated:
     ctx.builder.opReturn()
