@@ -36,6 +36,8 @@
 ##   binding to violate
 ##
 ## Shared:
+## - the parameter-classification analysis pass stores every proc's parameter
+##   classification in `CirModule.paramClasses`, the printer reads the records
 ## - a whole-vector read of a 3-wide coordinate builtin refuses, components read
 ##   one by one, the scalar `thread_index_in_threadgroup` reads whole as `int(gidx)`
 ## - the dispatch grid size has no HLSL semantic: a `threadgroups_per_grid` read refuses,
@@ -173,24 +175,31 @@ proc emitBpName(t: CirType): string =
   of ctFloat: result = (if t.bits == 64: "BpF64" else: "BpF32")
   else: result = ""
 
-proc bpElementStride(ctx: var PrintCtx, elem: CirType): int =
-  ## Byte stride of one buffer element on the fvVulkan route, its storage width.
-  ## The address arithmetic indexes buffers by it.
+proc bpElementStrideCheck*(elem: CirType): tuple[stride: int, err: string] =
+  ## Returns the byte stride of one buffer element on the fvVulkan route and the refusal when the element has no binding.
+  ## `err` is "" when the element binds, else the refusal detail. Readers: the fvVulkan access emitter, the parameter-classification pass.
   case elem.kind
   of ctInt, ctUint:
     if elem.bits != 32:
-      ctx.fail("buffer element of " & $elem.bits & "-bit integer has no fvVulkan" &
+      return (0, "buffer element of " & $elem.bits & "-bit integer has no fvVulkan" &
         " binding, the element envelope is 32-bit integers, float and double")
-    result = 4
+    result = (4, "")
   of ctFloat:
     if elem.bits != 32 and elem.bits != 64:
-      ctx.fail("buffer element of float" & $elem.bits & " has no fvVulkan" &
+      return (0, "buffer element of float" & $elem.bits & " has no fvVulkan" &
         " binding, the element envelope is 32-bit integers, float and double")
-    result = elem.bits div 8
+    result = (elem.bits div 8, "")
   else:
-    ctx.fail("buffer element of " & $elem.kind & " type has no fvVulkan binding," &
+    result = (0, "buffer element of " & $elem.kind & " type has no fvVulkan binding," &
       " the element envelope is 32-bit integers, float and double")
-    result = 0
+
+proc bpElementStride(ctx: var PrintCtx, elem: CirType): int =
+  ## Byte stride of one buffer element on the fvVulkan route, its storage width.
+  ## The address arithmetic indexes buffers by it.
+  let (stride, err) = bpElementStrideCheck(elem)
+  if err.len > 0:
+    ctx.fail(err)
+  result = stride
 
 proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size, align: int] =
   ## Packed size and alignment of one fvVulkan push-block value member.
@@ -615,82 +624,10 @@ proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
   let resTy = if rw: "RWStructuredBuffer" else: "StructuredBuffer"
   result = resTy & "<" & ctx.emitHlslScalar(p.typ.pElem) & "> " & p.name
 
-proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
-  ## Splits one proc's parameters into buffer resources and values.
-  ## - kernels: values join the Push block, buffers take register ordinals
-  ## - device functions: values pass by value (a `var T` binds `inout`),
-  ##   buffers are unbound resource params
-  ## Rejects the parameter shapes the HLSL resource model cannot bind.
-  for p in fn.params:
-    case p.typ.kind
-    of ctAptr:
-      if p.typ.space != caDevice:
-        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space &
-          " space, buffers address device memory")
-        return
-      if ctx.flavor == fvVulkan:
-        # element types are checked up front, the access emitter and the buffer-pointer typedef both read them
-        discard ctx.bpElementStride(p.typ.pElem)
-        if ctx.failing():
-          return
-      buffers.add p
-    of ctPtr:
-      if p.typ.space == caThread:
-        if fn.isKernel:
-          ctx.fail("by-reference parameter " & p.name & " in kernel `" &
-            fn.name & "` has no binding, kernels take values and buffers")
-          return
-        # device function: the `inout` binding, reads and writes are direct
-        discard
-      else:
-        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.space &
-          " space has no binding")
-        return
-    of ctArray:
-      ctx.fail("array parameter " & p.name & " in `" & fn.name &
-        "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
-      return
-    of ctSpan:
-      ctx.fail("span parameter " & p.name & " in `" & fn.name &
-        "` has no HLSL binding, openArray spans split to pointer + length" &
-        " before printing")
-      return
-    of ctInt, ctUint:
-      if p.typ.bits != 32:
-        ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
-          "` is rejected: int64_t is a parse error in the HLSL frontend and" &
-          " uint64_t pulls the SPIR-V Int64 capability")
-        return
-      if fn.isKernel:
-        pushParams.incl(p.name)
-    of ctFloat:
-      if p.typ.bits == 16:
-        ctx.fail("float16 parameter " & p.name & " in `" & fn.name &
-          "`, float16 types are outside the HLSL subset")
-        return
-      if fn.isKernel:
-        pushParams.incl(p.name)
-    of ctBool:
-      if fn.isKernel:
-        if ctx.flavor == fvVulkan:
-          ctx.fail("bool parameter " & p.name & ", the fvVulkan push block has" &
-            " no bool member")
-          return
-        pushParams.incl(p.name)
-    of ctVoid, ctVector, ctStruct:
-      if fn.isKernel:
-        pushParams.incl(p.name)
-    of ctProc:
-      ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
-      return
-
-proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, pushParams: var HashSet[string], forwardDeclare: bool): string =
+proc emitFnSignature(ctx: var PrintCtx, fn: CirProc, graph: CallGraph, forwardDeclare: bool): string =
   ## `RetType name(params)` of one proc, buffers as resources, `var T` device parameters as `inout`.
   ## The signature of an `{.inline.}` proc opens with the `inline ` qualifier.
-  var buffers: seq[CirParam]
-  ctx.classifyParams(fn, pushParams, buffers)
-  if ctx.failing():
-    return ""
+  ## Parameter legality refuses in the classification pass, the printer reads the stored records.
   var params: seq[string]
   for p in fn.params:
     case p.typ.kind
@@ -734,8 +671,7 @@ proc printFn(ctx: var PrintCtx, fn: CirProc, graph: CallGraph): string =
   let bodyTxt = ctx.printStmts(fn.body)
   if ctx.failing():
     return ""
-  var pushParams = initHashSet[string]()
-  let sig = ctx.emitFnSignature(fn, graph, pushParams, forwardDeclare = false)
+  let sig = ctx.emitFnSignature(fn, graph, forwardDeclare = false)
   if ctx.failing():
     return ""
   return sig & " {\n" & bodyTxt & '\n' & "}"
@@ -873,13 +809,11 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   # computed by the call-graph analysis pass after the last transform
   let graph = m.callGraph
 
-  # kernel resources: buffer parameters and Push members
+  # kernel resources: buffer parameters and Push members, read from the stored `CirModule.paramClasses` record the classification pass filled
   ctx.fnName = kernel.name
-  var pushParams = initHashSet[string]()
-  var buffers: seq[CirParam]
-  ctx.classifyParams(kernel, pushParams, buffers)
-  if ctx.failing():
-    return ("", ctx.err)
+  let kernelClass = m.paramClasses[kernel.name]
+  let pushParams = kernelClass.push
+  let buffers = kernelClass.buffers
 
   # struct declarations for the referenced value structs, dependency order
   var refs = initHashSet[string]()
@@ -1002,8 +936,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
       fns.add fn
   for fn in fns:
     ctx.fnName = fn.name
-    var fnPush = initHashSet[string]()
-    result.src &= ctx.emitFnSignature(fn, graph, fnPush, forwardDeclare = true) & '\n'
+    result.src &= ctx.emitFnSignature(fn, graph, forwardDeclare = true) & '\n'
     if ctx.failing():
       return ("", ctx.err)
   if fns.len > 0:

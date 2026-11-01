@@ -254,6 +254,7 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   reg.registerHlslLoweringPasses()
   # analysis passes after the last transform: analysis results are valid
   # only if no transform runs after them (the registry never invalidates)
+  reg.registerHlslParamClassPass(flavor)
   reg.registerHlslCallGraphPass()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)

@@ -24,12 +24,16 @@
 ##   `CirModule.globals` in encounter order, every proc and scope depth covered,
 ##   the printer emits the relocated declarations as file-scope `static const`
 ##   variables
+##
+## `hlslClassifyParams` fills `CirModule.paramClasses` with one classification
+## record per proc, one registration per flavor.
 ## - dxc folds the relocated declarations at compile time, they take no register
 ##   in the `$Globals`/cbuffer layout and they are visible to all functions
 
 import std/[sets, strutils, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
+import ../backends/hlsl_lang
 import ./pass_datatypes
 import ./pass_helpers
 import ./passes_lowering_cfamily
@@ -511,3 +515,109 @@ proc hlslRegisterDissolvePointerLocals(reg: var PassRegistry) =
     " parameters into the HLSL storage model",
     DissolveCtx, newDissolveCtx, dissolveVarDecl, dissolveAsgn,
     dissolveDropsVar, dissolveDropsAsgn, rewriteDissolveExpr)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Parameter classification
+# ═══════════════════════════════════════════════════════════════════════
+
+proc classifyParams(fn: CirProc, flavor: HlslFlavor, pushParams: var HashSet[string], buffers: var seq[CirParam]): string =
+  ## Splits one proc's parameters into buffer resources and values.
+  ##
+  ## - kernels: values join the Push block, buffers take register ordinals
+  ## - device functions: values pass by value (a `var T` binds `inout`),
+  ##   buffers are unbound resource params
+  ##
+  ## Rejects the parameter shapes the HLSL resource model cannot bind.
+  ## Returns "" when clean, else the first refusal.
+  for p in fn.params:
+    case p.typ.kind
+    of ctAptr:
+      if p.typ.space != caDevice:
+        return "buffer parameter " & p.name & " in " & $p.typ.space &
+          " space, buffers address device memory"
+      if flavor == fvVulkan:
+        # element types are checked up front, the access emitter and the buffer-pointer typedef both read them
+        let (_, err) = bpElementStrideCheck(p.typ.pElem)
+        if err.len > 0:
+          return err
+      buffers.add p
+    of ctPtr:
+      if p.typ.space == caThread:
+        if fn.isKernel:
+          return "by-reference parameter " & p.name & " in kernel `" &
+            fn.name & "` has no binding, kernels take values and buffers"
+        # device function: the `inout` binding, reads and writes are direct
+        discard
+      else:
+        return "pointer parameter " & p.name & " in " & $p.typ.space &
+          " space has no binding"
+    of ctArray:
+      return "array parameter " & p.name & " in `" & fn.name &
+        "` has no binding, buffers pass as `ptr UncheckedArray[T]`"
+    of ctSpan:
+      return "span parameter " & p.name & " in `" & fn.name &
+        "` has no HLSL binding, openArray spans split to pointer + length" &
+        " before printing"
+    of ctInt, ctUint:
+      if p.typ.bits != 32:
+        return "64-bit integer parameter " & p.name & " in `" & fn.name &
+          "` is rejected: int64_t is a parse error in the HLSL frontend and" &
+          " uint64_t pulls the SPIR-V Int64 capability"
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctFloat:
+      if p.typ.bits == 16:
+        return "float16 parameter " & p.name & " in `" & fn.name &
+          "`, float16 types are outside the HLSL subset"
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctBool:
+      if fn.isKernel:
+        if flavor == fvVulkan:
+          return "bool parameter " & p.name & ", the fvVulkan push block has" &
+            " no bool member"
+        pushParams.incl(p.name)
+    of ctVoid, ctVector, ctStruct:
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctProc:
+      return "procedure parameter " & p.name & " in `" & fn.name & "` has no binding"
+  return ""
+
+proc classifyHlslModuleParams(m: CirModule, flavor: HlslFlavor): string =
+  ## Classifies every proc's parameters into `CirModule.paramClasses`, one record per proc keyed by proc name.
+  ## The printer reads the records and never reclassifies.
+  ##
+  ## The flavor selects the fvVulkan-only refusals, the buffer-element binding check and the bool push member.
+  ## The pipeline registers the flavor the macro compiles for, so an fvD3D12 module never refuses on fvVulkan-only shapes.
+  ## Runs after the last transform, the registry never invalidates the record.
+  for fn in m.procs:
+    var pc = ParamClass()
+    let err = classifyParams(fn, flavor, pc.push, pc.buffers)
+    if err.len > 0:
+      return "at " & fn.name & ": " & err
+    m.paramClasses[fn.name] = pc
+  return ""
+
+proc classifyFvD3D12(m: CirModule): string =
+  classifyHlslModuleParams(m, fvD3D12)
+
+proc classifyFvVulkan(m: CirModule): string =
+  classifyHlslModuleParams(m, fvVulkan)
+
+proc registerHlslParamClassPass*(reg: var PassRegistry, flavor: HlslFlavor) =
+  ## Registers the HLSL parameter-classification analysis pass for `flavor`:
+  ##
+  ## - the pass fills `CirModule.paramClasses`, one record per proc
+  ## - the flavor selects the refusal set, the pipeline registers the flavor
+  ##   that the macro compiles
+  let description = "Splits every proc's parameters into buffer resources and" &
+    " push-block values, refusing the shapes the resource model cannot bind"
+  case flavor
+  of fvD3D12:
+    reg.register("hlslClassifyParams", pkAnalysis, phaseMain, description,
+      run = classifyFvD3D12)
+  of fvVulkan:
+    reg.register("hlslClassifyParams", pkAnalysis, phaseMain, description,
+      run = classifyFvVulkan)
