@@ -106,32 +106,12 @@ proc unwrapVarDerefsExpr(e: CirExpr, varParams: HashSet[string]) =
     for ch in getExprChildren(e):
       ch.unwrapVarDerefsExpr(varParams)
 
-proc unwrapVarDerefsStmts(ss: var seq[CirStmt], varParams: HashSet[string]) =
+proc unwrapVarDerefsStmts(ss: seq[CirStmt], varParams: HashSet[string]) =
   ## Statement-walk overload of `unwrapVarDerefsExpr`, nested bodies included.
-  for s in mitems(ss):
-    case s.kind
-    of sVar, sConst:
-      s.init.unwrapVarDerefsExpr(varParams)
-    of sAsgn:
-      s.lhs.unwrapVarDerefsExpr(varParams)
-      s.rhs.unwrapVarDerefsExpr(varParams)
-    of sIte:
-      s.cond.unwrapVarDerefsExpr(varParams)
-      s.thenBody.unwrapVarDerefsStmts(varParams)
-      s.elseBody.unwrapVarDerefsStmts(varParams)
-    of sLoop:
-      s.loopCond.unwrapVarDerefsExpr(varParams)
-      s.loopBody.unwrapVarDerefsStmts(varParams)
-    of sRet:
-      s.retVal.unwrapVarDerefsExpr(varParams)
-    of sDiscard:
-      s.discardVal.unwrapVarDerefsExpr(varParams)
-    of sCall:
-      s.callCallee.unwrapVarDerefsExpr(varParams)
-      for a in mitems(s.callArgs):
-        a.unwrapVarDerefsExpr(varParams)
-    of sAsm, sEmit:
-      discard
+  ## The shared walk covers every expression position, the deref unwrap
+  ## splices symbols in place.
+  ss.walkStmts(nil, proc(e: CirExpr) =
+    e.unwrapVarDerefsExpr(varParams))
 
 proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]): string =
   ## Rewrites the call arguments of one expression tree:
@@ -423,106 +403,38 @@ proc registerTypeRefBlocks(blocks: var OrderedTable[string, CirType], t: CirType
   ## Registers the buffer-reference blocks of every device pointer
   ## reachable from the type tree, through pointer targets and array
   ## elements and object fields, dedup by reference-block name.
-  if t.isNil:
-    return
-  case t.kind
-  of ctAptr:
-    registerRefBlock(blocks, t.pElem)
-    registerTypeRefBlocks(blocks, t.pElem)
-  of ctPtr:
-    registerTypeRefBlocks(blocks, t.pElem)
-  of ctArray:
-    registerTypeRefBlocks(blocks, t.aElem)
-  of ctVector:
-    registerTypeRefBlocks(blocks, t.vElem)
-  of ctStruct:
-    for f in t.fields:
-      registerTypeRefBlocks(blocks, f.typ)
-  else:
-    discard
+  var found = blocks
+  proc registerAptr(tt: CirType) =
+    if tt.kind == ctAptr:
+      registerRefBlock(found, tt.pElem)
+  walkTypeTree(t, registerAptr)
+  blocks = found
 
 proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr) =
   ## Registers the buffer-reference blocks reachable from one expression:
   ## every buffer pointer subexpression's pointee needs its block declared
   ## before the module body prints, a cast target included.
-  if e.isNil:
-    return
-  let t = getExprType(e)
-  if t != nil and t.kind == ctAptr:
-    registerRefBlock(blocks, t.pElem)
-  case e.kind
-  of eCall:
-    registerExprRefBlocks(blocks, e.callee)
-    for a in e.args:
-      registerExprRefBlocks(blocks, a)
-  of eAt:
-    registerExprRefBlocks(blocks, e.atBase)
-    registerExprRefBlocks(blocks, e.atIndex)
-  of ePat:
-    registerExprRefBlocks(blocks, e.patBase)
-    registerExprRefBlocks(blocks, e.patIndex)
-  of eDot:
-    registerExprRefBlocks(blocks, e.dotBase)
-  of eDeref:
-    registerExprRefBlocks(blocks, e.derefOperand)
-  of eAddr:
-    registerExprRefBlocks(blocks, e.addrOperand)
-  of eCast, eConv:
-    registerExprRefBlocks(blocks, e.castOperand)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    registerExprRefBlocks(blocks, e.left)
-    registerExprRefBlocks(blocks, e.right)
-  of eAnd, eOr:
-    registerExprRefBlocks(blocks, e.andLeft)
-    registerExprRefBlocks(blocks, e.andRight)
-  of eTernary:
-    registerExprRefBlocks(blocks, e.cond)
-    registerExprRefBlocks(blocks, e.thenE)
-    registerExprRefBlocks(blocks, e.elseE)
-  of eEq, eNeq, eLt, eLe:
-    registerExprRefBlocks(blocks, e.a)
-    registerExprRefBlocks(blocks, e.b)
-  of eNeg:
-    registerExprRefBlocks(blocks, e.unOperand)
-  of eNot:
-    registerExprRefBlocks(blocks, e.notOperand)
-  of eOconstr:
-    for kvf in e.kvFields:
-      registerExprRefBlocks(blocks, kvf.value)
-  of eAconstr:
-    for el in e.elems:
-      registerExprRefBlocks(blocks, el)
-  of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof, eSym:
-    discard
+  ##
+  ## Node visits run pre-order, in the printer's declaration-sequence order.
+  var found = blocks
+  proc registerAptrNode(e: CirExpr) =
+    let t = getExprType(e)
+    if t != nil and t.kind == ctAptr:
+      registerRefBlock(found, t.pElem)
+  e.walkExprs(registerAptrNode)
+  blocks = found
 
 proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[CirStmt]) =
   ## Registers the buffer-reference blocks reachable from one statement list.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      if s.declType.kind == ctAptr:
-        registerRefBlock(blocks, s.declType.pElem)
-      registerExprRefBlocks(blocks, s.init)
-    of sAsgn:
-      registerExprRefBlocks(blocks, s.lhs)
-      registerExprRefBlocks(blocks, s.rhs)
-    of sIte:
-      registerExprRefBlocks(blocks, s.cond)
-      registerStmtRefBlocks(blocks, s.thenBody)
-      registerStmtRefBlocks(blocks, s.elseBody)
-    of sLoop:
-      registerExprRefBlocks(blocks, s.loopCond)
-      registerStmtRefBlocks(blocks, s.loopBody)
-    of sRet:
-      registerExprRefBlocks(blocks, s.retVal)
-    of sDiscard:
-      registerExprRefBlocks(blocks, s.discardVal)
-    of sCall:
-      registerExprRefBlocks(blocks, s.callCallee)
-      for a in s.callArgs:
-        registerExprRefBlocks(blocks, a)
-    of sAsm, sEmit:
-      discard
+  var found = blocks
+  proc onDecl(s: CirStmt): bool =
+    if s.declType.kind == ctAptr:
+      registerRefBlock(found, s.declType.pElem)
+    true
+  proc onExpr(e: CirExpr) =
+    registerExprRefBlocks(found, e)
+  ss.scanStmtRefs(onDecl, onExpr)
+  blocks = found
 
 proc glslRegisterRefBlocks(m: CirModule): string =
   ## Registers every buffer-reference block that the printer will declare,

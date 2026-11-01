@@ -181,6 +181,10 @@ proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
 
 proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
   ## Statement-walk overload of `substituteArgsExpr`, nested bodies included.
+  ##
+  ## The walk stays hand-rolled. A substitution splices the call argument
+  ## into the symbol node and must not re-walk the spliced content: its symbols belong to the caller.
+  ## A shared walk descends into the rewritten node and would substitute a second parameter inside the argument.
   for s in mitems(ss):
     case s.kind
     of sVar, sConst:
@@ -484,14 +488,19 @@ proc wgslRegisterExplodePointerLocals(reg: var PassRegistry) =
 # Bool kernel parameter reads
 # ═══════════════════════════════════════════════════════════════════════
 
-proc rewriteBoolReadsExpr(e: CirExpr, boolParams: HashSet[string]) =
-  ## Replaces every read of a bool kernel parameter in place with the `name != 0u` comparison,
-  ## the type-preserving bool form.
+proc rewriteBoolReadsExpr(e: CirExpr, boolParams, boolPointees: HashSet[string]) =
+  ## Replaces every read of a bool kernel parameter in place with the `name != 0u` comparison in its type-preserving bool form.
   ##
-  ## Expressions are refs, the rewrite applies to every sharer.
+  ## Expressions are refs, so the rewrite applies to every sharer and checks
+  ## the symbol's own type: a proc-typed callee position never fires
+  ## and a bool-typed symbol is never a callee. The comparison's operand is
+  ## a fresh symbol. The rewrite returns before the walk re-enters it.
+  ##
+  ## `boolPointees` stays empty, WGSL collects no bool-pointee storage.
   if e.isNil:
     return
-  if e.kind == eSym and e.name in boolParams:
+  if e.kind == eSym and e.typ != nil and e.typ.kind == ctBool and
+      e.name in boolParams:
     let paramType = e.typ
     let param = sym(e.name, paramType)
     e.kind = eNeq
@@ -500,75 +509,37 @@ proc rewriteBoolReadsExpr(e: CirExpr, boolParams: HashSet[string]) =
     e.b = intLit(0, tUint(32))
     return
   for ch in getExprChildren(e):
-    rewriteBoolReadsExpr(ch, boolParams)
+    rewriteBoolReadsExpr(ch, boolParams, boolPointees)
 
-proc rewriteBoolReadsStmts(ss: var seq[CirStmt], boolParams: HashSet[string]) =
-  ## Statement-walk overload of `rewriteBoolReadsExpr`.
-  for s in mitems(ss):
-    case s.kind
-    of sVar, sConst:
-      rewriteBoolReadsExpr(s.init, boolParams)
-    of sAsgn:
-      rewriteBoolReadsExpr(s.lhs, boolParams)
-      rewriteBoolReadsExpr(s.rhs, boolParams)
-    of sIte:
-      rewriteBoolReadsExpr(s.cond, boolParams)
-      rewriteBoolReadsStmts(s.thenBody, boolParams)
-      rewriteBoolReadsStmts(s.elseBody, boolParams)
-    of sLoop:
-      rewriteBoolReadsExpr(s.loopCond, boolParams)
-      rewriteBoolReadsStmts(s.loopBody, boolParams)
-    of sRet:
-      rewriteBoolReadsExpr(s.retVal, boolParams)
-    of sDiscard:
-      rewriteBoolReadsExpr(s.discardVal, boolParams)
-    of sCall:
-      rewriteBoolReadsExpr(s.callCallee, boolParams)
-      for a in mitems(s.callArgs):
-        rewriteBoolReadsExpr(a, boolParams)
-    of sAsm, sEmit:
-      discard
+proc collectBoolKernelParams(fn: CirProc, vals, ptrs: var HashSet[string]) =
+  ## Collects the kernel's bool parameter names. The storage keeps its type. `ptrs` stays empty, WGSL collects no bool-pointee storage.
+  for p in fn.params:
+    if p.typ.kind == ctBool:
+      vals.incl(p.name)
 
 proc rewriteBoolKernelParamReads(m: CirModule): string =
   ## Rewrites every read of a bool kernel parameter in the kernel body into
   ## a `name != 0u` comparison. Device functions are untouched, their own bool
   ## parameters and locals stay real bools. Returns "" when clean.
-  for fn in m.procs:
-    if not fn.isKernel:
-      continue
-    var boolParams: HashSet[string]
-    for p in fn.params:
-      if p.typ.kind == ctBool:
-        boolParams.incl(p.name)
-    if boolParams.len == 0:
-      continue
-    fn.body.rewriteBoolReadsStmts(boolParams)
-  return ""
+  ##
+  ## WGSL keeps bool storage: no retype, no store rewrite, only the kernel bodies walk.
+  m.patchBoolStorage(BoolPatchPolicy(
+    walks: proc(fn: CirProc): bool = fn.isKernel,
+    collectParams: collectBoolKernelParams,
+    rewriteRead: rewriteBoolReadsExpr))
 
 # ═══════════════════════════════════════════════════════════════════════
 # Struct-reference registration
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerTypeStructs(needed: var HashSet[string], t: CirType) =
-  ## Registers the struct names reachable from `t`:
-  ##
-  ## - through object fields, array elements, vector elements and pointer
-  ##   targets
-  if t.isNil:
-    return
-  case t.kind
-  of ctStruct:
-    needed.incl(t.name)
-    for f in t.fields:
-      registerTypeStructs(needed, f.typ)
-  of ctArray:
-    registerTypeStructs(needed, t.aElem)
-  of ctVector:
-    registerTypeStructs(needed, t.vElem)
-  of ctPtr, ctAptr:
-    registerTypeStructs(needed, t.pElem)
-  else:
-    discard
+  ## Registers the struct names reachable from `t`: object fields, array elements, vector elements, pointer targets.
+  var refs = needed
+  proc inclStruct(tt: CirType) =
+    if tt.kind == ctStruct:
+      refs.incl(tt.name)
+  walkTypeTree(t, inclStruct)
+  needed = refs
 
 proc scanBareTypeStructs(needed: var HashSet[string], t: CirType) =
   ## Registers the struct names one emitted WGSL type name covers:
@@ -585,64 +556,42 @@ proc scanBareTypeStructs(needed: var HashSet[string], t: CirType) =
     discard
 
 proc scanExprStructs(needed: var HashSet[string], e: CirExpr) =
-  ## Registers the struct names the printed form of one expression names:
-  ## a cast or conversion target type, a constructor type. Every other kind
-  ## recurses into its children.
+  ## Registers the struct names one expression node's printed form names:
+  ## a cast or conversion target type, a constructor type.
+  ##
+  ## The scanner walks the children with `walkExprs`.
   if e.isNil:
     return
   case e.kind
   of eCast, eConv:
     scanBareTypeStructs(needed, e.castType)
-    scanExprStructs(needed, e.castOperand)
   of eOconstr:
     scanBareTypeStructs(needed, e.ocType)
-    for kvf in e.kvFields:
-      scanExprStructs(needed, kvf.value)
   of eAconstr:
     scanBareTypeStructs(needed, e.acType)
-    for el in e.elems:
-      scanExprStructs(needed, el)
   else:
-    for ch in getExprChildren(e):
-      scanExprStructs(needed, ch)
+    discard
 
 proc scanStmtStructs(needed: var HashSet[string], ss: seq[CirStmt]) =
   ## Registers the struct names the printed forms of one statement list name.
   ##
   ## - a `var` declaration registers its type only where the printer emits
   ##   the declaration: a relocated space survivor or a pointer-shaped
-  ##   local refuses before any type name prints
-  for s in ss:
-    case s.kind
-    of sVar:
-      if s.space notin {caThreadgroup, caConstant, caDevice} and
-          s.declType.kind notin {ctPtr, ctAptr} and
-          not (s.declType.kind == ctStruct and s.declType.containsPtrDeep):
-        scanBareTypeStructs(needed, s.declType)
-        scanExprStructs(needed, s.init)
-    of sConst:
-      scanBareTypeStructs(needed, s.declType)
-      scanExprStructs(needed, s.init)
-    of sAsgn:
-      scanExprStructs(needed, s.lhs)
-      scanExprStructs(needed, s.rhs)
-    of sIte:
-      scanExprStructs(needed, s.cond)
-      scanStmtStructs(needed, s.thenBody)
-      scanStmtStructs(needed, s.elseBody)
-    of sLoop:
-      scanExprStructs(needed, s.loopCond)
-      scanStmtStructs(needed, s.loopBody)
-    of sRet:
-      scanExprStructs(needed, s.retVal)
-    of sDiscard:
-      scanExprStructs(needed, s.discardVal)
-    of sCall:
-      scanExprStructs(needed, s.callCallee)
-      for a in s.callArgs:
-        scanExprStructs(needed, a)
-    of sAsm, sEmit:
-      discard
+  ##   local refuses before any type name prints. The shared walk skips
+  ##   its initializer with the declaration
+  var refs = needed
+  proc onDecl(s: CirStmt): bool =
+    if s.kind == sVar:
+      if s.space in {caThreadgroup, caConstant, caDevice} or
+          s.declType.kind in {ctPtr, ctAptr} or
+          (s.declType.kind == ctStruct and s.declType.containsPtrDeep):
+        return false
+    scanBareTypeStructs(refs, s.declType)
+    true
+  proc onExpr(e: CirExpr) =
+    scanExprStructs(refs, e)
+  ss.scanStmtRefs(onDecl, onExpr)
+  needed = refs
 
 proc closeStructRefs(byName: Table[string, CirType], needed: var HashSet[string], name: string) =
   ## Adds the struct-typed members of `name`'s declaration, recursively:
@@ -679,13 +628,8 @@ proc wgslScanStructRefs(m: CirModule): string =
   ## The pass runs after the last transform: the walked declarations and bodies are final.
   ## The pass registry never invalidates a stored record. A module that lacks exactly one
   ## kernel contributes no kernel-side registrations. Such a module refuses at the printer.
-  var kernel: CirProc = nil
-  var kernelCount = 0
-  for fn in m.procs:
-    if fn.isKernel:
-      inc kernelCount
-      kernel = fn
-  if kernelCount == 1:
+  let kernel = m.singleKernel()
+  if kernel != nil:
     for p in kernel.params:
       registerTypeStructs(m.structRefs, p.typ)
   for s in m.globals:
@@ -705,7 +649,7 @@ proc wgslScanStructRefs(m: CirModule): string =
         scanBareTypeStructs(m.structRefs, p.typ)
     if fn.ret.kind != ctVoid:
       scanBareTypeStructs(m.structRefs, fn.ret)
-  if kernelCount == 1:
+  if kernel != nil:
     scanStmtStructs(m.structRefs, kernel.body)
   var byName: Table[string, CirType]
   for t in m.types:

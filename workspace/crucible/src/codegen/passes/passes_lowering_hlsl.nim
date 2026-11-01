@@ -518,52 +518,29 @@ proc registerHlslParamClassPass*(reg: var PassRegistry, flavor: HlslFlavor) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerStructRefs(refs: var HashSet[string], t: CirType) =
-  ## Records the struct type names reachable from `t`, through fields,
-  ## array elements and vector elements.
-  if t.isNil:
-    return
-  case t.kind
-  of ctStruct:
-    if t.name in refs:
-      return
-    refs.incl(t.name)
-    for f in t.fields:
-      registerStructRefs(refs, f.typ)
-  of ctArray:
-    registerStructRefs(refs, t.aElem)
-  of ctVector:
-    registerStructRefs(refs, t.vElem)
-  else:
-    discard
+  ## Records the struct type names reachable from `t`, through fields, array elements and vector elements.
+  ## Pointer targets stay unvisited (`descendPtrs = false`): a pointer target
+  ## prints no HLSL type name and the printer refuses a struct with a pointer field.
+  var found = refs
+  proc inclStruct(tt: CirType) =
+    if tt.kind == ctStruct:
+      found.incl(tt.name)
+  walkTypeTree(t, inclStruct, descendPtrs = false)
+  refs = found
 
 proc scanStmtStructRefs(refs: var HashSet[string], ss: seq[CirStmt]) =
-  ## Records the struct types that the statement tree references: declaration types,
-  ## construction types and cast result types.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      registerStructRefs(refs, s.declType)
-      if s.init != nil:
-        if s.init.kind == eOconstr:
-          registerStructRefs(refs, s.init.ocType)
-        if s.init.kind == eCall:
-          for a in s.init.args:
-            if a.kind == eOconstr:
-              registerStructRefs(refs, a.ocType)
-    of sAsgn:
-      if s.rhs != nil and s.rhs.kind == eOconstr:
-        registerStructRefs(refs, s.rhs.ocType)
-    of sIte:
-      scanStmtStructRefs(refs, s.thenBody)
-      scanStmtStructRefs(refs, s.elseBody)
-    of sLoop:
-      scanStmtStructRefs(refs, s.loopBody)
-    of sCall:
-      for a in s.callArgs:
-        if a.kind == eOconstr:
-          registerStructRefs(refs, a.ocType)
-    of sRet, sDiscard, sAsm, sEmit:
-      discard
+  ## Records the struct types that the statement tree references:
+  ## declaration types, and the construction types of every expression node
+  ## the shared walk visits.
+  var found = refs
+  proc onDecl(s: CirStmt): bool =
+    registerStructRefs(found, s.declType)
+    true
+  proc onExpr(e: CirExpr) =
+    if e.kind == eOconstr:
+      registerStructRefs(found, e.ocType)
+  ss.scanStmtRefs(onDecl, onExpr)
+  refs = found
 
 proc hlslScanStructRefs(m: CirModule): string =
   ## Records the struct types the printer declares into `m.structRefs`:
@@ -578,15 +555,10 @@ proc hlslScanStructRefs(m: CirModule): string =
   ##
   ## A module without exactly one kernel contributes no kernel-side registrations. Such a module refuses at the printer.
   ## The pass runs after the last transform, the record it stores never invalidates.
-  var kernel: CirProc = nil
-  var kernelCount = 0
-  for fn in m.procs:
-    if fn.isKernel:
-      inc kernelCount
-      kernel = fn
-  if kernelCount == 1:
+  let kernel = m.singleKernel()
+  if kernel != nil:
     for p in kernel.params:
-      if p.name != "crucible_numworkgroups":
+      if p.name != NumWorkgroupsParam:
         registerStructRefs(m.structRefs, p.typ)
   for fn in m.procs:
     if fn.isKernel:
@@ -595,7 +567,7 @@ proc hlslScanStructRefs(m: CirModule): string =
     for p in fn.params:
       registerStructRefs(m.structRefs, p.typ)
     scanStmtStructRefs(m.structRefs, fn.body)
-  if kernelCount == 1:
+  if kernel != nil:
     scanStmtStructRefs(m.structRefs, kernel.body)
   # relocated const_mem declarations, struct-typed ones included
   scanStmtStructRefs(m.structRefs, m.globals)

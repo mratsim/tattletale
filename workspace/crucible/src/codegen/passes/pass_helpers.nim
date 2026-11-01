@@ -8,10 +8,9 @@
 ## Shared pass helpers over CIRv2.
 ##
 ## - call-target collection and the shared statement and expression walk
-## - the root symbol of a dotted or indexed chain
-## - declaration and clone utilities
-## - the kernel-parameter leaf walk
-## - the pointer-local explosion context and its leaf registration
+## - the root symbol of a dotted or indexed chain, declaration and clone utilities
+## - the kernel-parameter leaf walk and the pointer-local explosion context
+## - the struct-reference scanner's walks, the bool-storage scaffold
 ##
 ## Every pass file may import these, no pass owns them.
 
@@ -130,6 +129,164 @@ proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: str
       collected.add((name: s.name, typ: s.declType))
   stmts.walkStmts(collect, nil)
   locals = collected
+
+proc walkTypeTree*(t: CirType, visit: proc(t: CirType), descendPtrs: bool = true) =
+  ## Pre-order walk over one type tree, `visit` sees every node once:
+  ## struct fields in field order, then array elements, vector elements, pointer targets.
+  ##
+  ## - `descendPtrs` names the target's pointer-recursion policy: a printer
+  ##   that names no type behind a pointer kind passes `false` and leaves
+  ##   the pointer targets unvisited
+  ## - a collecting visitor cannot loop, value type trees are acyclic
+  if t.isNil:
+    return
+  visit(t)
+  case t.kind
+  of ctStruct:
+    for f in t.fields:
+      walkTypeTree(f.typ, visit, descendPtrs)
+  of ctArray:
+    walkTypeTree(t.aElem, visit, descendPtrs)
+  of ctVector:
+    walkTypeTree(t.vElem, visit, descendPtrs)
+  of ctPtr, ctAptr:
+    if descendPtrs:
+      walkTypeTree(t.pElem, visit, descendPtrs)
+  else:
+    discard
+
+proc singleKernel*(m: CirModule): CirProc =
+  ## Returns the module's kernel when the module has exactly one, nil otherwise.
+  ## A module without exactly one kernel contributes no kernel-side registrations.
+  ## Such a module refuses at the printer.
+  for fn in m.procs:
+    if fn.isKernel:
+      if result != nil:
+        return nil
+      result = fn
+
+proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: proc(e: CirExpr)) =
+  ## Statement walk of the struct-reference scanners.
+  ##
+  ## - every expression position goes through `onExpr`, one `walkExprs`
+  ##   per position
+  ## - `onDecl` takes each `var`/`const` declaration before its initializer
+  ##   walk and returns `false` to skip that walk when the declaration
+  ##   never prints on the target that refused it
+  ## - nested bodies recurse in source order, `onExpr` sees nodes pre-order
+  ##
+  ## Visited positions:
+  ##
+  ## - declaration types, assignment operands, conditions
+  ## - return values, discard values, call callees, call arguments
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      if onDecl(s):
+        s.init.walkExprs(onExpr)
+    of sAsgn:
+      s.lhs.walkExprs(onExpr)
+      s.rhs.walkExprs(onExpr)
+    of sIte:
+      s.cond.walkExprs(onExpr)
+      scanStmtRefs(s.thenBody, onDecl, onExpr)
+      scanStmtRefs(s.elseBody, onDecl, onExpr)
+    of sLoop:
+      s.loopCond.walkExprs(onExpr)
+      scanStmtRefs(s.loopBody, onDecl, onExpr)
+    of sRet:
+      s.retVal.walkExprs(onExpr)
+    of sDiscard:
+      s.discardVal.walkExprs(onExpr)
+    of sCall:
+      s.callCallee.walkExprs(onExpr)
+      for a in s.callArgs:
+        a.walkExprs(onExpr)
+    of sAsm, sEmit:
+      discard
+
+# ═══════════════════════════════════════════════════════════════════════
+# Bool storage lowering
+# ═══════════════════════════════════════════════════════════════════════
+
+type
+  BoolPatchPolicy* = object
+    ## Per-backend policy of the shared bool-storage scaffold: walked procs, collected and retyped storage, read and store rewrites.
+    collectGlobals*: proc(m: CirModule, vals, ptrs: var HashSet[string])
+      ## Collects and retypes the module-level bool storage, nil when the target keeps module-level bools typed as declared.
+    collectParams*: proc(fn: CirProc, vals, ptrs: var HashSet[string])
+      ## Collects and retypes one walked proc's bool parameters.
+    walks*: proc(fn: CirProc): bool
+      ## True when the proc's body gets the read and store rewrites.
+    rewriteRead*: proc(e: CirExpr, vals, ptrs: HashSet[string])
+      ## Rewrites one value-position expression tree in place, owning its own descent.
+    rewriteStore*: proc(s: CirStmt, vals, ptrs: HashSet[string]): bool
+      ## Rewrites one assignment into collected bool storage. A `true` return skips the operand walk: the store target is no read.
+      ## Nil when the target keeps bool stores.
+
+proc patchBoolStmts(ss: seq[CirStmt], vals, ptrs: HashSet[string],
+    rewriteRead: proc(e: CirExpr, vals, ptrs: HashSet[string]),
+    rewriteStore: proc(s: CirStmt, vals, ptrs: HashSet[string]): bool) =
+  ## One statement list of the bool-storage walk.
+  ##
+  ## - every value position goes to `rewriteRead`
+  ## - an assignment into collected storage goes through `rewriteStore`
+  ##   before its operands
+  ## - nested bodies recurse
+  ##
+  ## The walk visits each position once, the rewrites own their descent.
+  ## A read rewrite replaces a symbol with a fresh node that must not re-enter the rewrite:
+  ## WGSL's comparison operand is a fresh bool-typed symbol, a per-node walk would rematch it forever.
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      s.init.rewriteRead(vals, ptrs)
+    of sAsgn:
+      if rewriteStore == nil or not rewriteStore(s, vals, ptrs):
+        s.lhs.rewriteRead(vals, ptrs)
+        s.rhs.rewriteRead(vals, ptrs)
+    of sIte:
+      s.cond.rewriteRead(vals, ptrs)
+      patchBoolStmts(s.thenBody, vals, ptrs, rewriteRead, rewriteStore)
+      patchBoolStmts(s.elseBody, vals, ptrs, rewriteRead, rewriteStore)
+    of sLoop:
+      s.loopCond.rewriteRead(vals, ptrs)
+      patchBoolStmts(s.loopBody, vals, ptrs, rewriteRead, rewriteStore)
+    of sRet:
+      s.retVal.rewriteRead(vals, ptrs)
+    of sDiscard:
+      s.discardVal.rewriteRead(vals, ptrs)
+    of sCall:
+      s.callCallee.rewriteRead(vals, ptrs)
+      for a in s.callArgs:
+        a.rewriteRead(vals, ptrs)
+    of sAsm, sEmit:
+      discard
+
+proc patchBoolStorage*(m: CirModule, policy: BoolPatchPolicy): string =
+  ## Shared scaffold of the bool-storage lowering: collection, per-proc context and statement walk.
+  ##
+  ## - `collectGlobals` runs once before the proc loop, `collectParams` runs
+  ##   once per walked proc, both may retype the declarations in place
+  ## - the walk covers every expression position, callee positions included.
+  ##   A callee names a proc, a proc-typed symbol is never a collected bool,
+  ##   the read rewrites check the symbol's own type
+  ## - an assignment into collected bool storage goes through `rewriteStore`
+  ##   before its operands walk (the store target is no read)
+  ##
+  ## Returns "" when clean.
+  var globalVals, globalPtrs: HashSet[string]
+  if policy.collectGlobals != nil:
+    policy.collectGlobals(m, globalVals, globalPtrs)
+  for fn in m.procs:
+    if not policy.walks(fn):
+      continue
+    var vals = globalVals
+    var ptrs = globalPtrs
+    if policy.collectParams != nil:
+      policy.collectParams(fn, vals, ptrs)
+    fn.body.patchBoolStmts(vals, ptrs, policy.rewriteRead, policy.rewriteStore)
+  return ""
 
 proc cloneExpr*(e: CirExpr): CirExpr =
   ## Deep copy of one expression: statements and expressions are ref objects,

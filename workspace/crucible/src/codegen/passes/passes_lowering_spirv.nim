@@ -15,6 +15,7 @@ import std/sets
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
+import ./pass_helpers
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -32,17 +33,23 @@ func registerSpirvLoweringPasses*(reg: var PassRegistry) =
 
 proc patchBoolReadsExpr(e: CirExpr, boolVals, boolPtrs: HashSet[string]) =
   ## Wraps every value-position read of an i32-stored bool back into bool.
-  ## Expressions are refs, the rewrite applies to every sharer.
+  ##
+  ## Expressions are refs, so the rewrite applies to every sharer and checks
+  ## the symbol's own type: a proc-typed callee position never fires
+  ## and a bool-typed symbol is never a callee. The conv's operand is
+  ## a fresh node. The rewrite returns before the walk re-enters it.
   if e.isNil:
     return
-  if e.kind == eSym and e.name in boolVals:
+  if e.kind == eSym and e.typ != nil and e.typ.kind == ctBool and
+      e.name in boolVals:
     let b = e.typ
     let symName = e.name
     e.kind = eConv
     e.castType = b
     e.castOperand = CirExpr(kind: eSym, name: symName, typ: tInt(32))
     return
-  if e.kind == eDeref and e.derefOperand.kind == eSym and
+  if e.kind == eDeref and e.typ != nil and e.typ.kind == ctBool and
+      e.derefOperand.kind == eSym and
       e.derefOperand.name in boolPtrs:
     let b = e.typ
     e.kind = eConv
@@ -63,62 +70,54 @@ proc isBoolStoreTarget(s: CirStmt, boolVals, boolPtrs: HashSet[string]): bool =
     return true
   return false
 
-proc patchBoolReadsStmts(ss: var seq[CirStmt], boolVals, boolPtrs: HashSet[string]) =
-  ## Applies the read and store rewrites over a statement list.
-  for s in mitems(ss):
-    case s.kind
-    of sVar, sConst:
-      patchBoolReadsExpr(s.init, boolVals, boolPtrs)
-    of sAsgn:
-      if isBoolStoreTarget(s, boolVals, boolPtrs):
-        # one conv wraps the whole right-hand side, storage is i32
-        # reads inside it already rewrapped to bool keep their values
-        s.rhs = convE(tInt(32), s.rhs)
-      else:
-        patchBoolReadsExpr(s.rhs, boolVals, boolPtrs)
-    of sIte:
-      patchBoolReadsExpr(s.cond, boolVals, boolPtrs)
-      patchBoolReadsStmts(s.thenBody, boolVals, boolPtrs)
-      patchBoolReadsStmts(s.elseBody, boolVals, boolPtrs)
-    of sLoop:
-      patchBoolReadsExpr(s.loopCond, boolVals, boolPtrs)
-      patchBoolReadsStmts(s.loopBody, boolVals, boolPtrs)
-    of sRet:
-      patchBoolReadsExpr(s.retVal, boolVals, boolPtrs)
-    of sDiscard:
-      patchBoolReadsExpr(s.discardVal, boolVals, boolPtrs)
-    of sCall:
-      for a in mitems(s.callArgs):
-        patchBoolReadsExpr(a, boolVals, boolPtrs)
-    of sAsm, sEmit:
-      discard
+proc wrapBoolStores(s: CirStmt, boolVals, boolPtrs: HashSet[string]): bool =
+  ## Wraps the whole right-hand side of an assignment into i32-stored bool
+  ## storage in `conv(i32)`. Returns `true` when the statement is a store,
+  ## the shared walk skips its operands: storage is i32 and the reads inside keep their 0/1 values.
+  if s.kind == sAsgn and isBoolStoreTarget(s, boolVals, boolPtrs):
+    s.rhs = convE(tInt(32), s.rhs)
+    true
+  else:
+    false
+
+proc collectBoolGlobals(m: CirModule, vals, ptrs: var HashSet[string]) =
+  ## Retypes the module's bool storage to i32 and collects the names:
+  ## bool globals as values, bool-pointee globals as pointers.
+  for g in m.globals:
+    if g.declType.kind == ctBool:
+      g.declType = tInt(32)
+      vals.incl g.name
+    elif g.declType.kind in {ctPtr, ctAptr} and g.declType.pElem != nil and
+        g.declType.pElem.kind == ctBool:
+      g.declType.pElem = tInt(32)
+      ptrs.incl g.name
+
+proc collectKernelBoolParams(fn: CirProc, vals, ptrs: var HashSet[string]) =
+  ## Retypes the kernel's bool parameters to i32 and collects the names,
+  ## bool-pointee parameters as pointers. A kernel's bool parameter names
+  ## apply to that kernel only: a device function with a same-named bool
+  ## local keeps real bools.
+  if not fn.isKernel:
+    return
+  for p in mitems(fn.params):
+    if p.typ.kind == ctBool:
+      p.typ = tInt(32)
+      vals.incl p.name
+    elif p.typ.kind in {ctPtr, ctAptr} and p.typ.pElem != nil and
+        p.typ.pElem.kind == ctBool:
+      p.typ.pElem = tInt(32)
+      ptrs.incl p.name
 
 proc spirvPatchBoolToI32(m: CirModule): string =
   ## Retypes bool kernel parameters and bool globals to i32 storage,
   ## rewriting the reads and stores of every proc body to match.
   ## Returns "" when clean.
-  var globalVals, globalPtrs: HashSet[string]
-  for g in m.globals:
-    if g.declType.kind == ctBool:
-      g.declType = tInt(32)
-      globalVals.incl g.name
-    elif g.declType.kind in {ctPtr, ctAptr} and g.declType.pElem != nil and
-        g.declType.pElem.kind == ctBool:
-      g.declType.pElem = tInt(32)
-      globalPtrs.incl g.name
-  for fn in m.procs:
-    # a kernel's bool parameter names apply to that kernel only:
-    # a device function with a same-named bool local keeps real bools
-    var boolVals = globalVals
-    var boolPtrs = globalPtrs
-    if fn.isKernel:
-      for p in mitems(fn.params):
-        if p.typ.kind == ctBool:
-          p.typ = tInt(32)
-          boolVals.incl p.name
-        elif p.typ.kind in {ctPtr, ctAptr} and p.typ.pElem != nil and
-            p.typ.pElem.kind == ctBool:
-          p.typ.pElem = tInt(32)
-          boolPtrs.incl p.name
-    patchBoolReadsStmts(fn.body, boolVals, boolPtrs)
-  return ""
+  ##
+  ## The shared walk covers every expression position, callee positions included.
+  ## A callee names a proc, never a retyped bool symbol.
+  m.patchBoolStorage(BoolPatchPolicy(
+    collectGlobals: collectBoolGlobals,
+    collectParams: collectKernelBoolParams,
+    walks: proc(fn: CirProc): bool = true,
+    rewriteRead: patchBoolReadsExpr,
+    rewriteStore: wrapBoolStores))
