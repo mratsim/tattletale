@@ -3,7 +3,7 @@
 ## Test that a `cast[uint16]` over a float16 value in a cuda: kernel dies in the CUDA printer before any PTX is emitted.
 ## The refusal names the pass:
 ##
-##   Error: cirv2 printer cuda: at kern: bit cast of a 16-bit float is unwired
+##   Error: cirv2 printer cuda: at kern: no native 16-bit float bit cast
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

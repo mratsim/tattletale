@@ -30,7 +30,7 @@ import std/[macros, strutils, sequtils, sets, tables]
 import ../ir/ast_datatypes
 import ./print_common
 import ./print_compute
-import ./targets_rows
+import ./targets_registry
 
 type
   PrintCtx = object

@@ -22,7 +22,7 @@
 ##   would collide across invocations
 ##
 ## Each family's entry grammar is the doc of its parse proc below.
-## `targets_rows.nim` states every family of all six targets.
+## `targets_registry.nim` states every family of all six targets.
 
 import std/macros
 import std/strutils
