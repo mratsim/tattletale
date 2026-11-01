@@ -240,13 +240,11 @@ proc resolveTypeSection(ctx: var FrontendCtx, n: NimNode) =
   for typeDef in n:
     typeDef.expectKind(nnkTypeDef)
     let head = typeDef[0]
-    if head.kind == nnkPragmaExpr:
-      # a pragma-wrapped type name keeps the type node under the pragma
-      discard ctx.resolver.resolveCirType(head[0])
-    elif head.kind == nnkBracketExpr or head.typeKind == ntyGenericBody:
+    if head.kind == nnkBracketExpr or head.typeKind == ntyGenericBody:
       continue
-    else:
-      discard ctx.resolver.resolveCirType(head)
+    # a pragma-wrapped type name keeps the type node under the pragma
+    let typeNode = if head.kind == nnkPragmaExpr: head[0] else: head
+    discard ctx.resolver.resolveCirType(typeNode)
 
 proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
 
@@ -320,11 +318,7 @@ proc isGenericDef(fn: NimNode): bool =
 proc resolveCalleeProcType(ctx: var FrontendCtx, callee: NimNode): CirType =
   ## Proc type of a callee symbol. An overload choice resolves to its first candidate,
   ## which sem picked during overload resolution.
-  let calleeSym =
-    if callee.kind in {nnkOpenSymChoice, nnkClosedSymChoice} and callee.len > 0:
-      callee[0]
-    else:
-      callee
+  let calleeSym = resolveCallCallee(callee)
   result = ctx.resolver.resolveCirType(calleeSym.getTypeInst())
   if ctx.failing():
     return nil
@@ -512,8 +506,6 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
       ctx.fail("magic call " & callee.repr & " (" & magic & ") is outside the supported set")
       return nil
   let calleeSym = resolveCallCallee(callee)
-  if ctx.failing():
-    return nil
   # `abs` over scalars lowers as a builtin call, printers use the native name.
   # Only `abs` intercepts: system `abs` over floats has a refused body.
   # `min`/`max` harvest into a ternary idiom.
@@ -1159,8 +1151,6 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.fail("call callee " & callee.repr & " is not a proc symbol")
     return @[]
   let calleeSym = resolveCallCallee(callee)
-  if ctx.failing():
-    return @[]
   let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
   if isBodilessMagic(callee):
     ctx.fail("magic call " & callee.repr & " in statement position without a destination")
@@ -1898,14 +1888,3 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
   m.globals = ctx.moduleGlobals
   return (m, ctx.resolver.err)
 
-proc tryLowerCirv2*(body: NimNode): tuple[m: CirModule, err: string] =
-  let (m, err) = lowerCirv2(body)
-  return (m, err)
-
-proc toCirv2Module*(body: NimNode): CirModule =
-  ## Lowers the typed macro body to CIRv2, a construct outside the supported
-  ## closure rejects through `error`, naming the construct.
-  let (m, err) = tryLowerCirv2(body)
-  if err.len > 0:
-    error(err)
-  return m
