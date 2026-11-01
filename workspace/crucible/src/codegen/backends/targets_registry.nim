@@ -343,7 +343,7 @@ genTargets:
     scalar void "void", bool "bool", i32 "int", u32 "uint", f32 "float", f64 "double"
     # HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
     # `asfloat` (32 bit) and `asdouble` (64 bit). Without the suffix the HLSL
-    # frontend changes width or signedness. Nil literals refuse at the site.
+    # frontend changes width or signedness. Nil literals: the shared walk refuses them.
     lit u32Suffix "u", u64Suffix "u", f16Suffix "f", f32Suffix "f", f64Suffix "l",
       inf16 "asfloat(0x7f800000)", negInf16 "asfloat(0xff800000)", nan16 "asfloat(0x7fc00000)",
       inf32 "asfloat(0x7f800000)", negInf32 "asfloat(0xff800000)", nan32 "asfloat(0x7fc00000)",
