@@ -134,6 +134,21 @@ type
     kernelParamPointerRestrict*: bool = false
     ## Restrict qualifier on a kernel's device-space pointer parameter
     ## (`__global T* restrict p`), a function-parameter qualifier in OpenCL C.
+    ptrSpace*: array[CirAddrSpace, string]
+    ## Address-space word inside the target's pointer type (`ptr<storage, T>`),
+    ## empty when the space has no pointer form and the printer refuses at the site.
+    ptrAccessMode*: string
+    ## Access mode after the pointee type inside a storage pointer (`ptr<storage, T, read_write>`),
+    ## empty when the target's pointer types take no access mode.
+    ## An array pointer has no pointer form at all, its binding is the array and the pointer form refuses at the site.
+    declVarPrefix*: string
+    ## Space prefix of the hoisted module-scope variable declaration of relocated threadgroup
+    ## storage (`var<workgroup>`), empty when the target does not relocate threadgroup storage
+    ## into a space-qualified module-scope variable.
+    bindingVarPrefix*: string
+    ## Storage-class prefix of a module-level bound value variable (`var<storage, read>`), empty when the target binds values without one.
+    bindingBufferPrefix*: string
+    ## Storage-class prefix of a bound device buffer (`var<storage, read_write>`), empty when the target binds buffers as resources.
 
   ConvRow* = object
     ## Name tables of one target: conversion data that is a pure name-to-text mapping.
@@ -165,6 +180,10 @@ type
     ccDimCall
     ## Call with the component's dimension as a literal argument
     ## (`get_global_id(0)`).
+    ccWhole
+    ## Every read composes the cell's whole form: the builtin is scalar and no read addresses a component.
+    ccWorkgroupDim
+    ## A component read is the baked workgroup dimension at the component index, interpolated at emission from the entry's workgroup size.
 
   CoordCell* = object
     ## One coordinate builtin kind's static data of one target.
@@ -174,6 +193,10 @@ type
     ## Names are kind-static, never body-dependent.
     paramType*: string
     ## Attributed parameter's type name, "" when the target has no form for the kind.
+    paramAnnotation*: string
+    ## Entry-point annotation of the builtin's synthesized kernel parameter:
+    ## the WGSL `@builtin(...)` attribute name or the HLSL input semantic,
+    ## "" when the kind has no synthesized parameter.
     whole*: CoordWholeForm
     componentCast*: string
     ## Type a component read casts to, "" for none.
@@ -209,8 +232,16 @@ type
     ## Binding group form, `$1` stands for the group, "" when absent.
     entryTakesParams*: bool = true
     ## True when the entry signature takes the kernel's parameter list.
-    ## False when the parameters pack elsewhere and the signature takes none
-    ## (GLSL's push-constant block).
+    ## False when the parameters pack elsewhere and the entry takes
+    ## synthesized inputs instead: none for GLSL (push-constant block),
+    ## `@builtin(...)` coordinate parameters for WGSL, semantics inputs for HLSL.
+
+  VectorNameForm* = enum
+    ## Composition of a vector type name from the element's prefix and the lane count.
+    vnfPrefixed
+    ## `prefix & $laneCount` forms the C-family names (`vec3`, `float4`). An empty prefix composes the element's scalar name from the scalar row.
+    vnfGenericElem
+    ## `prefix & $laneCount & '<' & elementName & '>'` forms the generic-element names (`vec3<f32>`).
 
   VectorContext* = enum
     ## Where a target's printer emits vector types.
@@ -224,10 +255,12 @@ type
     context*: VectorContext
     elems*: seq[tuple[kind: CirTypeKind, width: int, prefix: string]]
     ## Element types the target names, with the vector name's prefix.
-    ## The name composes as `prefix & $laneCount`, an empty prefix composes
-    ## the element's scalar name from the scalar row. Empty for `vcNone`.
+    ## The name composes from the prefix and the lane count per `nameForm`.
+    ## Empty for `vcNone`.
     lanes*: seq[int]
     ## Lane counts the target emits.
+    nameForm*: VectorNameForm = vnfPrefixed
+    ## Composition of the vector type name from the element's prefix and the lane count.
 
 const ScalarCellAxis*: array[13, tuple[kind: CirTypeKind, width: int]] = [
   (ctVoid, 0), (ctBool, 0),

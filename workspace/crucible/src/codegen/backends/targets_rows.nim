@@ -5,12 +5,15 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Registry rows of the Metal (MSL), CUDA C++, OpenCL C and GLSL targets.
+## Registry rows of the Metal (MSL), CUDA C++, OpenCL C, GLSL, WebGPU WGSL and HLSL targets.
 ##
-## Plain-data restatements of the static target values msl_lang.nim, cuda_lang.nim,
-## opencl_lang.nim and glsl_lang.nim state in code.
-## The printers do not read the rows yet.
-## Registry consumer tests verify them against the printers' behavior.
+## Plain-data restatements of the static target values the six printers state in code:
+## msl_lang.nim, cuda_lang.nim, opencl_lang.nim, glsl_lang.nim, wgsl_lang.nim and hlsl_lang.nim.
+##
+## - HLSL keys its signature row per flavor (`fvD3D12`, `fvVulkan`), every other family
+##   is target-wide: the flavor changes the binding section only
+## - printers do not read the rows yet, registry consumer tests verify each row
+##   against the printer behavior it restates
 
 import std/tables
 import ../ir/cirv2_lang
@@ -330,6 +333,218 @@ genTargets:
         (ctFloat, 16, "f16vec"), (ctFloat, 32, "vec"), (ctFloat, 64, "dvec"),
         (ctInt, 32, "ivec"), (ctUint, 32, "uvec"), (ctBool, 0, "bvec")],
       lanes: @[2, 3, 4])
+
+
+  target wgsl:
+    # WGSL has no 8/16-bit integer types: 32 and 64 bit are its only integer widths.
+    scalar: ScalarRow(cells: @[
+      ScalarCell(kind: ctVoid, width: 0, spelling: "void", supported: true),
+      ScalarCell(kind: ctBool, width: 0, spelling: "bool", supported: true),
+      ScalarCell(kind: ctInt, width: 8, supported: false, reasonClass: rcCapability),
+      ScalarCell(kind: ctInt, width: 16, supported: false, reasonClass: rcCapability),
+      ScalarCell(kind: ctInt, width: 32, spelling: "i32", supported: true),
+      ScalarCell(kind: ctInt, width: 64, spelling: "i64", supported: true),
+      ScalarCell(kind: ctUint, width: 8, supported: false, reasonClass: rcCapability),
+      ScalarCell(kind: ctUint, width: 16, supported: false, reasonClass: rcCapability),
+      ScalarCell(kind: ctUint, width: 32, spelling: "u32", supported: true),
+      ScalarCell(kind: ctUint, width: 64, spelling: "u64", supported: true),
+      ScalarCell(kind: ctFloat, width: 16, spelling: "f16", supported: true),
+      ScalarCell(kind: ctFloat, width: 32, spelling: "f32", supported: true),
+      ScalarCell(kind: ctFloat, width: 64, spelling: "f64", supported: true)])
+    # Bare integer and float literals are abstract and work in any typed context,
+    # u32 gains the `u` suffix and f16 the `h`, f32 and f64 print bare.
+    # WGSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
+    # `bitcast` from the unsigned integer of the same width. Nil literals refuse
+    # at the site.
+    lit: LitRow(
+      int: IntLitTokens(u32Suffix: "u"),
+      f16Suffix: "h",
+      nonFinite: FloatLitTokens(
+        inf16: "bitcast<f16>(0x7c00u)", negInf16: "bitcast<f16>(0xfc00u)", nan16: "bitcast<f16>(0x7e00u)",
+        inf32: "bitcast<f32>(0x7f800000u)",
+        negInf32: "bitcast<f32>(0xff800000u)",
+        nan32: "bitcast<f32>(0x7fc00000u)",
+        inf64: "bitcast<f64>(0x7ff0000000000000u)",
+        negInf64: "bitcast<f64>(0xfff0000000000000u)",
+        nan64: "bitcast<f64>(0x7ff8000000000000u)"))
+    kind: KindRow(
+      loop: LoopStyle(
+        # WGSL has no unroll directive: the drop surfaces in the artifact
+        unrollDirective: "// {.unroll.} requested but not honored on WebGPU",
+        infiniteHead: "loop {\n",
+        braceSameLine: true),
+      ternary: tfSelectCall,
+      asmForm: afRefuse,
+      constDecl: cdfLet,
+      constructor: cofCall,
+      targetExprKinds: {eNil, eAt, ePat, eTernary})
+    # Address-space words sit inside the pointer type (`ptr<storage, T>`), no qualifier precedes the type.
+    # Storage pointers declare the access mode, array pointers refuse the pointer form (the binding is the array).
+    # Locals print unqualified `var`, pointer locals refuse at the site, and WGSL has no `<uniform>` class.
+    space: SpaceRow(
+      ptrQualifier: ["", "", "", ""],
+      localPrefix: ["", "", "", ""],
+      kernelParamScalar: "",
+      kernelParamPointer: "",
+      smemParam: "",
+      ptrSpace: ["function", "workgroup", "", "storage"],
+      ptrAccessMode: "read_write",
+      declVarPrefix: "var<workgroup>",
+      bindingVarPrefix: "var<storage, read>",
+      bindingBufferPrefix: "var<storage, read_write>")
+    conv: ConvRow()
+    # One `@builtin(...)` kernel parameter exists per referenced coordinate builtin,
+    # kernel bodies read the parameter name. Whole-value reads compose the i32
+    # vector from int-cast components and the scalar thread index casts whole.
+    # threads_per_threadgroup refuses: WGSL exposes the threadgroup size only
+    # through the `@workgroup_size` attribute.
+    coord: CoordRow(cells: @[
+      CoordCell(kind: cbkThreadPositionInGrid,
+        paramName: "global_id", paramType: "vec3<u32>",
+        paramAnnotation: "global_invocation_id",
+        whole: cwfVector, componentCast: "i32"),
+      CoordCell(kind: cbkThreadgroupPositionInGrid,
+        paramName: "workgroup_id", paramType: "vec3<u32>",
+        paramAnnotation: "workgroup_id",
+        whole: cwfVector, componentCast: "i32"),
+      CoordCell(kind: cbkThreadPositionInThreadgroup,
+        paramName: "local_invocation_id", paramType: "vec3<u32>",
+        paramAnnotation: "local_invocation_id",
+        whole: cwfVector, componentCast: "i32"),
+      CoordCell(kind: cbkThreadsPerThreadgroup,
+        whole: cwfRefuse),
+      CoordCell(kind: cbkThreadgroupsPerGrid,
+        paramName: "num_workgroups", paramType: "vec3<u32>",
+        paramAnnotation: "num_workgroups",
+        whole: cwfVector, componentCast: "i32"),
+      CoordCell(kind: cbkThreadIndexInThreadgroup,
+        paramName: "local_invocation_index", paramType: "u32",
+        paramAnnotation: "local_invocation_index",
+        whole: cwfCast, componentCast: "i32", componentForm: ccWhole)])
+    sig: SigRow(
+      entryLinkage: "fn ",
+      deviceFnLinkage: "fn ",
+      # WGSL has no void type name, a void return emits no arrow
+      voidRet: "",
+      entryAttr: "@compute ",
+      workgroupAttr: "@workgroup_size($n, $n, $n)\n",
+      workgroupDefault: [64, 1, 1],
+      bindingPrefix: "@group(0) @binding($1)",
+      entryTakesParams: false)
+    vector: VectorRule(
+      context: vcEverywhere,
+      elems: @[
+        (ctVoid, 0, "vec"), (ctBool, 0, "vec"),
+        (ctInt, 32, "vec"), (ctInt, 64, "vec"),
+        (ctUint, 32, "vec"), (ctUint, 64, "vec"),
+        (ctFloat, 16, "vec"), (ctFloat, 32, "vec"), (ctFloat, 64, "vec")],
+      lanes: @[2, 3, 4],
+      nameForm: vnfGenericElem)
+
+  target hlsl:
+    # 8/16-bit integers and int64_t are parse errors in the HLSL frontend,
+    # uint64_t pulls the SPIR-V Int64 capability, float16 is outside the subset.
+    scalar: ScalarRow(cells: @[
+      ScalarCell(kind: ctVoid, width: 0, spelling: "void", supported: true),
+      ScalarCell(kind: ctBool, width: 0, spelling: "bool", supported: true),
+      ScalarCell(kind: ctInt, width: 8, supported: false, reasonClass: rcParseError),
+      ScalarCell(kind: ctInt, width: 16, supported: false, reasonClass: rcParseError),
+      ScalarCell(kind: ctInt, width: 32, spelling: "int", supported: true),
+      ScalarCell(kind: ctInt, width: 64, supported: false, reasonClass: rcParseError),
+      ScalarCell(kind: ctUint, width: 8, supported: false, reasonClass: rcParseError),
+      ScalarCell(kind: ctUint, width: 16, supported: false, reasonClass: rcParseError),
+      ScalarCell(kind: ctUint, width: 32, spelling: "uint", supported: true),
+      ScalarCell(kind: ctUint, width: 64, supported: false, reasonClass: rcOutsideSubset),
+      ScalarCell(kind: ctFloat, width: 16, supported: false, reasonClass: rcOutsideSubset),
+      ScalarCell(kind: ctFloat, width: 32, spelling: "float", supported: true),
+      ScalarCell(kind: ctFloat, width: 64, spelling: "double", supported: true)])
+    # HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
+    # `asfloat` (32 bit) and `asdouble` (64 bit). Without the suffix the HLSL
+    # frontend changes width or signedness. Nil literals refuse at the site.
+    lit: LitRow(
+      int: IntLitTokens(u32Suffix: "u", u64Suffix: "u"),
+      f16Suffix: "f",
+      f32Suffix: "f",
+      f64Suffix: "l",
+      nonFinite: FloatLitTokens(
+        inf16: "asfloat(0x7f800000)", negInf16: "asfloat(0xff800000)", nan16: "asfloat(0x7fc00000)",
+        inf32: "asfloat(0x7f800000)", negInf32: "asfloat(0xff800000)", nan32: "asfloat(0x7fc00000)",
+        inf64: "asdouble(0u, 0x7ff00000u)",
+        negInf64: "asdouble(0u, 0xfff00000u)",
+        nan64: "asdouble(0u, 0x7ff80000u)"))
+    kind: KindRow(
+      loop: LoopStyle(
+        unrollDirective: "[unroll]",
+        infiniteHead: "for (;;)",
+        braceSameLine: false),
+      ternary: tfQuestion,
+      foldsIteElse: true,
+      emitOperandRendersExpr: true,
+      asmForm: afRefuse,
+      constDecl: cdfConst,
+      constructor: cofMixed,
+      targetExprKinds: {eNil, eAt, ePat, eDeref, eAddr})
+    # HLSL has no address-space qualifiers: pointer, threadgroup and device-space
+    # refuse at the site. Const_mem locals hoist to file-scope `static const` module assembly.
+    # Kernel values pack into the push block.
+    space: SpaceRow(
+      ptrQualifier: ["", "", "", ""],
+      localPrefix: ["", "", "", ""],
+      kernelParamScalar: "",
+      kernelParamPointer: "",
+      smemParam: "")
+    conv: ConvRow(
+      fpRefusals: @[
+        "toFp16", "toFp32", "toBf16", "toBf32", "toFp8e4m3", "toFp8e5m2",
+        "asFp16", "asU16"])
+    # Coordinate semantics are synthesized `main` inputs, exactly the ones the kernel
+    # body reads. threads_per_threadgroup components substitute the baked workgroup
+    # dimensions at emission, and the scalar thread index reads whole as `int(gidx)`.
+    # threadgroups_per_grid refuses: the HLSL lowering pass materializes the dispatch grid size, and whole-vector reads refuse.
+    coord: CoordRow(cells: @[
+      CoordCell(kind: cbkThreadPositionInGrid,
+        paramName: "gid", paramType: "uint3", paramAnnotation: "SV_DispatchThreadID",
+        whole: cwfRefuse, componentCast: "int"),
+      CoordCell(kind: cbkThreadgroupPositionInGrid,
+        paramName: "groupId", paramType: "uint3", paramAnnotation: "SV_GroupID",
+        whole: cwfRefuse, componentCast: "int"),
+      CoordCell(kind: cbkThreadPositionInThreadgroup,
+        paramName: "groupThreadId", paramType: "uint3", paramAnnotation: "SV_GroupThreadID",
+        whole: cwfRefuse, componentCast: "int"),
+      CoordCell(kind: cbkThreadsPerThreadgroup,
+        whole: cwfRefuse, componentForm: ccWorkgroupDim),
+      CoordCell(kind: cbkThreadgroupsPerGrid,
+        whole: cwfRefuse),
+      CoordCell(kind: cbkThreadIndexInThreadgroup,
+        paramName: "gidx", paramType: "uint", paramAnnotation: "SV_GroupIndex",
+        whole: cwfCast, componentCast: "int", componentForm: ccWhole)])
+    vector: VectorRule(
+      context: vcEverywhere,
+      elems: @[
+        (ctBool, 0, "bool"), (ctInt, 32, "int"), (ctUint, 32, "uint"),
+        (ctFloat, 32, "float")],
+      lanes: @[2, 3, 4])
+
+  target hlsl(fvD3D12):
+    sig: SigRow(
+      entryLinkage: "void ",
+      inlineLinkage: "inline ",
+      voidRet: "void",
+      workgroupAttr: "[numthreads($n, $n, $n)]\n",
+      workgroupDefault: [256, 1, 1],
+      bindingPrefix: ": register($1, space0)",
+      entryTakesParams: false)
+
+  target hlsl(fvVulkan):
+    # Zero-descriptor flavor bindings go through the `[[vk::push_constant]]` struct,
+    # member offsets lock at emission, no register form exists
+    sig: SigRow(
+      entryLinkage: "void ",
+      inlineLinkage: "inline ",
+      voidRet: "void",
+      workgroupAttr: "[numthreads($n, $n, $n)]\n",
+      workgroupDefault: [256, 1, 1],
+      entryTakesParams: false)
 
 ## Cells that two targets name on purpose differently: msl names 8-bit signed
 ## `char` and 64-bit signed `long`, CUDA names the same widths `signed char`
