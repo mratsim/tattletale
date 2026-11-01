@@ -83,10 +83,6 @@ proc patchBoolReadsStmts(ss: var seq[CirStmt], boolVals, boolPtrs: HashSet[strin
     of sLoop:
       patchBoolReadsExpr(s.loopCond, boolVals, boolPtrs)
       patchBoolReadsStmts(s.loopBody, boolVals, boolPtrs)
-    of sScope:
-      patchBoolReadsStmts(s.scopeBody, boolVals, boolPtrs)
-    of sAssume:
-      patchBoolReadsExpr(s.assumeCond, boolVals, boolPtrs)
     of sRet:
       patchBoolReadsExpr(s.retVal, boolVals, boolPtrs)
     of sDiscard:
@@ -94,7 +90,7 @@ proc patchBoolReadsStmts(ss: var seq[CirStmt], boolVals, boolPtrs: HashSet[strin
     of sCall:
       for a in mitems(s.callArgs):
         patchBoolReadsExpr(a, boolVals, boolPtrs)
-    of sCase, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
 
 proc spirvPatchBoolToI32(m: CirModule): string =

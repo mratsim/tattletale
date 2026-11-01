@@ -102,20 +102,6 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
       if err.len > 0:
         return err
       lowered.add s
-    of sCase:
-      for b in s.branches.mitems:
-        let err = decomposeArrayAssignStmts(b.body)
-        if err.len > 0:
-          return err
-      let err = decomposeArrayAssignStmts(s.caseElse)
-      if err.len > 0:
-        return err
-      lowered.add s
-    of sScope:
-      let err = decomposeArrayAssignStmts(s.scopeBody)
-      if err.len > 0:
-        return err
-      lowered.add s
     else:
       lowered.add s
   body = lowered

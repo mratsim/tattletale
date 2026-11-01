@@ -781,13 +781,11 @@ proc scanStmtStructRefs(ctx: var PrintCtx, ss: seq[CirStmt], refs: var HashSet[s
       ctx.scanStmtStructRefs(s.elseBody, refs)
     of sLoop:
       ctx.scanStmtStructRefs(s.loopBody, refs)
-    of sScope:
-      ctx.scanStmtStructRefs(s.scopeBody, refs)
     of sCall:
       for a in s.callArgs:
         if a.kind == eOconstr:
           ctx.registerStructRefs(a.ocType, refs)
-    of sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
+    of sRet, sDiscard, sAsm, sEmit:
       discard
 
 proc emitStructDecls(ctx: var PrintCtx, refs: var HashSet[string],

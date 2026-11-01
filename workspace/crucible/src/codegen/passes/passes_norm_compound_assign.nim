@@ -130,14 +130,6 @@ proc bindStmtTemps(b: var TempBinder, body: var seq[CirStmt]) =
     of sLoop:
       b.bindStmtTemps(s.loopBody)
       lowered.add(s)
-    of sCase:
-      for br in s.branches.mitems:
-        b.bindStmtTemps(br.body)
-      b.bindStmtTemps(s.caseElse)
-      lowered.add(s)
-    of sScope:
-      b.bindStmtTemps(s.scopeBody)
-      lowered.add(s)
     else:
       lowered.add(s)
   body = lowered

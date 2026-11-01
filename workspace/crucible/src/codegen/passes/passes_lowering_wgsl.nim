@@ -127,15 +127,6 @@ proc containsReturn(ss: seq[CirStmt]): bool =
     of sLoop:
       if s.loopBody.containsReturn:
         return true
-    of sCase:
-      for br in s.branches:
-        if br.body.containsReturn:
-          return true
-      if s.caseElse.containsReturn:
-        return true
-    of sScope:
-      if s.scopeBody.containsReturn:
-        return true
     else:
       discard
   return false
@@ -198,15 +189,6 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
     of sLoop:
       s.loopCond.substituteArgsExpr(subst)
       s.loopBody.substituteArgsStmts(subst)
-    of sCase:
-      s.selector.substituteArgsExpr(subst)
-      for br in mitems(s.branches):
-        br.body.substituteArgsStmts(subst)
-      s.caseElse.substituteArgsStmts(subst)
-    of sScope:
-      s.scopeBody.substituteArgsStmts(subst)
-    of sAssume:
-      s.assumeCond.substituteArgsExpr(subst)
     of sRet:
       s.retVal.substituteArgsExpr(subst)
     of sDiscard:
@@ -309,25 +291,6 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
         let lerr = inlineInStmts(fn, s.loopBody, procs)
         if lerr.len > 0:
           return lerr
-      of sCase:
-        let serr = refuseValuePositionCalls(fn, s.selector, procs)
-        if serr.len > 0:
-          return serr
-        for br in mitems(s.branches):
-          let berr = inlineInStmts(fn, br.body, procs)
-          if berr.len > 0:
-            return berr
-        let eerr = inlineInStmts(fn, s.caseElse, procs)
-        if eerr.len > 0:
-          return eerr
-      of sScope:
-        let serr = inlineInStmts(fn, s.scopeBody, procs)
-        if serr.len > 0:
-          return serr
-      of sAssume:
-        let aerr = refuseValuePositionCalls(fn, s.assumeCond, procs)
-        if aerr.len > 0:
-          return aerr
       of sRet:
         let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
         if rerr.len > 0:
@@ -629,10 +592,6 @@ proc rewriteBoolReadsStmts(ss: var seq[CirStmt], boolParams: HashSet[string]) =
     of sLoop:
       rewriteBoolReadsExpr(s.loopCond, boolParams)
       rewriteBoolReadsStmts(s.loopBody, boolParams)
-    of sScope:
-      rewriteBoolReadsStmts(s.scopeBody, boolParams)
-    of sAssume:
-      rewriteBoolReadsExpr(s.assumeCond, boolParams)
     of sRet:
       rewriteBoolReadsExpr(s.retVal, boolParams)
     of sDiscard:
@@ -641,7 +600,7 @@ proc rewriteBoolReadsStmts(ss: var seq[CirStmt], boolParams: HashSet[string]) =
       rewriteBoolReadsExpr(s.callCallee, boolParams)
       for a in mitems(s.callArgs):
         rewriteBoolReadsExpr(a, boolParams)
-    of sCase, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
 
 proc rewriteBoolKernelParamReads(m: CirModule): string =

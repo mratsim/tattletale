@@ -1,7 +1,7 @@
-## Hand-built CIRv2: the dead-local pass counting discard and assume reads.
+## Hand-built CIRv2: the dead-local pass counting discard reads.
 ##
-## Test that `discard <local>` and `assume <local>` count as reads:
-## a local read only by discard or assume keeps its declaration.
+## Test that `discard <local>` counts as a read:
+## a local read only by discard keeps its declaration.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -28,14 +28,12 @@ proc hasDecl(body: seq[CirStmt], name: string): bool =
       return true
 
 static:
-  # kernel: `discard x` and `assume y` read their bare locals,
+  # kernel: `discard x` reads its bare local,
   # an unrelated local `dead` stays removable
   let fn = procD("discardKernel", @[], tVoid(), @[
     varD("x", tInt(32), intLit(1, tInt(32))),
-    varD("y", tInt(32), intLit(2, tInt(32))),
     varD("dead", tInt(32), intLit(3, tInt(32))),
     discardS(sym("x", tInt(32))),
-    assumeS(sym("y", tInt(32))),
     retS(),
   ])
   fn.isKernel = true
@@ -43,7 +41,5 @@ static:
   doAssert err.len == 0, "dead-local elimination must succeed: " & err
   doAssert hasDecl(outM.procs[0].body, "x"),
     "the discarded local's declaration must survive"
-  doAssert hasDecl(outM.procs[0].body, "y"),
-    "the assumed local's declaration must survive"
   doAssert not hasDecl(outM.procs[0].body, "dead"),
     "an unread local must still be removed"

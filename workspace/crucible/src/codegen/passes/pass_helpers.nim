@@ -86,15 +86,6 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
     of sLoop:
       slot(s.loopCond)
       walkStmts(s.loopBody, onStmt, onExpr)
-    of sCase:
-      slot(s.selector)
-      for br in s.branches:
-        walkStmts(br.body, onStmt, onExpr)
-      walkStmts(s.caseElse, onStmt, onExpr)
-    of sScope:
-      walkStmts(s.scopeBody, onStmt, onExpr)
-    of sAssume:
-      slot(s.assumeCond)
     of sRet:
       slot(s.retVal)
     of sDiscard:
@@ -112,34 +103,23 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
     if onStmt != nil:
       onStmt(s)
 
-proc appendCallTargetsExpr*(e: CirExpr, targets: var HashSet[string]) =
-  ## Collects the callee name of one expression node into `targets`.
-  if e.isNil:
-    return
-  if e.kind == eCall and e.callee.kind == eSym:
-    targets.incl e.callee.name
-
-proc appendCallTargetsStmts*(ss: seq[CirStmt], targets: var HashSet[string]) =
-  ## Collects the callee names of one statement list, nested bodies included.
-  ##
-  ## Contract:
-  ## - a statement-level call names its callee with a bare symbol,
-  ##   `onStmt` reads `s.callCallee` directly
-  ## - the expression visitor sees only the call nodes nested in expression positions
-  var collected = targets
-  let onExpr = proc(e: CirExpr) =
-    e.appendCallTargetsExpr(collected)
-  let onStmt = proc(s: CirStmt) =
-    if s.kind == sCall and s.callCallee.kind == eSym:
-      collected.incl s.callCallee.name
-  ss.walkStmts(onStmt, onExpr)
-  targets = collected
-
-
 proc collectCallTargets*(stmts: seq[CirStmt], targets: var HashSet[string]) =
   ## Collects every callee name appearing in the statement list.
   ## Nested bodies are included.
-  appendCallTargetsStmts(stmts, targets)
+  ##
+  ## Contract:
+  ## - a statement-level call names its callee with a bare symbol,
+  ##   the statement visitor reads `s.callCallee` directly
+  ## - the expression visitor sees only the call nodes nested in expression positions
+  var collected = targets
+  let onExpr = proc(e: CirExpr) =
+    if e.kind == eCall and e.callee.kind == eSym:
+      collected.incl e.callee.name
+  let onStmt = proc(s: CirStmt) =
+    if s.kind == sCall and s.callCallee.kind == eSym:
+      collected.incl s.callCallee.name
+  stmts.walkStmts(onStmt, onExpr)
+  targets = collected
 
 proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: string, typ: CirType]]) =
   ## Every local declared in the statement list with its type, nested bodies included.
@@ -184,7 +164,6 @@ proc cloneExpr*(e: CirExpr): CirExpr =
   of eDot:
     result.dotBase = cloneExpr(e.dotBase)
     result.fieldName = e.fieldName
-    result.inherit = e.inherit
   of eDeref:
     result.derefOperand = cloneExpr(e.derefOperand)
   of eAddr:
@@ -208,7 +187,7 @@ proc cloneExpr*(e: CirExpr): CirExpr =
     result.elseE = cloneExpr(e.elseE)
   of eNot:
     result.notOperand = cloneExpr(e.notOperand)
-  of eNeg, eBitNot:
+  of eNeg:
     result.unOperand = cloneExpr(e.unOperand)
   of eCast, eConv:
     result.castType = e.castType
@@ -253,10 +232,6 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.loopCond = cloneExpr(s.loopCond)
       c.loopBody = cloneStmts(s.loopBody)
       c.unroll = s.unroll
-    of sScope:
-      c.scopeBody = cloneStmts(s.scopeBody)
-    of sAssume:
-      c.assumeCond = cloneExpr(s.assumeCond)
     of sRet:
       c.retVal = cloneExpr(s.retVal)
     of sCall:
@@ -271,11 +246,6 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.emitParts = s.emitParts
       for op in s.emitOperands:
         c.emitOperands.add cloneExpr(op)
-    of sCase:
-      c.selector = cloneExpr(s.selector)
-      for br in s.branches:
-        c.branches.add CirCaseBranch(ranges: br.ranges, body: cloneStmts(br.body))
-      c.caseElse = cloneStmts(s.caseElse)
     of sDiscard:
       c.discardVal = cloneExpr(s.discardVal)
     result.add c
@@ -346,7 +316,7 @@ proc freshProcType*(params: seq[CirType], ret: CirType): CirType =
 
 proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): string =
   ## Relocates the `{.const_mem.}` locals of one statement list into `m.globals` in encounter order,
-  ## nested scopes and case branches included, the declarations deleted from the list.
+  ## loop and branch bodies included, the declarations deleted from the list.
   ## Returns "" when clean, else the first refusal.
   ##
   ## Kernel and device-function locals relocate alike.
@@ -376,18 +346,6 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
       let loopErr = hoistConstMemStmts(m, fn, s.loopBody)
       if loopErr.len > 0:
         return loopErr
-    of sCase:
-      for bi in 0 ..< s.branches.len:
-        let branchErr = hoistConstMemStmts(m, fn, s.branches[bi].body)
-        if branchErr.len > 0:
-          return branchErr
-      let elseErr = hoistConstMemStmts(m, fn, s.caseElse)
-      if elseErr.len > 0:
-        return elseErr
-    of sScope:
-      let scopeErr = hoistConstMemStmts(m, fn, s.scopeBody)
-      if scopeErr.len > 0:
-        return scopeErr
     else:
       discard
     i.inc
@@ -395,7 +353,7 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
 
 proc hoistConstMemLocals*(m: CirModule): string =
   ## Relocates every `{.const_mem.}` local of every proc into `m.globals` in encounter order,
-  ## scopes and case branches included, the declarations dropped from their bodies.
+  ## loop and branch bodies included, the declarations dropped from their bodies.
   ## Returns "" when clean, else the first refusal.
   ##
   ## Contract:

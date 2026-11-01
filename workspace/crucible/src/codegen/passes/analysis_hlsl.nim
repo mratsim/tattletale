@@ -47,19 +47,19 @@ proc directCalls(ss: seq[CirStmt], outp: var seq[CirExpr]) =
   ss.walkStmts(onStmt, onExpr)
   outp = calls
 
-proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
+proc scanStoredStmts(stored: var HashSet[string], fn: CirProc, ss: seq[CirStmt]) =
   ## Records the parameters `fn` stores through, anywhere in the statement tree:
   ##
   ## - an assignment whose target roots at a parameter symbol
   ## - a statement call whose callee or argument roots at one
   ##   (a var parameter that the callee stores through, or a buffer passed deeper)
   ## - the verbatim text of an emit, which can name a buffer
-  var g = graph
+  var g = stored
   proc markStored(root: CirExpr) =
     if root != nil:
       for p in fn.params:
         if p.name == root.name:
-          g.stored.incl(fn.name & "/" & p.name)
+          g.incl(fn.name & "/" & p.name)
   let onStmt = proc(s: CirStmt) =
     case s.kind
     of sAsgn:
@@ -78,31 +78,33 @@ proc scanStoredStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
         emitText.add op.name
       for p in fn.params:
         if p.typ.kind in {ctPtr, ctAptr} and emitText.contains(p.name):
-          g.stored.incl(fn.name & "/" & p.name)
+          g.incl(fn.name & "/" & p.name)
     else:
       discard
   ss.walkStmts(onStmt, nil)
-  graph = g
+  stored = g
 
-proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
+proc scanCallStmts(procs: Table[string, CirProc],
+    edges: var seq[tuple[caller, arg, callee, param: string]],
+    fn: CirProc, ss: seq[CirStmt]) =
   ## Records one edge per call argument rooted at a parameter symbol:
   ## `caller/arg -> callee/paramI`.
   ##
   ## Call sites match `directCalls`, every operand position included,
   ## each nested call contributes one edge.
-  var g = graph
+  var es = edges
   proc record(callee: CirExpr, args: seq[CirExpr]) =
     let calleeName = if callee != nil and callee.kind == eSym: callee.name else: ""
-    if calleeName.len == 0 or not g.procs.hasKey(calleeName):
+    if calleeName.len == 0 or not procs.hasKey(calleeName):
       return
-    let calleeFn = g.procs[calleeName]
+    let calleeFn = procs[calleeName]
     for i, a in args:
       let root = exprRootSym(a)
       if root == nil or i >= calleeFn.params.len:
         continue
       for p in fn.params:
         if p.name == root.name:
-          g.edges.add (fn.name, p.name, calleeName, calleeFn.params[i].name)
+          es.add (fn.name, p.name, calleeName, calleeFn.params[i].name)
   let onStmt = proc(s: CirStmt) =
     if s.kind == sCall:
       record(s.callCallee, s.callArgs)
@@ -110,33 +112,33 @@ proc scanCallStmts(graph: var CallGraph, fn: CirProc, ss: seq[CirStmt]) =
     if e != nil and e.kind == eCall:
       record(e.callee, e.args)
   ss.walkStmts(onStmt, onExpr)
-  graph = g
+  edges = es
 
 # ═══════════════════════════════════════════════════════════════════════
 # Read-write fixpoint and recursion refusal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc classifyRwBuffers(graph: var CallGraph) =
+proc classifyRwBuffers(stored: HashSet[string], edges: seq[tuple[caller, arg, callee, param: string]], reached: var HashSet[string]) =
   ## Marks every buffer parameter stored through, directly or transitively
   ## over the argument-flow edges: a read-write fixpoint over the call graph.
   ## Each edge propagates read-write both ways:
   ## - a store through the callee's parameter writes the caller's buffer
   ## - a stored caller buffer flows into the callee's parameter
-  graph.reached = graph.stored
+  reached = stored
   var grew = true
   while grew:
     grew = false
-    for e in graph.edges:
+    for e in edges:
       let src = e.caller & "/" & e.arg
       let dst = e.callee & "/" & e.param
-      if src in graph.reached and dst notin graph.reached:
-        graph.reached.incl(dst)
+      if src in reached and dst notin reached:
+        reached.incl(dst)
         grew = true
-      if dst in graph.reached and src notin graph.reached:
-        graph.reached.incl(src)
+      if dst in reached and src notin reached:
+        reached.incl(src)
         grew = true
 
-proc checkDeviceFnRecursion(graph: CallGraph): string =
+proc checkDeviceFnRecursion(procs: Table[string, CirProc]): string =
   ## Returns the recursion refusal over the device-function call graph,
   ## "" when the graph is acyclic.
   var state = initTable[string, int]() # fn name: 1 = on the visit stack, 2 = fully visited
@@ -157,16 +159,16 @@ proc checkDeviceFnRecursion(graph: CallGraph): string =
     state[fn] = 2
 
   var calleesOf: Table[string, seq[string]]
-  for fn in graph.procs.values:
+  for fn in procs.values:
     if fn.isKernel:
       continue
     var calls: seq[CirExpr]
     directCalls(fn.body, calls)
     for c in calls:
-      if c.callee.kind == eSym and graph.procs.hasKey(c.callee.name) and
-          not graph.procs[c.callee.name].isKernel:
+      if c.callee.kind == eSym and procs.hasKey(c.callee.name) and
+          not procs[c.callee.name].isKernel:
         calleesOf.mgetOrPut(fn.name, @[]).add(c.callee.name)
-  for fn in graph.procs.values:
+  for fn in procs.values:
     if not fn.isKernel and state.getOrDefault(fn.name, 0) == 0:
       result = visit(state, calleesOf, fn.name)
       if result.len > 0:
@@ -177,21 +179,24 @@ proc checkDeviceFnRecursion(graph: CallGraph): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc hlslRun(m: CirModule): string {.nimcall.} =
-  var graph = CallGraph()
+  var procs: Table[string, CirProc]
   for fn in m.procs:
-    graph.procs[fn.name] = fn
+    procs[fn.name] = fn
+  var stored: HashSet[string]
+  var edges: seq[tuple[caller, arg, callee, param: string]]
   for fn in m.procs:
-    graph.scanStoredStmts(fn, fn.body)
-    graph.scanCallStmts(fn, fn.body)
-  graph.classifyRwBuffers()
-  m.callGraph = graph
-  result = checkDeviceFnRecursion(graph)
+    stored.scanStoredStmts(fn, fn.body)
+    procs.scanCallStmts(edges, fn, fn.body)
+  var reached: HashSet[string]
+  stored.classifyRwBuffers(edges, reached)
+  m.callGraph = CallGraph(stored: stored, reached: reached)
+  result = checkDeviceFnRecursion(procs)
 
 proc registerHlslCallGraphPass*(reg: var PassRegistry) =
   ## Registers the HLSL call-graph analysis pass over CIRv2 modules.
   ##
   ## Contract:
-  ## - fills `CirModule.callGraph` with the argument-flow edges and the read-write classification of every buffer parameter
+  ## - fills `CirModule.callGraph` with the read-write classification of every buffer parameter
   ## - refuses recursive device functions
   ## - registers after the last transform, before the check-only validation stage
   ## - analysis results are valid only if no transform runs after them

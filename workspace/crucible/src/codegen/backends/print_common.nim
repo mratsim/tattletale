@@ -456,8 +456,6 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
       return "(&" & ctx.printExpr(e.addrOperand) & ")"
     return "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
       " : " & ctx.printExpr(e.elseE) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
   of eNeg:
     return "(-" & ctx.printExpr(e.unOperand) & ")"
   of eSym, eDot, eCast, eConv, eSizeof, eOconstr, eAconstr, eCall:
@@ -466,8 +464,8 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
 proc printStmt*(ctx: var auto, s: CirStmt): string =
   ## Prints one structured statement.
   ##
-  ## Shared variants emit here: `sIte`, `sScope`, `sAssume`,
-  ## `sRet`, `sDiscard`, `sCase`, `sEmit`. A loop prints through
+  ## Shared variants emit here: `sIte`, `sRet`, `sDiscard`, `sEmit`.
+  ## A loop prints through
   ## `printLoopText` off `printStmtList`. Per-target policy resolves
   ## at instantiation through the printer's own procs:
   ##
@@ -500,15 +498,6 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
   of sLoop:
     # loops print through printStmtList
     result = ""
-  of sScope:
-    result = pad & "{\n"
-    ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody)
-    ctx.indent.dec
-    result &= '\n' & pad & '}'
-  of sAssume:
-    # a loop-bound hint, no target prints one
-    result = ""
   of sRet:
     if s.retVal != nil:
       result = pad & "return " & ctx.printExpr(s.retVal) & ";"
@@ -525,9 +514,6 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
       if i < s.emitOperands.len:
         text.add(ctx.printEmitOperand(s.emitOperands[i]))
     result = pad & text
-  of sCase:
-    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
-    result = ""
 
 proc printAsgn*(ctx: var auto, s: CirStmt): string =
   ## One assignment, the plain form `lhs = rhs;`.

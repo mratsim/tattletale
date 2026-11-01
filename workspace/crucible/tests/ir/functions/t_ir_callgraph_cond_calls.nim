@@ -60,11 +60,3 @@ static:
       "the buffer passed to a storing callee in a loop condition is read-write"
     doAssert reached.contains("kTern/a"),
       "the buffer passed to a storing callee in a ternary branch is read-write"
-    let condEdge: tuple[caller, arg, callee, param: string] =
-      ("kCond", "a", "storeIt", "buf")
-    let ternEdge: tuple[caller, arg, callee, param: string] =
-      ("kTern", "a", "storeIt", "buf")
-    doAssert m.callGraph.edges.contains(condEdge),
-      "the loop-condition call site records one argument-flow edge"
-    doAssert m.callGraph.edges.contains(ternEdge),
-      "the ternary-branch call site records one argument-flow edge"

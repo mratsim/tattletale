@@ -268,7 +268,7 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   if r.err.len > 0:
     return nil
   let candidate = tStruct(deriveStructName(canon) & "_" &
-    base58Short(typeIdentityHash(nameKey)), fields).withOrigin(canon)
+    base58Short(typeIdentityHash(nameKey)), fields)
   result = r.registerType(candidate)
   r.structMemo[nameKey] = result
 

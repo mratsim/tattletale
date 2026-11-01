@@ -61,14 +61,6 @@ proc markExplicitUnrolls(ss: var seq[CirStmt]) =
       markExplicitUnrolls(s.thenBody)
       markExplicitUnrolls(s.elseBody)
       kept.add s
-    of sCase:
-      for br in mitems(s.branches):
-        markExplicitUnrolls(br.body)
-      markExplicitUnrolls(s.caseElse)
-      kept.add s
-    of sScope:
-      markExplicitUnrolls(s.scopeBody)
-      kept.add s
     else:
       if not s.isUnrollMarker:
         kept.add s

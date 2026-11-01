@@ -53,9 +53,6 @@ static:
       "the buffer passed to a storing callee is read-write"
     doAssert "k/c" notin reached,
       "a buffer the kernel only reads is not read-write"
-    doAssert m.callGraph.edges == @[(caller: "k", arg: "a",
-      callee: "writeFirst", param: "buf")],
-      "the call argument rooted at the kernel parameter records one edge"
 
   block recursionRefusal:
     # a device function calling itself refuses: the frontend accepts

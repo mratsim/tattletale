@@ -122,10 +122,6 @@ proc assignBuiltinKindsStmts(ss: var seq[CirStmt]) =
     of sLoop:
       assignBuiltinKindsExpr(s.loopCond)
       assignBuiltinKindsStmts(s.loopBody)
-    of sScope:
-      assignBuiltinKindsStmts(s.scopeBody)
-    of sAssume:
-      assignBuiltinKindsExpr(s.assumeCond)
     of sRet:
       assignBuiltinKindsExpr(s.retVal)
     of sDiscard:

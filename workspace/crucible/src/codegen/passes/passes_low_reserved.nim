@@ -219,10 +219,6 @@ proc renameStmts(ss: var seq[CirStmt], fieldRenames, symRenames: Table[string, s
     of sLoop:
       renameFieldAccesses(s.loopCond, fieldRenames, symRenames)
       renameStmts(s.loopBody, fieldRenames, symRenames)
-    of sScope:
-      renameStmts(s.scopeBody, fieldRenames, symRenames)
-    of sAssume:
-      renameFieldAccesses(s.assumeCond, fieldRenames, symRenames)
     of sRet:
       renameFieldAccesses(s.retVal, fieldRenames, symRenames)
     of sDiscard:

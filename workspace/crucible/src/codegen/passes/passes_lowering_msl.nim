@@ -138,7 +138,6 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]) =
   ## Hoists the `{.smem.}` locals of one device function into threadgroup
   ## pointer parameters:
   ##
-  ## - top-level locals and one `scope` level deep are covered
   ## - the declarations drop from the body
   var i = 0
   while i < fn.body.len:
@@ -147,15 +146,6 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]) =
       fn.hoistSmemLocal(s, arenas)
       fn.body.delete i
       continue
-    if s.kind == sScope:
-      var j = 0
-      while j < s.scopeBody.len:
-        let sub = s.scopeBody[j]
-        if sub.kind == sVar and sub.space == caThreadgroup:
-          fn.hoistSmemLocal(sub, arenas)
-          s.scopeBody.delete j
-          continue
-        j.inc
     i.inc
 
 proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
@@ -188,10 +178,6 @@ proc ownedSmemNames(fn: CirProc): HashSet[string] =
   for s in fn.body:
     if s.kind == sVar and s.space == caThreadgroup:
       result.incl(s.name)
-    if s.kind == sScope:
-      for sub in s.scopeBody:
-        if sub.kind == sVar and sub.space == caThreadgroup:
-          result.incl(sub.name)
 
 proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
                   args: var seq[CirExpr],

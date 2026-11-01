@@ -96,14 +96,12 @@ proc computeStructLayout(t: CirType, boolWidth: static int): StructLayout =
   ## Returns:
   ## - the padded struct size
   ## - the strictest member alignment
-  ## - the start offset of each member in declaration order
   doAssert t.kind == ctStruct
   var off = 0
   var align = 1
   for f in t.fields:
     let fa = packedAlign(f.typ, boolWidth)
     off = roundUpMultiple(off, fa)
-    result.memberOffsets.add off
     off += packedSize(f.typ, boolWidth)
     align = max(align, fa)
   result.align = align
@@ -119,10 +117,8 @@ proc typeByteSize*(layouts: Table[string, StructLayout], t: CirType, boolWidth: 
   ##   typeByteSize(m.layouts, tVec(3, tFloat(32)), std430BoolWidth) == 12
   case t.kind
   of ctStruct:
-    let stored = layouts.getOrDefault(t.name)
-    doAssert stored.memberOffsets.len == t.fields.len,
-      "no stored layout for struct " & t.name
-    stored.size
+    doAssert layouts.hasKey(t.name), "no stored layout for struct " & t.name
+    layouts[t.name].size
   of ctVoid, ctBool, ctInt, ctUint, ctFloat:
     scalarByteSize(t, boolWidth)
   of ctVector:

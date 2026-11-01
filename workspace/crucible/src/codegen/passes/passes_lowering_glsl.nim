@@ -120,15 +120,6 @@ proc unwrapVarDerefsStmts(ss: var seq[CirStmt], varParams: HashSet[string]) =
     of sLoop:
       s.loopCond.unwrapVarDerefsExpr(varParams)
       s.loopBody.unwrapVarDerefsStmts(varParams)
-    of sCase:
-      s.selector.unwrapVarDerefsExpr(varParams)
-      for br in mitems(s.branches):
-        br.body.unwrapVarDerefsStmts(varParams)
-      s.caseElse.unwrapVarDerefsStmts(varParams)
-    of sScope:
-      s.scopeBody.unwrapVarDerefsStmts(varParams)
-    of sAssume:
-      s.assumeCond.unwrapVarDerefsExpr(varParams)
     of sRet:
       s.retVal.unwrapVarDerefsExpr(varParams)
     of sDiscard:
@@ -216,25 +207,6 @@ proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashS
       let lerr = rewriteVarCallArgsStmts(fn, s.loopBody, varParams, procs)
       if lerr.len > 0:
         return lerr
-    of sCase:
-      let serr = rewriteVarCallArgsExpr(fn, s.selector, varParams, procs)
-      if serr.len > 0:
-        return serr
-      for br in mitems(s.branches):
-        let berr = rewriteVarCallArgsStmts(fn, br.body, varParams, procs)
-        if berr.len > 0:
-          return berr
-      let eerr = rewriteVarCallArgsStmts(fn, s.caseElse, varParams, procs)
-      if eerr.len > 0:
-        return eerr
-    of sScope:
-      let serr = rewriteVarCallArgsStmts(fn, s.scopeBody, varParams, procs)
-      if serr.len > 0:
-        return serr
-    of sAssume:
-      let aerr = rewriteVarCallArgsExpr(fn, s.assumeCond, varParams, procs)
-      if aerr.len > 0:
-        return aerr
     of sRet:
       let rerr = rewriteVarCallArgsExpr(fn, s.retVal, varParams, procs)
       if rerr.len > 0:
@@ -523,7 +495,7 @@ proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr
   of eEq, eNeq, eLt, eLe:
     registerExprRefBlocks(blocks, e.a)
     registerExprRefBlocks(blocks, e.b)
-  of eBitNot, eNeg:
+  of eNeg:
     registerExprRefBlocks(blocks, e.unOperand)
   of eNot:
     registerExprRefBlocks(blocks, e.notOperand)
@@ -554,15 +526,6 @@ proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[Ci
     of sLoop:
       registerExprRefBlocks(blocks, s.loopCond)
       registerStmtRefBlocks(blocks, s.loopBody)
-    of sCase:
-      registerExprRefBlocks(blocks, s.selector)
-      for br in s.branches:
-        registerStmtRefBlocks(blocks, br.body)
-      registerStmtRefBlocks(blocks, s.caseElse)
-    of sScope:
-      registerStmtRefBlocks(blocks, s.scopeBody)
-    of sAssume:
-      registerExprRefBlocks(blocks, s.assumeCond)
     of sRet:
       registerExprRefBlocks(blocks, s.retVal)
     of sDiscard:
