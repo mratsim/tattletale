@@ -20,6 +20,7 @@
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import nim_type_resolvers
+import ../../builtins/builtins_magic_catalog
 import ../ir/cirv2_pretty
 import std/[macros, tables, strutils, sets]
 
@@ -416,18 +417,6 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   let calleeName = if calleeBuiltin: calleeSym.strVal
                    else: entry.name
   return sym(calleeName, entry.fnType, calleeBuiltin)
-
-const NimGpuNumericBuiltinsOps = {
-  "AddI": "+", "AddU": "+", "AddF32": "+", "AddF64": "+",
-  "SubI": "-", "SubU": "-", "SubF32": "-", "SubF64": "-",
-  "MulI": "*", "MulU": "*", "MulF32": "*", "MulF64": "*",
-  "DivI": "/", "DivU": "/", "DivF32": "/", "DivF64": "/",
-  "ModI": "mod", "ModU": "mod",
-  "ShlI": "shl", "ShrI": "shr",
-}.toTable()
-  ## Trusted catalog of the system magic names that are primitive arithmetic.
-  ## Membership decides: the magic lowers to the Nim operator it names,
-  ## its body is never inspected, no proc harvests, no call emits.
 
 func arithExpr(op: string, t: CirType, x, y: CirExpr): CirExpr =
   ## Primitive arithmetic node for one operator over one operand type.
