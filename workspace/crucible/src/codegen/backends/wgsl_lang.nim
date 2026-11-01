@@ -246,9 +246,6 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## WGSL text of the kinds in `targetExprKinds`.
   case e.kind
-  of eNil:
-    ctx.fail("nil literal is outside the WGSL subset")
-    return ""
   of eFloatLit:
     # a 64-bit non-finite float has no token in the lit row:
     # - `bitcast<f64>` requires the shader-f64 device feature the runtime cannot request
@@ -306,15 +303,14 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
         if e.dotBase.coordBuiltin == cbkThreadsPerThreadgroup:
           ctx.fail("threads_per_threadgroup reads refuse on WGSL, only the @workgroup_size attribute exists")
         else:
-          ctx.fail("no coordinate component " & e.fieldName)
+          ctx.fail("coordinate builtin has no component " & e.fieldName)
         return ""
       ctx.builtins.incl(e.dotBase.coordBuiltin)
       return mapped
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
-      let comp = emitVectorComponent(e.fieldName)
-      if comp.len == 0:
-        ctx.fail("no vector component " & e.fieldName)
+      let comp = ctx.getVectorComponent(e.fieldName)
+      if ctx.failing():
         return ""
       return ctx.printExpr(e.dotBase) & "." & comp
     if bt != nil and bt.kind == ctStruct:
@@ -334,7 +330,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eConv:
     return ctx.printConv(e)
   of eOconstr:
-    # constructor-call form, a zero-field struct's padding member zero-initializes
+    # a zero-field struct's padding member zero-initializes
     if e.kvFields.len == 0:
       return ctx.emitWgslTypeBare(e.ocType) & "(0u)"
     result = ctx.emitWgslTypeBare(e.ocType) & "("
@@ -351,7 +347,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
         result.add ctx.printExpr(kvv.value)
     result.add ")"
   of eAconstr:
-    # constructor-call form
     result = ctx.emitWgslTypeBare(e.acType) & "("
     for i, el in e.elems:
       if i > 0:
@@ -362,7 +357,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     let args = printCallArgs(ctx, e)
     return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
   else:
-    ctx.fail("expression kind " & $e.kind & " has no WGSL emission")
+    ctx.fail(unhandledExprRejection(e.kind))
+
 
 
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
@@ -509,23 +505,18 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
     result = attr & "var<storage, read_write> " & p.name & ": array<" &
       ctx.emitWgslTypeBare(p.typ.pElem) & ">;"
   of ctPtr:
-    ctx.fail("kernel parameter " & p.name &
-      " of pointer type, the engine binds device buffers and values")
+    ctx.fail("kernel parameter " & p.name & " of pointer type has no WGSL binding")
     return ""
   of ctArray:
-    ctx.fail("kernel parameter " & p.name &
-      " of array type, the engine packs the value, the parameter is a struct or a scalar")
+    ctx.fail("kernel parameter " & p.name & " of array type has no WGSL binding")
     return ""
   of ctStruct:
     for f in p.typ.fields:
       if f.typ.kind == ctVector:
-        ctx.fail("kernel parameter " & p.name & " field " & f.name &
-          " is a vector, the WGSL storage layout of vectors (16-byte alignment" &
-          " for 3-component vectors) does not match the host packing")
+        ctx.fail("kernel parameter " & p.name & " field " & f.name & " is a vector with no host-packed WGSL storage")
         return ""
       if f.typ.kind == ctArray and f.typ.aElem.kind == ctBool:
-        ctx.fail("kernel parameter " & p.name & " field " & f.name &
-          " is a bool array, only a scalar bool field maps to a NIM_BOOL word")
+        ctx.fail("kernel parameter " & p.name & " field " & f.name & " is a bool array, only a scalar bool field maps to a NIM_BOOL word")
         return ""
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitWgslTypeBare(p.typ) & ";"

@@ -314,7 +314,7 @@ genTargets:
     # u32 gains the `u` suffix, f16 the `h`, f32 prints bare.
     # WGSL has no infinity or NaN literal: the 16 and 32-bit IEEE-754 bit patterns
     # go through `bitcast` from the unsigned integer of the same width.
-    # Nil literals refuse at the site.
+    # Nil literals: the shared walk refuses them.
     lit u32Suffix "u", f16Suffix "h",
       inf16 "bitcast<f16>(0x7c00u)", negInf16 "bitcast<f16>(0xfc00u)", nan16 "bitcast<f16>(0x7e00u)",
       inf32 "bitcast<f32>(0x7f800000u)",

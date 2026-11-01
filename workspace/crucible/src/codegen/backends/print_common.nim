@@ -37,6 +37,14 @@ template fail*(ctx: auto, detail: string) =
   if ctx.err.len == 0:
     ctx.err = "cirv2 printer " & printerTarget & ": at " & ctx.fnName & ": " & detail
 
+## Refusal text for a nil literal in a target whose kind row refuses nil.
+const nilLiteralRejection* = "nil literal is outside the target subset"
+
+proc unhandledExprRejection*(kind: CirExprKind): string =
+  ## Refusal text for an expression kind outside the printer's case.
+  ## A routing bug: the dispatcher sends only the kinds the case lists.
+  "expression kind " & $kind & " has no printer emission"
+
 proc roundUpMultiple*(v, multiple: int): int =
   ## Smallest multiple of `multiple` that is >= `v`.
   doAssert multiple > 0
@@ -57,6 +65,17 @@ proc emitVectorComponent*(name: string): string =
   of "F2": "z"
   of "F3": "w"
   else: ""
+
+proc getVectorComponent*(ctx: var auto, field: string): string =
+  ## Component letter for one vector field name.
+  ##
+  ## Returns "" when the name maps to no component letter. The walk records
+  ## the refusal and the caller discards its partial text.
+  ##
+  ##   let comp = ctx.getVectorComponent(e.fieldName)
+  result = emitVectorComponent(field)
+  if result.len == 0:
+    ctx.fail("no vector component " & field)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Declarator engine: type names and declaration forms over the registry rows
@@ -380,12 +399,18 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## - the call skeleton prints through `printCallArgs` and `printCallText`
   ## - the kinds a printer emits itself route to its `printTargetExpr`,
   ##   named by its `targetExprKinds` set
+  ## - a target that lists `eNil` refuses the nil literal here, one home for the refusing targets
   ## - subscript, dereference, address-of and ternary kinds without a target route take the shared default forms below
   mixin printExpr, printTargetExpr
   if ctx.failing():
     return ""
   case e.kind
-  of eNil, eTrue, eFalse, eIntLit, eFloatLit:
+  of eNil:
+    if e.kind in ctx.policy.targetExprKinds:
+      ctx.fail(nilLiteralRejection)
+      return ""
+    return emitLiteral(e, ctx.lit, ctx.row)
+  of eTrue, eFalse, eIntLit, eFloatLit:
     if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
     return emitLiteral(e, ctx.lit, ctx.row)
