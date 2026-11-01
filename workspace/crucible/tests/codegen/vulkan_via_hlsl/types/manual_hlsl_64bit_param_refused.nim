@@ -5,11 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## HLSL: a 64-bit integer kernel parameter refuses on the scalar-row channel.
+## HLSL: a 64-bit integer kernel parameter refuses on the scalar-names channel.
 ##
 ## Test that an int64 kernel parameter refuses at the push-block declaration:
-## the hlsl scalar row has no 64-bit integer cell, the row lookup returns no
-## name and the declaration emitter refuses:
+## the hlsl scalar names have no 64-bit integer cell. The names lookup returns
+## no name and the declaration emitter refuses:
 ##
 ## - `int64 has no HLSL type name`
 ##

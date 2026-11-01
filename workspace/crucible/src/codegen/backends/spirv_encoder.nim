@@ -67,28 +67,28 @@ func oMany(kind: SpvKind): SpvOperand {.inline.} =
   SpvOperand(kind: kind, quant: qMany)
 
 macro genSpvOpcodeTable(defs: untyped) =
-  ## Declarative opcode table in the glyph style, one row per opcode:
+  ## Declarative opcode table in the glyph style, one entry per opcode:
   ##   op OpName: <opcode>: [o(kind1), oOpt(kind2), ...]
   ## - generates the `SpvOp` enum, member value = opcode number
-  ## - generates the `spvInstOperands` encoding lookup, rows sorted by opcode
+  ## - generates the `spvInstOperands` encoding lookup, entries sorted by opcode
   ## - a duplicate opcode or opcode name fails at macro expansion
   var
     seenOpcodes: Table[int, string]
     seenNames: Table[string, int]
-    rows: seq[tuple[opcode: int, name: string, operands: NimNode]]
-  for row in defs:
-    row.expectKind nnkCommand
-    doAssert row[0].eqIdent "op"
-    row[1].expectKind nnkIdent
-    row[2].expectKind nnkStmtList
-    doAssert row.len == 3
-    let name = $row[1]
+    ops: seq[tuple[opcode: int, name: string, operands: NimNode]]
+  for def in defs:
+    def.expectKind nnkCommand
+    doAssert def[0].eqIdent "op"
+    def[1].expectKind nnkIdent
+    def[2].expectKind nnkStmtList
+    doAssert def.len == 3
+    let name = $def[1]
     if name in seenNames:
-      error "opcode name " & name & " declared twice", row[1]
+      error "opcode name " & name & " declared twice", def[1]
     seenNames[name] = 0
-    let body = row[2]
+    let body = def[2]
     var opcode: int
-    var operands = newNimNode(nnkBracket, row)
+    var operands = newNimNode(nnkBracket, def)
     if body[0].kind == nnkIntLit:
       opcode = body[0].intVal.int
     else:
@@ -101,13 +101,13 @@ macro genSpvOpcodeTable(defs: untyped) =
       for k in br:
         operands.add k
     if opcode in seenOpcodes:
-      error "opcode " & $opcode & " already used by " & seenOpcodes[opcode], row[2][0]
+      error "opcode " & $opcode & " already used by " & seenOpcodes[opcode], def[2][0]
     seenOpcodes[opcode] = name
-    rows.add (opcode, name, operands)
-  rows.sort(proc(x, y: tuple[opcode: int, name: string, operands: NimNode]): int =
+    ops.add (opcode, name, operands)
+  ops.sort(proc(x, y: tuple[opcode: int, name: string, operands: NimNode]): int =
     cmp(x.opcode, y.opcode))
   var enumTy = nnkEnumTy.newTree(newEmptyNode())
-  for r in rows:
+  for r in ops:
     enumTy.add nnkEnumFieldDef.newTree(ident(r.name), newLit(r.opcode))
   let typeSection = nnkTypeSection.newTree(
     nnkTypeDef.newTree(
@@ -115,7 +115,7 @@ macro genSpvOpcodeTable(defs: untyped) =
       newEmptyNode(),
       enumTy))
   var table = nnkCaseStmt.newTree(ident"op")
-  for r in rows:
+  for r in ops:
     table.add nnkOfBranch.newTree(ident(r.name), nnkCall.newTree(ident"@", r.operands))
   let procSection = nnkProcDef.newTree(
     ident"spvInstOperands",

@@ -9,7 +9,7 @@
 ## conversion builtins over `float16`, `bfloat16`, `fp8e4m3`, `fp8e5m2`.
 ##
 ## A device call to these procs lowers to the backend native conversion
-## through the registry conv rows. The body runs on the host.
+## through the registry conv tables. The body runs on the host.
 ## `builtins_gpu_types` declares the types and the `to*` dispatch
 ## templates and imports this module for the bodies.
 
