@@ -506,10 +506,10 @@ proc registerHlslParamClassPass*(reg: var PassRegistry, flavor: HlslFlavor) =
     " push-block values, refusing the shapes the resource model cannot bind"
   case flavor
   of fvD3D12:
-    reg.register("hlslClassifyParams", pkAnalysis, phaseMain, description,
+    reg.register("hlslClassifyParams", pkAnalysis, description,
       run = classifyFvD3D12)
   of fvVulkan:
-    reg.register("hlslClassifyParams", pkAnalysis, phaseMain, description,
+    reg.register("hlslClassifyParams", pkAnalysis, description,
       run = classifyFvVulkan)
 
 
@@ -558,13 +558,11 @@ proc scanStmtStructRefs(refs: var HashSet[string], ss: seq[CirStmt]) =
       scanStmtStructRefs(refs, s.elseBody)
     of sLoop:
       scanStmtStructRefs(refs, s.loopBody)
-    of sScope:
-      scanStmtStructRefs(refs, s.scopeBody)
     of sCall:
       for a in s.callArgs:
         if a.kind == eOconstr:
           registerStructRefs(refs, a.ocType)
-    of sAssume, sRet, sDiscard, sCase, sAsm, sEmit:
+    of sRet, sDiscard, sAsm, sEmit:
       discard
 
 proc hlslScanStructRefs(m: CirModule): string =
@@ -608,7 +606,7 @@ proc registerHlslStructRefPass*(reg: var PassRegistry) =
   ##
   ## - the pass fills `CirModule.structRefs` with the struct types the printer declares, every struct reachable through fields included
   ## - the printer declares exactly the stored names and scans for nothing itself
-  reg.register("hlslScanStructRefs", pkAnalysis, phaseMain,
+  reg.register("hlslScanStructRefs", pkAnalysis,
     "Records the struct types the printer declares, every struct reachable" &
     " through fields and element types included",
     run = hlslScanStructRefs
