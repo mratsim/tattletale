@@ -29,6 +29,7 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables]
 import ../ir/ast_datatypes
 import ./print_common
+import ./print_compute
 import ./targets_rows
 
 type
@@ -84,6 +85,22 @@ proc emitOpenclPtrField(t: CirType, ident: string): string =
     of caDevice: "__global"
   let sep = if qualifier.len > 0: " " else: ""
   result = qualifier & sep & emitOpenclTypeBare(t) & ' ' & ident
+
+proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## OpenCL C declaration text of one struct member.
+  ##
+  ## - an array stacks every dimension behind the name (`float a[4][8]`)
+  ## - a pointer member prints its address-space qualifier, and only device
+  ##   pointers nest in structs
+  if f.typ.kind == ctArray:
+    return emitOpenclArrayDecl(f.typ, f.name)
+  if f.typ.kind in {ctAptr, ctPtr}:
+    if f.typ.kind == ctAptr and f.typ.space != caDevice:
+      ctx.fail("struct field " & t.name & "." & f.name &
+        " in " & $f.typ.space & " space, only device pointers nest in structs")
+      return ""
+    return emitOpenclPtrField(f.typ, f.name)
+  return emitOpenclTypeBare(f.typ) & ' ' & f.name
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
@@ -401,22 +418,25 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
   else:
     result = emitOpenclTypeBare(p.typ) & ' ' & p.name
 
-proc printFn(ctx: var PrintCtx, fn: CirProc): string =
-  ## One device function: signature, body, closing brace.
-  ctx.fnName = fn.name
-  ctx.inKernel = false
-  ctx.indent = 0
-  var params: seq[string]
+proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
+  ## OpenCL C parameter texts of one proc or kernel, in declaration order,
+  ## through the per-parameter `emitParam` policy.
   for p in fn.params:
-    params.add ctx.emitParam(p, false)
-  if ctx.failing():
-    return ""
-  let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
-    return ""
-  let sig = "static inline " & emitOpenclTypeBare(fn.ret) & ' ' &
-    fn.name & '(' & params.join(", ") & ")"
-  return sig & " {\n" & bodyTxt & '\n' & "}"
+    result.add ctx.emitParam(p, fn.isKernel)
+
+proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
+  ## OpenCL C linkage prefix of one proc or kernel.
+  ##
+  ## - a kernel is `__kernel`
+  ## - a device function is `static inline`: C99 linkage whose storage class
+  ##   keeps the name file-local to the program
+  if fn.isKernel:
+    return "__kernel "
+  return "static inline "
+
+proc emitComputeRet(ctx: var PrintCtx, t: CirType): string =
+  ## OpenCL C name of a return type, no identifier.
+  emitOpenclTypeBare(t)
 
 proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `__constant` declaration of a const_mem local.
@@ -431,6 +451,15 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   else:
     result = "__constant " & emitOpenclTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
+
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope declaration text of one relocated const_mem local.
+  ## A const_mem local without an initializer refuses: OpenCL C forbids
+  ## declaring `__constant` storage without one.
+  if s.init == nil:
+    ctx.fail("const_mem local " & s.name & " without an initializer")
+    return ""
+  ctx.emitConstDecl(s)
 
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full OpenCL C translation unit: extension pragmas, struct typedefs,
@@ -450,44 +479,12 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
 
   result.src = emitExtensions(m.features)
 
-  for t in m.types:
-    if t.kind != ctStruct:
-      ctx.fail("module type " & t.name & " is not a struct")
-      break
-    result.src &= "typedef struct {\n"
-    if t.fields.len == 0:
-      # OpenCL C requires at least one field in a struct
-      result.src &= "  char _padding_;\n"
-    for f in t.fields:
-      var field: string
-      if f.typ.kind == ctArray:
-        field = emitOpenclArrayDecl(f.typ, f.name)
-      elif f.typ.kind in {ctAptr, ctPtr}:
-        if f.typ.kind == ctAptr and f.typ.space != caDevice:
-          ctx.fail("struct field " & t.name & "." & f.name &
-            " in " & $f.typ.space & " space, only device pointers nest in structs")
-          field = ""
-        else:
-          field = emitOpenclPtrField(f.typ, f.name)
-      else:
-        field = emitOpenclTypeBare(f.typ) & ' ' & f.name
-      result.src &= "  " & field & ";\n"
-    result.src &= "} " & t.name & ";\n\n"
+  result.src &= printComputeStructs(ctx, m, true, "char _padding_")
   if ctx.failing():
     return ("", ctx.err)
 
   # program-scope `__constant` declarations from `m.globals`, relocated there by the OpenCL lowering pass in encounter order
-  var hoisted: seq[string]
-  for s in m.globals:
-    if s.kind == sVar and s.space == caConstant:
-      if s.init == nil:
-        ctx.fail("const_mem local " & s.name & " without an initializer")
-      else:
-        hoisted.add ctx.emitConstDecl(s)
-  for d in hoisted:
-    result.src &= d & "\n"
-  if hoisted.len > 0:
-    result.src &= "\n"
+  result.src &= printComputeGlobals(ctx, m, {caConstant})
   if ctx.failing():
     return ("", ctx.err)
 
@@ -497,39 +494,24 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     if not fn.isKernel:
       fns.add fn
   for fn in fns:
-    ctx.fnName = fn.name
-    var params: seq[string]
-    for p in fn.params:
-      params.add ctx.emitParam(p, false)
+    result.src &= printComputeSig(ctx, fn) & ";\n"
     if ctx.failing():
       return ("", ctx.err)
-    result.src &= "static inline " & emitOpenclTypeBare(fn.ret) & ' ' &
-      fn.name & '(' & params.join(", ") & ");\n"
   if fns.len > 0:
     result.src &= "\n"
   for fn in fns:
-    result.src &= ctx.printFn(fn) & "\n\n"
+    # device functions declare no kernel storage, printVar refuses it there
+    ctx.inKernel = false
+    result.src &= printComputeProc(ctx, fn) & "\n\n"
   if ctx.failing():
     return ("", ctx.err)
 
   # every kernel of the module, in encounter order: one OpenCL program per module, the engine launches each kernel by name
   for kernel in kernels:
-    ctx.fnName = kernel.name
     ctx.inKernel = true
-    ctx.indent = 0
-    var params: seq[string]
-    for p in kernel.params:
-      params.add ctx.emitParam(p, true)
+    result.src &= printComputeProc(ctx, kernel) & "\n"
     if ctx.failing():
       return ("", ctx.err)
-    let bodyTxt = ctx.printStmts(kernel.body)
-    if ctx.failing():
-      return ("", ctx.err)
-    # exportc renames a kernel entry for the host runtime lookup.
-    # A device function keeps the name its call sites reference.
-    let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
-    result.src &= "__kernel void " & entryName & '(' &
-      params.join(", ") & ") {\n" & bodyTxt & '\n' & "}\n"
   return (result.src, "")
 
 

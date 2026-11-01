@@ -29,6 +29,7 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, tables, math]
 import ../ir/ast_datatypes
 import ./print_common
+import ./print_compute
 import ./targets_rows
 
 type
@@ -61,6 +62,10 @@ proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## over the CUDA rows. Arrays take the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
   cDecl(cudaScalarRow, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
+
+proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## CUDA declaration text of one struct member via the shared C declarator.
+  emitCudaType(f.typ, f.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -275,46 +280,41 @@ proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printProc(ctx: var PrintCtx, fn: CirProc): string =
-  ## One proc or kernel: signature, body, closing brace.
-  ctx.fnName = fn.name
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
-    return ""
-  # exportc renames a kernel entry for the host runtime lookup.
-  # A device function keeps the name its call sites reference.
-  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
-  var params: seq[string]
-  if fn.isKernel:
-    for p in fn.params:
-      case p.typ.kind
-      of ctAptr, ctPtr:
-        params.add emitCudaScalar(p.typ.pElem) & "* " & p.name
-      of ctArray:
-        # by-value array params decay to pointers, they are read-only,
-        # const-qualified so the read-only contract reaches the callee
-        params.add "const " & emitCudaType(p.typ, p.name, false)
+proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
+  ## CUDA parameter texts of one proc or kernel, in declaration order.
+  ##
+  ## - pointers print `T* name` (the engine binds device buffers and values)
+  ## - a kernel's by-value array parameter is const-qualified: the array
+  ##   decays to a pointer and is read-only
+  ## - every other parameter prints the plain declarator form
+  for p in fn.params:
+    case p.typ.kind
+    of ctAptr, ctPtr:
+      result.add emitCudaScalar(p.typ.pElem) & "* " & p.name
+    of ctArray:
+      if fn.isKernel:
+        result.add "const " & emitCudaType(p.typ, p.name, false)
       else:
-        params.add emitCudaType(p.typ, p.name, true)
-  else:
-    for p in fn.params:
-      case p.typ.kind
-      of ctAptr, ctPtr:
-        params.add emitCudaScalar(p.typ.pElem) & "* " & p.name
-      else:
-        params.add emitCudaType(p.typ, p.name, true)
-  let ret = emitCudaType(fn.ret, "", true)
-  var prefix = ""
+        result.add emitCudaType(p.typ, p.name, true)
+    else:
+      result.add emitCudaType(p.typ, p.name, true)
+
+proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
+  ## CUDA linkage prefix of one proc or kernel.
+  ##
+  ## - a kernel is `extern "C" __global__`: extern "C" keeps the unmangled
+  ##   name that the host runtime looks up
+  ## - a device function is `__device__`, plus the force-inline qualifier
+  ##   under `{.inline.}`
   if fn.isKernel:
-    # extern "C" keeps the unmangled name that the host runtime looks up
-    prefix = "extern \"C\" __global__ "
-  else:
-    if fn.inline:
-      prefix = "__forceinline__ "
-    prefix &= "__device__ "
-  let sig = prefix & ret & ' ' & name & '(' & params.join(", ") & ")"
-  return sig & " {\n" & bodyTxt & '\n' & "}"
+    return "extern \"C\" __global__ "
+  if fn.inline:
+    return "__forceinline__ __device__ "
+  return "__device__ "
+
+proc emitComputeRet(ctx: var PrintCtx, t: CirType): string =
+  ## CUDA declaration text of a return type, no identifier.
+  emitCudaType(t, "", true)
 
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full CUDA translation unit: struct declarations, program-scope constants,
@@ -323,18 +323,9 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow,
     lit: cudaLitRow, row: cudaScalarRow)
-  var src = ""
-  for t in m.types:
-    if t.kind != ctStruct:
-      ctx.fail("module type " & t.name & " is not a struct")
-      break
-    src &= "struct " & t.name & " {\n"
-    if t.fields.len == 0:
-      # CUDA requires at least one field in a struct
-      src &= "  char _;\n"
-    for f in t.fields:
-      src &= "  " & emitCudaType(f.typ, f.name, false) & ";\n"
-    src &= "};\n\n"
+  var src = printComputeStructs(ctx, m, false, "char _")
+  if ctx.failing():
+    return ("", ctx.err)
   for s in m.globals:
     if s.kind != sVar:
       ctx.fail("module global " & s.name & " is not a variable")
@@ -355,7 +346,7 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   if ctx.failing():
     return ("", ctx.err)
   for fn in m.procs:
-    let txt = ctx.printProc(fn)
+    let txt = printComputeProc(ctx, fn)
     if ctx.err.len > 0:
       break
     src &= txt & "\n\n"
