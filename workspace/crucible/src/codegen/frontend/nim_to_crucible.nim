@@ -1220,9 +1220,6 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         ctx.declareLocal(nameNode, sym(cirName, typ), spc)
         if value.isNil:
           result.add(hoists & @[varD(cirName, typ, nil, spc)])
-        elif value.kind == eCall:
-          result.add(hoists & @[varD(cirName, typ, nil, spc),
-              asgnS(sym(cirName, typ), value)])
         else:
           result.add(hoists & @[varD(cirName, typ, value, spc)])
   of nnkConstSection:
