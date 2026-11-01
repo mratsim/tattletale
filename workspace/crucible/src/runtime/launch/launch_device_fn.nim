@@ -30,7 +30,7 @@ type
     blk: Dim3
     sharedMem: int
 
-func langName(n: NimNode): string =
+func parseLangName(n: NimNode): string =
   ## `lang =` launch extra value: a bare language ident matched before sem,
   ## `spirv` (words route, default), `glsl` (glslangValidator), `hlsl` (dxc)
   var name = $n
@@ -312,7 +312,7 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
       `engine`.launchKernelImpl(`kname`, `outputN`, argsVal,
         LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`))
 
-func formalCounts(candFormals: NimNode): tuple[total, required: int] =
+func countFormals(candFormals: NimNode): tuple[total, required: int] =
   for i in 1 ..< candFormals.len:
     let f = candFormals[i]
     result.total += f.len - 2
@@ -328,7 +328,7 @@ proc resolveKernelOverload(kernel: NimNode, argCount: int): NimNode =
     let candImpl = cand.getImpl()
     if candImpl.kind != nnkProcDef:
       continue
-    let (total, required) = formalCounts(candImpl[3])
+    let (total, required) = countFormals(candImpl[3])
     if required <= argCount and argCount <= total:
       match = cand
       count.inc
@@ -401,7 +401,7 @@ macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
         of "grid": gridN = f[1]
         of "blk": blkN = f[1]
         of "sharedMem": sharedMemN = f[1]
-        of "lang": lang = langName(f[1])
+        of "lang": lang = parseLangName(f[1])
         else:
           error("launchDeviceFn: chevron schedule expects grid / blk / sharedMem / lang, got " & f.repr)
       else:
@@ -445,7 +445,7 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
       of "grid": gridN = a[1]
       of "blk": blkN = a[1]
       of "sharedMem": sharedMemN = a[1]
-      else: lang = langName(a[1])
+      else: lang = parseLangName(a[1])
   let langLit = newLit(lang)
   result = bindSym"resolveDeviceCall".newCall(engine, callNode[0], gridN, blkN, sharedMemN, langLit)
   for i in 1 ..< callNode.len:

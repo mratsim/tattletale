@@ -44,7 +44,7 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
   ## - visitors return nothing: a refusing visitor records its refusal itself
   ##   and stops work once recorded, so the first refusal in walk order wins
 
-  proc slot(e: CirExpr) =
+  proc visitExprs(e: CirExpr) =
     if onExpr != nil:
       e.walkExprs(onExpr)
   var walked: seq[CirStmt]
@@ -53,31 +53,31 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
   for s in walked:
     case s.kind
     of sVar, sConst:
-      slot(s.init)
+      visitExprs(s.init)
     of sAsgn:
-      slot(s.lhs)
-      slot(s.rhs)
+      visitExprs(s.lhs)
+      visitExprs(s.rhs)
     of sIte:
-      slot(s.cond)
+      visitExprs(s.cond)
       walkStmts(s.thenBody, onStmt, onExpr)
       walkStmts(s.elseBody, onStmt, onExpr)
     of sWhile:
-      slot(s.whileCond)
+      visitExprs(s.whileCond)
       walkStmts(s.whileBody, onStmt, onExpr)
     of sRet:
-      slot(s.retVal)
+      visitExprs(s.retVal)
     of sDiscard:
-      slot(s.discardVal)
+      visitExprs(s.discardVal)
     of sCall:
-      slot(s.callCallee)
+      visitExprs(s.callCallee)
       for a in s.callArgs:
-        slot(a)
+        visitExprs(a)
     of sAsm:
       for op in s.asmOperands:
-        slot(op)
+        visitExprs(op)
     of sEmit:
       for op in s.emitOperands:
-        slot(op)
+        visitExprs(op)
     if onStmt != nil:
       onStmt(s)
 
@@ -122,7 +122,7 @@ proc walkTypeTree*(t: CirType, visit: proc(t: CirType), descendPtrs: bool = true
   else:
     discard
 
-proc singleKernel*(m: CirModule): CirProc =
+proc getSingleKernel*(m: CirModule): CirProc =
   ## A module without exactly one kernel contributes no kernel-side registrations,
   ## the printer refuses such a module.
   for fn in m.procs:
@@ -300,7 +300,7 @@ type
     typ*: CirType
     isBuffer*: bool
 
-proc leavesWalk(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
+proc collectLeaves(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
   case t.kind
   of ctPtr, ctAptr:
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: true)
@@ -308,7 +308,7 @@ proc leavesWalk(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
     if t.containsPtrDeep:
       for f in t.fields:
         if f.typ.kind != ctVoid:
-          leavesWalk(f.typ, name & "_" & f.name, leaves)
+          collectLeaves(f.typ, name & "_" & f.name, leaves)
     else:
       leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
   of ctArray:
@@ -319,7 +319,7 @@ proc leavesWalk(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
 
 proc kernelParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
-  leavesWalk(t, name, result)
+  collectLeaves(t, name, result)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Pointer-local explosion
@@ -350,16 +350,16 @@ proc refuseAt*(fn: CirProc, detail: string): string =
   ## Text the pass runner prefixes with the pass name.
   "at " & fn.name & ": " & detail
 
-proc dottedPath*(e: CirExpr): string =
+proc getDottedPath*(e: CirExpr): string =
   if e.kind == eSym:
     return e.name
   if e.kind == eDot:
-    let base = dottedPath(e.dotBase)
+    let base = getDottedPath(e.dotBase)
     if base.len > 0:
       return base & "." & e.fieldName
   return ""
 
-proc structRoot*(e: CirExpr): CirExpr =
+proc getStructRoot*(e: CirExpr): CirExpr =
   ## Unlike `exprRootSym`, an indexed or pattern base stops this walk, nil.
   result = e
   while result != nil and result.kind == eDot:
@@ -447,9 +447,9 @@ proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
         " used as a value, " & target & " has no pointer values")
     return ""
   of eDot:
-    let root = structRoot(e)
+    let root = getStructRoot(e)
     if root != nil and root.name in ctx.structLocals:
-      let path = dottedPath(e)
+      let path = getDottedPath(e)
       if ctx.leafOf.hasKey(path):
         let leaf = ctx.leafOf[path]
         e.spliceSym(leaf.sym, leaf.typ)

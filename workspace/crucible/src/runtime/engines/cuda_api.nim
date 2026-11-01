@@ -91,7 +91,7 @@ proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   # CUdeviceptr values pack 8 bytes into heap-backed storage, addrs stay valid across the by-value return
-  const size = deviceLayout(T, bkCuda).size
+  const size = computeDeviceLayout(T, bkCuda).size
   ctx.bytes[argIdx] = newSeq[byte](size)
   if size > 0:
     var off = 0

@@ -59,11 +59,11 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
-  leafName(openclScalarRow, openclVectorRule, t)
+  getLeafName(openclScalarRow, openclVectorRule, t)
 
 proc emitTypeBare(t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
-  bareName(openclScalarRow, openclVectorRule, t)
+  getBareName(openclScalarRow, openclVectorRule, t)
 
 proc emitOpenclArrayDecl(t: CirType, ident: string): string =
   ## OpenCL C declaration of an array local or field, the lengths move behind the identifier
@@ -131,7 +131,7 @@ const OpenclFlatThreadIndex =
   "(int)(get_local_id(2)*get_local_size(0)*get_local_size(1) + " &
   "get_local_id(1)*get_local_size(0) + get_local_id(0))"
 
-proc atomicOperandPtr(e: CirExpr): CirType =
+proc getAtomicOperandPtr(e: CirExpr): CirType =
   ## Pointer type of an atomicFetchAdd address operand.
   ## The base of an element access, else the operand itself when it is
   ## already a pointer. Nil when the operand has no pointer.
@@ -201,7 +201,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
         else: "fabs"
       return mapped & "(" & args.join(", ") & ")"
   if call.callee.kind == eSym and call.callee.atomicsBuiltin == abkAtomicFetchAdd:
-    let pt = atomicOperandPtr(call.args[0])
+    let pt = getAtomicOperandPtr(call.args[0])
     if pt == nil or pt.pElem == nil:
       ctx.fail("atomicFetchAdd on an operand with no pointee type")
       return ""

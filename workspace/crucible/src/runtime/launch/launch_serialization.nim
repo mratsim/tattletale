@@ -22,7 +22,7 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 # ▸ Compile-time binding
 # ═══════════════════════════════════════════════════════════════════════
 
-func argWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
+func getArgWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
   ## Crucible-lowered byte width of scalar `T`
   when T is int|uint|enum:
     4
@@ -76,7 +76,7 @@ func hasBoolLeaf[T](_: typedesc[T]): bool {.compileTime.} =
   else:
     result = false
 
-func blobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
+func isBlobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
   ## True when every non-leaf field of `T` is trivially copyable: the backend store
   ## flattens leaves individually, and the wrapper is never copyMem'd whole.
   when T is object|tuple:
@@ -91,7 +91,7 @@ func blobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
 func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
   backend in {bkMetal, bkWebGPU, bkOpenCL}
 
-func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
+func computeDeviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
   ## Device size and alignment of `T` on `backend`: phantom and static types
   ## contribute zero bytes, Nim int/uint lower to 4 bytes
   when T is DeviceMem:
@@ -102,22 +102,22 @@ func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, 
     else:
       result.align = 1
       for f in fields(default(T)):
-        let fl = deviceLayout(typeof(f), backend)
+        let fl = computeDeviceLayout(typeof(f), backend)
         result.size = round_multiple_up(result.size, fl.align) + fl.size
         result.align = max(result.align, fl.align)
       result.size = round_multiple_up(result.size, result.align)
   elif T is array:
     when backend == bkGlsl and hasBoolLeaf(T):
       # one 4-byte std430 word per bool, array elements stride at the device element layout, never Nim's 1-byte bool
-      let el = deviceLayout(typeof(default(T)[0]), backend)
+      let el = computeDeviceLayout(typeof(default(T)[0]), backend)
       result = (default(T).len * el.size, el.align)
     else:
-      let ea = if default(T).len > 0: argWidth(typeof(default(T)[0]), backend) else: 1
+      let ea = if default(T).len > 0: getArgWidth(typeof(default(T)[0]), backend) else: 1
       result = (sizeof(T), ea)
   else:
-    result = (argWidth(T, backend), argWidth(T, backend))
+    result = (getArgWidth(T, backend), getArgWidth(T, backend))
 
-func argCount[T, H](_: typedesc[T], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
+func countArgs[T, H](_: typedesc[T], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
   ## Device args one launch value delivers
   when T is H or T is DeviceMem or T is ptr or T is pointer:
     1
@@ -126,7 +126,7 @@ func argCount[T, H](_: typedesc[T], _: typedesc[H], backend: static BackendKind)
       0
     elif hasBufferLeaf(T, H) and explodesStructArgs(backend):
       for f in fields(default(T)):
-        result += argCount(typeof(f), H, backend)
+        result += countArgs(typeof(f), H, backend)
     else:
       1
   elif T is array:
@@ -167,25 +167,25 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
   ## Packs one value at its device layout, aligned, ints lowered to 32-bit
   when T is object|tuple:
     when not isStaticArg(T):
-      let a = deviceLayout(T, backend).align
+      let a = computeDeviceLayout(T, backend).align
       off = round_multiple_up(off, a)
       for f in fields(v):
         dst.packFrom(off, f, backend)
       off = round_multiple_up(off, a)
   elif T is array:
     when backend == bkGlsl and hasBoolLeaf(T):
-      # element-wise packing, one 4-byte std430 word per bool, same as the scalar argWidth rule
-      let a = deviceLayout(T, backend).align
+      # element-wise packing, one 4-byte std430 word per bool, same as the scalar getArgWidth rule
+      let a = computeDeviceLayout(T, backend).align
       off = round_multiple_up(off, a)
       for el in v:
         dst.packFrom(off, el, backend)
     else:
-      let a = deviceLayout(T, backend).align
+      let a = computeDeviceLayout(T, backend).align
       off = round_multiple_up(off, a)
       copyMem(dst[off].addr, v.addr, sizeof(v))
       off += sizeof(v)
   else:
-    const a = argWidth(T, backend)
+    const a = getArgWidth(T, backend)
     off = round_multiple_up(off, a)
     putBytes(dst, off, v, a)
     off += a
@@ -211,7 +211,7 @@ macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedes
         else:
           # leaves flatten to device addresses, non-leaf fields must stay copyable
           when not supportsCopyMem(typeof(`v`)) and
-              not blobPackable(typeof(`v`), `H`):
+              not isBlobPackable(typeof(`v`), `H`):
             {.error: "kernel args are trivially copyable types only, " &
                 $typeof(`v`) & " does not support copyMem".}
           `store`(`ctx`, `v`, `pos`)
@@ -234,9 +234,9 @@ macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedes
 # ═══════════════════════════════════════════════════════════════════════
 
 func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
-  result = argCount(O, H, backend)
+  result = countArgs(O, H, backend)
   for f in fields(default(A)):
-    result += argCount(typeof(f), H, backend)
+    result += countArgs(typeof(f), H, backend)
 
 template bindArgs*(ctx: var auto, output: auto, args: untyped, store: untyped, H: typedesc, backend: static BackendKind) =
   var pos = 0

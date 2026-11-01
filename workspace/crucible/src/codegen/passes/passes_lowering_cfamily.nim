@@ -97,7 +97,7 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
 # Smem initializer rewrite
 # ═══════════════════════════════════════════════════════════════════════
 
-proc smemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt] =
+proc buildSmemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt] =
   let base = sym(name, declType)
   if init.kind == eAconstr and declType.kind == ctArray:
     for i, el in init.elems:
@@ -118,7 +118,7 @@ proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
         return "at " & fnName & ": smem local " & s.name &
           " with an initializer that is not a constructor, no" &
           " element-wise store form exists"
-      let stores = smemInitStores(s.name, s.declType, s.init)
+      let stores = buildSmemInitStores(s.name, s.declType, s.init)
       s.init = nil
       var grown: seq[CirStmt]
       grown.add ss[0 .. i]
@@ -164,7 +164,7 @@ proc rewriteSmemInits(m: CirModule): string =
   var entryStores: seq[CirStmt]
   for g in mitems(m.globals):
     if g.kind == sVar and g.space == caThreadgroup and g.init != nil:
-      entryStores.add smemInitStores(g.name, g.declType, g.init)
+      entryStores.add buildSmemInitStores(g.name, g.declType, g.init)
       g.init = nil
   if entryStores.len > 0:
     for fn in mitems(m.procs):

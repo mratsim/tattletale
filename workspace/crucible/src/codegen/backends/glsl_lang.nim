@@ -61,7 +61,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
-  leafName(glslScalarRow, glslVectorRule, t)
+  getLeafName(glslScalarRow, glslVectorRule, t)
 
 proc emitTypeBare(t: CirType): string =
   ## GLSL name of `t` with no identifier, array dimensions composed into
@@ -127,7 +127,7 @@ proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string 
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
-proc glslCoordName(kind: CoordBuiltinKind): string =
+proc getGlslCoordName(kind: CoordBuiltinKind): string =
   ## GLSL name of a canonical coordinate builtin kind: all six are native
   ## GLSL builtins, a plain rename.
   case kind
@@ -238,7 +238,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return "int(gl_LocalInvocationIndex)"
-      let g = glslCoordName(e.coordBuiltin)
+      let g = getGlslCoordName(e.coordBuiltin)
       return "ivec3(int(" & g & ".x), int(" & g & ".y), int(" & g & ".z))"
     if e.typ != nil and e.typ.kind == ctPtr and e.typ.space != caDevice:
       ctx.fail("pointer local " & e.name & " used as a value, GLSL has no" &
@@ -272,7 +272,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     # takes its letter, names pass through
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       # a component of an unsigned GLSL builtin, cast to the canonical int
-      return "int(" & glslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
+      return "int(" & getGlslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
       let comp = emitVectorComponent(e.fieldName)

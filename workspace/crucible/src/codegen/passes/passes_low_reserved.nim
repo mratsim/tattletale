@@ -166,7 +166,7 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
 # The pass
 # ═══════════════════════════════════════════════════════════════════════
 
-func safeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: string): string =
+func makeSafeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: string): string =
   var safe = if name in reserved: name & "_nim" else: name
   if doubleUnderscorePrefix.len > 0 and safe.startsWith("__"):
     safe = doubleUnderscorePrefix & safe
@@ -232,26 +232,26 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
   for t in m.types:
     if t.kind == ctStruct:
       # types are shared refs so a renamed name reaches every use through the type object
-      let safeName = safeIdent(t.name, reserved, doubleUnderscorePrefix)
+      let safeName = makeSafeIdent(t.name, reserved, doubleUnderscorePrefix)
       if safeName != t.name:
         fieldRenames[t.name] = safeName
         t.name = safeName
       for f in mitems(t.fields):
-        let safe = safeIdent(f.name, reserved, doubleUnderscorePrefix)
+        let safe = makeSafeIdent(f.name, reserved, doubleUnderscorePrefix)
         if safe != f.name:
           fieldRenames[f.name] = safe
           f.name = safe
   # one shared fn map feeds every proc's symbol walk, so a call site renames with its callee
   var fnRenames: Table[string, string]
   for fn in m.procs:
-    let safeFn = safeIdent(fn.name, reserved, doubleUnderscorePrefix)
+    let safeFn = makeSafeIdent(fn.name, reserved, doubleUnderscorePrefix)
     if safeFn != fn.name:
       fnRenames[fn.name] = safeFn
       fn.name = safeFn
   for fn in m.procs:
     var symRenames = fnRenames
     for p in mitems(fn.params):
-      let safe = safeIdent(p.name, reserved, doubleUnderscorePrefix)
+      let safe = makeSafeIdent(p.name, reserved, doubleUnderscorePrefix)
       if safe != p.name:
         symRenames[p.name] = safe
         p.name = safe
@@ -260,7 +260,7 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
     for s in fn.body.mitems:
       case s.kind
       of sVar, sConst:
-        let safe = safeIdent(s.name, reserved, doubleUnderscorePrefix)
+        let safe = makeSafeIdent(s.name, reserved, doubleUnderscorePrefix)
         if safe != s.name:
           decls.add((s.name, safe))
           s.name = safe

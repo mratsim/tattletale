@@ -12,4 +12,4 @@ import ./pass_datatypes
 import ./passes_norm_aliases
 
 func registerLegalizationPasses*(reg: var PassRegistry) =
-  reg.registerBuiltinKindAssignment()
+  reg.registerAssignBuiltinKindsPass()

@@ -219,7 +219,7 @@ proc newVulkanContext*(): VulkanContext =
   # Software renderers (Mesa Xe KMD) can enumerate first and fail vkMapMemory,
   # prefer a discrete GPU with a compute queue
   let initCtx = result   # this nested proc shadows `result` and captures the ctx
-  proc deviceScore(dev: VkPhysicalDevice): tuple[score: int, name: string] =
+  proc scoreDevice(dev: VkPhysicalDevice): tuple[score: int, name: string] =
     let props = deviceProps(initCtx, dev)
     let name = deviceName(initCtx, dev)
     var qfCount: uint32 = 0
@@ -253,14 +253,14 @@ proc newVulkanContext*(): VulkanContext =
   var bestIdx = 0
   var bestScore = -1
   for i, dev in devices:
-    let (score, _) = deviceScore(dev)
+    let (score, _) = scoreDevice(dev)
     if score > bestScore:
       bestScore = score
       bestIdx = i
   if bestScore < 0:
     failLoud("No Vulkan device with a compute-capable queue family found")
   result.physicalDevice = devices[bestIdx]
-  echo "  Vulkan device: ", deviceScore(result.physicalDevice).name
+  echo "  Vulkan device: ", scoreDevice(result.physicalDevice).name
 
   var qfCount: uint32 = 0
   gpqfp(result.physicalDevice, qfCount.addr, nil)

@@ -58,7 +58,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 proc emitCudaScalar(t: CirType): string =
   ## CUDA bare name of a non-array leaf type, "" when the caller composes the name.
-  bareName(cudaScalarRow, cudaVectorRule, t)
+  getBareName(cudaScalarRow, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## CUDA declaration text of `t` with `ident` appended, the shared C declarator

@@ -47,7 +47,7 @@ proc getArtifact*(engine: OpenCLEngine): string {.inline.} =
   engine.source
 
 proc deviceName*(engine: OpenCLEngine): string {.inline.} =
-  engine.ctx.device.name()
+  engine.ctx.device.getName()
 
 proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[OpenCLBuffer, T] {.inline.} =
   ## Allocates len elements of T on the engine
@@ -75,7 +75,7 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     static:
       error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
-  const size = deviceLayout(T, bkOpenCL).size
+  const size = computeDeviceLayout(T, bkOpenCL).size
   var blob: array[size, byte]
   var off = 0
   blob.packFrom(off, v, bkOpenCL)

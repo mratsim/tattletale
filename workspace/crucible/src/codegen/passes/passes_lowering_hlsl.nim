@@ -213,7 +213,7 @@ proc hlslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
   case e.kind
   of eDot:
     proc spliceExplodedRead(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, root: CirExpr): string =
-      let path = dottedPath(e)
+      let path = getDottedPath(e)
       if ctx.hasLeafPrefix(path):
         return rewritePointerExpr(fn, ctx, e.dotBase)
       if not ctx.hasDeeperField(path):
@@ -221,7 +221,7 @@ proc hlslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
           " of exploded struct local " & root.name &
           " has no leaf binding, HLSL has no pointer struct members")
       return ""
-    let root = structRoot(e)
+    let root = getStructRoot(e)
     if root != nil and root.name in ctx.structLocals:
       return spliceExplodedRead(fn, ctx, e, root)
     let err = rewritePointerExpr(fn, ctx, e.dotBase)
@@ -229,7 +229,7 @@ proc hlslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
       return err
     # child rewrite may have spliced the base chain to an exploded struct
     # local or its leaf, re-splice this node against the rewritten base
-    let root2 = structRoot(e)
+    let root2 = getStructRoot(e)
     if root2 != nil and root2.name in ctx.structLocals:
       return spliceExplodedRead(fn, ctx, e, root2)
     return ""

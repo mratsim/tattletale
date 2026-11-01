@@ -9,7 +9,7 @@
 ##
 ## C declarator engine, driven by the registry rows that each printer supplies.
 ##
-## - `scalarName`/`leafName`/`bareName`: type names from `ScalarRow` and `VectorRule`
+## - `getScalarName`/`getLeafName`/`getBareName`: type names from `ScalarRow` and `VectorRule`
 ## - `cDecl`: C-style declaration text from type structure
 ## - a leaf absent from the rows returns "", so the caller composes the name or refuses
 ##
@@ -62,13 +62,13 @@ proc emitVectorComponent*(name: string): string =
 # Declarator engine: type names and declaration forms over the registry rows
 # ═══════════════════════════════════════════════════════════════════════
 
-proc scalarName*(row: ScalarRow, t: CirType): string =
+proc getScalarName*(row: ScalarRow, t: CirType): string =
   ## Scalar type name of a leaf type from the target's scalar row.
   ##
   ## Returns "" when the kind is not a scalar leaf or the (kind, width) cell is absent from the row.
   ## The caller composes the name or refuses, per its own policy.
   ##
-  ##   result = scalarName(mslScalarRow(), t)  # "half" for a 16-bit float
+  ##   result = getScalarName(mslScalarRow(), t)  # "half" for a 16-bit float
   case t.kind
   of ctVoid, ctBool:
     for c in row.cells:
@@ -97,13 +97,13 @@ proc scalarRefusal*(target: string, row: ScalarRow, t: CirType): string =
       return "<" & target & ": no " & tok & ", " & r.reason & ">"
   return "<" & target & ": no " & tok & ">"
 
-proc vectorName*(rule: VectorRule, row: ScalarRow, t: CirType): string =
+proc getVectorName*(rule: VectorRule, row: ScalarRow, t: CirType): string =
   ## Vector type name of `t` from the target's vector rule.
   ##
   ## Returns "" when `t` is not a vector, its element has no cell in the rule,
   ## or its lane count is outside `rule.lanes`. The caller refuses.
   ##
-  ##   result = vectorName(glslVectorRule(), glslScalarRow(), t)  # "vec4"
+  ##   result = getVectorName(glslVectorRule(), glslScalarRow(), t)  # "vec4"
   if t.kind != ctVector:
     return ""
   for e in rule.elems:
@@ -112,51 +112,51 @@ proc vectorName*(rule: VectorRule, row: ScalarRow, t: CirType): string =
         return ""
       case rule.nameForm
       of vnfPrefixed:
-        let prefix = if e.prefix.len > 0: e.prefix else: scalarName(row, t.vElem)
+        let prefix = if e.prefix.len > 0: e.prefix else: getScalarName(row, t.vElem)
         return prefix & $t.vN
       of vnfGenericElem:
-        return e.prefix & $t.vN & "<" & scalarName(row, t.vElem) & ">"
+        return e.prefix & $t.vN & "<" & getScalarName(row, t.vElem) & ">"
   return ""
 
-proc leafName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
+proc getLeafName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
   ## Bare type name of a non-array leaf type: the scalar, vector or struct name.
   ##
   ## Returns "" for pointers, arrays, proc and span types. The caller composes
   ## the name or refuses, per its own policy.
   case t.kind
   of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    result = scalarName(row, t)
+    result = getScalarName(row, t)
   of ctVector:
-    result = vectorName(rule, row, t)
+    result = getVectorName(rule, row, t)
   of ctStruct:
     result = t.name
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
-proc bareName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
+proc getBareName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
   ## Bare type name of `t`: the form casts and compound literals use.
   ## No identifier, pointer stars trailing the pointee name.
   ##
   ## Returns "" for arrays, proc and span types.
   ## The caller composes the name or refuses, per its own policy.
   ##
-  ##   result = bareName(cudaScalarRow(), cudaVectorRule(), t)  # "float**"
+  ##   result = getBareName(cudaScalarRow(), cudaVectorRule(), t)  # "float**"
   if t.kind in {ctPtr, ctAptr}:
-    return bareName(row, rule, t.pElem) & "*"
-  return leafName(row, rule, t)
+    return getBareName(row, rule, t.pElem) & "*"
+  return getLeafName(row, rule, t)
 
-proc unnamedScalarCell*(row: ScalarRow, t: CirType): CirType =
+proc getUnnamedScalarCell*(row: ScalarRow, t: CirType): CirType =
   ## Returns the scalar leaf of `t` when `row` names no type for it, after peeling pointer stars and array dimensions.
   ##
   ## Returns nil when every scalar leaf has a type name or when the leaf is not a scalar kind.
   ##
-  ##   let missing = unnamedScalarCell(mslScalarRow, tFloat(64))
+  ##   let missing = getUnnamedScalarCell(mslScalarRow, tFloat(64))
   ##   # tFloat(64) while msl names no f64, nil for tFloat(16) ("half")
   var leaf = t
   while leaf.kind in {ctPtr, ctAptr, ctArray}:
     leaf = if leaf.kind == ctArray: leaf.aElem else: leaf.pElem
   if leaf.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat} and
-      scalarName(row, leaf).len == 0:
+      getScalarName(row, leaf).len == 0:
     return leaf
   return nil
 
@@ -176,15 +176,15 @@ proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident:
   if t.kind == ctArray:
     if ident.len == 0 and not allowEmptyIdent:
       return "<" & target & ": array needs an identifier>"
-  let missing = unnamedScalarCell(row, t)
+  let missing = getUnnamedScalarCell(row, t)
   if missing != nil:
     return scalarRefusal(target, row, missing)
   if t.kind == ctArray:
     if t.aElem.kind == ctArray:
       return cDecl(row, rule, target, t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
         allowEmptyIdent)
-    return bareName(row, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
-  result = bareName(row, rule, t)
+    return getBareName(row, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
+  result = getBareName(row, rule, t)
   if ident.len > 0:
     result.add ' ' & ident
 
@@ -232,7 +232,7 @@ template emitLiteral*(e: CirExpr, litRow: LitRow, row: ScalarRow): string =
     case e.kind
     of eIntLit:
       if e.litType.bits notin {32, 64} and litRow.int.narrowCast:
-        lit = "(" & scalarName(row, e.litType) & ")" & $e.value
+        lit = "(" & getScalarName(row, e.litType) & ")" & $e.value
       else:
         case e.litType.kind
         of ctUint:
