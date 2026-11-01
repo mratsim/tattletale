@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Cirv2 frontend: typed NimNode to CIRv2, normal form by construction.
+## Cirv2 frontend: typed NimNode to CIRv2, one Nim node in, one IR node out.
 ##
 ## Entry: the typed node the `metal:`-family macros receive, a block of kernel
 ## proc defs or the single `{.global.}` wrapper proc of a launchDeviceFn call.
@@ -1661,7 +1661,7 @@ proc exitProcBody(ctx: var FrontendCtx, save: ProcCtxSave) =
 
 proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   ## One proc definition: parameters typed off Nim once and the body lowered
-  ## into normal form.
+  ## node for node.
   ##
   ## Generic definitions skip here, their instantiations harvest at the calls that use them.
   ## A def claims and emits under its own name: kernels keep the plain name,
