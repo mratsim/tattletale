@@ -40,9 +40,9 @@ type
     policy: WalkPolicy
     ## Walk policy of the target. The shared walk reads its fields.
     lit: LitTokens
-    ## Literal token forms of the target. The shared literal head reads them, per kernel state.
+    ## Literal token forms of the target. The shared literal head reads them.
     scalarNames: ScalarNames
-    ## Scalar names of the target. The narrow integer cast takes its type name from them, per kernel state.
+    ## Scalar names of the target. The narrow integer cast names its type from them.
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
@@ -96,8 +96,7 @@ proc emitMslPtr(t: CirType, ident: string): string =
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## MSL declaration text of one struct member: a pointer member names
-  ## the address space of its pointee (`device float* p`), the rest takes
-  ## the shared C declarator form.
+  ## the address space of its pointee (`device float* p`).
   if f.typ.kind in {ctPtr, ctAptr}:
     return emitMslPtr(f.typ, f.name)
   return emitMslType(f.typ, f.name, false)
@@ -130,7 +129,6 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## `args` contains the already-printed argument texts.
   if callee.kind != eSym:
     return ""
-  # builtin vocabulary dispatches on the typed kinds, never on names
   case callee.synchroBuiltin
   of sbkThreadgroupBarrier:
     return "threadgroup_barrier(mem_flags::mem_threadgroup)"
@@ -168,8 +166,7 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
 
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
-  ## One numeric conversion, the C-style cast form, pointer casts name
-  ## their address space.
+  ## Pointer casts name their address space.
   let t = e.castType
   var castTyp = emitMslType(t, "", true)
   if t.kind in {ctPtr, ctAptr}:
@@ -181,12 +178,10 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## MSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    # a coordinate builtin returns its attributed parameter name, others return unchanged
     if e.coordBuiltin != cbkNone:
       return ctx.printBuiltinRef(e.name, true)
     return e.name
   of eDot:
-    # a coordinate component casts to the canonical int, a dereferenced base parenthesizes
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       ctx.builtins.incl(e.dotBase.name)
       return "(int)(" & e.dotBase.name & '.' & e.fieldName & ")"
@@ -208,7 +203,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(kv.value)
     result.add "}"
   of eAconstr:
-    # every element casts to the element type
     result = "{"
     for i, el in e.elems:
       if i > 0:
@@ -227,17 +221,13 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration: kernel-scope threadgroup storage and storage-class refusals, then the declaration text.
+  ## One local declaration.
   let pad = spaces(ctx.indent * 2)
   if s.space == caThreadgroup:
-    # kernel-scope threadgroup storage: the MSL lowering pass keeps only
-    # a kernel's initializer-less smem locals here, a device function's
-    # smem local and any initializer refuse in the pass
+    # Only a kernel's initializer-less smem locals reach here: the MSL lowering pass refuses a device function's smem local and any initializer
     result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
     return
   if s.space == caConstant:
-    # MSL lowering pass relocates const_mem locals at every scope,
-    # a survivor here was never relocated
     ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
       " pass hoists const_mem locals to program scope")
     return ""
@@ -250,7 +240,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   result &= ";"
 
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local constant declaration, the `constexpr` form.
+  ## One local constant declaration.
   let pad = spaces(ctx.indent * 2)
   if s.declType.kind == ctArray:
     result = pad & "constexpr " &
@@ -260,7 +250,7 @@ proc printConst(ctx: var PrintCtx, s: CirStmt): string =
       " = " & ctx.printExpr(s.init) & ";"
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
-  ## One inline assembly statement: the spliced text, MSL has no asm form.
+  ## One inline assembly statement: the spliced text.
   let pad = spaces(ctx.indent * 2)
   var text = ""
   for i, part in s.asmParts:
@@ -306,7 +296,6 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ## Device-function parameters:
   ## - a threadgroup `ptr` parameter is a relocated smem arena, caller-owned
   ##   storage (Metal rejects threadgroup allocation inside device functions)
-  ## - other pointers keep their address space, values print plainly
   var slot = 0
   if fn.isKernel:
     for p in fn.params:
@@ -339,8 +328,6 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
         result.add emitMslType(p.typ, p.name, true)
 
 proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
-  ## MSL linkage prefix: a kernel is `kernel`, an `{.inline.}` device function
-  ## is `inline`, every other device function prints none.
   if fn.isKernel:
     return "kernel "
   if fn.inline:
@@ -352,8 +339,8 @@ proc emitTypeBare(t: CirType): string =
   emitMslType(t, "", true)
 
 proc prepProc(ctx: var PrintCtx, fn: CirProc) =
-  ## Per-proc state of the MSL walk: the builtin set resets before the walk,
-  ## the body walk fills it, and the signature reads it after the body prints.
+  ## Resets the builtin set before the body walk, the signature reads it
+  ## after the body prints.
   ctx.builtins = initOrderedSet[string]()
 
 const mslModuleShape = ModuleShape(
