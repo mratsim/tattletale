@@ -51,7 +51,7 @@ static void queuebuf_freeRetired(tpc_taskqueue* tq) {
 static void queuebuf_grow(tpc_taskqueue* tq, tpc_queuebuf** buf, int32_t newCapacity, intptr_t front, intptr_t back) {
     /* Read -> Copy -> Update */
     tpc_queuebuf* fresh = queuebuf_new(newCapacity);
-    for (int32_t i = front; i < back; i++) {
+    for (intptr_t i = front; i < back; i++) {
         atomic_store_explicit(
             &fresh->slots[i & (fresh->capacity - 1)],
             atomic_load_explicit(&(*buf)->slots[i & ((*buf)->capacity - 1)],

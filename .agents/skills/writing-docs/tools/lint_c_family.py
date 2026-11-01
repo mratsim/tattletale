@@ -408,7 +408,7 @@ def check_param_lists(path, blocks, source_lines, findings):
                                 "the description column moved from %d to %d, "
                                 "all entries align in one column"
                                 % (shared["desc"], desc_col)))
-                    elif not re.match(r"^[0-9]+:", content):
+                    elif not re.match(r"^\s*[0-9]+:", content):
                         # free-text Returns content, not an entry list
                         cur["desc_col"] = "free"
                 else:
@@ -449,6 +449,9 @@ def check_param_lists(path, blocks, source_lines, findings):
                         % (shared["desc"], desc_col)))
                 cur["entries"] += 1
             else:
+                if re.match(r"^\s*[0-9]+:", c):
+                    # numeric Returns entries are list items, not continuations
+                    continue
                 cont_col = len(c) - len(c.lstrip())
                 if shared["desc"] is not None and cont_col != shared["desc"]:
                     findings.append(Finding(
@@ -805,7 +808,10 @@ def lint_c_family(path, text, findings):
                 and c.rstrip().endswith((";", "{", "}"))):
             prev_prose = None
             continue
-        check_line(path, n, c, kind, False, prev_text, prev_kind, findings)
+        # C comment lines carry the hash kind: the engine's doc kind
+        # belongs to nim and python doc comments, whose the-opener rule
+        # would double-report what comment-the already reports
+        check_line(path, n, c, "hash", False, prev_text, prev_kind, findings)
         if structural(c) or code_like(c):
             prev_prose = None
             continue

@@ -1221,7 +1221,7 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
             "prose line is %d chars, cap is %d" % (len(c), PROSE_CAP)))
     if ";" in bare:
         findings.append(Finding(path, n, "semicolon", "semicolon in prose"))
-    if COMMENT_THE_OPEN_RE.match(c):
+    if kind == "hash" and COMMENT_THE_OPEN_RE.match(c):
         findings.append(Finding(
             path, n, "comment-the",
             "a comment opens on the definite article, open on the noun, "
