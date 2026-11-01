@@ -46,6 +46,23 @@ nim ceramic_cgs runner=cgs_layout_compose dump=true
 | Known breakage | 5 runners fail to compile identically on both sides: complement, make_layout_like, products, indexing, tensor_selectors (`crucibleCompileTarget` undeclared in `h_copy_dispatch.nim`), a pre-existing ceramic breakage, compare the 26 kernels that compile |
 | Delta rule | a byte delta names its mechanism |
 
+## Emitted-output policy
+
+A compiler change answers four checks:
+
+- emitted output behaves the same, kernels launch and read back the expected results
+- compile time stays in the T2c band
+- runtime performance is unchanged
+- maintenance line count goes down
+
+Byte identity is a banned check.
+
+An inspected emitted-source diff shows three properties:
+
+- valid under the target's consumer: xcrun metal, dxc, glslang, naga
+- every delta names the mechanism that produced it
+- no md5 locking, no byte-diff proof tables, no byte-identical claims
+
 ## Passes layer publicity
 
 `src/codegen/passes/passes_*` files export only `register*` routines.
