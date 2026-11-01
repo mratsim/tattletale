@@ -254,8 +254,20 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   let fields = r.deriveStructFields(impl, valueSpaces)
   if r.err.len > 0:
     return nil
-  result = tStruct(deriveStructName(canon) & "_" &
+  let candidate = tStruct(deriveStructName(canon) & "_" &
     base58Short(typeIdentityHash(nameKey)), fields)
+  # One struct per structure: the same type reached through two type texts
+  # (a formal's instance and a body's literal, say) must resolve to one struct,
+  # a call boundary passes it under one name.
+  #
+  # - the first registration names the struct
+  # - an equal structure returns the registered instance
+  for registered in r.structs:
+    if structuralEqual(registered, candidate):
+      result = registered
+      r.structMemo[nameKey] = result
+      return
+  result = candidate
   r.structs.add(result)
   r.structMemo[nameKey] = result
 

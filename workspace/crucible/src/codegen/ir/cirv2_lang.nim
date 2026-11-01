@@ -505,6 +505,45 @@ proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
   result.space = space
   result.pElem = t.pElem
 
+proc structuralEqual*(a, b: CirType): bool =
+  ## Returns true when `a` and `b` carry the same structure:
+  ## a struct compares by its field list, every other kind field by field.
+  ## The emitted struct name never participates.
+  if a.isNil != b.isNil:
+    return false
+  if a.isNil:
+    return true
+  if a.kind != b.kind:
+    return false
+  case a.kind
+  of ctVoid, ctBool:
+    result = true
+  of ctInt, ctUint, ctFloat:
+    result = a.bits == b.bits
+  of ctVector:
+    result = a.vN == b.vN and structuralEqual(a.vElem, b.vElem)
+  of ctPtr, ctAptr:
+    result = a.space == b.space and structuralEqual(a.pElem, b.pElem)
+  of ctStruct:
+    if a.fields.len != b.fields.len:
+      return false
+    result = true
+    for i in 0 ..< a.fields.len:
+      if a.fields[i].name != b.fields[i].name or
+          not structuralEqual(a.fields[i].typ, b.fields[i].typ):
+        return false
+  of ctArray:
+    result = a.aN == b.aN and structuralEqual(a.aElem, b.aElem)
+  of ctSpan:
+    result = a.sSpace == b.sSpace and structuralEqual(a.sElem, b.sElem)
+  of ctProc:
+    if a.params.len != b.params.len:
+      return false
+    for i in 0 ..< a.params.len:
+      if not structuralEqual(a.params[i], b.params[i]):
+        return false
+    result = structuralEqual(a.ret, b.ret)
+
 proc sameType*(a, b: CirType): bool =
   ## Returns true when `a` and `b` are the same type.
   ##
