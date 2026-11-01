@@ -14,7 +14,7 @@
 ## - the read-write classification: a buffer parameter is read-write when its proc stores through it or a transitive callee does
 ##
 ## What the recursion pass refuses:
-## - a recursive device function would not terminate
+## - a recursive device function, a recursion would not terminate
 ##
 ## Contract:
 ## - the target registers each pass after the last transform, before the check-only validation stage
