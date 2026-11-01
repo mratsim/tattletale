@@ -29,6 +29,7 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
 import ./print_common
+import ./print_compute
 import ./targets_rows
 
 type
@@ -93,6 +94,14 @@ proc emitMslPtr(t: CirType, ident: string): string =
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
   ptrField(mslScalarRow, mslVectorRule, printerTarget,
     mslPtrQualifier(t.space), t, ident)
+
+proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## MSL declaration text of one struct member: a pointer member names
+  ## the address space of its pointee (`device float* p`), the rest takes
+  ## the shared C declarator form.
+  if f.typ.kind in {ctPtr, ctAptr}:
+    return emitMslPtr(f.typ, f.name)
+  return emitMslType(f.typ, f.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -291,62 +300,70 @@ proc emitBuiltinParam(name: string): string =
     return "uint " & name & " [[" & name & "]]"
   return "uint3 " & name & " [[" & name & "]]"
 
-proc printProc(ctx: var PrintCtx, fn: CirProc): string =
-  ## One proc or kernel: signature, body, closing brace. The body prints first,
-  ## the kernel signature consumes the builtin set the body references.
-  ctx.fnName = fn.name
-  ctx.builtins = initOrderedSet[string]()
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
-    return ""
-  # exportc renames a kernel entry for the host runtime lookup.
-  # A device function keeps the name its call sites reference.
-  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
-  var params: seq[string]
+proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
+  ## MSL parameter texts of one proc or kernel, in declaration order.
+  ##
+  ## Kernel parameters:
+  ## - a relocated smem local binds as threadgroup storage, no buffer slot
+  ## - a device pointer takes the next `[[buffer(n)]]` slot
+  ## - a value parameter binds as `constant T&`, bool retypes to `int`
+  ##   (Metal has no bool constant storage)
+  ## - the coordinate builtins that the body references append as attributed parameters, no slot
+  ##
+  ## Device-function parameters:
+  ## - a threadgroup `ptr` parameter is a relocated smem arena, caller-owned
+  ##   storage (Metal rejects threadgroup allocation inside device functions)
+  ## - other pointers keep their address space, values print plainly
   var slot = 0
   if fn.isKernel:
     for p in fn.params:
       if p.typ.kind == ctPtr and p.typ.space == caThreadgroup:
-        # a relocated smem local, no buffer slot
-        params.add emitMslSmemParam(p)
+        result.add emitMslSmemParam(p)
         continue
       case p.typ.kind
       of ctAptr, ctPtr:
         let inner = p.typ.pElem
-        params.add "device " & emitMslType(inner, "", true) & "* " & p.name &
+        result.add "device " & emitMslType(inner, "", true) & "* " & p.name &
           " [[buffer(" & $slot & ")]]"
       else:
         var elem = emitMslScalar(p.typ)
         if p.typ.kind == ctBool:
           elem = "int"
-        params.add "constant " & elem & "& " & p.name
+        result.add "constant " & elem & "& " & p.name
       inc slot
     for b in ctx.builtins:
       # coordinate builtins are attributed params, no binding, no slot
-      params.add emitBuiltinParam(b)
+      result.add emitBuiltinParam(b)
   else:
     for p in fn.params:
       case p.typ.kind
       of ctAptr, ctPtr:
-        # a threadgroup-space pointer parameter is a relocated smem arena,
-        # caller-owned storage (Metal rejects threadgroup allocation inside device functions)
-        # - an `aptr` over the element type prints a pointer:
-        #   `threadgroup T* name`
-        # - a `ptr` over the object type prints a reference:
-        #   `threadgroup T& name`
         if p.typ.space == caThreadgroup and p.typ.kind == ctPtr:
-          params.add emitMslSmemParam(p)
+          result.add emitMslSmemParam(p)
         else:
-          params.add emitMslPtr(p.typ, p.name)
+          result.add emitMslPtr(p.typ, p.name)
       else:
-        params.add emitMslType(p.typ, p.name, true)
-  let ret = emitMslType(fn.ret, "", true)
-  let prefix = if fn.isKernel: "kernel "
-    elif fn.inline: "inline "
-    else: ""
-  let sig = prefix & ret & ' ' & name & '(' & params.join(", ") & ")"
-  return sig & " {\n" & bodyTxt & '\n' & "}"
+        result.add emitMslType(p.typ, p.name, true)
+
+proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
+  ## MSL linkage prefix: a kernel is `kernel`, an `{.inline.}` device function
+  ## is `inline`, every other device function prints none.
+  if fn.isKernel:
+    return "kernel "
+  if fn.inline:
+    return "inline "
+  return ""
+
+proc emitComputeRet(ctx: var PrintCtx, t: CirType): string =
+  ## MSL declaration text of a return type, no identifier.
+  emitMslType(t, "", true)
+
+proc printProc(ctx: var PrintCtx, fn: CirProc): string =
+  ## One proc or kernel through the shared signature assembly:
+  ## the builtin set resets before the walk, the body walk fills that set,
+  ## and the signature assembles after the body prints.
+  ctx.builtins = initOrderedSet[string]()
+  printComputeProc(ctx, fn)
 
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full MSL translation unit: metal headers, struct declarations, program-scope constants,
@@ -358,19 +375,9 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   var src = "#include <metal_stdlib>\n"
   src &= "#include <metal_atomic>\n"
   src &= "using namespace metal;\n\n"
-  for t in m.types:
-    if t.kind != ctStruct:
-      ctx.fail("module type " & t.name & " is not a struct")
-      break
-    src &= "struct " & t.name & " {\n"
-    if t.fields.len == 0:
-      src &= "  char _;\n"
-    for f in t.fields:
-      var field = emitMslType(f.typ, f.name, false)
-      if f.typ.kind in {ctPtr, ctAptr}:
-        field = emitMslPtr(f.typ, f.name)
-      src &= "  " & field & ";\n"
-    src &= "};\n\n"
+  src &= printComputeStructs(ctx, m, false, "char _")
+  if ctx.failing():
+    return ("", ctx.err)
   # program-scope `constant` declarations relocated into `m.globals` by the MSL lowering pass,
   # in encounter order
   var hoisted: seq[string]
