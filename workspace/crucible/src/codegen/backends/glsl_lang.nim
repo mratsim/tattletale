@@ -214,6 +214,9 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     if call.callee.synchroBuiltin != sbkNone:
       ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
       return ""
+  if call.callee.kind == eSym and call.callee.builtin and
+      glslConvBuiltinNames.hasKey(call.callee.name):
+    return glslConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════

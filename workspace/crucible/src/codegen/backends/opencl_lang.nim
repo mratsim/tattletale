@@ -237,6 +237,9 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   if call.callee.kind == eSym and call.callee.synchroBuiltin != sbkNone:
     ctx.fail("barrier is a statement, a value-position barrier is outside the OpenCL subset")
     return ""
+  if call.callee.kind == eSym and call.callee.builtin and
+      openclConvBuiltinNames.hasKey(call.callee.name):
+    return openclConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 proc emitLocalDecl(s: CirStmt): string =
   ## Declaration text of one local, the array form appends the length to the name, the init stays with the caller.

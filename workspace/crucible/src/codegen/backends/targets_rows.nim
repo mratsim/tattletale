@@ -182,6 +182,18 @@ const openclCastRules* = [
   CastRule(srcKinds: {ctInt, ctUint}, dstKinds: {ctFloat}, sameWidth: true,
     spelling: "as_$2($1)")]
 
+# `{.builtin.}` fp16 conversions resolve to the OpenCL C cast forms,
+# `float16` keeps a first-class `half` identity and `asFp16`/`asU16`
+# reinterpret through the `as_` builtins.
+# `bfloat16` and fp8 conversions stay outside: no OpenCL C native exists.
+# `{.builtin.}` names pass through and refuses at OpenCL compile time.
+const openclConvBuiltinNames* = {
+  "toFp16": "(half)($1)",
+  "toFp32": "(float)($1)",
+  "asFp16": "as_half($1)",
+  "asU16": "as_ushort($1)",
+}.toTable()
+
 const glslScalarRow* = ScalarRow(cells: @[
   # 8, 16 and 64-bit names compile behind the explicit-arithmetic-types extensions the module emits.
   ScalarCell(kind: ctVoid, width: 0, spelling: "void"),
@@ -219,6 +231,18 @@ const glslLitRow* = LitRow(
     inf64: "double(uintBitsToFloat(0x7f800000u))",
     negInf64: "double(uintBitsToFloat(0xff800000u))",
     nan64: "double(uintBitsToFloat(0x7fc00000u))"))
+
+# `{.builtin.}` fp16 conversions resolve to the GLSL native call text,
+# `float16` keeps a first-class `float16_t` identity and `asFp16`/`asU16`
+# reinterpret through the float16 bit-level builtins.
+# `bfloat16` and fp8 conversions stay outside: no GLSL native exists.
+# `{.builtin.}` names pass through and refuses at glslang compile time.
+const glslConvBuiltinNames* = {
+  "toFp16": "float16_t($1)",
+  "toFp32": "float($1)",
+  "asFp16": "uint16BitsToFloat16($1)",
+  "asU16": "float16BitsToUint16($1)",
+}.toTable()
 
 const glslKindRow* = KindRow(
   loop: LoopStyle(
@@ -307,6 +331,18 @@ const wgslVectorRule* = VectorRule(
 const wgslCastRules* = [
   CastRule(srcAny: true, dstKinds: {low(CirTypeKind)..high(CirTypeKind)},
     spelling: "bitcast<$2>($1)")]
+
+# `{.builtin.}` fp16 conversions resolve to the WGSL native call text,
+# `float16` keeps a first-class `f16` identity and `asFp16`/`asU16`
+# reinterpret through `bitcast`.
+# `bfloat16` and fp8 conversions stay outside: no WGSL native exists.
+# `{.builtin.}` names pass through and refuses at wgpu parse time.
+const wgslConvBuiltinNames* = {
+  "toFp16": "f16($1)",
+  "toFp32": "f32($1)",
+  "asFp16": "bitcast<f16>($1)",
+  "asU16": "bitcast<u16>($1)",
+}.toTable()
 
 const hlslScalarRow* = ScalarRow(cells: @[
   # 8/16-bit integers and int64_t are parse errors in the HLSL frontend,

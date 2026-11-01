@@ -228,6 +228,9 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     of "rsqrt":
       return "inverseSqrt(" & args.join(", ") & ")"
     else: discard
+  if call.callee.kind == eSym and call.callee.builtin and
+      wgslConvBuiltinNames.hasKey(call.callee.name):
+    return wgslConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Declaration text of one local, the init stays with the caller.
