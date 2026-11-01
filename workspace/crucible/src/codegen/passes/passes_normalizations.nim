@@ -11,9 +11,13 @@
 
 import ./pass_datatypes
 import ./passes_norm_compound_assign
+import ./passes_norm_literals
 import ./passes_norm_unroll
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
-  # bindCompoundAssignTemps runs first, its shared-tree detection compares references
+  # retypeLiterals settles literal types before the later stages read them
+  reg.registerRetypeLiterals()
+  # bindCompoundAssignTemps runs first among the reshaping passes:
+  # shared-tree detection compares references
   reg.registerCompoundAssignTemps()
   reg.registerMarkExplicitUnrolls()
