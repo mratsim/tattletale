@@ -113,56 +113,18 @@ func isLargeStruct(t: CirType): bool =
 
 proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
   ## Rewrites every read of the by-value param `oldName` into a deref of the hidden pointer `ptrSym`, in place over the expression tree.
+  ## Expressions are refs, the rewrite applies to the node every sharer sees.
+  ##
+  ## The rewritten read splices to `deref(ptrSym)` and the walk descends
+  ## into the spliced node's children: `ptrSym` names the hidden pointer
+  ## and never matches `oldName`.
   if e.isNil:
     return
-  case e.kind
-  of eSym:
-    if e.name == oldName:
+  proc rewrite(e: CirExpr) =
+    if e.kind == eSym and e.name == oldName:
       e.kind = eDeref
       e.derefOperand = ptrSym
-  of eDeref:
-    wrapParamReads(e.derefOperand, oldName, ptrSym)
-  of eAt:
-    wrapParamReads(e.atBase, oldName, ptrSym)
-    wrapParamReads(e.atIndex, oldName, ptrSym)
-  of ePat:
-    wrapParamReads(e.patBase, oldName, ptrSym)
-    wrapParamReads(e.patIndex, oldName, ptrSym)
-  of eDot:
-    wrapParamReads(e.dotBase, oldName, ptrSym)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    wrapParamReads(e.left, oldName, ptrSym)
-    wrapParamReads(e.right, oldName, ptrSym)
-  of eNeg:
-    wrapParamReads(e.unOperand, oldName, ptrSym)
-  of eEq, eNeq, eLt, eLe:
-    wrapParamReads(e.a, oldName, ptrSym)
-    wrapParamReads(e.b, oldName, ptrSym)
-  of eNot:
-    wrapParamReads(e.notOperand, oldName, ptrSym)
-  of eAnd, eOr:
-    wrapParamReads(e.andLeft, oldName, ptrSym)
-    wrapParamReads(e.andRight, oldName, ptrSym)
-  of eTernary:
-    wrapParamReads(e.cond, oldName, ptrSym)
-    wrapParamReads(e.thenE, oldName, ptrSym)
-    wrapParamReads(e.elseE, oldName, ptrSym)
-  of eCast, eConv:
-    wrapParamReads(e.castOperand, oldName, ptrSym)
-  of eAddr:
-    wrapParamReads(e.addrOperand, oldName, ptrSym)
-  of eOconstr:
-    for kvf in e.kvFields.mitems:
-      wrapParamReads(kvf.value, oldName, ptrSym)
-  of eAconstr:
-    for el in e.elems.mitems:
-      wrapParamReads(el, oldName, ptrSym)
-  of eCall:
-    wrapParamReads(e.callee, oldName, ptrSym)
-    for a in e.args.mitems:
-      wrapParamReads(a, oldName, ptrSym)
-  of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof:
-    discard
+  e.walkExprs(rewrite)
 
 proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int) =
   ## Wraps a call argument in an address when the formal travels as a hidden
@@ -173,71 +135,34 @@ proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int) =
   ##
   ## - the hoisted declarations run in front of the statement
   ## - nested calls hoist first, every reference reads a computed temp
+  ##
+  ## The descent goes through `getExprChildren` and the wrap logic reads
+  ## the children after it: a call node sees its arguments already rewritten.
   if e.isNil:
     return
-  case e.kind
-  of eCall:
-    for a in e.args.mitems:
-      addrWrapByrefArgs(a, pre, tmpCount)
-    addrWrapByrefArgs(e.callee, pre, tmpCount)
-    let fnTy = e.callee.typ
-    if fnTy != nil and fnTy.kind == ctProc:
-      for i in 0 ..< e.args.len:
-        if i >= fnTy.params.len:
-          break
-        let formal = fnTy.params[i]
-        if formal != nil and formal.kind in {ctPtr, ctAptr} and
-            formal.pElem != nil and formal.pElem.kind == ctStruct:
-          let at = getExprType(e.args[i])
-          if at != nil and at.kind == ctStruct:
-            if isLvalue(e.args[i]):
-              e.args[i] = addrE(formal, e.args[i])
-            else:
-              inc tmpCount
-              let tmpName = "byref_tmp" & $tmpCount
-              let tmp = sym(tmpName, at)
-              pre.add(varD(tmpName, at))
-              pre.add(asgnS(tmp, e.args[i]))
-              e.args[i] = addrE(formal, tmp)
-  of eDeref:
-    addrWrapByrefArgs(e.derefOperand, pre, tmpCount)
-  of eAt:
-    addrWrapByrefArgs(e.atBase, pre, tmpCount)
-    addrWrapByrefArgs(e.atIndex, pre, tmpCount)
-  of ePat:
-    addrWrapByrefArgs(e.patBase, pre, tmpCount)
-    addrWrapByrefArgs(e.patIndex, pre, tmpCount)
-  of eDot:
-    addrWrapByrefArgs(e.dotBase, pre, tmpCount)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    addrWrapByrefArgs(e.left, pre, tmpCount)
-    addrWrapByrefArgs(e.right, pre, tmpCount)
-  of eNeg:
-    addrWrapByrefArgs(e.unOperand, pre, tmpCount)
-  of eEq, eNeq, eLt, eLe:
-    addrWrapByrefArgs(e.a, pre, tmpCount)
-    addrWrapByrefArgs(e.b, pre, tmpCount)
-  of eNot:
-    addrWrapByrefArgs(e.notOperand, pre, tmpCount)
-  of eAnd, eOr:
-    addrWrapByrefArgs(e.andLeft, pre, tmpCount)
-    addrWrapByrefArgs(e.andRight, pre, tmpCount)
-  of eTernary:
-    addrWrapByrefArgs(e.cond, pre, tmpCount)
-    addrWrapByrefArgs(e.thenE, pre, tmpCount)
-    addrWrapByrefArgs(e.elseE, pre, tmpCount)
-  of eCast, eConv:
-    addrWrapByrefArgs(e.castOperand, pre, tmpCount)
-  of eAddr:
-    addrWrapByrefArgs(e.addrOperand, pre, tmpCount)
-  of eOconstr:
-    for kvf in e.kvFields.mitems:
-      addrWrapByrefArgs(kvf.value, pre, tmpCount)
-  of eAconstr:
-    for el in e.elems.mitems:
-      addrWrapByrefArgs(el, pre, tmpCount)
-  of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof, eSym:
-    discard
+  for ch in getExprChildren(e):
+    addrWrapByrefArgs(ch, pre, tmpCount)
+  if e.kind != eCall:
+    return
+  let fnTy = e.callee.typ
+  if fnTy != nil and fnTy.kind == ctProc:
+    for i in 0 ..< e.args.len:
+      if i >= fnTy.params.len:
+        break
+      let formal = fnTy.params[i]
+      if formal != nil and formal.kind in {ctPtr, ctAptr} and
+          formal.pElem != nil and formal.pElem.kind == ctStruct:
+        let at = getExprType(e.args[i])
+        if at != nil and at.kind == ctStruct:
+          if isLvalue(e.args[i]):
+            e.args[i] = addrE(formal, e.args[i])
+          else:
+            inc tmpCount
+            let tmpName = "byref_tmp" & $tmpCount
+            let tmp = sym(tmpName, at)
+            pre.add(varD(tmpName, at))
+            pre.add(asgnS(tmp, e.args[i]))
+            e.args[i] = addrE(formal, tmp)
 
 proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int)
   ## Forward declaration: nested statement lists recurse into each other.
@@ -348,58 +273,16 @@ proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =
 
 proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
   ## Points a call-site callee symbol's proc type at the rewritten formals.
+  ## Symbols name no children, one visit per node covers the tree.
   if e.isNil:
     return
-  if e.kind == eSym and e.typ != nil and e.typ.kind == ctProc and
-      newFormals.hasKey(e.name):
-    let ps = newFormals[e.name]
-    for i in 0 ..< min(ps.len, e.typ.params.len):
-      e.typ.params[i] = ps[i]
-    return
-  case e.kind
-  of eDeref:
-    retargetProcTypeSyms(e.derefOperand, newFormals)
-  of eAt:
-    retargetProcTypeSyms(e.atBase, newFormals)
-    retargetProcTypeSyms(e.atIndex, newFormals)
-  of ePat:
-    retargetProcTypeSyms(e.patBase, newFormals)
-    retargetProcTypeSyms(e.patIndex, newFormals)
-  of eDot:
-    retargetProcTypeSyms(e.dotBase, newFormals)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    retargetProcTypeSyms(e.left, newFormals)
-    retargetProcTypeSyms(e.right, newFormals)
-  of eNeg:
-    retargetProcTypeSyms(e.unOperand, newFormals)
-  of eEq, eNeq, eLt, eLe:
-    retargetProcTypeSyms(e.a, newFormals)
-    retargetProcTypeSyms(e.b, newFormals)
-  of eNot:
-    retargetProcTypeSyms(e.notOperand, newFormals)
-  of eAnd, eOr:
-    retargetProcTypeSyms(e.andLeft, newFormals)
-    retargetProcTypeSyms(e.andRight, newFormals)
-  of eTernary:
-    retargetProcTypeSyms(e.cond, newFormals)
-    retargetProcTypeSyms(e.thenE, newFormals)
-    retargetProcTypeSyms(e.elseE, newFormals)
-  of eCast, eConv:
-    retargetProcTypeSyms(e.castOperand, newFormals)
-  of eAddr:
-    retargetProcTypeSyms(e.addrOperand, newFormals)
-  of eOconstr:
-    for kvf in e.kvFields.mitems:
-      retargetProcTypeSyms(kvf.value, newFormals)
-  of eAconstr:
-    for el in e.elems.mitems:
-      retargetProcTypeSyms(el, newFormals)
-  of eCall:
-    retargetProcTypeSyms(e.callee, newFormals)
-    for a in e.args.mitems:
-      retargetProcTypeSyms(a, newFormals)
-  of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof, eSym:
-    discard
+  proc retarget(e: CirExpr) =
+    if e.kind == eSym and e.typ != nil and e.typ.kind == ctProc and
+        newFormals.hasKey(e.name):
+      let ps = newFormals[e.name]
+      for i in 0 ..< min(ps.len, e.typ.params.len):
+        e.typ.params[i] = ps[i]
+  e.walkExprs(retarget)
 
 proc retargetProcTypeStmts(stmts: seq[CirStmt], newFormals: Table[string, seq[CirType]]) =
   for st in stmts:

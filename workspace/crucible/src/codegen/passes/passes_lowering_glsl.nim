@@ -434,55 +434,15 @@ proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr
   ## Registers the buffer-reference blocks reachable from one expression:
   ## every buffer pointer subexpression's pointee needs its block declared
   ## before the module body prints, a cast target included.
-  if e.isNil:
-    return
-  let t = getExprType(e)
-  if t != nil and t.kind == ctAptr:
-    registerRefBlock(blocks, t.pElem)
-  case e.kind
-  of eCall:
-    registerExprRefBlocks(blocks, e.callee)
-    for a in e.args:
-      registerExprRefBlocks(blocks, a)
-  of eAt:
-    registerExprRefBlocks(blocks, e.atBase)
-    registerExprRefBlocks(blocks, e.atIndex)
-  of ePat:
-    registerExprRefBlocks(blocks, e.patBase)
-    registerExprRefBlocks(blocks, e.patIndex)
-  of eDot:
-    registerExprRefBlocks(blocks, e.dotBase)
-  of eDeref:
-    registerExprRefBlocks(blocks, e.derefOperand)
-  of eAddr:
-    registerExprRefBlocks(blocks, e.addrOperand)
-  of eCast, eConv:
-    registerExprRefBlocks(blocks, e.castOperand)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    registerExprRefBlocks(blocks, e.left)
-    registerExprRefBlocks(blocks, e.right)
-  of eAnd, eOr:
-    registerExprRefBlocks(blocks, e.andLeft)
-    registerExprRefBlocks(blocks, e.andRight)
-  of eTernary:
-    registerExprRefBlocks(blocks, e.cond)
-    registerExprRefBlocks(blocks, e.thenE)
-    registerExprRefBlocks(blocks, e.elseE)
-  of eEq, eNeq, eLt, eLe:
-    registerExprRefBlocks(blocks, e.a)
-    registerExprRefBlocks(blocks, e.b)
-  of eNeg:
-    registerExprRefBlocks(blocks, e.unOperand)
-  of eNot:
-    registerExprRefBlocks(blocks, e.notOperand)
-  of eOconstr:
-    for kvf in e.kvFields:
-      registerExprRefBlocks(blocks, kvf.value)
-  of eAconstr:
-    for el in e.elems:
-      registerExprRefBlocks(blocks, el)
-  of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof, eSym:
-    discard
+  ##
+  ## Node visits run pre-order, in the printer's declaration-sequence order.
+  var found = blocks
+  proc registerAptrNode(e: CirExpr) =
+    let t = getExprType(e)
+    if t != nil and t.kind == ctAptr:
+      registerRefBlock(found, t.pElem)
+  e.walkExprs(registerAptrNode)
+  blocks = found
 
 proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[CirStmt]) =
   ## Registers the buffer-reference blocks reachable from one statement list.
