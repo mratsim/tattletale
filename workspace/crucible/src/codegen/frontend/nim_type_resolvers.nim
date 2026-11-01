@@ -20,9 +20,6 @@ type
   CirTypeResolver* = object
     ## Nim-to-CirType translation state: struct memo, nominal struct set,
     ## first refusal message.
-    structMemo: Table[string, CirType]
-    ## Struct memo keyed on the canonical identity text, consulted before any field derivation.
-    ## Deriving one struct's fields re-resolves every field type, so a repeated identity pays the whole field walk again without it.
     structs*: seq[CirType]
     ## Nominal struct types declared by the module, in discovery order.
     err*: string
@@ -274,28 +271,21 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   for name, spc in valueSpaces:
     if spc != caDevice:
       nameKey &= "/" & name & "=" & $spc
-  if r.structMemo.hasKey(nameKey):
-    return r.structMemo[nameKey]
   let impl = n.getTypeImpl()
   let fields = r.deriveStructFields(impl, valueSpaces)
   if r.err.len > 0:
     return nil
   let candidate = tStruct(deriveStructName(canon) & "_" &
     base58Short(typeIdentityHash(nameKey)), fields)
-  # One struct per structure: the same type reached through two type texts
-  # (a formal's instance and a body's literal, say) must resolve to one struct,
-  # each call passes the struct under one name across the boundary.
-  #
-  # - the first registration names the struct
-  # - an equal structure returns the registered instance
+  # One dedup, the registration: an equal structure returns the registered
+  # struct under the name its first registration chose. The canonical text
+  # alone is not the identity: an alias instantiation can reach the resolver
+  # through the generic body's own object text, and both name one struct.
   for registered in r.structs:
     if structuralEqual(registered, candidate):
-      result = registered
-      r.structMemo[nameKey] = result
-      return
+      return registered
   result = candidate
   r.structs.add(result)
-  r.structMemo[nameKey] = result
 
 func constrHasTypeElem(t: NimNode): bool =
   ## True when an instantiated tuple/object constructor type node has a type element anywhere.

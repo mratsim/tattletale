@@ -81,6 +81,38 @@ macro structNameChecks(body: typed): untyped =
     "alias MeterF32 and Meter[float32] disagree: " & names[5] & " vs " & names[1]
   result = newEmptyNode()
 
+macro identityChecks(body: typed): untyped =
+  ## Resolves every statement's type through one resolver.
+  ## Asserts the identity contract:
+  ##
+  ## - one structure resolves to one struct
+  ## - the first registration names it, later lookups read the name back
+  var r: CirTypeResolver
+  var names: seq[string]
+  for e in body:
+    let expr = if e.kind == nnkDiscardStmt: e[0] else: e
+    let t = r.resolveCirType(expr.getTypeInst())
+    doAssert r.err.len == 0, "frontend refused: " & r.err
+    doAssert t != nil and t.kind == ctStruct, "expected a struct type"
+    names.add(t.name)
+  # a repeated construction of one type resolves to one struct
+  doAssert names[0] == names[1],
+    "two constructions of one type resolved to two structs: " &
+    names[0] & " vs " & names[1]
+  # an anonymous tuple literal and a named tuple type over the same member
+  # types carry different member names (positional vs declared) and resolve
+  # to two structs under the canonical-text identity
+  doAssert names[2] != names[3],
+    "anonymous and named tuples collapsed: " & names[2] & " vs " & names[3]
+  result = newEmptyNode()
+
+identityChecks:
+  discard Shape(dims: [1'i32, 2'i32])
+  discard Shape(dims: [3'i32, 4'i32])
+  discard (1'i32, 2'i32)
+  discard block:
+    (proc: tuple[a: int32, b: int32] = (1'i32, 2'i32))()
+
 structNameChecks:
   discard TensorView[Shape, Stride](shape: Shape(dims: [1'i32, 2'i32]),
     stride: Stride(strides: [4'i32, 8'i32]))
