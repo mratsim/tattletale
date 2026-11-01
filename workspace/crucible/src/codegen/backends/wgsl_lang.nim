@@ -32,6 +32,8 @@ import ../passes/pass_helpers
 import std/[macros, math, sets, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
+import ./print_compute
+import ./print_shaders
 import ./targets_rows
 import ../passes/layout_std430
 
@@ -193,6 +195,18 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
   let p = wgslBuiltinParam(kind)
   result = "vec3<i32>(i32(" & p.param & ".x), i32(" & p.param & ".y), i32(" &
     p.param & ".z))"
+
+const wgslEntryInputs*: EntryInputRow = block:
+  ## WGSL entry-input text per canonical coordinate builtin kind: the `@builtin(...)` parameter the entry signature declares.
+  ##
+  ## - built from the `wgslBuiltinParam` table, one text per kind that has a parameter
+  ## - "" for kinds without a WGSL builtin: `threads_per_threadgroup` reads refuse, WGSL has only the `@workgroup_size` attribute
+  var row: EntryInputRow
+  for kind in CoordBuiltinKind:
+    let p = wgslBuiltinParam(kind)
+    if p.attribute.len > 0:
+      row[kind] = "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
+  row
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -490,20 +504,34 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   result = ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules
+# Procs and modules: shader-tier hooks over print_shaders
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printFn(ctx: var PrintCtx, fn: CirProc): string =
-  ## One device function: signature, body, closing brace.
-  ctx.fnName = fn.name
-  ctx.inKernel = false
-  ctx.indent = 0
+proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
+  ## Per-proc state of the WGSL walk:
+  ##
+  ## - the parameter names, whose pointer reads print as-is: WGSL device functions take real pointer parameters, only pointer locals refuse
+  ## - the kernel flag, a coordinate-builtin read outside the entry refuses
   ctx.paramNames = HashSet[string]()
   for p in fn.params:
     ctx.paramNames.incl p.name
-  let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
-    return ""
+  ctx.inKernel = fn.isKernel
+
+proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
+  ## Head of one proc, signature and open brace:
+  ##
+  ## - a device function: the bare `fn name(params) -> ret` signature, a void return emits no arrow (WGSL has no `void` type name)
+  ## - a pointer parameter takes the `ptr<space, T>` form
+  ## - a device pointer parameter refuses: the call sites have no pointer form for a storage binding
+  ## - the entry kernel: `@compute @workgroup_size(...)` attribute lines, then `fn <entry>(<entry inputs>)` over the body-walk inputs
+  ##   exportc renames the entry for the host runtime lookup.
+  if fn.isKernel:
+    let wg = (if fn.workgroup == [0, 0, 0]: [64, 1, 1] else: fn.workgroup)
+    let entryName = if fn.exportName.len > 0: fn.exportName else: fn.name
+    result = "@compute @workgroup_size(" & $wg[0] & ", " & $wg[1] & ", " &
+      $wg[2] & ")\nfn " & entryName & "(" &
+      emitEntryInputs(ctx.builtins, wgslEntryInputs) & ") {\n"
+    return
   var params: seq[string]
   for p in fn.params:
     case p.typ.kind
@@ -516,10 +544,26 @@ proc printFn(ctx: var PrintCtx, fn: CirProc): string =
       params.add p.name & ": " & ctx.emitWgslPtrType(p.typ)
     else:
       params.add p.name & ": " & ctx.emitWgslTypeBare(p.typ)
-  let sig = "fn " & fn.name & "(" & params.join(", ") & ")"
-  # a void return emits no arrow, WGSL has no `void` type name
-  let arrow = if fn.ret.kind == ctVoid: "" else: " -> " & ctx.emitWgslTypeBare(fn.ret)
-  return sig & arrow & " {\n" & bodyTxt & '\n' & "}"
+  result = "fn " & fn.name & "(" & params.join(", ") & ")"
+  if fn.ret.kind != ctVoid:
+    result &= " -> " & ctx.emitWgslTypeBare(fn.ret)
+
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope declaration text of one relocated storage local:
+  ##
+  ## - a threadgroup local declares `var<workgroup>` storage, no initializer survives relocation (the rewrite ran before printing)
+  ## - a bool workgroup variable stores as the NIM_BOOL alias of u32
+  ## - a constant local declares `const` with its initializer
+  if s.space == caThreadgroup:
+    ctx.storageBoolSpelling = true
+    let ty = ctx.emitWgslTypeBare(s.declType)
+    ctx.storageBoolSpelling = false
+    return "var<workgroup> " & s.name & ": " & ty & ";"
+  if s.init == nil:
+    ctx.fail("const_mem local " & s.name & " without an initializer")
+    return ""
+  return "const " & s.name & ": " & ctx.emitWgslTypeBare(s.declType) &
+    " = " & ctx.printExpr(s.init) & ";"
 
 proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
   ## `@group(0) @binding(i)` declaration of one kernel parameter in host `store` packing order:
@@ -582,36 +626,50 @@ proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
       result &= "  " & field & ",\n"
   result &= '}'
 
+proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
+  ## Struct declarations for the referenced value structs, one per entry of the `CirModule.structRefs` record the struct-reference pass filled.
+  ## A pointer-holding struct refuses in `emitWgslStruct`.
+  for t in m.types:
+    if t.kind == ctStruct and t.name in m.structRefs:
+      result &= ctx.emitWgslStruct(t) & "\n\n"
+
+proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
+  ## Kernel parameter bindings, one `@group(0) @binding(i)` per parameter in host `store` packing order, output first.
+  ## The per-parameter policy is `emitBinding`.
+  for i, p in kernel.params:
+    result &= ctx.emitBinding(p, i) & "\n"
+  if result.len > 0:
+    result &= "\n"
+
+proc emitShaderFns(ctx: var PrintCtx, m: CirModule): string =
+  ## Device functions in encounter order.
+  for fn in moduleDeviceFns(m):
+    result &= ctx.printShaderProc(fn) & "\n\n"
+
 proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full WGSL module, one `@group(0) @binding(i)` per kernel parameter:
-  ## - `enable f16` when any type in the module uses f16
-  ## - the referenced struct declarations
-  ## - the hoisted module-scope `var<workgroup>` and `const` declarations
-  ## - the device functions, then the `@compute` kernel with its builtin parameters
+  ##
+  ## - `enable f16` when any type in the module uses f16, and the `NIM_BOOL` alias when interface storage or a declared struct field is bool
+  ## - struct declarations for the referenced value structs, then bindings, then hoisted module-scope declarations, then device functions
+  ## - the `@compute` kernel last, its builtin parameters over the body-walk input set
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: wgslKindRow,
     lit: wgslLitRow, row: wgslScalarRow)
   ctx.layouts = m.layouts
-  var kernels: seq[CirProc]
-  for fn in m.procs:
-    if fn.isKernel:
-      kernels.add fn
-  if kernels.len != 1:
-    ctx.fail("exactly one kernel per module, found " & $kernels.len)
+  let kernel = selectShaderKernel(ctx, m)
+  if ctx.failing():
     return ("", ctx.err)
-  let kernel = kernels[0]
-  # a pointer-typed kernel parameter would refuse at the binding, and until that refusal the body's symbol reads print as-is
+  # names whose storage binds as NIM_BOOL: kernel bool parameters and bool workgroup variables
+  # reads coerce to bool, writes coerce to NIM_BOOL (see the module header)
   for p in kernel.params:
-    ctx.paramNames.incl p.name
     if p.typ.kind == ctBool:
       ctx.nimBoolNames.incl p.name
   for s in m.globals:
     if s.kind == sVar and s.space == caThreadgroup and s.declType.kind == ctBool:
       ctx.nimBoolNames.incl s.name
 
-  # `enable f16` from the stored module feature scan
-  # (`CirModule.features`, filled by the feature-scan pass)
+  # `enable f16` from the stored module feature scan `CirModule.features`, filled by the feature-scan pass
   # NIM_BOOL appears in interface storage names and in bool fields of declared structs
   var usesNimBool = ctx.nimBoolNames.len > 0
   for t in m.types:
@@ -619,91 +677,13 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
       for f in t.fields:
         if f.typ.kind == ctBool:
           usesNimBool = true
+  var prelude = ""
   if m.features.fp16:
-    result.src = "enable f16;\n\n"
+    prelude = "enable f16;\n\n"
   if usesNimBool:
-    result.src &= "alias NIM_BOOL = u32;\n\n"
+    prelude &= "alias NIM_BOOL = u32;\n\n"
 
-  # device functions first, their bodies register the structs they reference
-  var fns: seq[CirProc]
-  for fn in m.procs:
-    if not fn.isKernel:
-      fns.add fn
-  var fnTxts: seq[string]
-  for fn in fns:
-    let txt = ctx.printFn(fn)
-    if ctx.failing():
-      return ("", ctx.err)
-    fnTxts.add txt
-
-  # kernel body: the signature consumes the builtin set it references
-  ctx.fnName = kernel.name
-  ctx.inKernel = true
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(kernel.body)
-  if ctx.failing():
-    return ("", ctx.err)
-  var builtinArgs: seq[string]
-  for kind in ctx.builtins:
-    let p = wgslBuiltinParam(kind)
-    builtinArgs.add "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
-  let wg = (if kernel.workgroup == [0, 0, 0]: [64, 1, 1] else: kernel.workgroup)
-  # exportc renames a kernel entry for the host runtime lookup.
-  # A device function keeps the name its call sites reference.
-  let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
-  let kernelSig = "@compute @workgroup_size(" & $wg[0] & ", " & $wg[1] & ", " &
-    $wg[2] & ")\nfn " & entryName & "(" & builtinArgs.join(", ") & ")"
-
-  # module-scope workgroup and const declarations relocated into
-  # `m.globals` by the WGSL lowering pass, in encounter order
-  var hoisted: seq[string]
-  for s in m.globals:
-    if s.kind == sVar and s.space == caThreadgroup:
-      # no initializer survives relocation, as the rewrite ran before printing
-      ctx.storageBoolSpelling = true
-      let ty = ctx.emitWgslTypeBare(s.declType)
-      ctx.storageBoolSpelling = false
-      hoisted.add "var<workgroup> " & s.name & ": " & ty & ";"
-    elif s.kind == sVar and s.space == caConstant:
-      if s.init == nil:
-        ctx.fail("const_mem local " & s.name & " without an initializer")
-      else:
-        hoisted.add "const " & s.name & ": " &
-          ctx.emitWgslTypeBare(s.declType) & " = " & ctx.printExpr(s.init) & ";"
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # struct declarations for the referenced value structs, one per entry of the `CirModule.structRefs` record filled by the struct-reference pass
-  for t in m.types:
-    if t.kind != ctStruct:
-      continue
-    if t.name notin m.structRefs:
-      continue
-    result.src &= ctx.emitWgslStruct(t) & "\n\n"
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # kernel parameter bindings, one per parameter in order
-  var bindings: seq[string]
-  for i, p in kernel.params:
-    let b = ctx.emitBinding(p, i)
-    if ctx.failing():
-      return ("", ctx.err)
-    bindings.add b
-  for b in bindings:
-    result.src &= b & "\n"
-  if bindings.len > 0:
-    result.src &= "\n"
-
-  for d in hoisted:
-    result.src &= d & "\n"
-  if hoisted.len > 0:
-    result.src &= "\n"
-
-  for txt in fnTxts:
-    result.src &= txt & "\n\n"
-  result.src &= kernelSig & " {\n" & bodyTxt & '\n' & "}\n"
-  return (result.src, "")
+  printShaderModule(ctx, m, kernel, prelude, {caThreadgroup, caConstant})
 
 
 proc codegen*(ctx: var GpuContext): string =

@@ -524,6 +524,21 @@ proc printStmts*(ctx: var auto, stmts: seq[CirStmt]): string =
   ## Prints one statement list with the target's loop style from its kind row.
   printStmtList(ctx, stmts, ctx.policy.loop)
 
+proc moduleKernels*(m: CirModule): seq[CirProc] =
+  ## Returns the kernel procs of `m.procs`, in encounter order.
+  ##
+  ## The compute class emits every kernel of the module.
+  ## The shader class compiles exactly one through `selectShaderKernel`.
+  for fn in m.procs:
+    if fn.isKernel:
+      result.add fn
+
+proc moduleDeviceFns*(m: CirModule): seq[CirProc] =
+  ## Returns the device functions of `m.procs`: every proc that is not a kernel.
+  for fn in m.procs:
+    if not fn.isKernel:
+      result.add fn
+
 proc codegenModule*[R](printed: (R, string)): R =
   ## Converts a printer result tuple into the `backends_api` entry-point return value.
   ##
