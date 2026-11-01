@@ -15,6 +15,7 @@
 ## - device functions: `__device__` with no extern "C", each device function keeps its C++ mangled name.
 ## - parameters print plainly, CUDA has one generic address space,
 ##   `{.smem.}` locals print `__shared__` in the body, and program-scope variables in `CirModule.globals` print `__constant__`
+## - the translation unit opens with `#include <cuda_fp16.h>`, NVRTC's default include path provides that header
 ##
 ## Statement and builtin contract:
 ##
@@ -169,6 +170,16 @@ proc cudaMathCallText(call: CirExpr, args: seq[string]): string =
     return ""
   return name & "(" & args.join(", ") & ")"
 
+proc cudaConvCallText(call: CirExpr, args: seq[string]): string =
+  ## CUDA text of a `{.builtin.}` fp16 conversion call whose canonical name
+  ## maps to a cuda_fp16.h native (`cudaConvBuiltinNames`), "" otherwise.
+  if call.callee.kind != eSym or not call.callee.builtin:
+    return ""
+  let name = cudaConvBuiltinNames.getOrDefault(call.callee.name, "")
+  if name.len == 0:
+    return ""
+  return name % args.join(", ")
+
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One numeric conversion, the C-style cast form.
   let t = e.castType
@@ -222,6 +233,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     var builtinTxt = emitBuiltinCall(e.callee, args)
     if builtinTxt.len == 0:
       builtinTxt = cudaMathCallText(e, args)
+    if builtinTxt.len == 0:
+      builtinTxt = cudaConvCallText(e, args)
     return printCallText(ctx, e, args, builtinTxt)
   else:
     # dispatcher sends only the kinds above, anything else is a routing bug
@@ -314,7 +327,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   for p in fn.params:
     case p.typ.kind
     of ctAptr, ctPtr:
-      result.add emitCudaScalar(p.typ.pElem) & "* " & p.name
+      result.add emitCudaType(p.typ, p.name, true)
     of ctArray:
       if fn.isKernel:
         result.add "const " & emitCudaType(p.typ, p.name, false)
@@ -347,7 +360,9 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow,
     lit: cudaLitRow, row: cudaScalarRow)
-  var src = printComputeStructs(ctx, m, false, "char _")
+  # NVRTC's default include path provides cuda_fp16.h, so __half and the fp16
+  # conversion builtins compile with no host-side include setup.
+  var src = "#include <cuda_fp16.h>\n" & printComputeStructs(ctx, m, false, "char _")
   if ctx.failing():
     return ("", ctx.err)
   for s in m.globals:
