@@ -77,7 +77,7 @@ type
 
   ScalarNames* = object
     ## Scalar type names of one target by (kind, width) cell.
-    ## The table lists the cells the target names, the lookup refuses an omitted cell.
+    ## The table lists the cells that the target names, the lookup refuses an omitted cell.
     cells*: seq[ScalarCell]
     refusals*: seq[tuple[kind: CirTypeKind, width: int, reason: string]]
     ## One-line refusal reason per omitted cell the table documents.

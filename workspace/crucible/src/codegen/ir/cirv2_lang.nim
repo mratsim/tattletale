@@ -29,11 +29,11 @@ const CoordBuiltinNames*: array[6, string] = [
   "threadgroups_per_grid",
   "thread_index_in_threadgroup",
 ]
-## Canonical coordinate builtin names, in the order passes declare
+## Canonical coordinate builtin names, in the order that passes declare
 ## parameters and entry heads list inputs.
 ## - The IR names every coordinate builtin by its canonical name.
 ## - Consumers dispatch on the name.
-## - A symbol sharing a name without a `{.builtin.}` read stays
+## - A symbol sharing a name without a `{.builtin.}` read is
 ##   unrecognized (`builtin` false).
 
 type
