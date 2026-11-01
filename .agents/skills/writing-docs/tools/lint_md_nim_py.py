@@ -1246,6 +1246,14 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
             "a comment opens on the definite article, open on the noun, "
             "the article is warranted only for a unique noun, clear from "
             "context"))
+    if (re.match(r"^[A-Za-z][\w'/-]*( [\w'/-]+){1,2}\.$", bare.strip())
+            and prev_text.get(n - 1)
+            and re.search(r"[.:]\s*$", prev_text[n - 1].rstrip())):
+        findings.append(Finding(
+            path, n, "sentence-exile",
+            "a %d-word sentence sits exiled on its own line, reflow it "
+            "into the previous line"
+            % len(bare.strip().split())))
     if "—" in c or "–" in c:
         findings.append(Finding(path, n, "em-dash", "em-dash in prose"))
     low = bare.lower()
@@ -2570,6 +2578,10 @@ def changed_set_hygiene(base):
             continue
         f = Path(repo) / rel
         name = rel.rsplit("/", 1)[-1].lower()
+        # make only auto-discovers the make-mandated names, the rule
+        # stays out of those extensionless paths too
+        if name in ("makefile", "gnumakefile"):
+            continue
         if any(w in name for w in ("tmp", "debug", "probe")):
             out.append(Finding(
                 f, 1, "scratch-filename",

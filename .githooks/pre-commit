@@ -7,6 +7,9 @@ Routing (directory-specific through this script):
   the Nim linter (lint_md_nim_py.py), the doc rules and the kernel-root tile
   rules scoped to the lines the staged diff adds via --base,
   pre-existing sites stay outside the gate
+- any staged C-family file (.c .h .cc .cpp .hpp .cxx): the C-family
+  linter (lint_c_family.py), the prose rules over comment text plus the
+  parameter-list layout and the block-closer rule
 - tests/testgen/gen_*.py: the generator linter (L2)
 - tests/fixtures/**: the fixture linter (L3)
 - tests/**/*.nim: the fixture-consumer linter (L4)
@@ -25,6 +28,7 @@ import sys
 TESTS = os.path.join("workspace", "transformers", "tests")
 LINT_DIR = os.path.join(TESTS, "linters")
 NIM_LINT = os.path.join(".agents", "skills", "writing-docs", "tools", "lint_md_nim_py.py")
+C_LINT = os.path.join(".agents", "skills", "writing-docs", "tools", "lint_c_family.py")
 KERNEL_PREFIXES = (
     os.path.join("workspace", "positron", "src", "kernels") + os.sep,
     os.path.join("workspace", "positron", "src", "mega_kernels") + os.sep,
@@ -63,6 +67,8 @@ def route(path):
     picked = []
     if rel.endswith((".md", ".nim")) or rel.startswith(".agents" + os.sep):
         picked.append(NIM_LINT)
+    if rel.endswith((".c", ".h", ".cc", ".cpp", ".hpp", ".cxx")):
+        picked.append(C_LINT)
     for d, prefix, script in ROUTES:
         if rel.startswith(d + os.sep):
             if not prefix or os.path.basename(rel).startswith(prefix):
