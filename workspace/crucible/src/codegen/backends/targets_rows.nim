@@ -17,7 +17,6 @@
 
 import std/tables
 import ../ir/cirv2_lang
-import ./emit_common
 import ./targets_registry
 import ./targets_macros
 

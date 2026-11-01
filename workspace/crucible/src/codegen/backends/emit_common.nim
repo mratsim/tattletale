@@ -25,10 +25,13 @@
 ## | nonFiniteFloatLit               | non-finite float literal token, classified against the printer's token table                         |
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
+## The token schema types (`ScalarTokens`, `LitTokens`, `LoopStyle`) live in targets_registry and re-export from here.
 
 import std/[macros, math, strutils]
 import ../ir/cirv2_lang
 import ../ir/ast_datatypes
+import ./targets_registry
+export targets_registry
 
 template failing*(ctx: auto): bool =
   ## True when the walk in `ctx` already recorded a refusal.
@@ -73,21 +76,6 @@ proc emitVectorComponent*(name: string): string =
   of "F3": "w"
   else: ""
 
-type
-  ScalarTokens* = object
-    ## Scalar type names of one printer target, by type kind and width.
-    ##
-    ## Widths name different C types on different targets: `long` is
-    ## 64-bit on LP64 targets and 32-bit on LLP64 hosts.
-    ## Plain `char` takes its signedness from the host ABI.
-    ##
-    ## Each target defines its own table. A "" field means the type
-    ## is refused by the caller.
-    void*, bool*: string
-    i8*, i16*, i32*, i64*: string
-    u8*, u16*, u32*, u64*: string
-    f16*, f32*, f64*: string
-
 proc emitScalarToken*(tok: ScalarTokens, t: CirType): string =
   ## Scalar type name of a leaf type from the target table `tok`.
   ##
@@ -120,48 +108,6 @@ proc emitScalarToken*(tok: ScalarTokens, t: CirType): string =
     of 64: tok.f64
     else: ""
   else: ""
-
-type
-  FloatLitTokens* = object
-    ## Non-finite float literal tokens for one printer target:
-    ##
-    ## - one field per literal width
-    ## - Nim's `$` renders the special values `inf`, `-inf` and `nan`, and no
-    ##   shader language accepts those as a literal token
-
-    inf16*, negInf16*, nan16*: string
-    inf32*, negInf32*, nan32*: string
-    inf64*, negInf64*, nan64*: string
-
-  IntLitTokens* = object
-    ## Integer literal token chosen by signedness and width:
-    ## `prefix & $value & suffix`.
-    ##
-    ## - 64-bit widths take `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
-    ## - 32-bit unsigned takes `u32Suffix`, 32-bit signed prints bare
-    ## - narrow (8/16-bit) widths print bare or, per `narrowCast`, as a cast
-    ##   to the scalar type name from `LitTokens.scalar`
-    u64Prefix*, u64Suffix*, u32Suffix*: string
-    i64Prefix*, i64Suffix*: string
-    narrowCast*: bool
-
-  LitTokens* = object
-    ## Literal token table of one printer target:
-    ##
-    ## - `int`: integer token fields by signedness and width
-    ## - `f16Prefix`/`f16Suffix`, `f32Suffix`, `f64Prefix`/`f64Suffix`:
-    ##   finite float forms around the numeric text
-    ## - `nilToken`: null pointer token, "" when the target refuses nil
-    ##   before the literal printer sees it
-    ## - `nonFinite` and `scalar`: non-finite float tokens and the scalar
-    ##   type names feeding the narrow integer cast, see `nonFiniteFloatLit`
-    int*: IntLitTokens
-    f16Prefix*, f16Suffix*: string
-    f32Suffix*: string
-    f64Prefix*, f64Suffix*: string
-    nilToken*: string
-    nonFinite*: FloatLitTokens
-    scalar*: ScalarTokens
 
 proc nonFiniteFloatLit*(e: CirExpr, tok: FloatLitTokens): string =
   ## Emission token of a non-finite float literal.
@@ -234,19 +180,6 @@ template emitLiteral*(e: CirExpr, tok: LitTokens): string =
     else:
       lit = "<" & printerTarget & ": not a literal>"
     lit
-
-type
-  LoopStyle* = object
-    ## Loop text of one printer target:
-    ##
-    ## - `unrollDirective`: `{.unroll.}` directive text, printed before
-    ##   the loop at the loop indentation, "" prints no directive
-    ## - `infiniteHead`: head of a condition-less loop, with its open brace
-    ##   (`for (;;) {\n`, `loop {\n`)
-    ## - `braceSameLine`: the open brace sits on the head line, otherwise it
-    ##   prints on its own line under the head (HLSL)
-    unrollDirective*, infiniteHead*: string
-    braceSameLine*: bool
 
 proc printLoopText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
   ## Returns the text of one `sLoop` statement: the unroll directive,

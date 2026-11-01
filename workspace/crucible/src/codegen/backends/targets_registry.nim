@@ -21,14 +21,83 @@
 ## | sig    | SigRow     | signature static parts, keyed per flavor      |
 ## | vector | VectorRule | a target's real vector coverage               |
 ##
+## The token types the rows embed (`ScalarTokens`, `LitTokens`, `LoopStyle`) live here too:
+## the registry is the one home of the printers' static data schema.
+##
 ## `genTargets` (targets_macros) parses row blocks into these types and generates one lookup proc per family and target.
 ## Checks run at registration as one compile-time block: full (kind, width) coverage per key, refused cells with a reason class,
-## cross-target name collisions, and the ledgered cross-target divergences.
-## A missing or drifted row is a compile error.
+## cross-target name collisions, and the ledgered cross-target divergences. A missing or drifted row is a compile error.
 
 import std/tables
 import ../ir/cirv2_lang
-import ./emit_common
+
+type
+  ScalarTokens* = object
+    ## Scalar type names of one printer target, by type kind and width.
+    ##
+    ## Widths name different C types on different targets: `long` is
+    ## 64-bit on LP64 targets and 32-bit on LLP64 hosts.
+    ## Plain `char` takes its signedness from the host ABI.
+    ##
+    ## Each target defines its own table. A "" field means the type
+    ## is refused by the caller.
+    void*, bool*: string
+    i8*, i16*, i32*, i64*: string
+    u8*, u16*, u32*, u64*: string
+    f16*, f32*, f64*: string
+
+  FloatLitTokens* = object
+    ## Non-finite float literal tokens for one printer target:
+    ##
+    ## - one field per literal width
+    ## - Nim's `$` renders the special values `inf`, `-inf` and `nan`, and no
+    ##   shader language accepts those as a literal token
+
+    inf16*, negInf16*, nan16*: string
+    inf32*, negInf32*, nan32*: string
+    inf64*, negInf64*, nan64*: string
+
+  IntLitTokens* = object
+    ## Integer literal token chosen by signedness and width:
+    ## `prefix & $value & suffix`.
+    ##
+    ## - 64-bit widths take `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
+    ## - 32-bit unsigned takes `u32Suffix`, 32-bit signed prints bare
+    ## - narrow (8/16-bit) widths print bare or, per `narrowCast`, as a cast
+    ##   to the scalar type name from `LitTokens.scalar`
+    u64Prefix*, u64Suffix*, u32Suffix*: string
+    i64Prefix*, i64Suffix*: string
+    narrowCast*: bool
+
+  LitTokens* = object
+    ## Literal token table of one printer target:
+    ##
+    ## - `int`: integer token fields by signedness and width
+    ## - `f16Prefix`/`f16Suffix`, `f32Suffix`, `f64Prefix`/`f64Suffix`:
+    ##   finite float forms around the numeric text
+    ## - `nilToken`: null pointer token, "" when the target refuses nil
+    ##   before the literal printer sees it
+    ## - `nonFinite` and `scalar`: non-finite float tokens and the scalar
+    ##   type names feeding the narrow integer cast, see `nonFiniteFloatLit`
+    int*: IntLitTokens
+    f16Prefix*, f16Suffix*: string
+    f32Suffix*: string
+    f64Prefix*, f64Suffix*: string
+    nilToken*: string
+    nonFinite*: FloatLitTokens
+    scalar*: ScalarTokens
+
+  LoopStyle* = object
+    ## Loop text of one printer target:
+    ##
+    ## - `unrollDirective`: `{.unroll.}` directive text, printed before
+    ##   the loop at the loop indentation, "" prints no directive
+    ## - `infiniteHead`: head of a condition-less loop, with its open brace
+    ##   (`for (;;) {\n`, `loop {\n`)
+    ## - `braceSameLine`: the open brace sits on the head line, otherwise it
+    ##   prints on its own line under the head (HLSL)
+    unrollDirective*, infiniteHead*: string
+    braceSameLine*: bool
 
 type
   ReasonClass* = enum

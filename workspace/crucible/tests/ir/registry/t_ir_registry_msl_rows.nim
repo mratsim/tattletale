@@ -9,7 +9,6 @@
 
 import std/tables
 import workspace/crucible/src/codegen/ir/cirv2_lang
-import workspace/crucible/src/codegen/backends/emit_common
 import workspace/crucible/src/codegen/backends/targets_registry
 import workspace/crucible/src/codegen/backends/targets_rows
 
