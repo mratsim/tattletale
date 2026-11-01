@@ -67,19 +67,6 @@ proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
   cDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
-proc ptrField(names: ScalarNames, rule: VectorRule, target: string, qualifier: string, t: CirType, ident: string): string =
-  ## Declaration text of a pointer or array pointer with its address-space qualifier:
-  ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  ##
-  ## - `qualifier`: the MSL pointer space qualifier, "" never occurs on MSL
-  ##   (all four address spaces carry a qualifier)
-  ## - an array pointee takes the identifier into the parenthesized declarator
-  let sep = if qualifier.len > 0: " " else: ""
-  let inner = t.pElem
-  if inner.kind == ctArray:
-    return qualifier & sep & cDecl(names, rule, target, inner, "(*" & ident & ")", true)
-  return qualifier & sep & getBareName(names, rule, inner) & "* " & ident
-
 proc getMslPtrQualifier(space: AddressSpace): string =
   ## MSL qualifier before a pointer declaration or cast, one word per space.
   case space
@@ -91,8 +78,10 @@ proc getMslPtrQualifier(space: AddressSpace): string =
 proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  ptrField(mslScalarNames, mslVectorRule, printerTarget,
-    getMslPtrQualifier(t.space), t, ident)
+  let qualifier = getMslPtrQualifier(t.space)
+  let sep = if qualifier.len > 0: " " else: ""
+  result = qualifier & sep &
+    cDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, true)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## MSL declaration text of one struct member: a pointer member names
@@ -315,8 +304,8 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
         continue
       case p.typ.kind
       of ctAptr, ctPtr:
-        let inner = p.typ.pElem
-        result.add "device " & emitMslType(inner, "", true) & "* " & p.name &
+        result.add "device " &
+          cDecl(mslScalarNames, mslVectorRule, printerTarget, p.typ, p.name, true) &
           " [[buffer(" & $slot & ")]]"
       else:
         var elem = emitMslScalar(p.typ)
