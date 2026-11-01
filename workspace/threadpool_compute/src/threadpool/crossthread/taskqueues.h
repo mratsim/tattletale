@@ -78,9 +78,7 @@ intptr_t tpc_taskqueue_peek(tpc_taskqueue* tq);
 /** Initialize a deque with an initial capacity of capPow2 slots. */
 void tpc_taskqueue_init(tpc_taskqueue* tq, int32_t capPow2);
 
-/** Free the deque and every retired buffer. Retired buffers are freed
- *  only by an owner operation that leaves the deque empty, a thief cannot
- *  win a compare-exchange on the retired generation.
+/** Frees the deque and every buffer retired by growth.
  *  Requires a quiescent deque (no thief mid-steal).
  */
 void tpc_taskqueue_teardown(tpc_taskqueue* tq);

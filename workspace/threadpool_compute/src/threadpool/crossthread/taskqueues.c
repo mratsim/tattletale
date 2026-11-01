@@ -24,17 +24,14 @@ void tpc_taskqueue_init(tpc_taskqueue* tq, int32_t capPow2) {
     atomic_store_explicit(&tq->buf, queuebuf_new(capPow2), memory_order_relaxed);
 }
 
-/** Retire the buffer and free every buffer that a subsequent empty-deque
- *  owner operation finds in the chain: a thief that read a retired
- *  buffer has already lost its compare-exchange by the time the deque
- *  is empty again.
- */
+/** Chains a buffer replaced by a grow, it stays valid until teardown. */
 static void queuebuf_retire(tpc_taskqueue* tq, tpc_queuebuf* old) {
     old->prevRetired = tq->garbage;
     tq->garbage = old;
 }
 
-static void queuebuf_garbageCollect(tpc_taskqueue* tq) {
+/** Frees every retired buffer, requires a quiescent deque. */
+static void queuebuf_freeRetired(tpc_taskqueue* tq) {
     tpc_queuebuf* node = tq->garbage;
     while (node != NULL) {
         tpc_queuebuf* next = node->prevRetired;
@@ -62,8 +59,7 @@ static void queuebuf_grow(tpc_taskqueue* tq, tpc_queuebuf** buf, int32_t newCapa
             memory_order_relaxed);
     }
     queuebuf_retire(tq, *buf);
-    /* publish globally, release pairs with the consume load of thieves
-     * so the copied slots are visible before the new buffer is */
+    /* Release publish, the consume steal loads pair with it */
     atomic_store_explicit(&tq->buf, fresh, memory_order_release);
     /* publish locally */
     *buf = fresh;
@@ -77,10 +73,6 @@ void tpc_taskqueue_push(tpc_taskqueue* tq, tpc_task* item) {
     if (back - front > (int32_t)buf->capacity - 1) {
         /* Full queue */
         queuebuf_grow(tq, &buf, buf->capacity * 2, front, back);
-    }
-    if (tq->garbage != NULL && front == back) {
-        /* Empty queue, no thieves can have a pointer to an old retired buffer */
-        queuebuf_garbageCollect(tq);
     }
 
     atomic_store_explicit(&buf->slots[back & (buf->capacity - 1)], item, memory_order_relaxed);
@@ -107,16 +99,10 @@ tpc_task* tpc_taskqueue_pop(tpc_taskqueue* tq) {
                 item = NULL;
             }
             atomic_store_explicit(&tq->back, back + 1, memory_order_relaxed);
-            if (tq->garbage != NULL) {
-                queuebuf_garbageCollect(tq);
-            }
         }
     } else {
         /* Empty queue. */
         atomic_store_explicit(&tq->back, back + 1, memory_order_relaxed);
-        if (tq->garbage != NULL) {
-            queuebuf_garbageCollect(tq);
-        }
     }
     return item;
 }
@@ -148,6 +134,6 @@ intptr_t tpc_taskqueue_peek(tpc_taskqueue* tq) {
 }
 
 void tpc_taskqueue_teardown(tpc_taskqueue* tq) {
-    queuebuf_garbageCollect(tq);
+    queuebuf_freeRetired(tq);
     free(atomic_load_explicit(&tq->buf, memory_order_relaxed));
 }
