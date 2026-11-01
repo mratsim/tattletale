@@ -29,7 +29,7 @@
 ##
 ## - `scalarName`/`leafName`/`bareName`: type names from `ScalarRow` and `VectorRule`
 ## - `cDecl`: C-style declaration text from type structure
-## - a leaf that the rows refuse returns "", so the caller composes the name or refuses
+## - a leaf absent from the rows returns "", so the caller composes the name or refuses
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
 ## A leaf belongs here when two or more printers need the same text.
@@ -90,22 +90,37 @@ proc emitVectorComponent*(name: string): string =
 proc scalarName*(row: ScalarRow, t: CirType): string =
   ## Scalar type name of a leaf type from the target's scalar row.
   ##
-  ## Returns "" when the kind is not a scalar leaf or the (kind, width) cell is refused.
+  ## Returns "" when the kind is not a scalar leaf or the (kind, width) cell is absent from the row.
   ## The caller composes the name or refuses, per its own policy.
   ##
   ##   result = scalarName(mslScalarRow(), t)  # "half" for a 16-bit float
   case t.kind
   of ctVoid, ctBool:
     for c in row.cells:
-      if c.kind == t.kind and c.spelling.len > 0:
+      if c.kind == t.kind:
         return c.spelling
   of ctInt, ctUint, ctFloat:
     for c in row.cells:
-      if c.kind == t.kind and c.width == t.bits and c.spelling.len > 0:
+      if c.kind == t.kind and c.width == t.bits:
         return c.spelling
   else:
     discard
   return ""
+
+proc scalarRefusal*(target: string, row: ScalarRow, t: CirType): string =
+  ## Returns the one-line refusal message for a scalar leaf the target's scalar
+  ## row does not name: `<target>: no <cell>` with the row's stated reason appended.
+  ##
+  ##   result = scalarRefusal("msl", mslScalarRow, tFloat(64))
+  ##   # "<msl: no f64, double has no Apple GPU support>"
+  var tok = ""
+  for a in ScalarCellAxis:
+    if a.kind == t.kind and (t.kind in {ctVoid, ctBool} or a.width == t.bits):
+      tok = a.tok
+  for r in row.refusals:
+    if r.kind == t.kind and (t.kind in {ctVoid, ctBool} or r.width == t.bits):
+      return "<" & target & ": no " & tok & ", " & r.reason & ">"
+  return "<" & target & ": no " & tok & ">"
 
 proc vectorName*(rule: VectorRule, row: ScalarRow, t: CirType): string =
   ## Vector type name of `t` from the target's vector rule.
@@ -161,8 +176,9 @@ proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident:
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
   ##
   ## - `allowEmptyIdent` permits no identifier, return types and casts use it
-  ## - an array without an identifier otherwise refuses: the returned text is
-  ##   `<target: array needs an identifier>` (the caller's refusal channel)
+  ## - an array without an identifier refuses with the `<target: array needs an identifier>` text
+  ## - a scalar leaf absent from the scalar row refuses with the one-line
+  ##   `scalarRefusal` message on the same `<target: ...>` channel
   ##
   ##   result = cDecl(cudaScalarRow(), cudaVectorRule(), "cuda", t, "buf", false)
   if t.kind == ctArray:
@@ -173,6 +189,8 @@ proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident:
         allowEmptyIdent)
     return bareName(row, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
   result = bareName(row, rule, t)
+  if result.len == 0 and t.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat}:
+    return scalarRefusal(target, row, t)
   if ident.len > 0:
     result.add ' ' & ident
 
