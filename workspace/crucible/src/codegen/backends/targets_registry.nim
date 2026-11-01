@@ -27,18 +27,6 @@
 import ../ir/cirv2_lang
 
 type
-  ScalarTokens* = object
-    ## Scalar type names of one printer target, by type kind and width.
-    ##
-    ## Plain `char` takes its signedness from the host ABI.
-    ##
-    ## Each target defines its own table. A "" field means the type
-    ## is refused by the caller.
-    void*, bool*: string
-    i8*, i16*, i32*, i64*: string
-    u8*, u16*, u32*, u64*: string
-    f16*, f32*, f64*: string
-
   FloatLitTokens* = object
     ## Non-finite float literal tokens for one printer target:
     ##
@@ -57,28 +45,11 @@ type
     ## - 64-bit widths take `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
     ## - 32-bit unsigned takes `u32Suffix`, 32-bit signed prints bare
     ## - narrow (8/16-bit) widths print bare or, per `narrowCast`, as a cast
-    ##   to the scalar type name from `LitTokens.scalar`
+    ##   to the scalar type name from the target's scalar row
     u64Prefix*, u64Suffix*, u32Suffix*: string
     i64Prefix*, i64Suffix*: string
     narrowCast*: bool
 
-  LitTokens* = object
-    ## Literal token table of one printer target:
-    ##
-    ## - `int`: integer token fields by signedness and width
-    ## - `f16Prefix`/`f16Suffix`, `f32Suffix`, `f64Prefix`/`f64Suffix`:
-    ##   finite float forms around the numeric text
-    ## - `nilToken`: null pointer token, "" when the target refuses nil
-    ##   before the literal printer sees it
-    ## - `nonFinite` and `scalar`: non-finite float tokens and the scalar
-    ##   type names feeding the narrow integer cast, see `nonFiniteFloatLit`
-    int*: IntLitTokens
-    f16Prefix*, f16Suffix*: string
-    f32Suffix*: string
-    f64Prefix*, f64Suffix*: string
-    nilToken*: string
-    nonFinite*: FloatLitTokens
-    scalar*: ScalarTokens
 
   LoopStyle* = object
     ## Loop text of one printer target:

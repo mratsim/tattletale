@@ -39,8 +39,10 @@ type
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitTokens
-    ## Literal token table of the target, the shared literal head reads it, per kernel state.
+    lit: LitRow
+    ## Literal token forms of the target. The shared literal head reads them, per kernel state.
+    row: ScalarRow
+    ## Scalar row of the target. The narrow integer cast names its type from it., per kernel state.
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
@@ -366,7 +368,7 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: mslKindRow,
-    lit: litTokens(mslLitRow, mslScalarRow))
+    lit: mslLitRow, row: mslScalarRow)
   var src = "#include <metal_stdlib>\n"
   src &= "#include <metal_atomic>\n"
   src &= "using namespace metal;\n\n"

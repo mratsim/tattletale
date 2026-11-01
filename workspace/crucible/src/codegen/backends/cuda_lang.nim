@@ -39,8 +39,10 @@ type
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitTokens
-    ## Literal token table of the target, the shared literal head reads it.
+    lit: LitRow
+    ## Literal token forms of the target. The shared literal head reads them.
+    row: ScalarRow
+    ## Scalar row of the target. The narrow integer cast names its type from it.
 
 const printerTarget = "cuda"
 
@@ -348,7 +350,7 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow,
-    lit: litTokens(cudaLitRow, cudaScalarRow))
+    lit: cudaLitRow, row: cudaScalarRow)
   var src = ""
   for t in m.types:
     if t.kind != ctStruct:

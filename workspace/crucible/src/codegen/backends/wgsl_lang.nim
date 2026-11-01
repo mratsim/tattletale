@@ -39,8 +39,10 @@ type
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitTokens
-    ## Literal token table of the target, the shared literal head reads it.
+    lit: LitRow
+    ## Literal token forms of the target. The shared literal head reads them.
+    row: ScalarRow
+    ## Scalar row of the target. The narrow integer cast names its type from it..
     inKernel: bool
     ## False inside a device function, a device function reading a coordinate builtin refuses.
     paramNames: HashSet[string]
@@ -505,7 +507,7 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: wgslKindRow,
-    lit: litTokens(wgslLitRow, wgslScalarRow))
+    lit: wgslLitRow, row: wgslScalarRow)
   ctx.layouts = m.layouts
   var kernels: seq[CirProc]
   for fn in m.procs:

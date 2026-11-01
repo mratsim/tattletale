@@ -13,8 +13,7 @@
 ## | codegenModule                   | `(artifact, err)` to entry-point-result conversion                                                   |
 ## | roundUpMultiple, scalarByteSize | shared layout arithmetic over CIRv2 types                                                            |
 ## | emitVectorComponent             | vector component letters (`F0`..`F3` to `x`..`w`)                                                    |
-## | ScalarTokens, emitScalarToken   | scalar type names per target table, one walker over the leaf kinds                                   |
-## | LitTokens, emitLiteral          | integer/float/nil literal token forms per target table                                               |
+## | emitLiteral                     | literal token forms of one target, over its lit and scalar rows                                      |
 ## | LoopStyle, printLoopText        | loop text of one target: unroll directive, head, brace style                                         |
 ## | printStmtList                   | statement-list walk: sLoop through `printLoopText`, others through `printStmt`                       |
 ## | printStmts                      | statement-list walk with the target's kind-row loop style                                            |
@@ -176,85 +175,6 @@ proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident:
   if ident.len > 0:
     result.add ' ' & ident
 
-proc scalarTokens*(row: ScalarRow): ScalarTokens =
-  ## Token-table view of a scalar row with the cell names by (kind, width).
-  ## A refused cell names "". The result feeds `LitTokens.scalar`.
-  for c in row.cells:
-    if c.spelling.len == 0:
-      continue
-    case c.kind
-    of ctVoid: result.void = c.spelling
-    of ctBool: result.bool = c.spelling
-    of ctInt:
-      case c.width
-      of 8: result.i8 = c.spelling
-      of 16: result.i16 = c.spelling
-      of 32: result.i32 = c.spelling
-      of 64: result.i64 = c.spelling
-      else: discard
-    of ctUint:
-      case c.width
-      of 8: result.u8 = c.spelling
-      of 16: result.u16 = c.spelling
-      of 32: result.u32 = c.spelling
-      of 64: result.u64 = c.spelling
-      else: discard
-    of ctFloat:
-      case c.width
-      of 16: result.f16 = c.spelling
-      of 32: result.f32 = c.spelling
-      of 64: result.f64 = c.spelling
-      else: discard
-    else: discard
-
-proc litTokens*(lit: LitRow, row: ScalarRow): LitTokens =
-  ## Literal token table composed from the target's lit and scalar rows.
-  ##
-  ## - the narrow integer cast names its type from the scalar row
-  ##
-  ##   lit: litTokens(mslLitRow(), mslScalarRow())  # the `PrintCtx.lit` field
-  LitTokens(
-    int: lit.int,
-    f16Prefix: lit.f16Prefix, f16Suffix: lit.f16Suffix,
-    f32Suffix: lit.f32Suffix,
-    f64Prefix: lit.f64Prefix, f64Suffix: lit.f64Suffix,
-    nilToken: lit.nilToken,
-    nonFinite: lit.nonFinite,
-    scalar: scalarTokens(row))
-
-proc emitScalarToken*(tok: ScalarTokens, t: CirType): string =
-  ## Scalar type name of a leaf type from the target table `tok`.
-  ##
-  ## Returns "" when the kind is not a leaf or the width has no name:
-  ## the caller composes the name or refuses, per its own policy.
-  ##
-  ##   of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-  ##     result = emitScalarToken(lit.scalar, t)
-  case t.kind
-  of ctVoid: tok.void
-  of ctBool: tok.bool
-  of ctInt:
-    case t.bits
-    of 8: tok.i8
-    of 16: tok.i16
-    of 32: tok.i32
-    of 64: tok.i64
-    else: ""
-  of ctUint:
-    case t.bits
-    of 8: tok.u8
-    of 16: tok.u16
-    of 32: tok.u32
-    of 64: tok.u64
-    else: ""
-  of ctFloat:
-    case t.bits
-    of 16: tok.f16
-    of 32: tok.f32
-    of 64: tok.f64
-    else: ""
-  else: ""
-
 proc nonFiniteFloatLit*(e: CirExpr, tok: FloatLitTokens): string =
   ## Emission token of a non-finite float literal.
   ##
@@ -285,40 +205,41 @@ proc nonFiniteFloatLit*(e: CirExpr, tok: FloatLitTokens): string =
   else:
     result = ""
 
-template emitLiteral*(e: CirExpr, tok: LitTokens): string =
-  ## Returns the literal token of `e`, chosen from the target table `tok`
-  ## according to the literal type of `e`.
+template emitLiteral*(e: CirExpr, litRow: LitRow, row: ScalarRow): string =
+  ## Returns the literal token of `e`, chosen from the target's lit row
+  ## `litRow` according to the literal type of `e`.
   ##
-  ## - a width the table does not name prints the plain numeric text
-  ## - a non-finite float takes its bit-pattern token from `tok.nonFinite`
-  ## - a literal kind outside the table prints `<printerTarget: not a literal>`
+  ## - a narrow (8/16-bit) integer prints as a cast to its scalar row name
+  ##   when the lit row sets `narrowCast`, otherwise bare
+  ## - a non-finite float takes its bit-pattern token from `litRow.nonFinite`
+  ## - a literal kind outside the rows prints `<printerTarget: not a literal>`
   mixin printerTarget
   block:
     var lit: string
     case e.kind
     of eIntLit:
-      if e.litType.bits notin {32, 64} and tok.int.narrowCast:
-        lit = "(" & emitScalarToken(tok.scalar, e.litType) & ")" & $e.value
+      if e.litType.bits notin {32, 64} and litRow.int.narrowCast:
+        lit = "(" & scalarName(row, e.litType) & ")" & $e.value
       else:
         case e.litType.kind
         of ctUint:
           case e.litType.bits
-          of 64: lit = tok.int.u64Prefix & $e.value & tok.int.u64Suffix
-          of 32: lit = $e.value & tok.int.u32Suffix
+          of 64: lit = litRow.int.u64Prefix & $e.value & litRow.int.u64Suffix
+          of 32: lit = $e.value & litRow.int.u32Suffix
           else: lit = $e.value
         else:
           case e.litType.bits
-          of 64: lit = tok.int.i64Prefix & $e.value & tok.int.i64Suffix
+          of 64: lit = litRow.int.i64Prefix & $e.value & litRow.int.i64Suffix
           else: lit = $e.value
     of eFloatLit:
-      lit = nonFiniteFloatLit(e, tok.nonFinite)
+      lit = nonFiniteFloatLit(e, litRow.nonFinite)
       if lit.len == 0:
         case e.fLitType.bits
-        of 16: lit = tok.f16Prefix & $e.fValue & tok.f16Suffix
-        of 32: lit = $e.fValue & tok.f32Suffix
-        else: lit = tok.f64Prefix & $e.fValue & tok.f64Suffix
+        of 16: lit = litRow.f16Prefix & $e.fValue & litRow.f16Suffix
+        of 32: lit = $e.fValue & litRow.f32Suffix
+        else: lit = litRow.f64Prefix & $e.fValue & litRow.f64Suffix
     of eNil:
-      lit = tok.nilToken
+      lit = litRow.nilToken
       if lit.len == 0:
         lit = "<" & printerTarget & ": not a literal>"
     of eTrue: lit = "true"
@@ -397,7 +318,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## Prints one structured expression.
   ##
   ## - shared variants emit here: the operator branches, the literal head
-  ##   through `emitLiteral` over the context's `LitTokens` (`ctx.lit`)
+  ##   through `emitLiteral` over the context's lit and scalar rows
   ## - the call skeleton prints through `printCallArgs` and `printCallText`
   ## - the kinds a printer emits itself route to its `printTargetExpr`,
   ##   named by its `targetExprKinds` set
@@ -409,7 +330,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   of eNil, eTrue, eFalse, eIntLit, eFloatLit:
     if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
-    return emitLiteral(e, ctx.lit)
+    return emitLiteral(e, ctx.lit, ctx.row)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let op = case e.kind
       of eAdd: "+"

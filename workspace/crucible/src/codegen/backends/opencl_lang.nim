@@ -39,8 +39,10 @@ type
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitTokens
-    ## Literal token table of the target, the shared literal head reads it.
+    lit: LitRow
+    ## Literal token forms of the target. The shared literal head reads them.
+    row: ScalarRow
+    ## Scalar row of the target. The narrow integer cast names its type from it.
     inKernel: bool
     ## False inside a device function: `__local` and `__constant` locals are
     ## kernel-only storage, a device function declaring one refuses.
@@ -446,7 +448,7 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: openclKindRow,
-    lit: litTokens(openclLitRow, openclScalarRow))
+    lit: openclLitRow, row: openclScalarRow)
   var kernels: seq[CirProc]
   for fn in m.procs:
     if fn.isKernel:

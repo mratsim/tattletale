@@ -92,8 +92,10 @@ type
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitTokens
-    ## Literal token table of the target, the shared literal head reads it.
+    lit: LitRow
+    ## Literal token forms of the target. The shared literal head reads them.
+    row: ScalarRow
+    ## Scalar row of the target. The narrow integer cast names its type from it..
     isKernel: bool
     ## Scalar kernel parameters, their reads go through `push.<name>`.
     pushParams: HashSet[string]
@@ -735,7 +737,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", flavor: flavor,
-    policy: hlslKindRow, lit: litTokens(hlslLitRow, hlslScalarRow))
+    policy: hlslKindRow, lit: hlslLitRow, row: hlslScalarRow)
   var procsByName: Table[string, CirProc]
   for fn in m.procs:
     procsByName[fn.name] = fn
