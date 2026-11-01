@@ -28,7 +28,8 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables]
 import ../ir/ast_datatypes
-import ./emit_common
+import ./print_common
+import ./targets_rows
 
 type
   PrintCtx = object
@@ -54,33 +55,13 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # ═══════════════════════════════════════════════════════════════════════
 
 # OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
-const openclScalarTokens = ScalarTokens(
-  void: "void", bool: "int",
-  i8: "char", i16: "short", i32: "int", i64: "long",
-  u8: "uchar", u16: "ushort", u32: "uint", u64: "ulong",
-  f16: "half", f32: "float", f64: "double")
-
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
-  case t.kind
-  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    result = emitScalarToken(openclScalarTokens, t)
-  of ctVector:
-    let elem = emitOpenclScalar(t.vElem)
-    if elem.len > 0:
-      result = elem & $t.vN
-  of ctStruct:
-    result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
-    result = ""
+  leafName(openclScalarRow(), openclVectorRule(), t)
 
 proc emitOpenclTypeBare(t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
-  case t.kind
-  of ctPtr, ctAptr:
-    result = emitOpenclTypeBare(t.pElem) & "*"
-  else:
-    result = emitOpenclScalar(t)
+  bareName(openclScalarRow(), openclVectorRule(), t)
 
 proc emitOpenclArrayDecl(t: CirType, ident: string): string =
   ## OpenCL C declaration of an array local or field, the lengths move behind the identifier
@@ -163,15 +144,7 @@ proc emitExtensions(features: ModuleFeatures): string =
 
 # OpenCL C defines `INFINITY` and `NAN` as float-typed constants.
 # A C cast forms the wider widths.
-const targetLitTokens = LitTokens(
-  scalar: openclScalarTokens,
-  int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
-  f16Prefix: "(half)", f32Suffix: "f",
-  nilToken: "0",
-  nonFinite: FloatLitTokens(
-    inf16: "(half)INFINITY", negInf16: "(half)-INFINITY", nan16: "(half)NAN",
-    inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
-    inf64: "((double)INFINITY)", negInf64: "((double)-INFINITY)", nan64: "((double)NAN)"))
+const targetLitTokens = litTokens(openclLitRow(), openclScalarRow())
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One conversion, the C-style cast form.
@@ -276,7 +249,7 @@ proc emitLocalDecl(s: CirStmt): string =
     result = emitOpenclTypeBare(s.declType) & ' ' & s.name
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =

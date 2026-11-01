@@ -27,7 +27,8 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, tables]
 import ../ir/ast_datatypes
-import ./emit_common
+import ./print_common
+import ./targets_rows
 import ../passes/layout_std430
 
 type
@@ -54,33 +55,9 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-const glslScalarTokens = ScalarTokens(
-  void: "void", bool: "bool",
-  i8: "int8_t", i16: "int16_t", i32: "int", i64: "int64_t",
-  u8: "uint8_t", u16: "uint16_t", u32: "uint", u64: "uint64_t",
-  f16: "float16_t", f32: "float", f64: "double")
-
 proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
-  case t.kind
-  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    result = emitScalarToken(glslScalarTokens, t)
-  of ctVector:
-    let elem = emitGlslScalar(t.vElem)
-    let prefix = case elem
-      of "float": "vec"
-      of "double": "dvec"
-      of "float16_t": "f16vec"
-      of "int": "ivec"
-      of "uint": "uvec"
-      of "bool": "bvec"
-      else: ""
-    if prefix.len > 0:
-      result = prefix & $t.vN
-  of ctStruct:
-    result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
-    result = ""
+  leafName(glslScalarRow(), glslVectorRule(), t)
 
 proc emitGlslTypeBare(t: CirType): string =
   ## GLSL name of `t` with no identifier, array dimensions composed into
@@ -194,26 +171,7 @@ proc emitExtensions(features: ModuleFeatures): string =
 # GLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `uintBitsToFloat` (32 bit) and the width conversion at the use site.
 # Wide integer literals print as constructor calls (`int64_t(5)`), glslang rejects the `LL` suffix.
-const targetLitTokens = LitTokens(
-  scalar: glslScalarTokens,
-  int: IntLitTokens(
-    u64Prefix: "uint64_t(", u64Suffix: ")",
-    u32Suffix: "U",
-    i64Prefix: "int64_t(", i64Suffix: ")",
-    narrowCast: true),
-  f16Prefix: "float16_t(", f16Suffix: ")",
-  f32Suffix: "f",
-  f64Prefix: "double(", f64Suffix: ")",
-  nonFinite: FloatLitTokens(
-    inf16: "float16_t(uintBitsToFloat(0x7f800000u))",
-    negInf16: "float16_t(uintBitsToFloat(0xff800000u))",
-    nan16: "float16_t(uintBitsToFloat(0x7fc00000u))",
-    inf32: "uintBitsToFloat(0x7f800000u)",
-    negInf32: "uintBitsToFloat(0xff800000u)",
-    nan32: "uintBitsToFloat(0x7fc00000u)",
-    inf64: "double(uintBitsToFloat(0x7f800000u))",
-    negInf64: "double(uintBitsToFloat(0xff800000u))",
-    nan64: "double(uintBitsToFloat(0x7fc00000u))"))
+const targetLitTokens = litTokens(glslLitRow(), glslScalarRow())
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One conversion, the constructor-call form: a reference type constructs
@@ -418,7 +376,7 @@ const glslLoopStyle = LoopStyle(
   braceSameLine: true)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   ## One local declaration: pointer and storage-class refusals, then the declaration text.

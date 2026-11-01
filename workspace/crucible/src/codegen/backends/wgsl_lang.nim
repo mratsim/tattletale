@@ -27,7 +27,8 @@ import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
 import std/[macros, sets, strutils, tables]
 import ../ir/ast_datatypes
-import ./emit_common
+import ./print_common
+import ./targets_rows
 import ../passes/layout_std430
 
 type
@@ -62,20 +63,14 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-const wgslScalarTokens = ScalarTokens(
-  void: "void", bool: "bool",
-  i32: "i32", i64: "i64",
-  u32: "u32", u64: "u64",
-  f16: "f16", f32: "f32", f64: "f64")
-
 proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## WGSL name of a non-array leaf type, "" when the caller composes the name.
   ## A struct name registers the struct for reference-driven emission.
   case t.kind
   of ctVoid, ctBool, ctFloat:
-    result = emitScalarToken(wgslScalarTokens, t)
+    result = scalarName(wgslScalarRow(), t)
   of ctInt, ctUint:
-    result = emitScalarToken(wgslScalarTokens, t)
+    result = scalarName(wgslScalarRow(), t)
     if result.len == 0:
       ctx.fail($t.bits & "-bit integers have no WGSL type, only 32 and 64")
   of ctVector:
@@ -170,18 +165,7 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
 # WGSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `bitcast` from the unsigned integer of the same width. Bare literals are
 # abstract and work in any typed context, u32 gains the `u` suffix, f16 the `h`.
-const targetLitTokens = LitTokens(
-  int: IntLitTokens(u32Suffix: "u"),
-  f16Suffix: "h",
-  nonFinite: FloatLitTokens(
-    inf16: "bitcast<f16>(0x7c00u)", negInf16: "bitcast<f16>(0xfc00u)", nan16: "bitcast<f16>(0x7e00u)",
-    inf32: "bitcast<f32>(0x7f800000u)",
-    negInf32: "bitcast<f32>(0xff800000u)",
-    nan32: "bitcast<f32>(0x7fc00000u)",
-    inf64: "bitcast<f64>(0x7ff0000000000000u)",
-    negInf64: "bitcast<f64>(0xfff0000000000000u)",
-    nan64: "bitcast<f64>(0x7ff8000000000000u)"))
-
+const targetLitTokens = litTokens(wgslLitRow(), wgslScalarRow())
 proc printCast(ctx: var PrintCtx, e: CirExpr): string =
   ## One bit reinterpret, WGSL's bitcast.
   return "bitcast<" & ctx.emitWgslTypeBare(e.castType) & ">(" &

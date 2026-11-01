@@ -65,7 +65,8 @@ import ../ir/ast_datatypes
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
-import ./emit_common
+import ./print_common
+import ./targets_rows
 
 type HlslFlavor* = enum
   ## Resource-binding flavor of the emitted HLSL.
@@ -126,18 +127,13 @@ const FpConversionBuiltins = [
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-const hlslScalarTokens = ScalarTokens(
-  void: "void", bool: "bool",
-  i32: "int", u32: "uint",
-  f32: "float", f64: "double")
-
 proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid, ctBool:
-    result = emitScalarToken(hlslScalarTokens, t)
+    result = scalarName(hlslScalarRow(), t)
   of ctInt, ctUint, ctFloat:
-    result = emitScalarToken(hlslScalarTokens, t)
+    result = scalarName(hlslScalarRow(), t)
     if result.len == 0:
       case t.kind
       of ctInt:
@@ -543,7 +539,7 @@ proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, l
       lines.add target & "." & f.name & " = " & ctx.printExpr(val) & ";"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   ## One local declaration: pointer and storage-class refusals, then the declaration text with its initializer.

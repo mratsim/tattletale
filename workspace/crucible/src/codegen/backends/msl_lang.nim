@@ -28,7 +28,8 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
-import ./emit_common
+import ./print_common
+import ./targets_rows
 
 type
   PrintCtx = object
@@ -52,14 +53,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc emitMslSpace(space: CirAddrSpace): string =
-  ## MSL address-space qualifier of a memory class.
-  case space
-  of caThread: "thread"
-  of caThreadgroup: "threadgroup"
-  of caConstant: "constant"
-  of caDevice: "device"
-
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
   ## Forward declaration, arrays recurse into themselves.
 
@@ -82,77 +75,28 @@ const MslConversionBuiltinNames: Table[string, string] = {
   "asU16": "$1",
 }.toTable()
 
-const mslScalarTokens = ScalarTokens(
-  void: "void", bool: "bool",
-  i8: "char", i16: "short", i32: "int", i64: "long",
-  u8: "uchar", u16: "ushort", u32: "uint", u64: "ulong",
-  f16: "half", f32: "float")
-
 proc emitMslScalar(t: CirType): string =
-  ## MSL name of a non-array leaf type, "" when the caller composes the name.
-  case t.kind
-  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    result = emitScalarToken(mslScalarTokens, t)
-  of ctPtr, ctAptr:
-    result = emitMslScalar(t.pElem) & "*"
-  of ctStruct:
-    result = t.name
-  of ctVector:
-    # coordinate builtins carry `ivec3`, so the builtin-threading
-    # parameters and whole-value reads print this MSL vector name
-    case t.vElem.kind
-    of ctInt, ctUint:
-      if t.vElem.bits == 32:
-        result = (if t.vElem.kind == ctInt: "int" else: "uint") & $t.vN
-      else:
-        result = ""
-    else:
-      result = ""
-  of ctArray, ctProc, ctSpan:
-    result = ""
-
+  ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
+  bareName(mslScalarRow(), mslVectorRule(), t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
-  ## MSL name of `t` with `ident` appended. Arrays take the identifier into
-  ## the declarator (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
-  ## `allowEmptyIdent` permits no identifier (return types, casts), an array without one otherwise refuses.
-  case t.kind
-  of ctArray:
-    if ident.len == 0 and not allowEmptyIdent:
-      return "<msl: array needs an identifier>"
-    if t.aElem.kind == ctArray:
-      result = emitMslType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
-        allowEmptyIdent)
-    else:
-      result = emitMslType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
-  else:
-    result = emitMslScalar(t)
-    if ident.len > 0:
-      result.add ' ' & ident
+  ## MSL declaration text of `t` with `ident` appended, the shared C declarator
+  ## over the MSL rows. Arrays take the identifier into the declarator
+  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
+  cDecl(mslScalarRow(), mslVectorRule(), printerTarget, t, ident, allowEmptyIdent)
 
 proc emitMslPtr(t: CirType, ident: string): string =
-  ## MSL name of a pointer or array pointer with its address space:
+  ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  let inner = t.pElem
-  if inner.kind == ctArray:
-    result = emitMslSpace(t.space) & ' ' & emitMslType(inner, "(*" & ident & ")", true)
-  else:
-    result = emitMslSpace(t.space) & ' ' & emitMslScalar(inner) & "* " & ident
+  ptrField(mslScalarRow(), mslVectorRule(), printerTarget,
+    mslSpaceRow().ptrQualifier[t.space], t, ident)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
 # `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const targetLitTokens = LitTokens(
-  scalar: mslScalarTokens,
-  int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
-  f16Suffix: "h", f32Suffix: "f",
-  nilToken: "nullptr",
-  nonFinite: FloatLitTokens(
-    inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
-    inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
-    inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN"))
+const targetLitTokens = litTokens(mslLitRow(), mslScalarRow())
 
 proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
   ## MSL token of a builtin reference, the attributed parameter name.
@@ -220,7 +164,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   let t = e.castType
   var castTyp = emitMslType(t, "", true)
   if t.kind in {ctPtr, ctAptr}:
-    castTyp = emitMslSpace(t.space) & ' ' & castTyp
+    castTyp = mslSpaceRow().ptrQualifier[t.space] & ' ' & castTyp
   return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
 
 proc printCast(ctx: var PrintCtx, e: CirExpr): string =
@@ -296,7 +240,7 @@ const mslLoopStyle = LoopStyle(
   braceSameLine: true)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   ## One local declaration: kernel-scope threadgroup storage and storage-class refusals, then the declaration text.

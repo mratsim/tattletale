@@ -28,7 +28,8 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, tables, math]
 import ../ir/ast_datatypes
-import ./emit_common
+import ./print_common
+import ./targets_rows
 
 type
   PrintCtx = object
@@ -50,58 +51,22 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-const cudaScalarTokens = ScalarTokens(
-  void: "void", bool: "bool",
-  i8: "signed char", i16: "short", i32: "int", i64: "long long",
-  u8: "unsigned char", u16: "unsigned short", u32: "unsigned int",
-  u64: "unsigned long long",
-  f32: "float", f64: "double")
-
 proc emitCudaScalar(t: CirType): string =
-  ## CUDA name of a non-array leaf type, "" when the caller composes the name.
-  case t.kind
-  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    result = emitScalarToken(cudaScalarTokens, t)
-  of ctPtr, ctAptr:
-    result = emitCudaScalar(t.pElem) & "*"
-  of ctStruct:
-    result = t.name
-  of ctVector, ctArray, ctProc, ctSpan:
-    result = ""
+  ## CUDA bare name of a non-array leaf type, "" when the caller composes the name.
+  bareName(cudaScalarRow(), cudaVectorRule(), t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
-  ## CUDA name of `t` with `ident` appended. Arrays take the identifier into
-  ## the declarator (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
-  ## `allowEmptyIdent` permits no identifier, return types and casts use it.
-  ## An array without an identifier otherwise refuses.
-  case t.kind
-  of ctArray:
-    if ident.len == 0 and not allowEmptyIdent:
-      return "<cuda: array needs an identifier>"
-    if t.aElem.kind == ctArray:
-      result = emitCudaType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
-        allowEmptyIdent)
-    else:
-      result = emitCudaType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
-  else:
-    result = emitCudaScalar(t)
-    if ident.len > 0:
-      result.add ' ' & ident
+  ## CUDA declaration text of `t` with `ident` appended, the shared C declarator
+  ## over the CUDA rows. Arrays take the identifier into the declarator
+  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
+  cDecl(cudaScalarRow(), cudaVectorRule(), printerTarget, t, ident, allowEmptyIdent)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
 # `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const targetLitTokens = LitTokens(
-  scalar: cudaScalarTokens,
-  int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
-  f32Suffix: "f",
-  nilToken: "nullptr",
-  nonFinite: FloatLitTokens(
-    inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
-    inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
-    inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN"))
+const targetLitTokens = litTokens(cudaLitRow(), cudaScalarRow())
 
 proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: string, coordTy: CirType): string =
   ## CUDA text of a canonical coordinate reference.
@@ -279,7 +244,7 @@ const cudaLoopStyle = LoopStyle(
   braceSameLine: true)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   ## One local declaration: kernel-scope shared storage and storage-class refusals, then the declaration text.
