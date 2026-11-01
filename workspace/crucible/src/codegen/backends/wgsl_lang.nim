@@ -165,10 +165,6 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
 # WGSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `bitcast` from the unsigned integer of the same width. Bare literals are
 # abstract and work in any typed context, u32 gains the `u` suffix, f16 the `h`.
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, WGSL's bitcast.
-  return "bitcast<" & ctx.emitWgslTypeBare(e.castType) & ">(" &
-    ctx.printExpr(e.castOperand) & ")"
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One numeric conversion, the constructor-call form: WGSL has no bool
@@ -304,7 +300,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     return "select(" & ctx.printExpr(e.elseE) & ", " & ctx.printExpr(e.thenE) &
       ", " & ctx.printExpr(e.cond) & ")"
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, wgslCastRules, ctx.emitWgslTypeBare(e.castType))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:

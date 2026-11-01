@@ -318,19 +318,6 @@ proc emitCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string
       return a.addrOperand.name
   return ctx.printExpr(a)
 
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, the HLSL asint/asuint/asfloat reinterprets,
-  ## 32-bit widths only.
-  let t = e.castType
-  let fn = if t.kind == ctInt and t.bits == 32: "asint"
-    elif t.kind == ctUint and t.bits == 32: "asuint"
-    elif t.kind == ctFloat and t.bits == 32: "asfloat"
-    else: ""
-  if fn.len == 0:
-    ctx.fail("bit cast to " & emitHlslTypeBare(ctx, t) &
-      " has no HLSL emission, only the 32-bit asint/asuint/asfloat reinterprets")
-    return ""
-  return fn & "(" & ctx.printExpr(e.castOperand) & ")"
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One numeric conversion, the constructor-call form.
@@ -472,7 +459,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       " and locals rewrite to their pointee")
     return ""
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, hlslCastRules, emitHlslTypeBare(ctx, e.castType))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:

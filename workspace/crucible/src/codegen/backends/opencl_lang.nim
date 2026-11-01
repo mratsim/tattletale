@@ -155,16 +155,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
       emitOpenclTypeBare(e.castType)
   return "(" & target & ")" & ctx.printExpr(e.castOperand)
 
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, OpenCL's `as_` builtin: a C cast between float
-  ## and integer types converts the value, it does not move bits.
-  let src = getExprType(e.castOperand)
-  let t = e.castType
-  if t.kind in {ctFloat, ctInt, ctUint} and src != nil and
-      src.kind in {ctFloat, ctInt, ctUint} and src.bits == t.bits and
-      ((t.kind == ctFloat) != (src.kind == ctFloat)):
-    return "as_" & emitOpenclScalar(t) & "(" & ctx.printExpr(e.castOperand) & ")"
-  return ctx.printConv(e)
 
 proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
   ## Returns the OpenCL C text of an expression-position builtin call,
@@ -276,7 +266,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, openclCastRules, emitOpenclScalar(e.castType))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:

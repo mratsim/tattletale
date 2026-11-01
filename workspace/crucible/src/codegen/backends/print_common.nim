@@ -14,6 +14,7 @@
 ## | roundUpMultiple, scalarByteSize | shared layout arithmetic over CIRv2 types                                                            |
 ## | emitVectorComponent             | vector component letters (`F0`..`F3` to `x`..`w`)                                                    |
 ## | emitLiteral                     | literal token forms of one target, over its lit and scalar rows                                      |
+## | printCast                       | one bit reinterpret through the target's cast rules, unmatched casts keep the conversion form        |
 ## | LoopStyle, printLoopText        | loop text of one target: unroll directive, head, brace style                                         |
 ## | printStmtList                   | statement-list walk: sLoop through `printLoopText`, others through `printStmt`                       |
 ## | printStmts                      | statement-list walk with the target's kind-row loop style                                            |
@@ -247,6 +248,48 @@ template emitLiteral*(e: CirExpr, litRow: LitRow, row: ScalarRow): string =
     else:
       lit = "<" & printerTarget & ": not a literal>"
     lit
+
+proc matchCastRule(rules: openArray[CastRule], src: CirType, dst: CirType): int =
+  ## Index of the first cast rule that matches a cast from `src` to `dst`,
+  ## -1 when none does. A nil `src` matches only `srcAny` rules.
+  for i, r in rules:
+    if not r.srcAny:
+      if src == nil or src.kind notin r.srcKinds:
+        continue
+      if r.srcWidths.len > 0 and src.bits notin r.srcWidths:
+        continue
+    if dst.kind notin r.dstKinds:
+      continue
+    if r.dstWidths.len > 0 and dst.bits notin r.dstWidths:
+      continue
+    if r.sameWidth and (src == nil or src.bits != dst.bits):
+      continue
+    return i
+  return -1
+
+template printCast*(ctx: var auto, e: CirExpr, rules: openArray[CastRule], dstName: untyped): string =
+  ## Prints one bit reinterpret `e` through the target's cast rules `rules`.
+  ##
+  ## - the first matching rule decides the emission: a `spelling` rule formats
+  ##   `$1` as the printed operand and `$2` as `dstName`, a refusal rule
+  ##   records its message
+  ## - no matching rule keeps the target's numeric-conversion form, `ctx.printConv`
+  ## - `dstName` evaluates only when a rule formats it
+  ##
+  ##   of eCast:
+  ##     return ctx.printCast(e, cudaCastRules, emitCudaType(e.castType, "", true))
+  mixin printConv
+  block:
+    let src = getExprType(e.castOperand)
+    let i = matchCastRule(rules, src, e.castType)
+    if i >= 0:
+      if rules[i].spelling.len > 0:
+        rules[i].spelling % [ctx.printExpr(e.castOperand), dstName]
+      else:
+        ctx.fail(rules[i].refusal % ["", dstName])
+        ""
+    else:
+      ctx.printConv(e)
 
 proc printLoopText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
   ## Returns the text of one `sLoop` statement: the unroll directive,

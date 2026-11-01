@@ -170,35 +170,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
     return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
   return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
 
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, the GLSL floatBits builtins.
-  ##
-  ## - `uintBitsToFloat(u)` reads the pattern, a `T()` constructor call
-  ##   numerically converts
-  ## - core GLSL floatBits builtins cover the 32-bit float pairs only
-  ## - a same-width integer pair keeps the constructor, the modular
-  ##   conversion preserves every bit
-  ## - a wider float pair refuses, a numeric conversion would lose the bits
-  let t = e.castType
-  let src = getExprType(e.castOperand)
-  let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-    src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
-  if scalar and src.kind == ctFloat and t.kind != ctFloat:
-    if src.bits == 32:
-      return (if t.kind == ctUint: "floatBitsToUint" else: "floatBitsToInt") &
-        "(" & ctx.printExpr(e.castOperand) & ")"
-    ctx.fail("bit cast of a 64-bit float has no GLSL emission, only the" &
-      " 32-bit floatBits builtins")
-    return ""
-  if scalar and t.kind == ctFloat and src.kind != ctFloat:
-    if t.bits == 32:
-      return (if src.kind == ctUint: "uintBitsToFloat" else: "intBitsToFloat") &
-        "(" & ctx.printExpr(e.castOperand) & ")"
-    ctx.fail("bit cast to a 64-bit float has no GLSL emission, only the" &
-      " 32-bit floatBits builtins")
-    return ""
-  # pointers and same-width integer pairs keep the constructor call
-  return ctx.printConv(e)
 
 proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
   ## GLSL vocabulary for the atomic fetch-and-add builtin, shared by the value and statement call paths:
@@ -325,7 +296,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       "function-storage addressing; only the address of a buffer element")
     return ""
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, glslCastRules, emitGlslTypeBare(e.castType))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:

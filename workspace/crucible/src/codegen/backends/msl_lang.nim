@@ -168,20 +168,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
     castTyp = mslPtrQualifier(t.space) & ' ' & castTyp
   return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
 
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, `as_type<T>`.
-  ##
-  ## - a C-style cast converts numerically, 0xFF7FFFFF read as float32
-  ##   gives +4.29e9 and the same bits reinterpreted give -FLT_MAX
-  ## - pointer and machine-word casts keep the C-style text
-  ## - as_type accepts neither pointers nor width changes
-  let t = e.castType
-  let src = getExprType(e.castOperand)
-  if t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-      src.kind in {ctInt, ctUint, ctFloat} and
-      t.bits in {8, 16, 32, 64} and src.bits == t.bits:
-    return "as_type<" & emitMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
-  return ctx.printConv(e)
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## MSL text of the kinds in `targetExprKinds`.
@@ -201,7 +187,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "(" & base & ")." & e.fieldName
     return base & '.' & e.fieldName
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, mslCastRules, emitMslType(e.castType, "", true))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:

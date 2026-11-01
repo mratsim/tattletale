@@ -117,6 +117,28 @@ type
     nameForm*: VectorNameForm = vnfPrefixed
     ## Composition of the vector type name from the element's prefix and the lane count.
 
+  CastWidth* = range[0..255]
+  ## Bit width a cast rule matches.
+
+  CastRule* = object
+    ## One bit-cast coverage rule of a target: the first matching rule emits.
+    ##
+    ## - a rule with `srcAny` matches any source type, otherwise the source
+    ##   type must exist and be a scalar leaf of `srcKinds` and, when
+    ##   `srcWidths` is non-empty, of `srcWidths`
+    ## - the destination must be of `dstKinds` and, when `dstWidths` is
+    ##   non-empty, of `dstWidths`, with `sameWidth` also requiring equal
+    ##   source and destination widths
+    ## - a `spelling` rule emits its text, `$1` stands for the printed
+    ##   operand and `$2` for the destination type name
+    ## - an empty `spelling` makes the rule a refusal carrying `refusal`,
+    ##   `$2` stands for the destination type name
+    srcAny*: bool
+    srcKinds*, dstKinds*: set[CirTypeKind]
+    srcWidths*, dstWidths*: set[CastWidth]
+    sameWidth*: bool
+    spelling*, refusal*: string
+
 const ScalarCellAxis*: array[13, tuple[kind: CirTypeKind, width: int]] = [
   (ctVoid, 0), (ctBool, 0),
   (ctInt, 8), (ctInt, 16), (ctInt, 32), (ctInt, 64),

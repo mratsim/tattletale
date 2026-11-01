@@ -150,38 +150,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   let t = e.castType
   return "(" & emitCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
 
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, the CUDA float-as-integer intrinsics.
-  ##
-  ## - `__float_as_uint(1.5f)` reads 0x3FC00000, a C-style cast numerically
-  ##   converts and gives 1u
-  ## - float-as-integer intrinsics cover the 32- and 64-bit float pairs
-  ## - a same-width integer pair keeps the C-style cast, the modular
-  ##   conversion preserves every bit
-  ## - a same-width float pair without an intrinsic refuses, a numeric
-  ##   conversion would lose the bits
-  let t = e.castType
-  let src = getExprType(e.castOperand)
-  let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-    src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
-  if scalar and src.kind == ctFloat and t.kind != ctFloat:
-    if src.bits == 32:
-      return (if t.kind == ctUint: "__float_as_uint" else: "__float_as_int") &
-        "(" & ctx.printExpr(e.castOperand) & ")"
-    if src.bits == 64:
-      return "__double_as_longlong(" & ctx.printExpr(e.castOperand) & ")"
-    ctx.fail("bit cast of a 16-bit float has no CUDA emission")
-    return ""
-  if scalar and t.kind == ctFloat and src.kind != ctFloat:
-    if t.bits == 32:
-      return (if src.kind == ctUint: "__uint_as_float" else: "__int_as_float") &
-        "(" & ctx.printExpr(e.castOperand) & ")"
-    if t.bits == 64:
-      return "__longlong_as_double(" & ctx.printExpr(e.castOperand) & ")"
-    ctx.fail("bit cast to a 16-bit float has no CUDA emission")
-    return ""
-  # pointers, same-width integer pairs and float-to-float keep the C-style cast
-  return ctx.printConv(e)
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## CUDA text of the kinds in `targetExprKinds`.
@@ -201,7 +169,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "(" & base & ")." & e.fieldName
     return base & '.' & e.fieldName
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, cudaCastRules, emitCudaType(e.castType, "", true))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:

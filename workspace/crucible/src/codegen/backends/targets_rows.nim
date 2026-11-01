@@ -69,6 +69,12 @@ const mslVectorRule* = VectorRule(
   elems: @[(ctInt, 32, ""), (ctUint, 32, "")],
   lanes: @[2, 3, 4])
 
+# Same-width scalar pairs reinterpret through MSL's `as_type<T>`.
+# Pointer casts and width changes keep the conversion form.
+const mslCastRules* = [
+  CastRule(srcKinds: {ctInt, ctUint, ctFloat}, dstKinds: {ctInt, ctUint, ctFloat},
+    srcWidths: {8, 16, 32, 64}, sameWidth: true, spelling: "as_type<$2>($1)")]
+
 const cudaScalarRow* = ScalarRow(cells: @[
   ScalarCell(kind: ctVoid, width: 0, spelling: "void"),
   ScalarCell(kind: ctBool, width: 0, spelling: "bool"),
@@ -102,6 +108,28 @@ const cudaKindRow* = KindRow(
 
 const cudaVectorRule* = VectorRule()
 ## CUDA names no vector types, every vector refuses at its declaration.
+
+# Float/integer bit reinterprets print as intrinsics, a C-style cast
+# numerically converts and loses the bit pattern. A 16-bit float pair has no
+# intrinsic and refuses. Same-width integer pairs keep the conversion form,
+# a modular cast preserves every bit.
+const cudaCastRules* = [
+  CastRule(srcKinds: {ctFloat}, dstKinds: {ctUint}, srcWidths: {32},
+    sameWidth: true, spelling: "__float_as_uint($1)"),
+  CastRule(srcKinds: {ctFloat}, dstKinds: {ctInt}, srcWidths: {32},
+    sameWidth: true, spelling: "__float_as_int($1)"),
+  CastRule(srcKinds: {ctFloat}, dstKinds: {ctInt, ctUint}, srcWidths: {64},
+    sameWidth: true, spelling: "__double_as_longlong($1)"),
+  CastRule(srcKinds: {ctFloat}, dstKinds: {ctInt, ctUint}, sameWidth: true,
+    refusal: "bit cast of a 16-bit float has no CUDA emission"),
+  CastRule(srcKinds: {ctUint}, dstKinds: {ctFloat}, srcWidths: {32},
+    sameWidth: true, spelling: "__uint_as_float($1)"),
+  CastRule(srcKinds: {ctInt}, dstKinds: {ctFloat}, srcWidths: {32},
+    sameWidth: true, spelling: "__int_as_float($1)"),
+  CastRule(srcKinds: {ctInt, ctUint}, dstKinds: {ctFloat}, srcWidths: {64},
+    sameWidth: true, spelling: "__longlong_as_double($1)"),
+  CastRule(srcKinds: {ctInt, ctUint}, dstKinds: {ctFloat}, sameWidth: true,
+    refusal: "bit cast to a 16-bit float has no CUDA emission")]
 
 const openclScalarRow* = ScalarRow(cells: @[
   # OpenCL C is LP64 C: `char` and `long` name the 8-bit and 64-bit signed widths, as on msl.
@@ -144,6 +172,14 @@ const openclVectorRule* = VectorRule(
     (ctUint, 8, ""), (ctUint, 16, ""), (ctUint, 32, ""), (ctUint, 64, ""),
     (ctFloat, 16, ""), (ctFloat, 32, ""), (ctFloat, 64, "")],
   lanes: @[2, 3, 4, 8, 16])
+
+# A C-style cast between float and integer types converts the value.
+# A same-width pair reinterprets through the OpenCL C `as_` builtin instead.
+const openclCastRules* = [
+  CastRule(srcKinds: {ctFloat}, dstKinds: {ctInt, ctUint}, sameWidth: true,
+    spelling: "as_$2($1)"),
+  CastRule(srcKinds: {ctInt, ctUint}, dstKinds: {ctFloat}, sameWidth: true,
+    spelling: "as_$2($1)")]
 
 const glslScalarRow* = ScalarRow(cells: @[
   # 8, 16 and 64-bit names compile behind the explicit-arithmetic-types extensions the module emits.
@@ -195,6 +231,25 @@ const glslVectorRule* = VectorRule(
     (ctInt, 32, "ivec"), (ctUint, 32, "uvec"), (ctBool, 0, "bvec")],
   lanes: @[2, 3, 4])
 
+# Core GLSL floatBits builtins cover the 32-bit float pairs, a wider float
+# pair refuses: a constructor call numerically converts and loses the bits.
+# Same-width integer pairs keep the conversion form.
+const glslCastRules* = [
+  CastRule(srcKinds: {ctFloat}, dstKinds: {ctUint}, srcWidths: {32},
+    sameWidth: true, spelling: "floatBitsToUint($1)"),
+  CastRule(srcKinds: {ctFloat}, dstKinds: {ctInt}, srcWidths: {32},
+    sameWidth: true, spelling: "floatBitsToInt($1)"),
+  CastRule(srcKinds: {ctFloat}, dstKinds: {ctInt, ctUint}, sameWidth: true,
+    refusal: "bit cast of a 64-bit float has no GLSL emission, only the" &
+      " 32-bit floatBits builtins"),
+  CastRule(srcKinds: {ctUint}, dstKinds: {ctFloat}, srcWidths: {32},
+    sameWidth: true, spelling: "uintBitsToFloat($1)"),
+  CastRule(srcKinds: {ctInt}, dstKinds: {ctFloat}, srcWidths: {32},
+    sameWidth: true, spelling: "intBitsToFloat($1)"),
+  CastRule(srcKinds: {ctInt, ctUint}, dstKinds: {ctFloat}, sameWidth: true,
+    refusal: "bit cast to a 64-bit float has no GLSL emission, only the" &
+      " 32-bit floatBits builtins")]
+
 const wgslScalarRow* = ScalarRow(cells: @[
   # WGSL has no 8/16-bit integer types: 32 and 64 bit are its only integer widths.
   ScalarCell(kind: ctVoid, width: 0, spelling: "void"),
@@ -243,6 +298,11 @@ const wgslVectorRule* = VectorRule(
     (ctFloat, 16, "vec"), (ctFloat, 32, "vec"), (ctFloat, 64, "vec")],
   lanes: @[2, 3, 4],
   nameForm: vnfGenericElem)
+
+# WGSL's `bitcast` reinterprets any type.
+const wgslCastRules* = [
+  CastRule(srcAny: true, dstKinds: {low(CirTypeKind)..high(CirTypeKind)},
+    spelling: "bitcast<$2>($1)")]
 
 const hlslScalarRow* = ScalarRow(cells: @[
   # 8/16-bit integers and int64_t are parse errors in the HLSL frontend,
@@ -295,6 +355,16 @@ const hlslVectorRule* = VectorRule(
     (ctBool, 0, "bool"), (ctInt, 32, "int"), (ctUint, 32, "uint"),
     (ctFloat, 32, "float")],
   lanes: @[2, 3, 4])
+
+# Only the 32-bit asint/asuint/asfloat reinterprets are HLSL bit-cast forms,
+# every other bit cast refuses.
+const hlslCastRules* = [
+  CastRule(srcAny: true, dstKinds: {ctInt}, dstWidths: {32}, spelling: "asint($1)"),
+  CastRule(srcAny: true, dstKinds: {ctUint}, dstWidths: {32}, spelling: "asuint($1)"),
+  CastRule(srcAny: true, dstKinds: {ctFloat}, dstWidths: {32}, spelling: "asfloat($1)"),
+  CastRule(srcAny: true, dstKinds: {low(CirTypeKind)..high(CirTypeKind)},
+    refusal: "bit cast to $2 has no HLSL emission, only the" &
+      " 32-bit asint/asuint/asfloat reinterprets")]
 
 static:
   checkScalarRow(mslScalarRow, "msl")
