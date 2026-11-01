@@ -42,6 +42,19 @@ func hasBufferLeaf*[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} 
     result = default(T).len > 0 and hasBufferLeaf(typeof(default(T)[0]), H)
   else: result = false
 
+func hasBoolLeaf[T](_: typedesc[T]): bool {.compileTime.} =
+  ## True when `T` holds a bool anywhere. GLSL block layout gives every
+  ## boundary bool a 4-byte std430 word while a Nim bool is 1 byte, so
+  ## arrays that contain bools cannot pack as raw Nim bytes on GLSL.
+  when T is bool: true
+  elif T is object|tuple:
+    for f in fields(default(T)):
+      if hasBoolLeaf(typeof(f)): return true
+    result = false
+  elif T is array:
+    result = default(T).len > 0 and hasBoolLeaf(typeof(default(T)[0]))
+  else: result = false
+
 func blobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} =
   ## True when every non-leaf field of `T` is trivially copyable: the backend
   ## store flattens leaves individually, the wrapper is never copyMem'd whole.
@@ -72,8 +85,14 @@ func deviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, 
         result.align = max(result.align, fl.align)
       result.size = round_multiple_up(result.size, result.align)
   elif T is array:
-    let ea = if default(T).len > 0: argWidth(typeof(default(T)[0]), backend) else: 1
-    result = (sizeof(T), ea)
+    when backend == bkGlsl and hasBoolLeaf(T):
+      # one 4-byte std430 word per bool, array elements stride at the device
+      # element layout, never Nim's 1-byte bool
+      let el = deviceLayout(typeof(default(T)[0]), backend)
+      result = (default(T).len * el.size, el.align)
+    else:
+      let ea = if default(T).len > 0: argWidth(typeof(default(T)[0]), backend) else: 1
+      result = (sizeof(T), ea)
   else:
     result = (argWidth(T, backend), argWidth(T, backend))
 
@@ -126,10 +145,18 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
         dst.packFrom(off, f, backend)
       off = round_multiple_up(off, a)
   elif T is array:
-    let a = deviceLayout(T, backend).align
-    off = round_multiple_up(off, a)
-    copyMem(dst[off].addr, v.addr, sizeof(v))
-    off += sizeof(v)
+    when backend == bkGlsl and hasBoolLeaf(T):
+      # element-wise packing, one 4-byte std430 word per bool, same as the
+      # scalar argWidth rule
+      let a = deviceLayout(T, backend).align
+      off = round_multiple_up(off, a)
+      for el in v:
+        dst.packFrom(off, el, backend)
+    else:
+      let a = deviceLayout(T, backend).align
+      off = round_multiple_up(off, a)
+      copyMem(dst[off].addr, v.addr, sizeof(v))
+      off += sizeof(v)
   else:
     const a = argWidth(T, backend)
     off = round_multiple_up(off, a)

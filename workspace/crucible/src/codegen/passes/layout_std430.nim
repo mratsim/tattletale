@@ -20,7 +20,9 @@
 ##   and the struct size rounds up to the struct alignment
 ##
 ## Rule-set variant: `boolWidth`. A bool packs in `boolWidth` bytes:
-## - GLSL sets it to 1, matching the `std430` block qualifier
+## - GLSL sets it to 4: a Vulkan std430 bool is a 4-byte word (glslang
+##   compiles a bool member to a 32-bit integer), the same word the launch
+##   ABI packs
 ## - WGSL sets it to 4, one launch-ABI word per bool
 ##
 ## Input domain: `CirType`. The SPIR-V backend keeps `std430Layout` local
@@ -51,8 +53,10 @@ import ./pass_datatypes
 # Packing rules
 # ═══════════════════════════════════════════════════════════════════════
 
-const std430BoolWidth* = 1
-## Bool byte width under the `std430` packing that the GLSL blocks declare.
+const std430BoolWidth* = 4
+## Bool byte width under the `std430` packing that the GLSL blocks declare:
+## glslang gives a Vulkan std430 bool a full 4-byte word, matching the
+## launch ABI word.
 
 const launchAbiBoolWidth* = 4
 ## Bool byte width under the launch ABI: one 4-byte word per bool.
