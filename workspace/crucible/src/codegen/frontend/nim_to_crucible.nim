@@ -1201,6 +1201,24 @@ proc resolveLocalSpace(ctx: var FrontendCtx, nameNode: NimNode): CirAddrSpace =
     else:
       ctx.fail("unexpected pragma " & p.repr & " on a local declaration")
 
+func isUnrollPragma(n: NimNode): bool =
+  if n.kind != nnkPragma:
+    return false
+  for p in n:
+    if p.kind in {nnkIdent, nnkSym} and p.strVal == "unroll":
+      return true
+  return false
+
+func bodyMarksUnroll(body: NimNode): bool =
+  ## True when the loop body states `{.unroll.}` directly: a pragma nested
+  ## inside an inner loop's body marks that inner loop, never this one.
+  if body.kind != nnkStmtList:
+    return false
+  for stmt in body:
+    if isUnrollPragma(stmt):
+      return true
+  return false
+
 proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   if ctx.failing():
     return @[]
@@ -1360,6 +1378,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   of nnkWhileStmt:
     # statements spliced by the condition drain to the front of the loop body,
     # a splice runs once per iteration after the test that admits it
+    let unroll = bodyMarksUnroll(n[1])
     let cond = ctx.lowerExpr(n[0])
     if ctx.failing():
       return @[]
@@ -1368,7 +1387,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.popScope()
     if ctx.failing():
       return @[]
-    return @[whileS(cond, body)]
+    return @[whileS(cond, body, unroll)]
   of nnkForStmt:
     # a `for` over a literal range or `countup`: the loop variable declares
     # itself up front, bounds evaluate once at entry, the increment runs last
@@ -1463,6 +1482,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.pushScope()
     ctx.declareLocal(vars, sym(varName, varType))
     let varSym = sym(varName, varType)
+    let unroll = bodyMarksUnroll(n[^1])
     # start/stop/step hoists queued so far belong to the preamble, the body's own hoists drain per statement inside it
     let startHoists = ctx.drainHoisted()
     let body = ctx.lowerStmtBody(n[^1])
@@ -1490,7 +1510,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     var preamble = startHoists
     preamble.add(varD(varName, varType))
     preamble.add(asgnS(varSym, startT))
-    result = preamble & @[whileS(cmp, bodyHoists & body & incr)]
+    result = preamble & @[whileS(cmp, bodyHoists & body & incr, unroll)]
   of nnkReturnStmt:
     var valueNode = n[0]
     if valueNode.kind == nnkAsgn:
@@ -1558,22 +1578,15 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.resolveTypeSection(n)
     return @[]
   of nnkPragma:
-    var markUnroll = false
     var emitArgs: seq[NimNode] = @[]
     for p in n:
-      if p.kind in {nnkIdent, nnkSym} and p.strVal == "unroll":
-        # Unroll marking consumes this marker statement: the loop whose body
-        # states it gets the unroll flag
-        markUnroll = true
-      elif p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 2 and
+      if p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 2 and
           p[0].kind in {nnkIdent, nnkSym} and p[0].strVal == "emit":
         emitArgs.add(p[1])
-    var emitted: seq[CirStmt] = @[]
-    if markUnroll:
-      emitted.add(emitS(@["{.unroll.}"], @[]))
-    if emitted.len == 0 and emitArgs.len == 0:
+    if emitArgs.len == 0:
       # a non-emit statement pragma is a compile-time annotation, nothing emits
       return @[]
+    var emitted: seq[CirStmt] = @[]
     for emitArg in emitArgs:
       # literal runs alternate with spliced expressions: a computed splice
       # stores through a fresh temp that the emitted text references by name
