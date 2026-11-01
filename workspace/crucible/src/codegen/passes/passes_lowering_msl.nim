@@ -43,7 +43,7 @@ import ./pass_datatypes
 import ./pass_helpers
 import ./passes_low_address_spaces
 import ./passes_low_array_assign
-import ./passes_low_kernel_params
+import ./passes_low_pointers
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -63,7 +63,7 @@ func registerMslLoweringPasses*(reg: var PassRegistry) =
   ## Each pass appends its parameters and matching call-site arguments last,
   ## the two orders stay consistent.
   reg.registerDecomposeArrayAssign()
-  registerExplodeKernelStructs(reg)
+  registerExplodeStructWithPtrFields(reg)
   reg.register("mslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = mslHoistProgramScopeConstants

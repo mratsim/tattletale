@@ -15,7 +15,7 @@
 ## - `eSizeof` reports the packed byte size from the stored module layout records, GLSL has no `sizeof`
 ##
 ## Lowering-pass contract (`passes_lowering_glsl.nim` runs before printing):
-## - `ptr` locals dissolve into their pointees (GLSL has no function-storage addressing), a surviving pointer local refuses, naming the pass
+## - `ptr` locals rewrite to their pointees (GLSL has no function-storage addressing), a surviving pointer local refuses, naming the pass
 ## - a `var T` device-function parameter binds as `inout`, the qualify pass retyped it to its pointee
 ## - `{.smem.}` and `{.const_mem.}` kernel locals relocate into `CirModule.globals`, emitted as program-scope `shared`/`const` declarations
 ## - the ref-block pass registers every buffer-reference block into
@@ -263,7 +263,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "ivec3(int(" & g & ".x), int(" & g & ".y), int(" & g & ".z))"
     if e.typ != nil and e.typ.kind == ctPtr and e.typ.space != caDevice:
       ctx.fail("pointer local " & e.name & " used as a value, GLSL has no" &
-        " pointer values, the GLSL lowering pass dissolves pointer locals")
+        " pointer values, the GLSL lowering pass rewrites pointer locals to their pointees")
       return ""
     return e.name
   of eAt, ePat:
@@ -282,8 +282,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     if bt != nil and bt.kind == ctArray:
       return baseTxt & "[" & idxTxt & "]"
     if bt != nil and bt.kind == ctPtr:
-      ctx.fail("index through a pointer, the GLSL lowering pass dissolves" &
-        " pointer locals")
+      ctx.fail("index through a pointer, the GLSL lowering pass rewrites" &
+        " pointer locals to their pointees")
       return ""
     ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
       " base is outside the GLSL subset")
@@ -310,7 +310,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ctx.printExpr(op) & ".x[0]"
     if ot != nil and ot.kind == ctPtr:
       ctx.fail("deref of a pointer, GLSL has no function-storage addressing," &
-        " the GLSL lowering pass dissolves pointer locals")
+        " the GLSL lowering pass rewrites pointer locals to their pointees")
       return ""
     ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) &
       " operand is outside the GLSL subset")
@@ -362,7 +362,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   let pad = spaces(ctx.indent * 2)
   if s.declType.kind == ctPtr:
     ctx.fail("pointer local " & s.name & ", GLSL has no function-storage" &
-      " addressing, the GLSL lowering pass dissolves pointer locals")
+      " addressing, the GLSL lowering pass rewrites pointer locals to their pointees")
     return ""
   if s.space == caThreadgroup:
     ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering" &
@@ -400,7 +400,7 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   let pad = spaces(ctx.indent * 2)
   if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
     ctx.fail("pointer local " & s.lhs.name & " rebound, GLSL has no" &
-      " pointer values, the GLSL lowering pass dissolves pointer locals")
+      " pointer values, the GLSL lowering pass rewrites pointer locals to their pointees")
     return ""
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 

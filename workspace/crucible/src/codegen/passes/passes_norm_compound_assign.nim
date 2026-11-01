@@ -77,7 +77,7 @@ proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: Cir
   ## Binds each call-bearing operand of an lvalue tree into a fresh temp.
   ## Only operand positions bind: the lvalue spine (`x`, `x[i]`, `x.f`) stays structural.
   ## An operand temp is legal on every target, an address temp is not:
-  ## GLSL dissolves pointer locals and keeps no function storage.
+  ## GLSL rewrites pointer locals to their pointees and keeps no function storage.
   if e.kind notin {eAt, ePat, eDot, eDeref}:
     if e.hasCallDeep():
       return b.bindOperandTemp(hoists, e)

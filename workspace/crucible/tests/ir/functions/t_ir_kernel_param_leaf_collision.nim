@@ -11,12 +11,12 @@
 import std/strutils
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_registry
-import workspace/crucible/src/codegen/passes/passes_low_kernel_params
+import workspace/crucible/src/codegen/passes/passes_low_pointers
 
 proc explode(m: CirModule): tuple[m: CirModule, err: string] =
   ## Runs the kernel struct-argument explosion over `m` through the registry.
   var reg = PassRegistry.new()
-  reg.registerExplodeKernelStructs()
+  reg.registerExplodeStructWithPtrFields()
   let err = m.runPasses(reg)
   result = (m, err)
 

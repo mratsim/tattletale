@@ -1,7 +1,7 @@
 ## Hand-built CIRv2: the GLSL var-parameter qualification pass.
 ##
 ## Test that `glslQualifyVarParams` retypes `var T` parameters to their pointee
-## for the GLSL inout binding and the GLSL bundle then dissolves cleanly:
+## for the GLSL inout binding and the GLSL lowering then rewrites cleanly:
 ##
 ## - a var parameter retypes to its pointee, keeps the `varParam` mark, its body derefs unwrap to the plain symbol
 ## - a call-site address-of argument unwraps to the plain lvalue, the callee

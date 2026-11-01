@@ -33,7 +33,7 @@ import std/tables
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
-import ./passes_low_kernel_params
+import ./passes_low_pointers
 import ./pass_helpers
 import ./passes_low_address_spaces
 import ./passes_low_array_assign
@@ -53,7 +53,7 @@ func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   ## Registration contract: the pass sits after the reserved-word rename,
   ## relocated declaration names match the renamed body references.
   reg.registerDecomposeArrayAssign()
-  registerExplodeKernelStructs(reg)
+  registerExplodeStructWithPtrFields(reg)
   reg.register("openclHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = openclHoistProgramScopeConstants

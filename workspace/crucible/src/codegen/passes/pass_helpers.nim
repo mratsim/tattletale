@@ -11,10 +11,11 @@
 ## - the root symbol of a dotted or indexed chain
 ## - declaration and clone utilities
 ## - the kernel-parameter leaf walk
+## - the pointer-local explosion context and its leaf registration
 ##
 ## Every pass file may import these, no pass owns them.
 
-import std/sets
+import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 
@@ -298,6 +299,115 @@ proc leavesWalk(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
 proc kernelParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
   ## Returns the leaves of `t` in field order, the walk of `leavesWalk`.
   leavesWalk(t, name, result)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pointer-local explosion
+# ═══════════════════════════════════════════════════════════════════════
+
+type
+  ExplodeLeaf* = tuple[sym: string, typ: CirType]
+    ## One exploded field read: the leaf symbol standing in for it plus the leaf type.
+
+  ExplodeCtx* = object
+    pendingPtrs*: HashSet[string]
+      ## Pointer locals awaiting their address-of binding, a read refuses.
+    aliasOf*: Table[string, string]
+      ## Pointer local -> pointee local: one binding fixes the pair, a rebinding refuses.
+    structLocals*: HashSet[string]
+      ## Pointer-holding struct locals exploded into field rewrites: a whole-value use refuses.
+    leafOf*: Table[string, ExplodeLeaf]
+      ## Dotted field path of an exploded struct local -> its bound leaf symbol:
+      ## `v.data` -> the symbol bound to `data`, `v.inner.f` -> the symbol bound to the nested `f`.
+    byRefParams*: HashSet[string]
+      ## `var T` parameters of the proc in flight: targets that bind them `inout`
+      ## unwrap their derefs to the bare parameter.
+    procs*: Table[string, CirProc]
+      ## Module procs by name: targets that check call-site argument shapes against
+      ## callee parameter types read them here.
+
+proc refuseAt*(fn: CirProc, detail: string): string =
+  ## Refusal text of one proc-scoped failure: `at <proc>: <detail>`.
+  ## The pass runner prefixes the pass name.
+  "at " & fn.name & ": " & detail
+
+proc dottedPath*(e: CirExpr): string =
+  ## Dotted field path of a chain rooted at a symbol, "" otherwise:
+  ## `v` -> `v`, `v.inner.f` -> `v.inner.f`.
+  if e.kind == eSym:
+    return e.name
+  if e.kind == eDot:
+    let base = dottedPath(e.dotBase)
+    if base.len > 0:
+      return base & "." & e.fieldName
+  return ""
+
+proc structRoot*(e: CirExpr): CirExpr =
+  ## Returns the symbol at the root of a pure dotted chain, nil otherwise.
+  ## Unlike `exprRootSym`, an indexed or pattern base stops this walk.
+  result = e
+  while result != nil and result.kind == eDot:
+    result = result.dotBase
+  if result != nil and result.kind != eSym:
+    result = nil
+
+proc spliceSym*(e: CirExpr, name: string, typ: CirType) =
+  ## Splices one expression node into a plain symbol reference, in place.
+  ## Expressions are refs, the rewrite applies to the node every sharer sees.
+  e[] = sym(name, typ)[]
+
+proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: CirType, c: CirExpr, target: string): string =
+  ## Records the field rewrites of one pointer-holding struct local whose object
+  ## construction binds leaf symbols. Nested constructions recurse.
+  ## Returns "" when clean, else the refusal.
+  ##
+  ## Args:
+  ## - `path`: the dotted path the local is exploded under, `v` at the top
+  ## - `t`: the declared type of the local, `c` must construct it
+  ## - `target`: the target's name in the refusal texts, `WGSL` or `HLSL`
+  if c.kind != eOconstr:
+    return refuseAt(fn, "struct local " & path &
+      " initializer is not a construction, " & target &
+      " has no pointer struct members")
+  if c.ocType.name != t.name:
+    return refuseAt(fn, "struct local " & path & " initializer has type " &
+      c.ocType.name & ", expected " & t.name)
+  var bound: seq[string]
+  for kvv in c.kvFields:
+    bound.add kvv.name
+    var ft: CirType = nil
+    for f in t.fields:
+      if f.name == kvv.name:
+        ft = f.typ
+    if ft.isNil:
+      return refuseAt(fn, "field " & kvv.name & " is not on " & t.name)
+    if kvv.value.kind == eOconstr:
+      let err = registerExplodedStruct(fn, ctx, path & "." & kvv.name, ft, kvv.value, target)
+      if err.len > 0:
+        return err
+    elif kvv.value.kind == eSym:
+      ctx.leafOf[path & "." & kvv.name] = (kvv.value.name, ft)
+    else:
+      return refuseAt(fn, "field " & path & "." & kvv.name &
+        " initializer is not a leaf symbol, " & target &
+        " has no pointer struct members")
+  for f in t.fields:
+    if f.name notin bound:
+      return refuseAt(fn, "field " & f.name & " of " & path &
+        " is not bound by the construction")
+  return ""
+
+proc explodeStructVarDecl*(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt, target: string): string =
+  ## `sVar` case for a pointer-holding struct local: the construction registers
+  ## its field rewrites and the local joins `ctx.structLocals`.
+  ## Returns "" when clean, else the refusal.
+  if s.init == nil or s.init.kind != eOconstr:
+    return refuseAt(fn, "struct local " & s.name &
+      " without a construction, " & target & " has no pointer struct members")
+  let err = registerExplodedStruct(fn, ctx, s.name, s.declType, s.init, target)
+  if err.len > 0:
+    return err
+  ctx.structLocals.incl(s.name)
+  return ""
 
 # ═══════════════════════════════════════════════════════════════════════
 # Const_mem locals to program scope

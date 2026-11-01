@@ -10,7 +10,7 @@
 ## GLSL lowering: per-target transforms for the GLSL storage model,
 ## registered by the GLSL pipeline and run before printing.
 ##
-##   kernel body → glslQualifyVarParams → glslDissolvePointerLocals → glslHoistProgramScopeLocals
+##   kernel body → glslQualifyVarParams → glslExplodePointerLocals → glslHoistProgramScopeLocals
 ##   → glslRegisterRefBlocks → printed GLSL source
 ##
 ## GLSL has no function-storage addressing, a local cannot be addressed.
@@ -19,7 +19,7 @@
 ## - `glslQualifyVarParams`: `var T` device-function parameters bind as `inout`
 ## - the qualify pass retypes each marked parameter to its pointee, unwraps
 ##   the body derefs and rewrites the call sites to pass the plain lvalue
-## - `glslDissolvePointerLocals`: pointer locals dissolve into their pointee,
+## - `glslExplodePointerLocals`: pointer locals rewrite to their pointee,
 ##   reads through the alias rewrite to the pointee symbol
 ## - `glslHoistProgramScopeLocals`: `{.smem.}` kernel locals and `{.const_mem.}`
 ##   locals relocate into `CirModule.globals` in encounter order
@@ -34,7 +34,7 @@
 ##
 ## Refusal homes:
 ## - a pointer read before its address-of binding, a value read of a pointer,
-##   or a rebinding refuses in the dissolve pass
+##   or a rebinding refuses in the pointer-local explosion pass
 ## - a device-space local and a nested-scope or device-function threadgroup local
 ##   refuse at the printer, GLSL locals are private
 ## - a const_mem local without an initializer refuses in the hoist pass and again
@@ -42,11 +42,13 @@
 
 import std/[sets, tables]
 import ../ir/cirv2_lang
+import ../ir/cirv2_build
 import ../backends/glsl_lang
 import ./pass_datatypes
 import ./pass_helpers
 import ./passes_lowering_cfamily
 import ./passes_low_address_spaces
+import ./passes_low_pointers
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
@@ -54,7 +56,7 @@ import ./passes_low_address_spaces
 
 func registerGlslLoweringPasses*(reg: var PassRegistry) =
   ## Registers the GLSL per-target lowering passes:
-  ## - `glslDissolvePointerLocals` then `glslHoistProgramScopeLocals`, in that order, before printing
+  ## - `glslExplodePointerLocals` then `glslHoistProgramScopeLocals`, in that order, before printing
   ##
   ## Registration contract: the passes sit after the reserved-word rename,
   ## and the relocated declarations use the renamed names that their body already references.
@@ -63,7 +65,7 @@ func registerGlslLoweringPasses*(reg: var PassRegistry) =
     " the call-site address arguments",
     run = qualifyVarParams
   )
-  glslRegisterDissolvePointerLocals(reg)
+  glslRegisterExplodePointerLocals(reg)
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope", "")
@@ -97,7 +99,7 @@ proc unwrapVarDerefsExpr(e: CirExpr, varParams: HashSet[string]) =
     let op = e.derefOperand
     if op.kind == eSym and op.name in varParams and
         op.typ != nil and op.typ.kind == ctPtr:
-      e.splicePlainSym(op.name, op.typ.pElem)
+      e.spliceSym(op.name, op.typ.pElem)
     else:
       op.unwrapVarDerefsExpr(varParams)
   else:
@@ -156,7 +158,7 @@ proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string],
             arg.typ != nil and arg.typ.kind == ctPtr:
           arg.typ = arg.typ.pElem
         elif arg.kind notin {eSym, eAt, ePat, eDot}:
-          return dissolveFail(fn, "var parameter call argument must be an" &
+          return refuseAt(fn, "var parameter call argument must be an" &
             " lvalue, got " & $arg.kind)
       if hasVarParams:
         # a call site's callee type still states the pre-lowering signature, so the rewrite re-types it to the retyped parameters
@@ -246,7 +248,7 @@ proc qualifyVarParams(m: CirModule): string =
         if p.typ != nil and p.typ.kind == ctPtr:
           p.typ = p.typ.pElem
         else:
-          return dissolveFail(fn, "var parameter " & p.name &
+          return refuseAt(fn, "var parameter " & p.name &
             " without a pointer type")
   for fn in m.procs:
     var varParams: HashSet[string]
@@ -260,24 +262,8 @@ proc qualifyVarParams(m: CirModule): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Pointer dissolution
+# Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
-
-type
-  DissolveCtx = object
-    pendingPtrs: HashSet[string]
-    ## Pointer locals awaiting their address-of binding, a read refuses.
-    aliasOf: Table[string, string]
-    ## Pointer local -> pointee local. One binding dissolves the pair, a rebinding refuses.
-
-proc dissolveFail(fn: CirProc, detail: string): string =
-  "at " & fn.name & ": " & detail
-
-proc toPlainSym(name: string, typ: CirType): CirExpr =
-  ## Every dissolved read rewrites to the symbol this proc returns.
-  result = CirExpr(kind: eSym, name: name, typ: typ, builtin: false,
-    coordBuiltin: cbkNone, synchroBuiltin: sbkNone,
-    reductionBuiltin: rbkNone, atomicsBuiltin: abkNone)
 
 proc isBindShape(e: CirExpr): bool =
   ## Address-of binding shape: the address of a struct or array local.
@@ -291,7 +277,7 @@ proc bindPointee(e: CirExpr): string =
   ## Pointee local name of an address-of binding, `isBindShape` checked by the caller.
   e.addrOperand.name
 
-proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string =
+proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
   ## Rewrites one expression in place for the GLSL storage model.
   ## Returns "" when clean, else the first refusal.
   if e.isNil:
@@ -299,21 +285,21 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string 
   case e.kind
   of eSym:
     if e.name in ctx.pendingPtrs:
-      return dissolveFail(fn, "pointer local " & e.name &
+      return refuseAt(fn, "pointer local " & e.name &
         " read before its address-of binding, GLSL has no function-storage" &
         " addressing")
     if e.name in ctx.aliasOf:
-      return dissolveFail(fn, "pointer local " & e.name &
+      return refuseAt(fn, "pointer local " & e.name &
         " used as a value, GLSL has no pointer values")
     return ""
   of eDeref:
     let op = e.derefOperand
     if op.kind == eSym and op.name in ctx.aliasOf:
       # pointee stands in for the pointer, the deref unwraps to it
-      e.splicePlainSym(ctx.aliasOf[op.name], op.typ.pElem)
+      e.spliceSym(ctx.aliasOf[op.name], op.typ.pElem)
       return ""
     for ch in getExprChildren(e):
-      let err = rewriteDissolveExpr(fn, ctx, ch)
+      let err = rewritePointerExpr(fn, ctx, ch)
       if err.len > 0:
         return err
     let ot = getExprType(e.derefOperand)
@@ -323,48 +309,48 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string 
     if e.derefOperand.kind == eSym and e.derefOperand.name in ctx.aliasOf:
       # a child rewrite spliced the operand to an aliased pointer's pointee
       let op2 = e.derefOperand
-      e.splicePlainSym(ctx.aliasOf[op2.name], op2.typ.pElem)
+      e.spliceSym(ctx.aliasOf[op2.name], op2.typ.pElem)
       return ""
-    return dissolveFail(fn, "deref of a non-buffer-reference operand, no" &
+    return refuseAt(fn, "deref of a non-buffer-reference operand, no" &
       " pointee: GLSL has no function-storage addressing, the GLSL lowering" &
-      " pass dissolves pointer locals")
+      " pass rewrites pointer locals to their pointees")
   of eAt, ePat:
     let base = (if e.kind == eAt: e.atBase else: e.patBase)
     if base.kind == eSym:
       if base.name in ctx.pendingPtrs:
-        return dissolveFail(fn, "pointer local " & base.name &
+        return refuseAt(fn, "pointer local " & base.name &
           " read before its address-of binding, GLSL has no function-storage" &
           " addressing")
       if base.name in ctx.aliasOf:
         # aliased local stands in for the pointer, the index goes to the pointee
-        let pointee = toPlainSym(ctx.aliasOf[base.name], base.typ.pElem)
+        let pointee = sym(ctx.aliasOf[base.name], base.typ.pElem)
         if e.kind == eAt:
           e.atBase = pointee
         else:
           e.patBase = pointee
     for ch in getExprChildren(e):
-      let err = rewriteDissolveExpr(fn, ctx, ch)
+      let err = rewritePointerExpr(fn, ctx, ch)
       if err.len > 0:
         return err
     return ""
   of eAddr:
     for ch in getExprChildren(e):
-      let err = rewriteDissolveExpr(fn, ctx, ch)
+      let err = rewritePointerExpr(fn, ctx, ch)
       if err.len > 0:
         return err
     if e.addrOperand.kind == ePat:
       # a buffer element's address is the indexed reference access
       return ""
-    return dissolveFail(fn, "address-of has no GLSL form outside a buffer" &
+    return refuseAt(fn, "address-of has no GLSL form outside a buffer" &
       " element, GLSL has no function-storage addressing")
   else:
     for ch in getExprChildren(e):
-      let err = rewriteDissolveExpr(fn, ctx, ch)
+      let err = rewritePointerExpr(fn, ctx, ch)
       if err.len > 0:
         return err
     return ""
 
-proc dissolveVarDecl(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
+proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   ## `sVar` case: a pointer local pends for its address-of binding or binds its pointee,
   ## anything else rewrites the initializer.
   if s.declType.kind == ctPtr:
@@ -373,47 +359,48 @@ proc dissolveVarDecl(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
     elif isBindShape(s.init):
       ctx.aliasOf[s.name] = s.init.bindPointee
     else:
-      return dissolveFail(fn, "pointer local " & s.name &
+      return refuseAt(fn, "pointer local " & s.name &
         " must bind the address of a local, GLSL has no function-storage" &
         " addressing")
     return ""
-  return rewriteDissolveExpr(fn, ctx, s.init)
+  return rewritePointerExpr(fn, ctx, s.init)
 
-proc dissolveAsgn(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
+proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   ## `sAsgn` case: a pointer local binds exactly once, anything else rewrites both operands.
   if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
     if not isBindShape(s.rhs):
-      return dissolveFail(fn, "pointer local " & s.lhs.name &
+      return refuseAt(fn, "pointer local " & s.lhs.name &
         " must bind the address of a local, GLSL has no function-storage" &
         " addressing")
     if s.lhs.name in ctx.aliasOf:
-      return dissolveFail(fn, "pointer local " & s.lhs.name &
+      return refuseAt(fn, "pointer local " & s.lhs.name &
         " rebound, GLSL has no pointer values")
     ctx.pendingPtrs.excl(s.lhs.name)
     ctx.aliasOf[s.lhs.name] = s.rhs.bindPointee
     return ""
-  let lerr = rewriteDissolveExpr(fn, ctx, s.lhs)
+  let lerr = rewritePointerExpr(fn, ctx, s.lhs)
   if lerr.len > 0:
     return lerr
-  return rewriteDissolveExpr(fn, ctx, s.rhs)
+  return rewritePointerExpr(fn, ctx, s.rhs)
 
-proc dissolveDropsVar(s: CirStmt, ctx: DissolveCtx): bool =
+proc explodeDropsVar(s: CirStmt, ctx: ExplodeCtx): bool =
   ## A bound or pending pointer local drops from its list with its binding.
   s.declType.kind == ctPtr
 
-proc dissolveDropsAsgn(s: CirStmt, ctx: DissolveCtx): bool =
+proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
   ## A pointer-local binding drops from its list.
   s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr
 
-proc newDissolveCtx(m: CirModule, fn: CirProc): DissolveCtx =
-  DissolveCtx()
+proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
+  ExplodeCtx()
 
-proc glslRegisterDissolvePointerLocals(reg: var PassRegistry) =
-  ## Expands the shared dissolve template with the GLSL module-local procs.
-  registerCfamilyDissolvePointerLocals(reg, "glslDissolvePointerLocals",
-    "Dissolves pointer locals into their pointee locals",
-    DissolveCtx, newDissolveCtx, dissolveVarDecl, dissolveAsgn,
-    dissolveDropsVar, dissolveDropsAsgn, rewriteDissolveExpr)
+proc glslRegisterExplodePointerLocals(reg: var PassRegistry) =
+  ## Registers the GLSL pointer-local explosion pass over the shared walk.
+  registerExplodePointerLocals(reg, "glslExplodePointerLocals",
+    "Rewrites pointer locals to their pointee locals, reads through the" &
+    " alias to the pointee symbol",
+    newExplodeCtx, explodeVarDecl, explodeAsgn,
+    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Buffer-reference block registration
