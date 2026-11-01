@@ -1,15 +1,21 @@
-## CUDA: `{.builtin.}` scalar-math names over float operands
+## CUDA: `{.builtin.}` scalar-math over float operands, launched and read back
 ##
-## Test that the CUDA pipeline emits the device math names for `abs`
-## and `exp2` and the emitted unit compiles clean under the device math
-## declarations:
+## `abs` and `exp2` must emit the device math names on CUDA:
+##
+## - `fabsf` and `fabs` for `abs`, `exp2f` for `exp2`
+## - bare `abs` resolves to NVRTC's integer `abs(int)`, a silent
+##   float-to-int miscompile
+## - bare `exp2` is undeclared
+##
+## The kernel launches on a CUDA device and the results are read back.
+## Without a CUDA device the test refuses loudly:
+## that miscompile is invisible at compile time.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests --nimcache:nimcache/tests \
+##   nim c -r --hints:off --warnings:off --outdir:build/tests \
+##     --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/cuda/functions/t_cuda_abs_exp2.nim
 
-import std/[os, osproc, strutils]
 import workspace/crucible
 
 const absExp2Cuda = cuda:
@@ -23,44 +29,30 @@ const abs64Cuda = cuda:
     let x = output[0]
     output[1] = abs(x)
 
-# Device math declarations for the compile check, one entry per device
-# name the printer must emit:
-#
-# - `abs(int)` is NVRTC's device `abs`, clang refuses a float-to-int
-#   conversion of a bare `abs(float)` resolution under the error flags
-# - `exp2(double)` is deliberately absent, a bare `exp2` over a float
-#   operand fails compilation as undeclared
-const deviceMathDecls = [
-  "#define __global__",
-  "#define __device__",
-  "#define __forceinline__",
-  "int abs(int n);",
-  "float fabsf(float x);",
-  "double fabs(double x);",
-  "float exp2f(float x);",
-].join("\n") & "\n"
+proc runTest() =   # private, tests run in a proc so engines are destroyed at return
+  var bufF32: array[3, float32]
+  var engine = newEngine(runCuda)
+  engine.ingest(absExp2Cuda)
 
-proc compilesAsDeviceCode(src: string): bool =
-  ## Syntax-checks one emitted CUDA unit under the device math declarations,
-  ## true when clang accepts it under the error flags below.
-  let dir = getTempDir() / "crucible_cuda_abs_exp2"
-  createDir(dir)
-  let path = dir / "emitted_unit.cc"
-  writeFile(path, deviceMathDecls & "\n" & src)
-  result = execCmd("clang -x c++ -fsyntax-only -Werror=absolute-value " &
-    "-Werror=float-conversion -Werror=literal-conversion " &
-    quoteShell(path)) == 0
+  bufF32[0] = -2.5'f32
+  let o32 = engine.allocDevice(float32, bufF32.len)
+  engine.copyToDeviceFromHost(o32, addr bufF32[0], bufF32.len)
+  engine.launchKernel("mathKernel", o32, ())
+  engine.copyToHostFromDevice(addr bufF32[0], o32, bufF32.len)
+  echo "  abs(-2.5'f32)   = ", bufF32[1]
+  echo "  exp2(-2.5'f32)  = ", bufF32[2]
+  doAssert bufF32[1] == 2.5'f32
+  doAssert abs(bufF32[2] - 0.1767767'f32) < 1e-6'f32
 
-proc runTest() =
-  # pipeline acceptance: the const kernels above already ran the compiler
-  # end to end. A refusal fails `nim c` itself.
-  doAssert absExp2Cuda.len > 0
-  doAssert abs64Cuda.len > 0
-  doAssert compilesAsDeviceCode(absExp2Cuda),
-    "float abs/exp2 unit must compile under the device math declarations"
-  doAssert compilesAsDeviceCode(abs64Cuda),
-    "double abs unit must compile under the device math declarations"
-  echo "  OK - t_cuda_abs_exp2"
+  var bufF64: array[2, float64]
+  engine.ingest(abs64Cuda)
+  bufF64[0] = -2.5'f64
+  let o64 = engine.allocDevice(float64, bufF64.len)
+  engine.copyToDeviceFromHost(o64, addr bufF64[0], bufF64.len)
+  engine.launchKernel("abs64Kernel", o64, ())
+  engine.copyToHostFromDevice(addr bufF64[0], o64, bufF64.len)
+  echo "  abs(-2.5'f64)   = ", bufF64[1]
+  doAssert bufF64[1] == 2.5'f64
 
-when isMainModule:
-  runTest()
+runTest()
+echo "CUDA abs/exp2 builtin names: GREEN"
