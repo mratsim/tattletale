@@ -1,277 +1,258 @@
 # Crucible Architecture
 
-Crucible is the GPU code generator in the tattletale monorepo.
-This document describes how a GPU DSL body written in Nim becomes native GPU source,
-the pass pipeline that transforms it, and how to extend it.
+Crucible is the GPU code generator of the tattletale monorepo.
+A kernel body written in Nim becomes native GPU source, or binary SPIR-V, at compile time.
+The route is one intermediate representation, CIRv2, one pass pipeline, and one printer per target.
+Crucible is a compiler, not a runtime.
 
 ## Position in the stack
 
-Crucible is the base layer of the tattletale GPU stack.
-[`workspace/ceramic/`](../ceramic/) and [`workspace/positron/`](../positron/) are built on top of it.
-It hands native GPU source to the external toolchains that run it:
+Crucible is the base layer of the GPU stack.
+[`workspace/ceramic/`](../ceramic/) and [`workspace/positron/`](../positron/) build on it.
+The codegen macros produce their output during Nim semantic analysis.
+The external toolchains consume it:
 
-- **Produces** native GPU source strings handed to external toolchains:
-  NVRTC (CUDA C++ → PTX), glslangValidator (GLSL → SPIR-V), the OpenCL ICD (OpenCL C → device binaries),
-  wgpu-native (WGSL ingested directly), and the Objective-C runtime (`compileLibrary`, MSL → metallib).
-
-Crucible itself is a compiler pipeline, not a runtime.
-
-## Naming model
-
-Languages, runtimes, and bindings are named separately:
-
-| Layer | Names | Role |
-| --- | --- | --- |
-| Languages | MSL, GLSL, WGSL, OpenCL C, CUDA C++ | what the printers emit |
-| Runtimes | Metal, OpenCL, Vulkan, WebGPU, CUDA | what executes the artifact |
-| Bindings | objc_abi, opencl_abi, vulkan_abi, nvidia_abi | raw C FFI under the runtimes |
-| Implementations | wgpu-native (in `vendor/`) | the concrete library behind a standard |
+| Toolchain           | Input    | Output            |
+| ---                 | ---      | ---               |
+| NVRTC               | CUDA C++ | PTX               |
+| glslangValidator    | GLSL     | SPIR-V            |
+| dxc                 | HLSL     | SPIR-V            |
+| OpenCL ICD          | OpenCL C | device binaries   |
+| wgpu-native         | WGSL     | ingested directly |
+| Objective-C runtime | MSL      | metallib          |
 
 ## Module layering
 
 One import: `import workspace/crucible`.
 
-```
-crucible.nim                     Top-level API: re-exports the curated surface and
-                                 the GPU builtins, catalogue in the header.
-src/
-  crucible_public_api.nim        Curated surface: engines, device memory, launch
-                                 sugar, codegen macros. No builtins.
-  crucible_gpu_builtins.nim      The builtin vocabulary callable from kernel
-                                 bodies: scalar types, thread geometry, sync,
-                                 math, warp reductions, atomics, pragmas.
-  crucible_internal_compiler.nim The IR/compiler internals, the test surface for
-                                 tests/ir.
-```
+| Module                               | Role                                                               |
+| ---                                  | ---                                                                |
+| `crucible.nim`                       | Top-level API, re-exports the curated surface and the GPU builtins |
+| `src/crucible_public_api.nim`        | Engines, device memory, launch sugar, codegen macros, no builtins  |
+| `src/crucible_gpu_builtins.nim`      | Builtin vocabulary callable from kernel bodies                     |
+| `src/crucible_internal_compiler.nim` | Test surface for `tests/ir/`, re-exports the compiler internals    |
+
+## CIRv2, the intermediate representation
+
+`src/codegen/ir/cirv2_lang.nim` defines CIRv2: a plain Nim object-variant tree, usable at macro time, shaped as a Final IR.
+The shape encodes the normal form:
+
+| Rule            | Form                                                                                       |
+| ---             | ---                                                                                        |
+| Control flow    | Statement-based: `sIte`, `sLoop`, `sCase`, `sScope`                                        |
+| Calls           | `eCall` is an ordinary value node in any operand position, statement calls stay `sCall`    |
+| Typing          | Every typed operation states its type, the `(add Type a b)` discipline of the Leng grammar |
+| Inline assembly | First-class: `sAsm`, and `{.emit.}` lowers to the same shape as `sEmit`                    |
+
+The tree composes five node families:
+
+| Node        | Contents                                                                                             |
+| ---         | ---                                                                                                  |
+| `CirModule` | Nominal type declarations, the proc set, program-scope declarations, the analysis records            |
+| `CirProc`   | One proc or kernel: name, typed params, return type, statement body, kernel and linkage flags        |
+| `CirStmt`   | Statement vocabulary, Leng names                                                                     |
+| `CirExpr`   | Expression vocabulary, Leng names, every typed operand states its type                               |
+| `CirType`   | Closed kind set: scalars by bit width, vectors, pointers, nominal structs, arrays, spans, proc types |
+
+Pointer types and span types name their memory class through `AddressSpace`:
+`caThread` names per-thread registers and is the unannotated default, `caThreadgroup`, `caConstant`, and `caDevice` name the shared classes.
+The frontend derives a value's class once at the boundary, passes never re-derive it.
+
+Type identity has two comparison contracts:
+
+- `sameType`: nominal structs compare by name, every other kind compares field by field, recursively
+- `structuralEqual` / `structuralHash`: structs compare by field list, so equal structures share one registered struct
+
+`src/codegen/ir/cirv2_build.nim` supplies the constructors.
+`src/codegen/ir/cirv2_pretty.nim` renders the tree as an s-expression dump for tests and pass development.
+
+`src/codegen/ir/ast_datatypes.nim` keeps the small cross-boundary vocabulary.
+`BackendKind` names the runtime engines, `GpuTypeKind` enumerates the builtin scalar and vector types.
+`GpuContext` is the compilation state handed to a printer, its `module` field is the CIRv2 module after the pass registry.
 
 ## Pipeline
 
-The compiler is a linear pipeline: a frontend lowers Nim AST to a backend-neutral IR,
-named passes transform it, and per-language printers emit the result.
+Each target exposes one untyped macro: `cuda:`, `opencl:`, `glsl:`, `webgpu:`, `metal:`, `hlsl:`, `spirv:`.
+The macro in [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim) records the compile target.
+It delegates to a typed macro that runs four steps:
+
+1. `lowerCirv2` lowers the typed body to a `CirModule`, a refusal becomes a compile-time error
+2. a `PassRegistry` registers the shared stages, then the target's rename, lowering, and analysis bundles, then validation
+3. `runPasses` executes the registry in registration order, a refusal becomes a compile-time error
+4. `backends_api.codegen` prints the module with the target's printer, `spirv` encodes binary words instead
 
 ```mermaid
 flowchart LR
-    subgraph Input
-        DSL["GPU DSL body (Nim)"]
-        CER["ceramic layout algebra"]
-        POS["positron kernel specs"]
-    end
-
-    subgraph Frontend
-        F["frontend/nim_to_crucible.nim<br/>pure 1:1 AST to IR translator"]
-    end
-
-    subgraph IR
-        AST["GpuAst (IR)"]
-        CTX["GpuContext<br/>fnTable, symbol refs, types"]
-    end
-
-    subgraph Passes
-        N["normalizations"]
-        LEG["legalizations"]
-        PRE["preprocessing<br/>(mangleNames, per-backend)"]
-        OPT["optimizations"]
-        LOW["lowering"]
-        V["validations"]
-    end
-
-    subgraph Languages
-        B1["cuda_lang.nim -> CUDA C++"]
-        B2["opencl_lang.nim -> OpenCL C"]
-        B3["glsl_lang.nim -> GLSL"]
-        B4["wgsl_lang.nim -> WGSL"]
-        B5["msl_lang.nim -> MSL"]
-    end
-
-    DSL --> F
-    CER --> DSL
-    POS --> DSL
-    F --> AST
-    AST --> CTX
-    CTX --> N --> LEG --> PRE --> OPT --> LOW --> V
-    V --> B1 & B2 & B3 & B4 & B5
+    B["Nim kernel body"] --> F["frontend/nim_to_crucible<br/>lowerCirv2"]
+    F --> M["CirModule"]
+    M --> P["PassRegistry<br/>legalize - normalize - lower - analyze - validate"]
+    P --> M2["CirModule, final form"]
+    M2 --> PR["printers backends/*_lang<br/>+ spirv encoder"]
+    PR --> S["CUDA C++ / OpenCL C / GLSL /<br/>WGSL / MSL / HLSL / SPIR-V words"]
 ```
 
-All five backends share the same IR and the same common pass set, registered by
-`registerCommonPasses` in [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim).
-They diverge only in the per-language passes:
+### Stages
 
-- `passes_cuda.nim`, `passes_glsl.nim`, `passes_msl.nim`, `passes_opencl.nim`, `passes_wgsl.nim`
+Every target registers the first three stages identically.
+Divergence starts at the reserved-word rename.
 
-Each printer emits its target language.
+| Stage           | Registration                        | Passes                                                                                         |
+| ---             | ---                                 | ---                                                                                            |
+| Legalization    | `registerLegalizationPasses`        | `builtinKindAssignment`, kind-assigns every builtin symbol from the canonical name tables      |
+| Normalization   | `registerNormalizationPasses`       | `bindCompoundAssignTemps`, binds the call-bearing targets of compound assignments into temps   |
+| Shared lowering | `registerSharedLoweringPasses`      | `lowerSpans`, splits `openArray` spans into pointer + length pairs                             |
+| Reserved rename | `registerRenameReservedIdentifiers` | one pass per text target, the target's reserved-word set as data                               |
+| Target lowering | `register<target>LoweringPasses`    | the target's storage-model transforms, table below                                             |
+| Analysis        | per-target registrations            | the target's feature scan, struct layouts, call graph, or binding records                      |
+| Validation      | `registerValidationPostPasses`      | `validateAddressSpaceCasts`, `validateConstantWrites`, check-only, every bundle runs them last |
 
-## Annotated tree
+### Pass records
 
-```
-crucible.nim                        Top-level API (see Module layering).
-src/
-  crucible_public_api.nim           Curated surface.
-  crucible_gpu_builtins.nim         Builtin vocabulary hub.
-  crucible_internal_compiler.nim    IR/compiler test surface.
-  macros/ast_rebuilder.nim          Nim AST rebuilding helpers.
-  builtins/
-    builtins.nim                  Aggregator for the builtin vocabulary.
-    builtins_catalog.nim          Canonical thread geometry and the
-                                  per-backend idiom matrix, barriers.
-    builtins_functions.nim        Scalar math builtins (exp2, rsqrt).
-    builtins_gpu_types.nim        float16, bfloat16, fp8e4m3, fp8e5m2 and
-                                  their conversion primitives.
-    builtins_warp_sync_reductions.nim  reduceAdd, reduceMax.
-    builtins_atomics.nim          atomicFetchAdd.
-    builtins_pragmas.nim          global, workgroup, device, smem, ...
-    builtins_compilermagic.nim    CompileTarget, ccGetBackend.
-  codegen/
-    gpu_compiler.nim                Entry point. The `cuda:`/`opencl:`/`glsl:`/
-                                    `webgpu:`/`metal:` macros build a GpuContext +
-                                    PassRegistry, run the passes, and call the
-                                    backend codegen macro. `toGpuAst` emits the IR
-                                    without running passes.
-    frontend/
-      nim_to_crucible.nim                Frontend: walks the typed Nim AST, emits
-                                    GpuAst 1:1. Pure translator, no semantic
-                                    rewriting.
-      nim_type_resolvers.nim Type and overload resolution during IR
-                                    construction.
-    ir/
-      ast_datatypes.nim         IR core: GpuAst node kinds, GpuType,
-                                    GpuContext (unified fnTable, symbols with
-                                    immutable iSym fingerprint), BackendKind,
-                                    NamePolicy, base58 encoder.
-      ast_type_resolvers.nim    IR type helpers (pointee kinds, type
-                                    traversal).
-      ast_type_constructors.nim     GpuType constructors and helpers.
-    passes/
-      pass_datatypes.nim            GpuPass, PassKind, PassPhase, PassRegistry;
-                                    `walk` traversal; `runPasses` (checks
-                                    dependsOn).
-      pass_registry.nim             PassRegistry.new().
-      passes_legalizations.nim      ensureBlock, maybeInsertResult, liftConstexpr,
-                                    unwrapBlockInDot, rewriteIndexDeref,
-                                    mapIfExprToTernary, blitBlockExprs
-      passes_normalizations.nim     mapOperators, filterPragmas,
-                                    resolveOverloadedOperators,
-                                    deadCodeElimination,
-                                    deEmbedForRangeAdjustment, mangleNames
-      passes_lowering.nim           gtSpan -> ptr + len, compile-time parameter
-                                    pruning, memcpy decomposition.
-      passes_validations.nim        Pre/post validation (e.g. warnUnassigned).
-      passes_cuda.nim               Per-language passes: reserved words,
-      passes_glsl.nim               pointer rules, subgroup emission,
-      passes_msl.nim                storage-buffer descriptor / push-constant
-                                    lowering, address spaces.
-      passes_opencl.nim
-      passes_wgsl.nim
-    backends/
-      backends_api.nim              Dispatches codegen to the printers.
-      msl_lang.nim                  Language printers: walk the IR, emit
-      glsl_lang.nim                 native text. Deliberately "dumb": they
-      opencl_lang.nim               format the IR, they do not reason about it.
-      wgsl_lang.nim
-      cuda_lang.nim
-      lang_utils.nim                Shared printer helpers.
-  runtime/
-    errors.nim                      failLoud: stacktrace + stderr + quit(1).
-    engines/
-      engines_api.nim               The HwEngine concept, the newEngine
-                                    dispatch, the engines' API re-exports.
-      engines_common.nim            DeviceMem, Dim3, LaunchConfig, dim3.
-      cuda_api.nim                  Engine facades: the user-facing API over
-      opencl_api.nim                the platform sessions below.
-      vulkan_api.nim
-      webgpu_api.nim
-      metal_api.nim
-    backends/
-      cuda_runtime.nim              Platform sessions: library loading, device
-      opencl_runtime.nim            discovery, source -> artifact compilation,
-      vulkan_common.nim             buffers, raw dispatch. The engine facades
-      vulkan_descriptor_runtime.nim drive these.
-      vulkan_address_runtime.nim
-      vulkan_compile.nim
-      webgpu_runtime.nim
-      metal_runtime.nim
-      runtime_utils.nim
-    launch/
-      launch_kernel.nim             launchKernel + chevron sugar.
-      launch_device_fn.nim          launchDeviceFn: typed Nim device functions
-                                    with a `do:` schedule block.
-      launch_serialization.nim      Host -> device argument packing.
-  abis/
-    c_abi.nim                       Raw C FFI bindings.
-    opencl_abi.nim
-    vulkan_abi.nim
-    nvidia_abi.nim                  CUDA driver + NVRTC bindings.
-    nvidia_paths.nim                CUDA library discovery.
-    objc_abi.nim                    Objective-C runtime (Metal's host API).
-```
+`src/codegen/passes/pass_datatypes.nim` defines the machinery:
 
-## Data-flow walkthrough
+| Record      | Contract                                                                                                                         |
+| ---         | ---                                                                                                                              |
+| `PassKind`  | `pkValidation` refuses on invariant violation, `pkTransform` rewrites the IR, `pkAnalysis` computes metadata and changes nothing |
+| `PassPhase` | `phaseEarly`, `phasePreprocessing`, `phaseMain`, the coarse position of the pass                                                 |
+| `CirPass`   | Name, kind, phase, description, `dependsOn` list, `run` over the module                                                          |
+| `runPasses` | Executes the registry in registration order, refuses when a `dependsOn` entry has not run, returns the first refusal             |
 
-1. **Frontend (`frontend/nim_to_crucible.nim`).** The user writes a `cuda:`, `opencl:`, `glsl:`, `webgpu:`, or `metal:` block.
-   The corresponding macro in `gpu_compiler.nim` calls `ctx.toGpuAst(typeReg, body)`.
-It walks the typed Nim AST and emits a `GpuAst` 1:1, one IR node per AST construct, no semantic rewriting.
-Symbols are `ref` objects carrying a stable `iSym` fingerprint (see `Symbol` in `ast_datatypes.nim`).
+Registration order is execution order, there is no scheduler.
+A pass run takes the module in place and returns its refusal: `""` when clean, else the first refusal.
+The refusal channel is pure strings, no exceptions cross the pipeline.
 
-2. **IR construction.** The frontend populates the `GpuContext`: the unified `fnTable`, `types`,
-   `globalBlocks`, and per-scope symbol tables. The `fnTable` holds all known functions keyed by `iSym`.
-   Range nodes record their range kind (inclusive/exclusive) instead of encoding exclusivity with a `+1`.
+### Target lowering and analysis
 
-3. **Pass pipeline.** `registerCommonPasses` registers the stage bundles in order,
-   backend lowering bundles append after it.
+| Target | Lowering passes                                                                                                                                                                                                                                       | Analysis passes                                                                                             |
+| ---    | ---                                                                                                                                                                                                                                                   | ---                                                                                                         |
+| CUDA   | `decomposeArrayAssign`, the reserved-word rename, address-space callee instantiation                                                                                                                                                                  | `cudaScanModuleFeatures`, the warp-reduction kinds the printer templates emit                               |
+| MSL    | `decomposeArrayAssign`, `explodeKernelStructs`, const_mem hoist to program scope, device-fn smem hoist to reference parameters, kernel smem locals kept in-body, coordinate builtins threaded to device functions, address-space callee instantiation | none, the MSL printer reads no analysis record                                                              |
+| OpenCL | `decomposeArrayAssign`, `explodeKernelStructs`, const_mem hoist, by-value struct parameters as hidden thread pointers, address-space callee instantiation                                                                                             | `openclScanModuleFeatures`                                                                                  |
+| GLSL   | `glslQualifyVarParams` (var parameters retype to their pointee), pointer-local dissolution, program-scope hoist of smem and const_mem, address-space callee instantiation                                                                             | ref-block registration, `glslScanModuleFeatures`, `glslComputeStructLayouts` (std430)                       |
+| WGSL   | struct-argument explosion, pointer-local dissolution, bool kernel-parameter reads rewritten to `!= 0u` comparisons, program-scope hoist, address-space callee instantiation, pointer-param call inlining                                              | struct-reference set, `wgslScanModuleFeatures` (`enable f16`), `wgslComputeStructLayouts` (launch ABI)      |
+| HLSL   | `hlslMaterializeNumWorkgroups`, pointer-local dissolution, the reserved-word rename, const_mem hoist, address-space callee instantiation                                                                                                              | `hlslClassifyParams` (per flavor), struct-reference set, `hlslCallGraphAnalysis` with the recursion refusal |
+| SPIR-V | `spirvPatchBoolToI32`, bool kernel parameters and bool globals retype to i32 storage                                                                                                                                                                  | none                                                                                                        |
 
-   | Stage | Contract |
-   |---|---|
-   | pre-validation | well-formedness of the freshly built IR |
-   | legalization | Nim-only constructs (if-expressions, block expressions, index/deref shapes) become backend-neutral IR |
-   | normalization | names and call shapes canonicalized, mangleNames last |
-   | optimization | max/min folding, dead-local elimination |
-   | shared lowering | spans become ptr + len, memcpy decomposition, no frontend constructs survive |
-   | post-validation | the codegen boundary, no block expressions remain |
+Notes on the shared passes:
 
-   `runPasses` (in `pass_datatypes.nim`) executes them in registration order,
-   verifying each pass's `dependsOn` list was satisfied.
-   Passes mutate the IR in place, bundle call order is execution order,
-   there is no scheduler.
+- `explodeKernelStructs` expands kernel parameters of struct type with pointer fields into flat leaves
+  One buffer binds per leaf on the flat-resource targets: Metal, WebGPU, OpenCL
+- `decomposeArrayAssign` rewrites whole-array assignment into `__builtin_memcpy` calls
+  No C-family target expresses an array copy
+- the reserved-word rename suffixes `_nim` at every emitted site
+  WGSL additionally prefixes every `__`-headed name with `wgsl_`
+- `instantiateAddressSpaceGenerics` specializes module callees whose pointer arguments name another address space than the formal
+  One variant prints per space, every text target except SPIR-V registers the pass
 
-   `PassKind` is `pkValidation` (check-only), `pkTransform` (mutates IR), or `pkAnalysis` (metadata only).
-   Per-language passes are registered by the `passes_<lang>.nim` modules.
+## Analysis-last invariant
 
-4. **Language printing (`backends/`).** Each printer exposes `preprocess` and `codegen`, `backends_api.nim` dispatches.
-   The printers walk the now-annotated IR and emit native text.
+The pass registry has no invalidation: a pass runs once, in registration order.
+A result stays valid only while no transform runs after it.
 
-5. **Runtime path.** The compile-time macro result is a source string.
-   - An engine ingests it via `engine.ingest(source)`, the platform session under `runtime/backends/`
-     compiles it to an executable artifact.
-   - `launchKernel` or `launchDeviceFn` dispatches it, packing arguments through
-     `launch_serialization.nim`.
-   - `launchDeviceFn` is the typed path: the kernel is a Nim proc, its body is lowered by the same
-     frontend and pass pipeline, the `do:` schedule block sets `grid` and `blk`.
+Each target registers its analysis passes (`pkAnalysis`) after its last transform and before the check-only validation stage.
+The printer reads the stored records from `CirModule` and never rescans:
+`features`, `layouts`, `callGraph`, `structRefs`, `paramClasses`, `refBlocks`.
+
+`runPasses` enforces the declared `dependsOn` lists.
+The analysis-last placement itself is the registration sequence in `gpu_compiler.nim`, one bundle per target.
+
+## Printers
+
+Six text printers live in `src/codegen/backends/`: `cuda_lang`, `opencl_lang`, `glsl_lang`, `wgsl_lang`, `msl_lang`, `hlsl_lang`.
+The SPIR-V encoder (`spirv_shader_lang`) sits beside them.
+The printers walk the final module and emit text, they do not reason about semantics.
+A printer refusal is a compile-time error naming the construct.
+
+Two shared layers keep the printers thin:
+
+- `print_common.nim`: the statement and expression walk, a C declarator engine, scalar and literal token tables, loop text
+- `targets_registry.nim` and `targets_rows.nim`: the printers' static data as plain rows, one row family per concern
+- `genTargets` in `targets_macros.nim` parses the rows and checks them at compile time, a missing or drifted row fails the compile
+
+`backends_api.nim` dispatches `codegen` on a static `Backend` value.
+The compiler folds the dispatch to a direct call.
+`Backend` names the text printers, `BackendKind` names the runtime engines.
+The two enums stay separate.
+
+## Frontend
+
+`src/codegen/frontend/nim_to_crucible.nim` lowers the typed macro body to CIRv2, normal form by construction.
+`nim_type_resolvers.nim` resolves types and overloads during IR construction.
+
+Procs intern through the frontend's proc registry: one entry per proc identity.
+The emitted name is claimed at first registration, a second claimant of a base name suffixes.
+A construct outside the supported closure refuses through the refusal channel.
+The macro turns that refusal into a compile-time `error` naming the construct.
+
+## Runtime
+
+The compile-time macro result is a source string or SPIR-V words.
+The runtime layer turns it into an executing kernel:
+
+| Layer             | Files                    | Role                                                                                                    |
+| ---               | ---                      | ---                                                                                                     |
+| Engine facades    | `src/runtime/engines/`   | `newEngine`, `ingest`, device memory, the user-facing API per backend                                   |
+| Platform sessions | `src/runtime/backends/`  | Library loading, device discovery, source to artifact compilation, raw dispatch                         |
+| Launch            | `src/runtime/launch/`    | `launchKernel` with chevron sugar, `launchDeviceFn` with a typed `do:` schedule block, argument packing |
+| Bindings          | `src/abis/`              | Raw C FFI: CUDA driver + NVRTC, OpenCL, Vulkan, Objective-C                                             |
+| Errors            | `src/runtime/errors.nim` | `failLoud`: stacktrace, stderr, exit 1                                                                  |
+
+## Enforcement map
+
+| Invariant                                                       | Enforcement                                                                                                       |
+| ---                                                             | ---                                                                                                               |
+| Registration order is execution order                           | `runPasses` iterates the registry in registration order, there is no scheduler                                    |
+| A dependency runs before its dependent                          | `runPasses` refuses when a `dependsOn` entry has not run                                                          |
+| A refusal anywhere is a compile-time error naming the construct | The macros call `error()` on frontend and pipeline refusals, `codegenModule` calls `error()` on a printer refusal |
+| An analysis result survives only with no transform after it     | The registration sequence in `gpu_compiler.nim`, the registry has no invalidation                                 |
+| Target static data is complete and consistent                   | `genTargets` compile-time row checks                                                                              |
+| The passes layer exports only `register*` procs                 | The `passes-export` linter rule                                                                                   |
+
+## Refusals and testing
+
+Refusals flow end to end as strings, no exceptions cross the pipeline:
+
+| Stage    | Refusal path                                                                   |
+| ---      | ---                                                                            |
+| Frontend | `lowerCirv2` returns the first refusal, the macro raises it as a compile error |
+| Passes   | `runPasses` returns the first pass refusal, the macro raises it                |
+| Printer  | The walk records the first refusal, `codegenModule` raises it                  |
+
+No negative-compile test runs automatically, an expected compile failure is a `manual_` file run by hand.
+The IR tests under `tests/ir/` build a hand-made `CirModule` and run one registered pass through a `PassRegistry`.
+Each test asserts the IR delta or the refusal string.
+
+A compiler change answers behavioral checks, never byte identity:
+
+- kernels launch and read back the expected results
+- compile time stays close to the recorded measurements
+- runtime performance is unchanged
+- the maintenance line count goes down
+
+Every test launches through `engine.launchKernel()` or `engine.launchDeviceFn()`, ingestion alone is not a test.
+[`AGENTS.md`](AGENTS.md) documents the test conventions and run commands.
 
 ## Extension points
 
 ### Adding a pass
 
-1. Create or extend a file under `src/codegen/passes/`.
-   Implement the transform/validation as a `proc(ctx: var GpuContext): void`.
-2. Register it with `reg.register("name", kind, phase, "description", run = ...)` in
-   `registerCommonPasses` (`gpu_compiler.nim`) or in the per-language registration
-   inside `passes_<lang>.nim`.
-3. Set `dependsOn` to any passes it requires, `runPasses` enforces the dependency.
-4. Add an IR-level test under `tests/ir/` and, if it affects output, per-backend tests under `tests/codegen/<backend>/`.
-   The test drives the registered pass through its public entry: build a context via `crucible_internal_compiler`, call `ctx.<pass>()`.
-   Reach a private proc from a test with `import ... {.all.}` (module procs only, `privateAccess` is unused in Crucible).
-   Never export an implementation proc for a test.
+1. Implement the transform or check over `CirModule` in a file under `src/codegen/passes/`, file-local.
+2. Register it from the owning stage bundle with name, kind, phase, description, `run`, and `dependsOn`.
+3. Keep implementations file-local. The `register*` proc is the only public surface of a passes file.
+4. Add an IR test under `tests/ir/` that runs the pass through a `PassRegistry`, plus a per-backend test when output changes.
 
-### Adding a backend
+### Adding a target
 
-1. Add a printer file under `src/codegen/backends/` exposing `preprocess` and `codegen`.
-2. Wire it into `backends_api.nim` and add the `codegen<Backend>` macro in `gpu_compiler.nim`.
-3. Add the platform session under `src/runtime/backends/`, the engine facade under `src/runtime/engines/`,
-   the raw bindings under `src/abis/`, and the `BackendKind` value in `ast_datatypes.nim`.
-4. Add a `tests/codegen/<backend>/` suite obeying the naming convention of [`AGENTS.md`](AGENTS.md).
-   Backends that cannot auto-run get a `manual_*` test.
+| Step | Action |
+| --- | --- |
+| Printer | Add a printer under `src/codegen/backends/`, import `print_common`, state the target's rows in `targets_rows.nim` |
+| Dispatch | Add the `Backend` value in `backends_api.nim` and the `codegen<Target>` macro in `gpu_compiler.nim` |
+| Bundles | Register the target's rename, lowering, analysis, and validation bundles in `gpu_compiler.nim`, in that order |
+| Runtime | Add the platform session (`src/runtime/backends/`), the engine facade (`src/runtime/engines/`), the raw bindings (`src/abis/`), and the `BackendKind` value in `ast_datatypes.nim` |
+| Tests | Add a `tests/codegen/<backend>/` suite, a target that cannot auto-run gets `manual_` files |
 
 ## Related docs
 
-- [`README.md`](README.md): capability proof, status, source layout, run commands.
-- [`AGENTS.md`](AGENTS.md): test conventions and run commands.
-- [`workspace/ceramic/`](../ceramic/) and [`workspace/positron/`](../positron/): inputs consumed by Crucible.
+- [`README.md`](README.md): capability proof, source layout, run commands, builtin vocabulary and per-backend idiom matrix
+- [`AGENTS.md`](AGENTS.md): test conventions, emitted-output policy, benchmarks
+- [`workspace/ceramic/`](../ceramic/) and [`workspace/positron/`](../positron/): the inputs Crucible consumes
