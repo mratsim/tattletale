@@ -89,7 +89,7 @@ proc getScalarName*(names: ScalarNames, t: CirType): string =
   ##
   ##   result = getScalarName(mslScalarNames, t)  # "half" for a 16-bit float
   case t.kind
-  of ctVoid, ctBool:
+  of ctVoid, ctBool, ctString:
     for c in names.cells:
       if c.kind == t.kind:
         return c.spelling
@@ -143,7 +143,7 @@ proc getLeafName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
   ## Returns "" for pointers, arrays, proc and span types. The caller composes
   ## the name or refuses, per its own policy.
   case t.kind
-  of ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16:
+  of ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16, ctString:
     result = getScalarName(names, t)
   of ctVector:
     result = getVectorName(rule, names, t)
@@ -174,7 +174,7 @@ proc getUnnamedScalarCell*(names: ScalarNames, t: CirType): CirType =
   var leaf = t
   while leaf.kind in {ctPtr, ctAptr, ctArray}:
     leaf = if leaf.kind == ctArray: leaf.aElem else: leaf.pElem
-  if leaf.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16} and
+  if leaf.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16, ctString} and
       getScalarName(names, leaf).len == 0:
     return leaf
   return nil
@@ -282,6 +282,8 @@ template emitLiteral*(e: CirExpr, tokens: LitTokens, names: ScalarNames): string
       lit = tokens.nilToken
       if lit.len == 0:
         lit = "<" & printerTarget & ": not a literal>"
+    of eStrLit:
+      lit = '"' & e.sValue & '"'
     of eTrue: lit = "true"
     of eFalse: lit = "false"
     else:
@@ -418,7 +420,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
       ctx.fail(nilLiteralRejection)
       return ""
     return emitLiteral(e, ctx.lit, ctx.scalarNames)
-  of eTrue, eFalse, eIntLit, eFloatLit:
+  of eTrue, eFalse, eIntLit, eFloatLit, eStrLit:
     if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
     return emitLiteral(e, ctx.lit, ctx.scalarNames)

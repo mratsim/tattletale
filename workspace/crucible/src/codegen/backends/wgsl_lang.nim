@@ -108,6 +108,8 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
       ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, only 2..4-wide vectors have a name")
   of ctStruct:
     result = t.name
+  of ctString:
+    ctx.fail("string has no WGSL type")
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 

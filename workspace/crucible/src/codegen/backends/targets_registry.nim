@@ -144,8 +144,8 @@ type
     sameWidth*: bool
     spelling*, refusal*: string
 
-const ScalarCellAxis*: array[14, tuple[tok: string, kind: CirTypeKind, width: int]] = [
-  ("void", ctVoid, 0), ("bool", ctBool, 0),
+const ScalarCellAxis*: array[15, tuple[tok: string, kind: CirTypeKind, width: int]] = [
+  ("void", ctVoid, 0), ("bool", ctBool, 0), ("string", ctString, 0),
   ("i8", ctInt, 8), ("i16", ctInt, 16), ("i32", ctInt, 32), ("i64", ctInt, 64),
   ("u8", ctUint, 8), ("u16", ctUint, 16), ("u32", ctUint, 32), ("u64", ctUint, 64),
   ("f16", ctFloat, 16), ("bf16", ctBf16, 16), ("f32", ctFloat, 32), ("f64", ctFloat, 64)]
@@ -166,6 +166,7 @@ genTargets:
   target msl:
     scalar void "void", bool "bool", i8 "char", i16 "short", i32 "int", i64 "long",
       u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", bf16 "bfloat", f32 "float",
+      string "const char*",
       refused f64 "double has no Apple GPU support"
     # `char` and `long` are MSL's 8-bit signed and 64-bit type names.
     # CUDA names the same widths `signed char` and `long long`, each target declares its own names
@@ -196,7 +197,7 @@ genTargets:
   target cuda:
     scalar void "void", bool "bool", i8 "signed char", i16 "short", i32 "int", i64 "long long",
       u8 "unsigned char", u16 "unsigned short", u32 "unsigned int", u64 "unsigned long long",
-      f16 "__half", bf16 "__nv_bfloat16", f32 "float", f64 "double"
+      f16 "__half", bf16 "__nv_bfloat16", f32 "float", f64 "double", string "const char*"
     lit u64Suffix "ULL", u32Suffix "U", i64Suffix "LL", narrowCast true,
       f32Suffix "f", nilToken "nullptr",
       inf16 "INFINITY", negInf16 "-INFINITY", nan16 "NAN",
@@ -243,7 +244,7 @@ genTargets:
     # This row prints bool as `int` to match the launch ABI.
     scalar void "void", bool "int", i8 "char", i16 "short", i32 "int", i64 "long",
       u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "ushort", bf16 "ushort",
-      f32 "float", f64 "double"
+      f32 "float", f64 "double", string "const char*"
     lit u64Suffix "ULL", u32Suffix "U", i64Suffix "LL", narrowCast true,
       f16Prefix "(half)", f32Suffix "f", nilToken "0",
       inf16 "(half)INFINITY", negInf16 "(half)-INFINITY", nan16 "(half)NAN",
@@ -270,7 +271,8 @@ genTargets:
   target glsl:
     # 8, 16 and 64-bit names compile behind the explicit-arithmetic-types extensions the module emits.
     scalar void "void", bool "bool", i8 "int8_t", i16 "int16_t", i32 "int", i64 "int64_t",
-      u8 "uint8_t", u16 "uint16_t", u32 "uint", u64 "uint64_t", f16 "float16_t", f32 "float", f64 "double"
+      u8 "uint8_t", u16 "uint16_t", u32 "uint", u64 "uint64_t", f16 "float16_t", f32 "float", f64 "double",
+      string "const char*"
     # Wide integer and float literals print as constructor calls, glslang rejects the `LL` suffix.
     # GLSL has no infinity or NaN literal, IEEE-754 bit patterns go through `uintBitsToFloat`.
     lit u64Prefix "uint64_t(", u64Suffix ")", u32Suffix "U",

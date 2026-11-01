@@ -72,6 +72,9 @@ func computeCirSizeBytes(t: CirType): int =
     result = if t.bits > 0: t.bits div 8 else: 8
   of ctBool:
     result = 1
+  of ctString:
+    # String values store as `const char*`, the pointer is the storage
+    result = 8
   of ctPtr, ctAptr:
     result = 8
   of ctArray:

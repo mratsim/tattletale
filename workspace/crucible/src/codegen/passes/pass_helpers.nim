@@ -174,6 +174,8 @@ proc cloneExpr*(e: CirExpr): CirExpr =
   of eIntLit:
     result.value = e.value
     result.litType = e.litType
+  of eStrLit:
+    result.sValue = e.sValue
   of eFloatLit:
     result.fValue = e.fValue
     result.fLitType = e.fLitType

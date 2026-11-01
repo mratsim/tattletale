@@ -617,6 +617,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
   ## CirType of an expression, the read type for conversions.
   case e.kind
   of eNil: result = e.nilType
+  of eStrLit: result = CirType(kind: ctString)
   of eSym:
     # temp syms carry no type, the hoisted declaration's type is the truth
     result = fn.localTys.getOrDefault(e.name, e.typ)
@@ -756,6 +757,10 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   of eNil:
     let t = ctx.resolveTyId(ctx.valueTy(e.nilType))
     ctx.builder.freshInst(OpUndef, @[t])
+  of eStrLit:
+    # a string literal has no SPIR-V value, the construct refuses
+    ctx.failSpv("a string literal has no SPIR-V value")
+    return 0'u32
   of eIntLit, eFloatLit, eTrue, eFalse:
     ctx.resolveConstId(fn, e)
   of eSym:
@@ -1365,7 +1370,7 @@ proc scanCallExpr(e: CirExpr, calls: var seq[string]) =
       calls.add e.callee.name
     for a in e.args:
       scanCallExpr(a, calls)
-  of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSizeof:
+  of eNil, eTrue, eFalse, eIntLit, eFloatLit, eStrLit, eSizeof:
     discard
   of eSym:
     discard
