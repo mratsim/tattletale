@@ -1676,6 +1676,42 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
   else:
     result.add(retS(nil))
 
+type ProcCtxSave = object
+  ## Snapshot of the enclosing proc context that a body lowering replaces:
+  ## the proc under translation, its return type, the issued-name set,
+  ## the scope stack and its address spaces.
+  name: string
+  ret: CirType
+  counts: HashSet[string]
+  scopes: seq[Table[string, CirExpr]]
+  spaces: seq[Table[string, AddressSpace]]
+
+proc enterProcBody(ctx: var FrontendCtx, cirName: string, formals: NimNode): ProcCtxSave =
+  ## Snapshots the enclosing proc context, then seeds the body's state:
+  ## a fresh issued-name set covering program-scope names and claimed
+  ## proc names, the proc's root scope over the module scope,
+  ## plus the return type resolved from the formals.
+  result = ProcCtxSave(name: ctx.fnName, ret: ctx.retType,
+    counts: ctx.nameCounts, scopes: ctx.scopes, spaces: ctx.localSpaces)
+  ctx.fnName = cirName
+  ctx.nameCounts = initHashSet[string]()
+  # a local never takes a program-scope name, a claimed proc name,
+  # a claim made while this body lowers, the uniquer skips all three
+  for g in ctx.moduleScope.keys:
+    ctx.nameCounts.incl g
+  for n in ctx.claimedNames.keys:
+    ctx.nameCounts.incl n
+  ctx.scopes = @[ctx.moduleScope]
+  ctx.localSpaces = @[ctx.moduleSpaces]
+  ctx.retType = ctx.resolver.resolveCirType(formals[0])
+
+proc exitProcBody(ctx: var FrontendCtx, save: ProcCtxSave) =
+  ctx.fnName = save.name
+  ctx.retType = save.ret
+  ctx.nameCounts = save.counts
+  ctx.scopes = save.scopes
+  ctx.localSpaces = save.spaces
+
 proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   ## One proc definition: parameters typed off Nim once and the body lowered
   ## into normal form.
@@ -1697,22 +1733,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   if id notin ctx.procRegistry:
     ctx.procRegistry[id] = ProcEntry(name: cirName)
   ctx.procRegistry[id].hasBody = true
-  let savedName = ctx.fnName
-  let savedRet = ctx.retType
-  let savedCounts = ctx.nameCounts
-  let savedScopes = ctx.scopes
-  let savedSpaces = ctx.localSpaces
-  ctx.fnName = cirName
-  ctx.nameCounts = initHashSet[string]()
-  # a local never takes a program-scope name, a claimed proc name,
-  # a claim made while this body lowers, the uniquer skips all three
-  for g in ctx.moduleScope.keys:
-    ctx.nameCounts.incl g
-  for n in ctx.claimedNames.keys:
-    ctx.nameCounts.incl n
-  ctx.scopes = @[ctx.moduleScope]
-  ctx.localSpaces = @[ctx.moduleSpaces]
-  ctx.retType = ctx.resolver.resolveCirType(formals[0])
+  let save = ctx.enterProcBody(cirName, formals)
   if ctx.failing():
     return nil
   var params: seq[CirParam] = @[]
@@ -1727,11 +1748,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let wgErr = fn.applyProcPragmas(result)
   if wgErr.len > 0:
     ctx.fail(wgErr)
-  ctx.fnName = savedName
-  ctx.retType = savedRet
-  ctx.nameCounts = savedCounts
-  ctx.scopes = savedScopes
-  ctx.localSpaces = savedSpaces
+  ctx.exitProcBody(save)
   if ctx.failing():
     return nil
   ctx.procs.add(result)
@@ -1744,37 +1761,18 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   ctx.procRegistry[id].hasBody = true
   let impl = callee.getImpl()
   let formals = getFormalParams(callee.getTypeInst())
-  let savedName = ctx.fnName
-  let savedRet = ctx.retType
-  let savedCounts = ctx.nameCounts
-  let savedScopes = ctx.scopes
-  let savedSpaces = ctx.localSpaces
   let savedProcsLen = ctx.procs.len
   let savedHoisted = ctx.hoisted
   # callee lowers with its own hoist queue: the caller's pending hoists
   # belong to the caller's statement, never to the callee's body
   ctx.hoisted = @[]
-  ctx.fnName = cirName
-  ctx.nameCounts = initHashSet[string]()
-  # a local never takes a program-scope name, a claimed proc name,
-  # a claim made while this body lowers, the uniquer skips all three
-  for g in ctx.moduleScope.keys:
-    ctx.nameCounts.incl g
-  for n in ctx.claimedNames.keys:
-    ctx.nameCounts.incl n
-  ctx.scopes = @[ctx.moduleScope]
-  ctx.localSpaces = @[ctx.moduleSpaces]
-  ctx.retType = ctx.resolver.resolveCirType(formals[0])
+  let save = ctx.enterProcBody(cirName, formals)
   if ctx.failing():
     return
   var params: seq[CirParam] = @[]
   let fnRet = ctx.retType
   let body = ctx.lowerProcBody(impl, formals, getProcBody(impl), params)
-  ctx.fnName = savedName
-  ctx.retType = savedRet
-  ctx.nameCounts = savedCounts
-  ctx.scopes = savedScopes
-  ctx.localSpaces = savedSpaces
+  ctx.exitProcBody(save)
   # callee's own pending hoists close its body, the caller's queue resumes
   let calleeHoists = ctx.drainHoisted()
   ctx.hoisted = savedHoisted
