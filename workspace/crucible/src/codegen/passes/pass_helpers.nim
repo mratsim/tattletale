@@ -55,13 +55,13 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
   ## Visited positions:
   ##
   ## - declaration initializers and assignment operands
-  ## - branch and loop conditions, case selectors, assume conditions
+  ## - branch and loop conditions
   ## - return and discard values, `sAsm` and `sEmit` operands
   ## - call callees and call arguments
   ##
   ## `onStmt` sees every statement once, after its expression positions,
   ## after its nested statement lists. Nested bodies recurse:
-  ## then/else branches, loop bodies, case branches and case else, scopes.
+  ## then/else branches, loop bodies.
   ##
   ## The walk iterates a shallow copy of the statement list, so an insertion
   ## from `onStmt` does not disturb the iteration.

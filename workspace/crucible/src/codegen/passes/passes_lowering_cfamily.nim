@@ -45,8 +45,8 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ##   or device-function one stays in place and refuses at the printer
   ## - the initializer rewrite ran earlier, a relocated smem local has no
   ##   initializer
-  ## - the const_mem relocation covers every proc and scope depth, a shared
-  ##   const_mem walk recurses into the nested scopes at their encounter position,
+  ## - the const_mem relocation covers every proc, a shared
+  ##   const_mem walk recurses into the nested branch and loop bodies at their encounter position,
   ##   a const_mem initializer is required, which the printer emits
   ##   from the relocated node
   ## - runs after the reserved-word rename:
