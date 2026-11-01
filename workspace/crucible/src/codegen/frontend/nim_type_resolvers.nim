@@ -19,9 +19,13 @@ import std/[macros, tables, strutils, hashes]
 
 type
   CirTypeResolver* = object
-    ## Nim-to-CirType translation state: structural type registry, nominal struct set, first refusal message.
+    ## Nim-to-CirType translation state: structural type registry, struct memo,
+    ## nominal struct set, first refusal message.
     registry: Table[uint64, seq[CirType]]
     ## Structural identity registry: structure hash to registered types, an equal structure resolves to the first registered instance.
+    structMemo: Table[string, CirType]
+    ## Struct memo keyed on the canonical identity text, consulted before any field derivation.
+    ## Deriving one struct's fields re-resolves every field type, so a repeated identity pays the whole field walk again without it.
     structs*: seq[CirType]
     ## Nominal struct types declared by the module, in discovery order.
     err*: string
@@ -257,6 +261,8 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   for name, spc in valueSpaces:
     if spc != caDevice:
       nameKey &= "/" & name & "=" & $spc
+  if r.structMemo.hasKey(nameKey):
+    return r.structMemo[nameKey]
   let impl = n.getTypeImpl()
   let fields = r.deriveStructFields(impl, valueSpaces)
   if r.err.len > 0:
@@ -264,6 +270,7 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   let candidate = tStruct(deriveStructName(canon) & "_" &
     base58Short(typeIdentityHash(nameKey)), fields).withOrigin(canon)
   result = r.registerType(candidate)
+  r.structMemo[nameKey] = result
 
 func constrHasTypeElem(t: NimNode): bool =
   ## True when an instantiated tuple/object constructor type node has a type element anywhere.
