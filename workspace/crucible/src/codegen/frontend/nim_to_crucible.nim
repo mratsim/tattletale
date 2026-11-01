@@ -52,8 +52,9 @@ type
     ## Program-scope declarations in encounter order, `m.globals` of the module.
     nameCounts: HashSet[string]
     ## Emitted names already issued in the proc under translation:
-    ## program-scope names and claimed proc names seed it and the uniquer
-    ## suffixes past every entry.
+    ## program-scope names, claimed proc names, and a non-void proc's
+    ## `result` seed it and the uniquer suffixes past every entry,
+    ## live claims included.
     hoisted: seq[CirStmt]
     ## Statements hoisted in front of the statement being lowered.
 
@@ -1718,8 +1719,8 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let savedSpaces = ctx.localSpaces
   ctx.fnName = cirName
   ctx.nameCounts = initHashSet[string]()
-  # a local never takes a program-scope name or a claimed proc name,
-  # both kinds are issued before any proc lowers
+  # a local never takes a program-scope name, a claimed proc name,
+  # a claim made while this body lowers, the uniquer skips all three
   for g in ctx.moduleScope.keys:
     ctx.nameCounts.incl g
   for n in ctx.claimedNames.keys:
@@ -1770,8 +1771,8 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   ctx.hoisted = @[]
   ctx.fnName = cirName
   ctx.nameCounts = initHashSet[string]()
-  # a local never takes a program-scope name or a claimed proc name,
-  # both kinds are issued before any proc lowers
+  # a local never takes a program-scope name, a claimed proc name,
+  # a claim made while this body lowers, the uniquer skips all three
   for g in ctx.moduleScope.keys:
     ctx.nameCounts.incl g
   for n in ctx.claimedNames.keys:
