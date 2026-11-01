@@ -1785,19 +1785,9 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   let wgErr = impl.applyProcPragmas(harvested)
   if wgErr.len > 0:
     ctx.fail(wgErr)
-    ctx.fnName = savedName
-    ctx.retType = savedRet
-    ctx.nameCounts = savedCounts
-    ctx.scopes = savedScopes
-    ctx.localSpaces = savedSpaces
+    # nested harvests inside the callee body roll back with it
     ctx.procs.setLen(savedProcsLen)
-    ctx.hoisted = savedHoisted
     return
-  ctx.fnName = savedName
-  ctx.retType = savedRet
-  ctx.nameCounts = savedCounts
-  ctx.scopes = savedScopes
-  ctx.localSpaces = savedSpaces
   ctx.procs.add(harvested)
 
 # ═══════════════════════════════════════════════════════════════════════
