@@ -68,7 +68,7 @@ proc openclHoistProgramScopeConstants(m: CirModule): string =
 func computeCirSizeBytes(t: CirType): int =
   ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
   case t.kind
-  of ctInt, ctUint, ctFloat:
+  of ctInt, ctUint, ctFloat, ctBf16:
     result = if t.bits > 0: t.bits div 8 else: 8
   of ctBool:
     result = 1

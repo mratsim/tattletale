@@ -144,11 +144,11 @@ type
     sameWidth*: bool
     spelling*, refusal*: string
 
-const ScalarCellAxis*: array[13, tuple[tok: string, kind: CirTypeKind, width: int]] = [
+const ScalarCellAxis*: array[14, tuple[tok: string, kind: CirTypeKind, width: int]] = [
   ("void", ctVoid, 0), ("bool", ctBool, 0),
   ("i8", ctInt, 8), ("i16", ctInt, 16), ("i32", ctInt, 32), ("i64", ctInt, 64),
   ("u8", ctUint, 8), ("u16", ctUint, 16), ("u32", ctUint, 32), ("u64", ctUint, 64),
-  ("f16", ctFloat, 16), ("f32", ctFloat, 32), ("f64", ctFloat, 64)]
+  ("f16", ctFloat, 16), ("bf16", ctBf16, 16), ("f32", ctFloat, 32), ("f64", ctFloat, 64)]
   ## (kind, width) cells with the DSL token naming each cell.
   ## Every scalar row and vector element row keys its entries to this axis.
   ##
@@ -165,7 +165,7 @@ import ./targets_macros
 genTargets:
   target msl:
     scalar void "void", bool "bool", i8 "char", i16 "short", i32 "int", i64 "long",
-      u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", f32 "float",
+      u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", bf16 "bfloat", f32 "float",
       refused f64 "double has no Apple GPU support"
     # `char` and `long` are MSL's 8-bit signed and 64-bit type names.
     # CUDA names the same widths `signed char` and `long long`, each row states its own names
@@ -179,11 +179,10 @@ genTargets:
     # each entry a format string whose `$1` stands for the call's argument list.
     # `float16` keeps a first-class `half` identity: its conversions are plain native calls.
     # `asFp16`/`asU16` reinterpret through `as_type`.
-    # `bfloat16` names no MSL type here, values travel as raw bits.
-    # toBf16/toBf32 move the bit pattern through `as_type<ushort>` around the native `(bfloat)` cast.
+    # `bfloat16` has a first-class `bfloat` identity (Metal 3.1+), its conversions are plain casts.
     # fp8 conversions have no MSL native: the `{.builtin.}` name passes through and refuses at Metal compile time.
-    conv toFp16 "half($1)", toFp32 "float($1)", toBf16 "as_type<ushort>((bfloat)($1))",
-      toBf32 "float(as_type<bfloat>($1))", asFp16 "as_type<half>($1)", asU16 "as_type<ushort>($1)"
+    conv toFp16 "half($1)", toFp32 "float($1)", toBf16 "(bfloat)($1)",
+      toBf32 "(float)($1)", asFp16 "as_type<half>($1)", asU16 "as_type<ushort>($1)"
     # Coordinate builtins carry `ivec3`, so the builtin-threading parameters
     # and whole-value reads print this vector name: 32-bit int/uint elements only.
     vector:
@@ -192,13 +191,13 @@ genTargets:
     # Same-width scalar pairs reinterpret through MSL's `as_type<T>`.
     # Pointer casts and width changes keep the conversion form.
     bitcast:
-      rule srcKinds {ctInt, ctUint, ctFloat}, srcWidths {8, 16, 32, 64},
-        dstKinds {ctInt, ctUint, ctFloat}, sameWidth, "as_type<$2>($1)"
+      rule srcKinds {ctInt, ctUint, ctFloat, ctBf16}, srcWidths {8, 16, 32, 64},
+        dstKinds {ctInt, ctUint, ctFloat, ctBf16}, sameWidth, "as_type<$2>($1)"
 
   target cuda:
     scalar void "void", bool "bool", i8 "signed char", i16 "short", i32 "int", i64 "long long",
       u8 "unsigned char", u16 "unsigned short", u32 "unsigned int", u64 "unsigned long long",
-      f16 "__half", f32 "float", f64 "double"
+      f16 "__half", bf16 "__nv_bfloat16", f32 "float", f64 "double"
     lit u64Suffix "ULL", u32Suffix "U", i64Suffix "LL", narrowCast true,
       f32Suffix "f", nilToken "nullptr",
       inf16 "INFINITY", negInf16 "-INFINITY", nan16 "NAN",

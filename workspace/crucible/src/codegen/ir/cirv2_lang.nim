@@ -72,6 +72,7 @@ type
     ctInt
     ctUint
     ctFloat
+    ctBf16
     ctVector
     ctPtr
     ctAptr
@@ -93,7 +94,7 @@ type
     ##   structurally through `sameType`
     ## - `bits` is the bit width: 8, 16, 32, 64, or -1 for the machine word
     case kind*: CirTypeKind
-    of ctInt, ctUint, ctFloat:
+    of ctInt, ctUint, ctFloat, ctBf16:
       bits*: int
     of ctVector:
       vN*: int
@@ -500,7 +501,7 @@ proc structuralEqual*(a, b: CirType): bool =
   case a.kind
   of ctVoid, ctBool:
     result = true
-  of ctInt, ctUint, ctFloat:
+  of ctInt, ctUint, ctFloat, ctBf16:
     result = a.bits == b.bits
   of ctVector:
     result = a.vN == b.vN and structuralEqual(a.vElem, b.vElem)
@@ -541,7 +542,7 @@ proc sameType*(a, b: CirType): bool =
   case a.kind
   of ctVoid, ctBool:
     result = true
-  of ctInt, ctUint, ctFloat:
+  of ctInt, ctUint, ctFloat, ctBf16:
     result = a.bits == b.bits
   of ctVector:
     result = a.vN == b.vN and sameType(a.vElem, b.vElem)
@@ -562,9 +563,9 @@ proc sameType*(a, b: CirType): bool =
     result = sameType(a.ret, b.ret)
 
 func isScalarType*(t: CirType): bool =
-  ## True for the primitive scalar kinds a primitive operator takes: bool, int, uint, float.
+  ## True for the primitive scalar kinds a primitive operator takes: bool, int, uint, float, bfloat16.
   ## Every other kind (vector, pointer, array, struct, span, proc) is false.
-  t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat}
+  t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat, ctBf16}
 
 proc getExprType*(e: CirExpr): CirType =
   ## Returns the expression's type, or nil when the node's shape does not determine one.

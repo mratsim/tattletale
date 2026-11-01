@@ -47,6 +47,7 @@ proc renderType(t: CirType): string =
   of ctInt: result = "(i " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
   of ctUint: result = "(u " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
   of ctFloat: result = "(f " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
+  of ctBf16: result = "(bf16)"
   of ctVector: result = "(vector " & $t.vN & " " & renderType(t.vElem) & ")"
   of ctPtr: result = "(ptr " & getSpaceName(t.space) & " " & renderType(t.pElem) & ")"
   of ctAptr: result = "(aptr " & getSpaceName(t.space) & " " & renderType(t.pElem) & ")"
