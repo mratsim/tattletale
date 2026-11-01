@@ -26,7 +26,6 @@ A measurement without the master comparison measures nothing.
 | Nimcache | fresh cache directory per run, the compiler reuses cached modules across runs and a warm cache hides the cost under test |
 | Runs | 3 runs per tree, alternate the trees (branch, master, branch, master), report each tree's median |
 | Master checkout | measure master in the same batch, always, comparing a branch only against its own earlier commit can miss a regression that both commits share |
-| Flags | never pass `--maxLoopIterationsVM` when measuring compile time, it exists for the runtime benches |
 | Shell timeout | one command runs one round of both kernels on both trees, a full 3-round sweep needs several commands to stay inside the 300 s cap |
 | Reference | on the M4 Max workstation, master compiles the GEMM bench in about 4.2 s and the SDPA bench in about 8.3 s |
 
