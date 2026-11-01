@@ -365,9 +365,6 @@ const spvVersion13 = 0x00010300'u32
 const spvGeneratorNone = 0'u32
 const spvSchemaNone = 0'u32
 
-func initSpvModule(): SpvModule =
-  SpvModule(version: spvVersion13, nextId: 1)
-
 func addWord(m: var SpvModule, section: SpvSection, word: uint32) =
   m.sections[section].add word
 
@@ -426,7 +423,7 @@ type
       ## OpConstant literal word counts derive from it
 
 func initSpvBuilder(): SpvBuilder =
-  SpvBuilder(module: initSpvModule())
+  SpvBuilder(module: SpvModule(version: spvVersion13, nextId: 1))
 
 func cachedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
   let key: SpvInstKey = (opcode, @operands)

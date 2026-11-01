@@ -85,10 +85,6 @@ proc retypeSymsExpr(e: CirExpr, name: string, typ: CirType) =
   if e.kind == eSym and e.name == name:
     e.typ = typ
 
-proc retypeSymsStmts(ss: seq[CirStmt], name: string, typ: CirType) =
-  ss.walkStmts(nil, proc(e: CirExpr) =
-    e.retypeSymsExpr(name, typ))
-
 proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
   result = CirProc(name: name, ret: callee.ret, isKernel: callee.isKernel,
                    inline: callee.inline, exportName: callee.exportName,
@@ -100,7 +96,8 @@ proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
       result.params.add p
     else:
       result.params.add param(p.name, wanted[i])
-      retypeSymsStmts(result.body, p.name, wanted[i])
+      result.body.walkStmts(nil, proc(e: CirExpr) =
+        e.retypeSymsExpr(p.name, wanted[i]))
 
 type
   InstantiateCtx = ref object
