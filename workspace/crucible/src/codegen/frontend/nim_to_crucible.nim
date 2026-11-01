@@ -239,19 +239,6 @@ proc resolveTypeSection(ctx: var FrontendCtx, n: NimNode) =
 
 proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
 
-func hasLabeledBreak(n: NimNode, label: string): bool =
-  ## True when a `break label` statement inside `n` targets `label`.
-  ## Sym children are not descended into, a label never nests a break.
-  if n.kind == nnkBreakStmt and n.len > 0 and n[0].kind in {nnkSym, nnkIdent} and
-      n[0].strVal == label:
-    return true
-  if n.kind in {nnkSym, nnkIdent, nnkEmpty, nnkCommentStmt}:
-    return false
-  for c in n:
-    if hasLabeledBreak(c, label):
-      return true
-  return false
-
 proc builtinSymExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## A `{.builtin.}` value reference: the canonical coordinate vectors and the flat thread index,
   ## emitted as a plain symbol. The printers map the name onto the target vocabulary.
@@ -1456,10 +1443,8 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         return @[]
     return ctx.drainHoisted() & @[asmS(parts, operands)]
   of nnkBlockStmt:
-    if n[0].kind in {nnkSym, nnkIdent} and hasLabeledBreak(n[1], n[0].strVal):
-      ctx.fail("labeled block: break out of blocks is outside the supported set")
-      return @[]
-    # a label no `break label` targets is dead and the block lowers as its body
+    # a `break label` inside the body refuses at the break statement.
+    # A label no break targets is dead and lowers as its body
     ctx.pushScope()
     result = ctx.lowerStmt(n[1])
     ctx.popScope()
