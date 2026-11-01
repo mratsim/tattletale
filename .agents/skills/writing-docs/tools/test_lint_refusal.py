@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Refusal-slop rule fixtures over lint_md_nim_py.py.
+"""Refusal-slop and agent-verb rule fixtures over lint_md_nim_py.py.
 
 Test that the convicted refusal specimens fire their rules and the honest
-one-liner refusals stay clean.
+one-liner refusals stay clean. Test that the convicted agent-verb specimens
+fire and honest agent or specification subjects stay clean.
 
 Run:
 
@@ -23,10 +24,12 @@ def test_refusal_rules():
     Returns the failed case count through the assertion message.
     """
 
-    failed = lint_md_nim_py.refusal_selftest(quiet=True)
-    assert failed == 0, "%d refusal fixture case(s) failed" % failed
+    failed = (lint_md_nim_py.refusal_selftest(quiet=True)
+              + lint_md_nim_py.agent_verb_selftest(quiet=True))
+    assert failed == 0, "%d fixture case(s) failed" % failed
 
 
 if __name__ == "__main__":
-    failed = lint_md_nim_py.refusal_selftest()
+    failed = (lint_md_nim_py.refusal_selftest()
+              + lint_md_nim_py.agent_verb_selftest())
     sys.exit(1 if failed else 0)
