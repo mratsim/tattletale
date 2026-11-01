@@ -729,7 +729,8 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   ##
   ## One walker serves both consumers:
   ##
-  ## - the frontend stamps a pointer cast's target space from this derivation at the cast's birth
+  ## - at the cast's birth the frontend writes the cast's target space
+  ##   from this derivation
   ## - the cast validation reads the same derivation over the module's expressions
   result = caDevice
   case e.kind
