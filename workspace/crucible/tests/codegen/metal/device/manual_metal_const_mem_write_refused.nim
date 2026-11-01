@@ -1,7 +1,7 @@
 ## Metal refuses an assignment into relocated program-scope constant storage.
 ##
 ## - a `{.const_mem.}` local prints as a `constant` global
-## - a later assignment to that name refuses in the constant-write validation
+## - the constant-write validation refuses a later assignment to that name
 ## - v1 had no check: the write reached the emitted `constant` global and died
 ##   in the Metal compiler with no crucible diagnostic
 ##

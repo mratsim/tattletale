@@ -110,7 +110,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
-proc openclCoordComponent(name: string, field: string): string =
+proc getOpenclCoordComponent(name: string, field: string): string =
   ## OpenCL C call of one canonical coordinate builtin component, the dimension as a literal.
   ## "" when the field is not a component.
   let d = case field
@@ -194,7 +194,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       if call.args.len > 0:
         let at = getExprType(call.args[0])
         if at != nil and at.kind == ctFloat:
-          # float operands take the f-prefixed OpenCL names, integer operands keep the plain names
+          # float operands map to the f-prefixed OpenCL names, integer operands use the plain names
           let mapped = case call.callee.name
             of "max": "fmax"
             of "min": "fmin"
@@ -265,7 +265,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eDot:
     if e.dotBase.kind == eSym and e.dotBase.builtin and
         e.dotBase.name in CoordBuiltinNames:
-      let mapped = openclCoordComponent(e.dotBase.name, e.fieldName)
+      let mapped = getOpenclCoordComponent(e.dotBase.name, e.fieldName)
       if mapped.len == 0:
         ctx.fail("no coordinate component " & e.fieldName)
         return ""

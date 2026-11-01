@@ -75,7 +75,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 
-proc cudaCoordToken(name: string, whole: bool, field: string, coordTy: CirType): string =
+proc getCudaCoordToken(name: string, whole: bool, field: string, coordTy: CirType): string =
   ## CUDA text of a canonical coordinate reference.
   ## - whole-value use of a vector builtin: a braced init of the coordinate
   ##   struct the module registered. The CUDA builtins are unsigned and
@@ -186,12 +186,12 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   case e.kind
   of eSym:
     if e.builtin and e.name in CoordBuiltinNames:
-      return cudaCoordToken(e.name, true, "", e.typ)
+      return getCudaCoordToken(e.name, true, "", e.typ)
     return e.name
   of eDot:
     if e.dotBase.kind == eSym and e.dotBase.builtin and
         e.dotBase.name in CoordBuiltinNames:
-      return cudaCoordToken(e.dotBase.name, false,
+      return getCudaCoordToken(e.dotBase.name, false,
         e.fieldName, e.dotBase.typ)
     let base = ctx.printExpr(e.dotBase)
     if e.dotBase.kind == eDeref:

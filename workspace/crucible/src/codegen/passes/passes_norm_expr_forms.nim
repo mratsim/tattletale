@@ -9,9 +9,9 @@
 ##
 ##   - a literal re-types to the operand type at its use site: operation, comparison, call formal, or assignment destination
 ##   - a conversion over a literal folds to the literal at the conversion target, a bfloat16
-##     target keeps the node: bfloat16 has no literal token form, the conversion prints
+##     the pass keeps the node for a bfloat16 target: bfloat16 has no literal token form, the conversion prints
 ##   - a bitwise `and`/`or`/`xor` over bool operands becomes the logical form, `xor` prints as the `!=` comparison
-##   - an object constructor normalizes to its type's declaration order, omitted fields take the type's zero value
+##   - an object constructor normalizes to its type's declaration order, omitted fields fill with the type's zero value
 ##
 ## The frontend lowers syntactic shape only: the source node's literal width,
 ## the bitwise operator form, the constructor's given fields.
@@ -40,7 +40,7 @@ func registerSettleExprForms*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc zeroValue(t: CirType): CirExpr =
-  ## Zero value of a CIRv2 type, an omitted constructor field takes it.
+  ## Zero value of a CIRv2 type, the fill for an omitted constructor field.
   case t.kind
   of ctInt, ctUint:
     result = intLit(0, t)
@@ -70,7 +70,7 @@ proc zeroValue(t: CirType): CirExpr =
 
 proc retypeOperand(e: CirExpr, target: CirType) =
   ## Re-types a literal operand to `target` in place, an exact conversion.
-  ## Non-literals and kind-mismatched pairs return unchanged.
+  ## The pass leaves non-literals and kind-mismatched pairs unchanged.
   if e.isNil or target.isNil:
     return
   case e.kind

@@ -609,10 +609,10 @@ type EntryInputs* = Table[string, string]
 
 template emitEntryInputs*(kinds: untyped, inputs: EntryInputs): string =
   ## Returns the entry-input texts of one shader entry point: one text per
-  ## coordinate builtin the entry takes.
+  ## coordinate builtin that the entry reads.
   ##
-  ## `kinds` is the collection the entry's body walk collected (`ctx.builtins` on WGSL, the canonically ordered reads on HLSL).
-  ## The entry takes exactly the inputs its body reads, in the collection's own order: first use on WGSL, canonical order on HLSL.
+  ## `kinds` is the collection that the entry's body walk collected (`ctx.builtins` on WGSL, the canonically ordered reads on HLSL).
+  ## The entry declares exactly the inputs its body reads, in the collection's own order: first use on WGSL, canonical order on HLSL.
   ##
   ##   "fn k(" & emitEntryInputs(ctx.builtins, wgslEntryInputs) & ") {"
   var texts: seq[string]

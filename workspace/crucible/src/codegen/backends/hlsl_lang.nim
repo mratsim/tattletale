@@ -115,7 +115,7 @@ type
     ## Buffer parameters of the proc in flight by name to their `aptr` type:
     ## the fvVulkan access emitter reads the element type per access.
     coordReads: HashSet[string]
-    ## Canonical coordinate builtin names the kernel body reads, the entry head declares their inputs in `CoordBuiltinNames` order.
+    ## Canonical coordinate builtin names that the kernel body reads, the entry head declares their inputs in `CoordBuiltinNames` order.
     workgroup: array[3, int]
     ## Workgroup sizes of the entry, `threads_per_threadgroup` reads print the literal.
     procs: Table[string, CirProc]
@@ -282,7 +282,7 @@ proc getCoordEntryInput(name: string): string =
   else: ""
 
 proc orderedCoordReads(reads: HashSet[string]): seq[string] =
-  ## Kernel coordinate reads in `CoordBuiltinNames` order, the order the entry head declares their inputs.
+  ## Kernel coordinate reads in `CoordBuiltinNames` order, the order that the entry head declares their inputs.
   for name in CoordBuiltinNames:
     if name in reads:
       result.add name
@@ -403,7 +403,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   return ""
 
 
-proc coordReadRejection(ctx: PrintCtx, name: string): string =
+proc getCoordReadRejection(ctx: PrintCtx, name: string): string =
   ## Refusal text for a coordinate builtin read the printer rejects, "" in a kernel.
   ## The lowering pass materializes threadgroups_per_grid.
   if not ctx.isKernel:
@@ -418,7 +418,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eSym:
     # coordinate builtins bind the kernel entry only
     if e.builtin and e.name in CoordBuiltinNames:
-      let rej = coordReadRejection(ctx, e.name)
+      let rej = getCoordReadRejection(ctx, e.name)
       if rej.len > 0:
         ctx.fail(rej)
         return ""
@@ -462,7 +462,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eDot:
     if e.dotBase.kind == eSym and e.dotBase.builtin and
         e.dotBase.name in CoordBuiltinNames:
-      let rej = coordReadRejection(ctx, e.dotBase.name)
+      let rej = getCoordReadRejection(ctx, e.dotBase.name)
       if rej.len > 0:
         ctx.fail(rej)
         return ""
@@ -633,7 +633,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   if fn.isKernel:
     let wg = getWorkgroup(fn)
     result = "[numthreads(" & $wg[0] & ", " & $wg[1] & ", " & $wg[2] & ")]\n"
-    # a bare kernel is `main`, device functions print under the name their call sites reference
+    # a bare kernel is `main`, device functions print under the name that their call sites reference
     let entryName = if fn.exportName.len > 0: fn.exportName else: "main"
     result &= "void " & entryName & "(" &
       emitEntryInputs(orderedCoordReads(ctx.coordReads), hlslEntryInputs) & ")\n{\n"

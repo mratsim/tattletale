@@ -160,7 +160,7 @@ proc getWgslBuiltinParam(name: string): WgslBuiltinParam =
   else:
     ("", "", "")
 
-proc wgslCoordComponent(name: string, field: string): string =
+proc getWgslCoordComponent(name: string, field: string): string =
   case field
   of "x", "y", "z":
     let p = getWgslBuiltinParam(name)
@@ -169,16 +169,17 @@ proc wgslCoordComponent(name: string, field: string): string =
   else:
     result = ""
 
-proc wgslWholeVector(name: string): string =
+proc getWgslWholeVector(name: string): string =
   let p = getWgslBuiltinParam(name)
   result = "vec3<i32>(i32(" & p.param & ".x), i32(" & p.param & ".y), i32(" &
     p.param & ".z))"
 
 const wgslEntryInputs*: EntryInputs = block:
-  ## WGSL entry-input text per canonical coordinate builtin name: the `@builtin(...)` parameter the entry signature declares.
+  ## WGSL entry-input text per canonical coordinate builtin name: the `@builtin(...)` parameter that the entry signature declares.
   ##
   ## - built from the `getWgslBuiltinParam` table, one text per name that has a parameter
-  ## - a name without a WGSL builtin is absent: `threads_per_threadgroup` reads refuse, WGSL has only the `@workgroup_size` attribute
+  ## - a name without a WGSL builtin is absent: the printer refuses a `threads_per_threadgroup` read,
+  ##   WGSL has only the `@workgroup_size` attribute
   var inputs: EntryInputs
   for name in CoordBuiltinNames:
     let p = getWgslBuiltinParam(name)
@@ -268,7 +269,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       ctx.builtins.incl(e.name)
       if e.name == "thread_index_in_threadgroup":
         return "i32(" & getWgslBuiltinParam(e.name).param & ")"
-      return wgslWholeVector(e.name)
+      return getWgslWholeVector(e.name)
     return e.name
   of eAt, ePat:
     let base = if e.kind == eAt: e.atBase else: e.patBase
@@ -294,7 +295,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       if not ctx.inKernel:
         ctx.fail("a device function reads " & e.dotBase.name & ", WGSL coordinate builtins are entry-point parameters")
         return ""
-      let mapped = wgslCoordComponent(e.dotBase.name, e.fieldName)
+      let mapped = getWgslCoordComponent(e.dotBase.name, e.fieldName)
       if mapped.len == 0:
         if e.dotBase.name == "threads_per_threadgroup":
           ctx.fail("threads_per_threadgroup reads refuse on WGSL, only the @workgroup_size attribute exists")

@@ -185,7 +185,7 @@ type
       ## the body and records which locals no load reaches, so the real pass
       ## can elide their storage
     fnDeadLocals*: Table[string, HashSet[string]]
-      ## Proc name -> locals the planning pass proved unread.
+      ## Proc name -> locals that the planning pass proved unread.
       ## Filled only in the dry pass, consumed by the real pass.
     err*: string
 
@@ -488,14 +488,14 @@ type
       ## a pointer to a Function object cannot live in a Function variable
     fwd*: Table[string, uint32]
       ## Local name -> value id its reads return: the value of the last store
-      ## the emission walk has passed, valid at every read the walk reaches
-      ## before the next store to the name
+      ## that the emission walk has passed, valid at every read that the walk
+      ## reaches before the next store to the name
     elided*: HashSet[string]
       ## Locals whose storage the plan elided: every read reads the stored value.
       ## No variable is declared and no store is emitted
     localLoads*: Table[string, int]
-      ## Local name -> number of OpLoads the emission plans for it.
-      ## A zero count in the dry pass marks a local the real pass elides
+      ## Local name -> number of OpLoads that the emission plans for it.
+      ## A zero count in the dry pass marks a local that the real pass elides
     terminated*: bool
 
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
@@ -793,7 +793,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     if fn.bdaParams.hasKey(e.name):
       return fn.bdaParams[e.name]
     if fn.fwd.hasKey(e.name):
-      # a store the walk has already passed: the read returns its value
+      # a store that the walk has already passed: the read returns its value
       return fn.fwd[e.name]
     if fn.locals.hasKey(e.name):
       fn.localLoads.mgetOrPut(e.name, 0).inc
@@ -1332,7 +1332,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.emitStmts(fn, s.elseBody)
       if not fn.terminated:
         ctx.builder.opBranch(mergeLbl)
-      # a name either branch stored has no known value at the merge.
+      # a name that either branch stored has no known value at the merge.
       # Only entries unchanged by both branches survive here
       let elseFwd = fn.fwd
       fn.fwd = savedFwd
@@ -1397,7 +1397,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc recordDeadLocals(ctx: var SpvLangCtx, fn: SpvFnCtx, name: string) =
-  ## Dead locals of one planned function: declared locals no OpLoad reaches,
+  ## Dead locals of one planned function: declared locals that no OpLoad reaches,
   ## every read reading a forwarded stored value instead.
   ## Recorded in the dry pass only. The real pass elides their storage.
   if not ctx.dryRun:
