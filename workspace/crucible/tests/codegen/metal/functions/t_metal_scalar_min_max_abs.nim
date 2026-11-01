@@ -1,8 +1,7 @@
 ## Metal: scalar float `min`/`max`/`abs` over device values
 ##
 ## Test that a kernel computing min, max, and abs over float32 device values
-## matches the host results. The test checks semantics only, the fold pass
-## itself is discriminated outside the committed suite
+## matches the host results
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

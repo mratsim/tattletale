@@ -33,7 +33,6 @@ import ./frontend/nim_to_crucible
 import ./passes/pass_registry
 import ./passes/passes_legalizations
 import ./passes/passes_normalizations
-import ./passes/passes_optimizations
 import ./passes/passes_lowering
 import ./passes/passes_lowering_hlsl
 import ./passes/passes_lowering_glsl
@@ -62,7 +61,6 @@ macro codegenMetal(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
   reg.registerMslLoweringPasses()
@@ -91,7 +89,6 @@ macro codegenCuda(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   reg.registerCudaLoweringPasses()
   # feature scan after the last transform: analysis results are valid only
@@ -120,7 +117,6 @@ macro codegenOpenCL(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
   reg.registerOpenclLoweringPasses()
@@ -150,7 +146,6 @@ macro codegenGLSL(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   # registerRenameReservedIdentifiers runs first: the GLSL lowering passes
   # register after the rename, so the relocated program-scope declarations
@@ -186,7 +181,6 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   reg.registerSpirvLoweringPasses()
   reg.registerValidationPostPasses()
@@ -212,7 +206,6 @@ macro codegenWebGpu(body: typed): string =
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   # WGSL reserves the double-underscore identifier head, every `__`-prefixed name gains a `wgsl_` prefix
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
@@ -247,7 +240,6 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   var reg = PassRegistry.new()
   reg.registerLegalizationPasses()
   reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
   reg.registerSharedLoweringPasses()
   reg.registerHlslLoweringPasses()
   # analysis passes after the last transform: analysis results are valid

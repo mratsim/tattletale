@@ -216,6 +216,10 @@ proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string) =
       return
     for a in e.args.mitems:
       a.rewriteSpanUsesExpr(ctx, err)
+  of eCast, eConv:
+    # a conversion over a span read keeps the read's fold: the operand is
+    # a settable field, a folded read replaces it in the conversion
+    e.castOperand.rewriteSpanUsesExpr(ctx, err)
   else:
     # children are shared refs: the walk retypes span symbols in place
     # and no child position replaces its node
