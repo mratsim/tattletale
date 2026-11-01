@@ -2711,6 +2711,13 @@ def changed_set_hygiene(base):
                 f, 1, "extensionless-file",
                 "a changed file with no extension, name the format or "
                 "add one"))
+        if status == "A" and ("/tests/ir/" in rel
+                              or name.startswith(("t_ir_", "manual_ir_"))):
+            out.append(Finding(
+                f, 1, "ir-test-ban",
+                "a new IR test file, IR tests are banned: hand-built test "
+                "inputs ossify against IR evolution, cover the behavior "
+                "with an end-to-end kernel test through the public API"))
     return out
 
 
