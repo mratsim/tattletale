@@ -55,25 +55,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
   ## Forward declaration, arrays recurse into themselves.
 
-## `{.builtin.}` numeric conversions resolve to the MSL native call text:
-## each entry is a format string whose `$1` stands for the call's argument list.
-## CIRv2 has no fp16 or bf16 type kind: `float16` and `bfloat16` are `distinct uint16` types holding raw bits in `ushort` storage.
-## Value-producing conversions move the bit pattern, not the numeric value:
-## - `toFp16(x)` prints `as_type<ushort>(half(x))`
-## - `toBf16(x)` prints `as_type<ushort>((bfloat)(x))`
-## - `toFp32`/`toBf32` reinterpret the stored bits back through
-##   `as_type<half>`/`as_type<bfloat>` before the `float` widening
-## - `asFp16`/`asU16` are identities on that storage
-## fp8 conversions have no MSL native: the `{.builtin.}` name passes through and refuses at Metal compile time.
-const MslConversionBuiltinNames: Table[string, string] = {
-  "toFp16": "as_type<ushort>(half($1))",
-  "toFp32": "float(as_type<half>($1))",
-  "toBf16": "as_type<ushort>((bfloat)($1))",
-  "toBf32": "float(as_type<bfloat>($1))",
-  "asFp16": "$1",
-  "asU16": "$1",
-}.toTable()
-
 proc emitMslScalar(t: CirType): string =
   ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
   bareName(mslScalarRow(), mslVectorRule(), t)
@@ -83,6 +64,19 @@ proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## over the MSL rows. Arrays take the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
   cDecl(mslScalarRow(), mslVectorRule(), printerTarget, t, ident, allowEmptyIdent)
+
+proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: string, t: CirType, ident: string): string =
+  ## Declaration text of a pointer or array pointer with its address-space qualifier:
+  ## `device float* p`, pointer-to-array `device float (*p)[N]`.
+  ##
+  ## - `qualifier`: the space word from the target's `SpaceRow.ptrQualifier`,
+  ##   "" when the target qualifies no space
+  ## - an array pointee takes the identifier into the parenthesized declarator
+  let sep = if qualifier.len > 0: " " else: ""
+  let inner = t.pElem
+  if inner.kind == ctArray:
+    return qualifier & sep & cDecl(row, rule, target, inner, "(*" & ident & ")", true)
+  return qualifier & sep & bareName(row, rule, inner) & "* " & ident
 
 proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL declaration text of a pointer or array pointer with its address space:
@@ -150,8 +144,8 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
       error("atomic_fetch_add over a pointee without an MSL atomic type")
     return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
       "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
-  if callee.builtin and MslConversionBuiltinNames.hasKey(callee.name):
-    return MslConversionBuiltinNames.getOrDefault(callee.name) % args.join(", ")
+  if callee.builtin and mslConvRow().builtinNames.hasKey(callee.name):
+    return mslConvRow().builtinNames.getOrDefault(callee.name) % args.join(", ")
   return ""
 
 

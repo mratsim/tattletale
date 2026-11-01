@@ -244,7 +244,8 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   if s.space == caThreadgroup:
     # kernel-scope shared storage in `__shared__` form,
     # NVRTC allocates it per threadgroup, any initializer is discarded
-    result = pad & "__shared__ " & emitCudaType(s.declType, s.name, false) & ";"
+    result = pad & cudaSpaceRow().localPrefix[caThreadgroup] & ' ' &
+      emitCudaType(s.declType, s.name, false) & ";"
     return
   if s.space == caConstant:
     # program-scope storage belongs to CirModule.globals, a survivor here

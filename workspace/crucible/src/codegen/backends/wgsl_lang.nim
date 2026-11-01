@@ -74,8 +74,10 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
       ctx.fail($t.bits & "-bit integers have no WGSL type, only 32 and 64")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
-    if elem.len > 0:
-      result = "vec" & $t.vN & "<" & elem & ">"
+    result = vectorName(wgslVectorRule(), wgslScalarRow(), t)
+    if result.len == 0 and elem.len > 0:
+      ctx.fail("vector of " & elem & "x" & $t.vN &
+        " has no WGSL type name, only 2..4-wide vectors have a name")
   of ctStruct:
     ctx.neededStructs.incl(t.name)
     result = t.name

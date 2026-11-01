@@ -27,7 +27,7 @@
 ## C declarator engine, driven by the registry rows each printer supplies.
 ##
 ## - `scalarName`/`leafName`/`bareName`: type names from `ScalarRow` and `VectorRule`
-## - `cDecl`/`ptrField`: C-style declaration text from type structure
+## - `cDecl`: C-style declaration text from type structure
 ## - a leaf the rows refuse returns "", so the caller composes the name or refuses
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
@@ -174,19 +174,6 @@ proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident:
   result = bareName(row, rule, t)
   if ident.len > 0:
     result.add ' ' & ident
-
-proc ptrField*(row: ScalarRow, rule: VectorRule, target: string, qualifier: string, t: CirType, ident: string): string =
-  ## Declaration text of a pointer or array pointer with its address-space qualifier:
-  ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  ##
-  ## - `qualifier`: the space word from the target's `SpaceRow.ptrQualifier`,
-  ##   "" when the target qualifies no space
-  ## - an array pointee takes the identifier into the parenthesized declarator
-  let sep = if qualifier.len > 0: " " else: ""
-  let inner = t.pElem
-  if inner.kind == ctArray:
-    return qualifier & sep & cDecl(row, rule, target, inner, "(*" & ident & ")", true)
-  return qualifier & sep & bareName(row, rule, inner) & "* " & ident
 
 proc scalarTokens*(row: ScalarRow): ScalarTokens =
   ## Token-table view of a scalar row with the cell names by (kind, width).

@@ -115,13 +115,6 @@ const printerTarget = "hlsl"
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
-const FpConversionBuiltins = [
-  "toFp16", "toFp32", "toBf16", "toBf32", "toFp8e4m3", "toFp8e5m2",
-  "asFp16", "asU16"]
-  ## `{.builtin.}` fp16/bf16/fp8 conversion calls. The frontend erases
-  ## half-width types to 16-bit storage before printing, so the call name
-  ## is the only signal the printer can match.
-
 # ═══════════════════════════════════════════════════════════════════════
 # Types
 # ═══════════════════════════════════════════════════════════════════════
@@ -147,15 +140,8 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
         ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
   of ctVector:
     let elem = emitHlslScalar(ctx, t.vElem)
-    let base = case elem
-      of "float": "float"
-      of "int": "int"
-      of "uint": "uint"
-      of "bool": "bool"
-      else: ""
-    if base.len > 0 and t.vN in 2 .. 4:
-      result = base & $t.vN
-    else:
+    result = vectorName(hlslVectorRule(), hlslScalarRow(), t)
+    if result.len == 0:
       ctx.fail("vector of " & (if elem.len > 0: elem else: $t.vElem.kind) &
         "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
   of ctStruct:
@@ -378,7 +364,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
       return ""
     of shkNone: discard
-    if call.callee.builtin and call.callee.name in FpConversionBuiltins:
+    if call.callee.builtin and call.callee.name in hlslConvRow().fpRefusals:
       ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8" &
         " conversion builtins are outside the HLSL subset")
       return ""
