@@ -100,7 +100,7 @@ proc isSpvScalarKind(t: CirType): bool =
   t.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat}
 
 proc spvTyKey(t: SpvTy): string =
-  ## Structural key, the type-identity cache for OpType* dedup.
+  ## Structural key, serving as the type-identity cache for OpType* dedup.
   case t.kind
   of stkScalar:
     result = "s:" & $t.scalar.kind
@@ -170,7 +170,6 @@ type
     builder*: SpvBuilder
     caps*: HashSet[uint32]
     tyCache*: Table[string, uint32]
-    structCache*: Table[string, uint32]
     builtins*: Table[uint32, tuple[varId, vecTy: uint32]]
     scalarBuiltins*: Table[uint32, uint32]
     interfaceVars*: seq[uint32]
@@ -288,15 +287,6 @@ proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
     for m in t.members:
       memberIds.add ctx.tyId(m)
     let offsets = std430Offsets(t.members)
-    var structKey = "t:"
-    for mid in memberIds:
-      structKey &= $mid & ","
-    for off in offsets:
-      structKey &= $off & ","
-    if t.blockDecorated:
-      structKey &= "B"
-    if ctx.structCache.hasKey(structKey):
-      return ctx.structCache[structKey]
     result = ctx.builder.module.allocId()
     var words = @[result]
     for mid in memberIds:
@@ -306,7 +296,6 @@ proc tyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
       ctx.builder.emitMemberDecorate(result, uint32(i), decOffset, @[uint32(off)])
     if t.blockDecorated:
       ctx.builder.emitDecorate(result, decBlock)
-    ctx.structCache[structKey] = result
   of stkPointer:
     if t.storage == scPhysicalStorageBuffer:
       ctx.caps.incl capPhysicalStorageBufferAddresses
