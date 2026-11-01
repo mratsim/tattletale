@@ -2,6 +2,50 @@
 
 AI coding tool guidelines for the Crucible codegen backend.
 
+## Benchmarks
+
+Two benchmark families check compiler changes: compile time of the bench kernels and size of the emitted kernels.
+Both compare same-session against master.
+Absolute numbers do not reproduce across sessions because machine drift dominates.
+A bench without a master control tree measures nothing.
+
+### Compile time (T2c protocol)
+
+```bash
+# from each tree root: the branch worktree AND the main checkout at master
+/usr/bin/time -p nim cpp -d:release --hints:off --warnings:off \
+  --outdir:/tmp/bx_out/<tag> --nimcache:/tmp/bx_nc/<tag-fresh> \
+  workspace/ceramic/bench/gemm_gpu/bench_gemm_metal.nim
+
+/usr/bin/time -p nim cpp -d:release -d:sdpaDtype=bf16 \
+  --hints:off --warnings:off \
+  --outdir:/tmp/bx_out/<tag> --nimcache:/tmp/bx_nc/<tag-fresh> \
+  workspace/ceramic/bench/sdpa_gpu/bench_scaled_dot_product_attention_metal.nim
+```
+
+| Rule | Detail |
+| --- | --- |
+| Runs | fresh nimcache per run, 3 runs per tree, interleaved branch and master, medians reported |
+| Flags | `--maxLoopIterationsVM` is banned for compile timing, it exists for the runtime benches |
+| Control | the master tree is mandatory in every batch, an A/B against the branch's own earlier commit can miss a regression that both variants share |
+| Chunking | one command runs one interleaved round of both kernels on both trees, the 3-round sweep fits the 300 s bash cap only chunked |
+| Reference | recorded master band on this machine (M4 Max): GEMM ~4.2 s, SDPA bf16 ~8.3 s |
+
+### Emitted code size (ceramic codegen_size)
+
+```bash
+# from the tattletale/ directory of each tree
+nim ceramic_cgs runner=cgs_layout_compose dump=true
+```
+
+| Fact | Detail |
+| --- | --- |
+| Runners | 11 under `workspace/ceramic/bench/codegen_size`: complement, make_layout_like, make_fragment_like, compose, coalesce, concat, divides, products, indexing, inverses, tensor_selectors |
+| Output | one `.msl` per kernel in `workspace/ceramic/bench/codegen_size/dumps/cur_kernels`, untracked files |
+| Comparison | diff the dump sets per tree, per-kernel and total lines, words, bytes |
+| Known breakage | 5 runners fail to compile identically on both sides: complement, make_layout_like, products, indexing, tensor_selectors (`crucibleCompileTarget` undeclared in `h_copy_dispatch.nim`), a pre-existing ceramic breakage, compare the 26 kernels that compile |
+| Delta rule | a byte delta names its mechanism |
+
 ## Passes layer publicity
 
 `src/codegen/passes/passes_*` files export only `register*` routines.
