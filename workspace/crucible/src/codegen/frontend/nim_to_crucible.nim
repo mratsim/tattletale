@@ -857,11 +857,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let base = ctx.lowerExpr(n[0])
     if ctx.failing():
       return nil
-    if base.kind == eOconstr:
-      # a field read of a construction is the field's value, no runtime temporary materializes
-      for f in base.kvFields:
-        if f.name == sanitizeIdent(n[1].strVal):
-          return f.value
     return dotE(base, sanitizeIdent(n[1].strVal))
   of nnkInfix:
     # operators: arithmetic and bitwise directly, comparisons normalize into four kinds, `>` and `>=` swap operands
