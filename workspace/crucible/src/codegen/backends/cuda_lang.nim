@@ -213,7 +213,11 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   let pad = spaces(ctx.indent * 2)
   if s.space == caThreadgroup:
     # kernel-scope shared storage in `__shared__` form,
-    # NVRTC allocates it per threadgroup, any initializer is discarded
+    # NVRTC allocates it per threadgroup
+    if s.init != nil:
+      ctx.fail("smem local " & s.name &
+        " with an initializer, CUDA C++ forbids initializing __shared__ variables")
+      return ""
     result = pad & "__shared__" & ' ' &
       emitCudaType(s.declType, s.name, false) & ";"
     return

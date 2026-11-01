@@ -12,8 +12,9 @@
 ##
 ## - `registerCfamilyHoistProgramScopeLocals`: registers the smem and const_mem relocation.
 ## The pointer-local explosion walk lives in passes_low_pointers.
-##   `smemInitReason` is the target's refusal reason for a smem local with an initializer,
-##   "" when the target accepts one.
+##   `SmemInitPolicy` is the target's policy for an initializer on a smem local.
+##   `smemInitRefuse` refuses naming the target's rule.
+##   `smemInitEmit` keeps the initializer for the printer to emit.
 
 import ../ir/cirv2_lang
 import ./pass_datatypes
@@ -23,15 +24,24 @@ import ./pass_helpers
 # Program-scope hoisting
 # ═══════════════════════════════════════════════════════════════════════
 
-proc hoistProgramScopeLocalsCore(m: CirModule, smemInitReason: string): string =
+type SmemInitPolicy* = enum
+  ## Target policy for an initializer on a `{.smem.}` local.
+  smemInitRefuse
+    ## the target's workgroup storage takes no initializer so the hoist
+    ## refuses naming the target's rule
+  smemInitEmit
+    ## the target's workgroup storage accepts an initializer for the printer to emit
+
+proc hoistProgramScopeLocalsCore(m: CirModule, smemInit: SmemInitPolicy, smemInitReason: string): string =
   ## Relocates the `{.smem.}` and `{.const_mem.}` locals of every proc into
   ## `m.globals`, in encounter order, dropping them from their bodies.
   ##
   ## Contract:
   ## - the smem relocation covers top-level kernel-body locals only, a nested
   ##   or device-function one stays in place and refuses at the printer
-  ## - a smem local with an initializer refuses when `smemInitReason` is
-  ##   non-empty, it names the target's zero-initialization rule
+  ## - under `smemInitRefuse` a smem local with an initializer refuses,
+  ##   `smemInitReason` names the target's rule, under `smemInitEmit` it
+  ##   relocates with the local for the printer to emit
   ## - the const_mem relocation covers every proc and scope depth, the shared
   ##   const_mem walk recurses into the nested scopes at their encounter position,
   ##   a const_mem initializer is required, the printer emits it
@@ -48,7 +58,7 @@ proc hoistProgramScopeLocalsCore(m: CirModule, smemInitReason: string): string =
           # program-scope workgroup storage belongs to the kernel
           i.inc
           continue
-        if s.init != nil and smemInitReason.len > 0:
+        if s.init != nil and smemInit == smemInitRefuse:
           return "at " & fn.name & ": smem local " & s.name &
             " with an initializer, " & smemInitReason
         m.globals.add s
@@ -77,16 +87,21 @@ proc hoistProgramScopeLocalsCore(m: CirModule, smemInitReason: string): string =
         i.inc
   return ""
 
-template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName: string, description, smemInitReason: string) =
+template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName: string,
+    description: string, smemInit: SmemInitPolicy, smemInitReason = "") =
   ## Registers the program-scope hoist for one target.
   ##
   ## Args:
   ## - `passName`: the registry key, one of `glslHoistProgramScopeLocals`
   ##   and `wgslHoistProgramScopeLocals`
   ## - `description`: the registry description
-  ## - `smemInitReason`: the refusal reason for a smem local with an initializer,
-  ##   "" when the target's workgroup storage accepts one
+  ## - `smemInit`: the target's policy for an initializer on a smem local
+  ## - `smemInitReason`: the target's rule an initializer violates, required
+  ##   under `smemInitRefuse`, ignored under `smemInitEmit`
+  when smemInit == smemInitRefuse:
+    doAssert smemInitReason.len > 0,
+      passName & ": smemInitRefuse requires the target's refusal reason"
   reg.register(passName, pkTransform, description,
     run = proc(m: CirModule): string {.nimcall.} =
-      hoistProgramScopeLocalsCore(m, smemInitReason)
+      hoistProgramScopeLocalsCore(m, smemInit, smemInitReason)
   )

@@ -229,8 +229,8 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   let pad = spaces(ctx.indent * 2)
   if s.space == caThreadgroup:
     # kernel-scope threadgroup storage: the MSL lowering pass keeps only
-    # a kernel's smem locals here, a device function's smem local
-    # refuses in the pass, any initializer is discarded
+    # a kernel's initializer-less smem locals here, a device function's
+    # smem local and any initializer refuse in the pass
     result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
     return
   if s.space == caConstant:

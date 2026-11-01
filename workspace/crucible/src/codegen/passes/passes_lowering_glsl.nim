@@ -68,7 +68,8 @@ func registerGlslLoweringPasses*(reg: var PassRegistry) =
   glslRegisterExplodePointerLocals(reg)
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
-    " program scope", "")
+    " program scope", smemInitRefuse,
+    "GLSL shared variables take only a null initializer")
   reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
