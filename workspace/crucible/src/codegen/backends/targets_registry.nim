@@ -21,8 +21,8 @@
 ## | sig    | SigRow     | signature static parts, keyed per flavor      |
 ## | vector | VectorRule | a target's real vector coverage               |
 ##
-## The token types the rows embed (`ScalarTokens`, `LitTokens`, `LoopStyle`) live here too:
-## the registry is the one home of the printers' static data schema.
+## Token types that the rows embed (`ScalarTokens`, `LitTokens`, `LoopStyle`) are defined here,
+## so the registry stays the one home of the printers' static data schema.
 ##
 ## `genTargets` (targets_macros) parses row blocks into these types and generates one lookup proc per family and target.
 ## Checks run at registration as one compile-time block: full (kind, width) coverage per key, refused cells with a reason class,
@@ -35,8 +35,6 @@ type
   ScalarTokens* = object
     ## Scalar type names of one printer target, by type kind and width.
     ##
-    ## Widths name different C types on different targets: `long` is
-    ## 64-bit on LP64 targets and 32-bit on LLP64 hosts.
     ## Plain `char` takes its signedness from the host ABI.
     ##
     ## Each target defines its own table. A "" field means the type

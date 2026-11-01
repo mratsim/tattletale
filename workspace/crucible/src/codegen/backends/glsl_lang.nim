@@ -167,10 +167,6 @@ proc emitExtensions(features: ModuleFeatures): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-# GLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
-# `uintBitsToFloat` (32 bit) and the width conversion at the use site.
-# Wide integer literals print as constructor calls (`int64_t(5)`), glslang rejects the `LL` suffix.
-
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One conversion, the constructor-call form: a reference type constructs
   ## from its element type.

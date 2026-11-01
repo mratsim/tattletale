@@ -138,9 +138,6 @@ proc emitExtensions(features: ModuleFeatures): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-# OpenCL C defines `INFINITY` and `NAN` as float-typed constants.
-# A C cast forms the wider widths.
-
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One conversion, the C-style cast form.
   ##

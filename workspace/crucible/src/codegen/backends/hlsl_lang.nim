@@ -264,9 +264,6 @@ proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-# HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
-# `asfloat` (32 bit) and `asdouble` (64 bit). Without the suffix the HLSL
-# frontend changes width or signedness.
 proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string
   ## Forward declaration, nested constructions flatten recursively.
 

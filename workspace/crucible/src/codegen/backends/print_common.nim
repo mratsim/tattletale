@@ -17,6 +17,7 @@
 ## | LitTokens, emitLiteral          | integer/float/nil literal token forms per target table                                               |
 ## | LoopStyle, printLoopText        | loop text of one target: unroll directive, head, brace style                                         |
 ## | printStmtList                   | statement-list walk: sLoop through `printLoopText`, others through `printStmt`                       |
+## | printStmts                      | statement-list walk with the target's kind-row loop style                                            |
 ## | printStmt                       | dispatch: shared variants inline, target policy via printVar/printConst/printAsgn/printCall/printAsm |
 ## | printExpr                       | expression dispatch: shared branches inline, target kinds via printTargetExpr, default routes inline |
 ## | printTargetExpr                 | the per-printer expression walk, owning the kinds in the printer's `targetExprKinds` set             |
@@ -24,18 +25,18 @@
 ## | printIteElse, printEmitOperand  | sIte else tail and `{.emit.}` operand text, shared forms a printer overrides                         |
 ## | nonFiniteFloatLit               | non-finite float literal token, classified against the printer's token table                         |
 ##
-## C declarator engine, driven by the registry rows each printer supplies.
+## C declarator engine, driven by the registry rows that each printer supplies.
 ##
 ## - `scalarName`/`leafName`/`bareName`: type names from `ScalarRow` and `VectorRule`
 ## - `cDecl`: C-style declaration text from type structure
-## - a leaf the rows refuse returns "", so the caller composes the name or refuses
+## - a leaf that the rows refuse returns "", so the caller composes the name or refuses
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
-## The token schema types (`ScalarTokens`, `LitTokens`, `LoopStyle`) live in targets_registry and re-export from here.
+## A leaf belongs here when two or more printers need the same text.
+## Single-target emission stays in the printer.
 
 import std/[macros, math, strutils]
 import ../ir/cirv2_lang
-import ../ir/ast_datatypes
 import ./targets_registry
 export targets_registry
 
@@ -112,7 +113,7 @@ proc vectorName*(rule: VectorRule, row: ScalarRow, t: CirType): string =
   ## Returns "" when `t` is not a vector, its element has no cell in the rule,
   ## or its lane count is outside `rule.lanes`. The caller refuses.
   ##
-  ##   result = vectorName(glslVectorRow(), glslScalarRow(), t)  # "vec4"
+  ##   result = vectorName(glslVectorRule(), glslScalarRow(), t)  # "vec4"
   if t.kind != ctVector:
     return ""
   for e in rule.elems:
@@ -143,13 +144,13 @@ proc leafName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
     result = ""
 
 proc bareName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
-  ## Bare type name of `t` with no identifier, cast and compound-literal form,
-  ## pointer stars trailing the pointee name.
+  ## Bare type name of `t`: the form casts and compound literals use.
+  ## No identifier, pointer stars trailing the pointee name.
   ##
   ## Returns "" for arrays, proc and span types.
   ## The caller composes the name or refuses, per its own policy.
   ##
-  ##   result = bareName(cudaScalarRow(), cudaVectorRow(), t)  # "float**"
+  ##   result = bareName(cudaScalarRow(), cudaVectorRule(), t)  # "float**"
   if t.kind in {ctPtr, ctAptr}:
     return bareName(row, rule, t.pElem) & "*"
   return leafName(row, rule, t)
@@ -163,7 +164,7 @@ proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident:
   ## - an array without an identifier otherwise refuses: the returned text is
   ##   `<target: array needs an identifier>` (the caller's refusal channel)
   ##
-  ##   result = cDecl(cudaScalarRow(), cudaVectorRow(), "cuda", t, "buf", false)
+  ##   result = cDecl(cudaScalarRow(), cudaVectorRule(), "cuda", t, "buf", false)
   if t.kind == ctArray:
     if ident.len == 0 and not allowEmptyIdent:
       return "<" & target & ": array needs an identifier>"
@@ -211,7 +212,7 @@ proc litTokens*(lit: LitRow, row: ScalarRow): LitTokens =
   ##
   ## - the narrow integer cast names its type from the scalar row
   ##
-  ##   const targetLitTokens = litTokens(mslLitRow(), mslScalarRow())
+  ##   lit: litTokens(mslLitRow(), mslScalarRow())  # the `PrintCtx.lit` field
   LitTokens(
     int: lit.int,
     f16Prefix: lit.f16Prefix, f16Suffix: lit.f16Suffix,
@@ -228,7 +229,7 @@ proc emitScalarToken*(tok: ScalarTokens, t: CirType): string =
   ## the caller composes the name or refuses, per its own policy.
   ##
   ##   of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-  ##     result = emitScalarToken(targetScalarTokens, t)
+  ##     result = emitScalarToken(lit.scalar, t)
   case t.kind
   of ctVoid: tok.void
   of ctBool: tok.bool
@@ -398,7 +399,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## Prints one structured expression.
   ##
   ## - shared variants emit here: the operator branches, the literal head
-  ##   through `emitLiteral` over the printer's `targetLitTokens`
+  ##   through `emitLiteral` over the context's `LitTokens` (`ctx.lit`)
   ## - the call skeleton prints through `printCallArgs` and `printCallText`
   ## - the kinds a printer emits itself route to its `printTargetExpr`,
   ##   named by its `targetExprKinds` set
@@ -465,8 +466,9 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
 proc printStmt*(ctx: var auto, s: CirStmt): string =
   ## Prints one structured statement.
   ##
-  ## Shared variants emit here: `sIte`, `sLoop`, `sScope`, `sAssume`,
-  ## `sRet`, `sDiscard`, `sCase`, `sEmit`. Per-target policy resolves
+  ## Shared variants emit here: `sIte`, `sScope`, `sAssume`,
+  ## `sRet`, `sDiscard`, `sCase`, `sEmit`. A loop prints through
+  ## `printLoopText` off `printStmtList`. Per-target policy resolves
   ## at instantiation through the printer's own procs:
   ##
   ## - `printVar`, `printConst`: storage-class refusals and declaration text
