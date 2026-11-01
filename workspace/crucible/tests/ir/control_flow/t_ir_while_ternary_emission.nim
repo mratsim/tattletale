@@ -18,7 +18,7 @@ import workspace/crucible/src/codegen/backends/glsl_lang
 import workspace/crucible/src/codegen/backends/hlsl_lang
 import workspace/crucible/src/codegen/backends/wgsl_lang
 import workspace/crucible/src/codegen/passes/pass_registry
-import workspace/crucible/src/codegen/passes/callgraph_analysis
+import workspace/crucible/src/codegen/passes/analysis_hlsl
 
 static:
   let u32 = tUint(32)

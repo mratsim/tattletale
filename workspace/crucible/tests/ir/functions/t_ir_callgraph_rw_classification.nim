@@ -10,7 +10,7 @@
 import std/[sets, strutils]
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_registry
-import workspace/crucible/src/codegen/passes/callgraph_analysis
+import workspace/crucible/src/codegen/passes/analysis_hlsl
 
 proc runCallGraph(m: CirModule): string =
   ## Runs the call-graph analysis pass over `m` through the registry.
