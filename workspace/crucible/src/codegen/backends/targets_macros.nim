@@ -25,6 +25,7 @@
 ## `targets_registry.nim` declares every family of all six targets.
 
 import std/macros
+import std/sequtils
 import std/strutils
 import ../ir/cirv2_lang
 import ./targets_registry
@@ -43,7 +44,25 @@ const genBoolFields = ["narrowCast", "braceSameLine", "foldsIteElse", "emitOpera
   ## Lit and kind fields whose value is `true` or `false`.
 
 const unknownField = "\x00"
-  ## `fieldSection` result for a field the family's schema does not name.
+  ## `litKindCtor`'s section for a field the family's schema does not name.
+
+const genFieldSections = [
+  ("lit", "u64Prefix", "int", "IntLitTokens"), ("lit", "u64Suffix", "int", "IntLitTokens"),
+  ("lit", "u32Suffix", "int", "IntLitTokens"), ("lit", "i64Prefix", "int", "IntLitTokens"),
+  ("lit", "i64Suffix", "int", "IntLitTokens"), ("lit", "narrowCast", "int", "IntLitTokens"),
+  ("lit", "f16Prefix", "", ""), ("lit", "f16Suffix", "", ""), ("lit", "f32Suffix", "", ""),
+  ("lit", "f64Prefix", "", ""), ("lit", "f64Suffix", "", ""), ("lit", "nilToken", "", ""),
+  ("lit", "inf16", "nonFinite", "FloatLitTokens"), ("lit", "negInf16", "nonFinite", "FloatLitTokens"),
+  ("lit", "nan16", "nonFinite", "FloatLitTokens"), ("lit", "inf32", "nonFinite", "FloatLitTokens"),
+  ("lit", "negInf32", "nonFinite", "FloatLitTokens"), ("lit", "nan32", "nonFinite", "FloatLitTokens"),
+  ("lit", "inf64", "nonFinite", "FloatLitTokens"), ("lit", "negInf64", "nonFinite", "FloatLitTokens"),
+  ("lit", "nan64", "nonFinite", "FloatLitTokens"),
+  ("kind", "unrollDirective", "loop", "LoopStyle"), ("kind", "braceSameLine", "loop", "LoopStyle"),
+  ("kind", "foldsIteElse", "", ""), ("kind", "emitOperandRendersExpr", "", ""),
+  ("kind", "targetExprKinds", "", "")]
+  ## Lit and kind fields with the constructor section their value splices into.
+  ## A row names the section field in the row object and the type of the constructor nested there.
+  ## The "" section is the row's own fields, an unknown field is a compile error.
 
 proc familyRow(family: string): tuple[suffix: string, required: bool] {.compileTime.} =
   ## Table row of one DSL family, ("", false) for an unknown family.
@@ -67,86 +86,17 @@ proc sectionKey(n: NimNode): tuple[target, flavor: string] {.compileTime.} =
   else:
     error("genTargets: expected a 'target <name>:' or 'target <name>(<flavor>):' section header", n)
 
-proc keyDisplay(key: tuple[target, flavor: string]): string {.compileTime.} =
-  ## Name of one target key in check messages, `target(flavor)` for a flavor key.
+proc keyNames(key: tuple[target, flavor: string]): tuple[display, suffix: string] {.compileTime.} =
+  ## Two renderings of one target key. `display` names the key in check messages, `suffix` prefixes the generated lookup names.
   if key.flavor == "":
-    key.target
+    result = (key.target, key.target)
   else:
-    key.target & "(" & key.flavor & ")"
-
-proc keySuffix(key: tuple[target, flavor: string]): string {.compileTime.} =
-  ## Prefix a target key contributes to generated lookup names.
-  if key.flavor == "":
-    key.target
-  else:
-    key.target & key.flavor[0].toUpperAscii & key.flavor[1 ..^ 1]
-
-const genFieldSections = [
-  ("lit", "u64Prefix", "int"), ("lit", "u64Suffix", "int"), ("lit", "u32Suffix", "int"),
-  ("lit", "i64Prefix", "int"), ("lit", "i64Suffix", "int"), ("lit", "narrowCast", "int"),
-  ("lit", "f16Prefix", ""), ("lit", "f16Suffix", ""), ("lit", "f32Suffix", ""),
-  ("lit", "f64Prefix", ""), ("lit", "f64Suffix", ""), ("lit", "nilToken", ""),
-  ("lit", "inf16", "nonFinite"), ("lit", "negInf16", "nonFinite"), ("lit", "nan16", "nonFinite"),
-  ("lit", "inf32", "nonFinite"), ("lit", "negInf32", "nonFinite"), ("lit", "nan32", "nonFinite"),
-  ("lit", "inf64", "nonFinite"), ("lit", "negInf64", "nonFinite"), ("lit", "nan64", "nonFinite"),
-  ("kind", "unrollDirective", "loop"), ("kind", "braceSameLine", "loop"),
-  ("kind", "foldsIteElse", ""), ("kind", "emitOperandRendersExpr", ""),
-  ("kind", "targetExprKinds", "")]
-  ## Lit and kind fields with their constructor section. "" is the row's
-  ## own fields. A field outside the table is a compile error.
-
-const genSectionTypes = [("int", "IntLitTokens"), ("nonFinite", "FloatLitTokens"),
-  ("loop", "LoopStyle")]
-  ## Schema type of each nested constructor section.
-
-proc fieldSection(family, field: string): string {.compileTime.} =
-  ## Constructor section of one lit/kind field, `unknownField` for a field
-  ## the family's schema does not name.
-  for f in genFieldSections:
-    if f[0] == family and f[1] == field:
-      return f[2]
-  return "\x00"
-
-proc sectionType(section: string): string {.compileTime.} =
-  ## Schema type of one nested constructor section.
-  for t in genSectionTypes:
-    if t[0] == section:
-      return t[1]
-  return ""
+    result = (key.target & "(" & key.flavor & ")",
+      key.target & key.flavor[0].toUpperAscii & key.flavor[1 ..^ 1])
 
 proc colon(name: string, val: NimNode): NimNode {.compileTime.} =
   ## One `name: val` field of an object constructor.
   nnkExprColonExpr.newTree(ident name, val)
-
-proc objCtor(typeName: string, pairs: seq[tuple[section: string, pair: NimNode]]): NimNode {.compileTime.} =
-  ## Object constructor over validated field pairs. Top-level fields come
-  ## from the "" section, nested sections nest a constructor of their type.
-  var args = @[ident typeName]
-  var top: seq[NimNode]
-  var sections: seq[string]
-  for (section, pair) in pairs:
-    if section == "":
-      top.add pair
-    elif section notin sections:
-      sections.add section
-  for section in sections:
-    var sub: seq[NimNode]
-    for (s, pair) in pairs:
-      if s == section:
-        sub.add pair
-    args.add colon(section, nnkObjConstr.newTree(@[ident sectionType(section)] & sub))
-  nnkObjConstr.newTree(args & top)
-
-proc famEntries(fam: NimNode): seq[NimNode] {.compileTime.} =
-  ## Entries of one family row: the arguments of a `family ...` line
-  ## (comma-separated), or the block lines of the multi-line families.
-  ## a `cell` / `"name"` pair parses as a nested command.
-  if fam.kind == nnkCall:
-    for line in fam[1]:
-      result.add line
-  else:
-    for arg in fam[1 ..^ 1]:
-      result.add arg
 
 type
   ParsedCell = tuple[idx: int, spelling: string, node: NimNode]
@@ -204,18 +154,29 @@ proc cellCtor(idx: int, spelling: string): NimNode {.compileTime.} =
   nnkObjConstr.newTree(ident"ScalarCell", colon("kind", ident $axis.kind),
     colon("width", newLit axis.width), colon("spelling", newLit spelling))
 
-proc parseFieldLines(entries: seq[NimNode], family, display: string): seq[tuple[section: string, pair: NimNode]] {.compileTime.} =
-  ## Validated (section, constructor field) entries of a lit or kind row.
+proc litKindCtor(entries: seq[NimNode], family, suffix, display: string): NimNode {.compileTime.} =
+  ## Constructor of the lit or kind row over its validated fields.
   ##
-  ## - string fields take a string literal, bool fields take `true` or `false`
-  ## - `targetExprKinds` takes a set of expression kinds
+  ## - string fields take a string literal, bool fields `true` or `false`,
+  ##   `targetExprKinds` a set of expression kinds
+  ## - a nested-section field (the table above) splices into a constructor
+  ##   of that section's type, a row field takes the generated
+  ##   constructor's top level
   ## - a bad member name fails the compile at the row: value nodes splice
   ##   into the generated constructor at their original position
+  var args = @[ident suffix]
+  var top: seq[NimNode]
+  var subs: seq[tuple[section, sectType: string, fields: seq[NimNode]]]
   for line in entries:
     if line.kind != nnkCommand or line.len != 2:
       error("genTargets: expected a 'field value' entry in the " & family & " row of " & display, line)
     let field = $line[0]
-    let section = fieldSection(family, field)
+    var section = unknownField
+    var sectType = ""
+    for f in genFieldSections:
+      if f[0] == family and f[1] == field:
+        section = f[2]
+        sectType = f[3]
     if section == unknownField:
       error("genTargets: unknown field '" & field & "' in the " & family & " row of " & display, line)
     let val = line[1]
@@ -230,12 +191,27 @@ proc parseFieldLines(entries: seq[NimNode], family, display: string): seq[tuple[
           error("genTargets: field '" & field & "' takes expression kinds, got " & $e.kind, e)
     elif val.kind != nnkStrLit:
       error("genTargets: field '" & field & "' takes a string literal, got " & $val.kind, line)
-    result.add (section, colon(field, val))
+    let pair = colon(field, val)
+    if section == "":
+      top.add pair
+    else:
+      var slot = subs.len
+      for i, sub in subs:
+        if sub.section == section:
+          slot = i
+      if slot == subs.len:
+        subs.add (section, sectType, @[pair])
+      else:
+        subs[slot].fields.add pair
+  for sub in subs:
+    args.add colon(sub.section, nnkObjConstr.newTree(@[ident sub.sectType] & sub.fields))
+  nnkObjConstr.newTree(args & top)
 
-proc builtinTableCtor(entries: seq[NimNode], display: string, widthKeyed: bool): NimNode {.compileTime.} =
+proc builtinTableCtor(entries: seq[NimNode], family, display: string): NimNode {.compileTime.} =
   ## Builtin name table of a conv row (`builtin "text"`) or a math row
   ## (`builtin width "text"`). `$1` is the call's argument list, a math key
   ## is the (name, bit width) pair.
+  let widthKeyed = family == "math"
   var names: seq[string]
   var pairs: seq[NimNode]
   for line in entries:
@@ -246,13 +222,12 @@ proc builtinTableCtor(entries: seq[NimNode], display: string, widthKeyed: bool):
        else: line[1].kind == nnkStrLit)
     if not ok:
       error("genTargets: expected a 'builtin " &
-        (if widthKeyed: "width " else: "") & "\"text\"' entry in the " &
-        (if widthKeyed: "math" else: "conv") & " row of " & display, line)
+        (if widthKeyed: "width " else: "") & "\"text\"' entry in the " & family &
+        " row of " & display, line)
     let name = $line[0]
     let key = if widthKeyed: name & ":" & $line[1][0].intVal else: name
     if key in names:
-      error("genTargets: builtin '" & name & "' appears twice in the " &
-        (if widthKeyed: "math" else: "conv") & " row of " & display, line)
+      error("genTargets: builtin '" & name & "' appears twice in the " & family & " row of " & display, line)
     names.add key
     let k = if widthKeyed: nnkPar.newTree(newLit name, newLit line[1][0].intVal.int)
             else: newLit name
@@ -376,38 +351,42 @@ macro genTargets*(body: untyped) =
   body.expectKind nnkStmtList
   var
     keys: seq[tuple[target, flavor: string]]
-    sections: seq[NimNode]
-    ctors: seq[seq[tuple[family: string, ctor: NimNode]]]
     scalarCells: seq[tuple[display: string, cells: seq[ParsedCell]]]
+  result = nnkStmtList.newTree()
   for section in body:
     if section.kind != nnkCommand or section.len != 3 or $section[0] != "target":
       error("genTargets: expected a 'target <name>:' section", section)
     let key = sectionKey(section[1])
     if key in keys:
-      error("genTargets: duplicate target section '" & keyDisplay(key) & "'", section)
+      error("genTargets: duplicate target section '" & keyNames(key).display & "'", section)
     keys.add key
-    sections.add section
-    let display = keyDisplay(key)
-    var fams: seq[tuple[family: string, ctor: NimNode]]
+    let display = keyNames(key).display
     var seen: seq[string]
     for fam in section[2]:
       if fam[0].kind != nnkIdent or (fam.kind != nnkCommand and
           (fam.kind != nnkCall or fam[1].kind != nnkStmtList)):
         error("genTargets: expected a '<family> ...' row in target " & display, fam)
       let family = $fam[0]
-      let (suffix, required) = familyRow(family)
+      let suffix = familyRow(family).suffix
       if suffix == "":
         error("genTargets: unknown row family '" & family & "' in target " & display, fam)
       if family in seen:
         error("genTargets: duplicate row family '" & family & "' in target " & display, fam)
       seen.add family
-      let entries = famEntries(fam)
-      var ctor: NimNode = nil
+      var entries: seq[NimNode]
+      if fam.kind == nnkCall:
+        for line in fam[1]:
+          entries.add line
+      else:
+        for arg in fam[1 ..^ 1]:
+          entries.add arg
+      var ctor: NimNode
       case family
       of "scalar":
         var cells: seq[ParsedCell]
-        var seen: seq[int]
+        var seenCells: seq[int]
         var refused: seq[tuple[idx: int, reason: NimNode]]
+        var refusedIdxs: seq[int]
         for entry in entries:
           if entry.kind == nnkCommand and entry.len == 2 and $entry[0] == "refused":
             if entry[1].kind != nnkCommand or entry[1].len != 2 or
@@ -420,47 +399,37 @@ macro genTargets*(body: untyped) =
             if '\n' in entry[1][1].strVal:
               error("genTargets: the reason of refused cell '" & $entry[1][0] &
                 "' is one line, in " & display, entry)
-            for r in refused:
-              if r.idx == idx:
-                error("genTargets: refused cell '" & $entry[1][0] &
-                  "' appears twice in " & display, entry)
+            if idx in refusedIdxs:
+              error("genTargets: refused cell '" & $entry[1][0] & "' appears twice in " & display, entry)
+            refusedIdxs.add idx
             refused.add (idx, entry[1][1])
             continue
           let c = cellPair(entry, display)
           if c.spelling.len == 0:
             error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' of " &
               display & " takes a type name, a refused cell is omitted", entry)
-          if c.idx in seen:
+          if c.idx in seenCells:
             error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok &
               "' appears twice in " & display, entry)
-          seen.add c.idx
+          seenCells.add c.idx
           cells.add c
         for r in refused:
-          if r.idx in seen:
+          if r.idx in seenCells:
             error("genTargets: refused cell '" & ScalarCellAxis[r.idx].tok &
               "' is also stated in " & display, r.reason)
         scalarCells.add (display, cells)
-        var ctorArgs = @[ident"ScalarRow",
-          colon("cells", nnkCall.newTree(ident"@", nnkBracket.newTree(
-            block:
-              var cellNodes: seq[NimNode]
-              for c in cells:
-                cellNodes.add cellCtor(c.idx, c.spelling)
-              cellNodes)))]
+        var ctorArgs = @[ident"ScalarRow", colon("cells", nnkCall.newTree(ident"@",
+          nnkBracket.newTree(cells.mapIt(cellCtor(it.idx, it.spelling)))))]
         if refused.len > 0:
-          var refusalNodes: seq[NimNode]
-          for r in refused:
-            refusalNodes.add nnkPar.newTree(ident $ScalarCellAxis[r.idx].kind,
-              newLit ScalarCellAxis[r.idx].width, r.reason)
-          ctorArgs.add colon("refusals",
-            nnkCall.newTree(ident"@", nnkBracket.newTree(refusalNodes)))
+          ctorArgs.add colon("refusals", nnkCall.newTree(ident"@",
+            nnkBracket.newTree(refused.mapIt(nnkPar.newTree(
+              ident $ScalarCellAxis[it.idx].kind, newLit ScalarCellAxis[it.idx].width,
+              it.reason)))))
         ctor = nnkObjConstr.newTree(ctorArgs)
       of "lit", "kind":
-        ctor = objCtor(suffix, parseFieldLines(entries, family, display))
-      of "conv":
-        ctor = builtinTableCtor(entries, display, false)
-      of "math":
-        ctor = builtinTableCtor(entries, display, true)
+        ctor = litKindCtor(entries, family, suffix, display)
+      of "conv", "math":
+        ctor = builtinTableCtor(entries, family, display)
       of "refusals":
         ctor = refusalsCtor(entries, display)
       of "vector":
@@ -469,20 +438,10 @@ macro genTargets*(body: untyped) =
         ctor = castRulesCtor(entries, display)
       else:
         discard
-      fams.add (family, ctor)
-    ctors.add fams
-  for i, key in keys:
-    var fams: seq[string]
-    for r in ctors[i]:
-      fams.add r.family
-    for f in genFamilies:
-      if f[2] and f[0] notin fams:
-        error("genTargets: target " & keyDisplay(key) & " is missing row family '" &
-          f[0] & "'", sections[i])
-  checkCellNames(scalarCells)
-  result = nnkStmtList.newTree()
-  for i, key in keys:
-    for r in ctors[i]:
       result.add nnkConstSection.newTree(nnkConstDef.newTree(
-        nnkPostfix.newTree(ident"*", ident(keySuffix(key) & familyRow(r.family).suffix)),
-        newEmptyNode(), r.ctor))
+        nnkPostfix.newTree(ident"*", ident(keyNames(key).suffix & suffix)),
+        newEmptyNode(), ctor))
+    for f in genFamilies:
+      if f[2] and f[0] notin seen:
+        error("genTargets: target " & display & " is missing row family '" & f[0] & "'", section)
+  checkCellNames(scalarCells)
