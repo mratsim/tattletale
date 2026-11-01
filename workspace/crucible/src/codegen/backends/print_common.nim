@@ -145,6 +145,21 @@ proc bareName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
     return bareName(row, rule, t.pElem) & "*"
   return leafName(row, rule, t)
 
+proc unnamedScalarCell*(row: ScalarRow, t: CirType): CirType =
+  ## Returns the scalar leaf of `t` when `row` names no type for it, after peeling pointer stars and array dimensions.
+  ##
+  ## Returns nil when every scalar leaf has a type name or when the leaf is not a scalar kind.
+  ##
+  ##   let missing = unnamedScalarCell(mslScalarRow, tFloat(64))
+  ##   # tFloat(64) while msl names no f64, nil for tFloat(16) ("half")
+  var leaf = t
+  while leaf.kind in {ctPtr, ctAptr, ctArray}:
+    leaf = if leaf.kind == ctArray: leaf.aElem else: leaf.pElem
+  if leaf.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat} and
+      scalarName(row, leaf).len == 0:
+    return leaf
+  return nil
+
 proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## Declaration text of `t` with `ident` appended in the C declarator form:
   ## the array dimensions move behind the identifier and nest into the declarator
@@ -154,18 +169,22 @@ proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident:
   ## - the printer refuses an array without an identifier with the `<target: array needs an identifier>` text
   ## - the printer refuses a scalar leaf absent from the scalar row with the one-line
   ##   `scalarRefusal` message on the same `<target: ...>` channel
+  ## - the leaf check runs before the printer composes the name, so the refusal
+  ##   also fires when pointer stars or array dimensions wrap the absent cell
   ##
   ##   result = cDecl(cudaScalarRow(), cudaVectorRule(), "cuda", t, "buf", false)
   if t.kind == ctArray:
     if ident.len == 0 and not allowEmptyIdent:
       return "<" & target & ": array needs an identifier>"
+  let missing = unnamedScalarCell(row, t)
+  if missing != nil:
+    return scalarRefusal(target, row, missing)
+  if t.kind == ctArray:
     if t.aElem.kind == ctArray:
       return cDecl(row, rule, target, t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
         allowEmptyIdent)
     return bareName(row, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
   result = bareName(row, rule, t)
-  if result.len == 0 and t.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat}:
-    return scalarRefusal(target, row, t)
   if ident.len > 0:
     result.add ' ' & ident
 

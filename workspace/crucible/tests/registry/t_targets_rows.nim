@@ -34,11 +34,11 @@ static:
     doAssert scalarName(wgslScalarRow, tInt(8)) == ""
     doAssert scalarName(hlslScalarRow, tFloat(16)) == ""
     doAssert scalarName(mslScalarRow, tFloat(64)) == ""
-    doAssert scalarName(cudaScalarRow, tFloat(16)) == ""
+    doAssert scalarName(cudaScalarRow, tFloat(16)) == "__half"
     doAssert cDecl(mslScalarRow, mslVectorRule, "msl", tFloat(64), "x", false) ==
       "<msl: no f64, double has no Apple GPU support>"
     doAssert cDecl(cudaScalarRow, cudaVectorRule, "cuda", tFloat(16), "x", false) ==
-      "<cuda: no f16, no native f16>"
+      "__half x"
 
   block: # lit rows: literal token forms
     doAssert wgslLitRow.int.u32Suffix == "u"
@@ -61,6 +61,10 @@ static:
 
   block: # conv/math/refusals: the builtin name tables
     doAssert mslConvBuiltinNames["toFp16"] == "half($1)"
+    doAssert cudaConvBuiltinNames["toFp16"] == "__float2half($1)"
+    doAssert cudaConvBuiltinNames["toFp32"] == "__half2float($1)"
+    doAssert cudaConvBuiltinNames["asFp16"] == "__ushort_as_half($1)"
+    doAssert cudaConvBuiltinNames["asU16"] == "__half_as_ushort($1)"
     doAssert openclConvBuiltinNames["asFp16"] == "as_half($1)"
     doAssert glslConvBuiltinNames["asU16"] == "float16BitsToUint16($1)"
     doAssert wgslConvBuiltinNames["toFp32"] == "f32($1)"
@@ -79,6 +83,8 @@ static:
 
   block: # bitcast rules: first-match coverage
     doAssert cudaCastRules[0].spelling == "__float_as_uint($1)"
+    doAssert cudaCastRules[3].spelling == "__half_as_ushort($1)"
+    doAssert cudaCastRules[^1].spelling == "__ushort_as_half($1)"
     doAssert wgslCastRules[0].srcAny
     doAssert openclCastRules[0].spelling == "as_$2($1)"
     doAssert hlslCastRules[0].spelling == "asint($1)"
