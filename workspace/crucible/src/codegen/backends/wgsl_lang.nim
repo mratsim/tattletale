@@ -25,7 +25,7 @@
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
-import std/[macros, sets, strutils, tables]
+import std/[macros, math, sets, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
 import ./targets_rows
@@ -65,13 +65,33 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## WGSL name of a non-array leaf type, "" when the caller composes the name.
   ## A struct name registers the struct for reference-driven emission.
+  ##
+  ## 64-bit leaves refuse:
+  ## - i64/u64 require the shader-int64 device feature
+  ## - f64 requires the shader-f64 device feature
+  ## - the vendored wgpu-native exposes no WGPUFeatureName for either, so no
+  ##   request can enable them
   case t.kind
-  of ctVoid, ctBool, ctFloat:
+  of ctVoid, ctBool:
     result = scalarName(wgslScalarRow, t)
   of ctInt, ctUint:
     result = scalarName(wgslScalarRow, t)
     if result.len == 0:
-      ctx.fail($t.bits & "-bit integers have no WGSL type, only 32 and 64")
+      if t.bits == 64:
+        ctx.fail("64-bit integers have no WGSL emission: WGSL requires the" &
+          " shader-int64 device feature for i64/u64, the vendored wgpu-native" &
+          " has no WGPUFeatureName to request it")
+      else:
+        ctx.fail($t.bits & "-bit integers have no WGSL type, only 32")
+  of ctFloat:
+    result = scalarName(wgslScalarRow, t)
+    if result.len == 0:
+      if t.bits == 64:
+        ctx.fail("64-bit floats have no WGSL emission: WGSL requires the" &
+          " shader-f64 device feature for f64, the vendored wgpu-native has" &
+          " no WGPUFeatureName to request it")
+      else:
+        ctx.fail($t.bits & "-bit floats have no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
     result = vectorName(wgslVectorRule, wgslScalarRow, t)
@@ -224,6 +244,16 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eNil:
     ctx.fail("nil literal is outside the WGSL subset")
     return ""
+  of eFloatLit:
+    # a 64-bit non-finite float has no token in the lit row:
+    # - `bitcast<f64>` requires the shader-f64 device feature the runtime cannot request
+    # - every bitcast operand form fails, a u32-suffixed 64-bit literal is a parse error
+    if e.fValue.classify in {fcInf, fcNegInf, fcNan} and e.fLitType.bits == 64:
+      ctx.fail("a 64-bit non-finite float has no WGSL emission: bitcast<f64>" &
+        " requires the shader-f64 device feature, the vendored wgpu-native" &
+        " has no WGPUFeatureName to request it")
+      return ""
+    return emitLiteral(e, ctx.lit, ctx.row)
   of eSym:
     # pointer-value and whole-struct refusals, coordinate builtins are
     # entry-point parameters, names pass through

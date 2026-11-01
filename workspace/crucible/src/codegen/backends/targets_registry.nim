@@ -31,6 +31,7 @@ type
     ## Non-finite float literal tokens for one printer target:
     ##
     ## - one field per literal width
+    ## - an empty token is a refusal: the target emits no form for that width and the printer refuses the literal at the emission site
     ## - Nim's `$` renders the special values `inf`, `-inf` and `nan`, and no
     ##   shader language accepts those as a literal token
 
