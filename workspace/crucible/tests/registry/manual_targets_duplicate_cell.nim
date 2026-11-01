@@ -15,7 +15,7 @@ import workspace/crucible/src/codegen/backends/targets_macros
 genTargets:
   target msl:
     scalar void "void", bool "bool", i8 "char", i16 "short", i32 "int", i32 "long",
-      i64 "long", u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", f32 "float", f64 ""
+      i64 "long", u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", f32 "float", f64 "double"
     lit u32Suffix "U", nilToken "nullptr"
     kind unrollDirective "#pragma unroll", braceSameLine true
     vector:

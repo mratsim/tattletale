@@ -15,19 +15,30 @@ import workspace/crucible/src/codegen/backends/targets_rows
 import workspace/crucible/src/codegen/backends/print_common
 
 static:
-  block: # scalar rows: 13 cells per target, every cell stated
+  block: # scalar rows: the stated cells resolve, absent cells refuse
     for row in [mslScalarRow, cudaScalarRow, openclScalarRow, glslScalarRow,
         wgslScalarRow, hlslScalarRow]:
-      doAssert row.cells.len == 13, "each scalar row states all 13 axis cells"
+      var seen: seq[(CirTypeKind, int)]
+      for c in row.cells:
+        doAssert c.spelling.len > 0, "a stated cell names its type"
+        doAssert (c.kind, c.width) notin seen, "each cell stated once"
+        seen.add (c.kind, c.width)
     doAssert scalarName(mslScalarRow, tFloat(16)) == "half"
     doAssert scalarName(mslScalarRow, tInt(64)) == "long"
     doAssert scalarName(cudaScalarRow, tInt(64)) == "long long"
     doAssert scalarName(openclScalarRow, tBool()) == "int"
     doAssert scalarName(openclScalarRow, tFloat(32)) == "float"
     doAssert scalarName(wgslScalarRow, tInt(32)) == "i32"
-    doAssert scalarName(wgslScalarRow, tInt(8)) == ""
     doAssert scalarName(hlslScalarRow, tUint(32)) == "uint"
+    # absent cells refuse, scalarName returns no name and cDecl prints the refusal
+    doAssert scalarName(wgslScalarRow, tInt(8)) == ""
     doAssert scalarName(hlslScalarRow, tFloat(16)) == ""
+    doAssert scalarName(mslScalarRow, tFloat(64)) == ""
+    doAssert scalarName(cudaScalarRow, tFloat(16)) == ""
+    doAssert cDecl(mslScalarRow, mslVectorRule, "msl", tFloat(64), "x", false) ==
+      "<msl: no f64, double has no Apple GPU support>"
+    doAssert cDecl(cudaScalarRow, cudaVectorRule, "cuda", tFloat(16), "x", false) ==
+      "<cuda: no f16, the __half names live behind cuda_fp16.h and this printer emits no includes>"
 
   block: # lit rows: literal token forms
     doAssert wgslLitRow.int.u32Suffix == "u"

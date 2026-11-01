@@ -14,7 +14,7 @@ import workspace/crucible/src/codegen/backends/targets_macros
 genTargets:
   target msl:
     scalar void "void", bool "bool", i8 "char", i16 "short", i32 "int", i64 "long",
-      u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", f32 "float", f64 ""
+      u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", f32 "float", f64 "double"
     lit u32Suffix "U", nilToken "nullptr"
     kind unrollDirective "#pragma unroll", braceSameLine true
     vector:
@@ -27,7 +27,7 @@ genTargets:
   target cuda:
     scalar void "void", bool "bool", i8 "signed char", i16 "short", i32 "int", i64 "long long",
       u8 "unsigned char", u16 "unsigned short", u32 "unsigned int", u64 "unsigned long long",
-      f16, f32 "half", f64 "double"
+      f32 "half", f64 "double"
     lit u32Suffix "U", nilToken "nullptr"
     kind unrollDirective "#pragma unroll", braceSameLine true
     vector ()

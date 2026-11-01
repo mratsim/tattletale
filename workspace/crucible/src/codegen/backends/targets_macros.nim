@@ -182,7 +182,7 @@ proc checkCellNames(all: seq[tuple[display: string, cells: seq[ParsedCell]]]) {.
   for i in 0 ..< all.len:
     for a in 0 ..< all[i].cells.len:
       let ca = all[i].cells[a]
-      if ca.spelling.len == 0 or ScalarCellAxis[ca.idx].kind == ctBool:
+      if ScalarCellAxis[ca.idx].kind == ctBool:
         continue
       for j in i ..< all.len:
         for b in 0 ..< all[j].cells.len:
@@ -427,6 +427,9 @@ macro genTargets*(body: untyped) =
             refused.add (idx, entry[1][1])
             continue
           let c = cellPair(entry, display)
+          if c.spelling.len == 0:
+            error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' of " &
+              display & " takes a type name, a refused cell is omitted", entry)
           if c.idx in seen:
             error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok &
               "' appears twice in " & display, entry)
