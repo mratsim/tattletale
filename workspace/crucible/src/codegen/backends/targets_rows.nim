@@ -62,6 +62,12 @@ genTargets:
       kernelParamScalar: "constant",
       kernelParamPointer: "device",
       smemParam: "threadgroup")
+    # `{.builtin.}` numeric conversions resolve to the MSL native call text,
+    # each entry a format string whose `$1` stands for the call's argument list.
+    # CIRv2 has no fp16 or bf16 type kind,
+    # `float16` and `bfloat16` are `distinct uint16` over raw bits in `ushort` storage.
+    # Value-producing conversions move the bit pattern, not the numeric value.
+    # fp8 conversions have no MSL native: the `{.builtin.}` name passes through and refuses at Metal compile time.
     conv: ConvRow(
       builtinNames: {
         "toFp16": "as_type<ushort>(half($1))",
@@ -89,6 +95,8 @@ genTargets:
       inlineLinkage: "inline ",
       voidRet: "void",
       bindingPrefix: "[[buffer($1)]]")
+    # Coordinate builtins carry `ivec3`, so the builtin-threading parameters
+    # and whole-value reads print this vector name: 32-bit int/uint elements only.
     vector: VectorRule(
       context: vcCoordinate,
       elems: @[(ctInt, 32, ""), (ctUint, 32, "")],
@@ -492,6 +500,8 @@ genTargets:
       kernelParamScalar: "",
       kernelParamPointer: "",
       smemParam: "")
+    # `{.builtin.}` fp16/bf16/fp8 conversion calls refuse: the frontend erases
+    # half-width types to 16-bit storage before printing, so the call name is the only signal the printer can match.
     conv: ConvRow(
       fpRefusals: @[
         "toFp16", "toFp32", "toBf16", "toBf32", "toFp8e4m3", "toFp8e5m2",

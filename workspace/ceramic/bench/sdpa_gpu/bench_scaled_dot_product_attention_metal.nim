@@ -13,7 +13,7 @@
 # - per visited tile: QK costs 2*MT*NT*Dk, PV 2*MT*NT*Dv
 #
 # Run:
-#   nim c -r -d:release --maxLoopIterationsVM:100000000 \
+#   nim c -r -d:release \
 #     -d:sdpaDtype=f32|bf16 \
 #     --outdir:build/bench workspace/ceramic/bench/sdpa_gpu/bench_scaled_dot_product_attention_metal.nim
 
