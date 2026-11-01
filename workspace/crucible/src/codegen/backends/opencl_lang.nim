@@ -42,7 +42,7 @@ type
     lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
     scalarNames: ScalarNames
-    ## Scalar names of the target. The narrow integer cast takes its type name from them.
+    ## Scalar names of the target. The narrow integer cast names its type from them.
     inKernel: bool
     ## False inside a device function: `__local` and `__constant` locals are
     ## kernel-only storage, the pass refuses a device function declaring one.

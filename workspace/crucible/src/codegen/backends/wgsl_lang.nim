@@ -46,7 +46,7 @@ type
     lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
     scalarNames: ScalarNames
-    ## Scalar names of the target. The narrow integer cast takes its type name from them.
+    ## Scalar names of the target. The narrow integer cast names its type from them.
     inKernel: bool
     ## False inside a device function, the printer refuses a device function reading a coordinate builtin.
     paramNames: HashSet[string]
