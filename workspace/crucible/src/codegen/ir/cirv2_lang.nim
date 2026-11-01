@@ -270,7 +270,7 @@ type
     ## A CIRv2 statement.
     ##
     ## Control flow is statement-based:
-    ## - `ite` takes a bool condition and two statement lists
+    ## - `ite` selects between two statement lists on a bool condition
     ## - `loop` runs unconditionally, `while` re-tests its condition before every iteration
     ## - a `var` carries the memory class of its declaration in `space`, `const` ignores `space`
     ##   (`caThread` is per-thread registers and the unannotated default)

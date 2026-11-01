@@ -182,10 +182,10 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   if call.callee.kind == eSym:
     case call.callee.shuffleBuiltin
     of shkSimdShuffle:
-      # `sub_group_shuffle` takes the subgroup-relative index as `uint`
+      # subgroup-relative indices cast to `uint` for the intrinsic's parameter type
       return "sub_group_shuffle(" & args[0] & ", (uint)(" & args[1] & "))"
     of shkSimdShuffleXor:
-      # `sub_group_shuffle_xor` takes the xor mask as `uint`, not the Nim `int`
+      # xor masks cast to `uint`: the Nim `int` literal does not match the intrinsic's parameter type
       return "sub_group_shuffle_xor(" & args[0] & ", (uint)(" & args[1] & "))"
     of shkNone: discard
   if call.callee.kind == eSym and call.callee.builtin and
@@ -254,8 +254,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## OpenCL C text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    # a whole-vector coordinate read meets the printer's refusal, the flat thread index
-    # takes its canonical token, a name passes through
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return OpenclFlatThreadIndex
@@ -264,8 +262,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ""
     return e.name
   of eDot:
-    # a coordinate component takes its canonical token, a vector component
-    # takes its letter, names pass through
+    # coordinate-builtin dots return the canonical component token, vector dots return
+    # their field letter, and every other dot returns base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       let mapped = openclCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
       if mapped.len == 0:

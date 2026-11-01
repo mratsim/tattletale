@@ -181,7 +181,8 @@ genTargets:
     # `asFp16`/`asU16` reinterpret through `as_type`.
     # `bfloat16` names no MSL type here, values travel as raw bits.
     # toBf16/toBf32 move the bit pattern through `as_type<ushort>` around the native `(bfloat)` cast.
-    # fp8 conversions have no MSL native: the `{.builtin.}` name passes through and refuses at Metal compile time.
+    # fp8 conversions have no MSL native, an unspelled `{.builtin.}` name emits unchanged
+    # and Metal's compiler rejects it
     conv toFp16 "half($1)", toFp32 "float($1)", toBf16 "as_type<ushort>((bfloat)($1))",
       toBf32 "float(as_type<bfloat>($1))", asFp16 "as_type<half>($1)", asU16 "as_type<ushort>($1)"
     # Coordinate builtins carry `ivec3`, so the builtin-threading parameters

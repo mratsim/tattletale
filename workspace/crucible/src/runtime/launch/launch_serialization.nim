@@ -11,13 +11,6 @@ import workspace/crucible/src/codegen/ir/ast_datatypes
 import workspace/crucible/src/runtime/engines/engines_common
 import workspace/crucible/src/runtime/backends/runtime_utils
 
-## Launch-argument layout and packing: compile-time binding of Nim launch
-## values to device bytes, runtime packing of that layout.
-##
-## - Nim int/uint lower to 4 bytes, bools pack per backend word
-## - phantom/static types occupy zero bytes
-## - `bindArgs` computes the layout, `serialize`/`packFrom` write the bytes
-
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Compile-time binding
 # ═══════════════════════════════════════════════════════════════════════

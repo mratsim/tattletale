@@ -224,7 +224,7 @@ template emitLiteral*(e: CirExpr, litRow: LitRow, row: ScalarRow): string =
   ##
   ## - a narrow (8/16-bit) integer prints as a cast to its scalar row name
   ##   when the lit row sets `narrowCast`, otherwise bare
-  ## - a non-finite float takes its bit-pattern token from `litRow.nonFinite`
+  ## - a non-finite float emits the `litRow.nonFinite` bit-pattern token
   ## - a literal kind outside the rows prints `<printerTarget: not a literal>`
   mixin printerTarget
   block:

@@ -91,6 +91,7 @@ declares, a row lists, an invocation carries.
 | "targets_registry.nim states every family" | "targets_registry.nim declares every family" |
 | "one invocation states every target's rows" | "one invocation carries every target's rows" |
 | "a scalar row states any subset of the cells" | "a scalar row lists any subset of the cells" |
+| "a whole-vector coordinate read meets the printer's refusal, the flat thread index takes its canonical token, a name passes through" | the noun-soup poster child: every clause makes a value the actor of a human verb (meets, takes, passes) — rewrite in the arm's own terms ("whole-vector coordinate reads refuse; the thread index returns its token; other names return unchanged") or delete when the branches and refusal messages already say it |
 
 ## Before → after
 

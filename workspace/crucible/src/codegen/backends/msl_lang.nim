@@ -181,7 +181,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## MSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    # a coordinate builtin takes its attributed parameter name, a name passes through
+    # a coordinate builtin returns its attributed parameter name, others return unchanged
     if e.coordBuiltin != cbkNone:
       return ctx.printBuiltinRef(e.name, true)
     return e.name

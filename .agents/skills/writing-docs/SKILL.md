@@ -84,8 +84,13 @@ A CS undergraduate is the comprehension floor.
 - Code and data never act. Banned: "Scalar reads render `push.<name>`".
   Write who does what: "Reading a scalar parameter emits `push.<name>`".
 - A type, a value, a text, or a name never takes an agent verb.
-  Refuse, keep, stay, pair, travel, name, and live belong to code agents and specifications.
-  Banned: "float16 refuses", "the value stays untyped", "`bfloat16` names no MSL type".
+  Refuse, keep, stay, pair, travel, take, meet, name, and live belong to code agents and specifications.
+  Banned: "float16 refuses", "the value stays untyped", "`bfloat16` names no MSL type",
+  "a component takes its letter", "a read meets the refusal".
+- Noun soup: a comment that makes values the actors of human verbs in every clause
+  ("X takes its token, Y passes through, Z meets the refusal") is unreadable even
+  when each verb is defensible alone. Rewrite it in the code's own terms or delete
+  it when the branches and refusal messages already say the story.
 - Agent-verb rewrites. "float16 refuses" -> "the pass rejects float16 parameters",
   or the capability form ("float16 has no HLSL form, the value emits as its bits").
   "X stays untyped" -> "X is untyped" or "the body does not type X".

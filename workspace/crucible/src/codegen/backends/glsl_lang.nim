@@ -260,8 +260,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       " base is outside the GLSL subset")
     return ""
   of eDot:
-    # a coordinate component casts to the canonical int, a vector component
-    # takes its letter, names pass through
+    # coordinate-builtin dots cast to the canonical int, vector dots return
+    # their field letter, other dots return base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       # a component of an unsigned GLSL builtin, cast to the canonical int
       return "int(" & getGlslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"

@@ -97,7 +97,7 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
 proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, profile: ScanProfile) =
   ## Both call shapes share this helper. The caller passes the callee and the arguments of either shape.
   ##
-  ## Requires: an `abkAtomicFetchAdd` callee takes one pointer argument.
+  ## Requires: an `abkAtomicFetchAdd` callee supplies one pointer argument.
   if callee.kind != eSym:
     return
   case callee.reductionBuiltin

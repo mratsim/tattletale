@@ -309,8 +309,8 @@ const
   scopeDevice = 1'u32
   scopeSubgroup = 3'u32
 
-  ## MemoryAccess bit values (core grammar BitEnum), Aligned takes a trailing
-  ## literal alignment word the grammar operand list does not model
+  ## MemoryAccess bit values (core grammar BitEnum), the `Aligned` bit carries
+  ## a trailing literal alignment word the operand list does not model
   maAligned = 2'u32
 
 const

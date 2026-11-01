@@ -24,8 +24,8 @@
 ## - the WGSL lowering pass relocates a smem/const_mem kernel local into `CirModule.globals`
 ## - struct declarations emit for every struct of `CirModule.types` in declaration order,
 ##   a dissolved one included, an unused declaration is legal WGSL, the printer refuses a pointer-holding struct
-## - a loop prints `while (cond)` (WGSL's `while` takes a condition),
-##   an unrolled loop notes the unroll directive has no WGSL form
+## - a loop prints `while (cond)`, an unrolled loop notes the unroll directive
+##   has no WGSL form
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -295,8 +295,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "bool(" & baseTxt & ")"
     return baseTxt
   of eDot:
-    # a coordinate component takes its canonical token, a vector component
-    # takes its letter, names pass through
+    # coordinate-builtin dots return the canonical component token, vector dots return
+    # their field letter, other dots return base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       if not ctx.inKernel:
         ctx.fail("a device function reads " & e.dotBase.name & ", WGSL coordinate builtins are entry-point parameters")

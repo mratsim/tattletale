@@ -440,8 +440,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       " base is outside the HLSL subset")
     return ""
   of eDot:
-    # a coordinate component takes its semantic route, a vector component
-    # takes its letter, names pass through
+    # coordinate-builtin dots return the semantic name, vector dots return
+    # their field letter, other dots return base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       if not ctx.isKernel:
         ctx.fail("coordinate builtin in a device function, coordinate" &

@@ -64,7 +64,7 @@ Rule table (rule | trigger | severity):
 | duplicate-refusal-coverage | a refusal message fingerprint refused at 2 or more sites (refusal calls plus genTargets refusal row literals), the human disposes the duplicate | counted  |
 | refusal-essay       | a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses | counted  |
 | refusal-density     | 6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory | counted  |
-| agent-verb          | a comment gives a type, a value, a text, or a name an agent verb (refuses, keeps, stays, pairs, travels, names no), a file, a row, a module, or a doc never states its contents | counted  |
+| agent-verb          | a comment gives a type, a value, a text, or a name an agent verb (refuses, keeps, stays, pairs, travels, takes, meets, names no), a file, a row, a module, or a doc never states its contents | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -2830,13 +2830,13 @@ def refusal_selftest(quiet=False):
 
 # Agent-verb slop rule: agent-verb
 # A comment may not give agency to a non-agent. A type, a value, a text, or a
-# name never refuses, keeps, stays, pairs, travels, or names no X. The subject
+# name never refuses, keeps, stays, pairs, travels, takes, meets, or names no X. The subject
 # of the verb is the code that acts (the pass, the printer, the compiler) or
 # the specification that rules (the spec, the row, the table). A file, a row,
 # a module, or a doc never states its contents: a file declares or contains,
 # a row lists, an invocation carries.
 AGENT_VERB_RE = re.compile(
-    r"\b(refuses?|kept|keeps?|stays?|pairs|travels?|names no|states)\b")
+    r"\b(refuses?|kept|keeps?|stays?|pairs|travels?|names no|states|takes?|meets)\b")
 
 # Nouns whose subject may carry the agent verbs: code agents, specification
 # nouns, and target languages ("the pass refuses the input", "the spec keeps
@@ -2935,8 +2935,8 @@ def _agent_verb_comment(text):
 
 
 _AGENT_VERB_REASON = ("agent verb '%s' on a non-agent subject, a type, a value, "
-                      "a text, or a name never refuses, keeps, stays, pairs, or "
-                      "travels, the code that acts or the specification names the "
+                      "a text, or a name never refuses, keeps, stays, pairs, "
+                      "travels, takes, meets, the code that acts or the specification names the "
                       "actor")
 _AGENT_VERB_STATES_REASON = ("a file, a row, a module, a doc, or an invocation "
                              "never states its contents, a file declares or "
@@ -2991,6 +2991,8 @@ AGENT_VERB_SELFTEST_CASES = (
 ## a 16-bit float pair refuses on the printer wiring state.
 ## `float16` has no HLSL form, the value emits as its bits.
 ## `ternary` states its own type.
+## a coordinate component takes its canonical token.
+## a whole-vector read meets the printer's refusal.
 '''),
     ), (
         ("src/codegen/backends/doc_demo.nim", 1, "agent-verb", False),
@@ -3000,6 +3002,8 @@ AGENT_VERB_SELFTEST_CASES = (
         ("src/codegen/backends/doc_demo.nim", 5, "agent-verb", False),
         ("src/codegen/backends/doc_demo.nim", 6, "agent-verb", False),
         ("src/codegen/backends/doc_demo.nim", 8, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 9, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 10, "agent-verb", False),
     )),
     ("agent-verb honest agents and specifications stay clean", (
         ("src/codegen/backends/ok_demo.nim", '''## the pass refuses the input.

@@ -109,7 +109,7 @@ proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: st
     else:
       result = "(int)(threadIdx." & field & ")"
   of cbkThreadPositionInGrid:
-    # whole-value use has no CUDA text, the canonical name passes through
+    # whole-value reads return the name, component reads emit the flattened index
     if whole:
       result = name
     else:
@@ -189,12 +189,12 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## CUDA text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    # a coordinate builtin takes the CUDA vocabulary, a name passes through
+    # a coordinate builtin returns its CUDA token, other names return unchanged
     if e.coordBuiltin != cbkNone:
       return cudaCoordToken(e.coordBuiltin, e.name, true, "", e.typ)
     return e.name
   of eDot:
-    # a coordinate component takes its CUDA token, a dereferenced base parenthesizes
+    # coordinate-component dots return the CUDA token, a dereferenced base emits parenthesized
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       return cudaCoordToken(e.dotBase.coordBuiltin, e.dotBase.name, false,
         e.fieldName, e.dotBase.typ)
