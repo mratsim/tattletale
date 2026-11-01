@@ -7,11 +7,12 @@
 
 ## Shared pass helpers over CIRv2.
 ##
-## - call-target collection and the shared statement and expression walk
-## - the root symbol of a dotted or indexed chain, declaration and clone utilities
-## - the kernel-parameter leaf walk and the pointer-local explosion context
-## - the WGSL and HLSL pointer-local expression rewrite's shared skeleton
-## - the struct-reference scanner's walks
+## | Concern                    | Helpers                                                                       |
+## | -------------------------- | ----------------------------------------------------------------------------- |
+## | Walks                      | call-target collection, the shared statement and expression walk              |
+## | Chains                     | the root symbol of a dotted or indexed chain, declaration and clone utilities |
+## | Kernel parameters          | the leaf walk and the pointer-local explosion context                         |
+## | Rewrite and scan skeletons | the WGSL and HLSL pointer-local rewrite, the struct-reference scanner's walks |
 ##
 ## Every pass file may import these, no pass owns them.
 
