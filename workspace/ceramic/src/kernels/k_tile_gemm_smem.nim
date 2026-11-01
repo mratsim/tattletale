@@ -36,11 +36,6 @@ import workspace/ceramic/src/kernels/k_layout_copy_gpu
 import workspace/ceramic/src/hardware/h_copy_dispatch
 import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
-template stepTiledMma*[TAcc: typedesc, TA: typedesc, TB: typedesc, MT: static int, NT: static int, KT: static int](
-    mma: static TiledMma[TAcc, TA, TB, MT, NT, KT]): untyped =
-  ## Warp tile schedule narrowed to one atom cell along k.
-  TiledMma[TAcc, TA, TB, MT, NT, 16](atom: mma.atom)
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Stage geometry
 # ═══════════════════════════════════════════════════════════════════════
@@ -151,3 +146,137 @@ template stageSmemTile*(stageWords: untyped, src: TensorView, tid: int, stageRow
         elems[wordBase * 2 + elemOff + j] = zeroVal
     else:
       copyIf(atom, dstChunk, dstChunk, false, chunkWords)
+
+proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
+    mma: static TiledMma[TAcc, TA, TB, MT, NT, KT],
+    mmaStep: static TiledMma[TAcc, TA, TB, MT, NT, 16],
+    D: distinct TensorView, alpha: float32, A, B: distinct TensorView,
+    beta: float32, C: distinct TensorView) =
+  ## D = alpha·A·B + beta·C over (BM, BN) block tiles, each one staged
+  ## in shared memory. Beta = 0 skips the C read.
+  ## D may stay uninitialized.
+  ##
+  ## Args:
+  ## - mma: the warp tile schedule. A 2x2 warp grid covers one block
+  ##   tile of BM = 2·MT rows and BN = 2·NT columns, 128 threads.
+  ## - mmaStep: the same schedule narrowed to one atom cell along k
+  ##   (KT = 16), the fragment loads and the accumulate step work one
+  ##   k16 step at a time
+  ## - alpha, beta: the epilogue scales, beta = 0 skips the C read
+  ##
+  ## Pipeline:
+  ## - the reduction runs over BK = KT k-elements in two stage buffers
+  ## - the wait drains the current stage and the barrier orders
+  ##   previous consumers off the next buffer
+  ## - the next stage issues, then the warps consume the current one
+  ##   while its copy flies in
+  ##
+  ## The warps load their mma fragments straight out of the stage
+  ## through the atom thread->value map, one k16 step at a time.
+  ## D accumulates in registers across the whole reduction.
+  const
+    BM = 2 * mma.MT
+    BN = 2 * mma.NT
+    BK = mma.KT
+    stageKPad = stageRowStride(BK)
+    kSteps = BK div 16
+    aStageWords = BM * stageKPad div 2
+    bStageWords = BN * stageKPad div 2
+    tvmAStep = mmaStep.getThreadValueMap(opA)
+    tvmBStep = mmaStep.getThreadValueMap(opB)
+    tvmC = mma.getThreadValueMap(opC)
+    regAStep = mmaStep.getMmaLayout(opA)
+    regBStep = mmaStep.getMmaLayout(opB)
+    regC = mma.getMmaLayout(opC)
+
+  var
+    stageA {.smem.}: array[2 * aStageWords + 8, uint32]
+    stageB {.smem.}: array[2 * bStageWords + 8, uint32]
+
+  let
+    thrID = getLocalThreadID()
+    warpID = thrID div 32
+    laneID = thrID mod 32
+    warpRow = warpID div 2
+    warpCol = warpID mod 2
+    aStage = cast[ptr UncheckedArray[uint32]](
+      (cast[uint64](addr stageA[0]) + 15) and (not uint64(15)))
+    bStage = cast[ptr UncheckedArray[uint32]](
+      (cast[uint64](addr stageB[0]) + 15) and (not uint64(15)))
+    aElems = cast[ptr UncheckedArray[A.T]](aStage)
+    bElems = cast[ptr UncheckedArray[B.T]](bStage)
+    cGeom = D.tileWith((BM, BN))
+    cGrid = cGeom.getTileGrid()
+    (_, kTiles) = A.tileWith((BM, BK)).getTileGrid()
+    gridStride = getGridSize()
+
+  for blockTile in countup(cGrid.getLocalTileID(), cGrid.size() - 1, gridStride):
+    let (mTile, nTile) = idx2crd(cGrid, blockTile)
+    let blockM0 = mTile * BM
+    let blockN0 = nTile * BN
+
+    # prologue: stage the first k tile into buffer 0
+    stageSmemTile(aStage, A, thrID, BM, BK, 0, blockM0, 0,
+                  A.shape[0], A.shape[1])
+    stageSmemTile(bStage, B, thrID - 64, BN, BK, 0, blockN0, 0,
+                  B.shape[0], B.shape[1])
+    commit_group(getCopyAsyncAtom(uint32))
+
+    var rD: tile(D.T, regC)
+    rD.fillWith(zero(D.T))
+    var cur = 0
+    for kTile in 0 ..< kTiles:
+      # drain everything: the current stage is fully copied
+      wait_group(getCopyAsyncAtom(uint32), 0)
+      threadgroup_barrier()
+      let kNext = (kTile + 1) * BK
+      if kNext < kTiles * BK:
+        # Next stage issues into the other buffer and overlaps the compute below.
+        stageSmemTile(aStage, A, thrID, BM, BK, (1 - cur) * aStageWords,
+                      blockM0, kNext, A.shape[0], A.shape[1])
+        stageSmemTile(bStage, B, thrID - 64, BN, BK, (1 - cur) * bStageWords,
+                      blockN0, kNext, B.shape[0], B.shape[1])
+        commit_group(getCopyAsyncAtom(uint32))
+      # Fragment consumption, one k16 step at a time: the warp's row
+      # slice covers all steps and the tile id picks the k16 step,
+      # with (0, kStep) · tileShape = kStep·16 k-elements per read.
+      # Runtime-int slice layout, matched against the runtime layouts
+      # inside the tile load/store machinery.
+      let elemBase = cur * BM * stageKPad
+      let bElemBase = cur * BN * stageKPad
+      let rows = int(mma.MT)
+      let cols = int(mma.NT)
+      let stageCols = int(BK)
+      let pad = int(stageKPad)
+      let aSlice = make_view(
+        addr aElems[elemBase + warpRow * mma.MT * stageKPad],
+        make_layout((rows, stageCols), (pad, 1)))
+      let bSlice = make_view(
+        addr bElems[bElemBase + warpCol * mma.NT * stageKPad],
+        make_layout((cols, stageCols), (pad, 1)))
+      for kStep in 0 ..< kSteps:
+        var rA: tile(A.T, regAStep)
+        var rB: tile(B.T, regBStep)
+        loadFragTile(rA, aSlice, tvmAStep, laneID, (0, kStep))
+        loadFragTile(rB, bSlice, tvmBStep, laneID, (0, kStep))
+        mmaStep.atom.gemm_tile(rD, rA, rB, rD)
+      cur = 1 - cur
+
+    # epilogue: scale, accumulate C, store the warp's D tile
+    if alpha != 1.0'f32:
+      for i in 0 ..< regC.size():
+        rD[i] = alpha * rD[i]
+    let dRow = 2 * mTile + warpRow
+    let dCol = 2 * nTile + warpCol
+    if beta != 0.0'f32:
+      let rC = tile(C.T, regC).load(C, tvmC, laneID, (dRow, dCol))
+      for i in 0 ..< regC.size():
+        rD[i] += beta * rC[i]
+    D.store(rD, tvmC, laneID, (dRow, dCol))
+
+proc matmul_smem*[TAcc, TA, TB, MT, NT, KT](
+    mma: static TiledMma[TAcc, TA, TB, MT, NT, KT],
+    mmaStep: static TiledMma[TAcc, TA, TB, MT, NT, 16],
+    D, A, B: distinct TensorView) =
+  ## D = A·B, same staging and launch mapping as gemm_smem.
+  gemm_smem(mma, mmaStep, D, 1.0'f32, A, B, 0.0'f32, D)

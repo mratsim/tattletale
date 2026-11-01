@@ -23,6 +23,18 @@ import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/hardware/h_mma_registry
 import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/ceramic/src/kernels/k_tile_gemm_smem
+import workspace/crucible
+import workspace/math
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/tile_algebra
+import workspace/ceramic/src/hardware/h_mma_configgen
+import workspace/ceramic/src/hardware/h_mma_dispatch
+import workspace/ceramic/src/hardware/h_copy_dispatch
+import workspace/ceramic/src/kernels/k_layout_copy_gpu
+import workspace/ceramic/tests/ceramic_testutils
+import workspace/ceramic/tests/kernels/k_gemm/kernel_gemm_template
+import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
+import std/[strformat, strutils]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Bank-pattern analysis (pure, host side)
@@ -127,6 +139,142 @@ proc testFragmentLoadBanks() =
                 " words " & $words[a] & "," & $words[b]
   echo "  OK (fragment load bank pattern, warp grid 2x2, all k steps)"
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Staged contents vs host reference (CUDA)
+# ═══════════════════════════════════════════════════════════════════════
+
+const stageWords = 64 * stageRowStride(64) div 2
+
+proc stageProbeKernel(
+    dst: TensorView[uint32, tuple[a: int, b: int], tuple[a: int, b: int]],
+    aSrc: TensorView[bfloat16, tuple[a: int, b: int], tuple[a: int, b: int]],
+    bSrc: TensorView[bfloat16, tuple[a: int, b: int], tuple[a: int, b: int]]) =
+  ## Stages (64, 64) tiles of `aSrc` and `bSrc` through the staging
+  ## path of gemm_smem, then drains both stages back out as words
+  ## into `dst`: the A stage at [0, stageWords), the B stage after it.
+  var
+    stageA {.smem.}: array[2 * stageWords + 8, uint32]
+    stageB {.smem.}: array[2 * stageWords + 8, uint32]
+  let thrID = getLocalThreadID()
+  let aStage = cast[ptr UncheckedArray[uint32]](
+    (cast[uint64](addr stageA[0]) + 15) and (not uint64(15)))
+  let bStage = cast[ptr UncheckedArray[uint32]](
+    (cast[uint64](addr stageB[0]) + 15) and (not uint64(15)))
+  stageSmemTile(aStage, aSrc, thrID, 64, 64, 0, 0, 0,
+                aSrc.shape[0], aSrc.shape[1])
+  stageSmemTile(bStage, bSrc, thrID - 64, 64, 64, 0, 0, 0,
+                bSrc.shape[0], bSrc.shape[1])
+  commit_group(getCopyAsyncAtom(uint32))
+  wait_group(getCopyAsyncAtom(uint32), 0)
+  threadgroup_barrier()
+  # Drain the aligned stage, the alignment slack stays behind.
+  let slackA = int((cast[uint64](aStage) - cast[uint64](addr stageA[0])) div 4)
+  let slackB = int((cast[uint64](bStage) - cast[uint64](addr stageB[0])) div 4)
+  for i in 0 ..< stageWords div 128:
+    let w = thrID + i * 128
+    dst.data[w] = aStage[slackA + w]
+    dst.data[stageWords + w] = bStage[slackB + w]
+
+proc stageWordRef(src: HostTensor[bfloat16, tuple[a: int, b: int], tuple[a: int, b: int]], w: int): uint32 =
+  ## Stage word `w` that the staging must produce: elements 2w, 2w+1 of the row-major padded stage, real data in bounds else zero
+  let stageWidth = stageRowStride(64)
+  var lo, hi: uint16
+  for (off, bits) in [(0, addr lo), (1, addr hi)]:
+    let elem = 2 * w + off
+    let (row, k) = (elem div stageWidth, elem mod stageWidth)
+    if row < src.layout.shape[0] and k < src.layout.shape[1]:
+      bits[] = cast[uint16](src.data[src.layout.crd2idx((row, k))])
+    else:
+      bits[] = 0'u16
+  uint32(lo) or (uint32(hi) shl 16)
+
+proc checkStage[E: HwEngine](engine: E, aShape: (int, int), bShape: (int, int)) =
+  var rng = initRand(2026_11_02)
+  var
+    aHost = rng.randomHostTensor(bfloat16, aShape, (aShape[1], 1))
+    bHost = rng.randomHostTensor(bfloat16, bShape, (bShape[1], 1))
+    # One flat word buffer, the A stage then the B stage, 2-D metadata keeps the tensor utilities happy.
+    outHost = makeHostTensor(uint32, (2 * stageWords, 1), (1, 2 * stageWords))
+  let
+    aDev = engine.bridge(aHost)
+    bDev = engine.bridge(bHost)
+    outDev = engine.bridge(outHost)
+  engine.launchDeviceFn stageProbeKernel(outDev, aDev, bDev) do:
+    grid = (1, 1)
+    blk = (128, 1)
+  engine.copyToHostFromDevice(addr outHost.data[0], outDev.data, outHost.len)
+  for w in 0 ..< stageWords:
+    doAssert outHost.data[w] == stageWordRef(aHost, w),
+      "A stage word " & $w & ": got " & toHex(outHost.data[w]) & " want " &
+      toHex(stageWordRef(aHost, w)) & " (shape " & $aShape & ")"
+    doAssert outHost.data[stageWords + w] == stageWordRef(bHost, w),
+      "B stage word " & $w & ": got " & toHex(outHost.data[stageWords + w]) &
+      " want " & toHex(stageWordRef(bHost, w)) & " (shape " & $bShape & ")"
+  echo "  OK (staged contents, A " & $aShape & " B " & $bShape & ")"
+
+proc testStaging[E: HwEngine](engine: E) =
+  checkStage(engine, (64, 64), (64, 64))
+  checkStage(engine, (50, 37), (45, 64)) # ragged rows, ragged k with tail chunk
+  checkStage(engine, (1, 1), (64, 9))    # single row and two tail chunks
+
+# ═══════════════════════════════════════════════════════════════════════
+#  gemm_smem vs fp32 host reference (CUDA)
+# ═══════════════════════════════════════════════════════════════════════
+
+const GemmSmemHighlights = [
+  # square in-bounds tiles, both stride orders, beta accumulation
+  (alpha: 1.0'f32, A: ((64, 64), (64, 1)), B: ((64, 64), (64, 1)), beta: 0.0'f32, C: ((64, 64), (64, 1))),
+  (alpha: 2.0'f32, A: ((64, 64), (1, 64)), B: ((64, 64), (1, 64)), beta: 1.0'f32, C: ((64, 64), (1, 64))),
+  # multi-block tile grids, grid-stride covered
+  (alpha: 1.0'f32, A: ((100, 200), (200, 1)), B: ((150, 200), (1, 150)), beta: 0.5'f32, C: ((100, 150), (150, 1))),
+  (alpha: 2.0'f32, A: ((128, 128), (128, 1)), B: ((128, 128), (1, 128)), beta: 1.0'f32, C: ((128, 128), (128, 1))),
+  # ragged bounds: block-tile and stage-tail predication, odd strides
+  (alpha: 1.0'f32, A: ((65, 62), (62, 1)), B: ((63, 62), (63, 1)), beta: 2.0'f32, C: ((65, 63), (63, 1))),
+  (alpha: 1.0'f32, A: ((17, 23), (23, 1)), B: ((19, 23), (1, 19)), beta: 1.0'f32, C: ((17, 19), (19, 1))),
+  (alpha: 1.0'f32, A: ((1, 1), (1, 1)), B: ((1, 1), (1, 1)), beta: 0.0'f32, C: ((1, 1), (1, 1)))]
+
+proc checkGemmSmem[E: HwEngine, TIn](
+    rng: var Rand, engine: E, _: typedesc[TIn], cs: GemmCase) =
+  let (aShape, aStrides) = cs.A
+  let (bShape, bStrides) = cs.B
+  let (cShape, cStrides) = cs.C
+  let (M, N, K) = (aShape[0], bShape[0], aShape[1])
+  var
+    aHost = rng.randomHostTensor(TIn, aShape, aStrides)
+    bHost = rng.randomHostTensor(TIn, bShape, bStrides)
+    cHost = rng.randomHostTensor(float32, cShape, cStrides)
+    dHost = makeHostTensor(float32, cShape, cStrides)
+    refHost = makeHostTensor(float32, (M, N), (N, 1))
+  var dView = dHost.view()
+  fillWith_cpu(dView, -12345.0'f32) # every D cell must be written
+  let
+    aDev = engine.bridge(aHost)
+    bDev = engine.bridge(bHost)
+    cDev = engine.bridge(cHost)
+    dDev = engine.bridge(dHost)
+  # one (64, 64) block tile per launch block, 128 threads
+  engine.launchDeviceFn gemm_smem(tiledMma(float32, TIn, TIn, 32, 32, 64),
+      tiledMma(float32, TIn, TIn, 32, 32, 16),
+      dDev, cs.alpha, aDev, bDev, cs.beta, cDev) do:
+    grid = (ceil_div(M, 64), ceil_div(N, 64))
+    blk = (128, 1)
+  engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, dHost.len)
+  gemm_ref(refHost, cs.alpha, aHost, bHost, cs.beta, cHost)
+  assertAllClose(dHost.view(), refHost.view(), rtol = 1e-5, abstol = 1e-3,
+    msg = "gemm_smem " & $M & "x" & $N & "x" & $K & " strides " & $aStrides &
+          " " & $bStrides & " " & $cStrides)
+
+proc runGemmSmemChecks[E: HwEngine, TIn](
+    rng: var Rand, engine: E, _: typedesc[TIn],
+    cases: openArray[GemmCase], Iters: static int) =
+  for iter in 0 ..< Iters:
+    for cs in cases:
+      rng.checkGemmSmem(engine, TIn, cs)
+
+proc runGemmSmemFuzz[E: HwEngine, TIn](
+    rng: var Rand, engine: E, _: typedesc[TIn], cases: openArray[GemmCase]) =
+  for cs in cases:
+    rng.checkGemmSmem(engine, TIn, cs)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The suite
@@ -136,7 +284,17 @@ proc main =
   echo "t_kernel_gemm_smem"
   testStoreBanks()
   testFragmentLoadBanks()
-  # Kernel commit adds the GPU staging and gemm_smem checks
+
+  var engine = newEngine(runCuda)
+  testStaging(engine)
+
+  var rng = initRand(0xC16D_02B7)
+  rng.runGemmSmemChecks(engine, bfloat16, GemmSmemHighlights, Iters = 2)
+  rng.runGemmSmemChecks(engine, float16, GemmSmemHighlights, Iters = 2)
+  rng.runGemmSmemFuzz(engine, bfloat16, genGemmCases(
+    (64, 64, 64), (100, 150, 200), (37, 61, 45), (128, 128, 128)))
+  rng.runGemmSmemFuzz(engine, float16, genGemmCases(
+    (64, 64, 64), (100, 150, 200), (37, 61, 45), (128, 128, 128)))
 
 when isMainModule:
   main()
