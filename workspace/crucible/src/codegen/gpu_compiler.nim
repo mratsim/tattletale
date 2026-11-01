@@ -31,7 +31,6 @@ export builtins_compilermagic
 import ./ir/ast_datatypes
 import ./frontend/nim_to_crucible
 import ./passes/pass_registry
-import ./passes/passes_legalizations
 import ./passes/passes_normalizations
 import ./passes/passes_lowering
 import ./passes/passes_lowering_hlsl
@@ -60,7 +59,6 @@ macro codegenMetal(body: typed): string =
   ## CIRv2 lowering, the pass pipeline, then the MSL printer.
   ## A refusal in the chain is a compile-time error naming the construct.
   var reg = PassRegistry.new()
-  registerLegalizationPasses(reg)
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
   # Rename position: before every hoist and explosion. The rename walks types,
@@ -98,7 +96,6 @@ macro codegenCuda(body: typed): string =
   ## Refusals in the chain are compile-time
   ## errors naming the construct.
   var reg = PassRegistry.new()
-  registerLegalizationPasses(reg)
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
   registerDecomposeArrayAssign(reg)
@@ -130,7 +127,6 @@ macro codegenOpenCL(body: typed): string =
   ## Refusals in the chain are compile-time
   ## errors naming the construct.
   var reg = PassRegistry.new()
-  registerLegalizationPasses(reg)
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
   reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
@@ -162,7 +158,6 @@ macro codegenGLSL(body: typed): string =
   ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
   var reg = PassRegistry.new()
-  registerLegalizationPasses(reg)
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
   reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
@@ -196,7 +191,6 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   ## Any refusal in the chain is a compile-time error
   ## naming the construct.
   var reg = PassRegistry.new()
-  registerLegalizationPasses(reg)
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
   # No rename and no address-space callee instantiation: the encoder consumes typed words.
@@ -221,7 +215,6 @@ macro codegenWebGpu(body: typed): string =
   ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
   var reg = PassRegistry.new()
-  registerLegalizationPasses(reg)
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
@@ -256,7 +249,6 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   ## - a refusal in the chain is a compile-time
   ##   error naming the construct
   var reg = PassRegistry.new()
-  registerLegalizationPasses(reg)
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
   registerHlslMaterializeNumWorkgroups(reg)

@@ -53,7 +53,7 @@ type
     ## Parameter names of the proc in flight, a pointer-typed parameter prints
     ## as-is (WGSL device functions take real pointer parameters).
     ## Only pointer locals refuse as values.
-    builtins: OrderedSet[CoordBuiltinKind]
+    builtins: OrderedSet[string]
     ## Canonical coordinate builtin kinds the kernel body references, first-use order.
     nimBoolNames: HashSet[string]
     ## Names whose storage binds as `NIM_BOOL`: kernel bool parameters,
@@ -135,53 +135,53 @@ proc emitWgslPtrType(ctx: var PrintCtx, t: CirType): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 type WgslBuiltinParam = tuple[attribute, param, wgslType: string]
-  ## Coordinate builtin kind -> WGSL `@builtin(...)` kernel parameter.
+  ## Canonical coordinate builtin name -> WGSL `@builtin(...)` kernel parameter.
   ## - `attribute`: the WGSL builtin attribute.
   ## - `param`: the identifier the kernel body reads.
   ## - `wgslType`: the WGSL type (scalar for the flat thread index).
 
-proc getWgslBuiltinParam(kind: CoordBuiltinKind): WgslBuiltinParam =
-  ## Returns the WGSL parameter of a canonical coordinate builtin kind, an empty tuple when none exists.
+proc getWgslBuiltinParam(name: string): WgslBuiltinParam =
+  ## Returns the WGSL parameter of a canonical coordinate builtin name, an empty tuple when none exists.
   ## `threads_per_threadgroup` is absent, WGSL exposes the threadgroup size
   ## only as the `@workgroup_size` entry-point attribute, the printer refuses a read.
-  case kind
-  of cbkThreadPositionInGrid:
+  case name
+  of "thread_position_in_grid":
     ("global_invocation_id", "global_id", "vec3<u32>")
-  of cbkThreadgroupPositionInGrid:
+  of "threadgroup_position_in_grid":
     ("workgroup_id", "workgroup_id", "vec3<u32>")
-  of cbkThreadPositionInThreadgroup:
+  of "thread_position_in_threadgroup":
     ("local_invocation_id", "local_invocation_id", "vec3<u32>")
-  of cbkThreadgroupsPerGrid:
+  of "threadgroups_per_grid":
     ("num_workgroups", "num_workgroups", "vec3<u32>")
-  of cbkThreadIndexInThreadgroup:
+  of "thread_index_in_threadgroup":
     ("local_invocation_index", "local_invocation_index", "u32")
-  of cbkNone, cbkThreadsPerThreadgroup:
+  else:
     ("", "", "")
 
-proc wgslCoordComponent(kind: CoordBuiltinKind, field: string): string =
+proc wgslCoordComponent(name: string, field: string): string =
   case field
   of "x", "y", "z":
-    let p = getWgslBuiltinParam(kind)
+    let p = getWgslBuiltinParam(name)
     if p.attribute.len > 0:
       result = "i32(" & p.param & "." & field & ")"
   else:
     result = ""
 
-proc wgslWholeVector(kind: CoordBuiltinKind): string =
-  let p = getWgslBuiltinParam(kind)
+proc wgslWholeVector(name: string): string =
+  let p = getWgslBuiltinParam(name)
   result = "vec3<i32>(i32(" & p.param & ".x), i32(" & p.param & ".y), i32(" &
     p.param & ".z))"
 
 const wgslEntryInputs*: EntryInputs = block:
-  ## WGSL entry-input text per canonical coordinate builtin kind: the `@builtin(...)` parameter the entry signature declares.
+  ## WGSL entry-input text per canonical coordinate builtin name: the `@builtin(...)` parameter the entry signature declares.
   ##
-  ## - built from the `getWgslBuiltinParam` table, one text per kind that has a parameter
-  ## - "" for kinds without a WGSL builtin: `threads_per_threadgroup` reads refuse, WGSL has only the `@workgroup_size` attribute
+  ## - built from the `getWgslBuiltinParam` table, one text per name that has a parameter
+  ## - a name without a WGSL builtin is absent: `threads_per_threadgroup` reads refuse, WGSL has only the `@workgroup_size` attribute
   var inputs: EntryInputs
-  for kind in CoordBuiltinKind:
-    let p = getWgslBuiltinParam(kind)
+  for name in CoordBuiltinNames:
+    let p = getWgslBuiltinParam(name)
     if p.attribute.len > 0:
-      inputs[kind] = "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
+      inputs[name] = "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
   inputs
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -206,23 +206,25 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
 proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
   ## Returns the WGSL text of an expression-position builtin call,
   ## "" when `call.callee` is not a builtin.
-  if call.callee.kind == eSym:
-    # `rsqrt` is a math intrinsic outside the four typed categories, the name case below maps it to inverseSqrt
-    case call.callee.reductionBuiltin
-    of rbkReduceAdd:
+  if call.callee.kind == eSym and call.callee.builtin:
+    # builtin vocabulary dispatches on the canonical name through this table,
+    # `rsqrt` is a math intrinsic outside the categories, the name case below maps it to inverseSqrt
+    case call.callee.name
+    of "reduceAdd":
       return "subgroupAdd(" & args.join(", ") & ")"
-    of rbkReduceMax:
+    of "reduceMax":
       return "subgroupMax(" & args.join(", ") & ")"
-    of rbkNone: discard
-    if call.callee.atomicsBuiltin == abkAtomicFetchAdd:
+    of "atomicFetchAdd":
       # WGSL atomics cover i32/u32 on atomic<T> storage types only,
       # f32 atomics do not exist, and the atomic<T> retype of the binding
       # is a declaration-site change the printer does not make
       ctx.fail("atomicFetchAdd has no WGSL form, WGSL atomics cover i32/u32 pointees through atomic<T> storage types only")
       return ""
-    if call.callee.synchroBuiltin != sbkNone:
+    of "threadgroup_barrier", "threadgroup_barrier_device":
       ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
       return ""
+    else:
+      discard
   # a user proc that shares a builtin's name prints as an ordinary call, the name case applies only when the callee is the builtin
   if call.callee.kind == eSym and call.callee.builtin:
     case call.callee.name
@@ -254,17 +256,17 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     if e.typ != nil and e.typ.kind == ctBool and e.name in ctx.nimBoolNames:
       # storage is a u32 word, body reads expect bool
       return "bool(" & e.name & ")"
-    if e.coordBuiltin != cbkNone:
+    if e.builtin and e.name in CoordBuiltinNames:
       if not ctx.inKernel:
         ctx.fail("coordinate builtin " & e.name & " in a device function, WGSL builtins are entry-point parameters")
         return ""
-      if e.coordBuiltin == cbkThreadsPerThreadgroup:
+      if e.name == "threads_per_threadgroup":
         ctx.fail("threads_per_threadgroup has no WGSL builtin, WGSL has only the @workgroup_size attribute")
         return ""
-      ctx.builtins.incl(e.coordBuiltin)
-      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
-        return "i32(" & getWgslBuiltinParam(e.coordBuiltin).param & ")"
-      return wgslWholeVector(e.coordBuiltin)
+      ctx.builtins.incl(e.name)
+      if e.name == "thread_index_in_threadgroup":
+        return "i32(" & getWgslBuiltinParam(e.name).param & ")"
+      return wgslWholeVector(e.name)
     return e.name
   of eAt, ePat:
     let base = if e.kind == eAt: e.atBase else: e.patBase
@@ -285,18 +287,19 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "bool(" & baseTxt & ")"
     return baseTxt
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
       if not ctx.inKernel:
         ctx.fail("a device function reads " & e.dotBase.name & ", WGSL coordinate builtins are entry-point parameters")
         return ""
-      let mapped = wgslCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
+      let mapped = wgslCoordComponent(e.dotBase.name, e.fieldName)
       if mapped.len == 0:
-        if e.dotBase.coordBuiltin == cbkThreadsPerThreadgroup:
+        if e.dotBase.name == "threads_per_threadgroup":
           ctx.fail("threads_per_threadgroup reads refuse on WGSL, only the @workgroup_size attribute exists")
         else:
           ctx.fail("coordinate builtin has no component " & e.fieldName)
         return ""
-      ctx.builtins.incl(e.dotBase.coordBuiltin)
+      ctx.builtins.incl(e.dotBase.name)
       return mapped
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
@@ -410,11 +413,11 @@ proc printCall(ctx: var PrintCtx, s: CirStmt): string =
   parts.add ctx.printExpr(s.callCallee)
   for a in s.callArgs:
     parts.add ctx.printExpr(a)
-  if s.callCallee.kind == eSym and
-      s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+  if s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier":
     result = pad & "workgroupBarrier();"
-  elif s.callCallee.kind == eSym and
-      s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+  elif s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier_device":
     # WGSL has no combined barrier: the workgroup fence, then the storage fence
     result = pad & "workgroupBarrier();\n" & pad & "storageBarrier();"
   else:

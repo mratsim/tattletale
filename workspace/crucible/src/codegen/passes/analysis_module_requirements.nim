@@ -21,6 +21,7 @@
 ## - analysis results are valid only if no transform runs after them, which runPasses enforces
 ## - the printer reads the stored record, it never rescans
 
+import std/sets
 import ../ir/cirv2_lang
 import ./pass_datatypes
 import ./pass_helpers
@@ -104,20 +105,17 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
 proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, profile: ScanProfile) =
   ## Both call shapes share this helper. The caller passes the callee and the arguments of either shape.
   ##
-  ## Requires: an `abkAtomicFetchAdd` callee supplies one pointer argument.
-  if callee.kind != eSym:
+  ## Requires: an `atomicFetchAdd` callee supplies one pointer argument.
+  if callee.kind != eSym or not callee.builtin:
     return
-  case callee.reductionBuiltin
-  of rbkReduceAdd, rbkReduceMax:
+  if callee.name in ["reduceAdd", "reduceMax"]:
     if profile.reductions:
-      f.reductions.incl callee.reductionBuiltin
+      f.reductions.incl callee.name
     else:
       f.subgroup = true
-  of rbkNone:
-    discard
-  if profile.shuffleNames and callee.shuffleBuiltin != shkNone:
+  if profile.shuffleNames and callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
     f.subgroupShuffle = true
-  if callee.atomicsBuiltin == abkAtomicFetchAdd:
+  if callee.name == "atomicFetchAdd":
     var pt = getExprType(args[0])
     if profile.atomicFloatViaPattern and not pt.isFloat32Pointee() and
         args[0].kind == ePat:

@@ -584,24 +584,25 @@ proc moduleDeviceFns*(m: CirModule): seq[CirProc] =
 # Entry-input machinery of the shader entry heads
 # ═══════════════════════════════════════════════════════════════════════
 
-type EntryInputs* = array[CoordBuiltinKind, string]
-  ## Entry-input text of one coordinate builtin kind, in the form the target's entry signature declares:
+type EntryInputs* = Table[string, string]
+  ## Entry-input text of one canonical coordinate builtin name, in the form the target's entry signature declares:
   ## a WGSL `@builtin(...)` parameter, an HLSL semantic-carrying input.
   ##
-  ## "" carries no entry input: the kind the target reads another way.
-  ## Cases: the body's workgroup literal, a lowering-pass materialized parameter, no read at all.
+  ## A name absent from the table carries no entry input, the target reads it another way:
+  ## the body's workgroup literal, a lowering-pass materialized parameter, no read at all.
 
 template emitEntryInputs*(kinds: untyped, inputs: EntryInputs): string =
-  ## Returns the entry-input texts of one shader entry point: one text per coordinate builtin kind the entry takes.
+  ## Returns the entry-input texts of one shader entry point: one text per
+  ## coordinate builtin the entry takes.
   ##
-  ## `kinds` is the set the entry's body walk collected (`ctx.builtins` on WGSL, `ctx.coordReads` on HLSL).
-  ## The entry takes exactly the inputs its body reads, in the set's own iteration order: first use on WGSL, enum order on HLSL.
+  ## `kinds` is the collection the entry's body walk collected (`ctx.builtins` on WGSL, the canonically ordered reads on HLSL).
+  ## The entry takes exactly the inputs its body reads, in the collection's own order: first use on WGSL, canonical order on HLSL.
   ##
   ##   "fn k(" & emitEntryInputs(ctx.builtins, wgslEntryInputs) & ") {"
   var texts: seq[string]
-  for k in kinds:
-    if inputs[k].len > 0:
-      texts.add inputs[k]
+  for name in kinds:
+    if inputs.hasKey(name):
+      texts.add inputs[name]
   texts.join(", ")
 
 # ═══════════════════════════════════════════════════════════════════════
