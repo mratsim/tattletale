@@ -209,9 +209,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eSizeof:
     return "sizeof(" & emitCudaType(e.ofType, "", true) & ")"
   of eOconstr:
-    # braced init list `TypeName{val, ...}`, the functional-style cast form
-    # keeps the result a valid C++ expression, bare braced-init-lists are
-    # not expressions and cannot be used with member access
+    # Functional cast syntax keeps the result a valid C++ expression,
+    # bare braced-init-lists are not expressions and cannot be used with member access
     result = emitCudaType(e.ocType, "", true) & "{"
     for i, kv in e.kvFields:
       if i > 0:
@@ -236,7 +235,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       builtinTxt = cudaConvCallText(e, args)
     return printCallText(ctx, e, args, builtinTxt)
   else:
-    ctx.fail("expression kind " & $e.kind & " has no CUDA emission")
+    ctx.fail(unhandledExprRejection(e.kind))
 
 
 # ═══════════════════════════════════════════════════════════════════════
