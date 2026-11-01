@@ -24,7 +24,6 @@
 ## The scalar rows carry one compile-time check block over all six targets,
 ## see `checkScalarRowsTogether`.
 
-import std/tables
 import ../ir/cirv2_lang
 
 type
