@@ -795,16 +795,11 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   return "static const " & ctx.emitHlslDecl(s.declType, s.name) &
     " = " & ctx.printExpr(s.init) & ";"
 
-proc emitStructDecls(ctx: var PrintCtx, refs: HashSet[string],
-    byName: Table[string, CirType], emitted: var HashSet[string],
-    name: string, outp: var string) =
+proc emitStructDecls(ctx: var PrintCtx, byName: Table[string, CirType], emitted: var HashSet[string], name: string, outp: var string) =
   ## Emits one struct definition, member structs first, deduplicated by name.
-  ##
-  ## - HLSL resolves types at their declaration site, a referenced struct
-  ##   holding a pointer refuses, HLSL structs cannot take resources
-  ## - the reference set is the stored record `CirModule.structRefs`, every
-  ##   struct the member recursion reaches is already in it
-  if name in emitted or name notin refs:
+  ## HLSL resolves types at their declaration site: a struct holding a pointer refuses,
+  ## HLSL structs cannot take resources.
+  if name in emitted:
     return
   let t = byName.getOrDefault(name, nil)
   if t == nil:
@@ -817,10 +812,10 @@ proc emitStructDecls(ctx: var PrintCtx, refs: HashSet[string],
   emitted.incl name
   for f in t.fields:
     if f.typ.kind == ctStruct:
-      ctx.emitStructDecls(refs, byName, emitted, f.typ.name, outp)
+      ctx.emitStructDecls(byName, emitted, f.typ.name, outp)
     elif f.typ.kind == ctArray:
       if f.typ.aElem.kind == ctStruct:
-        ctx.emitStructDecls(refs, byName, emitted, f.typ.aElem.name, outp)
+        ctx.emitStructDecls(byName, emitted, f.typ.aElem.name, outp)
   if ctx.failing():
     return
   outp.add "struct " & name & " {\n"
@@ -833,19 +828,17 @@ proc emitStructDecls(ctx: var PrintCtx, refs: HashSet[string],
   outp.add "};\n\n"
 
 proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
-  ## Struct declarations for the referenced value structs in dependency order, member structs first, deduplicated by name.
-  ## The reference set is the stored record `CirModule.structRefs`, every struct the member recursion reaches is already in it.
-  let refs = m.structRefs
+  ## Struct declarations for every struct of `CirModule.types`, member structs first,
+  ## deduplicated by name. HLSL accepts an unused struct declaration, so a struct
+  ## the lowering dissolved emits as dead text.
   var byName: Table[string, CirType]
   for t in m.types:
     if t.kind == ctStruct:
       byName[t.name] = t
   var emitted = initHashSet[string]()
-  var refList: seq[string]
-  for name in refs:
-    refList.add name
-  for name in refList:
-    ctx.emitStructDecls(refs, byName, emitted, name, result)
+  for t in m.types:
+    if t.kind == ctStruct:
+      ctx.emitStructDecls(byName, emitted, t.name, result)
 
 proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
   ## Resource-binding section of the kernel, per flavor:

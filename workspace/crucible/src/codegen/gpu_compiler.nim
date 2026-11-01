@@ -271,7 +271,6 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
   registerHlslHoistProgramScopeConstants(reg)
   registerInstantiateAddressSpaceGenerics(reg)
-  registerHlslStructRefPass(reg)
   registerHlslCallGraphPass(reg)
   registerValidationPostPasses(reg)
   let (m, lerr) = lowerCirv2(body)

@@ -25,8 +25,6 @@
 ##   the printer emits the relocated declarations as file-scope `static const`
 ##   variables
 ##
-## `hlslScanStructRefs` fills `CirModule.structRefs` with the struct types
-## the printer declares, every struct reachable through fields included.
 ## - dxc folds the relocated declarations at compile time, they take no register
 ##   in the `$Globals`/cbuffer layout and they are visible to all functions
 
@@ -385,74 +383,3 @@ proc hlslHoistProgramScopeConstants(m: CirModule): string =
   ## - runs after the reserved-word rename, relocated declaration names match
   ##   the renamed body references
   hoistConstMemLocals(m)
-
-# ═══════════════════════════════════════════════════════════════════════
-# Struct-reference registration
-# ═══════════════════════════════════════════════════════════════════════
-
-proc registerStructRefs(refs: var HashSet[string], t: CirType) =
-  ## Records the struct type names reachable from `t`, through fields, array elements and vector elements.
-  ## Pointer targets stay unvisited (`descendPtrs = false`): a pointer target
-  ## prints no HLSL type name and the printer refuses a struct with a pointer field.
-  var found = refs
-  proc inclStruct(tt: CirType) =
-    if tt.kind == ctStruct:
-      found.incl(tt.name)
-  walkTypeTree(t, inclStruct, descendPtrs = false)
-  refs = found
-
-proc scanStmtStructRefs(refs: var HashSet[string], ss: seq[CirStmt]) =
-  ## Records the struct types that the statement tree references:
-  ## declaration types, and the construction types of every expression node
-  ## the shared walk visits.
-  var found = refs
-  proc onDecl(s: CirStmt): bool =
-    registerStructRefs(found, s.declType)
-    true
-  proc onExpr(e: CirExpr) =
-    if e.kind == eOconstr:
-      registerStructRefs(found, e.ocType)
-  ss.scanStmtRefs(onDecl, onExpr)
-  refs = found
-
-proc hlslScanStructRefs(m: CirModule): string =
-  ## Records the struct types the printer declares into `m.structRefs`:
-  ##
-  ## - the kernel's parameter types, the materialized dispatch-grid parameter excepted, its type is a vector
-  ## - every device function's return and parameter types and body
-  ## - the kernel body
-  ## - the relocated const_mem declarations, struct-typed ones included
-  ##
-  ## The registration walk recurses through fields, array elements and vector elements,
-  ## so every struct the printer's declaration recursion reaches is already in the record.
-  ##
-  ## A module without exactly one kernel contributes no kernel-side registrations. Such a module refuses at the printer.
-  ## The pass runs after the last transform, the record it stores never invalidates.
-  let kernel = m.singleKernel()
-  if kernel != nil:
-    for p in kernel.params:
-      if p.name != NumWorkgroupsParam:
-        registerStructRefs(m.structRefs, p.typ)
-  for fn in m.procs:
-    if fn.isKernel:
-      continue
-    registerStructRefs(m.structRefs, fn.ret)
-    for p in fn.params:
-      registerStructRefs(m.structRefs, p.typ)
-    scanStmtStructRefs(m.structRefs, fn.body)
-  if kernel != nil:
-    scanStmtStructRefs(m.structRefs, kernel.body)
-  # relocated const_mem declarations, struct-typed ones included
-  scanStmtStructRefs(m.structRefs, m.globals)
-  return ""
-
-proc registerHlslStructRefPass*(reg: var PassRegistry) =
-  ## Registers the HLSL struct-reference analysis pass:
-  ##
-  ## - the pass fills `CirModule.structRefs` with the struct types the printer declares, every struct reachable through fields included
-  ## - the printer declares exactly the stored names and scans for nothing itself
-  reg.register("hlslScanStructRefs", pkAnalysis,
-    "Records the struct types the printer declares, every struct reachable" &
-    " through fields and element types included",
-    run = hlslScanStructRefs
-  )

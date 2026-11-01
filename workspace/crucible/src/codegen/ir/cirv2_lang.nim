@@ -408,14 +408,6 @@ type
     ## - filled by the target's call-graph analysis pass after the last transform
     ## - valid only if no transform runs after the analysis, which runPasses enforces
     ## - the printer reads the stored record, it never rescans
-    structRefs*: HashSet[string]
-    ## Struct type names the printer declares, filled by the target's
-    ## struct-reference analysis pass after its last transform.
-    ##
-    ## - valid only if no transform runs after the pass: the pass registry
-    ##   has no invalidation
-    ## - the printer declares exactly these structs, in `types` declaration order,
-    ##   and never scans for them itself
     refBlocks*: OrderedTable[string, CirType]
     ## GLSL buffer-reference blocks, block name -> pointee type.
     ## One entry per distinct block, in registration order.
