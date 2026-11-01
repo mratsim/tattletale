@@ -9,23 +9,32 @@
 
 ## Lowering: whole-array assignment for the C-family targets.
 ##
-## C and C-family languages have no whole-array assignment. Two shapes refuse
-## to compile:
+## C and C-family languages have no whole-array assignment. The pass rewrites
+## the shapes that copy one whole array into `__builtin_memcpy` calls:
 ##
 ## - `a = b` over two `float[N]` locals
 ## - a declaration initialized from another array, `float c[N] = b;`
+## - `a = [1.0f, 2.0f]`, a constructor right side: a constructor is no lvalue.
+##   The pass binds the value to a fresh local through its braced init list.
+##   The memcpy copies that local.
 ##
-##   `a = b` over arrays → decomposeArrayAssign → `__builtin_memcpy(&dst, &src, sizeof(T))`
+## A declaration initialized from a constructor takes the braced init list.
+## `float a[8] = {1.0f, 2.0f}` is the C initialization form.
 ##
-## The pass rewrites both shapes into `__builtin_memcpy(&dst, &src, sizeof(T))` calls over any storage class.
+## The pass refuses two shapes:
+##
+## - a call result, `a = makeArr()`: C-family targets cannot take the address
+##   of a call result, bind the call to a local first
+## - an assignment right side that is neither an lvalue nor a constructor:
+##   the memcpy form copies through storage, and nothing else names storage
 ##
 ## Per-target scoping:
 ## - registered by the Metal, CUDA, and OpenCL bundles
 ## - GLSL, HLSL, and WGSL assign arrays natively, nodes surface untouched
 ## - the SPIR-V encoder emits composite load/store natively
 ##
-## A struct holding an array keeps plain assignment: struct assignment is
-## a legal whole-value copy that covers its array members.
+## The pass leaves a struct holding an array under plain assignment:
+## struct assignment is a legal whole-value copy that covers every array member.
 
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -37,8 +46,8 @@ import ./pass_datatypes
 
 func registerDecomposeArrayAssign*(reg: var PassRegistry) =
   reg.register("decomposeArrayAssign", pkTransform,
-    "Rewrites whole-array assignment and array-valued declaration init into" &
-    " __builtin_memcpy calls",
+    "Rewrites whole-array assignment, array-valued declaration init, and" &
+    " constructor assignment into __builtin_memcpy calls",
     run = decomposeArrayAssignPass)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -46,22 +55,45 @@ func registerDecomposeArrayAssign*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
-  ## Address operands type as thread pointers.
+  ## One whole-array copy, `__builtin_memcpy(&lhs, &rhs, sizeof(lhsType))`.
   ##
-  ## - the printers emit `&` without a space qualifier
-  ## - the per-address-space callee instantiation re-spaces the pointer
-  ##   arguments to the callee's parameter space
+  ## Both operands are addressed, so `rhs` names storage when this proc runs.
+  ## The caller refuses call results and non-lvalues and pre-binds constructor values to fresh locals.
+  ##
+  ## The pointer operands type as thread pointers. The address-space generic
+  ## instantiation re-spaces call arguments to the callee's parameter space,
+  ## so one placeholder space covers every source space.
   let callee = sym("__builtin_memcpy",
     tProcT([tPtr(caThread, lhsType), tPtr(caThread, lhsType), tUint(-1)], tVoid()))
   let dst = addrE(tPtr(caThread, lhsType), lhs)
   let src = addrE(tPtr(caThread, lhsType), rhs)
   callS(callee, dst, src, sizeofE(lhsType))
 
-proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
-  ## An array constructor initializer stays, it prints as a braced init list.
-  ## An array constructor initializer remains, it prints as a braced init list.
-  ## The pass refuses a call initializer or call right-hand side: C-family targets cannot
-  ## through a pointer parameter instead.
+proc bindConstrLocal(rhs: CirExpr, lhsType: CirType, tmpCount: var int): tuple[decl: CirStmt, local: CirExpr] =
+  ## Binds a constructor value to one fresh local through its braced init list.
+  ## The memcpy copies from that local. A constructor is no lvalue.
+  ## C-family targets cannot take its address in place.
+  ##
+  ## Returns the local's declaration and the local as an expression.
+  ## The name counts per proc, starting at `memcpy_tmp1`.
+  inc tmpCount
+  let name = "memcpy_tmp" & $tmpCount
+  result.decl = varD(name, lhsType, rhs)
+  result.local = sym(name, lhsType)
+
+proc decomposeArrayAssignStmts(body: var seq[CirStmt], tmpCount: var int): string =
+  ## Rewrites the whole-array copies of one statement sequence in place.
+  ##
+  ## Returns "" on success, else the refusal text naming the first shape
+  ## the pass cannot lower:
+  ##
+  ## - a declaration or assignment binding a call result: C-family targets
+  ##   cannot take the address of a call result, bind the call to a local first
+  ## - an assignment right side that is neither an lvalue nor a constructor:
+  ##   the memcpy form copies through storage
+  ##
+  ## `tmpCount` numbers the fresh constructor locals across the sequence,
+  ## counting continues through nested branch and loop bodies.
   var lowered: seq[CirStmt]
   for s in body.mitems:
     case s.kind
@@ -80,22 +112,27 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
         if s.rhs.kind == eCall:
           return "whole-array assignment binds a call result, C-family targets" &
             " cannot take the address of a call result; bind the call to a local first"
-        if not isLvalue(s.rhs):
+        if s.rhs.kind notin {eAconstr, eOconstr} and not isLvalue(s.rhs):
           return "whole-array assignment right-hand side is not an lvalue, the" &
             " memcpy form copies through storage"
-        lowered.add memcpyAssign(s.lhs, s.rhs, lhsType)
+        if s.rhs.kind in {eAconstr, eOconstr}:
+          let bound = bindConstrLocal(s.rhs, lhsType, tmpCount)
+          lowered.add bound.decl
+          lowered.add memcpyAssign(s.lhs, bound.local, lhsType)
+        else:
+          lowered.add memcpyAssign(s.lhs, s.rhs, lhsType)
       else:
         lowered.add s
     of sIte:
-      var err = decomposeArrayAssignStmts(s.thenBody)
+      var err = decomposeArrayAssignStmts(s.thenBody, tmpCount)
       if err.len > 0:
         return err
-      err = decomposeArrayAssignStmts(s.elseBody)
+      err = decomposeArrayAssignStmts(s.elseBody, tmpCount)
       if err.len > 0:
         return err
       lowered.add s
     of sWhile:
-      let err = decomposeArrayAssignStmts(s.whileBody)
+      let err = decomposeArrayAssignStmts(s.whileBody, tmpCount)
       if err.len > 0:
         return err
       lowered.add s
@@ -105,6 +142,7 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
 
 proc decomposeArrayAssignPass(m: CirModule): string =
   for fn in m.procs:
-    let err = decomposeArrayAssignStmts(fn.body)
+    var tmpCount = 0
+    let err = decomposeArrayAssignStmts(fn.body, tmpCount)
     if err.len > 0:
       return "in proc " & fn.name & ": " & err
