@@ -399,19 +399,6 @@ proc nimMagicName(n: NimNode): string =
       return "magic"
   return ""
 
-proc isBodilessMagic(callee: NimNode): bool =
-  ## A magic whose effect has no Nim body: a call lowers to the primitive operation, nothing harvests.
-  ## A magic's body renders as a `CommentStmt` and an `Empty`.
-  if nimMagicName(callee).len == 0:
-    return false
-  let body = getProcBody(callee.getImpl())
-  if body.isNil:
-    return true
-  for c in body:
-    if c.kind notin {nnkCommentStmt, nnkEmpty}:
-      return false
-  return true
-
 proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   ## Callee symbol of a call to a harvested or builtin proc:
   ## - the registry entry registers or reads
@@ -432,6 +419,22 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   let calleeName = if calleeBuiltin: calleeSym.strVal
                    else: entry.name
   return sym(calleeName, entry.fnType, calleeBuiltin)
+
+const NimGpuNumericBuiltinsOps = {
+  "AddI": "+", "AddU": "+", "AddF32": "+", "AddF64": "+",
+  "SubI": "-", "SubU": "-", "SubF32": "-", "SubF64": "-",
+  "MulI": "*", "MulU": "*", "MulF32": "*", "MulF64": "*",
+  "DivI": "/", "DivU": "/", "DivF32": "/", "DivF64": "/",
+  "ModI": "mod", "ModU": "mod",
+  "ShlI": "shl", "ShrI": "shr",
+}.toTable()
+  ## Trusted catalog of the system magic names that are primitive arithmetic.
+  ## Membership decides: the magic lowers to the Nim operator it names,
+  ## its body is never inspected, no proc harvests, no call emits.
+
+const NimGpuMagicFunctions = ["min", "max", "abs"]
+  ## Magic-named system functions that own a Nim body: they harvest like any
+  ## other proc. Every magic outside the two catalogs refuses.
 
 func arithExpr(op: string, t: CirType, x, y: CirExpr): CirExpr =
   ## Primitive arithmetic node for one operator over one operand type.
@@ -490,32 +493,19 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     let argTyp = getExprType(arg)
     let readTyp = tProcT(argTyp, tInt(32))
     return callE(sym("len", readTyp), arg)
-  if isBodilessMagic(callee):
-    # only bodiless magics lower to the primitive operation, a magic owning
-    # a Nim body (like `max`) harvests through the ordinary proc path below
-    case magic
-    of "AddI", "AddU", "AddF32", "AddF64",
-       "SubI", "SubU", "SubF32", "SubF64",
-       "MulI", "MulU", "MulF32", "MulF64",
-       "DivI", "DivU", "DivF32", "DivF64",
-       "ModI", "ModU", "ShlI", "ShrI":
-      let args = ctx.lowerCallArgs(callee, call)
-      if ctx.resolver.err.len > 0:
-        return nil
-      let opType = getExprType(args[0])
-      let rhs = operandLiteralTypedAs(args[1], opType)
-      let op = case magic
-        of "AddI", "AddU", "AddF32", "AddF64": "+"
-        of "SubI", "SubU", "SubF32", "SubF64": "-"
-        of "MulI", "MulU", "MulF32", "MulF64": "*"
-        of "DivI", "DivU", "DivF32", "DivF64": "/"
-        of "ModI", "ModU": "mod"
-        of "ShlI": "shl"
-        else: "shr"
-      return arithExpr(op, opType, args[0], rhs)
-    else:
-      ctx.fail("magic call " & callee.repr & " (" & magic & ") is outside the supported set")
+  # a catalog magic lowers to the primitive operation, nothing harvests
+  if magic in NimGpuNumericBuiltinsOps:
+    let args = ctx.lowerCallArgs(callee, call)
+    if ctx.resolver.err.len > 0:
       return nil
+    let opType = getExprType(args[0])
+    let rhs = operandLiteralTypedAs(args[1], opType)
+    return arithExpr(NimGpuNumericBuiltinsOps[magic], opType, args[0], rhs)
+  # a magic outside the catalogs refuses: only `min`/`max`/`abs` proceed,
+  # their Nim bodies lower through the ordinary proc path below
+  if magic != "" and callee.strVal notin NimGpuMagicFunctions:
+    ctx.fail("magic call " & callee.repr & " (" & magic & ") is outside the supported set")
+    return nil
   let calleeSym = resolveCallCallee(callee)
   # `abs` over scalars lowers as a builtin call, printers use the native name.
   # Only `abs` intercepts: system `abs` over floats has a refused body.
@@ -1092,7 +1082,7 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.fail("call callee " & callee.repr & " is not a proc symbol")
     return @[]
   let calleeSym = resolveCallCallee(callee)
-  if isBodilessMagic(callee):
+  if nimMagicName(callee) != "" and callee.strVal notin NimGpuMagicFunctions:
     ctx.fail("magic call " & callee.repr & " in statement position without a destination")
     return @[]
   let calleeExpr = ctx.harvestedCallee(calleeSym)
