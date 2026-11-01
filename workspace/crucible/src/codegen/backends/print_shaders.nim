@@ -110,3 +110,5 @@ proc printShaderModule*(ctx: var auto, m: CirModule, kernel: CirProc,
   if ctx.failing():
     return ("", ctx.err)
   result.src &= ctx.printShaderProc(kernel) & "\n"
+  if ctx.failing():
+    return ("", ctx.err)

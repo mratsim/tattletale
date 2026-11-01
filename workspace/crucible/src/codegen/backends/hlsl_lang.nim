@@ -147,13 +147,9 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
     if result.len == 0:
       case t.kind
       of ctInt:
-        ctx.fail("int" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
-          " are parse errors and int64_t is a parse error in the HLSL frontend," &
-          " 64-bit integers are rejected")
+        ctx.fail("int" & $t.bits & " has no HLSL type name")
       of ctUint:
-        ctx.fail("uint" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
-          " are parse errors and uint64_t pulls the SPIR-V Int64 capability," &
-          " 64-bit integers are rejected")
+        ctx.fail("uint" & $t.bits & " has no HLSL type name")
       else:
         ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
   of ctVector:
@@ -381,8 +377,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       return ""
     of shkNone: discard
     if call.callee.builtin and call.callee.name in hlslConvFpRefusals:
-      ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8" &
-        " conversion builtins are outside the HLSL subset")
+      ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8 conversion builtins are outside the HLSL subset")
       return ""
   return ""
 

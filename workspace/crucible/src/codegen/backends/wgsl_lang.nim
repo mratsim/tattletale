@@ -80,11 +80,8 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## WGSL name of a non-array leaf type, "" when the caller composes the name.
   ## A struct name registers the struct for reference-driven emission.
   ##
-  ## 64-bit leaves refuse:
-  ## - i64/u64 require the shader-int64 device feature
-  ## - f64 requires the shader-f64 device feature
-  ## - the vendored wgpu-native exposes no WGPUFeatureName for either, so no
-  ##   request can enable them
+  ## 64-bit leaves refuse: their device features exist but the vendored
+  ## wgpu-native exposes no WGPUFeatureName to request them.
   case t.kind
   of ctBool:
     if ctx.storageBoolSpelling:
@@ -97,26 +94,21 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     result = scalarName(wgslScalarRow, t)
     if result.len == 0:
       if t.bits == 64:
-        ctx.fail("64-bit integers have no WGSL emission: WGSL requires the" &
-          " shader-int64 device feature for i64/u64, the vendored wgpu-native" &
-          " has no WGPUFeatureName to request it")
+        ctx.fail("i64/u64 need the shader-int64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit integers have no WGSL type, only 32")
   of ctFloat:
     result = scalarName(wgslScalarRow, t)
     if result.len == 0:
       if t.bits == 64:
-        ctx.fail("64-bit floats have no WGSL emission: WGSL requires the" &
-          " shader-f64 device feature for f64, the vendored wgpu-native has" &
-          " no WGPUFeatureName to request it")
+        ctx.fail("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit floats have no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
     result = vectorName(wgslVectorRule, wgslScalarRow, t)
     if result.len == 0 and elem.len > 0:
-      ctx.fail("vector of " & elem & "x" & $t.vN &
-        " has no WGSL type name, only 2..4-wide vectors have a name")
+      ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, only 2..4-wide vectors have a name")
   of ctStruct:
     result = t.name
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
@@ -207,8 +199,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One numeric conversion in the constructor-call form: WGSL has no bool
   ## constructor and no bool-to-numeric conversion.
   if e.castType.kind == ctBool:
-    ctx.fail("conversion to bool, WGSL has no bool constructor, compare" &
-      " against zero")
+    ctx.fail("conversion to bool, WGSL has no bool constructor")
     return ""
   let bt = getExprType(e.castOperand)
   if bt != nil and bt.kind == ctBool:
@@ -232,8 +223,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       # WGSL atomics cover i32/u32 on atomic<T> storage types only,
       # f32 atomics do not exist, and the atomic<T> retype of the binding
       # is a declaration-site change the printer does not make
-      ctx.fail("atomicFetchAdd has no WGSL form, WGSL atomics cover i32/u32" &
-        " pointees through atomic<T> storage types only")
+      ctx.fail("atomicFetchAdd has no WGSL form, WGSL atomics cover i32/u32 pointees through atomic<T> storage types only")
       return ""
     if call.callee.synchroBuiltin != sbkNone:
       ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
@@ -269,9 +259,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     # - `bitcast<f64>` requires the shader-f64 device feature the runtime cannot request
     # - every bitcast operand form fails, a u32-suffixed 64-bit literal is a parse error
     if e.fValue.classify in {fcInf, fcNegInf, fcNan} and e.fLitType.bits == 64:
-      ctx.fail("a 64-bit non-finite float has no WGSL emission: bitcast<f64>" &
-        " requires the shader-f64 device feature, the vendored wgpu-native" &
-        " has no WGPUFeatureName to request it")
+      ctx.fail("a 64-bit non-finite float has no WGSL token, bitcast<f64> needs the unrequestable shader-f64 feature")
       return ""
     return emitLiteral(e, ctx.lit, ctx.row)
   of eSym:
@@ -282,13 +270,10 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "bool(" & e.name & ")"
     if e.coordBuiltin != cbkNone:
       if not ctx.inKernel:
-        ctx.fail("coordinate builtin " & e.name &
-          " in a device function, WGSL builtins are entry-point parameters")
+        ctx.fail("coordinate builtin " & e.name & " in a device function, WGSL builtins are entry-point parameters")
         return ""
       if e.coordBuiltin == cbkThreadsPerThreadgroup:
-        ctx.fail("threads_per_threadgroup has no WGSL builtin: WGSL has only" &
-          " the @workgroup_size attribute, the threadgroup size is not" &
-          " addressable from WGSL")
+        ctx.fail("threads_per_threadgroup has no WGSL builtin, WGSL has only the @workgroup_size attribute")
         return ""
       ctx.builtins.incl(e.coordBuiltin)
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
@@ -319,15 +304,12 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     # takes its letter, names pass through
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       if not ctx.inKernel:
-        ctx.fail("coordinate builtin " & e.dotBase.name &
-          " in a device function, WGSL builtins are entry-point parameters")
+        ctx.fail("a device function reads " & e.dotBase.name & ", WGSL coordinate builtins are entry-point parameters")
         return ""
       let mapped = wgslCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
       if mapped.len == 0:
         if e.dotBase.coordBuiltin == cbkThreadsPerThreadgroup:
-          ctx.fail("threads_per_threadgroup has no WGSL builtin: WGSL has only" &
-            " the @workgroup_size attribute, the threadgroup size is not" &
-            " addressable from WGSL")
+          ctx.fail("threads_per_threadgroup reads refuse on WGSL, only the @workgroup_size attribute exists")
         else:
           ctx.fail("no coordinate component " & e.fieldName)
         return ""
