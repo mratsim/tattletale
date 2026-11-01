@@ -599,6 +599,11 @@ proc sameType*(a, b: CirType): bool =
         return false
     result = sameType(a.ret, b.ret)
 
+func isScalarType*(t: CirType): bool =
+  ## True for the primitive scalar kinds a primitive operator takes: bool, int, uint, float.
+  ## Every other kind (vector, pointer, array, struct, span, proc) is false.
+  t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat}
+
 proc getExprType*(e: CirExpr): CirType =
   ## Returns the expression's type, or nil when the node's shape does not determine one.
   ## Nil arises for a `deref` of a non-pointer, an `at` of a non-array, a `dot` naming no field of its struct.

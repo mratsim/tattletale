@@ -521,9 +521,14 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     for p in kernel.params:
       var decl: string
       case p.typ.kind
-      of ctAptr, ctPtr:
-        # a device pointer packs as the buffer-reference handle: the engine passes the device address, the block dereferences it
+      of ctAptr:
+        # a device pointer packs as the buffer-reference handle: the engine passes the device address and the block dereferences it
         decl = ctx.emitGlslPtrDecl(p.typ, p.name)
+      of ctPtr:
+        ctx.fail("kernel parameter " & p.name &
+          " of pointer type, kernels take values and device buffers" &
+          " (`ptr UncheckedArray[T]`), pass an object's fields separately")
+        decl = ""
       of ctArray:
         ctx.fail("kernel parameter " & p.name &
           " of array type, arrays do not pack into the push block")
