@@ -124,7 +124,7 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
       error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
   ctx.pn = round_multiple_up(ctx.pn, 256)
   ctx.chunkOff[argIdx] = ctx.pn
-  const size = deviceLayout(T, bkWebGPU).size
+  const size = computeDeviceLayout(T, bkWebGPU).size
   let padded = round_multiple_up(size, 4)
   ctx.chunkLen[argIdx] = padded
   ctx.blob.setLen(ctx.pn + padded)

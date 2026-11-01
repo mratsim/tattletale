@@ -119,7 +119,7 @@ when defined(macosx):
   proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     when T is ptr|pointer:
       {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-    const size = deviceLayout(T, bkMetal).size
+    const size = computeDeviceLayout(T, bkMetal).size
     var blob: array[size, byte]
     var off = 0
     blob.packFrom(off, v, bkMetal)

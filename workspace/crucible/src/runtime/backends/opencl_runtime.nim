@@ -94,7 +94,7 @@ proc queryString(device: OpenCLDevice, info: Tdevice_info): string =
     if result[^1] == '\0':   # clGetDeviceInfo strings are NUL-terminated
       result.setLen(result.len - 1)
 
-proc name*(device: OpenCLDevice): string = device.queryString(DEVICE_NAME)
+proc getName*(device: OpenCLDevice): string = device.queryString(DEVICE_NAME)
 
 proc isGpu(device: OpenCLDevice): bool =
   var deviceType: TDeviceType

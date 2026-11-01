@@ -142,7 +142,7 @@ proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-  const lay = deviceLayout(T, bkGlsl)
+  const lay = computeDeviceLayout(T, bkGlsl)
   if lay.align > 1:
     ctx.pn = round_multiple_up(ctx.pn, lay.align)
   if ctx.pn + lay.size > 128:
@@ -217,7 +217,7 @@ proc parseHlslSquadron(hlsl: string): Dim3 =
     inc k
   return Dim3(x: 0, y: 0, z: 0)
 
-proc firstFunctionName(src: string, preamble, marker: string): string =
+proc findFirstFunctionName(src: string, preamble, marker: string): string =
   ## Reads the function name at the first `marker` after `preamble`,
   ## "main" when the marker is missing or the scan finds no identifier.
   var startPos = 0
@@ -241,12 +241,12 @@ proc firstFunctionName(src: string, preamble, marker: string): string =
 proc parseEntryPoint(glsl: string): string =
   ## Reads the first entry function after the local-size layout: the kernel entry name
   ## in the emitted GLSL source and in the compiled OpEntryPoint.
-  firstFunctionName(glsl, "layout(local_size_x", "void ")
+  findFirstFunctionName(glsl, "layout(local_size_x", "void ")
 
 proc parseHlslEntryPoint(hlsl: string): string =
   ## Reads the entry function after the `[numthreads(...)]` attribute: the kernel entry
   ## name in the emitted HLSL source and in the compiled OpEntryPoint.
-  firstFunctionName(hlsl, "[numthreads(", "void ")
+  findFirstFunctionName(hlsl, "[numthreads(", "void ")
 
 proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
