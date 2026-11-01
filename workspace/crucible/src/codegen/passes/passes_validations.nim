@@ -46,7 +46,7 @@ proc spaceCastRejection(e: CirExpr, fnName: string): string =
   ##   target from the operand at birth, so a mismatch means the target space
   ##   was written independently of the operand
   ## - an unprovenanced integer has no storage, only the default device
-  ##   space is claimable (the address route)
+  ##   space is claimable (the device-address binding)
   if e.kind notin {eCast, eConv}:
     return ""
   let target = e.castType
@@ -164,7 +164,7 @@ proc resolveConstStorageTarget(e: CirExpr, storage: ConstStorage): string =
 
 proc constWriteRejection(lhs: CirExpr, fnName: string, storage: ConstStorage): string =
   ## Rejection message of one assignment into constant storage.
-  ## Returns "" when the target lives in another memory class.
+  ## Returns "" when the target is in another memory class.
   let target = resolveConstStorageTarget(lhs, storage)
   if target.len == 0:
     return ""

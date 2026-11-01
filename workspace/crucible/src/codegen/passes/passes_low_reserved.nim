@@ -10,10 +10,10 @@
 ## Lowering: reserved-keyword renaming, one common pass registered per target
 ## with the target's reserved set as data.
 ##
-## An identifier colliding with a target reserved word takes the `_nim` suffix
-## at every emitted site, so the printers never rename. A target whose language
-## reserves the double-underscore identifier head additionally prefixes every
-## `__`-prefixed name (WGSL: `wgsl_`), with the suffix applied first:
+## The pass renames an identifier colliding with a target reserved word,
+## appending the `_nim` suffix at every emitted site, so the printers never rename.
+## - a target whose language reserves the double-underscore identifier head
+##   additionally prefixes every `__`-prefixed name (WGSL: `wgsl_`), suffix first
 ##
 ## - fn names, call sites, params and their body references
 ## - locals (var/const) and their body references

@@ -1083,6 +1083,8 @@ proc collectAddressSpace(ctx: var FrontendCtx, nameNode: NimNode): AddressSpace 
       ctx.fail("unexpected pragma " & p.repr & " on a local declaration")
 
 proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
+  ## Lowers one Nim statement body to CIRv2 statements in source order.
+  ## Hoisted statements drained from the context prepend to the body's own statements.
   if ctx.resolver.err.len > 0:
     return @[]
   if n.isNil:

@@ -58,7 +58,7 @@ proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
   callS(callee, dst, src, sizeofE(lhsType))
 
 proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
-  ## An array constructor initializer stays, it prints as a braced init list.
+  ## An array constructor initializer remains, it prints as a braced init list.
   ## An array constructor initializer remains, it prints as a braced init list.
   ## The pass refuses a call initializer or call right-hand side: C-family targets cannot
   ## through a pointer parameter instead.

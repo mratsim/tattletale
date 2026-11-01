@@ -34,7 +34,6 @@ type
     donePasses*: HashSet[string]
 
 func register*(reg: var PassRegistry, name: string, kind: PassKind, description: string, run: proc(m: CirModule): string {.nimcall.}) =
-  ## Appends the pass to the registry, `runPasses` executes passes in registration order.
   reg.passes.add CirPass(name: name, kind: kind, description: description, run: run)
 
 proc runPasses*(m: CirModule, reg: var PassRegistry): string =

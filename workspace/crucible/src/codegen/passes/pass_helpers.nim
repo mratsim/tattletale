@@ -102,7 +102,7 @@ proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: str
 
 proc walkTypeTree*(t: CirType, visit: proc(t: CirType), descendPtrs: bool = true) =
   ## Contract:
-  ## - a printer that names no type behind a pointer kind passes `descendPtrs = false`
+  ## - a printer with no type name behind a pointer kind passes `descendPtrs = false`
   ##   and leaves the pointer targets unvisited
   ## - a collecting visitor cannot loop, value type trees are acyclic
   if t.isNil:
