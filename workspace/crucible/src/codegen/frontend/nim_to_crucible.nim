@@ -544,12 +544,14 @@ proc lowerMagicPrimitive(ctx: var FrontendCtx, callee: NimNode, call: NimNode, m
   else:
     return nil
 
-proc numericBuiltinCall(ctx: var FrontendCtx, calleeSym: NimNode, call: NimNode): CirExpr =
-  ## Lowers a `min`/`max`/`abs` call over scalar operands as a builtin call,
-  ## no body harvest: the printers use the per-type native name.
-  ## A user proc sharing the name takes the ordinary harvest path
-  ## (a `max` over tiles, say): the targets have no builtin over aggregates.
-  if calleeSym.strVal notin ["min", "max", "abs"]:
+proc absBuiltinCall(ctx: var FrontendCtx, calleeSym: NimNode, call: NimNode): CirExpr =
+  ## Lowers an `abs` call over scalar operands as a builtin call, no body harvest: the printers use the per-type native name.
+  ##
+  ## Only `abs` intercepts:
+  ## - system `abs` over a float has a `when nimvm` body. The frontend refuses it, so no harvest path exists
+  ## - `min`/`max` harvest into a ternary idiom, folded to the native call in the optimization stage
+  ## - a user proc named `abs` over aggregates takes the ordinary harvest path. The targets have no builtin over aggregates
+  if calleeSym.strVal != "abs":
     return nil
   let fnType = ctx.resolveCalleeProcType(calleeSym)
   if ctx.failing():
@@ -627,11 +629,11 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
   let calleeSym = resolveCallCallee(callee)
   if ctx.failing():
     return nil
-  let numeric = ctx.numericBuiltinCall(calleeSym, call)
+  let absCall = ctx.absBuiltinCall(calleeSym, call)
   if ctx.failing():
     return nil
-  if numeric != nil:
-    return numeric
+  if absCall != nil:
+    return absCall
   let (cirName, known) = ctx.resolveCallCalleeName(calleeSym)
   # a bodiless magic took the primitive path above
   # every other callee harvests, a magic with a Nim body (like `max`) lowers through it
@@ -1226,35 +1228,16 @@ proc lowerIfStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       return @[]
   return ctx.lowerIfForm(branches, elseBody, nil)
 
-func isUnrollPragma(n: NimNode): bool =
-  if n.kind != nnkPragma:
-    return false
-  for p in n:
-    if p.kind in {nnkIdent, nnkSym} and p.strVal == "unroll":
-      return true
-  return false
-
-func bodyMarksUnroll(body: NimNode): bool =
-  ## True when the loop body states `{.unroll.}` directly, a pragma nested
-  ## inside an inner loop's body marks that inner loop, never this one.
-  if body.kind != nnkStmtList:
-    return false
-  for stmt in body:
-    if isUnrollPragma(stmt):
-      return true
-  return false
-
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## Statements spliced by the condition drain to the front of the loop body,
   ## a splice runs once per iteration after the test that admits it.
-  let unroll = bodyMarksUnroll(n[1])
   let cond = ctx.lowerExpr(n[0])
   if ctx.failing():
     return @[]
   let body = ctx.lowerStmt(n[1])
   if ctx.failing():
     return @[]
-  return @[whileS(cond, body, unroll)]
+  return @[whileS(cond, body)]
 
 proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `for` over a literal range or `countup`.
@@ -1348,7 +1331,6 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     stepT = operandLiteralTypedAs(stepV, varType)
   ctx.declareLocal(vars, sym(varName, varType))
   let varSym = sym(varName, varType)
-  let unroll = bodyMarksUnroll(n[^1])
   # start/stop/step hoists queued so far belong to the preamble, the body's own hoists drain per statement inside it
   let startHoists = ctx.drainHoisted()
   let body = ctx.lowerStmtBody(n[^1])
@@ -1374,7 +1356,7 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   var preamble = startHoists
   preamble.add(varD(varName, varType))
   preamble.add(asgnS(varSym, startT))
-  result = preamble & @[whileS(cmp, bodyHoists & body & incr, unroll)]
+  result = preamble & @[whileS(cmp, bodyHoists & body & incr)]
 
 proc lowerReturn(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   var valueNode = n[0]
@@ -1662,15 +1644,22 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.resolveTypeSection(n)
     return @[]
   of nnkPragma:
+    var markUnroll = false
     var emitArgs: seq[NimNode] = @[]
     for p in n:
-      if p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 2 and
+      if p.kind in {nnkIdent, nnkSym} and p.strVal == "unroll":
+        # Unroll marking consumes this marker statement: the loop whose body
+        # states it gets the unroll flag
+        markUnroll = true
+      elif p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 2 and
           p[0].kind in {nnkIdent, nnkSym} and p[0].strVal == "emit":
         emitArgs.add(p[1])
-    if emitArgs.len == 0:
+    var emitted: seq[CirStmt] = @[]
+    if markUnroll:
+      emitted.add(emitS(@["{.unroll.}"], @[]))
+    if emitted.len == 0 and emitArgs.len == 0:
       # a non-emit statement pragma is a compile-time annotation, nothing emits
       return @[]
-    var emitted: seq[CirStmt] = @[]
     for emitArg in emitArgs:
       let s = ctx.lowerEmitArg(emitArg)
       if ctx.failing():
@@ -1784,6 +1773,10 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let fnRet = ctx.retType
   let fnName = ctx.fnName
   let body = ctx.lowerProcBody(fn, formals, getProcBody(fn), params)
+  result = procD(fnName, params, fnRet, body)
+  let wgErr = fn.applyProcPragmas(result)
+  if wgErr.len > 0:
+    ctx.fail(wgErr)
   ctx.fnName = savedName
   ctx.retType = savedRet
   ctx.nameCounts = savedCounts
@@ -1791,12 +1784,10 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   ctx.localSpaces = savedSpaces
   if ctx.failing():
     return nil
-  result = procD(fnName, params, fnRet, body)
   # identity key includes the signature, true overloads register under one plain name
   let defKey = calleeSigKey(fn[0])
   ctx.procKeys[defKey] = true
   ctx.declaredProcs[defKey] = result.name
-  fn.applyProcPragmas(result)
   ctx.procs.add(result)
 
 proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
@@ -1839,7 +1830,22 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
     ctx.procs.setLen(savedProcsLen)
     return
   let harvested = procD(cirName, params, fnRet, calleeHoists & body)
-  impl.applyProcPragmas(harvested)
+  let wgErr = impl.applyProcPragmas(harvested)
+  if wgErr.len > 0:
+    ctx.fail(wgErr)
+    ctx.fnName = savedName
+    ctx.retType = savedRet
+    ctx.nameCounts = savedCounts
+    ctx.scopes = savedScopes
+    ctx.localSpaces = savedSpaces
+    ctx.procs.setLen(savedProcsLen)
+    ctx.hoisted = savedHoisted
+    return
+  ctx.fnName = savedName
+  ctx.retType = savedRet
+  ctx.nameCounts = savedCounts
+  ctx.scopes = savedScopes
+  ctx.localSpaces = savedSpaces
   ctx.procs.add(harvested)
 
 # ═══════════════════════════════════════════════════════════════════════

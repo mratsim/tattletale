@@ -278,7 +278,7 @@ proc moduleD*(name: string, types: seq[CirType], procs: seq[CirProc]): CirModule
 # Proc pragmas
 # ═══════════════════════════════════════════════════════════════════════
 
-proc applyProcPragmas*(fn: NimNode, p: CirProc) =
+proc applyProcPragmas*(fn: NimNode, p: CirProc): string =
   ## Args:
   ## - `p` the CirProc annotated in place
   ##
@@ -287,6 +287,10 @@ proc applyProcPragmas*(fn: NimNode, p: CirProc) =
   ## `{.inline.}` marks an inline device function.
   ##
   ## Other pragmas are legal and dropped.
+  ##
+  ## Returns "" when clean, else the first refusal.
+  ## A workgroup dimension of 0 or less is outside the supported set:
+  ## every target emits it verbatim as an invalid launch shape.
   for prag in fn.pragma:
     case prag.kind
     of nnkIdent, nnkSym:
@@ -313,12 +317,16 @@ proc applyProcPragmas*(fn: NimNode, p: CirProc) =
               prag
           if dims.kind in {nnkPar, nnkTupleConstr, nnkBracket}:
             for d in 0 ..< 3:
-              # a missing trailing dimension defaults to 1: workgroup: (4, 2) is the (4, 2, 1) launch shape, 0 is not a legal GLSL/WGSL dimension
-              if d < dims.len:
-                p.workgroup[d] = dims[d].intVal.int
-              else:
-                p.workgroup[d] = 1
+              # a missing trailing dimension defaults to 1: workgroup: (4, 2) is the (4, 2, 1) launch shape
+              let v = if d < dims.len: dims[d].intVal.int else: 1
+              if v <= 0:
+                return "workgroup dimension " & $(d + 1) & " is " & $v &
+                  ", only positive dimensions are supported"
+              p.workgroup[d] = v
           elif dims.kind in nnkIntLit .. nnkUInt64Lit:
+            if dims.intVal.int <= 0:
+              return "workgroup dimension 1 is " & $dims.intVal.int &
+                ", only positive dimensions are supported"
             p.workgroup[0] = dims.intVal.int
             p.workgroup[1] = 1
             p.workgroup[2] = 1
@@ -326,4 +334,5 @@ proc applyProcPragmas*(fn: NimNode, p: CirProc) =
           discard
     else:
       discard
+  return ""
 

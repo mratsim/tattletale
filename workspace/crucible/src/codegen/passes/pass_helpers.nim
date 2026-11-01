@@ -271,8 +271,13 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.emitParts = s.emitParts
       for op in s.emitOperands:
         c.emitOperands.add cloneExpr(op)
-    of sDiscard, sCase:
-      discard
+    of sCase:
+      c.selector = cloneExpr(s.selector)
+      for br in s.branches:
+        c.branches.add CirCaseBranch(ranges: br.ranges, body: cloneStmts(br.body))
+      c.caseElse = cloneStmts(s.caseElse)
+    of sDiscard:
+      c.discardVal = cloneExpr(s.discardVal)
     result.add c
 
 func containsPtrDeep*(t: CirType): bool =
