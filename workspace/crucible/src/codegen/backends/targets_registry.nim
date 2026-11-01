@@ -72,7 +72,7 @@ type
 
   ScalarRow* = object
     ## Scalar type names of one target by (kind, width) cell.
-    ## A row states the cells the target names, an omitted cell refuses at the lookup.
+    ## A row lists the cells the target names, an omitted cell refuses at the lookup.
     cells*: seq[ScalarCell]
     refusals*: seq[tuple[kind: CirTypeKind, width: int, reason: string]]
     ## One-line refusal reason per omitted cell the row documents.
@@ -111,7 +111,7 @@ type
     elems*: seq[tuple[kind: CirTypeKind, width: int, prefix: string]]
     ## Element types the target names, with the vector name's prefix.
     ## The name composes from the prefix and the lane count per `nameForm`.
-    ## Empty when the target names no vectors.
+    ## Empty when the target has no vectors.
     lanes*: seq[int]
     ## Lane counts the target emits.
     nameForm*: VectorNameForm = vnfPrefixed

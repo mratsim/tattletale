@@ -15,14 +15,16 @@
 ## - `eSizeof` reports the packed byte size from the stored module layout records, GLSL has no `sizeof`
 ##
 ## Lowering-pass contract (`passes_lowering_glsl.nim` runs before printing):
-## - `ptr` locals rewrite to their pointees (GLSL has no function-storage addressing), a surviving pointer local refuses, naming the pass
+## - `ptr` locals rewrite to their pointees (GLSL has no function-storage addressing),
+##   the pass refuses a surviving pointer local, the refusal message
+##   identifies the pass
 ## - a `var T` device-function parameter binds as `inout`, the qualify pass retyped it to its pointee
 ## - `{.smem.}` and `{.const_mem.}` kernel locals relocate into `CirModule.globals`, emitted as program-scope `shared`/`const` declarations
 ## - the ref-block pass registers every buffer-reference block into
 ##   `CirModule.refBlocks`, the printer declares one per entry in order
 ##
 ## Remaining checks:
-## - a threadgroup/constant local surviving in a nested scope or device function refuses, a `caDevice`-space local refuses too
+## - the printer refuses a threadgroup/constant local surviving in a nested scope or device function, and a `caDevice`-space local too
 ## - a loop prints `while (cond)`, `{.unroll.}` adds `[[unroll]]`
 
 import ../ir/cirv2_lang
@@ -293,7 +295,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       " operand is outside the GLSL subset")
     return ""
   of eAddr:
-    # a buffer element's address is the indexed reference access, anything else refuses
+    # a buffer element's address is the indexed reference access, the printer refuses anything else
     if e.addrOperand.kind == ePat:
       return ctx.printExpr(e.addrOperand)
     ctx.fail("cannot take the address of a local, GLSL has no " &
@@ -460,7 +462,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated storage local.
   ##
   ## - a threadgroup local declares bare `shared` storage
-  ## - a constant local declares `const`, an initializer-less one refuses
+  ## - a constant local declares `const`, the printer refuses an initializer-less one
   if s.space == caThreadgroup:
     return emitSmemDecl(s.declType, s.name)
   if s.init == nil:

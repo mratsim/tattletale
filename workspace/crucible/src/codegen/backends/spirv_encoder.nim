@@ -242,7 +242,7 @@ genSpvOpcodeTable:
   # (Shuffle) or the xor mask (ShuffleXor), both plain IdRef
   op OpGroupNonUniformShuffle: 345: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
   op OpGroupNonUniformShuffleXor: 346: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
-  # SPV_EXT_shader_atomic_float_add: fp atomic add, the extension string pairs with the AtomicFloat32AddEXT capability
+  # SPV_EXT_shader_atomic_float_add: fp atomic add, the extension string corresponds to the AtomicFloat32AddEXT capability
   op OpAtomicFAddEXT: 6035: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdScope), o(spvIdMemorySemantics), o(spvIdRef)]
 
 # ═══════════════════════════════════════════════════════════════════════

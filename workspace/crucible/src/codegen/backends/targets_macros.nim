@@ -7,7 +7,7 @@
 
 ## `genTargets`: the declarative target-row macro.
 ##
-## One invocation states every target's rows in the block DSL and generates one
+## One invocation carries every target's rows in the block DSL and generates one
 ## lookup const per (target, flavor) key and row family. Validation is compile
 ## time and every failure is a compile error at the row definition:
 ##
@@ -15,14 +15,14 @@
 ##   the family at the target's section
 ## - an unknown field, cell or value shape fails the compile at its line
 ## - a type name that denotes two cells fails the compile naming both targets
-## - a scalar row states any subset of the `ScalarCellAxis` cells, an omitted
+## - a scalar row lists any subset of the `ScalarCellAxis` cells, an omitted
 ##   cell refuses at the lookup with its one-line `refused <cell> "reason"`
 ##   message stated in the row
 ## - one invocation registers every target of its module, generated names
 ##   would collide across invocations
 ##
 ## Each family's entry grammar is the doc of its parse proc below.
-## `targets_rows.nim` states every family of all six targets.
+## `targets_rows.nim` declares every family of all six targets.
 
 import std/macros
 import std/strutils
@@ -140,7 +140,7 @@ proc objCtor(typeName: string, pairs: seq[tuple[section: string, pair: NimNode]]
 proc famEntries(fam: NimNode): seq[NimNode] {.compileTime.} =
   ## Entries of one family row: the arguments of a `family ...` line
   ## (comma-separated), or the block lines of the multi-line families.
-  ## `cell "name"` pairs parse as nested commands.
+  ## a `cell` / `"name"` pair parses as a nested command.
   if fam.kind == nnkCall:
     for line in fam[1]:
       result.add line
@@ -175,7 +175,7 @@ proc checkCellNames(all: seq[tuple[display: string, cells: seq[ParsedCell]]]) {.
   ##
   ## - within a target a repeated name fails at the second cell
   ## - a name two targets share must denote the same cell on both: msl
-  ##   `char`/`long` against cuda `signed char`/`long long` stays explicit
+  ##   the row keeps `char`/`long` against cuda `signed char`/`long long` explicit
   ##   per-target data
   ## - bool cells are exempt: OpenCL prints bool locals as `int` to match
   ##   the 4-byte launch ABI
@@ -285,7 +285,7 @@ proc vectorCtor(entries: seq[NimNode], display: string): NimNode {.compileTime.}
   ##
   ## - `elems` entries of `cell "prefix"` elements, a bare cell an empty prefix
   ## - one `lanes n, ...` entry, an optional `nameForm` entry
-  ## - a target that names no vectors states `vector ()`
+  ## - a target with no vectors lists `vector ()`
   var elems: seq[NimNode]
   var lanes: seq[NimNode]
   var nameForm = ""

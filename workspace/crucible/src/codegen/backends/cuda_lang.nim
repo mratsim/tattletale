@@ -45,7 +45,7 @@ type
     row: ScalarRow
     ## Scalar row of the target. The narrow integer cast names its type from it.
     inKernel: bool
-    ## False inside a device function. Its smem local owns no storage and refuses an initializer there.
+    ## False inside a device function. Its smem local owns no storage, the printer refuses an initializer there.
 
 const printerTarget = "cuda"
 
@@ -62,7 +62,7 @@ proc emitCudaScalar(t: CirType): string =
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## CUDA declaration text of `t` with `ident` appended, the shared C declarator
   ## over the CUDA rows. Arrays take the identifier into the declarator
-  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
+  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
   cDecl(cudaScalarRow, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
@@ -156,8 +156,8 @@ proc cudaMathCallText(call: CirExpr, args: seq[string]): string =
   ## CUDA text of a `{.builtin.}` scalar-math call whose CUDA name differs
   ## from the canonical name (`cudaMathBuiltinNames`), "" otherwise.
   ##
-  ## - only a single float operand selects the mapped name, an integer
-  ##   operand or a width outside the table keeps the canonical name
+  ## - only a single float operand selects the mapped name, the printer keeps
+  ##   the canonical name for an integer operand or a width outside the table
   ## - a user proc that shares a builtin's name stays an ordinary call
   if call.callee.kind != eSym or not call.callee.builtin or call.args.len != 1:
     return ""
@@ -241,7 +241,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   if s.space == caThreadgroup:
     # kernel-scope shared storage in `__shared__` form,
     # NVRTC allocates it per threadgroup
-    # a device function's smem local owns no storage, an initializer on it refuses
+    # a device function's smem local owns no storage, the printer refuses an initializer on it
     # kernel-body initializers rewrote to stores before printing
     if s.init != nil and not ctx.inKernel:
       ctx.fail("smem local " & s.name &
@@ -326,7 +326,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
 proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
   ## CUDA linkage prefix of one proc or kernel.
   ##
-  ## - a kernel is `extern "C" __global__`: extern "C" keeps the unmangled
+  ## - a kernel is `extern "C" __global__`: the kernel keeps its unmangled
   ##   name that the host runtime looks up
   ## - a device function is `__device__`, plus the force-inline qualifier
   ##   under `{.inline.}`

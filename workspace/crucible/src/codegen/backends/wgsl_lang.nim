@@ -19,10 +19,10 @@
 ## - the kernel signature takes only `@builtin(...)` coordinate parameters, first-use order
 ##
 ## Addressing, memory classes, jumps:
-## - a pointer local or pointer-holding struct local refuses: the WGSL lowering pass rewrites the shapes into pointees and leaf symbols
+## - the WGSL lowering pass refuses a pointer local or pointer-holding struct local: it rewrites the shapes into pointees and leaf symbols
 ## - the WGSL lowering pass relocates a smem/const_mem kernel local into `CirModule.globals`
 ## - struct declarations emit for every struct of `CirModule.types` in declaration order,
-##   a dissolved one included, an unused declaration is legal WGSL, a pointer-holding struct refuses
+##   a dissolved one included, an unused declaration is legal WGSL, the printer refuses a pointer-holding struct
 ## - a loop prints `while (cond)` (WGSL's `while` takes a condition),
 ##   an unrolled loop notes the unroll directive has no WGSL form
 
@@ -50,7 +50,7 @@ type
     row: ScalarRow
     ## Scalar row of the target. The narrow integer cast names its type from it.
     inKernel: bool
-    ## False inside a device function, a device function reading a coordinate builtin refuses.
+    ## False inside a device function, the printer refuses a device function reading a coordinate builtin.
     paramNames: HashSet[string]
     ## Parameter names of the proc in flight, a pointer-typed parameter prints
     ## as-is (WGSL device functions take real pointer parameters).
@@ -164,7 +164,7 @@ type WgslBuiltinParam = tuple[attribute, param, wgslType: string]
 proc wgslBuiltinParam(kind: CoordBuiltinKind): WgslBuiltinParam =
   ## Returns the WGSL parameter of a canonical coordinate builtin kind, an empty tuple when none exists.
   ## `threads_per_threadgroup` is absent, WGSL exposes the threadgroup size
-  ## only as the `@workgroup_size` entry-point attribute, a read refuses.
+  ## only as the `@workgroup_size` entry-point attribute, the printer refuses a read.
   case kind
   of cbkThreadPositionInGrid:
     ("global_invocation_id", "global_id", "vec3<u32>")
@@ -231,7 +231,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   ## "" when `call.callee` is not a builtin.
   if call.callee.kind == eSym:
     # builtin vocabulary dispatches on the typed kinds, never on names,
-    # `rsqrt` stays a name case, a math intrinsic outside the four categories
+    # `rsqrt` is a name case for the printer, a math intrinsic outside the four categories
     case call.callee.reductionBuiltin
     of rbkReduceAdd:
       return "subgroupAdd(" & args.join(", ") & ")"
@@ -261,7 +261,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   return ""
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Declaration text of one local, whose init the caller emits.
-  ## A pointer-typed local refuses earlier: the WGSL lowering pass rewrites it.
+  ## The WGSL lowering pass refuses a pointer-typed local early: the pass rewrites it.
   result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -508,7 +508,7 @@ proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the WGSL walk:
   ##
   ## - the parameter names, whose pointer reads print as-is: WGSL device functions take real pointer parameters, only pointer locals refuse
-  ## - the kernel flag, a coordinate-builtin read outside the entry refuses
+  ## - the kernel flag, the printer refuses a coordinate-builtin read outside the entry
   ctx.paramNames = HashSet[string]()
   for p in fn.params:
     ctx.paramNames.incl p.name
@@ -519,7 +519,7 @@ proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
   ##
   ## - a device function: the bare `fn name(params) -> ret` signature, a void return emits no arrow (WGSL has no `void` type name)
   ## - a pointer parameter takes the `ptr<space, T>` form
-  ## - a device pointer parameter refuses: the call sites have no pointer form for a storage binding
+  ## - the pass refuses a device pointer parameter: the call sites have no pointer form for a storage binding
   ## - the entry kernel: `@compute @workgroup_size(...)` attribute lines, then `fn <entry>(<entry inputs>)` over the body-walk inputs
   ##   exportc renames the entry for the host runtime lookup.
   if fn.isKernel:
@@ -626,7 +626,7 @@ proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
 proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
   ## Struct declarations for every struct in `CirModule.types`, in declaration order.
   ## WGSL accepts an unused struct declaration, so a struct the lowering
-  ## dissolved emits as dead text. A pointer-holding struct refuses in `emitWgslStruct`.
+  ## dissolved emits as dead text. `emitWgslStruct` refuses a pointer-holding struct.
   for t in m.types:
     if t.kind == ctStruct:
       result &= ctx.emitWgslStruct(t) & "\n\n"
