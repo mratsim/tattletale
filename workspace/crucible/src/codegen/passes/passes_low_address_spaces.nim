@@ -86,16 +86,6 @@ proc instKey(callee: CirProc, wanted: seq[CirType]): string =
     if not sameType(wanted[i], callee.params[i].typ):
       result.add "\x1f" & $i & "\x1f" & $wanted[i].space
 
-proc freshProcType(params: seq[CirType], ret: CirType): CirType =
-  ## A fresh proc type over `params`.
-  ##
-  ## Call-site callee types are interned: structurally identical signatures
-  ## share one `CirType` ref. A call site that re-types its callee replaces
-  ## the symbol type with this fresh copy, leaving the shared ref untouched.
-  result = CirType(kind: ctProc)
-  result.params = params
-  result.ret = ret
-
 proc retypeSymsExpr(e: CirExpr, name: string, typ: CirType) =
   ## Retypes the symbol named `name` in place.
   ## Expressions are refs: the rewrite applies to every sharer.
