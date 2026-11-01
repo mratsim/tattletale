@@ -167,20 +167,6 @@ func unwrapConv(n: NimNode): NimNode =
 
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr
 
-proc lowerOperandExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
-  ## Lowers one operator operand. A literal under a sem-introduced conversion
-  ## takes the conversion's target type, an exact conversion.
-  let bare = unwrapConv(n)
-  if bare != n and bare.kind in {nnkIntLit .. nnkUInt64Lit,
-      nnkFloat32Lit, nnkFloat64Lit, nnkFloatLit}:
-    let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.resolver.err.len > 0:
-      return nil
-    if bare.kind in {nnkFloat32Lit, nnkFloat64Lit, nnkFloatLit}:
-      return fltLit(bare.floatVal, typ)
-    return intLit(bare.intVal, typ)
-  return ctx.lowerExpr(bare)
-
 proc operandLiteralTypedAs(e: CirExpr, opType: CirType): CirExpr =
   ## Returns a literal operand typed as the operation's operand type.
   ## Nim types a literal at its default width and converts at the use site,
@@ -201,6 +187,18 @@ proc operandLiteralTypedAs(e: CirExpr, opType: CirType): CirExpr =
       e
   else:
     e
+
+proc lowerOperandExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
+  ## Lowers one operator operand: the node unwraps, lowers, and a literal
+  ## re-types to the operand node's own target type, an exact conversion.
+  ## Nim types a literal at its default width and converts at the use site,
+  ## the typed AST does not always carry the conversion around the literal.
+  let e = ctx.lowerExpr(unwrapConv(n))
+  if ctx.resolver.err.len > 0:
+    return nil
+  if e.kind notin {eIntLit, eFloatLit}:
+    return e
+  return operandLiteralTypedAs(e, ctx.resolver.resolveCirType(n.getTypeInst()))
 
 func zeroValue(t: CirType): CirExpr =
   ## Zero value of a CIRv2 type, an omitted object-constructor field takes this zero value.
