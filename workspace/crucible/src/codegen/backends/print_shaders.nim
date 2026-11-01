@@ -11,8 +11,8 @@
 ##
 ## | mixin proc                   | the printer supplies                          |
 ## | ---------------------------- | --------------------------------------------- |
-## | `prepShaderProc(fn)`         | the per-proc walk state of the target         |
-## | `emitShaderSig(fn)`          | the signature head, entry attributes included |
+## | `prepProc(fn)`               | the per-proc walk state of the target         |
+## | `printProcHead(fn)`          | the head, entry attributes and brace included |
 ## | `emitShaderStructs(m)`       | the referenced struct declarations            |
 ## | `emitShaderBindings(kernel)` | the kernel's resource-binding section         |
 ## | `emitShaderFns(m)`           | the device-function section                   |
@@ -55,35 +55,9 @@ proc selectShaderKernel*(ctx: var auto, m: CirModule): CirProc =
     return
   result = kernels[0]
 
-proc printShaderProc*(ctx: var auto, fn: CirProc): string =
-  ## Returns the text of one device function or the entry kernel: the target's per-proc state, then the body, then the head.
-  ## Returns "" once the walk recorded a refusal.
-  ##
-  ## The body prints before the signature assembles: the entry head names the coordinate-builtin inputs the body walk collected.
-  ## The head's inputs are WGSL's `@builtin(...)` parameters or HLSL's semantics, both collected during the walk.
-  ##
-  ## Contract:
-  ## - a device function's head is its bare signature line, and the caller opens the body on that line
-  ## - an entry kernel's head is the full entry head, target attribute lines included, and its open brace placement is the target's
-  ##   same line on WGSL, own line under the `[numthreads]` head on HLSL
-  ##
-  ##   let txt = printShaderProc(ctx, fn)  # "fn square(x: i32) -> i32 {" and the body and "}"
-  mixin prepShaderProc, emitShaderSig
-  ctx.fnName = fn.name
-  ctx.indent = 0
-  ctx.prepShaderProc(fn)
-  let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
-    return ""
-  let head = ctx.emitShaderSig(fn)
-  if ctx.failing():
-    return ""
-  if fn.isKernel:
-    return head & bodyTxt & '\n' & '}'
-  return head & " {\n" & bodyTxt & '\n' & '}'
-
 proc printShaderModule*(ctx: var auto, m: CirModule, kernel: CirProc,
-    prelude: string, hoistedSpaces: set[AddressSpace]): tuple[src: string, err: string] =
+    prelude: string, hoistedSpaces: set[AddressSpace],
+    shape: static ModuleShape): tuple[src: string, err: string] =
   ## Returns the full shader module assembly: the section order both targets emit.
   ## Returns "" as the error when clean, else the first refusal.
   ##
@@ -109,6 +83,6 @@ proc printShaderModule*(ctx: var auto, m: CirModule, kernel: CirProc,
   result.src &= ctx.emitShaderFns(m)
   if ctx.failing():
     return ("", ctx.err)
-  result.src &= ctx.printShaderProc(kernel) & "\n"
+  result.src &= ctx.printProc(kernel, shape) & "\n"
   if ctx.failing():
     return ("", ctx.err)

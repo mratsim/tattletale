@@ -358,12 +358,23 @@ proc emitTypeBare(t: CirType): string =
   ## MSL name of `t` with no identifier, as casts and sizeof print it.
   emitMslType(t, "", true)
 
-proc printProc(ctx: var PrintCtx, fn: CirProc): string =
-  ## One proc or kernel through the shared signature assembly:
-  ## the builtin set resets before the walk, the body walk fills that set,
-  ## and the signature assembles after the body prints.
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ## Per-proc state of the MSL walk: the builtin set resets before the walk,
+  ## the body walk fills it, and the signature reads it after the body prints.
   ctx.builtins = initOrderedSet[string]()
-  printComputeProc(ctx, fn)
+
+const mslModuleShape = ModuleShape(
+  spaces: {caConstant},
+  structTypedef: false,
+  structPadding: "char _",
+  structFieldTerm: ';',
+  fwdDecls: false,
+  moduleOrderProcs: true,
+  kernelSep: "\n\n",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: false)
 
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full MSL translation unit: metal headers, struct declarations, program-scope constants,
@@ -397,7 +408,7 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   if ctx.failing():
     return ("", ctx.err)
   for fn in m.procs:
-    let txt = ctx.printProc(fn)
+    let txt = ctx.printProc(fn, mslModuleShape)
     if ctx.err.len > 0:
       break
     src &= txt & "\n\n"

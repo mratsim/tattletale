@@ -455,7 +455,7 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 # Procs and modules: shader-tier hooks over print_shaders
 # ═══════════════════════════════════════════════════════════════════════
 
-proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the WGSL walk:
   ##
   ## - the parameter names, whose pointer reads print as-is: WGSL device functions take real pointer parameters, only pointer locals refuse
@@ -465,7 +465,7 @@ proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
     ctx.paramNames.incl p.name
   ctx.inKernel = fn.isKernel
 
-proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
+proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ## Head of one proc, signature and open brace:
   ##
   ## - a device function: the bare `fn name(params) -> ret` signature, a void return emits no arrow (WGSL has no `void` type name)
@@ -559,6 +559,19 @@ proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
       result &= "  " & field & ",\n"
   result &= '}'
 
+const wgslModuleShape = ModuleShape(
+  spaces: {caThreadgroup, caConstant},
+  structTypedef: false,
+  structPadding: "_padding: u32",
+  structFieldTerm: ',',
+  fwdDecls: false,
+  moduleOrderProcs: false,
+  kernelSep: "\n",
+  customProcHead: true,
+  printsRefBlocks: false,
+  printsParamBindings: true,
+  printsReduceTemplates: false)
+
 proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
   ## Struct declarations for every struct in `CirModule.types`, in declaration order.
   ## WGSL accepts an unused struct declaration, so a struct the lowering
@@ -576,7 +589,7 @@ proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
 
 proc emitShaderFns(ctx: var PrintCtx, m: CirModule): string =
   for fn in moduleDeviceFns(m):
-    result &= ctx.printShaderProc(fn) & "\n\n"
+    result &= ctx.printProc(fn, wgslModuleShape) & "\n\n"
 
 proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full WGSL module, one `@group(0) @binding(i)` per kernel parameter:
@@ -615,7 +628,8 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   if usesNimBool:
     prelude &= "alias NIM_BOOL = u32;\n\n"
 
-  printShaderModule(ctx, m, kernel, prelude, {caThreadgroup, caConstant})
+  printShaderModule(ctx, m, kernel, prelude, {caThreadgroup, caConstant},
+    wgslModuleShape)
 
 
 proc codegen*(ctx: var GpuContext): string =

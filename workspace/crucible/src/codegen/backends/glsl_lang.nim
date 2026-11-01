@@ -535,6 +535,23 @@ proc pushConstLayoutRejection(kernels: seq[CirProc]): string =
   return ""
 
 
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ## GLSL keeps no per-proc walk state.
+  discard
+
+const glslModuleShape = ModuleShape(
+  spaces: {caThreadgroup, caConstant},
+  structTypedef: false,
+  structPadding: "uint _padding",
+  structFieldTerm: ';',
+  fwdDecls: true,
+  moduleOrderProcs: false,
+  kernelSep: "\n\n",
+  customProcHead: false,
+  printsRefBlocks: true,
+  printsParamBindings: true,
+  printsReduceTemplates: false)
+
 proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full GLSL translation unit: version and extensions,
   ## buffer-reference blocks, struct declarations, the push-constant block,
@@ -614,13 +631,13 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   # forward declarations, then device function definitions, then the kernel
   let fns = moduleDeviceFns(m)
   for fn in fns:
-    result.src &= printComputeSig(ctx, fn) & ";\n"
+    result.src &= ctx.printSig(fn) & ";\n"
     if ctx.failing():
       return ("", ctx.err)
   if fns.len > 0:
     result.src &= "\n"
   for fn in fns:
-    result.src &= printComputeProc(ctx, fn) & "\n\n"
+    result.src &= ctx.printProc(fn, glslModuleShape) & "\n\n"
   if ctx.failing():
     return ("", ctx.err)
 
@@ -630,7 +647,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     let wg = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1] else: kernel.workgroup)
     result.src &= "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
       $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
-    result.src &= printComputeProc(ctx, kernel) & "\n\n"
+    result.src &= ctx.printProc(kernel, glslModuleShape) & "\n\n"
     if ctx.failing():
       return ("", ctx.err)
   return (result.src, "")

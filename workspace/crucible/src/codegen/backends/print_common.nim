@@ -544,6 +544,91 @@ proc moduleDeviceFns*(m: CirModule): seq[CirProc] =
     if not fn.isKernel:
       result.add fn
 
+# ═══════════════════════════════════════════════════════════════════════
+# Proc assembly: the one proc printer over both entry models
+# ═══════════════════════════════════════════════════════════════════════
+
+type ModuleShape* = object
+  ## Static assembly plan of one target's module: the grammar knobs the shared
+  ## skeleton prints with, plus the optional sections the target supplies.
+  ## Targets pass a `const` and the skeleton's `when` guards specialize on it.
+  spaces*: set[AddressSpace]
+  ## Program-scope address spaces the target declares.
+  structTypedef*: bool
+  ## Struct declarations in the C `typedef struct { ... } Name` form.
+  structPadding*: string
+  ## Member text of the zero-field struct declaration:
+  ##
+  ## - no indentation, no member terminator
+  ## - every target compiler requires at least one struct member
+  structFieldTerm*: char
+  ## Member terminator: a semicolon on the C family, a comma on WGSL.
+  fwdDecls*: bool
+  ## Device functions forward-declare before their definitions.
+  moduleOrderProcs*: bool
+  ## Every proc prints in `m.procs` order, declaration before use:
+  ##
+  ## - CUDA C++ and MSL resolve calls at their declaration site, a callee
+  ##   prints before its caller
+  ## - the device-functions-then-kernels split is off
+  kernelSep*: string
+  ## Text after each kernel body in the fns-then-kernels assembly.
+  customProcHead*: bool
+  ## Targets with their own head grammar assemble the proc head: shader entry heads and the GLSL `local_size` qualifier.
+  printsRefBlocks*: bool
+  ## Declares the module's buffer-reference blocks when set.
+  printsParamBindings*: bool
+  ## Declares the kernel parameter bindings: resource slots, push-constant members.
+  printsReduceTemplates*: bool
+  ## Emits the warp-reduction templates that the module's feature scan lists.
+
+proc printSig*(ctx: var auto, fn: CirProc): string =
+  ## C signature line of one proc: linkage prefix, return type, name, parameters.
+  ##
+  ## A kernel's name is its exportc override when one is set, else the proc name:
+  ## the host runtime looks a kernel up by its emitted name.
+  ## Returns "" once the walk recorded a refusal.
+  ##
+  ##   printSig(ctx, fn)  # "static inline float f(float x)" on OpenCL C
+  mixin emitComputeParams, emitComputePrefix, emitTypeBare
+  ctx.fnName = fn.name
+  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
+  let params = ctx.emitComputeParams(fn)
+  if ctx.failing():
+    return ""
+  result = ctx.emitComputePrefix(fn) & emitTypeBare(fn.ret) & ' ' & name &
+    '(' & params.join(", ") & ")"
+
+proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
+  ## Returns the text of one device function or kernel, "" once the walk
+  ## recorded a refusal.
+  ##
+  ## Emission sequence: the target's per-proc state (`prepProc`), then the body, then the head.
+  ##
+  ## Contract:
+  ##
+  ## - the body prints before the head assembles: a shader entry head names
+  ##   the coordinate-builtin inputs the body walk collected
+  ## - a kernel head carries its own open brace in the target's placement
+  ## - a device function head is the bare signature, this proc opens the body
+  ##   on that line
+  ##
+  ##   ctx.printProc(fn, cudaModuleShape)  # 'extern "C" __global__ void k(float* o) { ... }'
+  mixin prepProc, printProcHead, printStmts
+  ctx.fnName = fn.name
+  ctx.indent = 0
+  ctx.prepProc(fn)
+  let bodyTxt = ctx.printStmts(fn.body)
+  if ctx.failing():
+    return ""
+  let head = when shape.customProcHead: ctx.printProcHead(fn)
+             else: printSig(ctx, fn) & (if fn.isKernel: " {\n" else: "")
+  if ctx.failing():
+    return ""
+  if fn.isKernel:
+    return head & bodyTxt & '\n' & '}'
+  return head & " {\n" & bodyTxt & '\n' & '}'
+
 proc codegenModule*[R](printed: (R, string)): R =
   ## Converts a printer result tuple into the `backends_api` entry-point return value.
   ##

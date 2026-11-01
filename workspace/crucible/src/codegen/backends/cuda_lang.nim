@@ -353,6 +353,23 @@ proc emitTypeBare(t: CirType): string =
   ## CUDA C++ name of `t` with no identifier, as casts and sizeof print it.
   emitCudaType(t, "", true)
 
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ## Per-proc state of the CUDA walk: the kernel flag switches on the smem-initializer refusal in `printVar`.
+  ctx.inKernel = fn.isKernel
+
+const cudaModuleShape = ModuleShape(
+  spaces: {caThread, caThreadgroup, caConstant, caDevice},
+  structTypedef: false,
+  structPadding: "char _",
+  structFieldTerm: ';',
+  fwdDecls: false,
+  moduleOrderProcs: true,
+  kernelSep: "\n\n",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: true)
+
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full CUDA translation unit: struct declarations, program-scope constants,
   ## the warp-reduction templates in use, then every function body.
@@ -385,8 +402,7 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   if ctx.failing():
     return ("", ctx.err)
   for fn in m.procs:
-    ctx.inKernel = fn.isKernel
-    let txt = printComputeProc(ctx, fn)
+    let txt = ctx.printProc(fn, cudaModuleShape)
     if ctx.err.len > 0:
       break
     src &= txt & "\n\n"

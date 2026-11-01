@@ -454,6 +454,24 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
     return ""
   ctx.emitConstDecl(s)
 
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ## Per-proc state of the OpenCL walk: `__local` and `__constant` locals are
+  ## kernel-only storage, `printVar` refuses them inside a device function.
+  ctx.inKernel = fn.isKernel
+
+const openclModuleShape = ModuleShape(
+  spaces: {caConstant},
+  structTypedef: true,
+  structPadding: "char _padding_",
+  structFieldTerm: ';',
+  fwdDecls: true,
+  moduleOrderProcs: false,
+  kernelSep: "\n",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: false)
+
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full OpenCL C translation unit: extension pragmas, struct typedefs,
   ## program-scope `__constant` declarations, the device functions,
@@ -481,22 +499,19 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   # forward declarations, then device function definitions, then the kernel
   let fns = moduleDeviceFns(m)
   for fn in fns:
-    result.src &= printComputeSig(ctx, fn) & ";\n"
+    result.src &= ctx.printSig(fn) & ";\n"
     if ctx.failing():
       return ("", ctx.err)
   if fns.len > 0:
     result.src &= "\n"
   for fn in fns:
-    # device functions declare no kernel storage, printVar refuses it there
-    ctx.inKernel = false
-    result.src &= printComputeProc(ctx, fn) & "\n\n"
+    result.src &= ctx.printProc(fn, openclModuleShape) & "\n\n"
   if ctx.failing():
     return ("", ctx.err)
 
   # every kernel of the module, in encounter order: one OpenCL program per module, the engine launches each kernel by name
   for kernel in kernels:
-    ctx.inKernel = true
-    result.src &= printComputeProc(ctx, kernel) & "\n"
+    result.src &= ctx.printProc(kernel, openclModuleShape) & "\n"
     if ctx.failing():
       return ("", ctx.err)
   return (result.src, "")

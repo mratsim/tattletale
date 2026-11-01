@@ -6,49 +6,15 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Compute-tier emission shared by the CUDA C++, OpenCL C, GLSL and MSL printers:
-## proc signatures and the module's struct declarations.
+## the module's struct declarations and program-scope globals.
 ##
 ## Each printer owns a `PrintCtx` (`ctx: var auto`) and supplies the target
 ## vocabulary as `mixin` procs beside it, matching the `print_common` pattern.
 ##
-## - `emitComputeParams(fn)`: printed parameter texts, in declaration order
-## - `emitComputePrefix(fn)`: linkage prefix (`__global__`, `__kernel`, ...)
-## - `emitTypeBare(t)`: return type name, no identifier
 ## - `emitComputeStructField(struct, field)`: one struct member's declaration text
 
 import ../ir/cirv2_lang
 import ./print_common
-
-proc printComputeSig*(ctx: var auto, fn: CirProc): string =
-  ## A kernel's name is its exportc override when one is set, else the proc name.
-  ## The host runtime looks a kernel up by its emitted name.
-  ## Returns "" once the walk recorded a refusal.
-  ##
-  ##   printComputeSig(ctx, fn)  # "static inline float f(float x)" on OpenCL C
-  mixin emitComputeParams, emitComputePrefix, emitTypeBare
-  ctx.fnName = fn.name
-  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
-  let params = ctx.emitComputeParams(fn)
-  if ctx.failing():
-    return ""
-  result = ctx.emitComputePrefix(fn) & emitTypeBare(fn.ret) & ' ' & name &
-    '(' & params.join(", ") & ")"
-
-proc printComputeProc*(ctx: var auto, fn: CirProc): string =
-  ## The body prints before the signature assembles: the MSL kernel signature
-  ## appends the coordinate-builtin parameters that the body walk collects.
-  ## Returns "" once the walk recorded a refusal.
-  ##
-  ##   printComputeProc(ctx, fn)  # "extern \"C\" __global__ void k(float* o) { ... }"
-  ctx.fnName = fn.name
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
-    return ""
-  let sig = printComputeSig(ctx, fn)
-  if ctx.failing():
-    return ""
-  return sig & " {\n" & bodyTxt & '\n' & '}'
 
 proc printComputeStructs*(ctx: var auto, m: CirModule, typedef: bool, padding: string): string =
   ## Declaration text of the module's struct types, one per `CirModule.types`

@@ -622,7 +622,7 @@ proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
   let resTy = if rw: "RWStructuredBuffer" else: "StructuredBuffer"
   result = resTy & "<" & ctx.emitHlslScalar(p.typ.pElem) & "> " & p.name
 
-proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
+proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ## Head of one proc, signature and open brace:
   ##
   ## - a device function: the bare `RetType name(params)` signature, buffers as resources, `var T` device parameters as `inout`
@@ -706,7 +706,7 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
     of ctProc:
       ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
       return
-proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the HLSL walk:
   ##
   ## - the entry kernel: push-constant parameters from the stored classification record, buffer parameters to their resource or address route
@@ -780,6 +780,19 @@ proc emitStructDecls(ctx: var PrintCtx, byName: Table[string, CirType], emitted:
     for f in t.fields:
       outp.add "  " & ctx.emitHlslDecl(f.typ, f.name) & ";\n"
   outp.add "};\n\n"
+
+const hlslModuleShape = ModuleShape(
+  spaces: {caConstant},
+  structTypedef: false,
+  structPadding: "uint _padding",
+  structFieldTerm: ';',
+  fwdDecls: true,
+  moduleOrderProcs: false,
+  kernelSep: "\n",
+  customProcHead: true,
+  printsRefBlocks: false,
+  printsParamBindings: true,
+  printsReduceTemplates: false)
 
 proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
   ## Struct declarations for every struct of `CirModule.types`, member structs first,
@@ -866,11 +879,11 @@ proc emitShaderFns(ctx: var PrintCtx, m: CirModule): string =
   let fns = moduleDeviceFns(m)
   for fn in fns:
     ctx.fnName = fn.name
-    result &= ctx.emitShaderSig(fn) & ";\n"
+    result &= ctx.printProcHead(fn) & ";\n"
   if fns.len > 0:
     result &= "\n"
   for fn in fns:
-    result &= ctx.printShaderProc(fn) & "\n\n"
+    result &= ctx.printProc(fn, hlslModuleShape) & "\n\n"
 
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
   ## Emits the full HLSL translation unit: struct declarations, then the binding section, then the hoisted program-scope declarations,
@@ -897,7 +910,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   ctx.classifyParams(kernel, ctx.kernelPush, ctx.kernelBuffers)
   if ctx.failing():
     return ("", ctx.err)
-  printShaderModule(ctx, m, kernel, "", {caConstant})
+  printShaderModule(ctx, m, kernel, "", {caConstant}, hlslModuleShape)
 
 proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
   ## Prints the module in `ctx` as HLSL source for `flavor`, the `backends_api` entry point.
