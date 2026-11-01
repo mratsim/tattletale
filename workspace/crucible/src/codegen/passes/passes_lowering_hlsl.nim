@@ -50,14 +50,14 @@ import ./passes_low_reserved
 func registerHlslLoweringPasses*(reg: var PassRegistry) =
   ## Registers the HLSL per-target lowering passes in the order
   ## materialization -> dissolution -> reserved-word renaming -> printing.
-  reg.register("hlslMaterializeNumWorkgroups", pkTransform, phaseMain,
+  reg.register("hlslMaterializeNumWorkgroups", pkTransform,
     "Rewrites threadgroups_per_grid reads to the materialized trailing" &
     " kernel parameter the engine stages",
     run = materializeNumWorkgroups
   )
   hlslRegisterDissolvePointerLocals(reg)
   reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
-  reg.register("hlslHoistProgramScopeConstants", pkTransform, phaseMain,
+  reg.register("hlslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = hlslHoistProgramScopeConstants
   )
@@ -104,12 +104,6 @@ proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
       if findNumWorkgroupsExpr(s.loopCond, coordTy) or
           findNumWorkgroupsStmts(s.loopBody, coordTy):
         return true
-    of sScope:
-      if findNumWorkgroupsStmts(s.scopeBody, coordTy):
-        return true
-    of sAssume:
-      if findNumWorkgroupsExpr(s.assumeCond, coordTy):
-        return true
     of sRet:
       if s.retVal != nil and findNumWorkgroupsExpr(s.retVal, coordTy):
         return true
@@ -122,7 +116,7 @@ proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
       for a in s.callArgs:
         if findNumWorkgroupsExpr(a, coordTy):
           return true
-    of sCase, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
   return false
 
@@ -156,10 +150,6 @@ proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
     of sLoop:
       rewriteNumWorkgroupsExpr(s.loopCond, coordTy)
       rewriteNumWorkgroupsStmts(s.loopBody, coordTy)
-    of sScope:
-      rewriteNumWorkgroupsStmts(s.scopeBody, coordTy)
-    of sAssume:
-      rewriteNumWorkgroupsExpr(s.assumeCond, coordTy)
     of sRet:
       rewriteNumWorkgroupsExpr(s.retVal, coordTy)
     of sDiscard:
@@ -168,7 +158,7 @@ proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
       rewriteNumWorkgroupsExpr(s.callCallee, coordTy)
       for a in s.callArgs:
         rewriteNumWorkgroupsExpr(a, coordTy)
-    of sCase, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
 
 proc materializeNumWorkgroups(m: CirModule): string =

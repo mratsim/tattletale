@@ -9,7 +9,6 @@
 ##
 ## Each Nim type translates to a `CirType` over the closed set of type kinds.
 ##
-## A structural registry dedups the results: the first registration wins, an equal structure resolves to the registered instance.
 ## Nim `int`/`uint` lower to 32 bits.
 ## Rejections go into `err` as the first refusal message.
 
@@ -19,12 +18,10 @@ import std/[macros, tables, strutils, hashes]
 
 type
   CirTypeResolver* = object
-    ## Nim-to-CirType translation state: structural type registry, struct cache,
-    ## nominal struct set, first refusal message.
-    registry: Table[uint64, seq[CirType]]
-    ## Structural identity registry: structure hash to registered types, an equal structure resolves to the first registered instance.
-    structCache: Table[string, CirType]
-    ## Struct cache keyed on the canonical identity text, consulted before any field derivation.
+    ## Nim-to-CirType translation state: struct memo, nominal struct set,
+    ## first refusal message.
+    structMemo: Table[string, CirType]
+    ## Struct memo keyed on the canonical identity text, consulted before any field derivation.
     ## Deriving one struct's fields re-resolves every field type, so a repeated identity pays the whole field walk again without it.
     structs*: seq[CirType]
     ## Nominal struct types declared by the module, in discovery order.
@@ -231,27 +228,17 @@ func canonicalTypeNode(n: NimNode): NimNode =
   else:
     result = n
 
-proc registerType(r: var CirTypeResolver, t: CirType): CirType =
-  ## Registry lookup-or-insert: the first registration wins. An equal structure returns the registered instance.
-  ## A struct's emitted name comes from its first registration, every later resolution reuses the instance with the registered name.
-  let h = uint64(structuralHash(t))
-  for reg in r.registry.getOrDefault(h):
-    if structuralEqual(reg, t):
-      return reg
-  r.registry.mgetOrPut(h, @[]).add(t)
-  if t.kind == ctStruct:
-    r.structs.add(t)
-  return t
-
 proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
     valueSpaces: Table[string, AddressSpace] = initTable[string, AddressSpace]()): CirType =
-  ## Nominal struct translation for an object, tuple, or generic instantiation
-  ## type node, deduplicated by structural identity.
+  ## Nominal struct translation for an object, tuple, or generic instantiation type node.
   ##
-  ## Returns one shared struct for an alias and the instantiation it names.
-  ## Two resolutions whose derived text differs but whose structure agrees share one struct.
-  ## The first registration names the struct, an equal structure returns the registered instance.
-  ## Distinct structures get distinct names from the hash over the canonical text.
+  ## Identity key: the canonical text of the type node plus every non-device
+  ## field address space.
+  ##
+  ## - an alias and the instantiation it names share one struct
+  ## - two type nodes with different canonical text resolve to two structs, even
+  ##   when their field lists agree, and each emits under its own name
+  ## - the struct name hashes over the identity key
   let canon = followAliasHead(canonicalTypeNode(n))
   # one instantiation per pointer-space combination over the fields:
   # threadgroup-pointer constructions instantiate a struct that is separate
@@ -261,16 +248,28 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   for name, spc in valueSpaces:
     if spc != caDevice:
       nameKey &= "/" & name & "=" & $spc
-  if r.structCache.hasKey(nameKey):
-    return r.structCache[nameKey]
+  if r.structMemo.hasKey(nameKey):
+    return r.structMemo[nameKey]
   let impl = n.getTypeImpl()
   let fields = r.deriveStructFields(impl, valueSpaces)
   if r.err.len > 0:
     return nil
   let candidate = tStruct(deriveStructName(canon) & "_" &
-    base58Short(typeIdentityHash(nameKey)), fields).withOrigin(canon)
-  result = r.registerType(candidate)
-  r.structCache[nameKey] = result
+    base58Short(typeIdentityHash(nameKey)), fields)
+  # One struct per structure: the same type reached through two type texts
+  # (a formal's instance and a body's literal, say) must resolve to one struct,
+  # a call boundary passes it under one name.
+  #
+  # - the first registration names the struct
+  # - an equal structure returns the registered instance
+  for registered in r.structs:
+    if structuralEqual(registered, candidate):
+      result = registered
+      r.structMemo[nameKey] = result
+      return
+  result = candidate
+  r.structs.add(result)
+  r.structMemo[nameKey] = result
 
 func constrHasTypeElem(t: NimNode): bool =
   ## True when an instantiated tuple/object constructor type node has a type element anywhere.
@@ -351,7 +350,7 @@ proc resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
   result = tProcT(paramTypes, ret)
 
 proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType =
-  ## Translates one Nim type node to CirType through the structural registry.
+  ## Translates one Nim type node to CirType.
   ##
   ## `ptrSpace` names the memory class of the pointer kinds this type node contains:
   ## kernel parameters pass `caDevice`, a body-side `addr` result constructs
@@ -458,5 +457,3 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
   else:
     r.fail("type not supported: " & n.repr & " (" & $n.typeKind & ")")
     return nil
-  if result != nil:
-    result = r.registerType(result)

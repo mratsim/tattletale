@@ -93,8 +93,6 @@ type
     ## - nominal struct types identify by `name`, all other kinds compare
     ##   structurally through `sameType`
     ## - `bits` is the bit width: 8, 16, 32, 64, or -1 for the machine word
-    ## - `origin` stores the frontend's source NimNode
-    ##   (a fidelity and debugging aid, macro-time only, nil in hand-built fixtures)
     case kind*: CirTypeKind
     of ctInt, ctUint, ctFloat:
       bits*: int
@@ -118,7 +116,6 @@ type
       ret*: CirType
     of ctVoid, ctBool:
       discard
-    origin*: NimNode
 
   CirExprKind* = enum
     ## Expression vocabulary, Leng names.
@@ -150,7 +147,6 @@ type
     eBitAnd
     eBitOr
     eBitXor
-    eBitNot
     eEq
     eNeq
     eLt
@@ -214,11 +210,10 @@ type
     of eDot:
       dotBase*: CirExpr
       fieldName*: string
-      inherit*: int
     of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
       opType*: CirType
       left*, right*: CirExpr
-    of eBitNot, eNeg:
+    of eNeg:
       unType*: CirType
       unOperand*: CirExpr
     of eEq, eNeq, eLt, eLe:
@@ -256,16 +251,6 @@ type
     name*: string
     value*: CirExpr
 
-  CirRange* = object
-    ## One inclusive literal range of a case branch.
-    lo*: int64
-    hi*: int64
-
-  CirCaseBranch* = object
-    ## One `of` variant of a case statement: disjoint literal ranges plus a statement body.
-    ranges*: seq[CirRange]
-    body*: seq[CirStmt]
-
   CirStmtKind* = enum
     ## Statement vocabulary, Leng names. Inline assembly is first-class (`sAsm`):
     ## a verbatim template spliced with named symbol operands.
@@ -276,9 +261,6 @@ type
     sAsgn
     sIte
     sLoop
-    sCase
-    sScope
-    sAssume
     sRet
     sDiscard
     sCall
@@ -292,7 +274,6 @@ type
     ## - `ite` takes a bool condition and two statement lists
     ## - `loop` takes an optional bool condition in `loopCond`, a nil loopCond
     ##   keeps the conditionless shape that every target already emits
-    ## - `scope` gives destructor discipline
     ## - a `var` states the memory class of its declaration in `space`, `const` ignores `space`
     ##   (`caThread` is per-thread registers and the unannotated default)
     case kind*: CirStmtKind
@@ -314,14 +295,6 @@ type
       ## `{.unroll.}` statement in the loop body: every printer emits a full-unroll directive in front of the loop.
       ## - Metal: `#pragma clang loop unroll(full)`
       ## - OpenCL: `#pragma unroll`
-    of sCase:
-      selector*: CirExpr
-      branches*: seq[CirCaseBranch]
-      caseElse*: seq[CirStmt]
-    of sScope:
-      scopeBody*: seq[CirStmt]
-    of sAssume:
-      assumeCond*: CirExpr
     of sRet:
       retVal*: CirExpr
     of sDiscard:
@@ -406,20 +379,12 @@ type
     ## Padded struct size in bytes. The value `eSizeof` reports.
     align*: int
     ## Strictest member alignment in bytes, at least 1.
-    memberOffsets*: seq[int]
-    ## Start offset of each member in declaration order.
 
   CallGraph* = object
     ## Call graph over the device functions of one module, the stored record of the target's call-graph analysis pass.
     ##
-    ## - each edge records one argument flow: `caller` passes the argument rooted at parameter `arg` to callee parameter `param`
     ## - `reached` marks every `fn/param` key stored through its proc directly or through a transitive callee
     ## - a buffer parameter whose `fn/param` key is in `reached` is read-write
-    procs*: Table[string, CirProc]
-    ## Module procs by name.
-    edges*: seq[tuple[caller, arg, callee, param: string]]
-    ## One argument flow: `caller` passes the argument rooted at parameter
-    ## `arg` to the `param` parameter of `callee`.
     stored*: HashSet[string]
     ## `fn/param` keys whose parameter the proc stores through directly.
     reached*: HashSet[string]
@@ -448,14 +413,13 @@ type
     ## Feature scan result of the target's feature-scan analysis pass,
     ## filled after that target's last transform.
     ##
-    ## - valid only if no transform runs after the scan: the pass registry
-    ##   has no invalidation
+    ## - valid only if no transform runs after the scan, which runPasses enforces
     ## - the printer reads it, it never rescans
     callGraph*: CallGraph
-    ## Call-graph analysis record: the argument-flow edges and the read-write classification of every buffer parameter.
+    ## Call-graph analysis record: the read-write classification of every buffer parameter.
     ##
     ## - filled by the target's call-graph analysis pass after the last transform
-    ## - valid only if no transform runs after the analysis: the pass registry has no invalidation
+    ## - valid only if no transform runs after the analysis, which runPasses enforces
     ## - the printer reads the stored record, it never rescans
     structRefs*: HashSet[string]
     ## Struct type names the printer declares, filled by the target's
@@ -477,16 +441,14 @@ type
     ## One entry per distinct block, in registration order.
     ## Filled by the GLSL ref-block analysis pass after its last transform.
     ##
-    ## - valid only if no transform runs after the pass: the pass registry
-    ##   has no invalidation
+    ## - valid only if no transform runs after the pass, which runPasses enforces
     ## - the printer emits one `layout(buffer_reference, std430) buffer`
     ##   declaration per entry in order, it never registers a block itself
     layouts*: Table[string, StructLayout]
     ## Packed layout of each nominal struct type, keyed by struct name,
     ## filled by the target's layout analysis pass after its last transform.
     ##
-    ## - valid only if no transform runs after the layout pass: the pass
-    ##   registry has no invalidation
+    ## - valid only if no transform runs after the layout pass, which runPasses enforces
     ## - the printer reads the stored records, it never recomputes a struct
     ##   layout
 
@@ -566,7 +528,45 @@ proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
   result = CirType(kind: t.kind)
   result.space = space
   result.pElem = t.pElem
-  result.origin = t.origin
+
+proc structuralEqual*(a, b: CirType): bool =
+  ## Returns true when `a` and `b` carry the same structure:
+  ## a struct compares by its field list, every other kind field by field.
+  ## The emitted struct name never participates.
+  if a.isNil != b.isNil:
+    return false
+  if a.isNil:
+    return true
+  if a.kind != b.kind:
+    return false
+  case a.kind
+  of ctVoid, ctBool:
+    result = true
+  of ctInt, ctUint, ctFloat:
+    result = a.bits == b.bits
+  of ctVector:
+    result = a.vN == b.vN and structuralEqual(a.vElem, b.vElem)
+  of ctPtr, ctAptr:
+    result = a.space == b.space and structuralEqual(a.pElem, b.pElem)
+  of ctStruct:
+    if a.fields.len != b.fields.len:
+      return false
+    result = true
+    for i in 0 ..< a.fields.len:
+      if a.fields[i].name != b.fields[i].name or
+          not structuralEqual(a.fields[i].typ, b.fields[i].typ):
+        return false
+  of ctArray:
+    result = a.aN == b.aN and structuralEqual(a.aElem, b.aElem)
+  of ctSpan:
+    result = a.sSpace == b.sSpace and structuralEqual(a.sElem, b.sElem)
+  of ctProc:
+    if a.params.len != b.params.len:
+      return false
+    for i in 0 ..< a.params.len:
+      if not structuralEqual(a.params[i], b.params[i]):
+        return false
+    result = structuralEqual(a.ret, b.ret)
 
 proc sameType*(a, b: CirType): bool =
   ## Returns true when `a` and `b` are the same type.
@@ -574,7 +574,6 @@ proc sameType*(a, b: CirType): bool =
   ## Contract:
   ## - nominal struct types compare by name only, a struct is compatible with itself
   ## - every other kind compares field by field, recursively
-  ## - the `origin` NimNode never participates
   if a.isNil != b.isNil:
     return false
   if a.isNil:
@@ -604,77 +603,6 @@ proc sameType*(a, b: CirType): bool =
         return false
     result = sameType(a.ret, b.ret)
 
-proc structuralEqual*(a, b: CirType): bool =
-  ## Returns true when `a` and `b` carry the same structure.
-  ##
-  ## Contract:
-  ## - nominal struct types compare by field list only, equal structures are one registered struct
-  ## - every other kind compares field by field, recursively
-  ## - the emitted struct name and the `origin` NimNode never participate
-  if a.isNil != b.isNil:
-    return false
-  if a.isNil:
-    return true
-  if a.kind != b.kind:
-    return false
-  case a.kind
-  of ctVoid, ctBool:
-    result = true
-  of ctInt, ctUint, ctFloat:
-    result = a.bits == b.bits
-  of ctVector:
-    result = a.vN == b.vN and structuralEqual(a.vElem, b.vElem)
-  of ctPtr, ctAptr:
-    result = a.space == b.space and structuralEqual(a.pElem, b.pElem)
-  of ctStruct:
-    if a.fields.len != b.fields.len:
-      return false
-    for i in 0 ..< a.fields.len:
-      if a.fields[i].name != b.fields[i].name or
-          not structuralEqual(a.fields[i].typ, b.fields[i].typ):
-        return false
-    result = true
-  of ctArray:
-    result = a.aN == b.aN and structuralEqual(a.aElem, b.aElem)
-  of ctSpan:
-    result = a.sSpace == b.sSpace and structuralEqual(a.sElem, b.sElem)
-  of ctProc:
-    if a.params.len != b.params.len:
-      return false
-    for i in 0 ..< a.params.len:
-      if not structuralEqual(a.params[i], b.params[i]):
-        return false
-    result = structuralEqual(a.ret, b.ret)
-
-proc structuralHash*(t: CirType): Hash =
-  ## Hash of a type's structure: equal structures hash equal. The struct name and the origin never participate.
-  if t.isNil:
-    return 0
-  result = hash(t.kind)
-  case t.kind
-  of ctVoid, ctBool:
-    discard
-  of ctInt, ctUint, ctFloat:
-    result = result !& hash(t.bits)
-  of ctVector:
-    result = result !& hash(t.vN) !& structuralHash(t.vElem)
-  of ctPtr, ctAptr:
-    result = result !& hash(t.space) !& structuralHash(t.pElem)
-  of ctStruct:
-    result = result !& hash(t.fields.len)
-    for f in t.fields:
-      result = result !& hash(f.name) !& structuralHash(f.typ)
-  of ctArray:
-    result = result !& hash(t.aN) !& structuralHash(t.aElem)
-  of ctSpan:
-    result = result !& hash(t.sSpace) !& structuralHash(t.sElem)
-  of ctProc:
-    result = result !& hash(t.params.len)
-    for p in t.params:
-      result = result !& structuralHash(p)
-    result = result !& structuralHash(t.ret)
-  result = !$result
-
 proc getExprType*(e: CirExpr): CirType =
   ## Returns the expression's type, or nil when the node's shape does not determine one.
   ## Nil arises for a `deref` of a non-pointer, an `at` of a non-array, a `dot` naming no field of its struct.
@@ -694,7 +622,7 @@ proc getExprType*(e: CirExpr): CirType =
     result = CirType(kind: ctBool)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     result = e.opType
-  of eBitNot, eNeg:
+  of eNeg:
     result = e.unType
   of eEq, eNeq, eLt, eLe, eNot, eAnd, eOr:
     result = CirType(kind: ctBool)
@@ -739,7 +667,7 @@ proc getExprType*(e: CirExpr): CirType =
   of eDot:
     if e.dotBase != nil:
       let t = getExprType(e.dotBase)
-      if t != nil and t.kind == ctStruct and e.inherit == 0:
+      if t != nil and t.kind == ctStruct:
         for f in t.fields:
           if f.name == e.fieldName:
             return f.typ
@@ -763,7 +691,7 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
   of eAnd, eOr: result = @[e.andLeft, e.andRight]
   of eTernary: result = @[e.cond, e.thenE, e.elseE]
   of eNot: result = @[e.notOperand]
-  of eNeg, eBitNot: result = @[e.unOperand]
+  of eNeg: result = @[e.unOperand]
   of eCast, eConv: result = @[e.castOperand]
   of eOconstr:
     for f in e.kvFields:

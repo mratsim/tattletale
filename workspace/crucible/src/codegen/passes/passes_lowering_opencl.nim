@@ -54,11 +54,11 @@ func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   ## relocated declaration names match the renamed body references.
   reg.registerDecomposeArrayAssign()
   registerExplodeKernelStructs(reg)
-  reg.register("openclHoistProgramScopeConstants", pkTransform, phaseMain,
+  reg.register("openclHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = openclHoistProgramScopeConstants
   )
-  reg.register("lowerByrefParams", pkTransform, phaseMain,
+  reg.register("lowerByrefParams", pkTransform,
     "Passes large structs to device functions as hidden thread pointers",
     run = openclLowerByrefParams
   )
@@ -133,7 +133,7 @@ proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     wrapParamReads(e.left, oldName, ptrSym)
     wrapParamReads(e.right, oldName, ptrSym)
-  of eBitNot, eNeg:
+  of eNeg:
     wrapParamReads(e.unOperand, oldName, ptrSym)
   of eEq, eNeq, eLt, eLe:
     wrapParamReads(e.a, oldName, ptrSym)
@@ -212,7 +212,7 @@ proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int) =
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     addrWrapByrefArgs(e.left, pre, tmpCount)
     addrWrapByrefArgs(e.right, pre, tmpCount)
-  of eBitNot, eNeg:
+  of eNeg:
     addrWrapByrefArgs(e.unOperand, pre, tmpCount)
   of eEq, eNeq, eLt, eLe:
     addrWrapByrefArgs(e.a, pre, tmpCount)
@@ -254,15 +254,6 @@ proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int) =
   of sLoop:
     addrWrapByrefArgs(s.loopCond, pre, tmpCount)
     addrWrapByrefStmts(s.loopBody, tmpCount)
-  of sCase:
-    addrWrapByrefArgs(s.selector, pre, tmpCount)
-    for br in s.branches.mitems:
-      addrWrapByrefStmts(br.body, tmpCount)
-    addrWrapByrefStmts(s.caseElse, tmpCount)
-  of sScope:
-    addrWrapByrefStmts(s.scopeBody, tmpCount)
-  of sAssume:
-    addrWrapByrefArgs(s.assumeCond, pre, tmpCount)
   of sRet:
     addrWrapByrefArgs(s.retVal, pre, tmpCount)
   of sDiscard:
@@ -342,15 +333,6 @@ proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =
     of sLoop:
       wrapParamReads(st.loopCond, oldName, ptrSym)
       wrapParamReadsProc(st.loopBody, oldName, ptrSym)
-    of sCase:
-      wrapParamReads(st.selector, oldName, ptrSym)
-      for br in st.branches:
-        wrapParamReadsProc(br.body, oldName, ptrSym)
-      wrapParamReadsProc(st.caseElse, oldName, ptrSym)
-    of sScope:
-      wrapParamReadsProc(st.scopeBody, oldName, ptrSym)
-    of sAssume:
-      wrapParamReads(st.assumeCond, oldName, ptrSym)
     of sRet:
       wrapParamReads(st.retVal, oldName, ptrSym)
     of sDiscard:
@@ -388,7 +370,7 @@ proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     retargetProcTypeSyms(e.left, newFormals)
     retargetProcTypeSyms(e.right, newFormals)
-  of eBitNot, eNeg:
+  of eNeg:
     retargetProcTypeSyms(e.unOperand, newFormals)
   of eEq, eNeq, eLt, eLe:
     retargetProcTypeSyms(e.a, newFormals)
@@ -432,15 +414,6 @@ proc retargetProcTypeStmts(stmts: seq[CirStmt], newFormals: Table[string, seq[Ci
     of sLoop:
       retargetProcTypeSyms(st.loopCond, newFormals)
       retargetProcTypeStmts(st.loopBody, newFormals)
-    of sCase:
-      retargetProcTypeSyms(st.selector, newFormals)
-      for br in st.branches:
-        retargetProcTypeStmts(br.body, newFormals)
-      retargetProcTypeStmts(st.caseElse, newFormals)
-    of sScope:
-      retargetProcTypeStmts(st.scopeBody, newFormals)
-    of sAssume:
-      retargetProcTypeSyms(st.assumeCond, newFormals)
     of sRet:
       retargetProcTypeSyms(st.retVal, newFormals)
     of sDiscard:

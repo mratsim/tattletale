@@ -11,8 +11,7 @@
 ## Contract:
 ## - each target registers its scan in `gpu_compiler.nim` after its last transform,
 ##   before check-only validation
-## - analysis results are valid only if no transform runs after them:
-##   the registry runs in registration order and never invalidates
+## - analysis results are valid only if no transform runs after them, which runPasses enforces
 ## - the printer reads the stored record, it never rescans
 ##
 ## Detector set per target:
@@ -132,8 +131,6 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
       if s.loopCond != nil:
         scanExpr(s.loopCond, f, profile)
       scanStmts(s.loopBody, f, profile)
-    of sScope:
-      scanStmts(s.scopeBody, f, profile)
     of sRet:
       if s.retVal != nil:
         scanExpr(s.retVal, f, profile)
@@ -143,9 +140,7 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
         scanExpr(a, f, profile)
     of sDiscard:
       scanExpr(s.discardVal, f, profile)
-    of sAssume:
-      scanExpr(s.assumeCond, f, profile)
-    of sCase, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
 
 proc scanModuleFeatures(m: CirModule, f: var ModuleFeatures, profile: ScanProfile) =
@@ -195,12 +190,10 @@ proc wgslScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
       wgslScanStmts(s.elseBody, f)
     of sLoop:
       wgslScanStmts(s.loopBody, f)
-    of sScope:
-      wgslScanStmts(s.scopeBody, f)
     of sRet:
       if s.retVal != nil:
         wgslScanType(getExprType(s.retVal), f)
-    of sCall, sDiscard, sAssume, sCase, sAsm, sEmit:
+    of sCall, sDiscard, sAsm, sEmit:
       discard
 
 proc wgslScanFeatures(m: CirModule): string {.nimcall.} =
@@ -258,10 +251,6 @@ proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
       if s.loopCond != nil:
         cudaScanExpr(s.loopCond, f)
       cudaScanStmts(s.loopBody, f)
-    of sScope:
-      cudaScanStmts(s.scopeBody, f)
-    of sAssume:
-      cudaScanExpr(s.assumeCond, f)
     of sRet:
       cudaScanExpr(s.retVal, f)
     of sDiscard:
@@ -270,7 +259,7 @@ proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
       scanCudaCallee(s.callCallee, f)
       for a in s.callArgs:
         cudaScanExpr(a, f)
-    of sCase, sAsm, sEmit:
+    of sAsm, sEmit:
       discard
 
 proc cudaScanFeatures(m: CirModule): string {.nimcall.} =
@@ -295,9 +284,10 @@ proc registerGlslFeatureScan*(reg: var PassRegistry) =
   ## Contract:
   ## - fills `CirModule.features` with the flags the GLSL extension block maps
   ## - registers after the target's last transform, before the check-only
-  ##   validation stage: analysis results are valid only if no transform
+  ##   validation stage
+  ## - runPasses refuses a transform registered after an analysis
   ##   runs after them
-  reg.register("glslScanModuleFeatures", pkAnalysis, phaseMain,
+  reg.register("glslScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the GLSL extension block maps:" &
     " float and integer widths, subgroups, shuffles, atomic float, unroll loops",
     run = glslRun)
@@ -309,9 +299,10 @@ proc registerOpenclFeatureScan*(reg: var PassRegistry) =
   ## - fills `CirModule.features` with the flags the OpenCL extension pragma
   ##   block maps
   ## - registers after the target's last transform, before the check-only
-  ##   validation stage: analysis results are valid only if no transform
+  ##   validation stage
+  ## - runPasses refuses a transform registered after an analysis
   ##   runs after them
-  reg.register("openclScanModuleFeatures", pkAnalysis, phaseMain,
+  reg.register("openclScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the OpenCL pragma block maps:" &
     " float widths, subgroups, atomic float",
     run = openclRun)
@@ -323,9 +314,10 @@ proc registerWgslFeatureScan*(reg: var PassRegistry) =
   ## - fills `CirModule.features` with the `enable f16` trigger of the WGSL
   ##   module directive
   ## - registers after the target's last transform, before the check-only
-  ##   validation stage: analysis results are valid only if no transform
+  ##   validation stage
+  ## - runPasses refuses a transform registered after an analysis
   ##   runs after them
-  reg.register("wgslScanModuleFeatures", pkAnalysis, phaseMain,
+  reg.register("wgslScanModuleFeatures", pkAnalysis,
     "Scans the module once for 16-bit float values, the WGSL `enable f16` trigger",
     run = wgslScanFeatures)
 
@@ -336,9 +328,10 @@ proc registerCudaFeatureScan*(reg: var PassRegistry) =
   ## - fills `CirModule.features` with the warp-reduction kinds the CUDA
   ##   templates emit
   ## - registers after the target's last transform, before the check-only
-  ##   validation stage: analysis results are valid only if no transform
+  ##   validation stage
+  ## - runPasses refuses a transform registered after an analysis
   ##   runs after them
-  reg.register("cudaScanModuleFeatures", pkAnalysis, phaseMain,
+  reg.register("cudaScanModuleFeatures", pkAnalysis,
     "Scans the proc bodies once for the reduction kinds the warp-reduction" &
     " templates emit",
     run = cudaScanFeatures)

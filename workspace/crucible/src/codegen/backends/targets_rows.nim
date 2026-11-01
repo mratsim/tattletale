@@ -7,11 +7,9 @@
 
 ## Registry rows of the Metal (MSL), CUDA C++, OpenCL C, GLSL, WebGPU WGSL and HLSL targets.
 ##
-## Plain-data restatements of the static target values the six printers state in code:
+## The static target data the six printers read through the registry lookups:
 ## msl_lang.nim, cuda_lang.nim, opencl_lang.nim, glsl_lang.nim, wgsl_lang.nim and hlsl_lang.nim.
-##
-## - HLSL keys its signature row per flavor (`fvD3D12`, `fvVulkan`), every other family
-##   is target-wide: the flavor changes the binding section only
+## Signature text, coordinate builtins and refusal messages stay procedural in the printers.
 
 import std/tables
 import ../ir/cirv2_lang
@@ -35,7 +33,7 @@ genTargets:
       ScalarCell(kind: ctUint, width: 64, spelling: "ulong", supported: true),
       ScalarCell(kind: ctFloat, width: 16, spelling: "half", supported: true),
       ScalarCell(kind: ctFloat, width: 32, spelling: "float", supported: true),
-      ScalarCell(kind: ctFloat, width: 64, supported: false, reasonClass: rcCapability)])
+      ScalarCell(kind: ctFloat, width: 64, supported: false)])
     lit: LitRow(
       int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
       f16Suffix: "h",
@@ -49,11 +47,7 @@ genTargets:
       loop: LoopStyle(
         unrollDirective: "#pragma clang loop unroll(full)",
         infiniteHead: "for (;;) {\n",
-        braceSameLine: true),
-      ternary: tfQuestion,
-      asmForm: afSpliceRaw,
-      constDecl: cdfConstexpr,
-      constructor: cofBraced)
+        braceSameLine: true))
     # `{.builtin.}` numeric conversions resolve to the MSL native call text,
     # each entry a format string whose `$1` stands for the call's argument list.
     # CIRv2 has no fp16 or bf16 type kind,
@@ -69,24 +63,6 @@ genTargets:
         "asFp16": "$1",
         "asU16": "$1",
       }.toTable())
-    coord: CoordRow(cells: @[
-      CoordCell(kind: cbkThreadPositionInGrid, paramType: "uint3",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadgroupPositionInGrid, paramType: "uint3",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadPositionInThreadgroup, paramType: "uint3",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadsPerThreadgroup, paramType: "uint3",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadgroupsPerGrid, paramType: "uint3",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadIndexInThreadgroup, paramType: "uint",
-        whole: cwfParam, componentCast: "int")])
-    sig: SigRow(
-      entryLinkage: "kernel ",
-      inlineLinkage: "inline ",
-      voidRet: "void",
-      bindingPrefix: "[[buffer($1)]]")
     # Coordinate builtins carry `ivec3`, so the builtin-threading parameters
     # and whole-value reads print this vector name: 32-bit int/uint elements only.
     vector: VectorRule(
@@ -108,8 +84,7 @@ genTargets:
       ScalarCell(kind: ctUint, width: 64, spelling: "unsigned long long", supported: true),
       # CUDA names fp16 `__half` behind cuda_fp16.h. This printer emits no
       # includes and no fp16 type name, so the cell refuses.
-      ScalarCell(kind: ctFloat, width: 16, supported: false,
-        reasonClass: rcOutsideSubset),
+      ScalarCell(kind: ctFloat, width: 16, supported: false),
       ScalarCell(kind: ctFloat, width: 32, spelling: "float", supported: true),
       ScalarCell(kind: ctFloat, width: 64, spelling: "double", supported: true)])
     lit: LitRow(
@@ -124,36 +99,8 @@ genTargets:
       loop: LoopStyle(
         unrollDirective: "#pragma unroll",
         infiniteHead: "for (;;) {\n",
-        braceSameLine: true),
-      ternary: tfQuestion,
-      asmForm: afWrap,
-      constDecl: cdfConstexpr,
-      constructor: cofBraced)
+        braceSameLine: true))
     conv: ConvRow()
-    # CUDA's coordinate builtins are implicit variables (blockIdx, threadIdx, ...),
-    # no attributed parameter exists. Component reads cast to int.
-    # Whole-value reads:
-    # - a vector builtin composes the braced init of the use-site struct type
-    # - the grid position references the canonical name
-    # - the thread index in threadgroup is the x-major flat index
-    coord: CoordRow(cells: @[
-      CoordCell(kind: cbkThreadPositionInGrid,
-        whole: cwfParam, componentCast: "int"),
-      CoordCell(kind: cbkThreadgroupPositionInGrid,
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadPositionInThreadgroup,
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadsPerThreadgroup,
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadgroupsPerGrid,
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadIndexInThreadgroup,
-        whole: cwfFlatIndex, componentCast: "int")])
-    sig: SigRow(
-      entryLinkage: "extern \"C\" __global__ ",
-      deviceFnLinkage: "__device__ ",
-      inlineLinkage: "__forceinline__ __device__ ",
-      voidRet: "void")
     vector: VectorRule(context: vcNone)
 
   target opencl:
@@ -186,34 +133,10 @@ genTargets:
       loop: LoopStyle(
         unrollDirective: "#pragma unroll",
         infiniteHead: "for (;;) {\n",
-        braceSameLine: true),
-      ternary: tfQuestion,
-      asmForm: afRefuse,
-      constDecl: cdfConst,
-      constructor: cofBraced)
+        braceSameLine: true))
     conv: ConvRow()
     # OpenCL C names vectors by appending the lane count to the scalar name
     # (`float4`, `uchar3`), legal lengths 2, 3, 4, 8, 16.
-    # Coordinate whole-value reads refuse, components read as dimension calls.
-    coord: CoordRow(cells: @[
-      CoordCell(kind: cbkThreadPositionInGrid, paramName: "get_global_id",
-        whole: cwfRefuse, componentCast: "int", componentForm: ccDimCall),
-      CoordCell(kind: cbkThreadgroupPositionInGrid, paramName: "get_group_id",
-        whole: cwfRefuse, componentCast: "int", componentForm: ccDimCall),
-      CoordCell(kind: cbkThreadPositionInThreadgroup, paramName: "get_local_id",
-        whole: cwfRefuse, componentCast: "int", componentForm: ccDimCall),
-      CoordCell(kind: cbkThreadsPerThreadgroup, paramName: "get_local_size",
-        whole: cwfRefuse, componentCast: "int", componentForm: ccDimCall),
-      CoordCell(kind: cbkThreadgroupsPerGrid, paramName: "get_num_groups",
-        whole: cwfRefuse, componentCast: "int", componentForm: ccDimCall),
-      # x-major flat thread index, text the glue proc emits
-      CoordCell(kind: cbkThreadIndexInThreadgroup,
-        whole: cwfFlatIndex, componentCast: "int", componentForm: ccDimCall)])
-    sig: SigRow(
-      entryLinkage: "__kernel void ",
-      deviceFnLinkage: "static inline ",
-      inlineLinkage: "static inline ",
-      voidRet: "void")
     vector: VectorRule(
       context: vcEverywhere,
       elems: @[
@@ -265,34 +188,8 @@ genTargets:
         unrollDirective: "[[unroll]]",
         infiniteHead: "for (;;) {\n",
         braceSameLine: true),
-      ternary: tfQuestion,
-      asmForm: afRefuse,
-      constDecl: cdfConst,
-      constructor: cofCall,
       targetExprKinds: {eNil, eAt, ePat, eDeref, eAddr})
     conv: ConvRow()
-    # All six coordinate builtins are native GLSL names.
-    # Whole-value reads of the vector builtins compose the int vector from int-cast components.
-    # Flat thread index whole reads wrap the native name in the int cast.
-    coord: CoordRow(cells: @[
-      CoordCell(kind: cbkThreadPositionInGrid, paramName: "gl_GlobalInvocationID",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadgroupPositionInGrid, paramName: "gl_WorkGroupID",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadPositionInThreadgroup, paramName: "gl_LocalInvocationID",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadsPerThreadgroup, paramName: "gl_WorkGroupSize",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadgroupsPerGrid, paramName: "gl_NumWorkGroups",
-        whole: cwfVector, componentCast: "int"),
-      CoordCell(kind: cbkThreadIndexInThreadgroup, paramName: "gl_LocalInvocationIndex",
-        whole: cwfCast, componentCast: "int")])
-    sig: SigRow(
-      entryLinkage: "void ",
-      voidRet: "void",
-      workgroupAttr: "layout(local_size_x = $n, local_size_y = $n, local_size_z = $n) in;\n",
-      workgroupDefault: [256, 1, 1],
-      entryTakesParams: false)
     vector: VectorRule(
       context: vcEverywhere,
       elems: @[
@@ -306,12 +203,12 @@ genTargets:
     scalar: ScalarRow(cells: @[
       ScalarCell(kind: ctVoid, width: 0, spelling: "void", supported: true),
       ScalarCell(kind: ctBool, width: 0, spelling: "bool", supported: true),
-      ScalarCell(kind: ctInt, width: 8, supported: false, reasonClass: rcCapability),
-      ScalarCell(kind: ctInt, width: 16, supported: false, reasonClass: rcCapability),
+      ScalarCell(kind: ctInt, width: 8, supported: false),
+      ScalarCell(kind: ctInt, width: 16, supported: false),
       ScalarCell(kind: ctInt, width: 32, spelling: "i32", supported: true),
       ScalarCell(kind: ctInt, width: 64, spelling: "i64", supported: true),
-      ScalarCell(kind: ctUint, width: 8, supported: false, reasonClass: rcCapability),
-      ScalarCell(kind: ctUint, width: 16, supported: false, reasonClass: rcCapability),
+      ScalarCell(kind: ctUint, width: 8, supported: false),
+      ScalarCell(kind: ctUint, width: 16, supported: false),
       ScalarCell(kind: ctUint, width: 32, spelling: "u32", supported: true),
       ScalarCell(kind: ctUint, width: 64, spelling: "u64", supported: true),
       ScalarCell(kind: ctFloat, width: 16, spelling: "f16", supported: true),
@@ -339,50 +236,8 @@ genTargets:
         unrollDirective: "// {.unroll.} requested but not honored on WebGPU",
         infiniteHead: "loop {\n",
         braceSameLine: true),
-      ternary: tfSelectCall,
-      asmForm: afRefuse,
-      constDecl: cdfLet,
-      constructor: cofCall,
       targetExprKinds: {eNil, eAt, ePat, eTernary})
     conv: ConvRow()
-    # One `@builtin(...)` kernel parameter exists per referenced coordinate builtin,
-    # kernel bodies read the parameter name. Whole-value reads compose the i32
-    # vector from int-cast components and the scalar thread index casts whole.
-    # threads_per_threadgroup refuses: WGSL exposes the threadgroup size only
-    # through the `@workgroup_size` attribute.
-    coord: CoordRow(cells: @[
-      CoordCell(kind: cbkThreadPositionInGrid,
-        paramName: "global_id", paramType: "vec3<u32>",
-        paramAnnotation: "global_invocation_id",
-        whole: cwfVector, componentCast: "i32"),
-      CoordCell(kind: cbkThreadgroupPositionInGrid,
-        paramName: "workgroup_id", paramType: "vec3<u32>",
-        paramAnnotation: "workgroup_id",
-        whole: cwfVector, componentCast: "i32"),
-      CoordCell(kind: cbkThreadPositionInThreadgroup,
-        paramName: "local_invocation_id", paramType: "vec3<u32>",
-        paramAnnotation: "local_invocation_id",
-        whole: cwfVector, componentCast: "i32"),
-      CoordCell(kind: cbkThreadsPerThreadgroup,
-        whole: cwfRefuse),
-      CoordCell(kind: cbkThreadgroupsPerGrid,
-        paramName: "num_workgroups", paramType: "vec3<u32>",
-        paramAnnotation: "num_workgroups",
-        whole: cwfVector, componentCast: "i32"),
-      CoordCell(kind: cbkThreadIndexInThreadgroup,
-        paramName: "local_invocation_index", paramType: "u32",
-        paramAnnotation: "local_invocation_index",
-        whole: cwfCast, componentCast: "i32", componentForm: ccWhole)])
-    sig: SigRow(
-      entryLinkage: "fn ",
-      deviceFnLinkage: "fn ",
-      # WGSL has no void type name, a void return emits no arrow
-      voidRet: "",
-      entryAttr: "@compute ",
-      workgroupAttr: "@workgroup_size($n, $n, $n)\n",
-      workgroupDefault: [64, 1, 1],
-      bindingPrefix: "@group(0) @binding($1)",
-      entryTakesParams: false)
     vector: VectorRule(
       context: vcEverywhere,
       elems: @[
@@ -399,15 +254,15 @@ genTargets:
     scalar: ScalarRow(cells: @[
       ScalarCell(kind: ctVoid, width: 0, spelling: "void", supported: true),
       ScalarCell(kind: ctBool, width: 0, spelling: "bool", supported: true),
-      ScalarCell(kind: ctInt, width: 8, supported: false, reasonClass: rcParseError),
-      ScalarCell(kind: ctInt, width: 16, supported: false, reasonClass: rcParseError),
+      ScalarCell(kind: ctInt, width: 8, supported: false),
+      ScalarCell(kind: ctInt, width: 16, supported: false),
       ScalarCell(kind: ctInt, width: 32, spelling: "int", supported: true),
-      ScalarCell(kind: ctInt, width: 64, supported: false, reasonClass: rcParseError),
-      ScalarCell(kind: ctUint, width: 8, supported: false, reasonClass: rcParseError),
-      ScalarCell(kind: ctUint, width: 16, supported: false, reasonClass: rcParseError),
+      ScalarCell(kind: ctInt, width: 64, supported: false),
+      ScalarCell(kind: ctUint, width: 8, supported: false),
+      ScalarCell(kind: ctUint, width: 16, supported: false),
       ScalarCell(kind: ctUint, width: 32, spelling: "uint", supported: true),
-      ScalarCell(kind: ctUint, width: 64, supported: false, reasonClass: rcOutsideSubset),
-      ScalarCell(kind: ctFloat, width: 16, supported: false, reasonClass: rcOutsideSubset),
+      ScalarCell(kind: ctUint, width: 64, supported: false),
+      ScalarCell(kind: ctFloat, width: 16, supported: false),
       ScalarCell(kind: ctFloat, width: 32, spelling: "float", supported: true),
       ScalarCell(kind: ctFloat, width: 64, spelling: "double", supported: true)])
     # HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
@@ -429,12 +284,8 @@ genTargets:
         unrollDirective: "[unroll]",
         infiniteHead: "for (;;)\n",
         braceSameLine: false),
-      ternary: tfQuestion,
       foldsIteElse: true,
       emitOperandRendersExpr: true,
-      asmForm: afRefuse,
-      constDecl: cdfConst,
-      constructor: cofMixed,
       targetExprKinds: {eNil, eAt, ePat, eDeref, eAddr})
     # `{.builtin.}` fp16/bf16/fp8 conversion calls refuse: the frontend erases
     # half-width types to 16-bit storage before printing, so the call name is the only signal the printer can match.
@@ -442,63 +293,9 @@ genTargets:
       fpRefusals: @[
         "toFp16", "toFp32", "toBf16", "toBf32", "toFp8e4m3", "toFp8e5m2",
         "asFp16", "asU16"])
-    # Coordinate semantics are synthesized `main` inputs, exactly the ones the kernel
-    # body reads. threads_per_threadgroup components substitute the baked workgroup
-    # dimensions at emission, and the scalar thread index reads whole as `int(gidx)`.
-    # threadgroups_per_grid refuses: the HLSL lowering pass materializes the dispatch grid size, and whole-vector reads refuse.
-    coord: CoordRow(cells: @[
-      CoordCell(kind: cbkThreadPositionInGrid,
-        paramName: "gid", paramType: "uint3", paramAnnotation: "SV_DispatchThreadID",
-        whole: cwfRefuse, componentCast: "int"),
-      CoordCell(kind: cbkThreadgroupPositionInGrid,
-        paramName: "groupId", paramType: "uint3", paramAnnotation: "SV_GroupID",
-        whole: cwfRefuse, componentCast: "int"),
-      CoordCell(kind: cbkThreadPositionInThreadgroup,
-        paramName: "groupThreadId", paramType: "uint3", paramAnnotation: "SV_GroupThreadID",
-        whole: cwfRefuse, componentCast: "int"),
-      CoordCell(kind: cbkThreadsPerThreadgroup,
-        whole: cwfRefuse, componentForm: ccWorkgroupDim),
-      CoordCell(kind: cbkThreadgroupsPerGrid,
-        whole: cwfRefuse),
-      CoordCell(kind: cbkThreadIndexInThreadgroup,
-        paramName: "gidx", paramType: "uint", paramAnnotation: "SV_GroupIndex",
-        whole: cwfCast, componentCast: "int", componentForm: ccWhole)])
     vector: VectorRule(
       context: vcEverywhere,
       elems: @[
         (ctBool, 0, "bool"), (ctInt, 32, "int"), (ctUint, 32, "uint"),
         (ctFloat, 32, "float")],
       lanes: @[2, 3, 4])
-
-  target hlsl(fvD3D12):
-    sig: SigRow(
-      entryLinkage: "void ",
-      inlineLinkage: "inline ",
-      voidRet: "void",
-      workgroupAttr: "[numthreads($n, $n, $n)]\n",
-      workgroupDefault: [256, 1, 1],
-      bindingPrefix: ": register($1, space0)",
-      entryTakesParams: false)
-
-  target hlsl(fvVulkan):
-    # Zero-descriptor flavor bindings go through the `[[vk::push_constant]]` struct,
-    # member offsets lock at emission, no register form exists
-    sig: SigRow(
-      entryLinkage: "void ",
-      inlineLinkage: "inline ",
-      voidRet: "void",
-      workgroupAttr: "[numthreads($n, $n, $n)]\n",
-      workgroupDefault: [256, 1, 1],
-      entryTakesParams: false)
-
-## Cells that two targets name on purpose differently: msl names 8-bit signed
-## `char` and 64-bit signed `long`, CUDA names the same widths `signed char`
-## and `long long`. The ledger stores no names, so converging the two rows
-## fails the compile.
-const ScalarDivergences* = [
-  (a: "msl", b: "cuda", kind: ctInt, width: 8),
-  (a: "msl", b: "cuda", kind: ctInt, width: 64)]
-
-static:
-  checkScalarDivergences(
-    [("msl", mslScalarRow()), ("cuda", cudaScalarRow())], ScalarDivergences)

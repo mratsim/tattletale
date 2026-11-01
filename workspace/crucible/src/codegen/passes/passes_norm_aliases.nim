@@ -73,7 +73,7 @@ static:
 func registerBuiltinKindAssignment*(reg: var PassRegistry) =
   ## Registers the builtin kind assignment pass.
   ##
-  reg.register("builtinKindAssignment", pkTransform, phaseEarly,
+  reg.register("builtinKindAssignment", pkTransform,
     "Kind-assigns every builtin symbol from the canonical name tables",
     run = builtinKindAssignment)
 
@@ -122,10 +122,6 @@ proc assignBuiltinKindsStmts(ss: var seq[CirStmt]) =
     of sLoop:
       assignBuiltinKindsExpr(s.loopCond)
       assignBuiltinKindsStmts(s.loopBody)
-    of sScope:
-      assignBuiltinKindsStmts(s.scopeBody)
-    of sAssume:
-      assignBuiltinKindsExpr(s.assumeCond)
     of sRet:
       assignBuiltinKindsExpr(s.retVal)
     of sDiscard:

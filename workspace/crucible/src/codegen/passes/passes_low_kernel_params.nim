@@ -29,7 +29,7 @@ import ./pass_helpers
 
 func registerExplodeKernelStructs*(reg: var PassRegistry) =
   ## Registers the kernel struct-argument explosion pass, the lowering stage.
-  reg.register("explodeKernelStructs", pkTransform, phaseMain,
+  reg.register("explodeKernelStructs", pkTransform,
     "Expands kernel parameters of struct type with pointer fields into flat leaves",
     run = explodePass)
 

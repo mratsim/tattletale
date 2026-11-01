@@ -481,8 +481,6 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.hoistLocals(fn, s.elseBody)
     of sLoop:
       ctx.hoistLocals(fn, s.loopBody)
-    of sScope:
-      ctx.hoistLocals(fn, s.scopeBody)
     else:
       discard
 
@@ -597,7 +595,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
   of eTrue, eFalse: result = CirType(kind: ctBool)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     result = e.opType
-  of eBitNot, eNeg: result = e.unType
+  of eNeg: result = e.unType
   of eEq, eNeq, eLt, eLe:
     # a comparison is a value of bool, cmpType names the operand type
     result = CirType(kind: ctBool)
@@ -802,10 +800,6 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let v = ctx.emitExpr(fn, e.unOperand)
     let inst = (if t.kind == ctFloat: OpFNegate else: OpSNegate)
     ctx.builder.freshInst(inst, @[ctx.tyId(ctx.valueTy(t)), v])
-  of eBitNot:
-    let t = ctx.resolveExprType(fn, e.unOperand)
-    let v = ctx.emitExpr(fn, e.unOperand)
-    ctx.builder.freshInst(OpNot, @[ctx.tyId(ctx.valueTy(t)), v])
   of eAnd:
     # OpLogicalAnd/OpLogicalOr evaluate both operands, neither op short-circuits.
     # SPIR-V has no short-circuit logical op, so operands must be effect-safe
@@ -1291,11 +1285,6 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.builder.opBranch(headerLbl)
       ctx.builder.opLabelAt(mergeLbl)
       fn.terminated = false
-    of sScope:
-      ctx.emitStmts(fn, s.scopeBody)
-    of sAssume:
-      # an optimizer hint, no instruction
-      discard
     of sRet:
       if fn.terminated:
         ctx.failSpv("a second return in one basic block")
@@ -1317,7 +1306,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       callE.callee = s.callCallee
       callE.args = s.callArgs
       discard ctx.emitCallValue(fn, callE)
-    of sCase, sAsm, sEmit:
+    of sAsm, sEmit:
       ctx.failSpv("statement construct " & $s.kind &
         " outside the SPIR-V subset, it must lower earlier")
 
@@ -1345,7 +1334,7 @@ proc scanCallExpr(e: CirExpr, calls: var seq[string]) =
   of eDot: scanCallExpr(e.dotBase, calls)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     scanCallExpr(e.left, calls); scanCallExpr(e.right, calls)
-  of eBitNot, eNeg: scanCallExpr(e.unOperand, calls)
+  of eNeg: scanCallExpr(e.unOperand, calls)
   of eEq, eNeq, eLt, eLe: scanCallExpr(e.a, calls); scanCallExpr(e.b, calls)
   of eNot: scanCallExpr(e.notOperand, calls)
   of eAnd, eOr: scanCallExpr(e.andLeft, calls); scanCallExpr(e.andRight, calls)
@@ -1383,13 +1372,9 @@ proc scanCalls(ss: seq[CirStmt], calls: var seq[string]) =
     of sLoop:
       scanCallExpr(s.loopCond, calls)
       scanCalls(s.loopBody, calls)
-    of sScope:
-      scanCalls(s.scopeBody, calls)
     of sRet:
       if s.retVal != nil:
         scanCallExpr(s.retVal, calls)
-    of sAssume:
-      scanCallExpr(s.assumeCond, calls)
     else:
       discard
 

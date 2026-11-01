@@ -74,11 +74,11 @@ proc renderExpr(e: CirExpr): string =
   of eAt: result = "(at " & renderExpr(e.atBase) & " " & renderExpr(e.atIndex) & ")"
   of ePat: result = "(pat " & renderExpr(e.patBase) & " " & renderExpr(e.patIndex) & ")"
   of eDot:
-    result = "(dot " & renderExpr(e.dotBase) & " " & e.fieldName & " " & $e.inherit & ")"
+    result = "(dot " & renderExpr(e.dotBase) & " " & e.fieldName & ")"
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     result = "(" & toLowerAscii($e.kind)[1 ..^ 1] & " " & renderType(e.opType) &
       " " & renderExpr(e.left) & " " & renderExpr(e.right) & ")"
-  of eBitNot, eNeg:
+  of eNeg:
     result = "(" & toLowerAscii($e.kind)[1 ..^ 1] & " " & renderType(e.unType) &
       " " & renderExpr(e.unOperand) & ")"
   of eEq, eNeq, eLt, eLe:
@@ -120,12 +120,6 @@ proc renderStmtList*(b: var RenderBuf, body: seq[CirStmt], header: string) =
       b.renderStmt(s)
     b.close
 
-proc renderRange(r: CirRange): string =
-  if r.lo == r.hi:
-    result = $r.lo
-  else:
-    result = "(range " & $r.lo & " " & $r.hi & ")"
-
 proc renderStmt(b: var RenderBuf, s: CirStmt) =
   ## Compound nodes indent their children, branch bodies print under their header.
   if s.isNil:
@@ -160,30 +154,6 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
     for inner in s.loopBody:
       b.renderStmt(inner)
     b.close
-  of sCase:
-    b.open("(case " & renderExpr(s.selector))
-    for br in s.branches:
-      var rangesText = "(ranges"
-      for r in br.ranges:
-        rangesText.add(" " & renderRange(r))
-      rangesText.add(")")
-      b.open("(of " & rangesText)
-      for inner in br.body:
-        b.renderStmt(inner)
-      b.close
-    if s.caseElse.len > 0:
-      b.open("(else")
-      for inner in s.caseElse:
-        b.renderStmt(inner)
-      b.close
-    b.close
-  of sScope:
-    b.open("(scope")
-    for inner in s.scopeBody:
-      b.renderStmt(inner)
-    b.close
-  of sAssume:
-    b.add("(assume " & renderExpr(s.assumeCond) & ")")
   of sRet:
     if s.retVal != nil:
       b.add("(ret " & renderExpr(s.retVal) & ")")

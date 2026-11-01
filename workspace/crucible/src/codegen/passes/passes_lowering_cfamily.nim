@@ -75,18 +75,6 @@ proc hoistProgramScopeLocalsCore(m: CirModule, smemInitReason: string): string =
           let loopErr = hoistConstMemStmts(m, fn, s.loopBody)
           if loopErr.len > 0:
             return loopErr
-        of sCase:
-          for bi in 0 ..< s.branches.len:
-            let branchErr = hoistConstMemStmts(m, fn, s.branches[bi].body)
-            if branchErr.len > 0:
-              return branchErr
-          let elseErr = hoistConstMemStmts(m, fn, s.caseElse)
-          if elseErr.len > 0:
-            return elseErr
-        of sScope:
-          let scopeErr = hoistConstMemStmts(m, fn, s.scopeBody)
-          if scopeErr.len > 0:
-            return scopeErr
         else:
           discard
         i.inc
@@ -101,7 +89,7 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
   ## - `description`: the registry description
   ## - `smemInitReason`: the refusal reason for a smem local with an initializer,
   ##   "" when the target's workgroup storage accepts one
-  reg.register(passName, pkTransform, phaseMain, description,
+  reg.register(passName, pkTransform, description,
     run = proc(m: CirModule): string {.nimcall.} =
       hoistProgramScopeLocalsCore(m, smemInitReason)
   )
@@ -170,14 +158,6 @@ template registerCfamilyDissolvePointerLocals*(reg: var PassRegistry, passName: 
         let lerr = dissolveWalk(fn, ctx, s.loopBody)
         if lerr.len > 0:
           return lerr
-      of sScope:
-        let serr = dissolveWalk(fn, ctx, s.scopeBody)
-        if serr.len > 0:
-          return serr
-      of sAssume:
-        let aerr = rewriteDissolveExpr(fn, ctx, s.assumeCond)
-        if aerr.len > 0:
-          return aerr
       of sRet:
         let rerr = rewriteDissolveExpr(fn, ctx, s.retVal)
         if rerr.len > 0:
@@ -193,7 +173,7 @@ template registerCfamilyDissolvePointerLocals*(reg: var PassRegistry, passName: 
         s.callArgs = tmp.args
         if err.len > 0:
           return err
-      of sCase, sAsm, sEmit:
+      of sAsm, sEmit:
         discard
       if drops:
         ss.delete(i)
@@ -209,5 +189,5 @@ template registerCfamilyDissolvePointerLocals*(reg: var PassRegistry, passName: 
       if err.len > 0:
         return err
     return ""
-  reg.register(passName, pkTransform, phaseMain, description,
+  reg.register(passName, pkTransform, description,
     run = dissolvePointerLocals)

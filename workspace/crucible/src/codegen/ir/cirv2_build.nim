@@ -64,11 +64,6 @@ proc tSpan*(space: AddressSpace, elem: CirType): CirType =
 proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
   CirType(kind: ctProc, params: @params, ret: ret)
 
-proc withOrigin*(t: CirType, n: NimNode): CirType =
-  ## Macro-time only: the origin survives `withAddressSpace` copies but never participates in `sameType`.
-  t.origin = n
-  t
-
 # Expression constructors
 
 proc sym*(name: string, typ: CirType, builtin = false,
@@ -109,8 +104,8 @@ proc atE*(base, index: CirExpr): CirExpr =
 proc patE*(base, index: CirExpr): CirExpr =
   CirExpr(kind: ePat, patBase: base, patIndex: index)
 
-proc dotE*(base: CirExpr, fieldName: string, inherit = 0): CirExpr =
-  CirExpr(kind: eDot, dotBase: base, fieldName: fieldName, inherit: inherit)
+proc dotE*(base: CirExpr, fieldName: string): CirExpr =
+  CirExpr(kind: eDot, dotBase: base, fieldName: fieldName)
 
 proc arithE*(opKind: CirExprKind, opType: CirType, left, right: CirExpr): CirExpr =
   ## One constructor for the typed binary arithmetic/bitwise family (eAdd/eSub/eMul/eDiv/eMod/eShl/eShr/eBitAnd/eBitOr/eBitXor).
@@ -130,9 +125,6 @@ proc shrE*(opType: CirType, left, right: CirExpr): CirExpr = arithE(eShr, opType
 proc bitAndE*(opType: CirType, left, right: CirExpr): CirExpr = arithE(eBitAnd, opType, left, right)
 proc bitOrE*(opType: CirType, left, right: CirExpr): CirExpr = arithE(eBitOr, opType, left, right)
 proc bitXorE*(opType: CirType, left, right: CirExpr): CirExpr = arithE(eBitXor, opType, left, right)
-
-proc bitNotE*(opType: CirType, operand: CirExpr): CirExpr =
-  CirExpr(kind: eBitNot, unType: opType, unOperand: operand)
 
 proc negE*(opType: CirType, operand: CirExpr): CirExpr =
   CirExpr(kind: eNeg, unType: opType, unOperand: operand)
@@ -224,21 +216,6 @@ proc whileS*(cond: CirExpr, loopBody: seq[CirStmt], unroll = false): CirStmt =
   ## - `cond` is an ordinary expression, calls may appear in it
   doAssert cond != nil, "whileS: a conditioned loop takes a condition, use loopS"
   CirStmt(kind: sLoop, loopCond: cond, loopBody: loopBody, unroll: unroll)
-
-proc rng*(lo, hi: int64): CirRange =
-  CirRange(lo: lo, hi: hi)
-
-proc branch*(ranges: seq[CirRange], body: seq[CirStmt]): CirCaseBranch =
-  CirCaseBranch(ranges: ranges, body: body)
-
-proc caseS*(selector: CirExpr, branches: seq[CirCaseBranch], caseElse: seq[CirStmt] = @[]): CirStmt =
-  CirStmt(kind: sCase, selector: selector, branches: branches, caseElse: caseElse)
-
-proc scopeS*(scopeBody: seq[CirStmt]): CirStmt =
-  CirStmt(kind: sScope, scopeBody: scopeBody)
-
-proc assumeS*(assumeCond: CirExpr): CirStmt =
-  CirStmt(kind: sAssume, assumeCond: assumeCond)
 
 proc retS*(retVal: CirExpr = nil): CirStmt =
   CirStmt(kind: sRet, retVal: retVal)

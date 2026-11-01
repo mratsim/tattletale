@@ -35,7 +35,7 @@ import ./pass_datatypes
 
 func registerDecomposeArrayAssign*(reg: var PassRegistry) =
   ## Registers the whole-array assignment decomposition pass of the lowering stage.
-  reg.register("decomposeArrayAssign", pkTransform, phaseMain,
+  reg.register("decomposeArrayAssign", pkTransform,
     "Rewrites whole-array assignment and array-valued declaration init into" &
     " __builtin_memcpy calls",
     run = decomposeArrayAssignPass)
@@ -99,20 +99,6 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
       lowered.add s
     of sLoop:
       let err = decomposeArrayAssignStmts(s.loopBody)
-      if err.len > 0:
-        return err
-      lowered.add s
-    of sCase:
-      for b in s.branches.mitems:
-        let err = decomposeArrayAssignStmts(b.body)
-        if err.len > 0:
-          return err
-      let err = decomposeArrayAssignStmts(s.caseElse)
-      if err.len > 0:
-        return err
-      lowered.add s
-    of sScope:
-      let err = decomposeArrayAssignStmts(s.scopeBody)
       if err.len > 0:
         return err
       lowered.add s

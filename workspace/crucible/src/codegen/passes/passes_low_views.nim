@@ -46,7 +46,7 @@ func registerLowerSpans*(reg: var PassRegistry) =
   ## Placement contract: the shared lowering stage, before every per-target transform,
   ## so the per-address-space callee instantiation sees the split
   ## pointer + length call sites.
-  reg.register("lowerSpans", pkTransform, phaseMain,
+  reg.register("lowerSpans", pkTransform,
     "Splits openArray spans into pointer + length pairs, rewrites" &
     " toOpenArray call arguments, folds len reads",
     run = lowerSpansPass)
@@ -243,15 +243,6 @@ proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
     of sLoop:
       s.loopCond.rewriteSpanUsesExpr(ctx, err)
       s.loopBody.rewriteSpanUsesStmts(ctx, err)
-    of sCase:
-      s.selector.rewriteSpanUsesExpr(ctx, err)
-      for br in s.branches:
-        br.body.rewriteSpanUsesStmts(ctx, err)
-      s.caseElse.rewriteSpanUsesStmts(ctx, err)
-    of sScope:
-      s.scopeBody.rewriteSpanUsesStmts(ctx, err)
-    of sAssume:
-      s.assumeCond.rewriteSpanUsesExpr(ctx, err)
     of sRet:
       s.retVal.rewriteSpanUsesExpr(ctx, err)
     of sDiscard:
@@ -294,18 +285,6 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
       let loopErr = decomposeSpanBindings(s.loopBody, ctx)
       if loopErr.len > 0:
         return loopErr
-    of sCase:
-      for br in s.branches.mitems:
-        let brErr = decomposeSpanBindings(br.body, ctx)
-        if brErr.len > 0:
-          return brErr
-      let elseErr = decomposeSpanBindings(s.caseElse, ctx)
-      if elseErr.len > 0:
-        return elseErr
-    of sScope:
-      let scopeErr = decomposeSpanBindings(s.scopeBody, ctx)
-      if scopeErr.len > 0:
-        return scopeErr
     else:
       discard
     if s.kind == sVar and s.declType != nil and s.declType.kind == ctSpan and

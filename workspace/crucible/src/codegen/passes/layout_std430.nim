@@ -39,8 +39,7 @@
 ## Contract:
 ## - each target registers its pass after its last transform and before
 ##   the check-only validation stage
-## - analysis results are valid only if no transform runs after them:
-##   the registry runs in registration order and never invalidates
+## - analysis results are valid only if no transform runs after them, which runPasses enforces
 ## - the printer reads the stored records, it never recomputes a struct
 ##   layout
 
@@ -100,14 +99,12 @@ proc computeStructLayout(t: CirType, boolWidth: static int): StructLayout =
   ## Returns:
   ## - the padded struct size
   ## - the strictest member alignment
-  ## - the start offset of each member in declaration order
   doAssert t.kind == ctStruct
   var off = 0
   var align = 1
   for f in t.fields:
     let fa = packedAlign(f.typ, boolWidth)
     off = roundUpMultiple(off, fa)
-    result.memberOffsets.add off
     off += packedSize(f.typ, boolWidth)
     align = max(align, fa)
   result.align = align
@@ -123,10 +120,8 @@ proc typeByteSize*(layouts: Table[string, StructLayout], t: CirType, boolWidth: 
   ##   typeByteSize(m.layouts, tVec(3, tFloat(32)), std430BoolWidth) == 12
   case t.kind
   of ctStruct:
-    let stored = layouts.getOrDefault(t.name)
-    doAssert stored.memberOffsets.len == t.fields.len,
-      "no stored layout for struct " & t.name
-    stored.size
+    doAssert layouts.hasKey(t.name), "no stored layout for struct " & t.name
+    layouts[t.name].size
   of ctVoid, ctBool, ctInt, ctUint, ctFloat:
     scalarByteSize(t, boolWidth)
   of ctVector:
@@ -157,9 +152,9 @@ proc registerGlslLayoutPass*(reg: var PassRegistry) =
   ## - fills `CirModule.layouts` with the `std430`-bool packing of every
   ##   nominal struct type
   ## - registers after the target's last transform, before the check-only
-  ##   validation stage: analysis results are valid only if no transform
-  ##   runs after them
-  reg.register("glslComputeStructLayouts", pkAnalysis, phaseMain,
+  ##   validation stage
+  ## - runPasses refuses a transform registered after an analysis
+  reg.register("glslComputeStructLayouts", pkAnalysis,
     "Computes the packed layout of every nominal struct type once:" &
     " member offsets, struct alignment, padded struct size",
     run = glslRun)
@@ -171,9 +166,9 @@ proc registerWgslLayoutPass*(reg: var PassRegistry) =
   ## - fills `CirModule.layouts` with the launch-ABI packing of every
   ##   nominal struct type, 4-byte bools included
   ## - registers after the target's last transform, before the check-only
-  ##   validation stage: analysis results are valid only if no transform
-  ##   runs after them
-  reg.register("wgslComputeStructLayouts", pkAnalysis, phaseMain,
+  ##   validation stage
+  ## - runPasses refuses a transform registered after an analysis
+  reg.register("wgslComputeStructLayouts", pkAnalysis,
     "Computes the packed layout of every nominal struct type once:" &
     " member offsets, struct alignment, padded struct size",
     run = wgslRun)

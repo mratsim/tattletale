@@ -64,20 +64,20 @@ func registerMslLoweringPasses*(reg: var PassRegistry) =
   ## the two orders stay consistent.
   reg.registerDecomposeArrayAssign()
   registerExplodeKernelStructs(reg)
-  reg.register("mslHoistProgramScopeConstants", pkTransform, phaseMain,
+  reg.register("mslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = mslHoistProgramScopeConstants
   )
-  reg.register("mslHoistDeviceFnSmem", pkTransform, phaseMain,
+  reg.register("mslHoistDeviceFnSmem", pkTransform,
     "Hoists a device function's smem locals to threadgroup reference parameters," &
     " call sites pass the caller's arena",
     run = mslHoistDeviceFnSmem
   )
-  reg.register("mslRewriteSmemLocals", pkTransform, phaseMain,
+  reg.register("mslRewriteSmemLocals", pkTransform,
     "Keeps kernel smem locals in-body as threadgroup storage, refuses a device function's smem local",
     run = mslRewriteSmemLocals
   )
-  reg.register("mslThreadCoordinateBuiltins", pkTransform, phaseMain,
+  reg.register("mslThreadCoordinateBuiltins", pkTransform,
     "Threads coordinate builtins down to device functions as parameters," &
     " call sites forward the caller's values",
     run = mslThreadCoordinateBuiltins
@@ -138,7 +138,6 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]) =
   ## Hoists the `{.smem.}` locals of one device function into threadgroup
   ## pointer parameters:
   ##
-  ## - top-level locals and one `scope` level deep are covered
   ## - the declarations drop from the body
   var i = 0
   while i < fn.body.len:
@@ -147,15 +146,6 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]) =
       fn.hoistSmemLocal(s, arenas)
       fn.body.delete i
       continue
-    if s.kind == sScope:
-      var j = 0
-      while j < s.scopeBody.len:
-        let sub = s.scopeBody[j]
-        if sub.kind == sVar and sub.space == caThreadgroup:
-          fn.hoistSmemLocal(sub, arenas)
-          s.scopeBody.delete j
-          continue
-        j.inc
     i.inc
 
 proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
@@ -188,10 +178,6 @@ proc ownedSmemNames(fn: CirProc): HashSet[string] =
   for s in fn.body:
     if s.kind == sVar and s.space == caThreadgroup:
       result.incl(s.name)
-    if s.kind == sScope:
-      for sub in s.scopeBody:
-        if sub.kind == sVar and sub.space == caThreadgroup:
-          result.incl(sub.name)
 
 proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
                   args: var seq[CirExpr],

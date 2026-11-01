@@ -53,20 +53,6 @@ proc holdsToOpenArrayCall(body: seq[CirStmt]): bool =
     of sLoop:
       if s.loopCond.holdsToOpenArrayCall or s.loopBody.holdsToOpenArrayCall:
         return true
-    of sCase:
-      if s.selector.holdsToOpenArrayCall:
-        return true
-      for br in s.branches:
-        if br.body.holdsToOpenArrayCall:
-          return true
-      if s.caseElse.holdsToOpenArrayCall:
-        return true
-    of sScope:
-      if s.scopeBody.holdsToOpenArrayCall:
-        return true
-    of sAssume:
-      if s.assumeCond.holdsToOpenArrayCall:
-        return true
     of sRet:
       if s.retVal.holdsToOpenArrayCall:
         return true
