@@ -409,7 +409,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
     if e.kind in ctx.policy.targetExprKinds:
       ctx.fail(nilLiteralRejection)
       return ""
-    return emitLiteral(e, ctx.lit, ctx.row)
+    return emitLiteral(e, ctx.lit, ctx.scalarNames)
   of eTrue, eFalse, eIntLit, eFloatLit:
     if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
