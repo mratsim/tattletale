@@ -62,4 +62,5 @@ export builtins_atomics
 
 export builtins_pragmas
 
-export builtins_compilermagic.CompileTarget, builtins_compilermagic.ccGetBackend
+export builtins_compilermagic.CompileTarget, builtins_compilermagic.ccGetBackend,
+  builtins_compilermagic.crucibleCompileTarget

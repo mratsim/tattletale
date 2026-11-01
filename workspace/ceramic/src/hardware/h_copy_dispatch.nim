@@ -7,7 +7,7 @@
 
 ## Copy dispatch, bridging the copy-atom catalog (h_copy_registry.nim) with the hardware copy instructions.
 
-import std/macros
+import std/[macros, strutils]
 import ./h_copy_registry
 import ./h_copy_configgen
 import ./h_copy_properties
@@ -44,18 +44,25 @@ proc copyBody(atomName: string;
   ## The async atoms' asm body, the atom's instruction from the registry.
   let instr = bindSym(atomName & "_instr").getImpl()[2].strVal
   if true:
-    var operandStr = " :: \"r\"(`smemInt`), \"l\"(`gmemPtr`), \"n\"(" &
+    # Shared dst address converts inline: the generic pointer enters
+    # as one 64-bit operand. cvta.to.shared narrows it through scratch
+    # registers into the shared-space address for the instruction.
+    # One asm block, no helper builtin.
+    let asmInstr = instr.multiReplace(("%0", "cvtaDst"))
+    var operandStr = " :: \"l\"(`dstPtr`), \"l\"(`gmemPtr`), \"n\"(" &
       $chunkBytes & ")"
     if zfill:
       # the src-size operand is the chunk width, or 0 to zero-fill the chunk
-      operandStr = " :: \"r\"(`smemInt`), \"l\"(`gmemPtr`), \"n\"(" &
+      operandStr = " :: \"l\"(`dstPtr`), \"l\"(`gmemPtr`), \"n\"(" &
         $chunkBytes & "), \"r\"(`srcSize`)"
-    let asmStr = "\"" & instr & (if zfill: ", %3" else: "") &
-      ";\"" & operandStr & " : \"memory\""
+    let asmStr = "\"{ .reg .b64 cvtaTmp; .reg .b32 cvtaDst; " &
+      "cvta.to.shared.u64 cvtaTmp, %0; cvt.u32.u64 cvtaDst, cvtaTmp; " &
+      asmInstr & (if zfill: ", %3" else: "") & "; }\"" &
+      operandStr & " : \"memory\""
     result = newStmtList(
       newLetStmt(ident"srcSize", srcSize),
-      newLetStmt(ident"smemInt",
-        bindSym"cvtaGenericToShared".newCall(newDotExpr(dstView, ident"data"))),
+      newLetStmt(ident"dstPtr",
+        newDotExpr(dstView, ident"data")),
       newLetStmt(ident"gmemPtr",
         newDotExpr(srcView, ident"data")),
       newTree(nnkAsmStmt, newEmptyNode(), newLit(asmStr)))
