@@ -322,101 +322,68 @@ const cudaLoopStyle = LoopStyle(
   infiniteHead: "for (;;) {\n",
   braceSameLine: true)
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
-  ## Forward declaration, nested statement lists recurse into it.
-
-proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
-  ## One structured statement.
-  if ctx.failing():
-    return ""
+# ═══════════════════════════════════════════════════════════════════════
+# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# ═══════════════════════════════════════════════════════════════════════
+proc printVar(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local declaration: kernel-scope shared storage and storage-class refusals, then the declaration text.
   let pad = spaces(ctx.indent * 2)
-  case s.kind
-  of sVar:
-    if s.space == caThreadgroup:
-      # kernel-scope shared storage in `__shared__` form,
-      # NVRTC allocates it per threadgroup, any initializer is discarded
-      result = pad & "__shared__ " & emitCudaType(s.declType, s.name, false) & ";"
-      return
-    if s.space == caConstant:
-      # program-scope storage belongs to CirModule.globals, a survivor here
-      # was never relocated
-      ctx.fail("local " & s.name & " in constant space, CUDA constant storage" &
-        " is program scope only")
-      return ""
-    var decl = emitCudaType(s.declType, s.name, false)
-    result = pad & decl
-    if s.init != nil:
-      result &= " = " & ctx.printExpr(s.init)
-    result &= ";"
-  of sConst:
-    if s.declType.kind == ctArray:
-      result = pad & "constexpr " &
-        emitCudaType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
-    else:
-      result = pad & "constexpr " & emitCudaScalar(s.declType) & ' ' & s.name &
-        " = " & ctx.printExpr(s.init) & ";"
-  of sAsgn:
-    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-  of sIte:
-    let cond = ctx.printExpr(s.cond)
-    ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody)
-    ctx.indent.dec
-    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len > 0:
-      ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody)
-      ctx.indent.dec
-      result &= " else {\n" & elseTxt & '\n' & pad & '}'
-  of sLoop:
-    # loops print through printStmtList
-    result = ""
-  of sScope:
-    result = pad & "{\n"
-    ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody)
-    ctx.indent.dec
-    result &= '\n' & pad & '}'
-  of sAssume:
-    # a loop-bound hint, CUDA has no assume construct
-    result = ""
-  of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
-    else:
-      result = pad & "return;"
-  of sDiscard:
-    result = ""
-  of sCall:
-    let calleeName =
-      if s.callCallee.kind == eSym: s.callCallee.name
-      else: ctx.printExpr(s.callCallee)
-    var args: seq[string]
-    for a in s.callArgs:
-      args.add ctx.printExpr(a)
-    let builtinTxt = emitCudaBuiltinCall(s.callCallee, args)
-    if builtinTxt.len > 0:
-      result = pad & builtinTxt & ";"
-    else:
-      result = pad & calleeName & "(" & args.join(", ") & ");"
-  of sAsm:
-    var text = ""
-    for i, part in s.asmParts:
-      text.add(part)
-      if i < s.asmOperands.len:
-        text.add(s.asmOperands[i].name)
-    result = pad & "asm(" & text.strip() & ");"
-  of sEmit:
-    # `{.emit.}` raw source: the operand names splice into the verbatim text,
-    # no terminator appended, the text supplies its own terminators
-    var text = ""
-    for i, part in s.emitParts:
-      text.add(part)
-      if i < s.emitOperands.len:
-        text.add(s.emitOperands[i].name)
-    result = pad & text
-  of sCase:
-    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+  if s.space == caThreadgroup:
+    # kernel-scope shared storage in `__shared__` form,
+    # NVRTC allocates it per threadgroup, any initializer is discarded
+    result = pad & "__shared__ " & emitCudaType(s.declType, s.name, false) & ";"
+    return
+  if s.space == caConstant:
+    # program-scope storage belongs to CirModule.globals, a survivor here
+    # was never relocated
+    ctx.fail("local " & s.name & " in constant space, CUDA constant storage" &
+      " is program scope only")
+    return ""
+  var decl = emitCudaType(s.declType, s.name, false)
+  result = pad & decl
+  if s.init != nil:
+    result &= " = " & ctx.printExpr(s.init)
+  result &= ";"
+
+proc printConst(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local constant declaration, the `constexpr` form.
+  let pad = spaces(ctx.indent * 2)
+  if s.declType.kind == ctArray:
+    result = pad & "constexpr " &
+      emitCudaType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
+  else:
+    result = pad & "constexpr " & emitCudaScalar(s.declType) & ' ' & s.name &
+      " = " & ctx.printExpr(s.init) & ";"
+
+proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
+  ## One assignment.
+  let pad = spaces(ctx.indent * 2)
+  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+
+proc printCall(ctx: var PrintCtx, s: CirStmt): string =
+  ## One call statement: the builtin call vocabulary, then the plain call form.
+  let pad = spaces(ctx.indent * 2)
+  let calleeName =
+    if s.callCallee.kind == eSym: s.callCallee.name
+    else: ctx.printExpr(s.callCallee)
+  var args: seq[string]
+  for a in s.callArgs:
+    args.add ctx.printExpr(a)
+  let builtinTxt = emitCudaBuiltinCall(s.callCallee, args)
+  if builtinTxt.len > 0:
+    result = pad & builtinTxt & ";"
+  else:
+    result = pad & calleeName & "(" & args.join(", ") & ");"
+
+proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
+  ## One inline assembly statement: the spliced text in an `asm(...)` wrapper.
+  let pad = spaces(ctx.indent * 2)
+  var text = ""
+  for i, part in s.asmParts:
+    text.add(part)
+    if i < s.asmOperands.len:
+      text.add(s.asmOperands[i].name)
+  result = pad & "asm(" & text.strip() & ");"
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
   ## Prints one statement list, the shared walk with the CUDA loop style.

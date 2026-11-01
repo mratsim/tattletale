@@ -433,117 +433,82 @@ const glslLoopStyle = LoopStyle(
   infiniteHead: "for (;;) {\n",
   braceSameLine: true)
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
-  ## Forward declaration, nested statement lists recurse into it.
-
-proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
-  ## One structured statement.
-  if ctx.failing():
-    return ""
+# ═══════════════════════════════════════════════════════════════════════
+# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# ═══════════════════════════════════════════════════════════════════════
+proc printVar(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local declaration: pointer and storage-class refusals, then the declaration text.
   let pad = spaces(ctx.indent * 2)
-  case s.kind
-  of sVar:
-    if s.declType.kind == ctPtr:
-      ctx.fail("pointer local " & s.name & ", GLSL has no function-storage" &
-        " addressing, the GLSL lowering pass dissolves pointer locals")
-      return ""
-    if s.space == caThreadgroup:
-      ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering" &
-        " pass hoists threadgroup locals to program scope")
-      return ""
-    if s.space == caConstant:
-      ctx.fail("local " & s.name & " in constant space, the GLSL lowering" &
-        " pass hoists const_mem locals to program scope")
-      return ""
-    if s.space == caDevice:
-      ctx.fail("local " & s.name & " in device space, GLSL locals are private")
-      return ""
-    var decl: string
-    if s.declType.kind == ctAptr:
-      # a buffer pointer local is the reference block handle
-      decl = ctx.emitGlslPtrDecl(s.declType, s.name)
-    elif s.declType.kind == ctArray:
-      decl = emitGlslScalar(s.declType.aElem) & ' ' & s.name &
-        "[" & $s.declType.aN & "]"
-    else:
-      decl = emitGlslTypeBare(s.declType) & ' ' & s.name
-    result = pad & decl
-    if s.init != nil:
-      result &= " = " & ctx.printExpr(s.init)
-    result &= ";"
-  of sConst:
-    result = pad & "const " & emitGlslTypeBare(s.declType) & ' ' &
-      s.name & " = " & ctx.printExpr(s.init) & ";"
-  of sAsgn:
-    if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
-      ctx.fail("pointer local " & s.lhs.name & " rebound, GLSL has no" &
-        " pointer values, the GLSL lowering pass dissolves pointer locals")
-      return ""
-    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-  of sIte:
-    let cond = ctx.printExpr(s.cond)
-    ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody)
-    ctx.indent.dec
-    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len > 0:
-      ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody)
-      ctx.indent.dec
-      result &= " else {\n" & elseTxt & '\n' & pad & '}'
-  of sLoop:
-    # loops print through printStmtList
-    result = ""
-  of sScope:
-    result = pad & "{\n"
-    ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody)
-    ctx.indent.dec
-    result &= '\n' & pad & '}'
-  of sAssume:
-    # a loop-bound hint, GLSL has no assume construct
-    result = ""
-  of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
-    else:
-      result = pad & "return;"
-  of sDiscard:
-    result = ""
-  of sCall:
-    if s.callCallee.kind == eSym and
-        s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
-      result = pad & "barrier();"
-    elif s.callCallee.kind == eSym and
-        s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
-      # GLSL's barrier() orders shared memory only, buffer writes are
-      # ordered before it by a leading memoryBarrierBuffer() call
-      result = pad & "memoryBarrierBuffer();\n" & pad & "barrier();"
-    elif s.callCallee.kind == eSym and
-        s.callCallee.atomicsBuiltin == abkAtomicFetchAdd:
-      # a GLSL call statement discards the fetched old value
-      result = pad & ctx.printGlslAtomicFetchAdd(s.callArgs) & ";"
-    else:
-      var parts: seq[string]
-      parts.add ctx.printExpr(s.callCallee)
-      for a in s.callArgs:
-        parts.add ctx.printExpr(a)
-      result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
-  of sAsm:
-    ctx.fail("inline assembly has no GLSL form")
-    result = ""
-  of sEmit:
-    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
-    # no terminator appended, the text supplies its own terminators
-    var text = ""
-    for i, part in s.emitParts:
-      text.add(part)
-      if i < s.emitOperands.len:
-        text.add(s.emitOperands[i].name)
-    result = pad & text
-  of sCase:
-    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
-    result = ""
+  if s.declType.kind == ctPtr:
+    ctx.fail("pointer local " & s.name & ", GLSL has no function-storage" &
+      " addressing, the GLSL lowering pass dissolves pointer locals")
+    return ""
+  if s.space == caThreadgroup:
+    ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering" &
+      " pass hoists threadgroup locals to program scope")
+    return ""
+  if s.space == caConstant:
+    ctx.fail("local " & s.name & " in constant space, the GLSL lowering" &
+      " pass hoists const_mem locals to program scope")
+    return ""
+  if s.space == caDevice:
+    ctx.fail("local " & s.name & " in device space, GLSL locals are private")
+    return ""
+  var decl: string
+  if s.declType.kind == ctAptr:
+    # a buffer pointer local is the reference block handle
+    decl = ctx.emitGlslPtrDecl(s.declType, s.name)
+  elif s.declType.kind == ctArray:
+    decl = emitGlslScalar(s.declType.aElem) & ' ' & s.name &
+      "[" & $s.declType.aN & "]"
+  else:
+    decl = emitGlslTypeBare(s.declType) & ' ' & s.name
+  result = pad & decl
+  if s.init != nil:
+    result &= " = " & ctx.printExpr(s.init)
+  result &= ";"
+
+proc printConst(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local constant declaration, the `const` form.
+  let pad = spaces(ctx.indent * 2)
+  result = pad & "const " & emitGlslTypeBare(s.declType) & ' ' &
+    s.name & " = " & ctx.printExpr(s.init) & ";"
+
+proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
+  ## One assignment: the pointer-rebind refusal, then the assignment text.
+  let pad = spaces(ctx.indent * 2)
+  if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
+    ctx.fail("pointer local " & s.lhs.name & " rebound, GLSL has no" &
+      " pointer values, the GLSL lowering pass dissolves pointer locals")
+    return ""
+  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+
+proc printCall(ctx: var PrintCtx, s: CirStmt): string =
+  ## One call statement: the barrier and atomic vocabulary, then the plain call form.
+  let pad = spaces(ctx.indent * 2)
+  if s.callCallee.kind == eSym and
+      s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+    result = pad & "barrier();"
+  elif s.callCallee.kind == eSym and
+      s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+    # GLSL's barrier() orders shared memory only, buffer writes are
+    # ordered before it by a leading memoryBarrierBuffer() call
+    result = pad & "memoryBarrierBuffer();\n" & pad & "barrier();"
+  elif s.callCallee.kind == eSym and
+      s.callCallee.atomicsBuiltin == abkAtomicFetchAdd:
+    # a GLSL call statement discards the fetched old value
+    result = pad & ctx.printGlslAtomicFetchAdd(s.callArgs) & ";"
+  else:
+    var parts: seq[string]
+    parts.add ctx.printExpr(s.callCallee)
+    for a in s.callArgs:
+      parts.add ctx.printExpr(a)
+    result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
+
+proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
+  ## One inline assembly statement: refused, the text names the target.
+  ctx.fail("inline assembly has no GLSL form")
+  result = ""
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
   ## Prints one statement list, the shared walk with the GLSL loop style.

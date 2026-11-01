@@ -346,104 +346,71 @@ const mslLoopStyle = LoopStyle(
   infiniteHead: "for (;;) {\n",
   braceSameLine: true)
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
-  ## Forward declaration, nested statement lists recurse into it.
-
-proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
-  ## One structured statement.
-  if ctx.failing():
-    return ""
+# ═══════════════════════════════════════════════════════════════════════
+# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# ═══════════════════════════════════════════════════════════════════════
+proc printVar(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local declaration: kernel-scope threadgroup storage and storage-class refusals, then the declaration text.
   let pad = spaces(ctx.indent * 2)
-  case s.kind
-  of sVar:
-    if s.space == caThreadgroup:
-      # kernel-scope threadgroup storage: the MSL lowering pass keeps only
-      # a kernel's top-level smem locals here, a device function's smem local
-      # refuses in the pass, any initializer is discarded
-      result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
-      return
-    if s.space == caConstant:
-      # MSL lowering pass relocates const_mem locals at every scope,
-      # a survivor here was never relocated
-      ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
-        " pass hoists const_mem locals to program scope")
-      return ""
-    var decl = emitMslType(s.declType, s.name, false)
-    if s.declType.kind in {ctPtr, ctAptr}:
-      decl = emitMslPtr(s.declType, s.name)
-    result = pad & decl
-    if s.init != nil:
-      result &= " = " & ctx.printExpr(s.init)
-    result &= ";"
-  of sConst:
-    if s.declType.kind == ctArray:
-      result = pad & "constexpr " &
-        emitMslType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
-    else:
-      result = pad & "constexpr " & emitMslScalar(s.declType) & ' ' & s.name &
-        " = " & ctx.printExpr(s.init) & ";"
-  of sAsgn:
-    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-  of sIte:
-    let cond = ctx.printExpr(s.cond)
-    ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody)
-    ctx.indent.dec
-    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len > 0:
-      ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody)
-      ctx.indent.dec
-      result &= " else {\n" & elseTxt & '\n' & pad & '}'
-  of sLoop:
-    # loops print through printStmtList
-    result = ""
-  of sScope:
-    result = pad & "{\n"
-    ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody)
-    ctx.indent.dec
-    result &= '\n' & pad & '}'
-  of sAssume:
-    # a loop-bound hint, MSL has no assume construct
-    result = ""
-  of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
-    else:
-      result = pad & "return;"
-  of sDiscard:
-    result = ""
-  of sCall:
-    let calleeName =
-      if s.callCallee.kind == eSym: s.callCallee.name
-      else: ctx.printExpr(s.callCallee)
-    var args: seq[string]
-    for a in s.callArgs:
-      args.add ctx.printExpr(a)
-    let builtinTxt = emitMslBuiltinCall(s.callCallee, args)
-    if builtinTxt.len > 0:
-      result = pad & builtinTxt & ";"
-    else:
-      result = pad & calleeName & "(" & args.join(", ") & ");"
-  of sAsm:
-    var text = ""
-    for i, part in s.asmParts:
-      text.add(part)
-      if i < s.asmOperands.len:
-        text.add(s.asmOperands[i].name)
-    result = pad & text
-  of sEmit:
-    # `{.emit.}` raw source: the operand names splice into the verbatim text,
-    # no terminator appended, the text supplies its own terminators
-    var text = ""
-    for i, part in s.emitParts:
-      text.add(part)
-      if i < s.emitOperands.len:
-        text.add(s.emitOperands[i].name)
-    result = pad & text
-  of sCase:
-    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+  if s.space == caThreadgroup:
+    # kernel-scope threadgroup storage: the MSL lowering pass keeps only
+    # a kernel's top-level smem locals here, a device function's smem local
+    # refuses in the pass, any initializer is discarded
+    result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
+    return
+  if s.space == caConstant:
+    # MSL lowering pass relocates const_mem locals at every scope,
+    # a survivor here was never relocated
+    ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
+      " pass hoists const_mem locals to program scope")
+    return ""
+  var decl = emitMslType(s.declType, s.name, false)
+  if s.declType.kind in {ctPtr, ctAptr}:
+    decl = emitMslPtr(s.declType, s.name)
+  result = pad & decl
+  if s.init != nil:
+    result &= " = " & ctx.printExpr(s.init)
+  result &= ";"
+
+proc printConst(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local constant declaration, the `constexpr` form.
+  let pad = spaces(ctx.indent * 2)
+  if s.declType.kind == ctArray:
+    result = pad & "constexpr " &
+      emitMslType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
+  else:
+    result = pad & "constexpr " & emitMslScalar(s.declType) & ' ' & s.name &
+      " = " & ctx.printExpr(s.init) & ";"
+
+proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
+  ## One assignment.
+  let pad = spaces(ctx.indent * 2)
+  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+
+proc printCall(ctx: var PrintCtx, s: CirStmt): string =
+  ## One call statement: the builtin call vocabulary, then the plain call form.
+  let pad = spaces(ctx.indent * 2)
+  let calleeName =
+    if s.callCallee.kind == eSym: s.callCallee.name
+    else: ctx.printExpr(s.callCallee)
+  var args: seq[string]
+  for a in s.callArgs:
+    args.add ctx.printExpr(a)
+  let builtinTxt = emitMslBuiltinCall(s.callCallee, args)
+  if builtinTxt.len > 0:
+    result = pad & builtinTxt & ";"
+  else:
+    result = pad & calleeName & "(" & args.join(", ") & ");"
+
+proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
+  ## One inline assembly statement: the spliced text, MSL has no asm form.
+  let pad = spaces(ctx.indent * 2)
+  var text = ""
+  for i, part in s.asmParts:
+    text.add(part)
+    if i < s.asmOperands.len:
+      text.add(s.asmOperands[i].name)
+  result = pad & text
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
   ## Prints one statement list, the shared walk with the MSL loop style.

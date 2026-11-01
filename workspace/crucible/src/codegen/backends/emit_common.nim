@@ -7,17 +7,19 @@
 
 ## Shared printer leaves over CIRv2.
 ##
-## | leaf                            | contract                                                                       |
-## | ------------------------------- | ------------------------------------------------------------------------------ |
-## | failing / fail                  | first-refusal-wins walk state over each printer's `PrintCtx` (`err`, `fnName`) |
-## | codegenModule                   | `(artifact, err)` to entry-point-result conversion                             |
-## | roundUpMultiple, scalarByteSize | shared layout arithmetic over CIRv2 types                                      |
-## | emitVectorComponent             | vector component letters (`F0`..`F3` to `x`..`w`)                              |
-## | ScalarTokens, emitScalarToken   | scalar type names per target table, one walker over the leaf kinds             |
-## | LitTokens, emitLiteral          | integer/float/nil literal token spellings per target table                     |
-## | LoopStyle, printLoopText        | loop text of one target: unroll directive, head, brace style                   |
-## | printStmtList                   | statement-list walk: sLoop through `printLoopText`, others through `printStmt` |
-## | nonFiniteFloatLit               | non-finite float literal token, classified against the printer's token table   |
+## | leaf                            | contract                                                                                             |
+## | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+## | failing / fail                  | first-refusal-wins walk state over each printer's `PrintCtx` (`err`, `fnName`)                       |
+## | codegenModule                   | `(artifact, err)` to entry-point-result conversion                                                   |
+## | roundUpMultiple, scalarByteSize | shared layout arithmetic over CIRv2 types                                                            |
+## | emitVectorComponent             | vector component letters (`F0`..`F3` to `x`..`w`)                                                    |
+## | ScalarTokens, emitScalarToken   | scalar type names per target table, one walker over the leaf kinds                                   |
+## | LitTokens, emitLiteral          | integer/float/nil literal token forms per target table                                               |
+## | LoopStyle, printLoopText        | loop text of one target: unroll directive, head, brace style                                         |
+## | printStmtList                   | statement-list walk: sLoop through `printLoopText`, others through `printStmt`                       |
+## | printStmt                       | dispatch: shared variants inline, target policy via printVar/printConst/printAsgn/printCall/printAsm |
+## | printIteElse, printEmitOperand  | sIte else tail and `{.emit.}` operand text, shared forms a printer overrides                         |
+## | nonFiniteFloatLit               | non-finite float literal token, classified against the printer's token table                         |
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
 
@@ -270,13 +272,103 @@ proc printLoopText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
     result &= pad & "{\n"
   result &= bodyTxt & "\n" & pad & '}'
 
+proc foldsIteElse*(ctx: var auto): bool =
+  ## Returns true when a single-`sIte` else body folds into
+  ## an `else if` chain, false for the default braced else.
+  false
+
+proc printIteElse*(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
+  ## Else tail of an `sIte` statement, appended after its then branch.
+  ##
+  ## Returns "" when the else body is empty, otherwise the braced form:
+  ##
+  ##   result = pad & "if (" & cond & ") { ... }" & ctx.printIteElse(s.elseBody, pad)
+  mixin printStmts
+  if elseBody.len == 0:
+    return ""
+  ctx.indent.inc
+  let elseTxt = ctx.printStmts(elseBody)
+  ctx.indent.dec
+  result = " else {\n" & elseTxt & '\n' & pad & '}'
+
+proc printEmitOperand*(ctx: var auto, op: CirExpr): string =
+  ## Returns the splice text of one `{.emit.}` operand.
+  ##
+  ## The shared form splices the operand's symbol name, a printer whose
+  ## operands render as expressions overrides it.
+  op.name
+
+proc printStmt*(ctx: var auto, s: CirStmt): string =
+  ## Prints one structured statement.
+  ##
+  ## Shared variants emit here: `sIte`, `sLoop`, `sScope`, `sAssume`,
+  ## `sRet`, `sDiscard`, `sCase`, `sEmit`. Per-target policy resolves
+  ## at instantiation through the printer's own procs:
+  ##
+  ## - `printVar`, `printConst`: storage-class refusals and declaration text
+  ## - `printAsgn`: assignment policy, pointer rebinds and buffer writes
+  ## - `printCall`: barrier intrinsics and builtin call vocabulary
+  ## - `printAsm`: inline assembly form, refusal text or raw splice
+  mixin printStmts, printExpr, printVar, printConst, printAsgn, printCall, printAsm,
+        foldsIteElse, printIteElse, printEmitOperand
+  if ctx.failing():
+    return ""
+  let pad = spaces(ctx.indent * 2)
+  case s.kind
+  of sVar: result = ctx.printVar(s)
+  of sConst: result = ctx.printConst(s)
+  of sAsgn: result = ctx.printAsgn(s)
+  of sCall: result = ctx.printCall(s)
+  of sAsm: result = ctx.printAsm(s)
+  of sIte:
+    let cond = ctx.printExpr(s.cond)
+    ctx.indent.inc
+    let thenTxt = ctx.printStmts(s.thenBody)
+    ctx.indent.dec
+    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
+    if s.elseBody.len == 1 and s.elseBody[0].kind == sIte and ctx.foldsIteElse():
+      # an else side of one ite is the elif chain, printed as `else if`
+      result &= " else " & ctx.printStmt(s.elseBody[0])
+    else:
+      result &= ctx.printIteElse(s.elseBody, pad)
+  of sLoop:
+    # loops print through printStmtList
+    result = ""
+  of sScope:
+    result = pad & "{\n"
+    ctx.indent.inc
+    result &= ctx.printStmts(s.scopeBody)
+    ctx.indent.dec
+    result &= '\n' & pad & '}'
+  of sAssume:
+    # a loop-bound hint, no target prints one
+    result = ""
+  of sRet:
+    if s.retVal != nil:
+      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
+    else:
+      result = pad & "return;"
+  of sDiscard:
+    result = ""
+  of sEmit:
+    # `{.emit.}` raw source: verbatim text spliced with the operand text,
+    # no terminator appended, the text supplies its own terminators
+    var text = ""
+    for i, part in s.emitParts:
+      text.add(part)
+      if i < s.emitOperands.len:
+        text.add(ctx.printEmitOperand(s.emitOperands[i]))
+    result = pad & text
+  of sCase:
+    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+    result = ""
+
 proc printStmtList*(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string =
   ## Prints one statement list, one line per printed statement:
   ##
   ## - `sLoop`: `printLoopText` with the target's `style`
   ## - every other statement: `ctx.printStmt`, an empty text drops out
   ## - printed lines join with a newline separator
-  mixin printStmt
   var lines: seq[string]
   for s in stmts:
     let txt = if s.kind == sLoop: printLoopText(ctx, s, style)

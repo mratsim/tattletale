@@ -533,9 +533,6 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
-  ## Forward declaration, nested statement lists recurse into it.
-
 proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, lines: var seq[string]) =
   ## Appends one `target.leaf = value` line per leaf field of a struct construction,
   ## nested constructions recurse. DXC rejects compound literals on assignment,
@@ -553,135 +550,109 @@ proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, l
     else:
       lines.add target & "." & f.name & " = " & ctx.printExpr(val) & ";"
 
-proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
-  ## One structured statement.
-  if ctx.failing():
-    return ""
+# ═══════════════════════════════════════════════════════════════════════
+# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# ═══════════════════════════════════════════════════════════════════════
+proc printVar(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local declaration: pointer and storage-class refusals, then the declaration text with its initializer.
   let pad = spaces(ctx.indent * 2)
-  case s.kind
-  of sVar:
-    if s.declType.kind in {ctPtr, ctAptr}:
-      ctx.fail("pointer local " & s.name & ", HLSL has no pointer values," &
-        " the HLSL lowering pass dissolves pointer locals")
-      return ""
-    if s.space == caThreadgroup:
-      ctx.fail("local " & s.name & " in threadgroup space, HLSL has no" &
-        " program-scope shared emission")
-      return ""
-    if s.space == caConstant:
-      ctx.fail("local " & s.name & " in constant space, the HLSL lowering" &
-        " pass hoists const_mem locals to program scope")
-      return ""
-    if s.space == caDevice:
-      ctx.fail("local " & s.name & " in device space, HLSL locals are per-thread registers")
-      return ""
-    var decl = ctx.emitHlslDecl(s.declType, s.name)
-    if s.init != nil:
-      if s.init.kind == eOconstr and s.declType.kind == ctStruct:
-        decl &= " = " & ctx.printBraceList(s.declType, s.init)
-      else:
-        decl &= " = " & ctx.printExpr(s.init)
-    result = pad & decl & ";"
-  of sConst:
-    if s.init != nil and s.init.kind == eOconstr and s.declType.kind == ctStruct:
-      result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
-        " = " & ctx.printBraceList(s.declType, s.init) & ";"
+  if s.declType.kind in {ctPtr, ctAptr}:
+    ctx.fail("pointer local " & s.name & ", HLSL has no pointer values," &
+      " the HLSL lowering pass dissolves pointer locals")
+    return ""
+  if s.space == caThreadgroup:
+    ctx.fail("local " & s.name & " in threadgroup space, HLSL has no" &
+      " program-scope shared emission")
+    return ""
+  if s.space == caConstant:
+    ctx.fail("local " & s.name & " in constant space, the HLSL lowering" &
+      " pass hoists const_mem locals to program scope")
+    return ""
+  if s.space == caDevice:
+    ctx.fail("local " & s.name & " in device space, HLSL locals are per-thread registers")
+    return ""
+  var decl = ctx.emitHlslDecl(s.declType, s.name)
+  if s.init != nil:
+    if s.init.kind == eOconstr and s.declType.kind == ctStruct:
+      decl &= " = " & ctx.printBraceList(s.declType, s.init)
     else:
-      result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
-        " = " & ctx.printExpr(s.init) & ";"
-  of sAsgn:
-    let root = exprRootSym(s.lhs)
-    if root != nil and ctx.bufferParams.contains(root.name):
-      if ctx.flavor == fvD3D12 and root.name notin ctx.rwBuffers:
-        ctx.fail("assignment through read-only buffer parameter " & root.name)
-        return ""
-      result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-      return
-    if s.lhs.kind == eSym and ctx.pushParams.contains(s.lhs.name):
-      ctx.fail("assignment to push-constant parameter " & s.lhs.name &
-        ", push constants are read-only inputs")
-      return ""
-    if s.rhs != nil and s.rhs.kind == eOconstr and s.rhs.ocType.kind == ctStruct:
-      # member-wise leaf assignment, DXC rejects compound literals on assignment
-      var lines: seq[string]
-      ctx.printObjAssign(ctx.printExpr(s.lhs), s.rhs.ocType, s.rhs, lines)
-      if ctx.failing():
-        return ""
-      result = lines.join("\n")
-      return
-    if s.rhs != nil and s.rhs.kind == eAconstr:
-      ctx.fail("array constructor assignment has no HLSL form")
+      decl &= " = " & ctx.printExpr(s.init)
+  result = pad & decl & ";"
+
+proc printConst(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local constant declaration, struct initializers print as a brace list.
+  let pad = spaces(ctx.indent * 2)
+  if s.init != nil and s.init.kind == eOconstr and s.declType.kind == ctStruct:
+    result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
+      " = " & ctx.printBraceList(s.declType, s.init) & ";"
+  else:
+    result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
+      " = " & ctx.printExpr(s.init) & ";"
+
+proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
+  ## One assignment: buffer, push-constant, struct and array-constructor policy, then the assignment text.
+  let pad = spaces(ctx.indent * 2)
+  let root = exprRootSym(s.lhs)
+  if root != nil and ctx.bufferParams.contains(root.name):
+    if ctx.flavor == fvD3D12 and root.name notin ctx.rwBuffers:
+      ctx.fail("assignment through read-only buffer parameter " & root.name)
       return ""
     result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-  of sIte:
-    let cond = ctx.printExpr(s.cond)
-    ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody)
-    ctx.indent.dec
-    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len == 1 and s.elseBody[0].kind == sIte:
-      # an else side of one ite is the elif chain, printed as `else if`
-      result &= " else " & ctx.printStmt(s.elseBody[0])
-    elif s.elseBody.len > 0:
-      ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody)
-      ctx.indent.dec
-      result &= " else {\n" & elseTxt & '\n' & pad & '}'
-  of sLoop:
-    # loops print through printStmts
-    result = ""
-  of sScope:
-    result = pad & "{\n"
-    ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody)
-    ctx.indent.dec
-    result &= '\n' & pad & '}'
-  of sAssume:
-    # a loop-bound hint, HLSL has no assume construct
-    result = ""
-  of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
+    return
+  if s.lhs.kind == eSym and ctx.pushParams.contains(s.lhs.name):
+    ctx.fail("assignment to push-constant parameter " & s.lhs.name &
+      ", push constants are read-only inputs")
+    return ""
+  if s.rhs != nil and s.rhs.kind == eOconstr and s.rhs.ocType.kind == ctStruct:
+    # member-wise leaf assignment, DXC rejects compound literals on assignment
+    var lines: seq[string]
+    ctx.printObjAssign(ctx.printExpr(s.lhs), s.rhs.ocType, s.rhs, lines)
+    if ctx.failing():
+      return ""
+    result = lines.join("\n")
+    return
+  if s.rhs != nil and s.rhs.kind == eAconstr:
+    ctx.fail("array constructor assignment has no HLSL form")
+    return ""
+  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+
+proc printCall(ctx: var PrintCtx, s: CirStmt): string =
+  ## One call statement: the buffer-argument policy and barrier intrinsics, then the plain call form.
+  let pad = spaces(ctx.indent * 2)
+  var parts: seq[string]
+  if s.callCallee.kind == eSym:
+    parts.add s.callCallee.name
+  else:
+    parts.add ctx.printExpr(s.callCallee)
+  for i, a in s.callArgs:
+    if ctx.flavor == fvD3D12 and a.kind == eSym and
+        ctx.bufferParams.contains(a.name):
+      parts.add a.name
     else:
-      result = pad & "return;"
-  of sDiscard:
-    result = ""
-  of sCall:
-    var parts: seq[string]
-    if s.callCallee.kind == eSym:
-      parts.add s.callCallee.name
-    else:
-      parts.add ctx.printExpr(s.callCallee)
-    for i, a in s.callArgs:
-      if ctx.flavor == fvD3D12 and a.kind == eSym and
-          ctx.bufferParams.contains(a.name):
-        parts.add a.name
-      else:
-        parts.add ctx.emitCallArg(s.callCallee, i, a)
-    if s.callCallee.kind == eSym and
-        s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
-      result = pad & "GroupMemoryBarrierWithGroupSync();"
-    elif s.callCallee.kind == eSym and
-        s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
-      result = pad & "DeviceMemoryBarrierWithGroupSync();"
-    else:
-      result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
-  of sAsm:
-    ctx.fail("inline assembly has no HLSL form")
-    result = ""
-  of sEmit:
-    # `{.emit.}` raw source: operand expressions rendered and spliced
-    # into the verbatim text, a push-block scalar qualifies as `push.name`.
-    # No terminator is appended, the text ends where it ends.
-    var text = ""
-    for i, part in s.emitParts:
-      text.add(part)
-      if i < s.emitOperands.len:
-        text.add(ctx.printExpr(s.emitOperands[i]))
-    result = pad & text
-  of sCase:
-    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
-    result = ""
+      parts.add ctx.emitCallArg(s.callCallee, i, a)
+  if s.callCallee.kind == eSym and
+      s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+    result = pad & "GroupMemoryBarrierWithGroupSync();"
+  elif s.callCallee.kind == eSym and
+      s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+    result = pad & "DeviceMemoryBarrierWithGroupSync();"
+  else:
+    result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
+
+proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
+  ## One inline assembly statement: refused, the text names the target.
+  ctx.fail("inline assembly has no HLSL form")
+  result = ""
+
+proc foldsIteElse(ctx: var PrintCtx): bool =
+  ## A single-`sIte` else body prints as `else if`, the elif chain form.
+  true
+
+proc printEmitOperand(ctx: var PrintCtx, op: CirExpr): string =
+  ## Returns the rendered expression as the `{.emit.}` operand text.
+  ## A push-block scalar qualifies as `push.name` under
+  ## the expression policy of the target printer.
+  ctx.printExpr(op)
 
 proc exprHasCall(e: CirExpr): bool =
   ## True when any subexpression of `e` is a call.
