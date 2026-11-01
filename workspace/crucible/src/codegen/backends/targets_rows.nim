@@ -251,26 +251,31 @@ const glslCastRules* = [
       " 32-bit floatBits builtins")]
 
 const wgslScalarRow* = ScalarRow(cells: @[
-  # WGSL has no 8/16-bit integer types: 32 and 64 bit are its only integer widths.
+  # WGSL has no 8/16-bit integer types, 32 bit is its only always-available width.
+  # 64-bit integers and floats require the shader-int64 and shader-f64 device features.
+  # wgpu-native exposes no WGPUFeatureName for either feature and no request can enable them, so the cells refuse.
   ScalarCell(kind: ctVoid, width: 0, spelling: "void"),
   ScalarCell(kind: ctBool, width: 0, spelling: "bool"),
   ScalarCell(kind: ctInt, width: 8),
   ScalarCell(kind: ctInt, width: 16),
   ScalarCell(kind: ctInt, width: 32, spelling: "i32"),
-  ScalarCell(kind: ctInt, width: 64, spelling: "i64"),
+  ScalarCell(kind: ctInt, width: 64),
   ScalarCell(kind: ctUint, width: 8),
   ScalarCell(kind: ctUint, width: 16),
   ScalarCell(kind: ctUint, width: 32, spelling: "u32"),
-  ScalarCell(kind: ctUint, width: 64, spelling: "u64"),
+  ScalarCell(kind: ctUint, width: 64),
   ScalarCell(kind: ctFloat, width: 16, spelling: "f16"),
   ScalarCell(kind: ctFloat, width: 32, spelling: "f32"),
-  ScalarCell(kind: ctFloat, width: 64, spelling: "f64")])
+  ScalarCell(kind: ctFloat, width: 64)])
 
 # Bare integer and float literals are abstract and work in any typed context,
-# u32 gains the `u` suffix and f16 the `h`, f32 and f64 print bare.
-# WGSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
-# `bitcast` from the unsigned integer of the same width. Nil literals refuse
-# at the site.
+# u32 gains the `u` suffix, f16 the `h`, f32 prints bare.
+# WGSL has no infinity or NaN literal: the 16 and 32-bit IEEE-754 bit patterns
+# go through `bitcast` from the unsigned integer of the same width.
+# 64-bit bit patterns have no WGSL form and the empty tokens refuse.
+# `bitcast<f64>` requires the shader-f64 device feature the runtime cannot request.
+# A 64-bit literal with the `u` suffix is a parse error besides.
+# Nil literals refuse at the site.
 const wgslLitRow* = LitRow(
   int: IntLitTokens(u32Suffix: "u"),
   f16Suffix: "h",
@@ -278,24 +283,22 @@ const wgslLitRow* = LitRow(
     inf16: "bitcast<f16>(0x7c00u)", negInf16: "bitcast<f16>(0xfc00u)", nan16: "bitcast<f16>(0x7e00u)",
     inf32: "bitcast<f32>(0x7f800000u)",
     negInf32: "bitcast<f32>(0xff800000u)",
-    nan32: "bitcast<f32>(0x7fc00000u)",
-    inf64: "bitcast<f64>(0x7ff0000000000000u)",
-    negInf64: "bitcast<f64>(0xfff0000000000000u)",
-    nan64: "bitcast<f64>(0x7ff8000000000000u)"))
+    nan32: "bitcast<f32>(0x7fc00000u)"))
 
 const wgslKindRow* = KindRow(
   loop: LoopStyle(
     # WGSL has no unroll directive: the drop surfaces in the artifact
     unrollDirective: "// {.unroll.} requested but not honored on WebGPU",
     braceSameLine: true),
-  targetExprKinds: {eNil, eAt, ePat, eTernary})
+  # eFloatLit routes through `printTargetExpr`, a 64-bit non-finite float
+  # refuses there. The 16 and 32-bit tokens come from the lit row.
+  targetExprKinds: {eNil, eAt, ePat, eTernary, eFloatLit})
 
 const wgslVectorRule* = VectorRule(
   elems: @[
     (ctVoid, 0, "vec"), (ctBool, 0, "vec"),
-    (ctInt, 32, "vec"), (ctInt, 64, "vec"),
-    (ctUint, 32, "vec"), (ctUint, 64, "vec"),
-    (ctFloat, 16, "vec"), (ctFloat, 32, "vec"), (ctFloat, 64, "vec")],
+    (ctInt, 32, "vec"), (ctUint, 32, "vec"),
+    (ctFloat, 16, "vec"), (ctFloat, 32, "vec")],
   lanes: @[2, 3, 4],
   nameForm: vnfGenericElem)
 
