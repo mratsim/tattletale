@@ -45,9 +45,9 @@
 ##   staged at launch as a descriptor-route uniform on fvD3D12, as a push block member on fvVulkan
 ##
 ## Addressing, memory classes, jumps:
-## - HLSL has no pointer values: pointer locals, pointer-holding struct locals,
-##   `var` parameter derefs all unwrap in the HLSL lowering pass,
-##   anything pointer shaped reaching the printer refuses
+## - HLSL has no pointer values: the HLSL lowering pass unwraps pointer locals,
+##   pointer-holding struct locals and `var` parameter derefs, and it refuses
+##   every pointer shape it cannot unwrap
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the HLSL lowering pass,
 ##   file-scope `static const` output, a smem, device-space or surviving
 ##   constant-space local refuses
@@ -471,15 +471,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
         return ""
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
-  of eDeref:
-    # refused, HLSL has no pointer values
-    ctx.fail("bare dereference has no emission, HLSL has no pointer values")
-    return ""
-  of eAddr:
-    # refused, buffers are index-only resources and locals rewrite to their pointee
-    ctx.fail("address-of has no HLSL form, buffers are index-only resources" &
-      " and locals rewrite to their pointee")
-    return ""
   of eCast:
     return ctx.printCast(e, hlslCastRules, emitHlslTypeBare(ctx, e.castType))
   of eConv:
@@ -534,11 +525,15 @@ proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, l
 # Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration: pointer and storage-class refusals, then the declaration text with its initializer.
+  ## One local declaration:
+  ## - the buffer-local refusal and the storage-class refusals
+  ## - the declaration text with its initializer
+  ##
+  ## Thread-space pointer locals never reach here: the HLSL lowering pass
+  ## rewrites them to their pointees.
   let pad = spaces(ctx.indent * 2)
-  if s.declType.kind in {ctPtr, ctAptr}:
-    ctx.fail("pointer local " & s.name & ", HLSL has no pointer values," &
-      " the HLSL lowering pass rewrites pointer locals to their pointees")
+  if s.declType.kind == ctAptr:
+    ctx.fail("buffer local " & s.name & " has no HLSL binding, buffers are kernel parameters")
     return ""
   if s.space == caThreadgroup:
     ctx.fail("local " & s.name & " in threadgroup space, HLSL has no" &
@@ -771,8 +766,7 @@ proc emitStructDecls(ctx: var PrintCtx, byName: Table[string, CirType], emitted:
     ctx.fail("struct " & name & " is referenced but has no declaration")
     return
   if t.containsPtrDeep:
-    ctx.fail("struct " & name & " holds a pointer, HLSL structs cannot hold" &
-      " resources, the HLSL lowering pass rewrites pointer-holding locals to their fields")
+    ctx.fail("struct " & name & " holds a pointer, HLSL structs cannot hold resources")
     return
   emitted.incl name
   for f in t.fields:
