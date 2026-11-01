@@ -528,7 +528,12 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
       result.src &= "  " & field & ";\n"
     result.src &= "};\n\n"
 
-  # one push block for the whole module: the union of every kernel's parameters, same-name parameters dedup by their declaration text
+  # one push block for the whole module: the union of every kernel's parameters,
+  # same-name dedup by declaration text
+  #
+  # validateSharedPushConstLayout refuses multi-kernel modules whose kernels
+  # declare different ordered params: an accepted block then maps one member
+  # to one offset for every kernel
   var pushDecls: seq[string]
   for kernel in kernels:
     for p in kernel.params:

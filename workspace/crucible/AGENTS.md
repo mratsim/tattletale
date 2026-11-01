@@ -251,7 +251,7 @@ The args tuple order matches the kernel params minus the output, scalars are by-
 | Metal | buffers, output at index 0 then inputs in order, scalars in one shared constant buffer at 16-byte slots |
 | Metal | more than 31 bindings rejected at ingest via NSError, readback from `contents()` after `waitUntilCompleted`, no staging or map path |
 | Vulkan | by-value params are push constants (`layout(push_constant) uniform KernelParams`), 4-byte only, loud quit otherwise |
-| Vulkan | one kernel per `glsl:` source with scalars, a multi-kernel source unions params file-scope and misaligns them, pointer-only multi-kernel is fine |
+| Vulkan | multi-kernel `glsl:` sources must declare identical ordered params, scalars and pointers alike pack through the shared push-constant block, a conflict refuses at codegen |
 
 ### Run commands
 
