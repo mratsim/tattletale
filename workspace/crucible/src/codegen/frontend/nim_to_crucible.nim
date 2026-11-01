@@ -57,9 +57,6 @@ type
     hoisted: seq[CirStmt]
     ## Statements hoisted in front of the statement being lowered.
 
-proc failing(ctx: FrontendCtx): bool =
-  ctx.resolver.err.len > 0
-
 proc fail(ctx: var FrontendCtx, detail: string) =
   ## First refusal wins through the resolver's channel. The detail is prefixed
   ## with the proc under translation.
@@ -94,17 +91,13 @@ proc popScope(ctx: var FrontendCtx) =
   ctx.scopes.del(ctx.scopes.high)
   ctx.localSpaces.del(ctx.localSpaces.high)
 
-proc declareLocal(ctx: var FrontendCtx, nimName: string, sym: CirExpr, spc = caThread) =
-  ## Registers a local under an already-computed key in the innermost scope.
+proc declareLocal(ctx: var FrontendCtx, key: string, sym: CirExpr, spc = caThread) =
+  ## Registers a local under the caller's Nim lookup key in the innermost scope.
   ## Used for frontend-internal temporaries and for `result`.
-  ctx.scopes[^1][nimName] = sym
-  ctx.localSpaces[^1][nimName] = spc
-
-proc declareLocal(ctx: var FrontendCtx, n: NimNode, sym: CirExpr, spc = caThread) =
-  ## Registers a local under its Nim lookup key: the symbol's `repr`.
-  ## Macro-generated locals share one `strVal` across expansion scopes,
-  ## the gensym id inside `repr` tells them apart.
-  let key = if n.kind == nnkPragmaExpr: n[0].repr else: n.repr
+  ##
+  ## The key is the symbol's `repr`, pragma wrapper included:
+  ## macro-generated locals share one `strVal` across expansion scopes,
+  ## a gensym id inside `repr` tells them apart.
   ctx.scopes[^1][key] = sym
   ctx.localSpaces[^1][key] = spc
 
@@ -181,7 +174,7 @@ proc lowerOperandExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   if bare != n and bare.kind in {nnkIntLit .. nnkUInt64Lit,
       nnkFloat32Lit, nnkFloat64Lit, nnkFloatLit}:
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     if bare.kind in {nnkFloat32Lit, nnkFloat64Lit, nnkFloatLit}:
       return fltLit(bare.floatVal, typ)
@@ -266,7 +259,7 @@ proc builtinSymExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## emitted as a plain symbol. The printers map the name onto the target vocabulary.
   let name = sanitizeIdent(n.strVal)
   let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   result = sym(name, typ, builtin = true)
 
@@ -315,14 +308,6 @@ proc isGenericDef(fn: NimNode): bool =
           return true
   return false
 
-proc resolveCalleeProcType(ctx: var FrontendCtx, callee: NimNode): CirType =
-  ## Proc type of a callee symbol. An overload choice resolves to its first candidate,
-  ## which sem picked during overload resolution.
-  let calleeSym = resolveCallCallee(callee)
-  result = ctx.resolver.resolveCirType(calleeSym.getTypeInst())
-  if ctx.failing():
-    return nil
-
 func procIdentity(callee: NimNode): uint64 =
   ## Identity hash of a callee: the full 64-bit hash of the signature key,
   ## the repr and the signature hash. A generic adds the body hash,
@@ -363,13 +348,13 @@ proc registerOrGet(ctx: var FrontendCtx, calleeSym: NimNode): ProcEntry =
     if result.fnType.isNil:
       # a definition registers before its body lowers, so the type is read
       # once at the first call inside it
-      result.fnType = ctx.resolveCalleeProcType(calleeSym)
-      if ctx.failing():
+      result.fnType = ctx.resolver.resolveCirType(calleeSym.getTypeInst())
+      if ctx.resolver.err.len > 0:
         return
       ctx.procRegistry[id].fnType = result.fnType
     return
-  let fnType = ctx.resolveCalleeProcType(calleeSym)
-  if ctx.failing():
+  let fnType = ctx.resolver.resolveCirType(calleeSym.getTypeInst())
+  if ctx.resolver.err.len > 0:
     return
   let name = ctx.claimProcName(id,
     mangleOperatorName(calleeSym.strVal) & "_" & base58Short(id))
@@ -392,11 +377,11 @@ proc lowerCallArgs(ctx: var FrontendCtx, callee: NimNode, call: NimNode): seq[Ci
     if isCompileTimeFormal(ftype):
       continue
     let arg = ctx.lowerExpr(call[argIdx])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     # a literal argument re-types to the formal under this lowering, an exact conversion
     let ftyp = ctx.resolver.resolveCirType(ftype)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     result.add(operandLiteralTypedAs(arg, ftyp))
 
@@ -440,11 +425,11 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   ## pass kind-assign from the canonical tables.
   let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
   let entry = ctx.registerOrGet(calleeSym)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   if not calleeBuiltin and not entry.hasBody:
     ctx.harvestProc(calleeSym, entry.name)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
   let calleeName = if calleeBuiltin: calleeSym.strVal
                    else: entry.name
@@ -481,11 +466,11 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     # element type and space. The base must be a pointer: the split's pointer
     # side offsets the base by `first`, and CIRv2 states pointer arithmetic over pointers
     let base = ctx.lowerExpr(call[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let first = ctx.lowerOperandExpr(call[2])
     let last = ctx.lowerOperandExpr(call[3])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let baseTyp = getExprType(base)
     if baseTyp.isNil or baseTyp.kind notin {ctPtr, ctAptr}:
@@ -502,7 +487,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     # a `len(s)` read over an openArray lowers to the `len` call
     # that the span split pass folds to the span's split length binding
     let arg = ctx.lowerExpr(call[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let argTyp = getExprType(arg)
     let readTyp = tProcT(argTyp, tInt(32))
@@ -517,7 +502,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
        "DivI", "DivU", "DivF32", "DivF64",
        "ModI", "ModU", "ShlI", "ShrI":
       let args = ctx.lowerCallArgs(callee, call)
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       let opType = getExprType(args[0])
       let rhs = operandLiteralTypedAs(args[1], opType)
@@ -539,8 +524,8 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
   # `min`/`max` harvest into a ternary idiom.
   # An aggregate `abs` proc takes the harvest path below.
   if calleeSym.strVal == "abs":
-    let fnType = ctx.resolveCalleeProcType(calleeSym)
-    if ctx.failing():
+    let fnType = ctx.resolver.resolveCirType(calleeSym.getTypeInst())
+    if ctx.resolver.err.len > 0:
       return nil
     var scalar = true
     for p in fnType.params:
@@ -549,16 +534,16 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
         break
     if scalar:
       let args = ctx.lowerCallArgs(calleeSym, call)
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       return callE(sym(calleeSym.strVal, fnType, true), args)
   # a bodiless magic took the primitive path above
   # every other callee harvests, a magic with a Nim body (like `max`) lowers through it
   let calleeExpr = ctx.harvestedCallee(calleeSym)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   let args = ctx.lowerCallArgs(calleeSym, call)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   return callE(calleeExpr, args)
 
@@ -568,7 +553,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
 
 proc isBuiltinScalar(ctx: var FrontendCtx, n: NimNode): bool =
   let t = ctx.resolver.resolveCirType(n.getTypeInst())
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return false
   return isScalarType(t)
 
@@ -593,16 +578,16 @@ proc lowerNestedTernary(ctx: var FrontendCtx,
   ## contains the next branch, first match wins.
   ## `elseBody` is the innermost else variant.
   let cond = ctx.lowerExpr(branches[idx].cond)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   let thenV = ctx.lowerExpr(branchValueExpr(branches[idx].body))
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   let elseV = if idx + 1 < branches.len:
                  lowerNestedTernary(ctx, branches, elseBody, idx + 1, resType)
                else:
                  ctx.lowerExpr(branchValueExpr(elseBody))
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   return ternaryE(resType, cond, thenV, elseV)
 
@@ -626,7 +611,7 @@ proc buildBranchBody(ctx: var FrontendCtx, bodyNode: NimNode, dest: CirExpr): se
       value = ctx.lowerExpr(c)
     else:
       stmts.add(ctx.lowerStmt(c))
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     ctx.popScope()
     return @[]
   ctx.popScope()
@@ -639,17 +624,17 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
   var tail: seq[CirStmt] = @[]
   if not elseBody.isNil:
     tail = ctx.buildBranchBody(elseBody, dest)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
   for i in countdown(branches.len - 1, 0):
     let cond = ctx.lowerExpr(branches[i].cond)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     # condition splices emit before the branch test, inside the else body
     # of the previous branch, so a splice runs only when the test runs
     let condHoists = ctx.drainHoisted()
     let body = ctx.buildBranchBody(branches[i].body, dest)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     tail = condHoists & @[iteS(cond, body, tail)]
   result = tail
@@ -662,7 +647,7 @@ proc lowerSplicedStmt(ctx: var FrontendCtx, c: NimNode): seq[CirStmt] =
   if c.kind == nnkStmtList:
     for child in c:
       result.add(ctx.lowerSplicedStmt(child))
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return @[]
     return result
   if c.kind in {nnkObjConstr, nnkTupleConstr, nnkExprColonExpr, nnkBracketExpr,
@@ -674,13 +659,13 @@ proc lowerSplicedStmt(ctx: var FrontendCtx, c: NimNode): seq[CirStmt] =
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## Translates one expression node: the statements spliced by the expression
   ## sit in front of the enclosing statement.
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   if n.kind == nnkNilLit:
     # a nil literal: the literal node reports isNil too, this case runs
     # before the missing-node check
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     return nilE(typ)
   case n.kind
@@ -717,12 +702,12 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
   of nnkIntLit .. nnkUInt64Lit:
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     return intLit(n.intVal, typ)
   of nnkFloat32Lit, nnkFloat64Lit, nnkFloatLit:
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     return fltLit(n.floatVal, typ)
   of nnkHiddenStdConv:
@@ -733,7 +718,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let inner = n[1]
     if inner.kind in {nnkFloat32Lit, nnkFloat64Lit, nnkFloatLit}:
       let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       return fltLit(inner.floatVal, typ)
     return ctx.lowerExpr(inner)
@@ -742,10 +727,10 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       ctx.resolver.resolveCirType(n.getTypeInst())
     else:
       ctx.resolver.resolveCirType(n[0])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let operand = ctx.lowerExpr(n[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let ot = getExprType(operand)
     if ot != nil and sameType(ot, typ):
@@ -766,10 +751,10 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return convE(typ, operand)
   of nnkCast:
     var typ = ctx.resolver.resolveCirType(n[0])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let operand = ctx.lowerExpr(n[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     if typ.kind in {ctPtr, ctAptr}:
       # a pointer cast keeps its operand's storage space: the target type
@@ -778,7 +763,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return castE(typ, operand)
   of nnkHiddenDeref, nnkDerefExpr:
     let base = ctx.lowerExpr(n[0])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let bt = getExprType(base)
     if bt != nil and bt.kind == ctSpan:
@@ -787,7 +772,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return derefE(base)
   of nnkHiddenAddr, nnkAddr:
     let base = ctx.lowerExpr(n[0])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let bt = getExprType(base)
     # address space: the memory where the base value lives
@@ -829,10 +814,10 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       loweredBase = ctx.lowerExpr(baseNode[0])
     else:
       loweredBase = ctx.lowerExpr(baseNode)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let idx = ctx.lowerOperandExpr(n[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     let bt = getExprType(loweredBase)
     case bt.kind
@@ -856,7 +841,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
   of nnkDotExpr:
     let base = ctx.lowerExpr(n[0])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     return dotE(base, sanitizeIdent(n[1].strVal))
   of nnkInfix:
@@ -873,12 +858,12 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     else:
       discard
     let a = ctx.lowerOperandExpr(n[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     case op
     of "==", "!=", "<", "<=", ">", ">=":
       let b = ctx.lowerOperandExpr(n[2])
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       let at = getExprType(a)
       let bCmp = operandLiteralTypedAs(b, at)
@@ -904,7 +889,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       let at = getExprType(a)
       if at != nil and at.kind == ctBool:
         let b = ctx.lowerOperandExpr(n[2])
-        if ctx.failing():
+        if ctx.resolver.err.len > 0:
           return nil
         case op
         of "and":
@@ -914,7 +899,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         else:
           return neqE(a, b)
       let b = ctx.lowerOperandExpr(n[2])
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       case op
       of "and":
@@ -926,7 +911,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return result
     of "+", "-", "*", "/", "div", "mod", "shl", "shr":
       let b = ctx.lowerOperandExpr(n[2])
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       let opType = getExprType(a)
       return arithExpr(op, opType, a, operandLiteralTypedAs(b, opType))
@@ -936,7 +921,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   of nnkPrefix:
     let op = n[0].strVal
     let operand = ctx.lowerOperandExpr(n[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     case op
     of "-":
@@ -961,14 +946,14 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         # semantic analysis yields an Empty node for a nil field value, and the omitted-field zero fill below supplies the typed nil
         continue
       let v = ctx.lowerExpr(n[i][1])
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       let fieldName = sanitizeIdent(n[i][0].strVal)
       # a pointer-typed field instantiates under the space its value proves
       valueSpaces[fieldName] = resolveAddressSpace(v)
       fields.add(kv(fieldName, v))
     let typ = ctx.resolver.resolveStructType(n.getTypeInst(), valueSpaces)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     # Nim binds constructor values by name while the target syntax binds positionally:
     # normalize every constructor to the type's declaration order, omitted fields zero-initialize,
@@ -992,23 +977,23 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return ctx.lowerExpr(n[1])
   of nnkTupleConstr:
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     var fields: seq[CirKv] = @[]
     for i in 0 ..< n.len:
       let v = ctx.lowerExpr(n[i])
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       fields.add(kv("F" & $i, v))
     return oconstrE(typ, fields)
   of nnkBracket:
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     var elems: seq[CirExpr] = @[]
     for el in n:
       let v = ctx.lowerExpr(el)
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return nil
       elems.add(v)
     return aconstrE(typ, elems)
@@ -1024,7 +1009,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         value = ctx.lowerExpr(c)
       else:
         ctx.hoisted.add(ctx.lowerSplicedStmt(c))
-        if ctx.failing():
+        if ctx.resolver.err.len > 0:
           return nil
     return value
   of nnkBlockExpr, nnkBlockStmt:
@@ -1042,14 +1027,14 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         value = ctx.lowerExpr(c)
       else:
         ctx.hoisted.add(ctx.lowerSplicedStmt(c))
-        if ctx.failing():
+        if ctx.resolver.err.len > 0:
           return nil
     return value
   of nnkIfExpr:
     # an if-expression: single-expression branches nest into conditional values,
     # statement-bearing branches hoist a temp that the statement form assigns
     let resType = ctx.resolver.resolveCirType(n.getTypeInst())
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     var branches: seq[tuple[cond: NimNode, body: NimNode]] = @[]
     var elseBody: NimNode = nil
@@ -1079,7 +1064,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let tmpName = ctx.uniqueName("iftmp")
     ctx.declareLocal(tmpName, sym(tmpName, resType))
     let stmts = ctx.lowerIfForm(branches, elseBody, sym(tmpName, resType))
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return nil
     ctx.hoisted.add(@[varD(tmpName, resType)] & stmts)
     return sym(tmpName, resType)
@@ -1116,10 +1101,10 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     ctx.fail("magic call " & callee.repr & " in statement position without a destination")
     return @[]
   let calleeExpr = ctx.harvestedCallee(calleeSym)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return @[]
   let args = ctx.lowerCallArgs(calleeSym, n)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return @[]
   return ctx.drainHoisted() & @[callS(calleeExpr, args)]
 
@@ -1164,7 +1149,7 @@ func bodyMarksUnroll(body: NimNode): bool =
   return false
 
 proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return @[]
   if n.isNil:
     return @[]
@@ -1175,7 +1160,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   of nnkStmtList:
     for c in n:
       result.add(ctx.lowerStmt(c))
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return @[]
   of nnkLetSection, nnkVarSection:
     # a `let`/`var` section: one typed declaration per name, a call-valued initializer
@@ -1187,7 +1172,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       for j in 0 ..< defs.len - 2:
         let nameNode = defs[j]
         let spc = ctx.collectAddressSpace(nameNode)
-        if ctx.failing():
+        if ctx.resolver.err.len > 0:
           return @[]
         let nimName = if nameNode.kind == nnkPragmaExpr: nameNode[0].strVal
                       else: nameNode.strVal
@@ -1196,12 +1181,12 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
           typ = ctx.resolver.resolveCirType(typeNode)
         else:
           typ = ctx.resolver.resolveCirType(initNode.getTypeInst())
-        if ctx.failing():
+        if ctx.resolver.err.len > 0:
           return @[]
         var value: CirExpr = nil
         if initNode.kind != nnkEmpty:
           value = ctx.lowerExpr(initNode)
-          if ctx.failing():
+          if ctx.resolver.err.len > 0:
             return @[]
           if value.kind == eOconstr and typ != nil and typ.kind == ctStruct and
               value.ocType.kind == ctStruct:
@@ -1218,7 +1203,10 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
             typ = getExprType(value)
         let hoists = ctx.drainHoisted()
         let cirName = ctx.uniqueName(nimName)
-        ctx.declareLocal(nameNode, sym(cirName, typ), spc)
+        # lookup key: `repr` of the declaration, pragma wrapper included
+        let lookupKey = if nameNode.kind == nnkPragmaExpr: nameNode[0].repr
+                        else: nameNode.repr
+        ctx.declareLocal(lookupKey, sym(cirName, typ), spc)
         if value.isNil:
           result.add(hoists & @[varD(cirName, typ, nil, spc)])
         else:
@@ -1233,14 +1221,14 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         discard ctx.resolver.resolveCirType(typeNode)
       else:
         discard ctx.resolver.resolveCirType(valueNode.getTypeInst())
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return @[]
   of nnkAsgn:
     let lhs = ctx.lowerExpr(n[0])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     let rhs = ctx.lowerExpr(n[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     # a literal rhs re-types to the destination under this lowering, an exact conversion
     let rhsT = operandLiteralTypedAs(rhs, getExprType(lhs))
@@ -1258,7 +1246,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     if n[0].kind in {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
       let lt = ctx.resolver.resolveCirType(n[1].getTypeInst())
       let rt = ctx.resolver.resolveCirType(n[2].getTypeInst())
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         # operand type resolution failed, return with the pending failure,
         # a statement-position call path needs a clean channel
         return @[]
@@ -1266,7 +1254,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       scalar = isScalarType(lp) and isScalarType(rt)
     if op in ["+=", "-=", "*=", "/="] and scalar:
       var lhs = ctx.lowerExpr(n[1])
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return @[]
       # this lowering dereferences a var-returning `[]` call's element address, and the assignment target is the location behind it
       if lhs.kind == eAddr:
@@ -1277,7 +1265,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         # assignment operates on the pointee the pointer names
         lhs = derefE(lhs)
       let rhs = ctx.lowerOperandExpr(n[2])
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return @[]
       let opType = getExprType(lhs)
       let rhsOp = operandLiteralTypedAs(rhs, opType)
@@ -1305,12 +1293,12 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     # a splice runs once per iteration after the test that admits it
     let unroll = bodyMarksUnroll(n[1])
     let cond = ctx.lowerExpr(n[0])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     ctx.pushScope()
     let body = ctx.lowerStmt(n[1])
     ctx.popScope()
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     return @[whileS(cond, body, unroll)]
   of nnkForStmt:
@@ -1369,13 +1357,13 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       return @[]
     let varName = ctx.uniqueName($vars)
     let varType = ctx.resolver.resolveCirType(vars.getTypeInst())
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     let startV = ctx.lowerExpr(unwrapConv(startNode))
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     let stopV = ctx.lowerExpr(unwrapConv(stopNode))
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     # bounds and step re-type to the loop variable. A literal conversion is exact,
     # comparisons and increment then use one operand type
@@ -1398,20 +1386,20 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         # no entry lowering: a step's calls must not run once before the loop
         # body ever executes, per-iteration lowering belongs to the incr branch
         stepIsConst = false
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     if stepIsConst:
       stepT = operandLiteralTypedAs(stepV, varType)
     # a loop variable's Nim scope is the for statement, so the declaration
     # and the body nest one scope
     ctx.pushScope()
-    ctx.declareLocal(vars, sym(varName, varType))
+    ctx.declareLocal(vars.repr, sym(varName, varType))
     let varSym = sym(varName, varType)
     let unroll = bodyMarksUnroll(n[^1])
     # start/stop/step hoists queued so far belong to the preamble, while the body's own hoists drain per statement inside it
     let startHoists = ctx.drainHoisted()
     let body = ctx.lowerStmtBody(n[^1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       ctx.popScope()
       return @[]
     let bodyHoists = ctx.drainHoisted()
@@ -1428,7 +1416,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       # they re-evaluate at the continue point.
       # A step frozen at entry counts wrong iterations.
       let stepNow = ctx.lowerExpr(unwrapConv(stepNode))
-      if ctx.failing():
+      if ctx.resolver.err.len > 0:
         return @[]
       let stepNowT = operandLiteralTypedAs(stepNow, varType)
       incr.add(ctx.drainHoisted() & @[asgnS(varSym, addE(varType, varSym, stepNowT))])
@@ -1445,7 +1433,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         return @[retS(sym("result", ctx.retType))]
       return @[retS(nil)]
     let value = ctx.lowerExpr(valueNode)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     return ctx.drainHoisted() & @[retS(value)]
   of nnkDiscardStmt:
@@ -1454,7 +1442,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     if n[0].kind in {nnkCall, nnkCommand}:
       return ctx.lowerVoidCall(n[0])
     let value = ctx.lowerExpr(n[0])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     return ctx.drainHoisted() & @[discardS(value)]
   of nnkCall, nnkCommand:
@@ -1473,7 +1461,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         parts[^1].add(c.strVal)
       of nnkSym:
         let op = ctx.lowerExpr(c)
-        if ctx.failing():
+        if ctx.resolver.err.len > 0:
           return @[]
         parts.add("")
         operands.add(op)
@@ -1526,7 +1514,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
           parts[^1].add(part.strVal)
         else:
           let e = ctx.lowerExpr(part)
-          if ctx.failing():
+          if ctx.resolver.err.len > 0:
             return @[]
           var op = e
           if e.kind != eSym:
@@ -1553,13 +1541,13 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     # a discarded construction step of a macro expansion drops its value:
     # this lowering keeps the side effects only (see lowerSplicedStmt)
     discard ctx.lowerExpr(n)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     return ctx.drainHoisted()
   of nnkExprColonExpr:
     # a discarded named-field step of a macro expansion whose value is never read
     discard ctx.lowerExpr(n[1])
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       return @[]
     return ctx.drainHoisted()
   of nnkTryStmt, nnkRaiseStmt:
@@ -1574,7 +1562,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
 
 proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   let body = ctx.lowerStmtBody(n)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return @[]
   return ctx.drainHoisted() & body
 
@@ -1595,7 +1583,7 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
     if isCompileTimeFormal(ftype) or ftype.repr == "typedesc":
       continue
     let typ = ctx.resolver.resolveCirType(ftype)
-    if ctx.failing():
+    if ctx.resolver.err.len > 0:
       ctx.popScope()
       return @[]
     for j in 0 ..< formal.len - 2:
@@ -1603,7 +1591,7 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
       let psym = sym(pname, typ)
       params.add(CirParam(name: pname, typ: typ,
         varParam: ftype.kind == nnkVarTy))
-      ctx.declareLocal(formal[j], psym)
+      ctx.declareLocal(formal[j].repr, psym)
   let ret = ctx.retType
   if ret.kind != ctVoid:
     # Nim lets a non-void proc declare its own `result`, that local suffixes
@@ -1613,7 +1601,7 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
     result.add(varD("result", ret))
   result.add(ctx.lowerStmt(body))
   ctx.popScope()
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return @[]
   # a fall-through body takes the fallback return, an explicit trailing
   # return already ends the proc
@@ -1668,7 +1656,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   ## A def claims and emits under its own name: kernels keep the plain name,
   ## other defs mangle the operator name, a claim conflict suffixes.
   ## A call-site harvest never claims a plain name.
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   if isGenericDef(fn):
     return nil
@@ -1682,7 +1670,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
     ctx.procRegistry[id] = ProcEntry(name: cirName)
   ctx.procRegistry[id].hasBody = true
   let save = ctx.enterProcBody(cirName, formals)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   var params: seq[CirParam] = @[]
   let fnRet = ctx.retType
@@ -1697,7 +1685,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   if wgErr.len > 0:
     ctx.fail(wgErr)
   ctx.exitProcBody(save)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return nil
   ctx.procs.add(result)
 
@@ -1715,7 +1703,7 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   # belong to the caller's statement, never to the callee's body
   ctx.hoisted = @[]
   let save = ctx.enterProcBody(cirName, formals)
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     return
   var params: seq[CirParam] = @[]
   let fnRet = ctx.retType
@@ -1724,7 +1712,7 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   # pending hoists of the callee under lowering close its body, then the caller's queue resumes
   let calleeHoists = ctx.drainHoisted()
   ctx.hoisted = savedHoisted
-  if ctx.failing():
+  if ctx.resolver.err.len > 0:
     ctx.procs.setLen(savedProcsLen)
     return
   let harvested = procD(cirName, params, fnRet, calleeHoists & body)
@@ -1800,12 +1788,12 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
             let valN = def[2]
             let typN = if def[1].kind == nnkEmpty: valN.getTypeInst() else: def[1]
             let t = ctx.resolver.resolveCirType(typN, space)
-            if ctx.failing():
+            if ctx.resolver.err.len > 0:
               break topLevelSection
             var init: CirExpr = nil
             if valN.kind != nnkEmpty:
               init = ctx.lowerExpr(valN)
-              if ctx.failing():
+              if ctx.resolver.err.len > 0:
                 break topLevelSection
             let g = varD(name, t, init, space)
             ctx.moduleGlobals.add(g)
