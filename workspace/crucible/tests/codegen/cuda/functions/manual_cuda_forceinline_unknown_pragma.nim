@@ -6,7 +6,7 @@
 ## Run:
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/ir/frontend/manual_frontend_forceinline_unknown_pragma.nim
+##     workspace/crucible/tests/codegen/cuda/functions/manual_cuda_forceinline_unknown_pragma.nim
 
 import workspace/crucible
 
