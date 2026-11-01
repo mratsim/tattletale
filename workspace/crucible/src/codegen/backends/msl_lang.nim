@@ -37,12 +37,12 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
-    policy: KindRow
-    ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitRow
+    policy: WalkPolicy
+    ## Walk policy of the target. The shared walk reads its fields.
+    lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them, per kernel state.
-    row: ScalarRow
-    ## Scalar row of the target. The narrow integer cast names its type from it., per kernel state.
+    scalarNames: ScalarNames
+    ## Scalar names of the target. The narrow integer cast takes its type name from them, per kernel state.
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
@@ -59,15 +59,15 @@ proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
 
 proc emitMslScalar(t: CirType): string =
   ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
-  getBareName(mslScalarRow, mslVectorRule, t)
+  getBareName(mslScalarNames, mslVectorRule, t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## MSL declaration text of `t` with `ident` appended, the shared C declarator
-  ## over the MSL rows. Arrays take the identifier into the declarator
+  ## over the MSL tables. Arrays put the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
-  cDecl(mslScalarRow, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
+  cDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
-proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: string, t: CirType, ident: string): string =
+proc ptrField(names: ScalarNames, rule: VectorRule, target: string, qualifier: string, t: CirType, ident: string): string =
   ## Declaration text of a pointer or array pointer with its address-space qualifier:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
   ##
@@ -77,8 +77,8 @@ proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: strin
   let sep = if qualifier.len > 0: " " else: ""
   let inner = t.pElem
   if inner.kind == ctArray:
-    return qualifier & sep & cDecl(row, rule, target, inner, "(*" & ident & ")", true)
-  return qualifier & sep & getBareName(row, rule, inner) & "* " & ident
+    return qualifier & sep & cDecl(names, rule, target, inner, "(*" & ident & ")", true)
+  return qualifier & sep & getBareName(names, rule, inner) & "* " & ident
 
 proc getMslPtrQualifier(space: AddressSpace): string =
   ## MSL qualifier before a pointer declaration or cast, one word per space.
@@ -91,7 +91,7 @@ proc getMslPtrQualifier(space: AddressSpace): string =
 proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  ptrField(mslScalarRow, mslVectorRule, printerTarget,
+  ptrField(mslScalarNames, mslVectorRule, printerTarget,
     getMslPtrQualifier(t.space), t, ident)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
@@ -389,8 +389,8 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full MSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: mslKindRow,
-    lit: mslLitRow, row: mslScalarRow)
+  var ctx = PrintCtx(fnName: "<module>", policy: mslWalkPolicy,
+    lit: mslLitTokens, scalarNames: mslScalarNames)
   printModule(ctx, m, moduleKernels(m), mslModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =

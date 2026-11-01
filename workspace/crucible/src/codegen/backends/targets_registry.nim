@@ -5,25 +5,25 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Schema and data of the printers' static target rows.
+## Schema and data of the printers' static target registry.
 ##
-## A row is a const object of plain data: strings, bools, ints, enums, sets and tables of those.
+## Each const object is plain data: strings, bools, ints, enums, sets and tables of those.
 ## No field stores a proc or a placeholder whose value depends on a body walk.
 ##
-## | type       | contents                                      |
-## | ---------- | --------------------------------------------- |
-## | ScalarRow  | type names by (kind, width) cell              |
-## | LitRow     | literal token forms                           |
-## | KindRow    | walk policy: loops, else folding, routing set |
-## | VectorRule | a target's real vector coverage               |
-## | CastRule   | one bit-reinterpret coverage rule             |
+## | type        | contents                                        |
+## | ----------- | ----------------------------------------------- |
+## | ScalarNames | type names by (kind, width) cell                |
+## | LitTokens   | literal token forms                             |
+## | WalkPolicy  | shared-walk branches: loop text, folds, routing |
+## | VectorRule  | a target's real vector coverage                 |
+## | CastRule    | one bit-reinterpret coverage rule               |
 ##
 ## The six printer targets (Metal MSL, CUDA C++, OpenCL C, GLSL, WebGPU WGSL, HLSL):
 ##
-## - each states its rows in the `genTargets:` DSL at the bottom of this module
-## - the macro in `targets_macros.nim` validates every row against these types
-##   during compilation and generates one lookup const per row family
-## - a row missing the schema fails the compile at the row definition
+## - each declares its sections in the `genTargets:` DSL at the bottom of this module
+## - the macro in `targets_macros.nim` validates every section against these types
+##   during compilation and generates one lookup const per family
+## - a section that misses the schema fails the compile at the section definition
 ## - the printers read the generated lookups, signature text, coordinate
 ##   builtins and refusal messages stay procedural in the printers
 
@@ -35,7 +35,7 @@ type
     ## Non-finite float literal tokens for one printer target:
     ##
     ## - one field per literal width
-    ## - tokens are stated only for the widths the target emits, a width
+    ## - tokens are declared only for the widths the target emits, a width
     ##   without a token is covered by the target's scalar refusal
     ## - Nim's `$` renders the special values `inf`, `-inf` and `nan`, and no
     ##   shader language accepts those as a literal token
@@ -51,7 +51,7 @@ type
     ## - 64-bit widths take `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
     ## - 32-bit unsigned takes `u32Suffix`, 32-bit signed prints bare
     ## - narrow (8/16-bit) widths print bare or, per `narrowCast`, as a cast
-    ##   to the scalar type name from the target's scalar row
+    ##   to the scalar type name from the target's scalar names
     u64Prefix*, u64Suffix*, u32Suffix*: string
     i64Prefix*, i64Suffix*: string
     narrowCast*: bool
@@ -68,21 +68,21 @@ type
 
 type
   ScalarCell* = object
-    ## One (kind, width) cell of a scalar row.
+    ## One (kind, width) cell of a target's scalar names.
     kind*: CirTypeKind
     width*: int
     ## Bit width, 0 for the widthless kinds (void, bool).
     spelling*: string
     ## Type name the target prints.
 
-  ScalarRow* = object
+  ScalarNames* = object
     ## Scalar type names of one target by (kind, width) cell.
-    ## A row lists the cells the target names, an omitted cell refuses at the lookup.
+    ## The table lists the cells the target names, an omitted cell refuses at the lookup.
     cells*: seq[ScalarCell]
     refusals*: seq[tuple[kind: CirTypeKind, width: int, reason: string]]
-    ## One-line refusal reason per omitted cell the row documents.
+    ## One-line refusal reason per omitted cell the table documents.
 
-  LitRow* = object
+  LitTokens* = object
     ## Literal token forms of one target.
     ## No exponent or hex-float fields: no printer handles either form.
     int*: IntLitTokens
@@ -92,7 +92,7 @@ type
     nilToken*: string
     nonFinite*: FloatLitTokens
 
-  KindRow* = object
+  WalkPolicy* = object
     ## Per-target policy where the shared expression and statement walks branch on target.
     ## No for-range, switch or sizeof field: no printer emits the first two, sizeof routes per target through `printTargetExpr`.
     loop*: LoopStyle
@@ -107,7 +107,7 @@ type
   VectorNameForm* = enum
     ## Composition of a vector type name from the element's prefix and the lane count.
     vnfPrefixed
-    ## `prefix & $laneCount` forms the C-family names (`vec3`, `float4`). An empty prefix composes the element's scalar name from the scalar row.
+    ## `prefix & $laneCount` forms the C-family names (`vec3`, `float4`). An empty prefix composes the element's scalar name from the scalar names.
     vnfGenericElem
     ## `prefix & $laneCount & '<' & elementName & '>'` forms the generic-element names (`vec3<f32>`).
 
@@ -150,11 +150,11 @@ const ScalarCellAxis*: array[14, tuple[tok: string, kind: CirTypeKind, width: in
   ("u8", ctUint, 8), ("u16", ctUint, 16), ("u32", ctUint, 32), ("u64", ctUint, 64),
   ("f16", ctFloat, 16), ("bf16", ctBf16, 16), ("f32", ctFloat, 32), ("f64", ctFloat, 64)]
   ## (kind, width) cells with the DSL token naming each cell.
-  ## Every scalar row and vector element row keys its entries to this axis.
+  ## Every scalar-name table and vector element list keys its entries to this axis.
   ##
   ## - widths name different C types on different hosts, 64-bit `long`
   ##   on LP64 hosts against 32-bit on LLP64 hosts
-  ## - each target states its own names, one cell never inherits another
+  ## - each target declares its own names, one cell never inherits another
   ##   target's name
 
 # Imported after the schema: `targets_macros` imports this module's schema
@@ -168,7 +168,7 @@ genTargets:
       u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", bf16 "bfloat", f32 "float",
       refused f64 "double has no Apple GPU support"
     # `char` and `long` are MSL's 8-bit signed and 64-bit type names.
-    # CUDA names the same widths `signed char` and `long long`, each row states its own names
+    # CUDA names the same widths `signed char` and `long long`, each target declares its own names
     lit u64Suffix "ULL", u32Suffix "U", i64Suffix "LL", narrowCast true,
       f16Suffix "h", f32Suffix "f", nilToken "nullptr",
       inf16 "INFINITY", negInf16 "-INFINITY", nan16 "NAN",
@@ -177,7 +177,7 @@ genTargets:
     kind unrollDirective "#pragma clang loop unroll(full)", braceSameLine true
     # `{.builtin.}` numeric conversions resolve to the MSL native call text,
     # each entry a format string whose `$1` stands for the call's argument list.
-    # `float16` keeps a first-class `half` identity: its conversions are plain native calls.
+    # `float16` has a first-class `half` identity: its conversions are plain native calls.
     # `asFp16`/`asU16` reinterpret through `as_type`.
     # `bfloat16` has a first-class `bfloat` identity (Metal 3.1+), its conversions are plain casts.
     # fp8 conversions have no MSL native, an unspelled `{.builtin.}` name emits unchanged
@@ -262,10 +262,10 @@ genTargets:
       rule srcKinds {ctFloat}, dstKinds {ctInt, ctUint}, sameWidth, "as_$2($1)"
       rule srcKinds {ctInt, ctUint}, dstKinds {ctFloat}, sameWidth, "as_$2($1)"
     # `{.builtin.}` fp16 conversions resolve to the OpenCL C cast forms,
-    # `float16` keeps a first-class `half` identity and `asFp16`/`asU16`
+    # `float16` has a first-class `half` identity and `asFp16`/`asU16`
     # reinterpret through the `as_` builtins.
     # `bfloat16` and fp8 conversions stay outside: no OpenCL C native exists.
-    # `{.builtin.}` names pass through and refuses at OpenCL compile time.
+    # `{.builtin.}` names pass through and refuse at OpenCL compile time.
     conv toFp16 "(half)($1)", toFp32 "(float)($1)", asFp16 "as_half($1)", asU16 "as_ushort($1)"
 
   target glsl:
@@ -288,10 +288,10 @@ genTargets:
       negInf64 "double(uintBitsToFloat(0xff800000u))",
       nan64 "double(uintBitsToFloat(0x7fc00000u))"
     # `{.builtin.}` fp16 conversions resolve to the GLSL native call text,
-    # `float16` keeps a first-class `float16_t` identity and `asFp16`/`asU16`
+    # `float16` has a first-class `float16_t` identity and `asFp16`/`asU16`
     # reinterpret through the float16 bit-level builtins.
     # `bfloat16` and fp8 conversions stay outside: no GLSL native exists.
-    # `{.builtin.}` names pass through and refuses at glslang compile time.
+    # `{.builtin.}` names pass through and refuse at glslang compile time.
     conv toFp16 "float16_t($1)", toFp32 "float($1)", asFp16 "uint16BitsToFloat16($1)",
       asU16 "float16BitsToUint16($1)"
     kind unrollDirective "[[unroll]]", braceSameLine true,
@@ -335,10 +335,10 @@ genTargets:
     bitcast:
       rule srcAny, dstKinds {low(CirTypeKind)..high(CirTypeKind)}, "bitcast<$2>($1)"
     # `{.builtin.}` fp16 conversions resolve to the WGSL native call text,
-    # `float16` keeps a first-class `f16` identity and `asFp16`/`asU16`
+    # `float16` has a first-class `f16` identity and `asFp16`/`asU16`
     # reinterpret through `bitcast`.
     # `bfloat16` and fp8 conversions stay outside: no WGSL native exists.
-    # `{.builtin.}` names pass through and refuses at wgpu parse time.
+    # `{.builtin.}` names pass through and refuse at wgpu parse time.
     conv toFp16 "f16($1)", toFp32 "f32($1)", asFp16 "bitcast<f16>($1)", asU16 "bitcast<u16>($1)"
 
   target hlsl:

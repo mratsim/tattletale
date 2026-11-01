@@ -43,7 +43,7 @@ func `-`*(a: bfloat16): bfloat16 {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 #
 # builtins_type_conversions_fallback provides the host fallback bodies,
-# re-exported here. Device calls lower to the conv rows' native conversions.
+# re-exported here. Device calls lower to the conv tables' native conversions.
 
 import ./builtins_type_conversions_fallback
 export builtins_type_conversions_fallback
