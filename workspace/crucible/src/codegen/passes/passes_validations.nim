@@ -19,8 +19,7 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerValidationPostPasses*(reg: var PassRegistry) =
-  ## Registers the validation stage that every backend bundle runs last:
-  ## the two semantic checks.
+  ## Two semantic checks.
   ##
   ## Placement contract: the stage sits after every transform, before printing.
   ##
@@ -137,7 +136,7 @@ proc constStorageTarget(e: CirExpr, storage: ConstStorage): string =
   ##
   ## Chains:
   ##
-  ## - a write through a pointer or array pointer reads the pointer's space, the pointee may be an array or a scalar alike
+  ## - a write through a pointer or array pointer reads the pointer's space, array or scalar pointee alike
   ## - an indexed or field write uses the base's storage
   if e.isNil:
     return ""

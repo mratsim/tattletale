@@ -5,43 +5,35 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Struct layout analysis: one `pkAnalysis` pass per target.
-## Each pass computes the packed layout of every nominal struct type once
-## into `CirModule.layouts`.
+## Struct layout analysis: one `pkAnalysis` pass per target filling `CirModule.layouts` with the packed layout of every nominal struct type.
 ##
-## Packing rules, what a host-side packer and a `sizeof`-style query must
-## both compute:
-## - a leaf kind packs in its byte width: a scalar `bits div 8`, a bool
-##   `boolWidth`, a pointer 8, a proc type 0
-## - a vector packs its `vN` components back to back, its alignment equals
-##   the component width
+##   last target transform → glslComputeStructLayouts | wgslComputeStructLayouts → validation
+##
+## Packing rules, what a host-side packer and a `sizeof`-style query must both compute:
+## - a leaf kind packs in its byte width: a scalar `bits div 8`, a bool `boolWidth`, a pointer 8, a proc type 0
+## - a vector packs its `vN` components back to back, its alignment equals the component width
 ## - an array packs `aN` element copies back to back
-## - a struct member starts at the first offset that its alignment allows,
-##   and the struct size rounds up to the struct alignment
+## - a struct member starts at the first offset that its alignment allows, and the struct size rounds up to the struct alignment
 ##
 ## Rule-set variant: `boolWidth`. A bool packs in `boolWidth` bytes:
-## - GLSL sets it to 4: a Vulkan std430 bool is a 4-byte word, glslang
-##   compiles a bool member to a 32-bit integer, the same word the launch
-##   ABI packs
+## - GLSL sets it to 4: glslang compiles a bool member to a 32-bit integer, matching the word that the launch ABI packs
 ## - WGSL sets it to 4, one launch-ABI word per bool
 ##
-## Input domain: `CirType`. The SPIR-V backend keeps `std430Layout` local
-## over the post-patch `SpvTy` domain:
-## - the SPIR-V bool retype pass rewrites bool kernel parameters and globals
-##   to i32 before printing, so no CirType-domain bool width describes
-##   SPIR-V member widths
-## - the SPIR-V rule set aligns 3- and 4-component vectors at four times
-##   the element alignment and rounds array strides up to the element
-##   alignment
+## Input domain: `CirType`. The SPIR-V backend keeps `std430Layout` local over the post-patch `SpvTy` domain:
+##
+## - the SPIR-V bool retype pass rewrites bool kernel parameters and globals to i32 before printing
+## - no CirType-domain bool width describes SPIR-V member widths
+##
+## SPIR-V packing deltas over the CirType rules:
+## - the SPIR-V rule set aligns 3- and 4-component vectors at four times the element alignment
+## - the SPIR-V rule set rounds array strides up to the element alignment
 ## - the binary encodes those SPIR-V values as array strides and as struct member offsets
 ## - the aligned buffer stores take their element alignment from the same values
 ##
 ## Contract:
-## - each target registers its pass after its last transform and before
-##   the check-only validation stage
+## - each target registers its pass after its last transform and before the check-only validation stage
 ## - analysis results are valid only if no transform runs after them, which runPasses enforces
-## - the printer reads the stored records, it never recomputes a struct
-##   layout
+## - the printer reads the stored records, it never recomputes a struct layout
 
 import std/tables
 import ../ir/cirv2_lang
@@ -111,10 +103,10 @@ proc computeStructLayout(t: CirType, boolWidth: static int): StructLayout =
   result.size = roundUpMultiple(off, align)
 
 proc typeByteSize*(layouts: Table[string, StructLayout], t: CirType, boolWidth: static int): int =
-  ## Packed byte size of any type, the `eSizeof` value.
+  ## Packed byte size of any type, matching the `eSizeof` value.
   ##
-  ## - a nominal struct reads its stored record in `layouts`, the layout
-  ##   pass filled one for every struct in `CirModule.types`
+  ## - a nominal struct reads its stored record in `layouts`, which the layout
+  ##   pass filled for every struct in `CirModule.types`
   ## - every other kind derives from the packing rules
   ##
   ##   typeByteSize(m.layouts, tVec(3, tFloat(32)), std430BoolWidth) == 12
@@ -146,8 +138,6 @@ proc wgslRun(m: CirModule): string {.nimcall.} =
       m.layouts[t.name] = computeStructLayout(t, launchAbiBoolWidth)
 
 proc registerGlslLayoutPass*(reg: var PassRegistry) =
-  ## Registers the GLSL struct-layout pass over CIRv2 modules.
-  ##
   ## Contract:
   ## - fills `CirModule.layouts` with the `std430`-bool packing of every
   ##   nominal struct type
@@ -160,8 +150,6 @@ proc registerGlslLayoutPass*(reg: var PassRegistry) =
     run = glslRun)
 
 proc registerWgslLayoutPass*(reg: var PassRegistry) =
-  ## Registers the WGSL struct-layout pass over CIRv2 modules.
-  ##
   ## Contract:
   ## - fills `CirModule.layouts` with the launch-ABI packing of every
   ##   nominal struct type, 4-byte bools included

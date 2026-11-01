@@ -10,7 +10,7 @@
 ## - call-target collection and the shared statement and expression walk
 ## - the root symbol of a dotted or indexed chain, declaration and clone utilities
 ## - the kernel-parameter leaf walk and the pointer-local explosion context
-## - the struct-reference scanner's walks, the bool-storage scaffold
+## - the struct-reference scanner's walks and the bool-storage scaffold
 ##
 ## Every pass file may import these, no pass owns them.
 
@@ -45,6 +45,8 @@ proc walkExprs*(e: CirExpr, visit: proc(e: CirExpr)) =
 
 proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirExpr)) =
   ## Walks one statement list through two visitors, either nil.
+  ##
+  ##   statement list → onStmt per statement → onExpr per expression position
   ##
   ## - `onExpr` sees every expression position of every statement kind
   ##
@@ -168,6 +170,8 @@ proc singleKernel*(m: CirModule): CirProc =
 proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: proc(e: CirExpr)) =
   ## Statement walk of the struct-reference scanners.
   ##
+  ##   statement → onDecl (var/const) → initializer walk unless onDecl refuses
+  ##
   ## - every expression position goes through `onExpr`, one `walkExprs`
   ##   per position
   ## - `onDecl` takes each `var`/`const` declaration before its initializer
@@ -206,7 +210,7 @@ proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: pro
 
 proc cloneExpr*(e: CirExpr): CirExpr =
   ## Deep copy of one expression: statements and expressions are ref objects,
-  ## a splice renames its copy in place, the callee's own body must not move.
+  ## so a splice renames its copy in place and the callee's own body never moves.
   if e.isNil:
     return nil
   result = CirExpr(kind: e.kind)
@@ -370,7 +374,7 @@ proc leavesWalk(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
 
 proc kernelParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
-  ## Returns the leaves of `t` in field order, the walk of `leavesWalk`.
+  ## Returns the leaves of `t` in field order, as `leavesWalk` walks them.
   leavesWalk(t, name, result)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -425,7 +429,7 @@ proc structRoot*(e: CirExpr): CirExpr =
 
 proc spliceSym*(e: CirExpr, name: string, typ: CirType) =
   ## Splices one expression node into a plain symbol reference, in place.
-  ## Expressions are refs, the rewrite applies to the node every sharer sees.
+  ## Expressions are refs, so the rewrite applies to the node every sharer sees.
   e[] = sym(name, typ)[]
 
 proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: CirType, c: CirExpr, target: string): string =
@@ -492,14 +496,14 @@ proc freshProcType*(params: seq[CirType], ret: CirType): CirType =
   ## Returns a `CirType` ref sharing nothing with the interned signature types:
   ##
   ## - structurally identical call-site callee types share one `CirType` ref
-  ## - a call site re-typing its callee swaps the symbol type for this fresh copy, the shared ref stays untouched
+  ## - a call site re-typing its callee swaps the symbol type for this fresh copy, leaving the shared ref untouched
   result = CirType(kind: ctProc)
   result.params = params
   result.ret = ret
 
 proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): string =
   ## Relocates the `{.const_mem.}` locals of one statement list into `m.globals` in encounter order,
-  ## loop and branch bodies included, the declarations deleted from the list.
+  ## loop and branch bodies included, deleting the declarations from the list.
   ## Returns "" when clean, else the first refusal.
   ##
   ## Kernel and device-function locals relocate alike.
@@ -536,7 +540,7 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
 
 proc hoistConstMemLocals*(m: CirModule): string =
   ## Relocates every `{.const_mem.}` local of every proc into `m.globals` in encounter order,
-  ## loop and branch bodies included, the declarations dropped from their bodies.
+  ## loop and branch bodies included, dropping the declarations from their bodies.
   ## Returns "" when clean, else the first refusal.
   ##
   ## Contract:

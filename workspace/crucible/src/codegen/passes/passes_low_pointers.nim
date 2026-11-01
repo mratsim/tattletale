@@ -13,7 +13,6 @@
 ## - `explodeGlobalStructWithPtrFields`: kernel parameters of struct type
 ##   carrying (nested) pointer fields expand into flat ptr/scalar leaves
 ##   (Metal, OpenCL, WebGPU: flat resource targets)
-## - the kernel body opens with a local rebuilt from the leaves
 ## - `registerExplodePointerLocals`: pointer locals rewrite to their pointee,
 ##   pointer-holding struct locals to their field leaves, before the GLSL,
 ##   WGSL and HLSL printers run
@@ -35,7 +34,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
-  ## Registers the kernel struct-argument explosion lowering pass.
   reg.register(
     name = "explodeGlobalStructWithPtrFields",
     kind = pkTransform,
@@ -127,7 +125,7 @@ template registerExplodePointerLocals*(reg: var PassRegistry, passName,
   ##   the `sVar` and `sAsgn` variants and their drop predicates
   ## - `rewritePointerExpr(fn, ctx, e)`: the expression rewrite
   ##
-  ## Pass order:
+  ## Pass order: reserved-word rename → pointer-local explosion → printing
   ## - the pass sits after the reserved-word rename
   ## - the rewritten reads use the renamed names that their body already references
   # Each target module expands the template through a file-private forwarding

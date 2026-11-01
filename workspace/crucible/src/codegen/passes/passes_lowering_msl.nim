@@ -8,10 +8,15 @@
 {.experimental: "codeReordering".}
 
 ## MSL lowering: per-target transforms for the Metal storage model.
-## The pipeline table in `gpu_compiler.nim` declares the registration order.
+## The pipeline table in `gpu_compiler.nim` declares the registration order:
+##
+##   legalize → normalize → lowerSpans → mslReservedIdentifiers → decomposeArrayAssign
+##   → explodeGlobalStructWithPtrFields → smemInitRewrite → mslHoistProgramScopeConstants
+##   → mslHoistDeviceFnSmem → mslRewriteSmemLocals → mslThreadCoordinateBuiltins
+##   → instantiateAddressSpaceGenerics → validation
 ##
 ## - `mslHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into `CirModule.globals`
-##   in encounter order, the printer emits them as program-scope `constant`
+##   in encounter order for the printer to emit as program-scope `constant`
 ##   variables visible to all functions
 ## - `mslHoistDeviceFnSmem`: a device function's `{.smem.}` local hoists
 ##   to a threadgroup reference parameter, Metal supports no threadgroup
@@ -32,7 +37,7 @@
 ##   the arena is the caller's storage to lend, a kernel's own smem
 ##   initializer rewrote to stores before the pass
 ## - a device function declaring a parameter named like a needed coordinate
-##   builtin refuses in `mslThreadCoordinateBuiltins`, the call sites could
+##   builtin refuses in `mslThreadCoordinateBuiltins`, as the call sites could
 ##   not supply both values under one name
 
 import std/[sets, tables]
@@ -46,15 +51,13 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerMslHoistProgramScopeConstants*(reg: var PassRegistry) =
-  ## Registers the const_mem program-scope hoist: a const_mem local without
-  ## an initializer refuses in the pass.
+  ## A const_mem local without an initializer refuses in the pass.
   reg.register("mslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = mslHoistProgramScopeConstants
   )
 
 func registerMslHoistDeviceFnSmem*(reg: var PassRegistry) =
-  ## Registers the device-function smem hoist.
   reg.register("mslHoistDeviceFnSmem", pkTransform,
     "Hoists a device function's smem locals to threadgroup reference parameters," &
     " call sites pass the caller's arena",
@@ -62,16 +65,14 @@ func registerMslHoistDeviceFnSmem*(reg: var PassRegistry) =
   )
 
 func registerMslRewriteSmemLocals*(reg: var PassRegistry) =
-  ## Registers the kernel smem-local rewrite.
   reg.register("mslRewriteSmemLocals", pkTransform,
     "Keeps kernel smem locals in-body as threadgroup storage, refuses a device function's smem local",
     run = mslRewriteSmemLocals
   )
 
 func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
-  ## Registers the coordinate-builtin threading pass: each pass of the MSL
-  ## window appends its parameters and matching call-site arguments last.
-  ## The two orders stay consistent.
+  ## Each pass of the MSL window appends its parameters and matching
+  ## call-site arguments last, in registration order.
   reg.register("mslThreadCoordinateBuiltins", pkTransform,
     "Threads coordinate builtins down to device functions as parameters," &
     " call sites forward the caller's values",
@@ -155,9 +156,9 @@ proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
   ## Rewrites one expression node that reads a hoisted array arena, in place:
   ##
   ## - arena-symbol references retype to the `aptr` parameter type
-  ## - an `at` over the symbol becomes a `pat`, the printed text stays `scratch[i]`
+  ## - an `at` over the symbol becomes a `pat` and the printed text stays `scratch[i]`
   ##
-  ## Expressions are refs, the rewrite applies to every sharer.
+  ## Expressions are refs, so the rewrite applies to every sharer.
   if e.kind == eSym and arenaTypes.hasKey(e.name):
     e.typ = arenaTypes[e.name]
   if e.kind == eAt and e.atBase.kind == eSym and arenaTypes.hasKey(e.atBase.name):
@@ -195,8 +196,7 @@ proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
   ## - a device-function caller without one refuses, threadgroup storage is
   ##   the caller's to lend
   ##
-  ## A callee symbol's proc type grows by the arena types, the growth is
-  ## idempotent per shared symbol node and matches the appended arguments.
+  ## A callee symbol's proc type grows by the arena types, idempotent per shared symbol node and matched to the appended arguments.
   if callee.typ.kind == ctProc and
       callee.typ.params.len == calleeProc.params.len - arenas.len:
     var extra: seq[CirType]
@@ -315,7 +315,7 @@ proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[CoordBuiltinKin
   return true
 
 proc sortedCoordKinds(kinds: HashSet[CoordBuiltinKind]): seq[CoordBuiltinKind] =
-  ## Needed kinds in declaration order, the deterministic parameter order.
+  ## Needed kinds in declaration order, which also fixes the parameter order.
   for kind in CoordBuiltinKind:
     if kind != cbkNone and kind in kinds:
       result.add(kind)
@@ -342,8 +342,9 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
   ## proc type to match.
   ##
   ## - a kernel forwards the builtin-marked symbol: the printer then emits
-  ##   the builtin read, the kernel signature gains the attributed parameter
-  ## - a device function forwards its own parameter, the printer emits the bare name
+  ##   the builtin read and the kernel signature gains the attributed parameter
+  ## - a device function forwards its own parameter for the printer to emit
+  ##   as the bare name
   if callee.kind != eSym or not needs.hasKey(callee.name):
     return ""
   let calleeKinds = sortedCoordKinds(needs[callee.name])
@@ -399,7 +400,8 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
     var targets: HashSet[string]
     fn.body.collectCallTargets(targets)
     callTargets[fn.name] = targets
-  # fixpoint over the call graph: a builtin needed deep in a callee chain reaches every caller, the round count bounds cyclic call graphs
+  # fixpoint over the call graph: a builtin needed deep in a callee chain
+  # reaches every caller, and the round count bounds cyclic call graphs
   var changed = true
   var rounds = 0
   while changed:
@@ -443,12 +445,14 @@ proc mslRewriteSmemLocals(m: CirModule): string =
   ##   by Metal, no launch-time staging and no parameter
   ## - a device function's smem local refuses, only a kernel owns
   ##   threadgroup storage
+  ##   smem local → kernel: stays in body as threadgroup storage → device function: refuse
+  ##
   ## - the hoist drains the locals it covers, this walk catches a survivor
   ##   at any depth
   ## - the initializer rewrite ran earlier, a surviving local has no
   ##   initializer
   ##
-  ## - the pass runs after the reserved-word rename: the kept locals carry
+  ## - the pass runs after the reserved-word rename, so the kept locals use
   ##   the renamed names their body already references
   for fn in m.procs:
     var err = ""

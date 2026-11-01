@@ -48,7 +48,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
-  ## Registers the per-address-space callee instantiation pass of the lowering stage.
   ## Registration position: after the target's other lowering transforms,
   ## whose rewrites append parameters and call-site arguments by callee name
   ## over the declared call graph.

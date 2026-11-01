@@ -8,7 +8,12 @@
 {.experimental: "codeReordering".}
 
 ## GLSL lowering: per-target transforms for the GLSL storage model.
-## The pipeline table in `gpu_compiler.nim` declares the registration order.
+## The pipeline table in `gpu_compiler.nim` declares the registration order:
+##
+##   legalize → normalize → lowerSpans → glslReservedIdentifiers → glslQualifyVarParams
+##   → glslExplodePointerLocals → smemInitRewrite → glslHoistProgramScopeLocals
+##   → instantiateAddressSpaceGenerics → glslRegisterRefBlocks → glslScanModuleFeatures
+##   → glslComputeStructLayouts → validation
 ##
 ## GLSL has no function-storage addressing, a local cannot be addressed.
 ## Threadgroup and constant-storage locals must live at program scope:
@@ -51,7 +56,6 @@ import ./passes_low_pointers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerGlslQualifyVarParams*(reg: var PassRegistry) =
-  ## Registers the var-parameter qualification pass.
   reg.register("glslQualifyVarParams", pkTransform,
     "Retypes var parameters to their pointee, unwraps their body derefs and" &
     " the call-site address arguments",
@@ -59,7 +63,6 @@ func registerGlslQualifyVarParams*(reg: var PassRegistry) =
   )
 
 func registerGlslExplodePointerLocals*(reg: var PassRegistry) =
-  ## Registers the GLSL pointer-local explosion pass over the shared walk.
   registerExplodePointerLocals(reg, "glslExplodePointerLocals",
     "Rewrites pointer locals to their pointee locals, reads through the" &
     " alias to the pointee symbol",
@@ -67,8 +70,7 @@ func registerGlslExplodePointerLocals*(reg: var PassRegistry) =
     explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
 func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
-  ## Registers the GLSL program-scope hoist: the relocated declarations use
-  ## the renamed names that their body already references.
+  ## Relocated declarations use the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope")
@@ -79,7 +81,7 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
 
 proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
   ## Splices one expression node into a plain symbol reference, in place.
-  ## Expressions are refs, the rewrite applies to the node every sharer sees.
+  ## Expressions are refs, so the rewrite applies to the node every sharer sees.
   e.kind = eSym
   e.name = name
   e.typ = typ
@@ -110,7 +112,7 @@ proc unwrapVarDerefsExpr(e: CirExpr, varParams: HashSet[string]) =
 
 proc unwrapVarDerefsStmts(ss: seq[CirStmt], varParams: HashSet[string]) =
   ## Statement-walk overload of `unwrapVarDerefsExpr`, nested bodies included.
-  ## The shared walk covers every expression position, the deref unwrap
+  ## The shared walk covers every expression position, and the deref unwrap
   ## splices symbols in place.
   ss.walkStmts(nil, proc(e: CirExpr) =
     e.unwrapVarDerefsExpr(varParams))
@@ -277,7 +279,7 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
   of eDeref:
     let op = e.derefOperand
     if op.kind == eSym and op.name in ctx.aliasOf:
-      # pointee stands in for the pointer, the deref unwraps to it
+      # pointee stands in for the pointer and the deref unwraps to it
       e.spliceSym(ctx.aliasOf[op.name], op.typ.pElem)
       return ""
     for ch in getExprChildren(e):
@@ -286,7 +288,7 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
         return err
     let ot = getExprType(e.derefOperand)
     if ot != nil and ot.kind == ctAptr:
-      # a buffer-reference deref, the printer emits the indexed access
+      # a buffer-reference deref for the printer to emit as the indexed access
       return ""
     if e.derefOperand.kind == eSym and e.derefOperand.name in ctx.aliasOf:
       # a child rewrite spliced the operand to an aliased pointer's pointee
@@ -304,7 +306,7 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
           " read before its address-of binding, GLSL has no function-storage" &
           " addressing")
       if base.name in ctx.aliasOf:
-        # aliased local stands in for the pointer, the index goes to the pointee
+        # aliased local stands in for the pointer and the index goes to the pointee
         let pointee = sym(ctx.aliasOf[base.name], base.typ.pElem)
         if e.kind == eAt:
           e.atBase = pointee
@@ -386,7 +388,7 @@ proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirTyp
   ## deduped by block name.
   ##
   ## The block's member is the runtime array `x[]`: a fixed-array element nests
-  ## after the runtime dimension (`uint8_t x[][32]`), the unsized dimension is
+  ## after the runtime dimension (`uint8_t x[][32]`), as the unsized dimension is
   ## only legal in the outermost position. The printer composes the member text
   ## and refuses a void or proc pointee at the declaration site.
   let name = refTypeName(pointee)
@@ -452,8 +454,6 @@ proc glslRegisterRefBlocks(m: CirModule): string =
   return ""
 
 proc registerGlslRefBlockPass*(reg: var PassRegistry) =
-  ## Registers the GLSL ref-block analysis pass:
-  ##
   ## - the pass fills `CirModule.refBlocks` with one entry per block name,
   ##   in registration order
   ## - the printer reads the stored entries and registers nothing itself

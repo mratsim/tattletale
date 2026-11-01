@@ -9,10 +9,13 @@
 ## with the read-write classification of the module's buffer parameters,
 ## plus the device-function recursion refusal.
 ##
+##   last target transform → hlslCallGraphAnalysis → validation
+##
 ## What the pass computes:
 ## - the argument-flow edges: each call argument rooted at a parameter symbol flows into the callee's matching parameter
 ## - the read-write classification: a buffer parameter is read-write when its proc stores through it or a transitive callee does
-## - the recursion refusal: a recursive device function would not terminate, the HLSL frontend accepts recursive source while miscompiling it
+## - the recursion refusal: a recursive device function would not terminate,
+##   as the HLSL frontend accepts recursive source while miscompiling it
 ##
 ## Contract:
 ## - the target registers the pass after the last transform, before the check-only validation stage
@@ -193,8 +196,6 @@ proc hlslRun(m: CirModule): string {.nimcall.} =
   result = checkDeviceFnRecursion(procs)
 
 proc registerHlslCallGraphPass*(reg: var PassRegistry) =
-  ## Registers the HLSL call-graph analysis pass over CIRv2 modules.
-  ##
   ## Contract:
   ## - fills `CirModule.callGraph` with the read-write classification of every buffer parameter
   ## - refuses recursive device functions

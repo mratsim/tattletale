@@ -15,6 +15,8 @@
 ## - `a = b` over two `float[N]` locals
 ## - a declaration initialized from another array, `float c[N] = b;`
 ##
+##   `a = b` over arrays → decomposeArrayAssign → `__builtin_memcpy(&dst, &src, sizeof(T))`
+##
 ## The pass rewrites both shapes into `__builtin_memcpy(&dst, &src, sizeof(T))` calls over any storage class.
 ##
 ## Per-target scoping:
@@ -34,7 +36,6 @@ import ./pass_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerDecomposeArrayAssign*(reg: var PassRegistry) =
-  ## Registers the whole-array assignment decomposition pass of the lowering stage.
   reg.register("decomposeArrayAssign", pkTransform,
     "Rewrites whole-array assignment and array-valued declaration init into" &
     " __builtin_memcpy calls",

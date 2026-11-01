@@ -71,8 +71,6 @@ static:
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerBuiltinKindAssignment*(reg: var PassRegistry) =
-  ## Registers the builtin kind assignment pass.
-  ##
   reg.register("builtinKindAssignment", pkTransform,
     "Kind-assigns every builtin symbol from the canonical name tables",
     run = builtinKindAssignment)
@@ -95,7 +93,7 @@ proc assignBuiltinKindsExpr(e: CirExpr) =
   ## - only builtin-marked symbols kind-assign
   ## - a local or parameter sharing a builtin's name is an ordinary symbol,
   ##   untouched
-  ## - expressions are refs, the assignment applies to the shared node
+  ## - expressions are refs, so the assignment applies to the shared node
   if e.isNil:
     return
   if e.kind == eSym:
