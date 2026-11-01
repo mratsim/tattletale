@@ -10,7 +10,7 @@
 ## WGSL lowering: per-target transforms for the WGSL storage model,
 ## registered by the WebGPU pipeline and run before printing.
 ##
-##   kernel body → explodeGlobalStructWithPtrFields → wgslExplodePointerLocals → wgslRewriteBoolKernelParamReads → wgslHoistProgramScopeLocals → wgslInlinePointerParamCalls
+##   kernel body → explodeGlobalStructWithPtrFields → wgslExplodePointerLocals → wgslHoistProgramScopeLocals → wgslInlinePointerParamCalls
 ##   → wgslScanStructRefs → printed WGSL source
 ##
 ## - `explodeGlobalStructWithPtrFields`: kernel parameters of struct type
@@ -19,9 +19,6 @@
 ## - `wgslExplodePointerLocals`: pointer locals rewrite to their pointee,
 ##   pointer-holding struct locals into per-field leaf rewrites,
 ##   reads through an alias rewrite to the pointee or leaf symbol
-## - `wgslRewriteBoolKernelParamReads`: reads of the kernel's bool parameters
-##   rewrite to `name != 0u` comparisons, the kernel body only
-##   (bool is not host-shareable, the storage binding declares u32)
 ## - `wgslHoistProgramScopeLocals`: `{.smem.}` and `{.const_mem.}` kernel
 ##   locals relocate into `CirModule.globals` in kernel-body order,
 ##   the printer emits them at module scope, top-level kernel-body locals only
@@ -46,9 +43,8 @@
 ## - a threadgroup/constant local surviving in a nested scope or device
 ##   function refuses at the printer, the relocation covers top-level
 ##   kernel-body locals only
-## - a smem local with an initializer or a const_mem local without one
-##   refuses in the pass (WGSL workgroup variables are zero-initialized),
-##   the printer keeps both shape guards on the relocated declarations
+## - a const_mem local without an initializer refuses in the pass,
+##   the printer keeps the shape guard on the relocated declarations
 ## - a pointer local read as a value or before its address-of binding,
 ##   a pointer local rebound to a second pointee, an exploded struct local
 ##   used whole or read through an unbound field path
@@ -77,21 +73,12 @@ func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
     newExplodeCtx, explodeVarDecl, explodeAsgn,
     explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
-func registerWgslRewriteBoolKernelParamReads*(reg: var PassRegistry) =
-  ## Registers the bool kernel-parameter read rewrite: a const_mem initializer
-  ## reading a bool kernel parameter is patched before the hoist relocates it.
-  reg.register("wgslRewriteBoolKernelParamReads", pkTransform,
-    "Rewrites reads of the kernel's bool parameters to name != 0u comparisons",
-    run = rewriteBoolKernelParamReads
-  )
-
 func registerWgslHoistProgramScopeLocals*(reg: var PassRegistry) =
   ## Registers the WGSL program-scope hoist: the rewritten aliases plus
   ## the relocated declarations use the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "wgslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
-    " program scope", smemInitRefuse,
-    "WGSL workgroup variables are zero-initialized")
+    " program scope")
 
 func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
   ## Registers the pointer-param call inlining pass.
@@ -482,51 +469,7 @@ proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
   ExplodeCtx()
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# Bool kernel parameter reads
-# ═══════════════════════════════════════════════════════════════════════
-
-proc rewriteBoolReadsExpr(e: CirExpr, boolParams, boolPointees: HashSet[string]) =
-  ## Replaces every read of a bool kernel parameter in place with the `name != 0u` comparison in its type-preserving bool form.
-  ##
-  ## Expressions are refs, so the rewrite applies to every sharer and checks
-  ## the symbol's own type: a proc-typed callee position never fires
-  ## and a bool-typed symbol is never a callee. The comparison's operand is
-  ## a fresh symbol. The rewrite returns before the walk re-enters it.
-  ##
-  ## `boolPointees` stays empty, WGSL collects no bool-pointee storage.
-  if e.isNil:
-    return
-  if e.kind == eSym and e.typ != nil and e.typ.kind == ctBool and
-      e.name in boolParams:
-    let paramType = e.typ
-    let param = sym(e.name, paramType)
-    e.kind = eNeq
-    e.cmpType = paramType
-    e.a = param
-    e.b = intLit(0, tUint(32))
-    return
-  for ch in getExprChildren(e):
-    rewriteBoolReadsExpr(ch, boolParams, boolPointees)
-
-proc collectBoolKernelParams(fn: CirProc, vals, ptrs: var HashSet[string]) =
-  ## Collects the kernel's bool parameter names. The storage keeps its type. `ptrs` stays empty, WGSL collects no bool-pointee storage.
-  for p in fn.params:
-    if p.typ.kind == ctBool:
-      vals.incl(p.name)
-
-proc rewriteBoolKernelParamReads(m: CirModule): string =
-  ## Rewrites every read of a bool kernel parameter in the kernel body into
-  ## a `name != 0u` comparison. Device functions are untouched, their own bool
-  ## parameters and locals stay real bools. Returns "" when clean.
-  ##
-  ## WGSL keeps bool storage: no retype, no store rewrite, only the kernel bodies walk.
-  m.patchBoolStorage(BoolPatchPolicy(
-    walks: proc(fn: CirProc): bool = fn.isKernel,
-    collectParams: collectBoolKernelParams,
-    rewriteRead: rewriteBoolReadsExpr))
-
-# ═══════════════════════════════════════════════════════════════════════
+## - `wgslHoistProgramScopeLocals`:# ═══════════════════════════════════════════════════════════════════════
 # Struct-reference registration
 # ═══════════════════════════════════════════════════════════════════════
 

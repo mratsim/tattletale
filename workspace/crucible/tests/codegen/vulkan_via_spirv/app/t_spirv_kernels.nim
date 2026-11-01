@@ -94,6 +94,13 @@ const boolEqSpv = spirv:
     else:
       output[0] = 2
 
+const boolParamSpv = spirv:
+  proc boolParamKernel(output: ptr UncheckedArray[uint32], flag: bool) {.global.} =
+    if flag:
+      output[0] = 7
+    else:
+      output[0] = 9
+
 const fmaxSpv = spirv:
   proc fmaxKernel(output: ptr UncheckedArray[float32], x: ptr UncheckedArray[float32], n: int32) {.global.} =
     for i in 0 ..< n:
@@ -127,6 +134,8 @@ proc runTest() =
   validateSpv(ternaryRangeSpv, "t_spirv_kernels_ternary_range")
   # bool equality: OpIEqual requires integer operands, booleans lower to the logical equality opcodes
   validateSpv(boolEqSpv, "t_spirv_kernels_bool_eq")
+  # a bool kernel parameter: the push member is an OpTypeInt 32 word, reads coerce back to bool
+  validateSpv(boolParamSpv, "t_spirv_kernels_bool_param")
   # float max/min: the integer compare opcodes are illegal over float operands, floats lower through ordered float comparisons
   validateSpv(fmaxSpv, "t_spirv_kernels_fmax")
   validateSpv(statsSpv, "t_spirv_kernels_stats_u8")

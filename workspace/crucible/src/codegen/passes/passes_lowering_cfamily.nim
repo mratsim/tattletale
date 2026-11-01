@@ -12,36 +12,40 @@
 ##
 ## - `registerCfamilyHoistProgramScopeLocals`: registers the smem and const_mem relocation.
 ## The pointer-local explosion walk lives in passes_low_pointers.
-##   `SmemInitPolicy` is the target's policy for an initializer on a smem local.
-##   `smemInitRefuse` refuses naming the target's rule.
-##   `smemInitEmit` keeps the initializer for the printer to emit.
+## - `registerSmemInitRewrite`: an initializer on a `{.smem.}` local rewrites
+##   into a bare declaration plus element- or member-wise store statements,
+##   legal in every target's storage model
 
 import ../ir/cirv2_lang
+import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
+
+# ═══════════════════════════════════════════════════════════════════════
+# Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+func registerSmemInitRewrite*(reg: var PassRegistry) =
+  ## Registers the smem-initializer rewrite shared by every target.
+  reg.register("smemInitRewrite", pkTransform,
+    "Rewrites smem initializers into a bare declaration plus" &
+    " element- or member-wise stores",
+    run = rewriteSmemInits
+  )
 
 # ═══════════════════════════════════════════════════════════════════════
 # Program-scope hoisting
 # ═══════════════════════════════════════════════════════════════════════
 
-type SmemInitPolicy* = enum
-  ## Target policy for an initializer on a `{.smem.}` local.
-  smemInitRefuse
-    ## the target's workgroup storage takes no initializer so the hoist
-    ## refuses naming the target's rule
-  smemInitEmit
-    ## the target's workgroup storage accepts an initializer for the printer to emit
-
-proc hoistProgramScopeLocalsCore(m: CirModule, smemInit: SmemInitPolicy, smemInitReason: string): string =
+proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ## Relocates the `{.smem.}` and `{.const_mem.}` locals of every proc into
   ## `m.globals`, in encounter order, dropping them from their bodies.
   ##
   ## Contract:
   ## - the smem relocation covers top-level kernel-body locals only, a nested
   ##   or device-function one stays in place and refuses at the printer
-  ## - under `smemInitRefuse` a smem local with an initializer refuses,
-  ##   `smemInitReason` names the target's rule, under `smemInitEmit` it
-  ##   relocates with the local for the printer to emit
+  ## - the initializer rewrite ran earlier, a relocated smem local has no
+  ##   initializer
   ## - the const_mem relocation covers every proc and scope depth, the shared
   ##   const_mem walk recurses into the nested scopes at their encounter position,
   ##   a const_mem initializer is required, the printer emits it
@@ -58,9 +62,6 @@ proc hoistProgramScopeLocalsCore(m: CirModule, smemInit: SmemInitPolicy, smemIni
           # program-scope workgroup storage belongs to the kernel
           i.inc
           continue
-        if s.init != nil and smemInit == smemInitRefuse:
-          return "at " & fn.name & ": smem local " & s.name &
-            " with an initializer, " & smemInitReason
         m.globals.add s
         fn.body.delete i
       elif s.kind == sVar and s.space == caConstant:
@@ -88,20 +89,110 @@ proc hoistProgramScopeLocalsCore(m: CirModule, smemInit: SmemInitPolicy, smemIni
   return ""
 
 template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName: string,
-    description: string, smemInit: SmemInitPolicy, smemInitReason = "") =
+    description: string) =
   ## Registers the program-scope hoist for one target.
   ##
   ## Args:
   ## - `passName`: the registry key, one of `glslHoistProgramScopeLocals`
   ##   and `wgslHoistProgramScopeLocals`
   ## - `description`: the registry description
-  ## - `smemInit`: the target's policy for an initializer on a smem local
-  ## - `smemInitReason`: the target's rule an initializer violates, required
-  ##   under `smemInitRefuse`, ignored under `smemInitEmit`
-  when smemInit == smemInitRefuse:
-    doAssert smemInitReason.len > 0,
-      passName & ": smemInitRefuse requires the target's refusal reason"
   reg.register(passName, pkTransform, description,
     run = proc(m: CirModule): string {.nimcall.} =
-      hoistProgramScopeLocalsCore(m, smemInit, smemInitReason)
+      hoistProgramScopeLocalsCore(m)
   )
+
+# ═══════════════════════════════════════════════════════════════════════
+# Smem initializer rewrite
+# ═══════════════════════════════════════════════════════════════════════
+
+proc smemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt] =
+  ## Store statements that replace one initializer, in declaration order.
+  ##
+  ## - an array constructor: one indexed store per element
+  ## - an object constructor: one field store per member
+  ## - anything else: one whole-value store, the scalar shape
+  let base = sym(name, declType)
+  if init.kind == eAconstr and declType.kind == ctArray:
+    for i, el in init.elems:
+      result.add asgnS(patE(base, intLit(i, tInt(32))), el)
+  elif init.kind == eOconstr and declType.kind == ctStruct:
+    for kv in init.kvFields:
+      result.add asgnS(dotE(base, kv.name), kv.value)
+  else:
+    result.add asgnS(base, init)
+
+proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
+  ## Splits every initialized `{.smem.}` declaration in one statement list:
+  ## the bare declaration stays, the store statements take its position.
+  ## Nested branch and loop bodies recurse.
+  ## Returns "" when clean, else the first refusal.
+  var i = 0
+  while i < ss.len:
+    let s = ss[i]
+    if s.kind == sVar and s.space == caThreadgroup and s.init != nil:
+      if s.declType.kind in {ctArray, ctStruct} and
+          s.init.kind notin {eAconstr, eOconstr}:
+        return "at " & fnName & ": smem local " & s.name &
+          " with an initializer that is not a constructor, no" &
+          " element-wise store form exists"
+      let stores = smemInitStores(s.name, s.declType, s.init)
+      s.init = nil
+      var grown: seq[CirStmt]
+      grown.add ss[0 .. i]
+      grown.add stores
+      grown.add ss[i + 1 .. ^1]
+      ss = grown
+      i.inc stores.len
+    elif s.kind == sIte:
+      var err = splitSmemInits(s.thenBody, fnName)
+      if err.len == 0:
+        err = splitSmemInits(s.elseBody, fnName)
+      if err.len > 0:
+        return err
+    elif s.kind == sWhile:
+      let err = splitSmemInits(s.whileBody, fnName)
+      if err.len > 0:
+        return err
+    i.inc
+  return ""
+
+proc rewriteSmemInits(m: CirModule): string =
+  ## Rewrites every `{.smem.}` initializer into explicit stores.
+  ## Returns "" when clean, else the first refusal.
+  ##
+  ## Kernel-body storage:
+  ##
+  ## - a local at any depth: bare declaration plus stores
+  ##   at the declaration position. The store form is legal runtime storage where the initializer form is not
+  ## - Metal drops threadgroup array initializers at runtime
+  ## - OpenCL C and CUDA C++ and GLSL forbid the storage-class initializers
+  ## - WGSL workgroup variables are zero-initialized
+  ##
+  ## Untouched and program scope:
+  ##
+  ## - a device function's smem local: its storage belongs to the caller,
+  ##   the ownership refusals stay in charge
+  ## - a program-scope `{.smem.}` var in `m.globals`, the frontend's direct
+  ##   module path: the initializer strips, stores insert at every kernel's entry
+  ## - program-scope workgroup storage is fresh per workgroup, so every kernel
+  ##   observes the declared values
+  for fn in mitems(m.procs):
+    if fn.isKernel:
+      let err = splitSmemInits(fn.body, fn.name)
+      if err.len > 0:
+        return err
+  var entryStores: seq[CirStmt]
+  for g in mitems(m.globals):
+    if g.kind == sVar and g.space == caThreadgroup and g.init != nil:
+      entryStores.add smemInitStores(g.name, g.declType, g.init)
+      g.init = nil
+  if entryStores.len > 0:
+    for fn in mitems(m.procs):
+      if fn.isKernel:
+        var grown: seq[CirStmt]
+        grown.add entryStores
+        grown.add fn.body
+        fn.body = grown
+  return ""
+
+

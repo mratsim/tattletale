@@ -49,7 +49,6 @@ import ./passes/passes_low_reserved
 import ./passes/passes_low_pointers
 import ./passes/passes_low_array_assign
 import ./passes/passes_low_address_spaces
-import ./passes/passes_lowering_spirv
 import ./backends/backends_api
 import ./ir/cirv2_pretty
 from ./backends/hlsl_lang import HlslFlavor, fvD3D12, fvVulkan
@@ -117,6 +116,9 @@ proc attachOpenclHoistConst(reg: var PassRegistry, flavor: HlslFlavor) =
 proc attachOpenclByref(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerOpenclLowerByrefParams()
 
+proc attachSmemInitRewrite(reg: var PassRegistry, flavor: HlslFlavor) =
+  reg.registerSmemInitRewrite()
+
 proc attachGlslQualifyVarParams(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerGlslQualifyVarParams()
 
@@ -128,9 +130,6 @@ proc attachGlslHoistLocals(reg: var PassRegistry, flavor: HlslFlavor) =
 
 proc attachWgslExplodePointerLocals(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerWgslExplodePointerLocals()
-
-proc attachWgslBoolReads(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerWgslRewriteBoolKernelParamReads()
 
 proc attachWgslHoistLocals(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerWgslHoistProgramScopeLocals()
@@ -146,9 +145,6 @@ proc attachHlslExplodePointerLocals(reg: var PassRegistry, flavor: HlslFlavor) =
 
 proc attachHlslHoistConst(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerHlslHoistProgramScopeConstants()
-
-proc attachSpirvPatchBool(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerSpirvPatchBoolToI32()
 
 proc attachGlslRefBlocks(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerGlslRefBlockPass()
@@ -183,9 +179,6 @@ proc attachHlslStructRefs(reg: var PassRegistry, flavor: HlslFlavor) =
 proc attachHlslCallGraph(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerHlslCallGraphPass()
 
-proc attachGlslPushConstValidation(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerGlslValidationPasses()
-
 proc attachValidate(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerValidationPostPasses()
 
@@ -200,8 +193,8 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       # Rename position: after decomposeArrayAssign, incidental placement.
       # Decompose creates only `__builtin_memcpy` calls, no generated name
       # collides with the execution-space qualifiers of CudaReserved.
-      attachDecompose, attachRenameCuda, attachSpaceGenerics,
-      attachCudaScan,
+      attachDecompose, attachRenameCuda, attachSmemInitRewrite,
+      attachSpaceGenerics, attachCudaScan,
       attachValidate,
     ],
     ctMetal: @[
@@ -210,7 +203,7 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       # procs and proc bodies, never `m.globals`. A declaration hoisted earlier
       # leaves the rename's reach unrenamed.
       attachRenameMetal,
-      attachDecompose, attachExplodeStructs,
+      attachDecompose, attachExplodeStructs, attachSmemInitRewrite,
       attachMslHoistProgramScopeConstants, attachMslHoistDeviceFnSmem,
       attachMslRewriteSmemLocals, attachMslThreadCoordinateBuiltins,
       attachSpaceGenerics,
@@ -219,7 +212,7 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
     ctOpenCL: @[
       attachLegalize, attachNormalize, attachLowerSpans,
       attachRenameOpencl,
-      attachDecompose, attachExplodeStructs,
+      attachDecompose, attachExplodeStructs, attachSmemInitRewrite,
       attachOpenclHoistConst, attachOpenclByref, attachSpaceGenerics,
       attachOpenclScan,
       attachValidate,
@@ -228,16 +221,15 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       attachLegalize, attachNormalize, attachLowerSpans,
       attachRenameGlsl,
       attachGlslQualifyVarParams, attachGlslExplodePointerLocals,
-      attachGlslHoistLocals, attachSpaceGenerics,
+      attachSmemInitRewrite, attachGlslHoistLocals, attachSpaceGenerics,
       attachGlslRefBlocks, attachGlslScan, attachGlslLayout,
-      attachGlslPushConstValidation,
       attachValidate,
     ],
     ctWebGPU: @[
       attachLegalize, attachNormalize, attachLowerSpans,
       attachRenameWgsl,
       attachExplodeStructs, attachWgslExplodePointerLocals,
-      attachWgslBoolReads, attachWgslHoistLocals, attachSpaceGenerics,
+      attachSmemInitRewrite, attachWgslHoistLocals, attachSpaceGenerics,
       attachWgslInlinePointerCalls,
       attachWgslStructRefs, attachWgslScan, attachWgslLayout,
       attachValidate,
@@ -256,7 +248,6 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
     ctSpirvShader: @[
       attachLegalize, attachNormalize, attachLowerSpans,
       # No rename and no address-space callee instantiation: the encoder consumes typed words.
-      attachSpirvPatchBool,
       attachValidate,
     ],
   ]
