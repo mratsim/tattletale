@@ -18,8 +18,12 @@ import std/[macros, tables, strutils, hashes]
 
 type
   CirTypeResolver* = object
-    ## Nim-to-CirType translation state: struct memo, nominal struct set,
+    ## Nim-to-CirType translation state: struct cache, nominal struct set,
     ## first refusal message.
+    structIdentityCache: Table[string, CirType]
+    ## Struct cache keyed on the identity text, consulted before any field derivation.
+    ## Deriving one struct's fields re-resolves every field type, so a repeated
+    ## identity pays the whole field walk again without the cache.
     structs*: seq[CirType]
     ## Nominal struct types declared by the module, in discovery order.
     err*: string
@@ -268,6 +272,8 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   for name, spc in valueSpaces:
     if spc != caDevice:
       nameKey &= "/" & name & "=" & $spc
+  if r.structIdentityCache.hasKey(nameKey):
+    return r.structIdentityCache[nameKey]
   let impl = n.getTypeImpl()
   let fields = r.deriveStructFields(impl, valueSpaces)
   if r.err.len > 0:
@@ -280,9 +286,12 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   # through the generic body's own object text, and both name one struct.
   for registered in r.structs:
     if structuralEqual(registered, candidate):
-      return registered
+      result = registered
+      r.structIdentityCache[nameKey] = result
+      return
   result = candidate
   r.structs.add(result)
+  r.structIdentityCache[nameKey] = result
 
 func constrHasTypeElem(t: NimNode): bool =
   ## True when an instantiated tuple/object constructor type node has a type element anywhere.
