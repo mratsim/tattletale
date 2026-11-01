@@ -556,10 +556,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
 # Expression translation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc isBasicScalar(ctx: var FrontendCtx, n: NimNode): bool =
-  ## True when the expression's type resolves to a primitive scalar kind
-  ## (bool, int, uint, float): the kind the primitive arithmetic operators
-  ## cover natively. Any other operand type lowers as a proc call.
+proc isBuiltinScalar(ctx: var FrontendCtx, n: NimNode): bool =
   let t = ctx.resolver.resolveCirType(n.getTypeInst())
   if ctx.failing():
     return false
@@ -883,7 +880,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let op = n[0].strVal
     case op
     of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
-      if not (ctx.isBasicScalar(n[1]) and ctx.isBasicScalar(n[2])):
+      if not (ctx.isBuiltinScalar(n[1]) and ctx.isBuiltinScalar(n[2])):
         # overloaded operator over non-primitive-scalar operands: the check fails,
         # overload resolution picks the proc, lowered here as a call.
         # Example: `m_i - m_ij` over (MT x 1) tiles. Each operand lowers once,
