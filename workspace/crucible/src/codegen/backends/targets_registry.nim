@@ -188,9 +188,9 @@ type
   SpaceRow* = object
     ## Address-space qualifiers of one target, in the contexts its printer uses.
     ## Qualifiers are bare names, emission sites add separators, a context the target does not have stays "".
-    ptrQualifier*: array[CirAddrSpace, string]
+    ptrQualifier*: array[AddressSpace, string]
     ## Qualifier before a pointer type in declarations and casts.
-    localPrefix*: array[CirAddrSpace, string]
+    localPrefix*: array[AddressSpace, string]
     ## Qualifier before a local variable's declared type.
     kernelParamScalar*: string
     ## Qualifier on a kernel's by-reference scalar parameters.
@@ -201,7 +201,7 @@ type
     kernelParamPointerRestrict*: bool = false
     ## Restrict qualifier on a kernel's device-space pointer parameter
     ## (`__global T* restrict p`), a function-parameter qualifier in OpenCL C.
-    ptrSpace*: array[CirAddrSpace, string]
+    ptrSpace*: array[AddressSpace, string]
     ## Address-space word inside the target's pointer type (`ptr<storage, T>`),
     ## empty when the space has no pointer form and the printer refuses at the site.
     ptrAccessMode*: string

@@ -142,12 +142,12 @@ proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   else:
     refuse("compile-time value expected, got node kind " & $n.kind)
 
-func fieldSpaceAt(valueSpaces: Table[string, CirAddrSpace], name: string): CirAddrSpace =
+func fieldSpaceAt(valueSpaces: Table[string, AddressSpace], name: string): AddressSpace =
   ## Pointer space a construction proves for the field `name`, `caDevice` when the construction names no space for it.
   valueSpaces.getOrDefault(name, caDevice)
 
 proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
-    valueSpaces: Table[string, CirAddrSpace] = initTable[string, CirAddrSpace]()): seq[CirField] =
+    valueSpaces: Table[string, AddressSpace] = initTable[string, AddressSpace]()): seq[CirField] =
   ## Field list of an object or tuple implementation node.
   ## `valueSpaces` maps each field name to the pointer space its construction value proves,
   ## every other field resolves under `caDevice`.
@@ -244,7 +244,7 @@ proc registerType(r: var CirTypeResolver, t: CirType): CirType =
   return t
 
 proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
-    valueSpaces: Table[string, CirAddrSpace] = initTable[string, CirAddrSpace]()): CirType =
+    valueSpaces: Table[string, AddressSpace] = initTable[string, AddressSpace]()): CirType =
   ## Nominal struct translation for an object, tuple, or generic instantiation
   ## type node, deduplicated by structural identity.
   ##

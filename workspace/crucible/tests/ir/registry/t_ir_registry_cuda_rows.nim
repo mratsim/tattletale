@@ -72,7 +72,7 @@ static:
   doAssert kind.targetExprKinds == {}
 
   let space = cudaSpaceRow()
-  for i in CirAddrSpace:
+  for i in AddressSpace:
     doAssert space.ptrQualifier[i] == ""
     if i != caThreadgroup:
       doAssert space.localPrefix[i] == ""

@@ -76,7 +76,7 @@ proc wantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirTy
         formal.space in {caDevice, caThread} and
         argT != nil and argT.kind == formal.kind and
         sameType(argT.pElem, formal.pElem) and argT.space != formal.space:
-      wanted[i] = withSpace(formal, argT.space)
+      wanted[i] = withAddressSpace(formal, argT.space)
       result = true
 
 proc instKey(callee: CirProc, wanted: seq[CirType]): string =

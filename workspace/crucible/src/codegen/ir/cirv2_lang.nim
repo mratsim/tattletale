@@ -23,9 +23,8 @@
 import std/[macros, hashes, sequtils, sets, strutils, tables]
 
 type
-  CirAddrSpace* = enum
+  AddressSpace* = enum
     ## Memory class a pointer or aptr addresses.
-    ## Value-compatible with the codegen `AddressSpace` order (thread=RMEM, threadgroup=SMEM).
     caThread
     caThreadgroup
     caConstant
@@ -103,7 +102,7 @@ type
       vN*: int
       vElem*: CirType
     of ctPtr, ctAptr:
-      space*: CirAddrSpace
+      space*: AddressSpace
       pElem*: CirType
     of ctStruct:
       name*: string
@@ -112,7 +111,7 @@ type
       aN*: int
       aElem*: CirType
     of ctSpan:
-      sSpace*: CirAddrSpace
+      sSpace*: AddressSpace
       sElem*: CirType
     of ctProc:
       params*: seq[CirType]
@@ -301,7 +300,7 @@ type
       name*: string
       declType*: CirType
       init*: CirExpr
-      space*: CirAddrSpace
+      space*: AddressSpace
     of sAsgn:
       lhs*, rhs*: CirExpr
     of sIte:
@@ -536,7 +535,7 @@ proc shuffleBuiltinKind*(name: string): ShuffleBuiltinKind =
   ## Returns the shuffle builtin kind of a canonical name, `shkNone` otherwise.
   ShuffleBuiltinKindByName.getOrDefault(name, shkNone)
 
-proc withSpace*(t: CirType, space: CirAddrSpace): CirType =
+proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
   ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.
   ## CirType values are shared refs: a caller never re-spaces in place, so the copy is the per-site instance.
   doAssert t != nil and t.kind in {ctPtr, ctAptr}
@@ -766,7 +765,7 @@ proc hasCallDeep*(e: CirExpr): bool =
     if c.hasCallDeep():
       return true
 
-func provenanceSpace*(e: CirExpr): CirAddrSpace =
+func resolveAddressSpace*(e: CirExpr): AddressSpace =
   ## Address space of the storage an expression's pointer provenance names:
   ## the innermost pointer type along the access chain.
   ##
@@ -792,26 +791,26 @@ func provenanceSpace*(e: CirExpr): CirAddrSpace =
       of eAt: e.atBase
       else: e.patBase
     if base != nil:
-      result = provenanceSpace(base)
+      result = resolveAddressSpace(base)
   of eDot:
     let t = getExprType(e)
     if t != nil and t.kind in {ctPtr, ctAptr}:
       result = t.space
     elif e.dotBase != nil:
-      result = provenanceSpace(e.dotBase)
+      result = resolveAddressSpace(e.dotBase)
   of eCast, eConv:
     let t = e.castType
     if t != nil and t.kind in {ctPtr, ctAptr}:
       result = t.space
     elif e.castOperand != nil:
-      result = provenanceSpace(e.castOperand)
+      result = resolveAddressSpace(e.castOperand)
   of eAddr:
     if e.addrType != nil and e.addrType.kind in {ctPtr, ctAptr}:
       result = e.addrType.space
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    result = provenanceSpace(e.left)
+    result = resolveAddressSpace(e.left)
     if result == caDevice:
-      result = provenanceSpace(e.right)
+      result = resolveAddressSpace(e.right)
   else:
     discard
 

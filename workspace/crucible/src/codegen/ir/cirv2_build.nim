@@ -38,10 +38,10 @@ proc tFloat*(bits: int): CirType =
 proc tVec*(n: int, elem: CirType): CirType =
   CirType(kind: ctVector, vN: n, vElem: elem)
 
-proc tPtr*(space: CirAddrSpace, elem: CirType): CirType =
+proc tPtr*(space: AddressSpace, elem: CirType): CirType =
   CirType(kind: ctPtr, space: space, pElem: elem)
 
-proc tAptr*(space: CirAddrSpace, elem: CirType): CirType =
+proc tAptr*(space: AddressSpace, elem: CirType): CirType =
   CirType(kind: ctAptr, space: space, pElem: elem)
 
 proc fld*(name: string, typ: CirType): CirField =
@@ -53,7 +53,7 @@ proc tStruct*(name: string, fields: varargs[CirField]): CirType =
 proc tArray*(n: int, elem: CirType): CirType =
   CirType(kind: ctArray, aN: n, aElem: elem)
 
-proc tSpan*(space: CirAddrSpace, elem: CirType): CirType =
+proc tSpan*(space: AddressSpace, elem: CirType): CirType =
   ## Runtime-length view over `elem` storage in `space`:
   ##
   ## - an `openArray[T]` parameter or the result of a `toOpenArray` call
@@ -65,7 +65,7 @@ proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
   CirType(kind: ctProc, params: @params, ret: ret)
 
 proc withOrigin*(t: CirType, n: NimNode): CirType =
-  ## Macro-time only: the origin survives `withSpace` copies but never participates in `sameType`.
+  ## Macro-time only: the origin survives `withAddressSpace` copies but never participates in `sameType`.
   t.origin = n
   t
 
@@ -197,7 +197,7 @@ proc callE*(callee: CirExpr, args: varargs[CirExpr]): CirExpr =
 
 # Statement constructors
 
-proc varD*(name: string, typ: CirType, init: CirExpr = nil, space: CirAddrSpace = caThread): CirStmt =
+proc varD*(name: string, typ: CirType, init: CirExpr = nil, space: AddressSpace = caThread): CirStmt =
   ## Declares a local:
   ## - `space` names the memory class
   ## - `caThread` is the per-thread register default, `caThreadgroup` a `{.smem.}` local, `caConstant` a `{.const_mem.}` local

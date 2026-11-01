@@ -72,7 +72,7 @@ static:
     doAssert kind.targetExprKinds == {eNil, eAt, ePat, eTernary}
 
     let space = wgslSpaceRow()
-    for i in CirAddrSpace:
+    for i in AddressSpace:
       doAssert space.ptrQualifier[i] == ""
       doAssert space.localPrefix[i] == ""
     doAssert space.kernelParamScalar == ""
@@ -207,7 +207,7 @@ static:
     doAssert kind.targetExprKinds == {eNil, eAt, ePat, eDeref, eAddr}
 
     let space = hlslSpaceRow()
-    for i in CirAddrSpace:
+    for i in AddressSpace:
       doAssert space.ptrQualifier[i] == ""
       doAssert space.localPrefix[i] == ""
     doAssert space.kernelParamScalar == ""

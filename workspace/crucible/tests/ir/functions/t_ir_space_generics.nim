@@ -90,7 +90,7 @@ static:
   let fInsts = m.findProcs("f")
   doAssert fInsts.len == 3, "f must keep one instantiation per argument space, got " &
     $fInsts.len
-  var spaces: HashSet[CirAddrSpace]
+  var spaces: HashSet[AddressSpace]
   for inst in fInsts:
     doAssert inst.params.len == 2
     spaces.incl inst.params[0].typ.space
