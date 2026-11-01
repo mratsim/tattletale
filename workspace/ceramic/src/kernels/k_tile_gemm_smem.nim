@@ -116,36 +116,41 @@ template stageSmemTile*(stageWords: untyped, src: TensorView, tid: int, stageRow
     elems = cast[ptr UncheckedArray[typeof(src.data[0])]](stageWords)
     zeroVal = zero(typeof(src.data[0]))
   const atom = getCopyAsyncAtom(uint32)
-  for i in 0 ..< chunksPerThread:
-    let c = tid + i * stageThreads
-    let kc = c mod chunksPerRow
-    let rc = c div chunksPerRow
-    let elemOff = rc * stageRowStride(stageK) + kc * chunkElems
-    let kIn = max(min(kBound - (kOrigin + kc * chunkElems), chunkElems), 0)
-    let rowIn = rowOrigin + rc < rowBound
-    let dstChunk = make_view(addr stageWords[wordBase + elemOff div 2],
-                             make_layout((chunkWords,)))
-    if not rowIn:
-      # outside the row bounds: zero-fill, no global read
-      copyIf(atom, dstChunk, dstChunk, false, chunkWords)
-    elif kIn == chunkElems:
-      # fully in bounds: one async chunk, the gmem side re-viewed as words
-      let srcFlat = src.getLayout().crd2idx(
-        (rowOrigin + rc, kOrigin + kc * chunkElems))
-      let srcChunk = make_view(
-        cast[ptr UncheckedArray[uint32]](addr src.data[srcFlat]),
-        make_layout((chunkWords,)))
-      copyIf(atom, dstChunk, srcChunk, true, chunkWords)
-    elif kIn > 0:
-      # K-tail chunk: the in-bounds prefix copies, the rest zeroes
-      let srcFlat = src.getLayout().crd2idx(
-        (rowOrigin + rc, kOrigin + kc * chunkElems))
-      for j in 0 ..< kIn:
-        elems[wordBase * 2 + elemOff + j] = src.data[srcFlat + j]
-      for j in kIn ..< chunkElems:
-        elems[wordBase * 2 + elemOff + j] = zeroVal
-    else:
-      copyIf(atom, dstChunk, dstChunk, false, chunkWords)
+  # Participation guard: both staging calls run on all 128 threads,
+  # one with the thread id and one with the id shifted down 64 lanes,
+  # so exactly one call matches a staging thread id and the other
+  # skips whole warps (no intra-warp divergence).
+  if tid >= 0 and tid < stageThreads:
+    for i in 0 ..< chunksPerThread:
+      let c = tid + i * stageThreads
+      let kc = c mod chunksPerRow
+      let rc = c div chunksPerRow
+      let elemOff = rc * stageRowStride(stageK) + kc * chunkElems
+      let kIn = max(min(kBound - (kOrigin + kc * chunkElems), chunkElems), 0)
+      let rowIn = rowOrigin + rc < rowBound
+      let dstChunk = make_view(addr stageWords[wordBase + elemOff div 2],
+                               make_layout((chunkWords,)))
+      if not rowIn:
+        # outside the row bounds: zero-fill, no global read
+        copyIf(atom, dstChunk, dstChunk, false, chunkWords)
+      elif kIn == chunkElems:
+        # fully in bounds: one async chunk, the gmem side re-viewed as words
+        let srcFlat = src.getLayout().crd2idx(
+          (rowOrigin + rc, kOrigin + kc * chunkElems))
+        let srcChunk = make_view(
+          cast[ptr UncheckedArray[uint32]](addr src.data[srcFlat]),
+          make_layout((chunkWords,)))
+        copyIf(atom, dstChunk, srcChunk, true, chunkWords)
+      elif kIn > 0:
+        # K-tail chunk: the in-bounds prefix copies, the rest zeroes
+        let srcFlat = src.getLayout().crd2idx(
+          (rowOrigin + rc, kOrigin + kc * chunkElems))
+        for j in 0 ..< kIn:
+          elems[wordBase * 2 + elemOff + j] = src.data[srcFlat + j]
+        for j in kIn ..< chunkElems:
+          elems[wordBase * 2 + elemOff + j] = zeroVal
+      else:
+        copyIf(atom, dstChunk, dstChunk, false, chunkWords)
 
 proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
     mma: static TiledMma[TAcc, TA, TB, MT, NT, KT],
