@@ -233,7 +233,6 @@ macro codegenWebGpu(body: typed): string =
   registerWgslHoistProgramScopeLocals(reg)
   registerInstantiateAddressSpaceGenerics(reg)
   registerWgslInlinePointerParamCalls(reg)
-  registerWgslStructRefPass(reg)
   registerWgslFeatureScan(reg)
   registerWgslLayoutPass(reg)
   registerValidationPostPasses(reg)

@@ -21,8 +21,8 @@
 ## Addressing, memory classes, jumps:
 ## - a pointer local or pointer-holding struct local refuses: the WGSL lowering pass rewrites the shapes into pointees and leaf symbols
 ## - the WGSL lowering pass relocates a smem/const_mem kernel local into `CirModule.globals`
-## - struct declarations emit for the referenced value structs only, one declaration per entry of `CirModule.structRefs`.
-##   the struct-reference pass fills that record, and a pointer-holding struct refuses
+## - struct declarations emit for every struct of `CirModule.types` in declaration order,
+##   a dissolved one included, an unused declaration is legal WGSL, a pointer-holding struct refuses
 ## - a loop prints `while (cond)` (WGSL's `while` takes a condition),
 ##   an unrolled loop notes the unroll directive has no WGSL form
 
@@ -627,10 +627,11 @@ proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
   result &= '}'
 
 proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
-  ## Struct declarations for the referenced value structs, one per entry of the `CirModule.structRefs` record the struct-reference pass filled.
-  ## A pointer-holding struct refuses in `emitWgslStruct`.
+  ## Struct declarations for every struct in `CirModule.types`, in declaration order.
+  ## WGSL accepts an unused struct declaration, so a struct the lowering
+  ## dissolved emits as dead text. A pointer-holding struct refuses in `emitWgslStruct`.
   for t in m.types:
-    if t.kind == ctStruct and t.name in m.structRefs:
+    if t.kind == ctStruct:
       result &= ctx.emitWgslStruct(t) & "\n\n"
 
 proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
