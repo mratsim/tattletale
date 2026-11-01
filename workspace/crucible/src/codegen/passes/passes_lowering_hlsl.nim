@@ -43,14 +43,14 @@ import ./passes_low_reserved
 func registerHlslLoweringPasses*(reg: var PassRegistry) =
   ## Registers the HLSL per-target lowering passes in the order
   ## materialization -> dissolution -> reserved-word renaming -> printing.
-  reg.register("hlslMaterializeNumWorkgroups", pkTransform, phaseMain,
+  reg.register("hlslMaterializeNumWorkgroups", pkTransform,
     "Rewrites threadgroups_per_grid reads to the materialized trailing" &
     " kernel parameter the engine stages",
     run = materializeNumWorkgroups
   )
   hlslRegisterDissolvePointerLocals(reg)
   reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
-  reg.register("hlslHoistProgramScopeConstants", pkTransform, phaseMain,
+  reg.register("hlslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = hlslHoistProgramScopeConstants
   )

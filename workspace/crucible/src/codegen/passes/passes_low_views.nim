@@ -46,7 +46,7 @@ func registerLowerSpans*(reg: var PassRegistry) =
   ## Placement contract: the shared lowering stage, before every per-target transform,
   ## so the per-address-space callee instantiation sees the split
   ## pointer + length call sites.
-  reg.register("lowerSpans", pkTransform, phaseMain,
+  reg.register("lowerSpans", pkTransform,
     "Splits openArray spans into pointer + length pairs, rewrites" &
     " toOpenArray call arguments, folds len reads",
     run = lowerSpansPass)

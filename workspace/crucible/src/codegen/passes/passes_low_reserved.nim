@@ -157,7 +157,7 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
   ##   `CudaReserved`
   ## - `doubleUnderscorePrefix`: the prefix every `__`-prefixed name gains,
   ##   "" for targets without a reserved double-underscore head (WGSL: `wgsl_`)
-  reg.register(passName, pkTransform, phaseMain,
+  reg.register(passName, pkTransform,
     "Renames identifiers colliding with backend reserved words: fn names, call sites, params, locals, struct fields, field accesses",
     run = proc(m: CirModule): string {.nimcall.} =
       renameReservedIdentifiers(m, reserved, doubleUnderscorePrefix)

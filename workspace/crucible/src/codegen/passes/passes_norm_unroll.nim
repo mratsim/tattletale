@@ -27,7 +27,7 @@ import ./pass_datatypes
 
 func registerMarkExplicitUnrolls*(reg: var PassRegistry) =
   ## Registers the explicit-unroll marking pass in the normalization stage.
-  reg.register("markExplicitUnrolls", pkTransform, phaseEarly,
+  reg.register("markExplicitUnrolls", pkTransform,
     "Sets the unroll flag on the loops whose body states the `{.unroll.}` marker statement and drops every marker",
     run = markExplicitUnrolls)
 

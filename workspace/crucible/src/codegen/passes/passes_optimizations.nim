@@ -25,10 +25,10 @@ import ./pass_helpers
 func registerOptimizationPasses*(reg: var PassRegistry) =
   ## Registers the optimization stage passes, folding before dead-local
   ## elimination so the folds cascade into the deletions.
-  reg.register("foldMinMaxBuiltins", pkTransform, phaseMain,
+  reg.register("foldMinMaxBuiltins", pkTransform,
     "Folds a min/max-idiom ternary over scalar operands to the native min/max builtin call",
     run = foldMinMaxBuiltins)
-  reg.register("removeDeadLocals", pkTransform, phaseMain,
+  reg.register("removeDeadLocals", pkTransform,
     "Deletes the locals bound to constants nothing reads afterwards",
     run = eliminateDeadLocals)
 

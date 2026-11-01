@@ -404,30 +404,27 @@ type
     ## Feature scan result of the target's feature-scan analysis pass,
     ## filled after that target's last transform.
     ##
-    ## - valid only if no transform runs after the scan: the pass registry
-    ##   has no invalidation
+    ## - valid only if no transform runs after the scan, which runPasses enforces
     ## - the printer reads it, it never rescans
     callGraph*: CallGraph
     ## Call-graph analysis record: the read-write classification of every buffer parameter.
     ##
     ## - filled by the target's call-graph analysis pass after the last transform
-    ## - valid only if no transform runs after the analysis: the pass registry has no invalidation
+    ## - valid only if no transform runs after the analysis, which runPasses enforces
     ## - the printer reads the stored record, it never rescans
     refBlocks*: OrderedTable[string, CirType]
     ## GLSL buffer-reference blocks, block name -> pointee type.
     ## One entry per distinct block, in registration order.
     ## Filled by the GLSL ref-block analysis pass after its last transform.
     ##
-    ## - valid only if no transform runs after the pass: the pass registry
-    ##   has no invalidation
+    ## - valid only if no transform runs after the pass, which runPasses enforces
     ## - the printer emits one `layout(buffer_reference, std430) buffer`
     ##   declaration per entry in order, it never registers a block itself
     layouts*: Table[string, StructLayout]
     ## Packed layout of each nominal struct type, keyed by struct name,
     ## filled by the target's layout analysis pass after its last transform.
     ##
-    ## - valid only if no transform runs after the layout pass: the pass
-    ##   registry has no invalidation
+    ## - valid only if no transform runs after the layout pass, which runPasses enforces
     ## - the printer reads the stored records, it never recomputes a struct
     ##   layout
 
@@ -542,77 +539,6 @@ proc sameType*(a, b: CirType): bool =
       if not sameType(a.params[i], b.params[i]):
         return false
     result = sameType(a.ret, b.ret)
-
-proc structuralEqual*(a, b: CirType): bool =
-  ## Returns true when `a` and `b` carry the same structure.
-  ##
-  ## Contract:
-  ## - nominal struct types compare by field list only, equal structures are one registered struct
-  ## - every other kind compares field by field, recursively
-  ## - the emitted struct name never participates
-  if a.isNil != b.isNil:
-    return false
-  if a.isNil:
-    return true
-  if a.kind != b.kind:
-    return false
-  case a.kind
-  of ctVoid, ctBool:
-    result = true
-  of ctInt, ctUint, ctFloat:
-    result = a.bits == b.bits
-  of ctVector:
-    result = a.vN == b.vN and structuralEqual(a.vElem, b.vElem)
-  of ctPtr, ctAptr:
-    result = a.space == b.space and structuralEqual(a.pElem, b.pElem)
-  of ctStruct:
-    if a.fields.len != b.fields.len:
-      return false
-    for i in 0 ..< a.fields.len:
-      if a.fields[i].name != b.fields[i].name or
-          not structuralEqual(a.fields[i].typ, b.fields[i].typ):
-        return false
-    result = true
-  of ctArray:
-    result = a.aN == b.aN and structuralEqual(a.aElem, b.aElem)
-  of ctSpan:
-    result = a.sSpace == b.sSpace and structuralEqual(a.sElem, b.sElem)
-  of ctProc:
-    if a.params.len != b.params.len:
-      return false
-    for i in 0 ..< a.params.len:
-      if not structuralEqual(a.params[i], b.params[i]):
-        return false
-    result = structuralEqual(a.ret, b.ret)
-
-proc structuralHash*(t: CirType): Hash =
-  ## Hash of a type's structure: equal structures hash equal. The struct name never participates.
-  if t.isNil:
-    return 0
-  result = hash(t.kind)
-  case t.kind
-  of ctVoid, ctBool:
-    discard
-  of ctInt, ctUint, ctFloat:
-    result = result !& hash(t.bits)
-  of ctVector:
-    result = result !& hash(t.vN) !& structuralHash(t.vElem)
-  of ctPtr, ctAptr:
-    result = result !& hash(t.space) !& structuralHash(t.pElem)
-  of ctStruct:
-    result = result !& hash(t.fields.len)
-    for f in t.fields:
-      result = result !& hash(f.name) !& structuralHash(f.typ)
-  of ctArray:
-    result = result !& hash(t.aN) !& structuralHash(t.aElem)
-  of ctSpan:
-    result = result !& hash(t.sSpace) !& structuralHash(t.sElem)
-  of ctProc:
-    result = result !& hash(t.params.len)
-    for p in t.params:
-      result = result !& structuralHash(p)
-    result = result !& structuralHash(t.ret)
-  result = !$result
 
 proc getExprType*(e: CirExpr): CirType =
   ## Returns the expression's type, or nil when the node's shape does not determine one.

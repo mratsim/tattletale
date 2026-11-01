@@ -52,7 +52,7 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
   ## Registration position: after the target's other lowering transforms,
   ## whose rewrites append parameters and call-site arguments by callee name
   ## over the declared call graph.
-  reg.register("instantiateAddressSpaceGenerics", pkTransform, phaseMain,
+  reg.register("instantiateAddressSpaceGenerics", pkTransform,
     "Instantiates module callees whose pointer arguments name another" &
     " address space than the formal",
     run = instantiateAddressSpaceGenericsPass)

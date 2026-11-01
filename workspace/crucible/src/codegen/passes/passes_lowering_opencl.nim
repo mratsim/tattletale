@@ -54,11 +54,11 @@ func registerOpenclLoweringPasses*(reg: var PassRegistry) =
   ## relocated declaration names match the renamed body references.
   reg.registerDecomposeArrayAssign()
   registerExplodeKernelStructs(reg)
-  reg.register("openclHoistProgramScopeConstants", pkTransform, phaseMain,
+  reg.register("openclHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = openclHoistProgramScopeConstants
   )
-  reg.register("lowerByrefParams", pkTransform, phaseMain,
+  reg.register("lowerByrefParams", pkTransform,
     "Passes large structs to device functions as hidden thread pointers",
     run = openclLowerByrefParams
   )

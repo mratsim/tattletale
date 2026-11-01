@@ -25,7 +25,7 @@ func registerSpirvLoweringPasses*(reg: var PassRegistry) =
   ##
   ## - `spirvPatchBoolToI32`, before printing: bool kernel parameters and bool
   ##   globals retype to i32 storage, reads and stores wrap in conversions
-  reg.register("spirvPatchBoolToI32", pkTransform, phaseMain,
+  reg.register("spirvPatchBoolToI32", pkTransform,
     "Retypes bool kernel parameters and bool globals to i32 storage",
     run = spirvPatchBoolToI32
   )

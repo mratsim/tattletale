@@ -28,7 +28,7 @@ import ./pass_datatypes
 import ./pass_helpers
 
 func registerCompoundAssignTemps*(reg: var PassRegistry) =
-  reg.register("bindCompoundAssignTemps", pkTransform, phaseEarly,
+  reg.register("bindCompoundAssignTemps", pkTransform,
     "Binds the call-bearing operands of a compound-assign target into temps" &
     " so the single Nim evaluation prints once",
     run = bindCompoundAssignTempsPass)

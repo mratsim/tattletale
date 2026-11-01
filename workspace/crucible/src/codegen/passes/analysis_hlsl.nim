@@ -16,7 +16,7 @@
 ##
 ## Contract:
 ## - the target registers the pass after the last transform, before the check-only validation stage
-## - analysis results are valid only if no transform runs after them: the registry runs in registration order and never invalidates
+## - analysis results are valid only if no transform runs after them, which runPasses enforces
 ## - the printer reads the stored record in `CirModule.callGraph`, it never rescans
 
 import std/[sets, strutils, tables]
@@ -199,8 +199,8 @@ proc registerHlslCallGraphPass*(reg: var PassRegistry) =
   ## - fills `CirModule.callGraph` with the read-write classification of every buffer parameter
   ## - refuses recursive device functions
   ## - registers after the last transform, before the check-only validation stage
-  ## - analysis results are valid only if no transform runs after them
-  reg.register("hlslCallGraphAnalysis", pkAnalysis, phaseMain,
+  ## - analysis results are valid only if no transform runs after them, which runPasses enforces
+  reg.register("hlslCallGraphAnalysis", pkAnalysis,
     "Builds the device-function call graph once: argument-flow edges, the" &
     " read-write classification of buffer parameters, the recursion refusal",
     run = hlslRun)

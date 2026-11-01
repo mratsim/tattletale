@@ -35,7 +35,7 @@ import ./pass_datatypes
 
 func registerDecomposeArrayAssign*(reg: var PassRegistry) =
   ## Registers the whole-array assignment decomposition pass of the lowering stage.
-  reg.register("decomposeArrayAssign", pkTransform, phaseMain,
+  reg.register("decomposeArrayAssign", pkTransform,
     "Rewrites whole-array assignment and array-valued declaration init into" &
     " __builtin_memcpy calls",
     run = decomposeArrayAssignPass)

@@ -73,7 +73,7 @@ static:
 func registerBuiltinKindAssignment*(reg: var PassRegistry) =
   ## Registers the builtin kind assignment pass.
   ##
-  reg.register("builtinKindAssignment", pkTransform, phaseEarly,
+  reg.register("builtinKindAssignment", pkTransform,
     "Kind-assigns every builtin symbol from the canonical name tables",
     run = builtinKindAssignment)
 

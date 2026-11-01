@@ -28,10 +28,10 @@ func registerValidationPostPasses*(reg: var PassRegistry) =
   ##   The const_mem hoist relocates program-scope constants into `m.globals`
   ## - the per-address-space callee instantiation settles which pointer
   ##   spaces reach the printer, so the cast check reads final spaces
-  reg.register("validateAddressSpaceCasts", pkValidation, phaseMain,
+  reg.register("validateAddressSpaceCasts", pkValidation,
     "Rejects pointer casts whose target space differs from the operand's storage provenance",
     run = validateAddressSpaceCastsPass)
-  reg.register("validateConstantWrites", pkValidation, phaseMain,
+  reg.register("validateConstantWrites", pkValidation,
     "Rejects assignments into constant storage, direct or through a pointer",
     run = validateConstantWritesPass)
 # ═══════════════════════════════════════════════════════════════════════

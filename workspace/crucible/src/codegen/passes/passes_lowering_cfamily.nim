@@ -89,7 +89,7 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
   ## - `description`: the registry description
   ## - `smemInitReason`: the refusal reason for a smem local with an initializer,
   ##   "" when the target's workgroup storage accepts one
-  reg.register(passName, pkTransform, phaseMain, description,
+  reg.register(passName, pkTransform, description,
     run = proc(m: CirModule): string {.nimcall.} =
       hoistProgramScopeLocalsCore(m, smemInitReason)
   )
@@ -189,5 +189,5 @@ template registerCfamilyDissolvePointerLocals*(reg: var PassRegistry, passName: 
       if err.len > 0:
         return err
     return ""
-  reg.register(passName, pkTransform, phaseMain, description,
+  reg.register(passName, pkTransform, description,
     run = dissolvePointerLocals)

@@ -58,7 +58,7 @@ func registerGlslLoweringPasses*(reg: var PassRegistry) =
   ##
   ## Registration contract: the passes sit after the reserved-word rename,
   ## and the relocated declarations use the renamed names that their body already references.
-  reg.register("glslQualifyVarParams", pkTransform, phaseMain,
+  reg.register("glslQualifyVarParams", pkTransform,
     "Retypes var parameters to their pointee, unwraps their body derefs and" &
     " the call-site address arguments",
     run = qualifyVarParams
@@ -563,7 +563,7 @@ proc registerGlslRefBlockPass*(reg: var PassRegistry) =
   ## - the pass fills `CirModule.refBlocks` with one entry per block name,
   ##   in registration order
   ## - the printer reads the stored entries and registers nothing itself
-  reg.register("glslRegisterRefBlocks", pkAnalysis, phaseMain,
+  reg.register("glslRegisterRefBlocks", pkAnalysis,
     "Registers the buffer-reference blocks that the printer declares, one" &
     " per distinct block name in registration order",
     run = glslRegisterRefBlocks

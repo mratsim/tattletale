@@ -76,7 +76,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   ## kernel parameter is patched before the relocation moves it out of the body.
   registerExplodeKernelStructs(reg)
   wgslRegisterDissolvePointerLocals(reg)
-  reg.register("wgslRewriteBoolKernelParamReads", pkTransform, phaseMain,
+  reg.register("wgslRewriteBoolKernelParamReads", pkTransform,
     "Rewrites reads of the kernel's bool parameters to name != 0u comparisons",
     run = rewriteBoolKernelParamReads
   )
@@ -84,7 +84,7 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope", "WGSL workgroup variables are zero-initialized")
   reg.registerInstantiateAddressSpaceGenerics()
-  reg.register("wgslInlinePointerParamCalls", pkTransform, phaseMain,
+  reg.register("wgslInlinePointerParamCalls", pkTransform,
     "Inlines calls whose pointer arguments cannot cross a WGSL function" &
     " signature",
     run = inlinePointerParamCalls)

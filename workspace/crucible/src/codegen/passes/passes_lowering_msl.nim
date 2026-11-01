@@ -64,20 +64,20 @@ func registerMslLoweringPasses*(reg: var PassRegistry) =
   ## the two orders stay consistent.
   reg.registerDecomposeArrayAssign()
   registerExplodeKernelStructs(reg)
-  reg.register("mslHoistProgramScopeConstants", pkTransform, phaseMain,
+  reg.register("mslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = mslHoistProgramScopeConstants
   )
-  reg.register("mslHoistDeviceFnSmem", pkTransform, phaseMain,
+  reg.register("mslHoistDeviceFnSmem", pkTransform,
     "Hoists a device function's smem locals to threadgroup reference parameters," &
     " call sites pass the caller's arena",
     run = mslHoistDeviceFnSmem
   )
-  reg.register("mslRewriteSmemLocals", pkTransform, phaseMain,
+  reg.register("mslRewriteSmemLocals", pkTransform,
     "Keeps kernel smem locals in-body as threadgroup storage, refuses a device function's smem local",
     run = mslRewriteSmemLocals
   )
-  reg.register("mslThreadCoordinateBuiltins", pkTransform, phaseMain,
+  reg.register("mslThreadCoordinateBuiltins", pkTransform,
     "Threads coordinate builtins down to device functions as parameters," &
     " call sites forward the caller's values",
     run = mslThreadCoordinateBuiltins

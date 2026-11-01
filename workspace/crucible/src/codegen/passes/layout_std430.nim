@@ -37,8 +37,7 @@
 ## Contract:
 ## - each target registers its pass after its last transform and before
 ##   the check-only validation stage
-## - analysis results are valid only if no transform runs after them:
-##   the registry runs in registration order and never invalidates
+## - analysis results are valid only if no transform runs after them, which runPasses enforces
 ## - the printer reads the stored records, it never recomputes a struct
 ##   layout
 
@@ -149,9 +148,9 @@ proc registerGlslLayoutPass*(reg: var PassRegistry) =
   ## - fills `CirModule.layouts` with the `std430`-bool packing of every
   ##   nominal struct type
   ## - registers after the target's last transform, before the check-only
-  ##   validation stage: analysis results are valid only if no transform
-  ##   runs after them
-  reg.register("glslComputeStructLayouts", pkAnalysis, phaseMain,
+  ##   validation stage
+  ## - runPasses refuses a transform registered after an analysis
+  reg.register("glslComputeStructLayouts", pkAnalysis,
     "Computes the packed layout of every nominal struct type once:" &
     " member offsets, struct alignment, padded struct size",
     run = glslRun)
@@ -163,9 +162,9 @@ proc registerWgslLayoutPass*(reg: var PassRegistry) =
   ## - fills `CirModule.layouts` with the launch-ABI packing of every
   ##   nominal struct type, 4-byte bools included
   ## - registers after the target's last transform, before the check-only
-  ##   validation stage: analysis results are valid only if no transform
-  ##   runs after them
-  reg.register("wgslComputeStructLayouts", pkAnalysis, phaseMain,
+  ##   validation stage
+  ## - runPasses refuses a transform registered after an analysis
+  reg.register("wgslComputeStructLayouts", pkAnalysis,
     "Computes the packed layout of every nominal struct type once:" &
     " member offsets, struct alignment, padded struct size",
     run = wgslRun)
