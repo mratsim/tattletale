@@ -252,11 +252,14 @@ proc checkGemmSmem[E: HwEngine, TIn](
     bDev = engine.bridge(bHost)
     cDev = engine.bridge(cHost)
     dDev = engine.bridge(dHost)
-  # one (64, 64) block tile per launch block, 128 threads
+  # one (64, 64) block tile per launch block, 128 threads, the grid runs
+  # 1..2x the tile grid to stress the grid-stride loop and the barrier
+  # that guards the stage reuse between block tiles
   engine.launchDeviceFn gemm_smem(tiledMma(float32, TIn, TIn, 32, 32, 64),
       tiledMma(float32, TIn, TIn, 32, 32, 16),
       dDev, cs.alpha, aDev, bDev, cs.beta, cDev) do:
-    grid = (ceil_div(M, 64), ceil_div(N, 64))
+    grid = (rng.rand(1 .. 2 * ceil_div(M, 64)),
+            rng.rand(1 .. 2 * ceil_div(N, 64)))
     blk = (128, 1)
   engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, dHost.len)
   gemm_ref(refHost, cs.alpha, aHost, bHost, cs.beta, cHost)

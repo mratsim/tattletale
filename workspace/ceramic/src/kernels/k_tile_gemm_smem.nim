@@ -228,6 +228,12 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
     gridStride = getGridSize()
 
   for blockTile in countup(cGrid.getLocalTileID(), cGrid.size() - 1, gridStride):
+    # Grid-stride block-tile reuse: the k-loop's top barrier orders
+    # each kTile's consumers before the next restage, an odd kTiles
+    # count leaves the final fragment reads with no trailing barrier.
+    # This one orders every warp off the double buffers before the prologue
+    # restages buffer 0.
+    threadgroup_barrier()
     let (mTile, nTile) = idx2crd(cGrid, blockTile)
     let blockM0 = mTile * BM
     let blockN0 = nTile * BN
