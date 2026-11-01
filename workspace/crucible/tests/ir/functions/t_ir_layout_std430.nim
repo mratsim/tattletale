@@ -72,7 +72,7 @@ static:
     doAssert typeByteSize(m.layouts, outer, std430BoolWidth) == 24
     doAssert typeByteSize(m.layouts, tArray(3, outer), std430BoolWidth) == 72
     doAssert typeByteSize(m.layouts, tVec(3, tFloat(32)), std430BoolWidth) == 12
-    doAssert typeByteSize(m.layouts, tBool(), std430BoolWidth) == 1
+    doAssert typeByteSize(m.layouts, tBool(), std430BoolWidth) == 4
     doAssert typeByteSize(m.layouts, tAptr(caDevice, tFloat(32)),
       std430BoolWidth) == 8
 
