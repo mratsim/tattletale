@@ -128,17 +128,17 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getGlslCoordName(kind: CoordBuiltinKind): string =
-  ## GLSL name of a canonical coordinate builtin kind: all six are native
+proc getGlslCoordName(name: string): string =
+  ## GLSL name of a canonical coordinate builtin: all six are native
   ## GLSL builtins, a plain rename.
-  case kind
-  of cbkThreadPositionInGrid: "gl_GlobalInvocationID"
-  of cbkThreadgroupPositionInGrid: "gl_WorkGroupID"
-  of cbkThreadPositionInThreadgroup: "gl_LocalInvocationID"
-  of cbkThreadsPerThreadgroup: "gl_WorkGroupSize"
-  of cbkThreadgroupsPerGrid: "gl_NumWorkGroups"
-  of cbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
-  of cbkNone: ""
+  case name
+  of "thread_position_in_grid": "gl_GlobalInvocationID"
+  of "threadgroup_position_in_grid": "gl_WorkGroupID"
+  of "thread_position_in_threadgroup": "gl_LocalInvocationID"
+  of "threads_per_threadgroup": "gl_WorkGroupSize"
+  of "threadgroups_per_grid": "gl_NumWorkGroups"
+  of "thread_index_in_threadgroup": "gl_LocalInvocationIndex"
+  else: ""
 
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
   ## GLSL extension block over the stored module feature scan `CirModule.features`.
@@ -193,31 +193,28 @@ proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
 proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
   ## Returns the GLSL text of an expression-position builtin call,
   ## "" when `call.callee` is not a builtin.
-  if call.callee.kind == eSym and call.callee.atomicsBuiltin == abkAtomicFetchAdd:
-    # atomicFetchAdd prints its own arguments, a pre-print into the shared arg list would print each argument twice
-    return ctx.printGlslAtomicFetchAdd(call.args)
-  if call.callee.kind == eSym:
-    case call.callee.reductionBuiltin
-    of rbkReduceAdd:
+  if call.callee.kind == eSym and call.callee.builtin:
+    # builtin vocabulary dispatches on the canonical name through this table
+    case call.callee.name
+    of "atomicFetchAdd":
+      # atomicFetchAdd prints its own arguments, a pre-print into the shared arg list would print each argument twice
+      return ctx.printGlslAtomicFetchAdd(call.args)
+    of "reduceAdd":
       return "subgroupAdd(" & args.join(", ") & ")"
-    of rbkReduceMax:
+    of "reduceMax":
       return "subgroupMax(" & args.join(", ") & ")"
-    of rbkNone: discard
-  if call.callee.kind == eSym:
-    case call.callee.shuffleBuiltin
-    of shkSimdShuffle:
+    of "simd_shuffle":
       # subgroupShuffle's index parameter is `uint`, a plain cast
       # compiles without GL_NV_explicit_typecast
       return "subgroupShuffle(" & args[0] & ", uint(" & args[1] & "))"
-    of shkSimdShuffleXor:
+    of "simd_shuffle_xor":
       return "subgroupShuffleXor(" & args[0] & ", uint(" & args[1] & "))"
-    of shkNone: discard
-    if call.callee.synchroBuiltin != sbkNone:
+    of "threadgroup_barrier", "threadgroup_barrier_device":
       ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
       return ""
-  if call.callee.kind == eSym and call.callee.builtin and
-      glslConvBuiltinNames.hasKey(call.callee.name):
-    return glslConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
+    else:
+      if glslConvBuiltinNames.hasKey(call.callee.name):
+        return glslConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 
 
@@ -225,10 +222,10 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## GLSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    if e.coordBuiltin != cbkNone:
-      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+    if e.builtin and e.name in CoordBuiltinNames:
+      if e.name == "thread_index_in_threadgroup":
         return "int(gl_LocalInvocationIndex)"
-      let g = getGlslCoordName(e.coordBuiltin)
+      let g = getGlslCoordName(e.name)
       return "ivec3(int(" & g & ".x), int(" & g & ".y), int(" & g & ".z))"
     if e.typ != nil and e.typ.kind == ctPtr and e.typ.space != caDevice:
       ctx.fail("pointer local " & e.name & " used as a value, GLSL has no pointer values")
@@ -253,9 +250,10 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the GLSL subset")
     return ""
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
       # a component of an unsigned GLSL builtin, cast to the canonical int
-      return "int(" & getGlslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
+      return "int(" & getGlslCoordName(e.dotBase.name) & "." & e.fieldName & ")"
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
       let comp = ctx.getVectorComponent(e.fieldName)
@@ -370,16 +368,16 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
 proc printCall(ctx: var PrintCtx, s: CirStmt): string =
   ## One call statement.
   let pad = spaces(ctx.indent * 2)
-  if s.callCallee.kind == eSym and
-      s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+  if s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier":
     result = pad & "barrier();"
-  elif s.callCallee.kind == eSym and
-      s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+  elif s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier_device":
     # GLSL's barrier() orders shared memory only, buffer writes are
     # ordered before it by a leading memoryBarrierBuffer() call
     result = pad & "memoryBarrierBuffer();\n" & pad & "barrier();"
-  elif s.callCallee.kind == eSym and
-      s.callCallee.atomicsBuiltin == abkAtomicFetchAdd:
+  elif s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "atomicFetchAdd":
     # a GLSL call statement discards the fetched old value
     result = pad & ctx.printGlslAtomicFetchAdd(s.callArgs) & ";"
   else:

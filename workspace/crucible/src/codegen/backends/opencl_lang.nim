@@ -110,7 +110,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
-proc openclCoordComponent(kind: CoordBuiltinKind, field: string): string =
+proc openclCoordComponent(name: string, field: string): string =
   ## OpenCL C call of one canonical coordinate builtin component, the dimension as a literal.
   ## "" when the field is not a component.
   let d = case field
@@ -120,13 +120,13 @@ proc openclCoordComponent(kind: CoordBuiltinKind, field: string): string =
     else: ""
   if d.len == 0:
     return ""
-  case kind
-  of cbkThreadPositionInGrid: "(int)get_global_id(" & d & ")"
-  of cbkThreadgroupPositionInGrid: "(int)get_group_id(" & d & ")"
-  of cbkThreadPositionInThreadgroup: "(int)get_local_id(" & d & ")"
-  of cbkThreadsPerThreadgroup: "(int)get_local_size(" & d & ")"
-  of cbkThreadgroupsPerGrid: "(int)get_num_groups(" & d & ")"
-  of cbkNone, cbkThreadIndexInThreadgroup: ""
+  case name
+  of "thread_position_in_grid": "(int)get_global_id(" & d & ")"
+  of "threadgroup_position_in_grid": "(int)get_group_id(" & d & ")"
+  of "thread_position_in_threadgroup": "(int)get_local_id(" & d & ")"
+  of "threads_per_threadgroup": "(int)get_local_size(" & d & ")"
+  of "threadgroups_per_grid": "(int)get_num_groups(" & d & ")"
+  else: ""
 
 ## x-major flat thread index, parenthesized so a trailing `* k` cannot
 ## mis-associate into `+ get_local_id(0) * k`. OpenCL index builtins are
@@ -177,67 +177,64 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
 proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
   ## Returns the OpenCL C text of an expression-position builtin call,
   ## "" when `call.callee` is not a builtin.
-  if call.callee.kind == eSym:
-    case call.callee.reductionBuiltin
-    of rbkReduceAdd:
+  if call.callee.kind == eSym and call.callee.builtin:
+    # builtin vocabulary dispatches on the canonical name through this table
+    case call.callee.name
+    of "reduceAdd":
       return "sub_group_reduce_add(" & args.join(", ") & ")"
-    of rbkReduceMax:
+    of "reduceMax":
       return "sub_group_reduce_max(" & args.join(", ") & ")"
-    of rbkNone: discard
-  if call.callee.kind == eSym:
-    case call.callee.shuffleBuiltin
-    of shkSimdShuffle:
+    of "simd_shuffle":
       # subgroup-relative indices cast to `uint` for the intrinsic's parameter type
       return "sub_group_shuffle(" & args[0] & ", (uint)(" & args[1] & "))"
-    of shkSimdShuffleXor:
+    of "simd_shuffle_xor":
       # xor masks cast to `uint`: the Nim `int` literal does not match the intrinsic's parameter type
       return "sub_group_shuffle_xor(" & args[0] & ", (uint)(" & args[1] & "))"
-    of shkNone: discard
-  if call.callee.kind == eSym and call.callee.builtin and
-      call.callee.name in ["min", "max", "abs"] and call.args.len > 0:
-    let at = getExprType(call.args[0])
-    if at != nil and at.kind == ctFloat:
-      let mapped = case call.callee.name
-        of "max": "fmax"
-        of "min": "fmin"
-        else: "fabs"
-      return mapped & "(" & args.join(", ") & ")"
-  if call.callee.kind == eSym and call.callee.atomicsBuiltin == abkAtomicFetchAdd:
-    let pt = getAtomicOperandPtr(call.args[0])
-    if pt == nil or pt.pElem == nil:
-      ctx.fail("atomicFetchAdd on an operand with no pointee type")
-      return ""
-    let qualifier = case pt.space
-      of caDevice: "__global"
-      of caThreadgroup: "__local"
-      of caConstant: "__constant"
-      of caThread:
-        ctx.fail("atomicFetchAdd on thread-private storage")
+    of "min", "max", "abs":
+      if call.args.len > 0:
+        let at = getExprType(call.args[0])
+        if at != nil and at.kind == ctFloat:
+          # float operands take the f-prefixed OpenCL names, integer operands keep the plain names
+          let mapped = case call.callee.name
+            of "max": "fmax"
+            of "min": "fmin"
+            else: "fabs"
+          return mapped & "(" & args.join(", ") & ")"
+    of "atomicFetchAdd":
+      let pt = getAtomicOperandPtr(call.args[0])
+      if pt == nil or pt.pElem == nil:
+        ctx.fail("atomicFetchAdd on an operand with no pointee type")
         return ""
-    let atomicTy = case pt.pElem.kind
-      of ctFloat:
-        if pt.pElem.bits == 32: "atomic_float"
+      let qualifier = case pt.space
+        of caDevice: "__global"
+        of caThreadgroup: "__local"
+        of caConstant: "__constant"
+        of caThread:
+          ctx.fail("atomicFetchAdd on thread-private storage")
+          return ""
+      let atomicTy = case pt.pElem.kind
+        of ctFloat:
+          if pt.pElem.bits == 32: "atomic_float"
+          else: ""
+        of ctInt:
+          if pt.pElem.bits == 32: "atomic_int"
+          else: ""
+        of ctUint:
+          if pt.pElem.bits == 32: "atomic_uint"
+          else: ""
         else: ""
-      of ctInt:
-        if pt.pElem.bits == 32: "atomic_int"
-        else: ""
-      of ctUint:
-        if pt.pElem.bits == 32: "atomic_uint"
-        else: ""
-      else: ""
-    if atomicTy.len == 0:
-      ctx.fail("atomicFetchAdd on " & emitOpenclScalar(pt.pElem) &
-        ", only 32-bit int/uint/float pointees")
+      if atomicTy.len == 0:
+        ctx.fail("atomicFetchAdd on " & emitOpenclScalar(pt.pElem) & ", only 32-bit int/uint/float pointees")
+        return ""
+      # atomic_fetch_add requires `atomic_*` pointees, the raw qualified pointer casts at the call site
+      return "atomic_fetch_add((volatile " & qualifier & " " & atomicTy & "*)" &
+        ctx.printExpr(call.args[0]) & ", " & ctx.printExpr(call.args[1]) & ")"
+    of "threadgroup_barrier", "threadgroup_barrier_device":
+      ctx.fail("barrier is a statement, a value-position barrier is outside the OpenCL subset")
       return ""
-    # atomic_fetch_add requires `atomic_*` pointees, the raw qualified pointer casts at the call site
-    return "atomic_fetch_add((volatile " & qualifier & " " & atomicTy & "*)" &
-      ctx.printExpr(call.args[0]) & ", " & ctx.printExpr(call.args[1]) & ")"
-  if call.callee.kind == eSym and call.callee.synchroBuiltin != sbkNone:
-    ctx.fail("barrier is a statement, a value-position barrier is outside the OpenCL subset")
-    return ""
-  if call.callee.kind == eSym and call.callee.builtin and
-      openclConvBuiltinNames.hasKey(call.callee.name):
-    return openclConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
+    else:
+      if openclConvBuiltinNames.hasKey(call.callee.name):
+        return openclConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 proc emitLocalDecl(s: CirStmt): string =
   ## Declaration text of one local, the init remains with the caller.
@@ -258,16 +255,17 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## OpenCL C text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    if e.coordBuiltin != cbkNone:
-      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+    if e.builtin and e.name in CoordBuiltinNames:
+      if e.name == "thread_index_in_threadgroup":
         return OpenclFlatThreadIndex
       ctx.fail("whole-vector coordinate read " & e.name &
         ", OpenCL C has no vector form, read the components")
       return ""
     return e.name
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      let mapped = openclCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
+      let mapped = openclCoordComponent(e.dotBase.name, e.fieldName)
       if mapped.len == 0:
         ctx.fail("no coordinate component " & e.fieldName)
         return ""
@@ -367,11 +365,11 @@ proc printCall(ctx: var PrintCtx, s: CirStmt): string =
   parts.add ctx.printExpr(s.callCallee)
   for a in s.callArgs:
     parts.add ctx.printExpr(a)
-  if s.callCallee.kind == eSym and
-      s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+  if s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier":
     result = pad & "barrier(CLK_LOCAL_MEM_FENCE);"
-  elif s.callCallee.kind == eSym and
-      s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+  elif s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier_device":
     # global fence bit orders device-address-space accesses
     result = pad & "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);"
   else:

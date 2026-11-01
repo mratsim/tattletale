@@ -23,12 +23,12 @@
 ## - coordinate builtins map to the CUDA vocabulary: blockIdx, blockDim,
 ##   gridDim, threadIdx. The canonical Nim type is int, the CUDA builtins are unsigned, reads cast to int
 ## - `{.unroll.}` prints `#pragma unroll` in front of the loop, a loop prints `while (cond)` or `for (;;)`
-## - the typed builtin kinds dispatch to the CUDA vocabulary, `{.builtin.}` names pass through, the warp reductions are the exception
+## - the builtin vocabulary dispatches on the canonical name, `{.builtin.}` names pass through, the warp reductions are the exception
 ## - a warp-reduction call makes its butterfly template emit at module scope on first use
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
-import std/[macros, strutils, sequtils, tables, math]
+import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
@@ -75,7 +75,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 
-proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: string, coordTy: CirType): string =
+proc cudaCoordToken(name: string, whole: bool, field: string, coordTy: CirType): string =
   ## CUDA text of a canonical coordinate reference.
   ## - whole-value use of a vector builtin: a braced init of the coordinate
   ##   struct the module registered. The CUDA builtins are unsigned and
@@ -83,39 +83,39 @@ proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: st
   ## - component use: a cast to int, the flat thread index linearizes
   ##   x-major and parenthesizes so a trailing `* k` cannot mis-associate
   let vecTy = emitCudaScalar(coordTy)
-  case kind
-  of cbkThreadgroupPositionInGrid:
+  case name
+  of "threadgroup_position_in_grid":
     if whole:
       result = vecTy & "{(int)blockIdx.x, (int)blockIdx.y, (int)blockIdx.z}"
     else:
       result = "(int)(blockIdx." & field & ")"
-  of cbkThreadPositionInThreadgroup:
+  of "thread_position_in_threadgroup":
     if whole:
       result = vecTy & "{(int)threadIdx.x, (int)threadIdx.y, (int)threadIdx.z}"
     else:
       result = "(int)(threadIdx." & field & ")"
-  of cbkThreadsPerThreadgroup:
+  of "threads_per_threadgroup":
     if whole:
       result = vecTy & "{(int)blockDim.x, (int)blockDim.y, (int)blockDim.z}"
     else:
       result = "(int)(blockDim." & field & ")"
-  of cbkThreadgroupsPerGrid:
+  of "threadgroups_per_grid":
     if whole:
       result = vecTy & "{(int)gridDim.x, (int)gridDim.y, (int)gridDim.z}"
     else:
       result = "(int)(gridDim." & field & ")"
-  of cbkThreadIndexInThreadgroup:
+  of "thread_index_in_threadgroup":
     if whole:
       result = "(int)(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)"
     else:
       result = "(int)(threadIdx." & field & ")"
-  of cbkThreadPositionInGrid:
+  of "thread_position_in_grid":
     if whole:
       result = name
     else:
       result = "(int)(blockIdx." & field & "*blockDim." & field &
         "+threadIdx." & field & ")"
-  of cbkNone:
+  else:
     result = name
 
 proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
@@ -126,31 +126,28 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## its memory ordering, the CUDA text is `__syncthreads()`.
   ##
   ## `args` contains the already-printed argument texts.
-  if callee.kind != eSym:
+  if callee.kind != eSym or not callee.builtin:
     return ""
-  case callee.synchroBuiltin
-  of sbkThreadgroupBarrier, sbkThreadgroupBarrierDevice:
+  # builtin vocabulary dispatches on the canonical name through this table
+  case callee.name
+  of "threadgroup_barrier", "threadgroup_barrier_device":
     # __syncthreads() already orders global memory, the device-scope barrier emits no separate instruction
     return "__syncthreads()"
-  of sbkNone: discard
-  case callee.reductionBuiltin
-  of rbkReduceAdd:
+  of "reduceAdd":
     return "warpReduceAdd(" & args.join(", ") & ")"
-  of rbkReduceMax:
+  of "reduceMax":
     return "warpReduceMax(" & args.join(", ") & ")"
-  of rbkNone: discard
-  if callee.atomicsBuiltin == abkAtomicFetchAdd:
+  of "atomicFetchAdd":
     # atomicAdd overloads on the pointee type, no cast needed
     return "atomicAdd(" & args[0] & ", " & args[1] & ")"
-  case callee.shuffleBuiltin
-  of shkSimdShuffle, shkSimdShuffleXor:
+  of "simd_shuffle", "simd_shuffle_xor":
     # full mask: every warp lane participates and receives the result,
     # xor exchanges lane pairs bitwise
-    let shfl = if callee.shuffleBuiltin == shkSimdShuffle: "__shfl_sync"
+    let shfl = if callee.name == "simd_shuffle": "__shfl_sync"
                else: "__shfl_xor_sync"
     return shfl & "(0xffffffffu, " & args[0] & ", " & args[1] & ")"
-  of shkNone: discard
-  return ""
+  else:
+    return ""
 
 proc cudaMathCallText(call: CirExpr, args: seq[string]): string =
   ## CUDA text of a `{.builtin.}` scalar-math call whose CUDA name differs
@@ -188,12 +185,13 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## CUDA text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    if e.coordBuiltin != cbkNone:
-      return cudaCoordToken(e.coordBuiltin, e.name, true, "", e.typ)
+    if e.builtin and e.name in CoordBuiltinNames:
+      return cudaCoordToken(e.name, true, "", e.typ)
     return e.name
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      return cudaCoordToken(e.dotBase.coordBuiltin, e.dotBase.name, false,
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
+      return cudaCoordToken(e.dotBase.name, false,
         e.fieldName, e.dotBase.typ)
     let base = ctx.printExpr(e.dotBase)
     if e.dotBase.kind == eDeref:
@@ -280,17 +278,13 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
       text.add(s.asmOperands[i].name)
   result = pad & "asm(" & text.strip() & ");"
 
-proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
-  ## Butterfly warp-reduction template for one reduction kind: CUDA has no
+proc emitWarpReduceTemplate(name: string): string =
+  ## Butterfly warp-reduction template for one reduction: CUDA has no
   ## float warp-reduce intrinsic, the tree walks the xor mask 16/8/4/2/1.
-  let op = case kind
-    of rbkReduceAdd: "v += "
-    else: "v = max(v, "
-  let close = case kind
-    of rbkReduceAdd: ""
-    else: ")"
+  let op = if name == "reduceAdd": "v += " else: "v = max(v, "
+  let close = if name == "reduceAdd": "" else: ")"
   result = "template <typename T> __forceinline__ __device__ T warpReduce" &
-    (if kind == rbkReduceAdd: "Add" else: "Max") & "(T v) {\n"
+    (if name == "reduceAdd": "Add" else: "Max") & "(T v) {\n"
   result &= "  #pragma unroll\n"
   result &= "  for (int delta = 16; delta > 0; delta >>= 1) {\n"
   result &= "    " & op & "__shfl_xor_sync(0xffffffff, v, delta, 32)" & close & ";\n"
@@ -363,11 +357,11 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
   ## Warp-reduction template set from the stored module feature scan
   ## (`CirModule.features`, filled by the feature-scan pass).
-  let reduceKinds = m.features.reductions
-  if rbkReduceAdd in reduceKinds:
-    result &= emitWarpReduceTemplate(rbkReduceAdd)
-  if rbkReduceMax in reduceKinds:
-    result &= emitWarpReduceTemplate(rbkReduceMax)
+  let reduceNames = m.features.reductions
+  if "reduceAdd" in reduceNames:
+    result &= emitWarpReduceTemplate("reduceAdd")
+  if "reduceMax" in reduceNames:
+    result &= emitWarpReduceTemplate("reduceMax")
 
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full CUDA translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.

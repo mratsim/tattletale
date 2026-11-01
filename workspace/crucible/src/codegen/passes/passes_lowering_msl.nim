@@ -241,59 +241,58 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
 # Coordinate builtins threaded down to device functions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectCoordReads(e: CirExpr, kinds: var HashSet[CoordBuiltinKind]) =
-  if e.kind == eSym and e.coordBuiltin != cbkNone:
-    kinds.incl(e.coordBuiltin)
+proc collectCoordReads(e: CirExpr, names: var HashSet[string]) =
+  if e.kind == eSym and e.builtin and e.name in CoordBuiltinNames:
+    names.incl(e.name)
 
-proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CoordBuiltinKind] =
-  var kinds: HashSet[CoordBuiltinKind]
+proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[string] =
+  var names: HashSet[string]
   let collect = proc(e: CirExpr) =
-    e.collectCoordReads(kinds)
+    e.collectCoordReads(names)
   ss.walkStmts(nil, collect)
-  return kinds
+  return names
 
-proc getBuiltinParamType(kind: CoordBuiltinKind): CirType =
+proc getBuiltinParamType(name: string): CirType =
   ## Builtins carry the canonical `ivec3` type, so the printer emits an `int3` constructor for whole-value reads of the standing-in parameter.
-  if kind == cbkThreadIndexInThreadgroup:
+  if name == "thread_index_in_threadgroup":
     tInt(32)
   else:
     tVec(3, tInt(32))
 
-proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[CoordBuiltinKind]],
+proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[string]],
                       callTargets: Table[string, HashSet[string]],
-                      needs: var Table[string, HashSet[CoordBuiltinKind]]): bool =
-  var kinds = direct[fn.name]
+                      needs: var Table[string, HashSet[string]]): bool =
+  var names = direct[fn.name]
   for target in callTargets[fn.name]:
     if needs.hasKey(target):
-      for kind in needs[target]:
-        kinds.incl(kind)
-  if kinds == needs.getOrDefault(fn.name):
+      for name in needs[target]:
+        names.incl(name)
+  if names == needs.getOrDefault(fn.name):
     return false
-  needs[fn.name] = kinds
+  needs[fn.name] = names
   return true
 
-proc sortCoordKinds(kinds: HashSet[CoordBuiltinKind]): seq[CoordBuiltinKind] =
-  ## Needed kinds in declaration order, which also fixes the parameter order.
-  for kind in CoordBuiltinKind:
-    if kind != cbkNone and kind in kinds:
-      result.add(kind)
+proc orderedCoordNames(names: HashSet[string]): seq[string] =
+  ## Needed builtin names in `CoordBuiltinNames` order, which also fixes the parameter order.
+  for name in CoordBuiltinNames:
+    if name in names:
+      result.add(name)
 
-proc appendCoordParam(fn: CirProc, kind: CoordBuiltinKind): string =
+proc appendCoordParam(fn: CirProc, name: string): string =
   ## A parameter uses the builtin's canonical name so the body's
   ## builtin-marked reads print that name unchanged, in a kernel the name
   ## binds to the attributed parameter, in a device function to this parameter.
-  let name = CoordBuiltinCanonicalName[kind]
   for p in fn.params:
     if p.name == name:
       return "at " & fn.name & ": parameter " & name &
         " is named like the coordinate builtin the function needs," &
         " the call sites cannot supply both"
-  fn.params.add(param(name, getBuiltinParamType(kind)))
+  fn.params.add(param(name, getBuiltinParamType(name)))
   return ""
 
 proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
                          args: var seq[CirExpr],
-                         needs: Table[string, HashSet[CoordBuiltinKind]]): string =
+                         needs: Table[string, HashSet[string]]): string =
   ## One argument per needed builtin in the callee's parameter order, the callee symbol's proc type grows to match.
   ##
   ## - a kernel forwards the builtin-marked symbol: the printer then emits
@@ -302,25 +301,24 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
   ##   as the bare name
   if callee.kind != eSym or not needs.hasKey(callee.name):
     return ""
-  let calleeKinds = sortCoordKinds(needs[callee.name])
+  let calleeNames = orderedCoordNames(needs[callee.name])
   if callee.typ.kind == ctProc and
-      callee.typ.params.len == calleeProc.params.len - calleeKinds.len:
+      callee.typ.params.len == calleeProc.params.len - calleeNames.len:
     # one extension per callee symbol, call sites can share the node
     var extra: seq[CirType]
-    for kind in calleeKinds:
-      extra.add(getBuiltinParamType(kind))
+    for name in calleeNames:
+      extra.add(getBuiltinParamType(name))
     callee.typ = extendedProcType(callee.typ, extra)
-  for kind in calleeKinds:
+  for name in calleeNames:
     if fn.isKernel:
-      args.add(sym(CoordBuiltinCanonicalName[kind], getBuiltinParamType(kind),
-        builtin = true, coordBuiltin = kind))
+      args.add(sym(name, getBuiltinParamType(name), builtin = true))
     else:
-      args.add(sym(CoordBuiltinCanonicalName[kind], getBuiltinParamType(kind)))
+      args.add(sym(name, getBuiltinParamType(name)))
   return ""
 
 proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
                                     procs: Table[string, CirProc],
-                                    needs: Table[string, HashSet[CoordBuiltinKind]]): string =
+                                    needs: Table[string, HashSet[string]]): string =
   var err = ""
   let onExpr = proc(e: CirExpr) =
     if err.len > 0:
@@ -342,11 +340,11 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
   ## - a kernel body is untouched, it reads the builtins it forwards directly
   ## - Metal only: the builtins are legal reads inside device functions
   ##   on other targets, so the pass is not registered there
-  var needs = initTable[string, HashSet[CoordBuiltinKind]]()
-  var direct = initTable[string, HashSet[CoordBuiltinKind]]()
+  var needs = initTable[string, HashSet[string]]()
+  var direct = initTable[string, HashSet[string]]()
   var callTargets = initTable[string, HashSet[string]]()
   for fn in m.procs:
-    needs[fn.name] = initHashSet[CoordBuiltinKind]()
+    needs[fn.name] = initHashSet[string]()
     direct[fn.name] = fn.body.collectCoordReadsStmts()
     var targets: HashSet[string]
     fn.body.collectCallTargets(targets)
@@ -373,8 +371,8 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
   for fn in m.procs:
     if fn.isKernel:
       continue
-    for kind in sortCoordKinds(needs[fn.name]):
-      let err = fn.appendCoordParam(kind)
+    for name in orderedCoordNames(needs[fn.name]):
+      let err = fn.appendCoordParam(name)
       if err.len > 0:
         return err
   let procs = procsByName(m)

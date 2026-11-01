@@ -114,8 +114,8 @@ type
     addressParams: Table[string, CirType]
     ## Buffer parameters of the proc in flight by name to their `aptr` type:
     ## the fvVulkan access emitter reads the element type per access.
-    coordReads: set[CoordBuiltinKind]
-    ## Coordinate semantics the kernel body reads, main takes only those.
+    coordReads: HashSet[string]
+    ## Canonical coordinate builtin names the kernel body reads, the entry head declares their inputs in `CoordBuiltinNames` order.
     workgroup: array[3, int]
     ## Workgroup sizes of the entry, `threads_per_threadgroup` reads print the literal.
     procs: Table[string, CirProc]
@@ -250,33 +250,46 @@ proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size,
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
-## Synthesized main input variable per coordinate builtin kind, "" for the kinds
-## without one: threads_per_threadgroup prints the workgroup literal,
-## the lowering pass materializes threadgroups_per_grid.
-const CoordInputNames: array[CoordBuiltinKind, string] = [
-  "", "gid", "groupId", "groupThreadId", "", "", "gidx",
-]
+proc getCoordInputName(name: string): string =
+  ## Synthesized main input variable of one canonical coordinate builtin, "" for the names without one.
+  ## threads_per_threadgroup prints the workgroup literal, the lowering pass materializes threadgroups_per_grid.
+  case name
+  of "thread_position_in_grid": "gid"
+  of "threadgroup_position_in_grid": "groupId"
+  of "thread_position_in_threadgroup": "groupThreadId"
+  of "thread_index_in_threadgroup": "gidx"
+  else: ""
 
-proc getCoordInputName(kind: CoordBuiltinKind): string =
-  CoordInputNames[kind]
+proc getCoordEntryInput(name: string): string =
+  ## Entry-input text of one canonical coordinate builtin, the synthesized main input with its semantic.
+  ## "" for the names with no entry input: threads_per_threadgroup prints the workgroup literal,
+  ## the lowering pass materializes threadgroups_per_grid.
+  case name
+  of "thread_position_in_grid": "uint3 gid : SV_DispatchThreadID"
+  of "threadgroup_position_in_grid": "uint3 groupId : SV_GroupID"
+  of "thread_position_in_threadgroup": "uint3 groupThreadId : SV_GroupThreadID"
+  of "thread_index_in_threadgroup": "uint gidx : SV_GroupIndex"
+  else: ""
 
-## Entry-input text per canonical coordinate builtin kind: the synthesized main input with its semantic.
-## "" for the kinds with no entry input: threads_per_threadgroup prints the workgroup literal,
-## the lowering pass materializes threadgroups_per_grid.
-const hlslEntryInputs*: EntryInputs = [
-  "",
-  "uint3 gid : SV_DispatchThreadID",
-  "uint3 groupId : SV_GroupID",
-  "uint3 groupThreadId : SV_GroupThreadID",
-  "",
-  "",
-  "uint gidx : SV_GroupIndex"]
+proc orderedCoordReads(reads: HashSet[string]): seq[string] =
+  ## Kernel coordinate reads in `CoordBuiltinNames` order, the order the entry head declares their inputs.
+  for name in CoordBuiltinNames:
+    if name in reads:
+      result.add name
 
-proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string): string =
+const hlslEntryInputs*: EntryInputs = block:
+  var inputs: EntryInputs
+  for name in CoordBuiltinNames:
+    let text = getCoordEntryInput(name)
+    if text.len > 0:
+      inputs[name] = text
+  inputs
+
+proc emitCoordComponent(ctx: var PrintCtx, name: string, field: string): string =
   ## One coordinate-builtin component, cast to the canonical `int` type.
-  ctx.coordReads.incl(kind)
-  case kind
-  of cbkThreadsPerThreadgroup:
+  ctx.coordReads.incl(name)
+  case name
+  of "threads_per_threadgroup":
     let i = case field
       of "x": 0
       of "y": 1
@@ -285,10 +298,10 @@ proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string
     if i < 0:
       ctx.fail("no component " & field & " on threads_per_threadgroup")
     result = $ctx.workgroup[i]
-  of cbkThreadIndexInThreadgroup:
-    result = "int(" & getCoordInputName(kind) & ")"
+  of "thread_index_in_threadgroup":
+    result = "int(" & getCoordInputName(name) & ")"
   else:
-    result = "int(" & getCoordInputName(kind) & "." & field & ")"
+    result = "int(" & getCoordInputName(name) & "." & field & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -354,40 +367,38 @@ proc printCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): strin
 proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
   ## Returns the HLSL text of an expression-position builtin call,
   ## "" when `call.callee` is not a builtin.
-  if call.callee.kind == eSym:
-    case call.callee.synchroBuiltin
-    of sbkThreadgroupBarrier, sbkThreadgroupBarrierDevice:
+  if call.callee.kind == eSym and call.callee.builtin:
+    # builtin vocabulary dispatches on the canonical name through this table
+    case call.callee.name
+    of "threadgroup_barrier", "threadgroup_barrier_device":
       ctx.fail("barrier is a statement, a value-position barrier is outside the HLSL subset")
       return ""
-    else:
-      discard
-    if call.callee.reductionBuiltin != rbkNone:
+    of "reduceAdd", "reduceMax":
       ctx.fail("subgroup reductions have no emission, wave intrinsics are outside this backend")
       return ""
-    if call.callee.atomicsBuiltin != abkNone:
+    of "atomicFetchAdd":
       ctx.fail("atomic builtins have no emission in this backend")
       return ""
-    case call.callee.shuffleBuiltin
-    of shkSimdShuffle:
+    of "simd_shuffle":
       # simd_shuffle maps to WaveReadLaneAt, a dynamically uniform
       # lane index is required by the intrinsic
       return "WaveReadLaneAt(" & args.join(", ") & ")"
-    of shkSimdShuffleXor:
+    of "simd_shuffle_xor":
       ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
       return ""
-    of shkNone: discard
-    if call.callee.builtin and call.callee.name in hlslConvFpRefusals:
-      ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8 conversion builtins are outside the HLSL subset")
-      return ""
+    else:
+      if call.callee.name in hlslConvFpRefusals:
+        ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8 conversion builtins are outside the HLSL subset")
+        return ""
   return ""
 
 
-proc coordReadRejection(ctx: PrintCtx, kind: CoordBuiltinKind): string =
+proc coordReadRejection(ctx: PrintCtx, name: string): string =
   ## Refusal text for a coordinate builtin read the printer rejects, "" in a kernel.
   ## The lowering pass materializes threadgroups_per_grid.
   if not ctx.isKernel:
     return "coordinate semantics bind the kernel entry point only"
-  if kind == cbkThreadgroupsPerGrid:
+  if name == "threadgroups_per_grid":
     return "threadgroups_per_grid has no HLSL semantic"
   return ""
 
@@ -396,14 +407,14 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   case e.kind
   of eSym:
     # coordinate builtins bind the kernel entry only
-    if e.coordBuiltin != cbkNone:
-      let rej = coordReadRejection(ctx, e.coordBuiltin)
+    if e.builtin and e.name in CoordBuiltinNames:
+      let rej = coordReadRejection(ctx, e.name)
       if rej.len > 0:
         ctx.fail(rej)
         return ""
-      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
-        ctx.coordReads.incl(e.coordBuiltin)
-        return "int(" & getCoordInputName(e.coordBuiltin) & ")"
+      if e.name == "thread_index_in_threadgroup":
+        ctx.coordReads.incl(e.name)
+        return "int(" & getCoordInputName(e.name) & ")"
       ctx.fail("whole-vector read of a coordinate builtin is outside the HLSL subset")
       return ""
     if ctx.pushParams.contains(e.name):
@@ -439,12 +450,13 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("indexing an " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the HLSL subset")
     return ""
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      let rej = coordReadRejection(ctx, e.dotBase.coordBuiltin)
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
+      let rej = coordReadRejection(ctx, e.dotBase.name)
       if rej.len > 0:
         ctx.fail(rej)
         return ""
-      return emitCoordComponent(ctx, e.dotBase.coordBuiltin, e.fieldName)
+      return emitCoordComponent(ctx, e.dotBase.name, e.fieldName)
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
       let comp = ctx.getVectorComponent(e.fieldName)
@@ -578,11 +590,11 @@ proc printCall(ctx: var PrintCtx, s: CirStmt): string =
       parts.add a.name
     else:
       parts.add ctx.emitCallArg(s.callCallee, i, a)
-  if s.callCallee.kind == eSym and
-      s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
+  if s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier":
     result = pad & "GroupMemoryBarrierWithGroupSync();"
-  elif s.callCallee.kind == eSym and
-      s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
+  elif s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier_device":
     result = pad & "DeviceMemoryBarrierWithGroupSync();"
   else:
     result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
@@ -614,7 +626,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
     # a bare kernel is `main`, device functions print under the name their call sites reference
     let entryName = if fn.exportName.len > 0: fn.exportName else: "main"
     result &= "void " & entryName & "(" &
-      emitEntryInputs(ctx.coordReads, hlslEntryInputs) & ")\n{\n"
+      emitEntryInputs(orderedCoordReads(ctx.coordReads), hlslEntryInputs) & ")\n{\n"
     return
   var params: seq[string]
   for p in fn.params:

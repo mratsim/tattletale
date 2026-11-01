@@ -21,7 +21,7 @@
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
 ##   program-scope `constant` output, the printer refuses a const_mem survivor
 ## - a loop prints `while (cond)`, `{.unroll.}` adds the Metal unroll pragma
-## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
+## - the builtin vocabulary dispatches on the canonical name, `{.builtin.}` names pass
 ##   through except the numeric conversions, which resolve to the MSL native call text
 
 import ../ir/cirv2_lang
@@ -116,21 +116,19 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## its memory flags, the Metal compiler refuses the text.
   ##
   ## `args` contains the already-printed argument texts.
-  if callee.kind != eSym:
+  if callee.kind != eSym or not callee.builtin:
     return ""
-  case callee.synchroBuiltin
-  of sbkThreadgroupBarrier:
+  # builtin vocabulary dispatches on the canonical name through this table
+  case callee.name
+  of "threadgroup_barrier":
     return "threadgroup_barrier(mem_flags::mem_threadgroup)"
-  of sbkThreadgroupBarrierDevice:
+  of "threadgroup_barrier_device":
     return "threadgroup_barrier(mem_flags::mem_device)"
-  of sbkNone: discard
-  case callee.reductionBuiltin
-  of rbkReduceAdd:
+  of "reduceAdd":
     return "simd_sum(" & args.join(", ") & ")"
-  of rbkReduceMax:
+  of "reduceMax":
     return "simd_max(" & args.join(", ") & ")"
-  of rbkNone: discard
-  if callee.atomicsBuiltin == abkAtomicFetchAdd:
+  of "atomicFetchAdd":
     # pointer casts to the atomic pointee type, relaxed order only,
     # fp32 needs Metal 3+, device address space implies the scope
     var atomicTy = ""
@@ -149,8 +147,9 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
       error("atomic_fetch_add over a pointee without an MSL atomic type")
     return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
       "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
-  if callee.builtin and mslConvBuiltinNames.hasKey(callee.name):
-    return mslConvBuiltinNames.getOrDefault(callee.name) % args.join(", ")
+  else:
+    if mslConvBuiltinNames.hasKey(callee.name):
+      return mslConvBuiltinNames.getOrDefault(callee.name) % args.join(", ")
   return ""
 
 
@@ -167,11 +166,12 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## MSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    if e.coordBuiltin != cbkNone:
+    if e.builtin and e.name in CoordBuiltinNames:
       return ctx.printBuiltinRef(e.name, true)
     return e.name
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
       ctx.builtins.incl(e.dotBase.name)
       return "(int)(" & e.dotBase.name & '.' & e.fieldName & ")"
     let base = ctx.printExpr(e.dotBase)

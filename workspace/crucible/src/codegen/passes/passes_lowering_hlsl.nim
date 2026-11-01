@@ -72,7 +72,7 @@ const NumWorkgroupsParam* = "crucible_numworkgroups"
 proc findNumWorkgroupsExpr(e: CirExpr, coordTy: var CirType): bool =
   if e.isNil:
     return false
-  if e.kind == eSym and e.coordBuiltin == cbkThreadgroupsPerGrid:
+  if e.kind == eSym and e.builtin and e.name == "threadgroups_per_grid":
     coordTy = e.typ
     return true
   for ch in getExprChildren(e):
@@ -119,11 +119,10 @@ proc rewriteNumWorkgroupsExpr(e: CirExpr, coordTy: CirType) =
   ## Expressions are refs, the rewrite applies to the node every sharer sees.
   if e.isNil:
     return
-  if e.kind == eSym and e.coordBuiltin == cbkThreadgroupsPerGrid:
+  if e.kind == eSym and e.builtin and e.name == "threadgroups_per_grid":
     e.name = NumWorkgroupsParam
     e.typ = coordTy
     e.builtin = false
-    e.coordBuiltin = cbkNone
     return
   for ch in getExprChildren(e):
     rewriteNumWorkgroupsExpr(ch, coordTy)

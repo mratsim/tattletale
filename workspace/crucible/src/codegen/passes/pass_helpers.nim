@@ -171,10 +171,6 @@ proc cloneExpr*(e: CirExpr): CirExpr =
     result.name = e.name
     result.typ = e.typ
     result.builtin = e.builtin
-    result.coordBuiltin = e.coordBuiltin
-    result.synchroBuiltin = e.synchroBuiltin
-    result.reductionBuiltin = e.reductionBuiltin
-    result.atomicsBuiltin = e.atomicsBuiltin
   of eIntLit:
     result.value = e.value
     result.litType = e.litType

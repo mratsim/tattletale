@@ -21,6 +21,21 @@
 
 import std/[macros, hashes, sequtils, sets, strutils, tables]
 
+const CoordBuiltinNames*: array[6, string] = [
+  "thread_position_in_grid",
+  "threadgroup_position_in_grid",
+  "thread_position_in_threadgroup",
+  "threads_per_threadgroup",
+  "threadgroups_per_grid",
+  "thread_index_in_threadgroup",
+]
+## Canonical coordinate builtin names, in the order passes declare
+## parameters and entry heads list inputs.
+## - The IR names every coordinate builtin by its canonical name.
+## - Consumers dispatch on the name.
+## - A symbol sharing a name without a `{.builtin.}` read stays
+##   unrecognized (`builtin` false).
+
 type
   AddressSpace* = enum
     ## Memory class a pointer or aptr addresses.
@@ -28,41 +43,6 @@ type
     caThreadgroup
     caConstant
     caDevice
-
-  CoordBuiltinKind* = enum
-    ## Canonical coordinate builtin category. The alias canonicalization pass
-    ## assigns the kind from the canonical name table below, `cbkNone` marks every
-    ## symbol that is not a coordinate builtin.
-    cbkNone
-    cbkThreadPositionInGrid
-    cbkThreadgroupPositionInGrid
-    cbkThreadPositionInThreadgroup
-    cbkThreadsPerThreadgroup
-    cbkThreadgroupsPerGrid
-    cbkThreadIndexInThreadgroup
-
-  SynchroBuiltinKind* = enum
-    ## Canonical synchronization builtin category, `sbkNone` when not a barrier.
-    sbkNone
-    sbkThreadgroupBarrier
-    sbkThreadgroupBarrierDevice
-
-  ReductionBuiltinKind* = enum
-    ## Canonical subgroup-reduction builtin category, `rbkNone` when not a reduction.
-    rbkNone
-    rbkReduceAdd
-    rbkReduceMax
-
-  AtomicsBuiltinKind* = enum
-    ## Canonical atomic builtin category, `abkNone` when not an atomic.
-    abkNone
-    abkAtomicFetchAdd
-
-  ShuffleBuiltinKind* = enum
-    ## Canonical cross-lane shuffle builtin category, `shkNone` when not a shuffle.
-    shkNone
-    shkSimdShuffle
-    shkSimdShuffleXor
 
   CirTypeKind* = enum
     ## Closed set of type kinds, derived once at the frontend boundary and never
@@ -178,23 +158,9 @@ type
       name*: string
       typ*: CirType
       builtin*: bool
-      ## True for a symbol born from a `{.builtin.}` read or call. The frontend records
-      ## the pragma there:
-      ##
-      ## - the alias canonicalization pass renames only builtin symbols, a local
-      ##   or parameter that happens to share a builtin's name stays untouched
-      ## - the pass assigns the five typed kinds below from the canonical name tables
-      ## - downstream recognition dispatches on the kinds, never on names
-      coordBuiltin*: CoordBuiltinKind
-      ## Coordinate builtin kind, `cbkNone` when not a coordinate.
-      synchroBuiltin*: SynchroBuiltinKind
-      ## Synchronization builtin kind, `sbkNone` when not a barrier.
-      reductionBuiltin*: ReductionBuiltinKind
-      ## Reduction builtin kind, `rbkNone` when not a reduction intrinsic.
-      atomicsBuiltin*: AtomicsBuiltinKind
-      ## Atomic builtin kind, `abkNone` when not an atomic intrinsic.
-      shuffleBuiltin*: ShuffleBuiltinKind
-      ## Shuffle builtin kind, `shkNone` when not a shuffle intrinsic.
+      ## True for a symbol born from a `{.builtin.}` read or call, false for a local or parameter sharing a builtin's name.
+      ## - Consumers recognize the builtin vocabulary from the canonical name alone, guarded by this flag.
+      ## - The categories dispatch through the consumers' own emit tables.
     of eIntLit:
       value*: int64
       litType*: CirType
@@ -360,11 +326,11 @@ type
     ## A floating-point `atomicFetchAdd` on 32-bit float storage occurs in the module.
     controlFlow*: bool
     ## A `{.unroll.}`-marked loop occurs in the module.
-    reductions*: set[ReductionBuiltinKind]
-    ## Subgroup reduction kinds in use.
+    reductions*: HashSet[string]
+    ## Canonical names of the subgroup reductions in use.
     ##
     ## - the warp-reduction template list of the targets that emit one
-    ##   template per kind
+    ##   template per reduction
 
   CallGraph* = object
     ## Call graph over the device functions of one module, filled by the target's call-graph analysis pass.
@@ -406,79 +372,6 @@ type
     ## - valid only if no transform runs after the pass, which runPasses enforces
     ## - the printer emits one `layout(buffer_reference, std430) buffer`
     ##   declaration per entry in order, it never registers a block itself
-
-## Canonical name -> builtin-kind tables. The alias canonicalization pass reads
-## them after it renames an alias to its canonical name. The cross-check against
-## the catalog declarations lives in the pass module, which is the only importer of both sides.
-
-let CoordBuiltinKindByName* {.compileTime.}: Table[string, CoordBuiltinKind] = {
-  "thread_position_in_grid": cbkThreadPositionInGrid,
-  "threadgroup_position_in_grid": cbkThreadgroupPositionInGrid,
-  "thread_position_in_threadgroup": cbkThreadPositionInThreadgroup,
-  "threads_per_threadgroup": cbkThreadsPerThreadgroup,
-  "threadgroups_per_grid": cbkThreadgroupsPerGrid,
-  "thread_index_in_threadgroup": cbkThreadIndexInThreadgroup,
-}.toTable()
-
-## Canonical name of each coordinate builtin kind, "" for `cbkNone`.
-## Inverse of `CoordBuiltinKindByName`.
-##
-## Consumers that synthesize a coordinate-builtin reference read the name
-## from here: the Metal builtin-threading pass names its parameters
-## after the builtin.
-let CoordBuiltinCanonicalName* {.compileTime.}: array[CoordBuiltinKind, string] = [
-  cbkNone: "",
-  cbkThreadPositionInGrid: "thread_position_in_grid",
-  cbkThreadgroupPositionInGrid: "threadgroup_position_in_grid",
-  cbkThreadPositionInThreadgroup: "thread_position_in_threadgroup",
-  cbkThreadsPerThreadgroup: "threads_per_threadgroup",
-  cbkThreadgroupsPerGrid: "threadgroups_per_grid",
-  cbkThreadIndexInThreadgroup: "thread_index_in_threadgroup",
-]
-
-## Barrier builtin canonical name -> kind.
-let SynchroBuiltinKindByName* {.compileTime.}: Table[string, SynchroBuiltinKind] = {
-  "threadgroup_barrier": sbkThreadgroupBarrier,
-  "threadgroup_barrier_device": sbkThreadgroupBarrierDevice,
-}.toTable()
-
-## Reduction builtin canonical name -> kind.
-let ReductionBuiltinKindByName* {.compileTime.}: Table[string, ReductionBuiltinKind] = {
-  "reduceAdd": rbkReduceAdd,
-  "reduceMax": rbkReduceMax,
-}.toTable()
-
-## Atomic builtin canonical name -> kind.
-let AtomicsBuiltinKindByName* {.compileTime.}: Table[string, AtomicsBuiltinKind] = {
-  "atomicFetchAdd": abkAtomicFetchAdd,
-}.toTable()
-
-## Shuffle builtin canonical name -> kind.
-let ShuffleBuiltinKindByName* {.compileTime.}: Table[string, ShuffleBuiltinKind] = {
-  "simd_shuffle": shkSimdShuffle,
-  "simd_shuffle_xor": shkSimdShuffleXor,
-}.toTable()
-
-proc getCoordBuiltinKind*(name: string): CoordBuiltinKind =
-  ## Returns the coordinate builtin kind of a canonical name, `cbkNone` for every
-  ## other name (locals, math intrinsics, shadowing symbols).
-  CoordBuiltinKindByName.getOrDefault(name, cbkNone)
-
-proc getSynchroBuiltinKind*(name: string): SynchroBuiltinKind =
-  ## Returns the synchronization builtin kind of a canonical name, `sbkNone` otherwise.
-  SynchroBuiltinKindByName.getOrDefault(name, sbkNone)
-
-proc getReductionBuiltinKind*(name: string): ReductionBuiltinKind =
-  ## Returns the reduction builtin kind of a canonical name, `rbkNone` otherwise.
-  ReductionBuiltinKindByName.getOrDefault(name, rbkNone)
-
-proc getAtomicsBuiltinKind*(name: string): AtomicsBuiltinKind =
-  ## Returns the atomic builtin kind of a canonical name, `abkNone` otherwise.
-  AtomicsBuiltinKindByName.getOrDefault(name, abkNone)
-
-proc getShuffleBuiltinKind*(name: string): ShuffleBuiltinKind =
-  ## Returns the shuffle builtin kind of a canonical name, `shkNone` otherwise.
-  ShuffleBuiltinKindByName.getOrDefault(name, shkNone)
 
 proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
   ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.

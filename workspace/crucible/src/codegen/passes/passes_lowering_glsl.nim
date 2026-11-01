@@ -85,11 +85,6 @@ proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
   e.name = name
   e.typ = typ
   e.builtin = false
-  e.coordBuiltin = cbkNone
-  e.synchroBuiltin = sbkNone
-  e.reductionBuiltin = rbkNone
-  e.shuffleBuiltin = shkNone
-  e.atomicsBuiltin = abkNone
 
 proc unwrapVarDerefsExpr(e: CirExpr, varParams: HashSet[string]) =
   ## Every deref of a `var` parameter splices to the parameter itself at the pointee type. Other derefs survive.

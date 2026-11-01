@@ -69,19 +69,10 @@ proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
 
 # Expression constructors
 
-proc sym*(name: string, typ: CirType, builtin = false,
-          coordBuiltin = cbkNone, synchroBuiltin = sbkNone,
-          reductionBuiltin = rbkNone, atomicsBuiltin = abkNone,
-          shuffleBuiltin = shkNone): CirExpr =
+proc sym*(name: string, typ: CirType, builtin = false): CirExpr =
   ## One symbol reference. `builtin` marks a `{.builtin.}` read.
-  ##
-  ## Contract:
-  ## - the canonicalization pass fills the typed builtin kinds from the name tables
-  ## - the printers dispatch on the kinds
-  CirExpr(kind: eSym, name: name, typ: typ, builtin: builtin,
-    coordBuiltin: coordBuiltin, synchroBuiltin: synchroBuiltin,
-    reductionBuiltin: reductionBuiltin, atomicsBuiltin: atomicsBuiltin,
-    shuffleBuiltin: shuffleBuiltin)
+  ## Consumers recognize the builtin vocabulary from the canonical name alone.
+  CirExpr(kind: eSym, name: name, typ: typ, builtin: builtin)
 
 proc intLit*(value: int64, typ: CirType): CirExpr =
   CirExpr(kind: eIntLit, value: value, litType: typ)
