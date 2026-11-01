@@ -25,9 +25,9 @@
 ## declaration the printer emits directly.
 ##
 ## Refusal homes:
-## - a const_mem local without an initializer refuses in the pass and the printer
+## - the pass refuses a const_mem local without an initializer and the printer
 ##   keeps a nil-init shape guard on the relocated declarations
-## - a const_mem local surviving outside the relocation refuses at the printer,
+## - the printer refuses a const_mem local surviving outside the relocation,
 ##   the walk covers every proc and scope
 
 import std/tables
@@ -102,8 +102,8 @@ proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
   e.walkExprs(rewrite)
 
 proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int) =
-  ## Wraps a call argument in an address when the formal travels as a hidden
-  ## pointer and the argument is still the struct value.
+  ## Wraps a call argument in an address when the callee expects the formal
+  ## as a hidden pointer and the argument is still the struct value.
   ##
   ## A non-lvalue argument (a call result, a constructor) copies into a fresh local first, `&` of a temporary is invalid C.
   ## Hoisted declarations insert in front of the statement, nested calls hoist first, so a call node sees its arguments already rewritten.

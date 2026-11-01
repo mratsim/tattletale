@@ -35,12 +35,12 @@
 ## reads the constants of the kernels that it serves.
 ##
 ## Refusal homes:
-## - a pointer read before its address-of binding, a value read of a pointer,
-##   or a rebinding refuses in the pointer-local explosion pass
-## - a device-space local and a nested-scope or device-function threadgroup local
-##   refuse at the printer, GLSL locals are private
-## - a const_mem local without an initializer refuses in the hoist pass and again
-##   at the printer as a shape guard
+## - the pointer-local explosion pass refuses a pointer read before
+##   its address-of binding, a value read of a pointer, or a rebinding
+## - the printer refuses a device-space local and a nested-scope
+##   or device-function threadgroup local, GLSL locals are private
+## - the hoist pass refuses a const_mem local without an initializer,
+##   the printer refuses it again as a shape guard
 
 import std/[sets, tables]
 import ../ir/cirv2_lang

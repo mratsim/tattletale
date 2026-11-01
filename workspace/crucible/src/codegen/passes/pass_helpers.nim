@@ -124,7 +124,7 @@ proc walkTypeTree*(t: CirType, visit: proc(t: CirType), descendPtrs: bool = true
 
 proc singleKernel*(m: CirModule): CirProc =
   ## A module without exactly one kernel contributes no kernel-side registrations,
-  ## such a module refuses at the printer.
+  ## the printer refuses such a module.
   for fn in m.procs:
     if fn.isKernel:
       if result != nil:
@@ -331,11 +331,11 @@ type
 
   ExplodeCtx* = object
     pendingPtrs*: HashSet[string]
-      ## Pointer locals awaiting their address-of binding, a read refuses.
+      ## Pointer locals awaiting their address-of binding, the pass refuses a read.
     aliasOf*: Table[string, string]
-      ## Pointer local -> pointee local: one binding fixes the pair, a rebinding refuses.
+      ## Pointer local -> pointee local: one binding fixes the pair, the pass refuses a rebinding.
     structLocals*: HashSet[string]
-      ## Pointer-holding struct locals exploded into field rewrites: a whole-value use refuses.
+      ## Pointer-holding struct locals exploded into field rewrites: the pass refuses a whole-value use.
     leafOf*: Table[string, ExplodeLeaf]
       ## Dotted field path of an exploded struct local -> its bound leaf symbol:
       ## `v.data` -> the symbol bound to `data`, `v.inner.f` -> the symbol bound to the nested `f`.
@@ -476,7 +476,7 @@ proc freshProcType*(params: seq[CirType], ret: CirType): CirType =
   ## A fresh proc type over `params`, sharing nothing with the interned signature types.
   ##
   ## - structurally identical call-site callee types share one `CirType` ref
-  ## - a call site re-typing its callee swaps the symbol type for the fresh copy, so the shared ref of the other call sites stays untouched
+  ## - a call site re-typing its callee swaps the symbol type for the fresh copy, so the shared ref of the other call sites remains untouched
   result = CirType(kind: ctProc)
   result.params = params
   result.ret = ret
@@ -490,7 +490,7 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
   ##   storage is visible to all functions in every target running this walk
   ## - the initializer is required, a program-scope constant declaration has no
   ##   other initialization site
-  ## - an initializer only the target's compiler can fold prints verbatim and refuses there (a read of another local, say)
+  ## - an initializer only the target's compiler can fold prints verbatim and the compiler refuses it there (a read of another local, say)
   var i = 0
   while i < ss.len:
     let s = ss[i]

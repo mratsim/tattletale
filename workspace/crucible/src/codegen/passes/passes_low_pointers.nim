@@ -63,7 +63,7 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
   ## Contract:
   ## - buffer leaves name the device address space, value leaves the thread space
   ## - the kernel body opens with the rebuilt struct local
-  ## - a leaf name colliding with an existing kernel parameter or body local refuses
+  ## - the pass refuses a leaf name colliding with an existing kernel parameter or body local
   for fn in m.procs:
     if not fn.isKernel:
       continue
@@ -126,7 +126,7 @@ template registerExplodePointerLocals*(reg: var PassRegistry, passName,
   # Each target module expands the template through a file-private forwarding
   # proc placed after its machinery, one that passes the module-local procs
   # as explicit template arguments.
-  # codeReordering keeps the registration call at the module top.
+  # Nim's codeReordering keeps the registration call at the module top
   proc explodeWalk(fn: CirProc, ctx: var ExplodeCtx, ss: var seq[CirStmt]): string =
     var i = 0
     while i < ss.len:

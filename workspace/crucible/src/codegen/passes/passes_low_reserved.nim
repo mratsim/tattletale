@@ -227,7 +227,7 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
   ## - `m`: the module, renamed in place (its types and procs are shared refs)
   ##
   ## The `_nim` suffix marks every renamed identifier, declarations and uses
-  ## rename through one map so the emitted source stays consistent.
+  ## rename through one map so the emitted source remains consistent.
   var fieldRenames: Table[string, string]
   for t in m.types:
     if t.kind == ctStruct:

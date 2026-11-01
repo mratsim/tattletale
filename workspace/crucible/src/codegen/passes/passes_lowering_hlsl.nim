@@ -10,8 +10,8 @@
 ## HLSL lowering: per-target transforms for the HLSL storage model,
 ## registered by the HLSL pipeline and run before printing.
 ##
-## HLSL has no pointer values, every pointer use outside the pointer-local explosion pass refuses loudly,
-## the printer never sees a pointer.
+## HLSL has no pointer values, the pointer-local explosion pass loudly refuses
+## every pointer use outside it, the printer never sees a pointer.
 ##
 ## - `hlslMaterializeNumWorkgroups`: reads of `threadgroups_per_grid`
 ##   rewrite to a trailing kernel parameter named `crucible_numworkgroups`,
@@ -156,7 +156,7 @@ proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
 
 proc materializeNumWorkgroups(m: CirModule): string =
   ## Kernels without such reads stay untouched, device functions never see one,
-  ## a coordinate builtin in a device function refuses when printed.
+  ## the printer refuses a coordinate builtin in a device function.
   for fn in m.procs:
     if not fn.isKernel:
       continue

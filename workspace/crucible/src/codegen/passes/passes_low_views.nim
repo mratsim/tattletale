@@ -81,7 +81,7 @@ proc collectSpanSigs(m: CirModule): SpanSigs =
 
 proc splitSpanParams(fn: CirProc, sigs: seq[SpanSig]) =
   ## Replaces every span parameter of `fn` with its pointer + length pair,
-  ## the pointer keeps the parameter's name and the length is `<name>_len`.
+  ## the pointer carries the parameter's name and the length is `<name>_len`.
   var newParams: seq[CirParam]
   var sigIdx = 0
   for i, p in fn.params:
@@ -123,7 +123,7 @@ type
 proc splitSpanCall(callee: CirExpr, args: var seq[CirExpr], ctx: var SpanCtx, err: var string) =
   ## A `toOpenArray` argument expands into `base + first` and `last - first + 1`,
   ## a span symbol into the pointer and length bindings of its name.
-  ## A callee outside the module refuses, its span parameter would reach the printer unsplit.
+  ## The rewrite refuses a callee outside the module, its span parameter would reach the printer unsplit.
   if callee.kind != eSym or err.len > 0:
     return
   let sigs = ctx.sigs.getOrDefault(callee.name)
@@ -163,7 +163,7 @@ proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string)
   ## Forward declaration, statement lists recurse into their expressions.
 
 proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string) =
-  ## A surviving `toOpenArray` call refuses: the frontend emits one only in a view binding, a call argument, or a `len` read.
+  ## Surviving `toOpenArray` calls: the pass refuses one, the frontend emits one only in a view binding, a call argument, or a `len` read.
   ##
   ## A folded node replaces the node slot its parent references (`e` is a `var` param).
   if err.len > 0 or e.isNil:
@@ -202,7 +202,7 @@ proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string) =
     for a in e.args.mitems:
       a.rewriteSpanUsesExpr(ctx, err)
   of eCast, eConv:
-    # a conversion over a span read keeps the read's fold: the operand is
+    # a conversion over a span read retains the read's fold: the operand is
     # a settable field, a folded read replaces it in the conversion
     e.castOperand.rewriteSpanUsesExpr(ctx, err)
   else:
