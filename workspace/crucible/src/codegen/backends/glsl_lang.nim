@@ -23,7 +23,7 @@
 ##
 ## Remaining checks:
 ## - a threadgroup/constant local surviving in a nested scope or device function refuses, a `caDevice`-space local refuses too
-## - a loop prints `while (cond)`, a conditionless loop prints `for (;;)`, `{.unroll.}` adds `[[unroll]]`
+## - a loop prints `while (cond)`, `{.unroll.}` adds `[[unroll]]`
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -41,8 +41,10 @@ type
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitTokens
-    ## Literal token table of the target, the shared literal head reads it.
+    lit: LitRow
+    ## Literal token forms of the target. The shared literal head reads them.
+    row: ScalarRow
+    ## Scalar row of the target. The narrow integer cast names its type from it.
     layouts: Table[string, StructLayout]
     ## Stored struct layouts of the module, the layout pass filled them.
 
@@ -56,7 +58,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
-  leafName(glslScalarRow(), glslVectorRule(), t)
+  leafName(glslScalarRow, glslVectorRule, t)
 
 proc emitGlslTypeBare(t: CirType): string =
   ## GLSL name of `t` with no identifier, array dimensions composed into
@@ -168,35 +170,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
     return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
   return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
 
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, the GLSL floatBits builtins.
-  ##
-  ## - `uintBitsToFloat(u)` reads the pattern, a `T()` constructor call
-  ##   numerically converts
-  ## - core GLSL floatBits builtins cover the 32-bit float pairs only
-  ## - a same-width integer pair keeps the constructor, the modular
-  ##   conversion preserves every bit
-  ## - a wider float pair refuses, a numeric conversion would lose the bits
-  let t = e.castType
-  let src = getExprType(e.castOperand)
-  let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-    src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
-  if scalar and src.kind == ctFloat and t.kind != ctFloat:
-    if src.bits == 32:
-      return (if t.kind == ctUint: "floatBitsToUint" else: "floatBitsToInt") &
-        "(" & ctx.printExpr(e.castOperand) & ")"
-    ctx.fail("bit cast of a 64-bit float has no GLSL emission, only the" &
-      " 32-bit floatBits builtins")
-    return ""
-  if scalar and t.kind == ctFloat and src.kind != ctFloat:
-    if t.bits == 32:
-      return (if src.kind == ctUint: "uintBitsToFloat" else: "intBitsToFloat") &
-        "(" & ctx.printExpr(e.castOperand) & ")"
-    ctx.fail("bit cast to a 64-bit float has no GLSL emission, only the" &
-      " 32-bit floatBits builtins")
-    return ""
-  # pointers and same-width integer pairs keep the constructor call
-  return ctx.printConv(e)
 
 proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
   ## GLSL vocabulary for the atomic fetch-and-add builtin, shared by the value and statement call paths:
@@ -323,7 +296,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       "function-storage addressing; only the address of a buffer element")
     return ""
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, glslCastRules, emitGlslTypeBare(e.castType))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:
@@ -486,8 +459,8 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## and the kernel with its `local_size` layout qualifier.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow(),
-    lit: litTokens(glslLitRow(), glslScalarRow()))
+  var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow,
+    lit: glslLitRow, row: glslScalarRow)
   ctx.layouts = m.layouts
   var kernels: seq[CirProc]
   for fn in m.procs:

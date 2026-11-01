@@ -20,7 +20,7 @@
 ##   a device function still owning a smem local refuses in the pass
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
 ##   program-scope `constant` output, a const_mem survivor refuses at the printer
-## - a loop prints `while (cond)`, a conditionless loop prints `for (;;)`, `{.unroll.}` adds the Metal unroll pragma
+## - a loop prints `while (cond)`, `{.unroll.}` adds the Metal unroll pragma
 ## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
 ##   through except the numeric conversions, which resolve to the MSL native call text
 
@@ -39,8 +39,10 @@ type
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitTokens
-    ## Literal token table of the target, the shared literal head reads it, per kernel state.
+    lit: LitRow
+    ## Literal token forms of the target. The shared literal head reads them, per kernel state.
+    row: ScalarRow
+    ## Scalar row of the target. The narrow integer cast names its type from it., per kernel state.
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
@@ -57,13 +59,13 @@ proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
 
 proc emitMslScalar(t: CirType): string =
   ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
-  bareName(mslScalarRow(), mslVectorRule(), t)
+  bareName(mslScalarRow, mslVectorRule, t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## MSL declaration text of `t` with `ident` appended, the shared C declarator
   ## over the MSL rows. Arrays take the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
-  cDecl(mslScalarRow(), mslVectorRule(), printerTarget, t, ident, allowEmptyIdent)
+  cDecl(mslScalarRow, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: string, t: CirType, ident: string): string =
   ## Declaration text of a pointer or array pointer with its address-space qualifier:
@@ -89,7 +91,7 @@ proc mslPtrQualifier(space: AddressSpace): string =
 proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  ptrField(mslScalarRow(), mslVectorRule(), printerTarget,
+  ptrField(mslScalarRow, mslVectorRule, printerTarget,
     mslPtrQualifier(t.space), t, ident)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -152,8 +154,8 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
       error("atomic_fetch_add over a pointee without an MSL atomic type")
     return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
       "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
-  if callee.builtin and mslConvRow().builtinNames.hasKey(callee.name):
-    return mslConvRow().builtinNames.getOrDefault(callee.name) % args.join(", ")
+  if callee.builtin and mslConvBuiltinNames.hasKey(callee.name):
+    return mslConvBuiltinNames.getOrDefault(callee.name) % args.join(", ")
   return ""
 
 
@@ -166,20 +168,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
     castTyp = mslPtrQualifier(t.space) & ' ' & castTyp
   return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
 
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, `as_type<T>`.
-  ##
-  ## - a C-style cast converts numerically, 0xFF7FFFFF read as float32
-  ##   gives +4.29e9 and the same bits reinterpreted give -FLT_MAX
-  ## - pointer and machine-word casts keep the C-style text
-  ## - as_type accepts neither pointers nor width changes
-  let t = e.castType
-  let src = getExprType(e.castOperand)
-  if t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-      src.kind in {ctInt, ctUint, ctFloat} and
-      t.bits in {8, 16, 32, 64} and src.bits == t.bits:
-    return "as_type<" & emitMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
-  return ctx.printConv(e)
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## MSL text of the kinds in `targetExprKinds`.
@@ -199,7 +187,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "(" & base & ")." & e.fieldName
     return base & '.' & e.fieldName
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, mslCastRules, emitMslType(e.castType, "", true))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:
@@ -365,8 +353,8 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## device-function forward declarations, then every function body.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: mslKindRow(),
-    lit: litTokens(mslLitRow(), mslScalarRow()))
+  var ctx = PrintCtx(fnName: "<module>", policy: mslKindRow,
+    lit: mslLitRow, row: mslScalarRow)
   var src = "#include <metal_stdlib>\n"
   src &= "#include <metal_atomic>\n"
   src &= "using namespace metal;\n\n"

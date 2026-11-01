@@ -5,42 +5,28 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Declarative registry of the text printers' target data.
+## Schema of the printers' static target data.
 ##
-## A row is a const object of plain data: strings, bools, ints, enums and tables of those.
+## A row is a const object of plain data: strings, bools, ints, enums, sets and tables of those.
 ## No field stores a proc or a placeholder whose value depends on a body walk.
 ##
-## | family | row        | contents                                      |
-## | ------ | ---------- | --------------------------------------------- |
-## | scalar | ScalarRow  | type names and support cells by (kind, width) |
-## | lit    | LitRow     | literal token forms                           |
-## | kind   | KindRow    | walk policy: loops, else folding, routing set |
-## | conv   | ConvRow    | conversion name tables                        |
-## | vector | VectorRule | a target's real vector coverage               |
+## | type       | contents                                      |
+## | ---------- | --------------------------------------------- |
+## | ScalarRow  | type names by (kind, width) cell              |
+## | LitRow     | literal token forms                           |
+## | KindRow    | walk policy: loops, else folding, routing set |
+## | VectorRule | a target's real vector coverage               |
 ##
-## Token types that the rows embed (`ScalarTokens`, `LitTokens`, `LoopStyle`) are defined here,
-## so the registry stays the one home of the printers' static data schema.
+## Each target's rows are plain constants in `targets_rows.nim`.
+## The printer that needs a row reads it directly, a missing row is a compile
+## error at that call site.
 ##
-## `genTargets` (targets_macros) parses row blocks into these types and generates one lookup proc per family and target.
-## Checks run at registration as one compile-time block: full (kind, width) coverage per key,
-## refused cells without a name, and cross-target name collisions. A missing or drifted row is a compile error.
+## The scalar rows carry one compile-time check block over all six targets,
+## see `checkScalarRowsTogether`.
 
-import std/tables
 import ../ir/cirv2_lang
 
 type
-  ScalarTokens* = object
-    ## Scalar type names of one printer target, by type kind and width.
-    ##
-    ## Plain `char` takes its signedness from the host ABI.
-    ##
-    ## Each target defines its own table. A "" field means the type
-    ## is refused by the caller.
-    void*, bool*: string
-    i8*, i16*, i32*, i64*: string
-    u8*, u16*, u32*, u64*: string
-    f16*, f32*, f64*: string
-
   FloatLitTokens* = object
     ## Non-finite float literal tokens for one printer target:
     ##
@@ -59,39 +45,20 @@ type
     ## - 64-bit widths take `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
     ## - 32-bit unsigned takes `u32Suffix`, 32-bit signed prints bare
     ## - narrow (8/16-bit) widths print bare or, per `narrowCast`, as a cast
-    ##   to the scalar type name from `LitTokens.scalar`
+    ##   to the scalar type name from the target's scalar row
     u64Prefix*, u64Suffix*, u32Suffix*: string
     i64Prefix*, i64Suffix*: string
     narrowCast*: bool
 
-  LitTokens* = object
-    ## Literal token table of one printer target:
-    ##
-    ## - `int`: integer token fields by signedness and width
-    ## - `f16Prefix`/`f16Suffix`, `f32Suffix`, `f64Prefix`/`f64Suffix`:
-    ##   finite float forms around the numeric text
-    ## - `nilToken`: null pointer token, "" when the target refuses nil
-    ##   before the literal printer sees it
-    ## - `nonFinite` and `scalar`: non-finite float tokens and the scalar
-    ##   type names feeding the narrow integer cast, see `nonFiniteFloatLit`
-    int*: IntLitTokens
-    f16Prefix*, f16Suffix*: string
-    f32Suffix*: string
-    f64Prefix*, f64Suffix*: string
-    nilToken*: string
-    nonFinite*: FloatLitTokens
-    scalar*: ScalarTokens
 
   LoopStyle* = object
     ## Loop text of one printer target:
     ##
     ## - `unrollDirective`: `{.unroll.}` directive text, printed before
     ##   the loop at the loop indentation, "" prints no directive
-    ## - `infiniteHead`: head of a condition-less loop, with its open brace
-    ##   (`for (;;) {\n`, `loop {\n`)
     ## - `braceSameLine`: the open brace sits on the head line, otherwise it
     ##   prints on its own line under the head (HLSL)
-    unrollDirective*, infiniteHead*: string
+    unrollDirective*: string
     braceSameLine*: bool
 
 type
@@ -102,7 +69,6 @@ type
     ## Bit width, 0 for the widthless kinds (void, bool).
     spelling*: string
     ## Type name the target prints, "" for a refused cell.
-    supported*: bool
 
   ScalarRow* = object
     ## Scalar type names of one target by (kind, width) cell.
@@ -133,14 +99,6 @@ type
     ## Optional expression kinds the printer routes through its own `printTargetExpr` proc.
     ## Eight common kinds route unconditionally and are not members of this set.
 
-  ConvRow* = object
-    ## Name tables of one target: conversion data that is a pure name-to-text mapping.
-    ## Conversions needing operand type analysis or multi-statement emission stay procedural in the printers.
-    builtinNames*: Table[string, string]
-    ## `{.builtin.}` numeric conversion name to call text, `$1` stands for the call's argument list.
-    fpRefusals*: seq[string]
-    ## `{.builtin.}` fp-conversion names the target refuses.
-
   VectorNameForm* = enum
     ## Composition of a vector type name from the element's prefix and the lane count.
     vnfPrefixed
@@ -148,24 +106,38 @@ type
     vnfGenericElem
     ## `prefix & $laneCount & '<' & elementName & '>'` forms the generic-element names (`vec3<f32>`).
 
-  VectorContext* = enum
-    ## Where a target's printer emits vector types.
-    vcNone
-    vcCoordinate
-    ## Only in coordinate-builtin context.
-    vcEverywhere
-
   VectorRule* = object
     ## A target's real vector coverage, as its printer emits it today.
-    context*: VectorContext
     elems*: seq[tuple[kind: CirTypeKind, width: int, prefix: string]]
     ## Element types the target names, with the vector name's prefix.
     ## The name composes from the prefix and the lane count per `nameForm`.
-    ## Empty for `vcNone`.
+    ## Empty when the target names no vectors.
     lanes*: seq[int]
     ## Lane counts the target emits.
     nameForm*: VectorNameForm = vnfPrefixed
     ## Composition of the vector type name from the element's prefix and the lane count.
+
+  CastWidth* = range[0..255]
+  ## Bit width a cast rule matches.
+
+  CastRule* = object
+    ## One bit-cast coverage rule of a target: the first matching rule emits.
+    ##
+    ## - a rule with `srcAny` matches any source type, otherwise the source
+    ##   type must exist and be a scalar leaf of `srcKinds` and, when
+    ##   `srcWidths` is non-empty, of `srcWidths`
+    ## - the destination must be of `dstKinds` and, when `dstWidths` is
+    ##   non-empty, of `dstWidths`, with `sameWidth` also requiring equal
+    ##   source and destination widths
+    ## - a `spelling` rule emits its text, `$1` stands for the printed
+    ##   operand and `$2` for the destination type name
+    ## - an empty `spelling` makes the rule a refusal carrying `refusal`,
+    ##   `$2` stands for the destination type name
+    srcAny*: bool
+    srcKinds*, dstKinds*: set[CirTypeKind]
+    srcWidths*, dstWidths*: set[CastWidth]
+    sameWidth*: bool
+    spelling*, refusal*: string
 
 const ScalarCellAxis*: array[13, tuple[kind: CirTypeKind, width: int]] = [
   (ctVoid, 0), (ctBool, 0),
@@ -174,10 +146,9 @@ const ScalarCellAxis*: array[13, tuple[kind: CirTypeKind, width: int]] = [
   (ctFloat, 16), (ctFloat, 32), (ctFloat, 64)]
 
 proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
-  ## Registration checks over one target's scalar row:
+  ## Compile-time checks over one target's scalar row:
   ##
   ## - every cell of `ScalarCellAxis` appears exactly once, a second row for an existing cell fails the compile
-  ## - a supported cell has a type name, a refused cell has none
   ## - a type name denotes at most one cell, a bool cell's name may repeat another
   ##   cell's name (OpenCL prints bool locals as `int` for the 4-byte launch ABI)
   ##
@@ -190,15 +161,6 @@ proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
     doAssert count == 1, "target " & target & ": scalar cell (" &
       $axisCell.kind & ", " & $axisCell.width & ") appears " & $count &
       " times, exactly once required"
-  for c in row.cells:
-    if c.supported:
-      doAssert c.spelling.len > 0,
-        "target " & target & ": supported cell (" & $c.kind & ", " & $c.width &
-        ") needs a name"
-    else:
-      doAssert c.spelling.len == 0,
-        "target " & target & ": refused cell (" & $c.kind & ", " & $c.width &
-        ") needs no name"
   for i, a in row.cells:
     if a.spelling.len == 0 or a.kind == ctBool:
       continue

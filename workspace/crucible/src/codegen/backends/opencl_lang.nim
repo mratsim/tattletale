@@ -18,7 +18,7 @@
 ## Addressing and memory classes:
 ## - a `ptr` local is a plain C pointer, `(&x)` addresses a local, `(*p)` dereferences
 ## - `{.smem.}` locals declare `__local` in the kernel body
-## - a loop prints `while (cond)`, a conditionless loop prints `for (;;)`, `{.unroll.}` adds `#pragma unroll`
+## - a loop prints `while (cond)`, `{.unroll.}` adds `#pragma unroll`
 ##
 ## Storage relocation:
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the OpenCL lowering pass, program-scope `__constant` output
@@ -39,8 +39,10 @@ type
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitTokens
-    ## Literal token table of the target, the shared literal head reads it.
+    lit: LitRow
+    ## Literal token forms of the target. The shared literal head reads them.
+    row: ScalarRow
+    ## Scalar row of the target. The narrow integer cast names its type from it.
     inKernel: bool
     ## False inside a device function: `__local` and `__constant` locals are
     ## kernel-only storage, a device function declaring one refuses.
@@ -56,11 +58,11 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
-  leafName(openclScalarRow(), openclVectorRule(), t)
+  leafName(openclScalarRow, openclVectorRule, t)
 
 proc emitOpenclTypeBare(t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
-  bareName(openclScalarRow(), openclVectorRule(), t)
+  bareName(openclScalarRow, openclVectorRule, t)
 
 proc emitOpenclArrayDecl(t: CirType, ident: string): string =
   ## OpenCL C declaration of an array local or field, the lengths move behind the identifier
@@ -153,16 +155,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
       emitOpenclTypeBare(e.castType)
   return "(" & target & ")" & ctx.printExpr(e.castOperand)
 
-proc printCast(ctx: var PrintCtx, e: CirExpr): string =
-  ## One bit reinterpret, OpenCL's `as_` builtin: a C cast between float
-  ## and integer types converts the value, it does not move bits.
-  let src = getExprType(e.castOperand)
-  let t = e.castType
-  if t.kind in {ctFloat, ctInt, ctUint} and src != nil and
-      src.kind in {ctFloat, ctInt, ctUint} and src.bits == t.bits and
-      ((t.kind == ctFloat) != (src.kind == ctFloat)):
-    return "as_" & emitOpenclScalar(t) & "(" & ctx.printExpr(e.castOperand) & ")"
-  return ctx.printConv(e)
 
 proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
   ## Returns the OpenCL C text of an expression-position builtin call,
@@ -274,7 +266,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
   of eCast:
-    return ctx.printCast(e)
+    return ctx.printCast(e, openclCastRules, emitOpenclScalar(e.castType))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:
@@ -445,8 +437,8 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## and the kernels.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: openclKindRow(),
-    lit: litTokens(openclLitRow(), openclScalarRow()))
+  var ctx = PrintCtx(fnName: "<module>", policy: openclKindRow,
+    lit: openclLitRow, row: openclScalarRow)
   var kernels: seq[CirProc]
   for fn in m.procs:
     if fn.isKernel:

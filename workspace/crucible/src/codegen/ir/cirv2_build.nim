@@ -204,17 +204,12 @@ proc asgnS*(lhs, rhs: CirExpr): CirStmt =
 proc iteS*(cond: CirExpr, thenBody: seq[CirStmt], elseBody: seq[CirStmt] = @[]): CirStmt =
   CirStmt(kind: sIte, cond: cond, thenBody: thenBody, elseBody: elseBody)
 
-proc loopS*(loopBody: seq[CirStmt], unroll = false): CirStmt =
-  ## A conditionless loop, `unroll` marks a `{.unroll.}`-hinted loop.
-  ## A set `unroll` makes every printer emit a full-unroll directive in front of the loop.
-  CirStmt(kind: sLoop, loopBody: loopBody, unroll: unroll)
-
 proc whileS*(cond: CirExpr, loopBody: seq[CirStmt], unroll = false): CirStmt =
   ## A loop re-testing `cond` before every iteration.
   ##
   ## Args:
   ## - `cond` is an ordinary expression, calls may appear in it
-  doAssert cond != nil, "whileS: a conditioned loop takes a condition, use loopS"
+  doAssert cond != nil, "whileS: a conditioned loop takes a condition"
   CirStmt(kind: sLoop, loopCond: cond, loopBody: loopBody, unroll: unroll)
 
 proc retS*(retVal: CirExpr = nil): CirStmt =
