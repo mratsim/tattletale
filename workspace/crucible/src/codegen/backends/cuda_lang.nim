@@ -237,7 +237,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       builtinTxt = cudaConvCallText(e, args)
     return printCallText(ctx, e, args, builtinTxt)
   else:
-    ctx.fail("expression kind " & $e.kind & " has no CUDA emission")
+    ctx.fail(unhandledExprRejection(e.kind))
 
 
 # ═══════════════════════════════════════════════════════════════════════

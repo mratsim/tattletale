@@ -226,9 +226,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## GLSL text of the kinds in `targetExprKinds`.
   case e.kind
-  of eNil:
-    ctx.fail("nil literal is outside the GLSL subset")
-    return ""
   of eSym:
     # a pointer-value refusal, coordinate builtins take component casts,
     # names pass through
@@ -238,8 +235,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       let g = getGlslCoordName(e.coordBuiltin)
       return "ivec3(int(" & g & ".x), int(" & g & ".y), int(" & g & ".z))"
     if e.typ != nil and e.typ.kind == ctPtr and e.typ.space != caDevice:
-      ctx.fail("pointer local " & e.name & " used as a value, GLSL has no" &
-        " pointer values, the GLSL lowering pass rewrites pointer locals to their pointees")
+      ctx.fail("pointer local " & e.name & " used as a value, GLSL has no pointer values")
       return ""
     return e.name
   of eAt, ePat:
@@ -258,11 +254,9 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     if bt != nil and bt.kind == ctArray:
       return baseTxt & "[" & idxTxt & "]"
     if bt != nil and bt.kind == ctPtr:
-      ctx.fail("index through a pointer, the GLSL lowering pass rewrites" &
-        " pointer locals to their pointees")
+      ctx.fail("index through a pointer is outside the GLSL subset")
       return ""
-    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
-      " base is outside the GLSL subset")
+    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the GLSL subset")
     return ""
   of eDot:
     # coordinate-builtin dots cast to the canonical int, vector dots return
@@ -272,9 +266,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return "int(" & getGlslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
-      let comp = emitVectorComponent(e.fieldName)
-      if comp.len == 0:
-        ctx.fail("no vector component " & e.fieldName)
+      let comp = ctx.getVectorComponent(e.fieldName)
+      if ctx.failing():
         return ""
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
@@ -285,25 +278,22 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     if ot != nil and ot.kind == ctAptr:
       return ctx.printExpr(op) & ".x[0]"
     if ot != nil and ot.kind == ctPtr:
-      ctx.fail("deref of a pointer, GLSL has no function-storage addressing," &
-        " the GLSL lowering pass rewrites pointer locals to their pointees")
+      ctx.fail("deref of a pointer is outside the GLSL subset")
       return ""
-    ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) &
-      " operand is outside the GLSL subset")
+    ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) & " operand is outside the GLSL subset")
     return ""
   of eAddr:
     # a buffer element's address is the indexed reference access, the printer refuses anything else
     if e.addrOperand.kind == ePat:
       return ctx.printExpr(e.addrOperand)
-    ctx.fail("cannot take the address of a local, GLSL has no " &
-      "function-storage addressing; only the address of a buffer element")
+    ctx.fail("address of a local is outside the GLSL subset")
     return ""
   of eCast:
     return ctx.printCast(e, glslCastRules, emitTypeBare(e.castType))
   of eConv:
     return ctx.printConv(e)
   of eOconstr:
-    # constructor-call form, a zero-field struct's padding member zero-initializes
+    # a zero-field struct's padding member zero-initializes
     if e.kvFields.len == 0:
       return emitTypeBare(e.ocType) & "(0)"
     result = emitTypeBare(e.ocType) & "("
@@ -313,7 +303,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(kvv.value)
     result.add ")"
   of eAconstr:
-    # constructor-call form
     result = emitTypeBare(e.acType) & "("
     for i, el in e.elems:
       if i > 0:
@@ -324,7 +313,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     let args = printCallArgs(ctx, e)
     return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
   else:
-    ctx.fail("expression kind " & $e.kind & " has no GLSL emission")
+    ctx.fail(unhandledExprRejection(e.kind))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -605,13 +594,10 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
         # a device pointer packs as the buffer-reference handle: the engine passes the device address and the block dereferences it
         decl = ctx.emitGlslPtrDecl(p.typ, p.name)
       of ctPtr:
-        ctx.fail("kernel parameter " & p.name &
-          " of pointer type, kernels take values and device buffers" &
-          " (`ptr UncheckedArray[T]`), pass an object's fields separately")
+        ctx.fail("kernel parameter " & p.name & " of pointer type has no push-constant form")
         decl = ""
       of ctArray:
-        ctx.fail("kernel parameter " & p.name &
-          " of array type, arrays do not pack into the push block")
+        ctx.fail("kernel parameter " & p.name & " of array type, arrays do not pack into the push block")
         decl = ""
       else:
         decl = emitTypeBare(p.typ) & ' ' & p.name
@@ -631,7 +617,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     lit: glslLitTokens, scalarNames: glslScalarNames)
   let kernels = moduleKernels(m)
   if kernels.len == 0:
-    ctx.fail("no kernel in the module")
+    ctx.fail("module declares no kernel")
     return ("", ctx.err)
   printModule(ctx, m, kernels, glslModuleShape)
 

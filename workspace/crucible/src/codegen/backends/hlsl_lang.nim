@@ -383,29 +383,29 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
   return ""
 
 
+proc coordReadRejection(ctx: PrintCtx, kind: CoordBuiltinKind): string =
+  ## Refusal text for a coordinate builtin read the printer rejects, "" in a kernel.
+  ## The lowering pass materializes threadgroups_per_grid.
+  if not ctx.isKernel:
+    return "coordinate semantics bind the kernel entry point only"
+  if kind == cbkThreadgroupsPerGrid:
+    return "threadgroups_per_grid has no HLSL semantic"
+  return ""
+
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## HLSL text of the kinds in `targetExprKinds`.
   case e.kind
-  of eNil:
-    ctx.fail("nil literal is outside the HLSL subset")
-    return ""
   of eSym:
     # coordinate builtins resolve to kernel-entry semantics only
     if e.coordBuiltin != cbkNone:
-      if not ctx.isKernel:
-        ctx.fail("coordinate builtin in a device function, coordinate" &
-          " semantics bind the kernel entry point only")
-        return ""
-      if e.coordBuiltin == cbkThreadgroupsPerGrid:
-        ctx.fail("threadgroups_per_grid has no HLSL semantic, the HLSL" &
-          " lowering pass materializes it as the " & "crucible_numworkgroups" &
-          " parameter")
+      let rej = coordReadRejection(ctx, e.coordBuiltin)
+      if rej.len > 0:
+        ctx.fail(rej)
         return ""
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         ctx.coordReads.incl(e.coordBuiltin)
         return "int(" & getCoordInputName(e.coordBuiltin) & ")"
-      ctx.fail("whole-vector read of a coordinate builtin is outside the" &
-        " HLSL subset, read the components one by one")
+      ctx.fail("whole-vector read of a coordinate builtin is outside the HLSL subset")
       return ""
     if ctx.pushParams.contains(e.name):
       return "push." & e.name
@@ -438,28 +438,21 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
         # a cast binds looser than the subscript: parenthesize the base
         baseTxt = "(" & baseTxt & ")"
       return baseTxt & "[" & idxTxt & "]"
-    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
-      " base is outside the HLSL subset")
+    ctx.fail("indexing an " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the HLSL subset")
     return ""
   of eDot:
     # coordinate-builtin dots return the semantic name, vector dots return
     # their field letter, other dots return base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      if not ctx.isKernel:
-        ctx.fail("coordinate builtin in a device function, coordinate" &
-          " semantics bind the kernel entry point only")
-        return ""
-      if e.dotBase.coordBuiltin == cbkThreadgroupsPerGrid:
-        ctx.fail("threadgroups_per_grid has no HLSL semantic, the HLSL" &
-          " lowering pass materializes it as the " & "crucible_numworkgroups" &
-          " parameter")
+      let rej = coordReadRejection(ctx, e.dotBase.coordBuiltin)
+      if rej.len > 0:
+        ctx.fail(rej)
         return ""
       return emitCoordComponent(ctx, e.dotBase.coordBuiltin, e.fieldName)
     let bt = getExprType(e.dotBase)
     if bt != nil and bt.kind == ctVector:
-      let comp = emitVectorComponent(e.fieldName)
-      if comp.len == 0:
-        ctx.fail("no vector component " & e.fieldName)
+      let comp = ctx.getVectorComponent(e.fieldName)
+      if ctx.failing():
         return ""
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
@@ -468,9 +461,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eConv:
     return ctx.printConv(e)
   of eSizeof:
-    # refused, HLSL struct layout differs from the buffer layout the size would name
-    ctx.fail("sizeof has no HLSL emission, HLSL struct layout differs from the" &
-      " buffer layout the size would name")
+    ctx.fail("sizeof has no HLSL emission, HLSL struct layout differs from the buffer layout")
     return ""
   of eOconstr:
     # vectors construct by call, valid in declaration initializers and assignments alike, where struct brace lists only initialize
@@ -491,7 +482,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       args.add ctx.printCallArg(e.callee, i, a)
     return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
   else:
-    ctx.fail("expression kind " & $e.kind & " has no HLSL emission")
+    ctx.fail(unhandledExprRejection(e.kind))
 
 
 proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, lines: var seq[string]) =
