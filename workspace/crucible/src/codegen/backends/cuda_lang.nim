@@ -236,7 +236,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       builtinTxt = cudaConvCallText(e, args)
     return printCallText(ctx, e, args, builtinTxt)
   else:
-    # dispatcher sends only the kinds above, anything else is a routing bug
     ctx.fail("expression kind " & $e.kind & " has no CUDA emission")
 
 

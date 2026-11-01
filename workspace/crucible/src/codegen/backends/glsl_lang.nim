@@ -323,7 +323,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     let args = printCallArgs(ctx, e)
     return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
   else:
-    # dispatcher sends only the kinds above, anything else is a routing bug
     ctx.fail("expression kind " & $e.kind & " has no GLSL emission")
 
 

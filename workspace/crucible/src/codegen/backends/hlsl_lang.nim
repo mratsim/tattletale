@@ -392,7 +392,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("nil literal is outside the HLSL subset")
     return ""
   of eSym:
-    # coordinate builtins bind the kernel entry point, push constants qualify, buffer parameters take the flavor's route, names pass through
+    # coordinate builtins resolve to kernel-entry semantics only
     if e.coordBuiltin != cbkNone:
       if not ctx.isKernel:
         ctx.fail("coordinate builtin in a device function, coordinate" &
@@ -483,7 +483,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return emitHlslScalar(ctx, e.ocType) & "(" & parts.join(", ") & ")"
     return ctx.printBraceList(e.ocType, e)
   of eAconstr:
-    # one array construction in braces
     var parts: seq[string]
     for el in e.elems:
       parts.add ctx.printExpr(el)
@@ -494,7 +493,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       args.add ctx.printCallArg(e.callee, i, a)
     return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
   else:
-    # dispatcher sends only the kinds above, anything else is a routing bug
     ctx.fail("expression kind " & $e.kind & " has no HLSL emission")
 
 
@@ -664,14 +662,12 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
 proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
   ## Splits one proc's parameters into buffer resources and values:
   ##
-  ## - kernels: values join the Push block, buffers take register ordinals
+  ## - kernels: values join the Push block, buffers bind register ordinals
   ## - device functions: values pass by value (a `var T` binds `inout`),
   ##   buffers are unbound resource params
   ##
   ## Classification runs at the signature-emission sites, so a module printed
-  ## without the pipeline classifies exactly as one printed through it.
-  ## Parameters whose scalar-row cell is absent (the 64-bit integers and float16)
-  ## refuse at the declaration emission on the row-lookup channel.
+  ## without the pipeline classifies as one printed through it.
   for p in fn.params:
     case p.typ.kind
     of ctAptr:
@@ -705,6 +701,7 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
     of ctProc:
       ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
       return
+
 proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the HLSL walk:
   ##

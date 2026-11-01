@@ -201,7 +201,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eSizeof:
     return "sizeof(" & emitMslType(e.ofType, "", true) & ")"
   of eOconstr:
-    # one struct construction in braces
     result = emitMslType(e.ocType, "", true) & "{"
     for i, kv in e.kvFields:
       if i > 0:
@@ -221,7 +220,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     let args = printCallArgs(ctx, e)
     return printCallText(ctx, e, args, emitBuiltinCall(e.callee, args))
   else:
-    # dispatcher sends only the kinds above, anything else is a routing bug
     ctx.fail("expression kind " & $e.kind & " has no MSL emission")
 
 
