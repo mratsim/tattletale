@@ -428,6 +428,14 @@ func csCanMerge*(a, b: CoordStrideDescriptor, s: int): bool {.compileTime.} =
     b.kind == caMulti and csScaledEq(a.coeffs, b.coeffs, s)
 
 proc unwrapTypedesc*(n: NimNode): NimNode =
+  ## Strips the compile-time wrappers off a compile-time
+  ## CoordStride argument, down to the coefficient tuple node:
+  ##
+  ## - `typeDesc[...]` wrappers
+  ## - the `CoordStride[...]` instantiation itself
+  ## - a symbol naming one of the above
+  ##
+  ## Errors on anything else.
   var t = n.getTypeInst
   if t.kind == nnkBracketExpr and t[0].kind == nnkSym and t[0].strVal == "typeDesc":
     t = t[1]

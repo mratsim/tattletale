@@ -5,6 +5,7 @@
 
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_indexing
+import workspace/ceramic/src/layout_algebra/ism_coord_strides
 import std/typetraits
 import std/macros
 import workspace/ceramic/tests/layout/layouts_testutils
@@ -78,6 +79,18 @@ proc runGroupedNamedTupleTypeTests =
 runGroupedNamedTupleTypeTests()
 
 echo "  [OK] crd2idx: tuple coord (6 cases)"
+
+# ═══════════════════════════════════════════════════════════════════════
+#  crd2idx — coordinate stride coord
+# ═══════════════════════════════════════════════════════════════════════
+
+block:
+  # crd2idx over a CoordStride must agree with the tuple overload since
+  # both go through different overloads, one inner product expected
+  let L = make_layout((4, 8), (1, 4))
+  check crd2idx(L, E(16, 1)), crd2idx(L, (0, 16)), Int
+  check crd2idx(L, E(16, 1)), 64, Int
+echo "  [OK] crd2idx: coordinate stride coord"
 
 # ═══════════════════════════════════════════════════════════════
 #  crd2idx — scalar coord into nested shape/stride
