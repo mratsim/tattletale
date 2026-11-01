@@ -11,6 +11,8 @@
 ## proc defs or the single `{.global.}` wrapper proc of a launchDeviceFn call.
 ## Types translate exactly once through `nim_type_resolvers`.
 ##
+## Procs intern through the frontend's proc registry: one entry per proc identity, its emitted name claimed at first registration.
+##
 ## Constructs outside the supported closure refuse through the pure refusal channel,
 ## naming the construct: the macro wrapper turns the refusal into
 ## a compile-time `error`.
@@ -19,19 +21,27 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import nim_type_resolvers
 import ../ir/cirv2_pretty
-import std/[macros, tables, strutils, hashes]
+import std/[macros, tables, strutils]
 
 type
+  ProcEntry = object
+    ## Registry entry of one proc identity: the emitted name is a printed string.
+    ## Identity stays the registry's int key.
+    name: string
+    fnType: CirType
+    hasBody: bool
+
   FrontendCtx = object
     resolver: CirTypeResolver
     fnName: string
     ## Name of the proc under translation, names every refusal.
     retType: CirType
     procs: seq[CirProc]
-    procKeys: Table[string, bool]
-    ## Harvested proc names, dedups instantiations and guards recursion.
-    declaredProcs: Table[string, string]
-    ## Nim signature key to the CIRv2 name of an already declared proc, a call reuses that body.
+    procRegistry: Table[uint64, ProcEntry]
+    ## Keyed by proc identity hash: emitted name, proc type, and body state.
+    ## One entry per distinct proc, a call reads its name and its type from the entry.
+    claimedNames: Table[string, uint64]
+    ## Emitted proc name to the owning identity: definitions and harvests share one name space, a second claimant of a base suffixes.
     scopes: seq[Table[string, CirExpr]]
     localSpaces: seq[Table[string, CirAddrSpace]]
     ## Nim symbol name to CIRv2 symbol, innermost scope last.
@@ -399,51 +409,53 @@ proc calleeSigKey(callee: NimNode): string =
   if callee.symKind in {nskProc, nskFunc} and isGenericProc(callee):
     result &= "_" & callee.symBodyHash()
 
-proc computeInstProcName(ctx: var FrontendCtx, callee: NimNode): string =
-  ## Distinct instantiations share one erased signature: the `ProcTy` repr
-  ## alone erases bound static formals.
-  ##
-  ## Suffix: the base58 encoding of the full 64-bit hash.
-  ## Injective over the hash domain, a name collision would silently
-  ## reuse the first harvested body.
-  let base = mangleOperatorName(callee.strVal)
-  let formals = getFormalParams(callee.getTypeInst())
-  var sigRepr = callee.getTypeInst().repr
-  if not formals.isNil:
-    sigRepr = ""
-    for f in formals:
-      if f.kind == nnkIdentDefs and f.len >= 2:
-        let ft = f[f.len - 2]
-        if isCompileTimeFormal(ft):
-          # a bound static formal hashes its value: the type node of a bound
-          # static collapses to the value's type
-          sigRepr.add(ft.repr)
-        else:
-          sigRepr.add(ft.getTypeInst().repr)
-      else:
-        sigRepr.add(f.repr)
-  let impl = callee.getImpl()
-  let calleeSite = if impl.kind == nnkEmpty: "" else: impl.lineInfo
-  let sigKey = calleeSigKey(callee)
-  var h = hash(sigKey & "\x1f" & sigRepr & "\x1f" & callee.strVal & "\x1f" & calleeSite)
-  h = !$h
-  var x = uint64(h) and 0xFFFFFFFFFFFFFFFF'u64
-  var suffix = ""
-  if x == 0:
-    suffix = "1"
-  while x > 0:
-    suffix = Base58Alphabet[int(x mod 58)] & suffix
-    x = x div 58
-  result = base & "_" & suffix
+proc resolveCalleeProcType(ctx: var FrontendCtx, callee: NimNode): CirType
 
-proc resolveCallCalleeName(ctx: var FrontendCtx, calleeSym: NimNode): tuple[name: string, known: bool] =
-  ## CIRv2 name of a call's callee. A proc the module already declares
-  ## reuses the body, anything else takes a fresh instantiation name
-  ## for the caller to harvest.
-  let key = calleeSigKey(calleeSym)
-  if ctx.declaredProcs.hasKey(key):
-    return (ctx.declaredProcs[key], true)
-  return (ctx.computeInstProcName(calleeSym), false)
+func procIdentity(callee: NimNode): uint64 =
+  ## Identity hash of a callee: the full 64-bit hash of the signature key.
+  ## Distinct instantiations of one generic carry distinct identities through
+  ## the body hash inside the key.
+  typeIdentityHash(calleeSigKey(callee))
+
+proc claimProcName(ctx: var FrontendCtx, identity: uint64, base: string): string =
+  ## Emitted name of a proc identity: `base` on the first claim.
+  ## A second claimant of the same base takes a base58 suffix of the identity hash.
+  ## The suffix rechecks by appending underscores until the name is unclaimed.
+  ##
+  ## A claim by the owning identity returns the base: the module reservation
+  ## pass reserves kernel plain names, so a kernel's own def re-claims its name.
+  if ctx.claimedNames.getOrDefault(base, identity) == identity:
+    ctx.claimedNames[base] = identity
+    return base
+  result = base & "_" & base58Short(identity)
+  while ctx.claimedNames.getOrDefault(result, identity) != identity:
+    result.add("_")
+  ctx.claimedNames[result] = identity
+
+proc registerOrGet(ctx: var FrontendCtx, calleeSym: NimNode): ProcEntry =
+  ## Registry entry of a call's callee.
+  ## The first registration derives the proc type once and claims the emitted name under the harvest contract: base plus identity-hash suffix.
+  ## Later calls read the entry.
+  ##
+  ## A `{.builtin.}` callee keeps its canonical native name at the call site. The entry stores its type only.
+  let id = procIdentity(calleeSym)
+  if ctx.procRegistry.hasKey(id):
+    result = ctx.procRegistry[id]
+    if result.fnType.isNil:
+      # a definition registers before its body lowers, so the type is read
+      # once at the first call inside it
+      result.fnType = ctx.resolveCalleeProcType(calleeSym)
+      if ctx.failing():
+        return
+      ctx.procRegistry[id].fnType = result.fnType
+    return
+  let fnType = ctx.resolveCalleeProcType(calleeSym)
+  if ctx.failing():
+    return
+  let name = ctx.claimProcName(id,
+    mangleOperatorName(calleeSym.strVal) & "_" & base58Short(id))
+  result = ProcEntry(name: name, fnType: fnType)
+  ctx.procRegistry[id] = result
 
 proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string)
 
@@ -634,26 +646,25 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     return nil
   if absCall != nil:
     return absCall
-  let (cirName, known) = ctx.resolveCallCalleeName(calleeSym)
-  # a bodiless magic took the primitive path above
-  # every other callee harvests, a magic with a Nim body (like `max`) lowers through it
-  if not hasPragmaNim(calleeSym, "builtin") and not known:
-    ctx.harvestProc(calleeSym, cirName)
-    if ctx.failing():
-      return nil
-  let fnType = ctx.resolveCalleeProcType(calleeSym)
+  let entry = ctx.registerOrGet(calleeSym)
   if ctx.failing():
     return nil
+  # a bodiless magic took the primitive path above
+  # every other callee harvests, a magic with a Nim body (like `max`) lowers through it
+  let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
+  if not calleeBuiltin and not entry.hasBody:
+    ctx.harvestProc(calleeSym, entry.name)
+    if ctx.failing():
+      return nil
   let args = ctx.lowerCallArgs(calleeSym, call)
   if ctx.failing():
     return nil
   # a builtin callee emits the canonical native name, an instantiation hash would
   # name a proc the backend never defines. Builtin-marking the callee symbol
   # lets the alias canonicalization pass kind-assign from the canonical tables
-  let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
   let calleeName = if calleeBuiltin: calleeSym.strVal
-                   else: cirName
-  return callE(sym(calleeName, fnType, calleeBuiltin), args)
+                   else: entry.name
+  return callE(sym(calleeName, entry.fnType, calleeBuiltin), args)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expression translation
@@ -1388,24 +1399,23 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   let calleeSym = resolveCallCallee(callee)
   if ctx.failing():
     return @[]
-  let fnType = ctx.resolveCalleeProcType(calleeSym)
-  if ctx.failing():
-    return @[]
-  let (cirName, known) = ctx.resolveCallCalleeName(calleeSym)
   let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
-  let calleeName = if calleeBuiltin: calleeSym.strVal
-                   else: cirName
   if isBodilessMagic(callee):
     ctx.fail("magic call " & callee.repr & " in statement position without a destination")
     return @[]
-  if not hasPragmaNim(calleeSym, "builtin") and not known:
-    ctx.harvestProc(calleeSym, cirName)
+  let entry = ctx.registerOrGet(calleeSym)
+  if ctx.failing():
+    return @[]
+  let calleeName = if calleeBuiltin: calleeSym.strVal
+                   else: entry.name
+  if not calleeBuiltin and not entry.hasBody:
+    ctx.harvestProc(calleeSym, entry.name)
     if ctx.failing():
       return @[]
   let args = ctx.lowerCallArgs(calleeSym, n)
   if ctx.failing():
     return @[]
-  return ctx.drainHoisted() & @[callS(sym(calleeName, fnType, calleeBuiltin), args)]
+  return ctx.drainHoisted() & @[callS(sym(calleeName, entry.fnType, calleeBuiltin), args)]
 
 proc resolveLocalSpace(ctx: var FrontendCtx, nameNode: NimNode): CirAddrSpace =
   ## Memory class of a local declaration: the pragma list decides.
@@ -1751,18 +1761,30 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
 proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   ## One proc definition: parameters typed off Nim once and the body lowered
   ## into normal form.
+  ##
   ## Generic definitions skip here, their instantiations harvest at the calls that use them.
+  ## A def claims and emits under its own name: kernels keep the plain name,
+  ## other defs mangle the operator name, a claim conflict suffixes.
+  ## A call-site harvest never claims a plain name.
   if ctx.failing():
     return nil
   if isGenericDef(fn):
     return nil
   let formals = getFormalParams(fn)
+  let id = procIdentity(fn[0])
+  # a kernel keeps its plain name, launchKernel is ABI on it
+  let base = if hasPragmaNim(fn, "global"): sanitizeIdent(fn[0].strVal)
+             else: mangleOperatorName(fn[0].strVal)
+  let cirName = ctx.claimProcName(id, base)
+  if id notin ctx.procRegistry:
+    ctx.procRegistry[id] = ProcEntry(name: cirName)
+  ctx.procRegistry[id].hasBody = true
   let savedName = ctx.fnName
   let savedRet = ctx.retType
   let savedCounts = ctx.nameCounts
   let savedScopes = ctx.scopes
   let savedSpaces = ctx.localSpaces
-  ctx.fnName = sanitizeIdent($fn[0])
+  ctx.fnName = cirName
   ctx.nameCounts = initTable[string, int]()
   ctx.scopes = @[ctx.moduleScope]
   ctx.localSpaces = @[ctx.moduleSpaces]
@@ -1774,6 +1796,10 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let fnName = ctx.fnName
   let body = ctx.lowerProcBody(fn, formals, getProcBody(fn), params)
   result = procD(fnName, params, fnRet, body)
+  var paramTypes: seq[CirType]
+  for p in params:
+    paramTypes.add(p.typ)
+  ctx.procRegistry[id].fnType = tProcT(paramTypes, fnRet)
   let wgErr = fn.applyProcPragmas(result)
   if wgErr.len > 0:
     ctx.fail(wgErr)
@@ -1784,18 +1810,14 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   ctx.localSpaces = savedSpaces
   if ctx.failing():
     return nil
-  # identity key includes the signature, true overloads register under one plain name
-  let defKey = calleeSigKey(fn[0])
-  ctx.procKeys[defKey] = true
-  ctx.declaredProcs[defKey] = result.name
   ctx.procs.add(result)
 
 proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
-  ## Registers the instantiation of a generic (or external) proc behind a typed call:
-  ## the callee's instantiated signature and body, compile-time parameters erased.
-  if ctx.procKeys.hasKey(cirName):
-    return
-  ctx.procKeys[cirName] = true
+  ## Lowers the body of a callee a call registered.
+  ## The emitted name and the proc type come from the registry entry, compile-time parameters erased.
+  ## `hasBody` set before the body lowers guards the recursion, callers harvest only body-less entries.
+  let id = procIdentity(callee)
+  ctx.procRegistry[id].hasBody = true
   let impl = callee.getImpl()
   let formals = getFormalParams(callee.getTypeInst())
   let savedName = ctx.fnName
@@ -1903,6 +1925,12 @@ proc lowerModule(ctx: var FrontendCtx, bodyIn: NimNode) =
     ctx.fail("expected a block of kernel proc definitions or a single kernel proc, got " &
       $body.kind)
     return
+  # kernels are ABI: every {.global.} def claims its plain name before any body lowers,
+  # a same-named device proc takes the suffix
+  for c in body:
+    if c.kind in {nnkProcDef, nnkFuncDef} and not isGenericDef(c) and
+        hasPragmaNim(c, "global"):
+      discard ctx.claimProcName(procIdentity(c[0]), sanitizeIdent(c[0].strVal))
   for c in body:
     case c.kind
     of nnkProcDef, nnkFuncDef:

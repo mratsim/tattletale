@@ -572,6 +572,77 @@ proc sameType*(a, b: CirType): bool =
         return false
     result = sameType(a.ret, b.ret)
 
+proc structuralEqual*(a, b: CirType): bool =
+  ## Returns true when `a` and `b` carry the same structure.
+  ##
+  ## Contract:
+  ## - nominal struct types compare by field list only, equal structures are one registered struct
+  ## - every other kind compares field by field, recursively
+  ## - the emitted struct name and the `origin` NimNode never participate
+  if a.isNil != b.isNil:
+    return false
+  if a.isNil:
+    return true
+  if a.kind != b.kind:
+    return false
+  case a.kind
+  of ctVoid, ctBool:
+    result = true
+  of ctInt, ctUint, ctFloat:
+    result = a.bits == b.bits
+  of ctVector:
+    result = a.vN == b.vN and structuralEqual(a.vElem, b.vElem)
+  of ctPtr, ctAptr:
+    result = a.space == b.space and structuralEqual(a.pElem, b.pElem)
+  of ctStruct:
+    if a.fields.len != b.fields.len:
+      return false
+    for i in 0 ..< a.fields.len:
+      if a.fields[i].name != b.fields[i].name or
+          not structuralEqual(a.fields[i].typ, b.fields[i].typ):
+        return false
+    result = true
+  of ctArray:
+    result = a.aN == b.aN and structuralEqual(a.aElem, b.aElem)
+  of ctSpan:
+    result = a.sSpace == b.sSpace and structuralEqual(a.sElem, b.sElem)
+  of ctProc:
+    if a.params.len != b.params.len:
+      return false
+    for i in 0 ..< a.params.len:
+      if not structuralEqual(a.params[i], b.params[i]):
+        return false
+    result = structuralEqual(a.ret, b.ret)
+
+proc structuralHash*(t: CirType): Hash =
+  ## Hash of a type's structure: equal structures hash equal. The struct name and the origin never participate.
+  if t.isNil:
+    return 0
+  result = hash(t.kind)
+  case t.kind
+  of ctVoid, ctBool:
+    discard
+  of ctInt, ctUint, ctFloat:
+    result = result !& hash(t.bits)
+  of ctVector:
+    result = result !& hash(t.vN) !& structuralHash(t.vElem)
+  of ctPtr, ctAptr:
+    result = result !& hash(t.space) !& structuralHash(t.pElem)
+  of ctStruct:
+    result = result !& hash(t.fields.len)
+    for f in t.fields:
+      result = result !& hash(f.name) !& structuralHash(f.typ)
+  of ctArray:
+    result = result !& hash(t.aN) !& structuralHash(t.aElem)
+  of ctSpan:
+    result = result !& hash(t.sSpace) !& structuralHash(t.sElem)
+  of ctProc:
+    result = result !& hash(t.params.len)
+    for p in t.params:
+      result = result !& structuralHash(p)
+    result = result !& structuralHash(t.ret)
+  result = !$result
+
 proc getExprType*(e: CirExpr): CirType =
   ## Returns the expression's type, or nil when the node's shape does not determine one.
   ## Nil arises for a `deref` of a non-pointer, an `at` of a non-array, a `dot` naming no field of its struct.
