@@ -30,6 +30,7 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
+import ./print_compute
 import ./targets_rows
 import ../passes/layout_std430
 
@@ -111,6 +112,15 @@ proc emitGlslParam(t: CirType, name: string, varParam: bool): string =
   else:
     result = binding & emitGlslTypeBare(t) & ' ' & name
 
+proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## GLSL declaration text of one struct member: a buffer pointer member is
+  ## the reference block handle, an array stacks the dimension behind the name.
+  if f.typ.kind == ctArray:
+    return emitGlslScalar(f.typ.aElem) & ' ' & f.name & "[" & $f.typ.aN & "]"
+  if f.typ.kind in {ctAptr, ctPtr}:
+    return ctx.emitGlslPtrDecl(f.typ, f.name)
+  return emitGlslTypeBare(f.typ) & ' ' & f.name
+
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
@@ -128,35 +138,26 @@ proc glslCoordName(kind: CoordBuiltinKind): string =
   of cbkNone: ""
 
 proc emitExtensions(features: ModuleFeatures): string =
-  ## GLSL extension block from the stored module feature scan
-  ## (`CirModule.features`, filled by the feature-scan pass), `#version 450` first.
+  ## GLSL extension block from the stored module feature scan (`CirModule.features`):
+  ## `#version 450` prints first, then one line per feature in use.
   result = "#version 450\n"
   result.add "#extension GL_EXT_buffer_reference : enable\n"
   result.add "#extension GL_EXT_buffer_reference2 : enable\n"
-  if features.controlFlow:
-    result.add "#extension GL_EXT_control_flow_attributes : require\n"
-  if features.fp64:
-    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
-  if features.fp16:
-    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n"
-    result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
-  if features.int64:
-    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"
-  if features.int16:
-    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable\n"
-    result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
-  if features.int8:
-    result.add "#extension GL_EXT_shader_explicit_int8 : enable\n"
-    result.add "#extension GL_EXT_shader_8bit_storage : enable\n"
-  if features.subgroup:
-    result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
-    result.add "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"
-  if features.subgroupShuffle:
-    result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
-    result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
-  if features.atomicFloat:
-    result.add "#extension GL_EXT_shader_atomic_float : enable\n"
-  result.add "\n"
+  result.add emitFeatureLines(features, [
+    (features.controlFlow, "#extension GL_EXT_control_flow_attributes : require\n"),
+    (features.fp64, "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"),
+    (features.fp16, "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n"),
+    (features.fp16, "#extension GL_EXT_shader_16bit_storage : enable\n"),
+    (features.int64, "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"),
+    (features.int16, "#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable\n"),
+    (features.int16, "#extension GL_EXT_shader_16bit_storage : enable\n"),
+    (features.int8, "#extension GL_EXT_shader_explicit_int8 : enable\n"),
+    (features.int8, "#extension GL_EXT_shader_8bit_storage : enable\n"),
+    (features.subgroup, "#extension GL_KHR_shader_subgroup_basic : enable\n"),
+    (features.subgroup, "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"),
+    (features.subgroupShuffle, "#extension GL_KHR_shader_subgroup_basic : enable\n"),
+    (features.subgroupShuffle, "#extension GL_KHR_shader_subgroup_shuffle : enable\n"),
+    (features.atomicFloat, "#extension GL_EXT_shader_atomic_float : enable\n")])
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -408,27 +409,31 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printFn(ctx: var PrintCtx, fn: CirProc): string =
-  ## One device function: signature, body, closing brace.
-  ctx.fnName = fn.name
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
-    return ""
-  var params: seq[string]
+proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
+  ## GLSL parameter texts of one proc or kernel, in declaration order.
+  ##
+  ## - a kernel takes zero parameters: every kernel parameter packs into the module's shared push-constant block, deduped across kernels
+  ## - a device function's buffer pointer is the reference block handle,
+  ##   a `var` binding gains the `inout` qualifier
+  if fn.isKernel:
+    return
   for p in fn.params:
     case p.typ.kind
     of ctAptr:
-      params.add ctx.emitGlslPtrDecl(p.typ, p.name)
+      result.add ctx.emitGlslPtrDecl(p.typ, p.name)
     of ctPtr:
       ctx.fail("pointer parameter " & p.name &
         ", GLSL device functions take buffer references or values")
-      return ""
     else:
-      params.add emitGlslParam(p.typ, p.name, p.varParam)
-  let ret = emitGlslTypeBare(fn.ret)
-  let sig = ret & ' ' & fn.name & '(' & params.join(", ") & ")"
-  return sig & " {\n" & bodyTxt & '\n' & "}"
+      result.add emitGlslParam(p.typ, p.name, p.varParam)
+
+proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
+  ## GLSL linkage prefix: none, GLSL knows no linkage qualifiers.
+  ""
+
+proc emitComputeRet(ctx: var PrintCtx, t: CirType): string =
+  ## GLSL name of a return type, no identifier.
+  emitGlslTypeBare(t)
 
 proc emitSmemDecl(t: CirType, name: string): string =
   ## Program-scope `shared` declaration of a threadgroup local.
@@ -451,6 +456,23 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   else:
     result = "const " & emitGlslTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
+
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope declaration text of one relocated storage local.
+  ##
+  ## - a threadgroup local declares `shared`, its only legal initializer is
+  ##   the null initializer and anything else refuses
+  ## - a constant local declares `const`, an initializer-less one refuses
+  if s.space == caThreadgroup:
+    if s.init != nil:
+      ctx.fail("smem local " & s.name &
+        " with an initializer, GLSL shared variables take only a null initializer")
+      return ""
+    return emitSmemDecl(s.declType, s.name)
+  if s.init == nil:
+    ctx.fail("const_mem local " & s.name & " without an initializer")
+    return ""
+  ctx.emitConstDecl(s)
 
 proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full GLSL translation unit: version and extensions,
@@ -484,22 +506,9 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   if m.refBlocks.len > 0:
     result.src &= "\n"
 
-  for t in m.types:
-    if t.kind != ctStruct:
-      ctx.fail("module type " & t.name & " is not a struct")
-      break
-    result.src &= "struct " & t.name & " {\n"
-    if t.fields.len == 0:
-      result.src &= "  uint _padding;\n"
-    for f in t.fields:
-      var field = emitGlslTypeBare(f.typ) & ' ' & f.name
-      if f.typ.kind == ctArray:
-        field = emitGlslScalar(f.typ.aElem) & ' ' & f.name &
-          "[" & $f.typ.aN & "]"
-      elif f.typ.kind in {ctAptr, ctPtr}:
-        field = ctx.emitGlslPtrDecl(f.typ, f.name)
-      result.src &= "  " & field & ";\n"
-    result.src &= "};\n\n"
+  result.src &= printComputeStructs(ctx, m, false, "uint _padding")
+  if ctx.failing():
+    return ("", ctx.err)
 
   # one push block for the whole module: the union of every kernel's parameters,
   # same-name dedup by declaration text
@@ -533,23 +542,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
 
   # program-scope `shared` and `const` declarations relocated into
   # `m.globals` by the GLSL lowering pass, in encounter order
-  var hoisted: seq[string]
-  for s in m.globals:
-    if s.kind == sVar and s.space == caThreadgroup:
-      if s.init != nil:
-        ctx.fail("smem local " & s.name &
-          " with an initializer, GLSL shared variables take only a null initializer")
-      else:
-        hoisted.add emitSmemDecl(s.declType, s.name)
-    elif s.kind == sVar and s.space == caConstant:
-      if s.init == nil:
-        ctx.fail("const_mem local " & s.name & " without an initializer")
-      else:
-        hoisted.add ctx.emitConstDecl(s)
-  for d in hoisted:
-    result.src &= d & "\n"
-  if hoisted.len > 0:
-    result.src &= "\n"
+  result.src &= printComputeGlobals(ctx, m, {caThreadgroup, caConstant})
   if ctx.failing():
     return ("", ctx.err)
 
@@ -559,25 +552,13 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     if not fn.isKernel:
       fns.add fn
   for fn in fns:
-    ctx.fnName = fn.name
-    var params: seq[string]
-    for p in fn.params:
-      case p.typ.kind
-      of ctAptr:
-        params.add ctx.emitGlslPtrDecl(p.typ, p.name)
-      of ctPtr:
-        ctx.fail("pointer parameter " & p.name &
-          ", GLSL device functions take buffer references or values")
-      else:
-        params.add emitGlslParam(p.typ, p.name, p.varParam)
+    result.src &= printComputeSig(ctx, fn) & ";\n"
     if ctx.failing():
       return ("", ctx.err)
-    result.src &= emitGlslTypeBare(fn.ret) & ' ' & fn.name & '(' &
-      params.join(", ") & ");\n"
   if fns.len > 0:
     result.src &= "\n"
   for fn in fns:
-    result.src &= ctx.printFn(fn) & "\n\n"
+    result.src &= printComputeProc(ctx, fn) & "\n\n"
   if ctx.failing():
     return ("", ctx.err)
 
@@ -587,15 +568,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     let wg = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1] else: kernel.workgroup)
     result.src &= "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
       $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
-    ctx.fnName = kernel.name
-    ctx.indent = 0
-    let bodyTxt = ctx.printStmts(kernel.body)
-    if ctx.failing():
-      return ("", ctx.err)
-    # exportc renames a kernel entry for the host runtime lookup.
-    # A device function keeps the name its call sites reference.
-    let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
-    result.src &= "void " & entryName & "() {\n" & bodyTxt & '\n' & "}\n\n"
+    result.src &= printComputeProc(ctx, kernel) & "\n\n"
   return (result.src, "")
 
 

@@ -452,6 +452,15 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
     result = "__constant " & emitOpenclTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
 
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope declaration text of one relocated const_mem local.
+  ## A const_mem local without an initializer refuses: OpenCL C forbids
+  ## declaring `__constant` storage without one.
+  if s.init == nil:
+    ctx.fail("const_mem local " & s.name & " without an initializer")
+    return ""
+  ctx.emitConstDecl(s)
+
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full OpenCL C translation unit: extension pragmas, struct typedefs,
   ## program-scope `__constant` declarations, the device functions,
@@ -475,17 +484,7 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     return ("", ctx.err)
 
   # program-scope `__constant` declarations from `m.globals`, relocated there by the OpenCL lowering pass in encounter order
-  var hoisted: seq[string]
-  for s in m.globals:
-    if s.kind == sVar and s.space == caConstant:
-      if s.init == nil:
-        ctx.fail("const_mem local " & s.name & " without an initializer")
-      else:
-        hoisted.add ctx.emitConstDecl(s)
-  for d in hoisted:
-    result.src &= d & "\n"
-  if hoisted.len > 0:
-    result.src &= "\n"
+  result.src &= printComputeGlobals(ctx, m, {caConstant})
   if ctx.failing():
     return ("", ctx.err)
 
