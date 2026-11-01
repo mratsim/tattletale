@@ -36,8 +36,9 @@
 ##   binding to violate
 ##
 ## Shared:
-## - the printer classifies every proc's parameters at the signature-emission
-##   sites (`classifyParams`), no stored record
+## - the buffer/value split runs at the signature-emission sites (`classifyParams`)
+## - the read-write classification comes from the stored call-graph record
+##   (`CirModule.callGraph`), read at 4 sites and never rescanned
 ## - the printer refuses a whole-vector read of a 3-wide coordinate builtin, components read
 ##   one by one, the scalar `thread_index_in_threadgroup` reads whole as `int(gidx)`
 ## - the dispatch grid size has no HLSL semantic: the printer refuses a `threadgroups_per_grid` read,

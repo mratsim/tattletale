@@ -33,7 +33,6 @@ import std/[macros, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
-import ../passes/layout_std430
 
 type
   PrintCtx = object
@@ -47,8 +46,6 @@ type
     ## Literal token forms of the target. The shared literal head reads them.
     row: ScalarRow
     ## Scalar row of the target. The narrow integer cast names its type from it.
-    layouts: Table[string, StructLayout]
-    ## Stored struct layouts of the module, the layout pass filled them.
 
 const printerTarget = "glsl"
 
@@ -304,8 +301,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     return ctx.printCast(e, glslCastRules, emitTypeBare(e.castType))
   of eConv:
     return ctx.printConv(e)
-  of eSizeof:
-    return $typeByteSize(ctx.layouts, e.ofType, std430BoolWidth)
   of eOconstr:
     # constructor-call form, a zero-field struct's padding member zero-initializes
     if e.kvFields.len == 0:

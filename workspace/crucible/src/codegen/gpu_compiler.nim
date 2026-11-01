@@ -40,9 +40,8 @@ import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_msl
 import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_cfamily
-import ./passes/layout_std430
 import ./passes/analysis_hlsl
-import ./passes/scan_features
+import ./passes/analysis_module_requirements
 import ./passes/passes_validations
 import ./passes/passes_low_reserved
 import ./passes/passes_low_pointers
@@ -174,7 +173,6 @@ macro codegenGLSL(body: typed): string =
   registerInstantiateAddressSpaceGenerics(reg)
   registerGlslRefBlockPass(reg)
   registerGlslFeatureScan(reg)
-  registerGlslLayoutPass(reg)
   registerValidationPostPasses(reg)
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
@@ -234,7 +232,6 @@ macro codegenWebGpu(body: typed): string =
   registerInstantiateAddressSpaceGenerics(reg)
   registerWgslInlinePointerParamCalls(reg)
   registerWgslFeatureScan(reg)
-  registerWgslLayoutPass(reg)
   registerValidationPostPasses(reg)
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:

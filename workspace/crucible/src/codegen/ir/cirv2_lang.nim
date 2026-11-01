@@ -365,17 +365,6 @@ type
     ## - the warp-reduction template list of the targets that emit one
     ##   template per kind
 
-  StructLayout* = object
-    ## Packed layout of one nominal struct type, computed under the launch packing rules.
-    ##
-    ## - each member starts at the first offset that satisfies the member
-    ##   alignment
-    ## - the struct size rounds up to the struct alignment
-    size*: int
-    ## Padded struct size in bytes. The value `eSizeof` reports.
-    align*: int
-    ## Strictest member alignment in bytes, at least 1.
-
   CallGraph* = object
     ## Call graph over the device functions of one module, filled by the target's call-graph analysis pass.
     ##
@@ -416,13 +405,6 @@ type
     ## - valid only if no transform runs after the pass, which runPasses enforces
     ## - the printer emits one `layout(buffer_reference, std430) buffer`
     ##   declaration per entry in order, it never registers a block itself
-    layouts*: Table[string, StructLayout]
-    ## Packed layout of each nominal struct type, keyed by struct name,
-    ## filled by the target's layout analysis pass after its last transform.
-    ##
-    ## - valid only if no transform runs after the layout pass, which runPasses enforces
-    ## - the printer reads the stored records, it never recomputes a struct
-    ##   layout
 
 ## Canonical name -> builtin-kind tables. The alias canonicalization pass reads
 ## them after it renames an alias to its canonical name. The cross-check against

@@ -13,7 +13,7 @@
 ##   legalize → normalize → lowerSpans → glslReservedIdentifiers → glslQualifyVarParams
 ##   → glslExplodePointerLocals → smemInitRewrite → glslHoistProgramScopeLocals
 ##   → instantiateAddressSpaceGenerics → glslRegisterRefBlocks → glslScanModuleFeatures
-##   → glslComputeStructLayouts → validation
+##   → validation
 ##
 ## GLSL has no function-storage addressing, a local cannot be addressed.
 ## Threadgroup and constant-storage locals must live at program scope:

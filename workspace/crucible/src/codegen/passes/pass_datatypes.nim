@@ -42,7 +42,7 @@ proc runPasses*(m: CirModule, reg: var PassRegistry): string =
   ##
   ## Contract:
   ## - a transform registered after an analysis refuses, as the analysis records
-  ##   on the module (features, layouts, call graph, ref blocks) would go stale
+  ##   on the module (features, call graph, ref blocks) would go stale
   ## - the printers read the analysis records, they never rescan
   ## - returns "" when the whole pipeline is clean, else the first refusal
   var sawAnalysis = false
