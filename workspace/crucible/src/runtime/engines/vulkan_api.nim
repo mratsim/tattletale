@@ -70,21 +70,6 @@ proc ingest*(engine: VulkanEngine, source: string) =
              source.splitLines()[0])
 
 proc ingestGlsl(engine: VulkanEngine, glsl: string) =
-  # multi-kernel sources cannot address per-kernel scalars in the shared
-  # deduped push block, ingest quits loudly
-  if countKernels(glsl) > 1:
-    var inPush = false
-    for line in glsl.splitLines():
-      if "layout(push_constant" in line:
-        inPush = true
-      elif inPush and line.strip().startsWith("}"):
-        inPush = false
-      elif inPush:
-        let t = line.strip()
-        if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
-          failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
-                   "use one kernel per source when passing by-value scalars")
-
   engine.entryPoint = parseEntryPoint(glsl)
   engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(glsl)
@@ -233,13 +218,6 @@ proc parseHlslSquadron(hlsl: string): Dim3 =
       return Dim3(x: 0, y: 0, z: 0)
     inc k
   return Dim3(x: 0, y: 0, z: 0)
-
-proc countKernels(glsl: string): int =
-  const marker = "layout(local_size_x"
-  var i = glsl.find(marker)
-  while i >= 0:
-    inc result
-    i = glsl.find(marker, i + marker.len)
 
 proc firstFunctionName(src: string, preamble, marker: string): string =
   ## Reads the function name at the first `marker` after `preamble`,

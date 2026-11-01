@@ -157,6 +157,9 @@ macro codegenGLSL(body: typed): string =
   reg.registerGlslRefBlockPass()
   reg.registerGlslFeatureScan()
   reg.registerGlslLayoutPass()
+  # module-wide push-constant block contract: every kernel of the source must
+  # declare the same ordered params (the printer unions them into one block)
+  reg.registerGlslValidationPasses()
   reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
