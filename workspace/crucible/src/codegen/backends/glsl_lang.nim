@@ -32,7 +32,6 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
-import ./print_compute
 import ./targets_registry
 import ../passes/layout_std430
 

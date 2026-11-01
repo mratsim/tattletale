@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Shared printer tier over CIRv2: the statement/expression walk and the C declarator engine.
+## Shared printer tier over CIRv2: the statement/expression walk, the C declarator engine, and the module assembly.
 ##
 ## C declarator engine, driven by the registry rows that each printer supplies.
 ##
@@ -539,10 +539,46 @@ proc moduleKernels*(m: CirModule): seq[CirProc] =
     if fn.isKernel:
       result.add fn
 
+proc getEntryKernel*(ctx: var auto, m: CirModule): CirProc =
+  ## Returns the module's one kernel: a shader engine compiles one entry point per module invocation.
+  ## Returns nil with a refusal recorded when the module has none or several kernels.
+  ##
+  ##   if ctx.failing():
+  ##     return ("", ctx.err)
+  let kernels = moduleKernels(m)
+  if kernels.len != 1:
+    ctx.fail("exactly one kernel per module, found " & $kernels.len)
+    return
+  result = kernels[0]
+
 proc moduleDeviceFns*(m: CirModule): seq[CirProc] =
   for fn in m.procs:
     if not fn.isKernel:
       result.add fn
+
+# ═══════════════════════════════════════════════════════════════════════
+# Entry-input machinery of the shader entry heads
+# ═══════════════════════════════════════════════════════════════════════
+
+type EntryInputRow* = array[CoordBuiltinKind, string]
+  ## Entry-input text of one coordinate builtin kind, in the form the target's entry signature declares:
+  ## a WGSL `@builtin(...)` parameter, an HLSL semantic-carrying input.
+  ##
+  ## "" carries no entry input: the kind the target reads another way.
+  ## Cases: the body's workgroup literal, a lowering-pass materialized parameter, no read at all.
+
+template emitEntryInputs*(kinds: untyped, row: EntryInputRow): string =
+  ## Returns the entry-input texts of one shader entry point: one row text per coordinate builtin kind the entry takes.
+  ##
+  ## `kinds` is the set the entry's body walk collected (`ctx.builtins` on WGSL, `ctx.coordReads` on HLSL).
+  ## The entry takes exactly the inputs its body reads, in the set's own iteration order: first use on WGSL, enum order on HLSL.
+  ##
+  ##   "fn k(" & emitEntryInputs(ctx.builtins, wgslEntryInputs) & ") {"
+  var texts: seq[string]
+  for k in kinds:
+    if row[k].len > 0:
+      texts.add row[k]
+  texts.join(", ")
 
 # ═══════════════════════════════════════════════════════════════════════
 # Proc assembly: the one proc printer over both entry models
@@ -682,6 +718,23 @@ proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   if fn.isKernel:
     return head & bodyTxt & '\n' & '}'
   return head & " {\n" & bodyTxt & '\n' & '}'
+
+proc declareExtensions*(features: ModuleFeatures, lines: openArray[tuple[on: bool, text: string]]): string =
+  ## Extension pragma block of one module over the target's feature table.
+  ##
+  ## Expected input:
+  ## - `features`: the stored module feature scan (`CirModule.features`)
+  ## - `lines`: the target's table, one (feature flag, pragma line) pair per
+  ##   line the block can emit, in emission order
+  ##
+  ## Output: one pragma line per set flag, table order, then a blank line.
+  ##
+  ##   declareExtensions(features, openclFeatureTable)  # pragma lines or ""
+  ##
+  for entry in lines:
+    if entry.on:
+      result.add entry.text
+  result.add "\n"
 
 proc printProgramScopeDecls*(ctx: var auto, m: CirModule, spaces: set[AddressSpace]): string =
   ## Program-scope declarations of the relocated storage locals in `CirModule.globals`.

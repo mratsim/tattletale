@@ -33,8 +33,6 @@ import ../passes/pass_helpers
 import std/[macros, math, sets, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
-import ./print_compute
-import ./print_shaders
 import ./targets_registry
 import ../passes/layout_std430
 
@@ -452,7 +450,7 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   result = ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules: shader-tier hooks over print_shaders
+# Procs and modules: the shader hooks over the shared engine
 # ═══════════════════════════════════════════════════════════════════════
 
 proc prepProc(ctx: var PrintCtx, fn: CirProc) =

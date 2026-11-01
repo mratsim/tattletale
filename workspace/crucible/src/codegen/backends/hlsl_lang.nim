@@ -67,8 +67,6 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
 import ./print_common
-import ./print_compute
-import ./print_shaders
 import ./targets_registry
 
 type HlslFlavor* = enum
@@ -615,7 +613,7 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   result = ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules: shader-tier hooks over print_shaders
+# Procs and modules: the shader hooks over the shared engine
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =

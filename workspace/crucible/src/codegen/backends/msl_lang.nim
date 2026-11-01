@@ -29,7 +29,6 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
 import ./print_common
-import ./print_compute
 import ./targets_registry
 
 type
