@@ -10,7 +10,7 @@
 ## - call-target collection and the shared statement and expression walk
 ## - the root symbol of a dotted or indexed chain, declaration and clone utilities
 ## - the kernel-parameter leaf walk and the pointer-local explosion context
-## - the struct-reference scanner's type walk, statement walk and kernel count
+## - the struct-reference scanner's walks, the bool-storage scaffold
 ##
 ## Every pass file may import these, no pass owns them.
 
@@ -204,6 +204,89 @@ proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: pro
         a.walkExprs(onExpr)
     of sAsm, sEmit:
       discard
+
+# ═══════════════════════════════════════════════════════════════════════
+# Bool storage lowering
+# ═══════════════════════════════════════════════════════════════════════
+
+type
+  BoolPatchPolicy* = object
+    ## Per-backend policy of the shared bool-storage scaffold: walked procs, collected and retyped storage, read and store rewrites.
+    collectGlobals*: proc(m: CirModule, vals, ptrs: var HashSet[string])
+      ## Collects and retypes the module-level bool storage, nil when the target keeps module-level bools typed as declared.
+    collectParams*: proc(fn: CirProc, vals, ptrs: var HashSet[string])
+      ## Collects and retypes one walked proc's bool parameters.
+    walks*: proc(fn: CirProc): bool
+      ## True when the proc's body gets the read and store rewrites.
+    rewriteRead*: proc(e: CirExpr, vals, ptrs: HashSet[string])
+      ## Rewrites one value-position expression tree in place, owning its own descent.
+    rewriteStore*: proc(s: CirStmt, vals, ptrs: HashSet[string]): bool
+      ## Rewrites one assignment into collected bool storage. A `true` return skips the operand walk: the store target is no read.
+      ## Nil when the target keeps bool stores.
+
+proc patchBoolStmts(ss: seq[CirStmt], vals, ptrs: HashSet[string],
+    rewriteRead: proc(e: CirExpr, vals, ptrs: HashSet[string]),
+    rewriteStore: proc(s: CirStmt, vals, ptrs: HashSet[string]): bool) =
+  ## One statement list of the bool-storage walk.
+  ##
+  ## - every value position goes to `rewriteRead`
+  ## - an assignment into collected storage goes through `rewriteStore`
+  ##   before its operands
+  ## - nested bodies recurse
+  ##
+  ## The walk visits each position once, the rewrites own their descent.
+  ## A read rewrite replaces a symbol with a fresh node that must not re-enter the rewrite:
+  ## WGSL's comparison operand is a fresh bool-typed symbol, a per-node walk would rematch it forever.
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      s.init.rewriteRead(vals, ptrs)
+    of sAsgn:
+      if rewriteStore == nil or not rewriteStore(s, vals, ptrs):
+        s.lhs.rewriteRead(vals, ptrs)
+        s.rhs.rewriteRead(vals, ptrs)
+    of sIte:
+      s.cond.rewriteRead(vals, ptrs)
+      patchBoolStmts(s.thenBody, vals, ptrs, rewriteRead, rewriteStore)
+      patchBoolStmts(s.elseBody, vals, ptrs, rewriteRead, rewriteStore)
+    of sLoop:
+      s.loopCond.rewriteRead(vals, ptrs)
+      patchBoolStmts(s.loopBody, vals, ptrs, rewriteRead, rewriteStore)
+    of sRet:
+      s.retVal.rewriteRead(vals, ptrs)
+    of sDiscard:
+      s.discardVal.rewriteRead(vals, ptrs)
+    of sCall:
+      s.callCallee.rewriteRead(vals, ptrs)
+      for a in s.callArgs:
+        a.rewriteRead(vals, ptrs)
+    of sAsm, sEmit:
+      discard
+
+proc patchBoolStorage*(m: CirModule, policy: BoolPatchPolicy): string =
+  ## Shared scaffold of the bool-storage lowering: collection, per-proc context and statement walk.
+  ##
+  ## - `collectGlobals` runs once before the proc loop, `collectParams` runs
+  ##   once per walked proc, both may retype the declarations in place
+  ## - the walk covers every expression position, callee positions included.
+  ##   A callee names a proc, a proc-typed symbol is never a collected bool,
+  ##   the read rewrites check the symbol's own type
+  ## - an assignment into collected bool storage goes through `rewriteStore`
+  ##   before its operands walk (the store target is no read)
+  ##
+  ## Returns "" when clean.
+  var globalVals, globalPtrs: HashSet[string]
+  if policy.collectGlobals != nil:
+    policy.collectGlobals(m, globalVals, globalPtrs)
+  for fn in m.procs:
+    if not policy.walks(fn):
+      continue
+    var vals = globalVals
+    var ptrs = globalPtrs
+    if policy.collectParams != nil:
+      policy.collectParams(fn, vals, ptrs)
+    fn.body.patchBoolStmts(vals, ptrs, policy.rewriteRead, policy.rewriteStore)
+  return ""
 
 proc cloneExpr*(e: CirExpr): CirExpr =
   ## Deep copy of one expression: statements and expressions are ref objects,

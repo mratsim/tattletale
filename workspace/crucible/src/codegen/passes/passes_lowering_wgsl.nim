@@ -488,14 +488,19 @@ proc wgslRegisterExplodePointerLocals(reg: var PassRegistry) =
 # Bool kernel parameter reads
 # ═══════════════════════════════════════════════════════════════════════
 
-proc rewriteBoolReadsExpr(e: CirExpr, boolParams: HashSet[string]) =
-  ## Replaces every read of a bool kernel parameter in place with the `name != 0u` comparison,
-  ## the type-preserving bool form.
+proc rewriteBoolReadsExpr(e: CirExpr, boolParams, boolPointees: HashSet[string]) =
+  ## Replaces every read of a bool kernel parameter in place with the `name != 0u` comparison in its type-preserving bool form.
   ##
-  ## Expressions are refs, the rewrite applies to every sharer.
+  ## Expressions are refs, so the rewrite applies to every sharer and checks
+  ## the symbol's own type: a proc-typed callee position never fires
+  ## and a bool-typed symbol is never a callee. The comparison's operand is
+  ## a fresh symbol. The rewrite returns before the walk re-enters it.
+  ##
+  ## `boolPointees` stays empty, WGSL collects no bool-pointee storage.
   if e.isNil:
     return
-  if e.kind == eSym and e.name in boolParams:
+  if e.kind == eSym and e.typ != nil and e.typ.kind == ctBool and
+      e.name in boolParams:
     let paramType = e.typ
     let param = sym(e.name, paramType)
     e.kind = eNeq
@@ -504,50 +509,24 @@ proc rewriteBoolReadsExpr(e: CirExpr, boolParams: HashSet[string]) =
     e.b = intLit(0, tUint(32))
     return
   for ch in getExprChildren(e):
-    rewriteBoolReadsExpr(ch, boolParams)
+    rewriteBoolReadsExpr(ch, boolParams, boolPointees)
 
-proc rewriteBoolReadsStmts(ss: var seq[CirStmt], boolParams: HashSet[string]) =
-  ## Statement-walk overload of `rewriteBoolReadsExpr`.
-  for s in mitems(ss):
-    case s.kind
-    of sVar, sConst:
-      rewriteBoolReadsExpr(s.init, boolParams)
-    of sAsgn:
-      rewriteBoolReadsExpr(s.lhs, boolParams)
-      rewriteBoolReadsExpr(s.rhs, boolParams)
-    of sIte:
-      rewriteBoolReadsExpr(s.cond, boolParams)
-      rewriteBoolReadsStmts(s.thenBody, boolParams)
-      rewriteBoolReadsStmts(s.elseBody, boolParams)
-    of sLoop:
-      rewriteBoolReadsExpr(s.loopCond, boolParams)
-      rewriteBoolReadsStmts(s.loopBody, boolParams)
-    of sRet:
-      rewriteBoolReadsExpr(s.retVal, boolParams)
-    of sDiscard:
-      rewriteBoolReadsExpr(s.discardVal, boolParams)
-    of sCall:
-      rewriteBoolReadsExpr(s.callCallee, boolParams)
-      for a in mitems(s.callArgs):
-        rewriteBoolReadsExpr(a, boolParams)
-    of sAsm, sEmit:
-      discard
+proc collectBoolKernelParams(fn: CirProc, vals, ptrs: var HashSet[string]) =
+  ## Collects the kernel's bool parameter names. The storage keeps its type. `ptrs` stays empty, WGSL collects no bool-pointee storage.
+  for p in fn.params:
+    if p.typ.kind == ctBool:
+      vals.incl(p.name)
 
 proc rewriteBoolKernelParamReads(m: CirModule): string =
   ## Rewrites every read of a bool kernel parameter in the kernel body into
   ## a `name != 0u` comparison. Device functions are untouched, their own bool
   ## parameters and locals stay real bools. Returns "" when clean.
-  for fn in m.procs:
-    if not fn.isKernel:
-      continue
-    var boolParams: HashSet[string]
-    for p in fn.params:
-      if p.typ.kind == ctBool:
-        boolParams.incl(p.name)
-    if boolParams.len == 0:
-      continue
-    fn.body.rewriteBoolReadsStmts(boolParams)
-  return ""
+  ##
+  ## WGSL keeps bool storage: no retype, no store rewrite, only the kernel bodies walk.
+  m.patchBoolStorage(BoolPatchPolicy(
+    walks: proc(fn: CirProc): bool = fn.isKernel,
+    collectParams: collectBoolKernelParams,
+    rewriteRead: rewriteBoolReadsExpr))
 
 # ═══════════════════════════════════════════════════════════════════════
 # Struct-reference registration
