@@ -15,6 +15,9 @@
 ##   the family at the target's section
 ## - an unknown field, cell or value shape fails the compile at its line
 ## - a type name that denotes two cells fails the compile naming both targets
+## - a scalar row states any subset of the `ScalarCellAxis` cells, an omitted
+##   cell refuses at the lookup with its one-line `refused <cell> "reason"`
+##   message stated in the row
 ## - one invocation registers every target of its module, generated names
 ##   would collide across invocations
 ##
@@ -151,7 +154,8 @@ type
     ## the name checks anchor.
 
 proc cellPair(arg: NimNode, display: string): ParsedCell {.compileTime.} =
-  ## One `cell "name"` entry: a bare cell states no type name.
+  ## One `cell "name"` entry, also the vector-element form: a bare cell
+  ## states an empty prefix there.
   if arg.kind == nnkIdent:
     result = (cellIndex($arg), "", arg)
   elif arg.kind == nnkCommand and arg.len == 2 and arg[1].kind == nnkStrLit:
@@ -161,15 +165,6 @@ proc cellPair(arg: NimNode, display: string): ParsedCell {.compileTime.} =
   if result.idx < 0:
     error("genTargets: unknown cell '" &
       (if arg.kind == nnkIdent: $arg else: $arg[0]) & "' in " & display, arg)
-
-proc missingCells(cells: seq[ParsedCell]): seq[string] {.compileTime.} =
-  ## Cells of `ScalarCellAxis` that a scalar row does not state.
-  var have: seq[int]
-  for c in cells:
-    have.add c.idx
-  for i in 0 ..< ScalarCellAxis.len:
-    if i notin have:
-      result.add ScalarCellAxis[i].tok
 
 proc cellKey(idx: int): string {.compileTime.} =
   ## One cell's "(kind, width)" form in check messages.
@@ -187,7 +182,7 @@ proc checkCellNames(all: seq[tuple[display: string, cells: seq[ParsedCell]]]) {.
   for i in 0 ..< all.len:
     for a in 0 ..< all[i].cells.len:
       let ca = all[i].cells[a]
-      if ca.spelling.len == 0 or ScalarCellAxis[ca.idx].kind == ctBool:
+      if ScalarCellAxis[ca.idx].kind == ctBool:
         continue
       for j in i ..< all.len:
         for b in 0 ..< all[j].cells.len:
@@ -412,23 +407,54 @@ macro genTargets*(body: untyped) =
       of "scalar":
         var cells: seq[ParsedCell]
         var seen: seq[int]
+        var refused: seq[tuple[idx: int, reason: NimNode]]
         for entry in entries:
+          if entry.kind == nnkCommand and entry.len == 2 and $entry[0] == "refused":
+            if entry[1].kind != nnkCommand or entry[1].len != 2 or
+                entry[1][0].kind != nnkIdent or entry[1][1].kind != nnkStrLit:
+              error("genTargets: expected a 'refused <cell> \"reason\"' entry in " &
+                display, entry)
+            let idx = cellIndex($entry[1][0])
+            if idx < 0:
+              error("genTargets: unknown cell '" & $entry[1][0] & "' in " & display, entry[1][0])
+            if '\n' in entry[1][1].strVal:
+              error("genTargets: the reason of refused cell '" & $entry[1][0] &
+                "' is one line, in " & display, entry)
+            for r in refused:
+              if r.idx == idx:
+                error("genTargets: refused cell '" & $entry[1][0] &
+                  "' appears twice in " & display, entry)
+            refused.add (idx, entry[1][1])
+            continue
           let c = cellPair(entry, display)
+          if c.spelling.len == 0:
+            error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' of " &
+              display & " takes a type name, a refused cell is omitted", entry)
           if c.idx in seen:
             error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok &
               "' appears twice in " & display, entry)
           seen.add c.idx
           cells.add c
-        let missing = missingCells(cells)
-        if missing.len > 0:
-          error("genTargets: the scalar row of " & display & " is missing cell(s) " &
-            missing.join(", "), fam)
+        for r in refused:
+          if r.idx in seen:
+            error("genTargets: refused cell '" & ScalarCellAxis[r.idx].tok &
+              "' is also stated in " & display, r.reason)
         scalarCells.add (display, cells)
-        var cellNodes: seq[NimNode]
-        for c in cells:
-          cellNodes.add cellCtor(c.idx, c.spelling)
-        ctor = nnkObjConstr.newTree(ident"ScalarRow",
-          colon("cells", nnkCall.newTree(ident"@", nnkBracket.newTree(cellNodes))))
+        var ctorArgs = @[ident"ScalarRow",
+          colon("cells", nnkCall.newTree(ident"@", nnkBracket.newTree(
+            block:
+              var cellNodes: seq[NimNode]
+              for c in cells:
+                cellNodes.add cellCtor(c.idx, c.spelling)
+              cellNodes)))]
+        if refused.len > 0:
+          var refusalNodes: seq[NimNode]
+          for r in refused:
+            refusalNodes.add nnkPar.newTree(ident $ScalarCellAxis[r.idx].kind,
+              newLit ScalarCellAxis[r.idx].width, r.reason)
+          ctorArgs.add colon("refusals",
+            nnkCall.newTree(ident"@", nnkBracket.newTree(refusalNodes)))
+        ctor = nnkObjConstr.newTree(ctorArgs)
       of "lit", "kind":
         ctor = objCtor(suffix, parseFieldLines(entries, family, display))
       of "conv":

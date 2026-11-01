@@ -30,7 +30,8 @@ type
     ## Non-finite float literal tokens for one printer target:
     ##
     ## - one field per literal width
-    ## - an empty token is a refusal: the target emits no form for that width and the printer refuses the literal at the emission site
+    ## - tokens are stated only for the widths the target emits, a width
+    ##   without a token is covered by the target's scalar refusal
     ## - Nim's `$` renders the special values `inf`, `-inf` and `nan`, and no
     ##   shader language accepts those as a literal token
 
@@ -67,12 +68,14 @@ type
     width*: int
     ## Bit width, 0 for the widthless kinds (void, bool).
     spelling*: string
-    ## Type name the target prints, "" for a refused cell.
+    ## Type name the target prints.
 
   ScalarRow* = object
     ## Scalar type names of one target by (kind, width) cell.
-    ## Every cell of `ScalarCellAxis` appears exactly once per target.
+    ## A row states the cells the target names, an omitted cell refuses at the lookup.
     cells*: seq[ScalarCell]
+    refusals*: seq[tuple[kind: CirTypeKind, width: int, reason: string]]
+    ## One-line refusal reason per omitted cell the row documents.
 
   LitRow* = object
     ## Literal token forms of one target.
