@@ -188,7 +188,11 @@ proc openclLowerByrefParams(m: CirModule): string =
         p.typ = ptrTy
         byref.add((oldName, sym(p.name, ptrTy)))
     for pair in byref:
-      wrapParamReadsProc(fn.body, pair.oldName, pair.ptrSym)
+      # bind before the closure: `pair` is a lent loop var, not capturable
+      let oldName = pair.oldName
+      let ptrSym = pair.ptrSym
+      fn.body.walkStmts(nil, proc(e: CirExpr) =
+        e.wrapParamReads(oldName, ptrSym))
   # call-site callee symbols share the proc type: point each rewritten formal at the pointer there, one write per shared type
   var newFormals = initTable[string, seq[CirType]]()
   for fn in m.procs:
@@ -202,10 +206,6 @@ proc openclLowerByrefParams(m: CirModule): string =
     var tmpCount = 0
     addrWrapByrefStmts(fn.body, tmpCount)
   return ""
-
-proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =
-  stmts.walkStmts(nil, proc(e: CirExpr) =
-    e.wrapParamReads(oldName, ptrSym))
 
 proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
   ## Symbols name no children, one visit per node covers the tree.
