@@ -61,8 +61,9 @@ proc failing(ctx: FrontendCtx): bool =
   ctx.resolver.err.len > 0
 
 proc fail(ctx: var FrontendCtx, detail: string) =
-  if ctx.resolver.err.len == 0:
-    ctx.resolver.err = "cirv2 frontend: at " & ctx.fnName & ": " & detail
+  ## First refusal wins through the resolver's channel. The detail is prefixed
+  ## with the proc under translation.
+  ctx.resolver.fail("at " & ctx.fnName & ": " & detail)
 
 proc drainHoisted(ctx: var FrontendCtx): seq[CirStmt] =
   result = ctx.hoisted
