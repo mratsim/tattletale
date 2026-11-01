@@ -37,7 +37,6 @@ type
     cache: WebgpuCache
     shaderSquadron: Dim3
 
-template backendKind*(_: typedesc[WebgpuEngine]): BackendKind = bkWebGPU
 
 proc `=destroy`(cache: var WebgpuCache) =
   if cache.module != nil:

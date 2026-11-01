@@ -48,17 +48,3 @@ const CudaLibFlag* =
   if CudaLibDir.len > 0: "-L" & (CudaHome / CudaLibDir) & " -lcudart"
   else: "-lcudart"
 
-## Tries common locations for ``libcudadevrt.a`` and returns the first existing path.
-## Returns ``""`` if not found.
-proc findCudaDevrt*(): string =
-  ## Compile-time path resolver for the CUDA device runtime archive.
-  if CudaHome.len > 0:
-    for subdir in ["targets/x86_64-linux/lib", CudaLibDir, "lib64", "lib"]:
-      if subdir.len > 0 and fileExists(CudaHome / subdir / "libcudadevrt.a"):
-        return CudaHome / subdir / "libcudadevrt.a"
-  for root in ["/usr/local/cuda", "/opt/cuda"]:
-    if dirExists(root):
-      for subdir in ["targets/x86_64-linux/lib", "lib64", "lib"]:
-        if fileExists(root / subdir / "libcudadevrt.a"):
-          return root / subdir / "libcudadevrt.a"
-  return ""

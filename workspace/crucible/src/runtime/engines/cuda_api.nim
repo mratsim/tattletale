@@ -35,7 +35,6 @@ type
     ptx: string
     nvrtc: NVRTC
 
-template backendKind*(_: typedesc[CudaEngine]): BackendKind = bkCuda
 
 proc `=destroy`(nvrtc: NVRTC) =
   if nvrtc.module.pointer != nil:

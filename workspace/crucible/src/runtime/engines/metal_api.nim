@@ -35,7 +35,6 @@ type
     ctx: MetalContext
     cache: MetalCache   # after ctx: released before the context destroy
 
-template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
 
 # ════════════════════════════════════════════════════════════════════════
 

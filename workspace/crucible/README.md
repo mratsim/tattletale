@@ -99,8 +99,6 @@ Notes:
   `workgroup_barrier(flags)` and `workgroupBarrier()` are one declaration with a defaulted flag.
   `get_global_size` is excluded from the vocabulary, it is OpenCL-only native.
 - **No OpenCL `get_*` registration.**
-  [`NimGpuFnBuiltins`](src/builtins/builtins_functions.nim) registers only the Nim
-  function-style magic builtins (`toOpenArray`, `len`).
 - The OpenCL work-item names are template aliases in `builtins_catalog.nim`,
   they expand to canonical names during Nim semantic analysis. The name-only registration path never consults the list,
   so no codegen registration exists for them.

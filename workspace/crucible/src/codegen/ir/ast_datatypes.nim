@@ -11,10 +11,13 @@
 ##
 ## Readers:
 ##
-## - the public builtins (`builtins_functions`, `builtins_gpu_types`) import
-##   `BackendKind` and `GpuTypeKind`
-## - the runtime engines import `BackendKind`
+## - the runtime launch tier imports `BackendKind` for the per-backend
+##   argument layout
 ## - the backend printers receive the compilation state through `GpuContext`
+##
+## `GpuTypeKind` is the v1 type vocabulary, superseded by `CirTypeKind`
+## with zero live readers, retained pending the bfloat16 identity decision
+## (a native bf16 type kind revives it, conversion-only deletes it).
 
 import ./cirv2_lang
 
@@ -25,7 +28,6 @@ type
     bkOpenCL, ## OpenCL C backend
     bkGlsl,   ## GLSL backend, executed on Vulkan
     bkMetal,  ## Metal backend, MSL emitted
-    bkHlsl,   ## HLSL backend, glslang compiled
 
   GpuTypeKind* = enum
     gtVoid,
