@@ -69,7 +69,7 @@ import ../passes/pass_helpers
 import ./print_common
 import ./print_compute
 import ./print_shaders
-import ./targets_rows
+import ./targets_registry
 
 type HlslFlavor* = enum
   ## Resource-binding flavor of the emitted HLSL.

@@ -11,7 +11,7 @@ import std/tables
 import workspace/crucible/src/codegen/ir/cirv2_lang
 import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/backends/targets_registry
-import workspace/crucible/src/codegen/backends/targets_rows
+import workspace/crucible/src/codegen/backends/targets_registry
 import workspace/crucible/src/codegen/backends/print_common
 
 static:
@@ -38,7 +38,7 @@ static:
     doAssert cDecl(mslScalarRow, mslVectorRule, "msl", tFloat(64), "x", false) ==
       "<msl: no f64, double has no Apple GPU support>"
     doAssert cDecl(cudaScalarRow, cudaVectorRule, "cuda", tFloat(16), "x", false) ==
-      "<cuda: no f16, the __half names live behind cuda_fp16.h and this printer emits no includes>"
+      "<cuda: no f16, no native f16>"
 
   block: # lit rows: literal token forms
     doAssert wgslLitRow.int.u32Suffix == "u"
