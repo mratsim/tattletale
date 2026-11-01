@@ -51,7 +51,6 @@ const openclProfile = ScanProfile(
   atomicFloatViaPattern: true)
 
 proc isFloat32Pointee(t: CirType): bool =
-  ## True when `t` is a pointer whose pointee is a 32-bit float.
   t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil and
     t.pElem.kind == ctFloat and t.pElem.bits == 32
 
@@ -82,8 +81,7 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
     discard
 
 proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, profile: ScanProfile) =
-  ## Records the flags one call's callee selects. Both call shapes share this helper: an expression call nests
-  ## the callee symbol in an `eCall` node, a statement call stores it in `s.callCallee`. One printer routine prints both shapes.
+  ## Both call shapes share this helper, the caller passes the callee and the arguments of either shape.
   ##
   ## Requires: an `abkAtomicFetchAdd` callee takes one pointer argument.
   if callee.kind != eSym:
@@ -179,9 +177,9 @@ proc wgslScanType(t: CirType, f: var ModuleFeatures) =
     discard
 
 proc wgslScanExpr(e: CirExpr, f: var ModuleFeatures) =
-  ## Records the flags one expression tree needs: the type of every node
-  ## from the leaves to the root, so an fp16 value nested under a bool-typed
-  ## condition or inside a call's arguments still selects `enable f16`.
+  ## Scan depth: every node's type from the leaves to the root joins the scan.
+  ## An fp16 value nested under a bool-typed condition or inside call
+  ## arguments still selects `enable f16`.
   if e.isNil:
     return
   for c in getExprChildren(e):
@@ -237,8 +235,7 @@ proc wgslScanFeatures(m: CirModule): string {.nimcall.} =
 proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures)
 
 proc scanCudaCallee(callee: CirExpr, f: var ModuleFeatures) =
-  ## Records the reduction kind one call's callee needs. Both call shapes share this helper: an expression call
-  ## nests the callee symbol in an `eCall` node, a statement call stores it in `s.callCallee`. One printer routine prints both shapes.
+  ## Both call shapes share this helper: the caller passes the callee of either shape.
   if callee.kind == eSym:
     case callee.reductionBuiltin
     of rbkReduceAdd, rbkReduceMax:
@@ -247,7 +244,6 @@ proc scanCudaCallee(callee: CirExpr, f: var ModuleFeatures) =
       discard
 
 proc cudaScanExpr(e: CirExpr, f: var ModuleFeatures) =
-  ## Collects the reduction kinds one expression tree needs.
   ## Warp-reduction templates emit at module scope when a proc body
   ## references one kind.
   if e.isNil:
@@ -297,14 +293,7 @@ proc cudaScanFeatures(m: CirModule): string {.nimcall.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerGlslFeatureScan*(reg: var PassRegistry) =
-  ## Registers the GLSL feature scan over CIRv2 modules.
-  ##
-  ## Contract:
-  ## - fills `CirModule.features` with the flags the GLSL extension block maps
-  ## - registers after the target's last transform, before the check-only
-  ##   validation stage
-  ## - runPasses refuses a transform registered after an analysis
-  ##   runs after them
+  ## Fills `CirModule.features` with the flags the GLSL extension block maps.
   reg.register("glslScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the GLSL extension block maps:" &
     " float and integer widths, subgroups, shuffles, atomic float, unroll loops",
@@ -312,14 +301,7 @@ proc registerGlslFeatureScan*(reg: var PassRegistry) =
       scanModuleFeatures(m, m.features, glslProfile))
 
 proc registerOpenclFeatureScan*(reg: var PassRegistry) =
-  ## Registers the OpenCL feature scan over CIRv2 modules.
-  ##
-  ## Contract:
-  ## - fills `CirModule.features` with the flags the OpenCL pragma block maps
-  ## - registers after the target's last transform, before the check-only
-  ##   validation stage
-  ## - runPasses refuses a transform registered after an analysis
-  ##   runs after them
+  ## Fills `CirModule.features` with the flags the OpenCL pragma block maps.
   reg.register("openclScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the OpenCL pragma block maps:" &
     " float widths, subgroups, atomic float",
@@ -327,29 +309,13 @@ proc registerOpenclFeatureScan*(reg: var PassRegistry) =
       scanModuleFeatures(m, m.features, openclProfile))
 
 proc registerWgslFeatureScan*(reg: var PassRegistry) =
-  ## Registers the WGSL feature scan over CIRv2 modules.
-  ##
-  ## Contract:
-  ## - fills `CirModule.features` with the `enable f16` trigger of the WGSL
-  ##   module directive
-  ## - registers after the target's last transform, before the check-only
-  ##   validation stage
-  ## - runPasses refuses a transform registered after an analysis
-  ##   runs after them
+  ## Fills `CirModule.features` with the `enable f16` trigger of the WGSL module directive.
   reg.register("wgslScanModuleFeatures", pkAnalysis,
     "Scans the module once for 16-bit float values, the WGSL `enable f16` trigger",
     run = wgslScanFeatures)
 
 proc registerCudaFeatureScan*(reg: var PassRegistry) =
-  ## Registers the CUDA feature scan over CIRv2 modules.
-  ##
-  ## Contract:
-  ## - fills `CirModule.features` with the warp-reduction kinds the CUDA
-  ##   templates emit
-  ## - registers after the target's last transform, before the check-only
-  ##   validation stage
-  ## - runPasses refuses a transform registered after an analysis
-  ##   runs after them
+  ## Fills `CirModule.features` with the warp-reduction kinds the CUDA templates emit.
   reg.register("cudaScanModuleFeatures", pkAnalysis,
     "Scans the proc bodies once for the reduction kinds the warp-reduction" &
     " templates emit",
