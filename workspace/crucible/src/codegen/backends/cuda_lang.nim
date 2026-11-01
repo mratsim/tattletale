@@ -15,7 +15,8 @@
 ## - device functions: `__device__` with no extern "C", each device function keeps its C++ mangled name.
 ## - parameters print plainly, CUDA has one generic address space,
 ##   `{.smem.}` locals print `__shared__` in the body, and program-scope variables in `CirModule.globals` print `__constant__`
-## - the translation unit opens with `#include <cuda_fp16.h>`, NVRTC's default include path provides that header
+## - the translation unit opens with the fp16/bf16 includes, NVRTC's default
+##   include path provides cuda_fp16.h and cuda_bf16.h
 ##
 ## Statement and builtin contract:
 ##
@@ -371,10 +372,10 @@ const cudaModuleShape = ModuleShape(
   printsReduceTemplates: true)
 
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
-  ## Translation-unit head of every CUDA module: the fp16 include.
-  ## NVRTC's default include path provides cuda_fp16.h, so __half and the fp16
-  ## conversion builtins compile with no host-side include setup.
-  "#include <cuda_fp16.h>\n"
+  ## Translation-unit head of every CUDA module: the fp16 and bf16 includes.
+  ## NVRTC's default include path provides both headers.
+  ## __half, __nv_bfloat16 and the conversion builtins compile with no host-side include setup.
+  "#include <cuda_fp16.h>\n#include <cuda_bf16.h>\n"
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `__constant__` declaration of one relocated global.

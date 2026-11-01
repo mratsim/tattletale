@@ -213,15 +213,18 @@ genTargets:
     # - widths absent from the table keep the canonical name, `exp2` over
     #   `double` is a CUDA native
     math abs 32 "fabsf", abs 64 "fabs", exp2 32 "exp2f"
-    # `{.builtin.}` fp16 conversions resolve to the cuda_fp16.h native calls:
-    # `float16` has a first-class `__half` identity, and both `asFp16`/`asU16` entries map to the half bit builtins.
-    # `bfloat16` and fp8 conversions have no entry: cuda_bf16.h is not among this translation unit's includes.
+    # `{.builtin.}` fp16 and bf16 conversions resolve to the cuda_fp16.h and cuda_bf16.h native calls:
+    # `float16` has a first-class `__half` identity, both `asFp16`/`asU16` entries map to the half bit builtins.
+    # `bfloat16` has a first-class `__nv_bfloat16` identity, its conversions are the bfloat value builtins.
+    # fp8 conversions have no entry: no CUDA native exists.
     conv toFp16 "__float2half($1)", toFp32 "__half2float($1)",
-      asFp16 "__ushort_as_half($1)", asU16 "__half_as_ushort($1)"
+      asFp16 "__ushort_as_half($1)", asU16 "__half_as_ushort($1)",
+      toBf16 "__float2bfloat16($1)", toBf32 "__bfloat162float($1)"
     # Float/integer bit reinterprets print as intrinsics, a C-style cast
     # numerically converts and loses the bit pattern. Pairs of same-width integers
     # use the conversion form, a modular cast preserves every bit.
-    # `__half_as_ushort` and `__ushort_as_half` cover the two 16-bit float bit-cast directions.
+    # `__half_as_ushort`/`__ushort_as_half` and `__bfloat16_as_ushort`/`__ushort_as_bfloat16`
+    # cover the 16-bit float bit-cast directions.
     # Signed 16-bit reinterprets share the unsigned native, and the implicit
     # C conversion preserves the bit pattern.
     bitcast:
@@ -233,6 +236,8 @@ genTargets:
       rule srcKinds {ctInt}, srcWidths {32}, dstKinds {ctFloat}, sameWidth, "__int_as_float($1)"
       rule srcKinds {ctInt, ctUint}, srcWidths {64}, dstKinds {ctFloat}, sameWidth, "__longlong_as_double($1)"
       rule srcKinds {ctInt, ctUint}, srcWidths {16}, dstKinds {ctFloat}, sameWidth, "__ushort_as_half($1)"
+      rule srcKinds {ctBf16}, srcWidths {16}, dstKinds {ctInt, ctUint}, sameWidth, "__bfloat16_as_ushort($1)"
+      rule srcKinds {ctInt, ctUint}, srcWidths {16}, dstKinds {ctBf16}, sameWidth, "__ushort_as_bfloat16($1)"
 
   target opencl:
     # OpenCL C is LP64 C: `char` and `long` name the 8-bit and 64-bit signed widths, as on msl.
