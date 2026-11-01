@@ -61,7 +61,9 @@ The frontend derives a value's class once at the boundary, passes never re-deriv
 Type identity has two comparison contracts:
 
 - `sameType`: nominal structs compare by name, every other kind compares field by field, recursively
-- `structuralEqual` / `structuralHash`: structs compare by field list, so equal structures share one registered struct
+- structural identity in `resolveStructType`: a struct registers once per field list,
+  first registration wins, so two type texts reaching one structure share one
+  registered struct and one name
 
 `src/codegen/ir/cirv2_build.nim` supplies the constructors.
 `src/codegen/ir/cirv2_pretty.nim` renders the tree as an s-expression dump for tests and pass development.
@@ -113,9 +115,8 @@ Divergence starts at the reserved-word rename.
 | Record      | Contract                                                                                                                         |
 | ---         | ---                                                                                                                              |
 | `PassKind`  | `pkValidation` refuses on invariant violation, `pkTransform` rewrites the IR, `pkAnalysis` computes metadata and changes nothing |
-| `PassPhase` | `phaseEarly`, `phasePreprocessing`, `phaseMain`, the coarse position of the pass                                                 |
-| `CirPass`   | Name, kind, phase, description, `dependsOn` list, `run` over the module                                                          |
-| `runPasses` | Executes the registry in registration order, refuses when a `dependsOn` entry has not run, returns the first refusal             |
+| `CirPass`   | Name, kind, description, `run` over the module                                                                                   |
+| `runPasses` | Executes the registry in registration order, refuses a `pkTransform` registered after a `pkAnalysis`, returns the first refusal   |
 
 Registration order is execution order, there is no scheduler.
 A pass run takes the module in place and returns its refusal: `""` when clean, else the first refusal.
@@ -153,7 +154,7 @@ Each target registers its analysis passes (`pkAnalysis`) after its last transfor
 The printer reads the stored records from `CirModule` and never rescans:
 `features`, `layouts`, `callGraph`, `structRefs`, `paramClasses`, `refBlocks`.
 
-`runPasses` enforces the declared `dependsOn` lists.
+`runPasses` refuses a transform registered after an analysis.
 The analysis-last placement itself is the registration sequence in `gpu_compiler.nim`, one bundle per target.
 
 ## Printers
@@ -202,10 +203,10 @@ The runtime layer turns it into an executing kernel:
 | Invariant                                                       | Enforcement                                                                                                       |
 | ---                                                             | ---                                                                                                               |
 | Registration order is execution order                           | `runPasses` iterates the registry in registration order, there is no scheduler                                    |
-| A dependency runs before its dependent                          | `runPasses` refuses when a `dependsOn` entry has not run                                                          |
+| A transform never runs after an analysis                        | `runPasses` refuses when a `pkTransform` follows a `pkAnalysis`                                                    |
 | A refusal anywhere is a compile-time error naming the construct | The macros call `error()` on frontend and pipeline refusals, `codegenModule` calls `error()` on a printer refusal |
 | An analysis result survives only with no transform after it     | The registration sequence in `gpu_compiler.nim`, the registry has no invalidation                                 |
-| Target static data is complete and consistent                   | `genTargets` compile-time row checks                                                                              |
+| Target static data is complete and consistent                   | Compile errors at the printer's lookup site, plus the static cross-target scalar check                            |
 | The passes layer exports only `register*` procs                 | The `passes-export` linter rule                                                                                   |
 
 ## Refusals and testing
@@ -219,8 +220,8 @@ Refusals flow end to end as strings, no exceptions cross the pipeline:
 | Printer  | The walk records the first refusal, `codegenModule` raises it                  |
 
 No negative-compile test runs automatically, an expected compile failure is a `manual_` file run by hand.
-The IR tests under `tests/ir/` build a hand-made `CirModule` and run one registered pass through a `PassRegistry`.
-Each test asserts the IR delta or the refusal string.
+Pass-level checks run through a `PassRegistry` on a module built by the same
+builders the frontend uses, inside a kernel test through the public API.
 
 A compiler change answers behavioral checks, never byte identity:
 
@@ -237,9 +238,10 @@ Every test launches through `engine.launchKernel()` or `engine.launchDeviceFn()`
 ### Adding a pass
 
 1. Implement the transform or check over `CirModule` in a file under `src/codegen/passes/`, file-local.
-2. Register it from the owning stage bundle with name, kind, phase, description, `run`, and `dependsOn`.
+2. Register it from the owning stage bundle with name, kind, description, and `run`.
 3. Keep implementations file-local. The `register*` proc is the only public surface of a passes file.
-4. Add an IR test under `tests/ir/` that runs the pass through a `PassRegistry`, plus a per-backend test when output changes.
+4. Verify the behavior end to end: a kernel test through the public API which
+   launches and reads back, plus a per-backend test when output changes.
 
 ### Adding a target
 
