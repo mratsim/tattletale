@@ -41,7 +41,7 @@ import ./passes/passes_lowering_msl
 import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_cfamily
 import ./passes/analysis_hlsl
-import ./passes/scan_features
+import ./passes/analysis_module_requirements
 import ./passes/passes_validations
 import ./passes/passes_low_reserved
 import ./passes/passes_low_pointers
