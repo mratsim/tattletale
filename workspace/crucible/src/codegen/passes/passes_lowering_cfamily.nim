@@ -43,14 +43,10 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ## Contract:
   ## - the smem relocation covers top-level kernel-body locals only, a nested
   ##   or device-function one stays in place and refuses at the printer
-  ## - the initializer rewrite ran earlier, a relocated smem local has no
-  ##   initializer
-  ## - the const_mem relocation covers every proc, a shared
-  ##   const_mem walk recurses into the nested branch and loop bodies at their encounter position,
-  ##   a const_mem initializer is required, which the printer emits
-  ##   from the relocated node
-  ## - runs after the reserved-word rename:
-  ##   every relocated declaration uses the renamed names that its body already references
+  ## - the initializer rewrite ran earlier, a relocated smem local has no initializer
+  ## - the const_mem relocation covers every proc, nested branch and loop bodies included, at their encounter position
+  ## - a const_mem initializer is required, the printer emits it from the relocated node
+  ## - runs after the reserved-word rename, so relocated declarations use the renamed names their bodies already reference
   for fn in m.procs:
     var i = 0
     while i < fn.body.len:
@@ -102,11 +98,6 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
 # ═══════════════════════════════════════════════════════════════════════
 
 proc smemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt] =
-  ## Store statements that replace one initializer, in declaration order.
-  ##
-  ## - an array constructor: one indexed store per element
-  ## - an object constructor: one field store per member
-  ## - anything else: one whole-value store in the scalar shape
   let base = sym(name, declType)
   if init.kind == eAconstr and declType.kind == ctArray:
     for i, el in init.elems:
@@ -118,10 +109,6 @@ proc smemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt
     result.add asgnS(base, init)
 
 proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
-  ## Splits every initialized `{.smem.}` declaration in one statement list:
-  ## the bare declaration stays and the store statements take its position.
-  ## Nested branch and loop bodies recurse.
-  ## Returns "" when clean, else the first refusal.
   var i = 0
   while i < ss.len:
     let s = ss[i]
@@ -153,9 +140,6 @@ proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
   return ""
 
 proc rewriteSmemInits(m: CirModule): string =
-  ## Rewrites every `{.smem.}` initializer into explicit stores.
-  ## Returns "" when clean, else the first refusal.
-  ##
   ## Kernel-body storage:
   ##
   ## - a local at any depth: bare declaration plus stores

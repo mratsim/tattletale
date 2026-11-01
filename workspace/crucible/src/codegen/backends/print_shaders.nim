@@ -1,12 +1,5 @@
 ## Shader-tier emission shared by the WGSL and HLSL printers: the entry-point machinery and the module assembly both targets emit.
 ##
-## | proc               | contract                                                           |
-## | ------------------ | ------------------------------------------------------------------ |
-## | selectShaderKernel | the module's one kernel, one entry point per engine invocation     |
-## | emitEntryInputs    | entry-input texts over the target's `EntryInputRow`                |
-## | printShaderProc    | one device function or the entry kernel, body before the signature |
-## | printShaderModule  | module section order: structs, bindings, hoisted, fns, entry       |
-##
 ## The two shader targets split from the compute class on the entry and runtime model:
 ##
 ## - a shader module compiles one entry point per engine invocation

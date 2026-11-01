@@ -7,24 +7,6 @@
 
 ## Shared printer tier over CIRv2: the statement/expression walk and the C declarator engine.
 ##
-## | leaf                            | contract                                                                                             |
-## | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
-## | failing / fail                  | first-refusal-wins walk state over each printer's `PrintCtx` (`err`, `fnName`)                       |
-## | codegenModule                   | `(artifact, err)` to entry-point-result conversion                                                   |
-## | roundUpMultiple, scalarByteSize | shared layout arithmetic over CIRv2 types                                                            |
-## | emitVectorComponent             | vector component letters (`F0`..`F3` to `x`..`w`)                                                    |
-## | emitLiteral                     | literal token forms of one target, over its lit and scalar rows                                      |
-## | printCast                       | one bit reinterpret through the target's cast rules, unmatched casts keep the conversion form        |
-## | LoopStyle, printWhileText       | loop text of one target: unroll directive, head, brace style                                         |
-## | printStmtList                   | statement-list walk: sWhile through `printWhileText`, others through `printStmt`                     |
-## | printStmts                      | statement-list walk with the target's kind-row loop style                                            |
-## | printStmt                       | dispatch: shared variants inline, target policy via printVar/printConst/printAsgn/printCall/printAsm |
-## | printExpr                       | expression dispatch: shared branches inline, target kinds via printTargetExpr, default routes inline |
-## | printTargetExpr                 | the per-printer expression walk, owning the kinds in the printer's `targetExprKinds` set             |
-## | printCallArgs, printCallText    | call argument texts, then one call's text: builtin vocabulary when present, else the plain call form |
-## | printIteElse, printEmitOperand  | sIte else tail and `{.emit.}` operand text, shared forms a printer overrides                         |
-## | nonFiniteFloatLit               | non-finite float literal token, classified against the printer's token table                         |
-##
 ## C declarator engine, driven by the registry rows that each printer supplies.
 ##
 ## - `scalarName`/`leafName`/`bareName`: type names from `ScalarRow` and `VectorRule`
@@ -62,20 +44,13 @@ proc roundUpMultiple*(v, multiple: int): int =
 
 proc scalarByteSize*(t: CirType, boolWidth: static int = 1): int =
   ## Byte width of one scalar value.
-  ##
-  ## - ctBool: `boolWidth`, std430 packs a bool into 1 byte and the WGSL
-  ##   launch ABI packs one into 4
-  ## - ctInt, ctUint, ctFloat: `bits div 8`
-  ## - widthless kinds: 0
+  ## A bool is `boolWidth` wide: std430 packs a bool into 1 byte and the WGSL launch ABI into 4.
   case t.kind
   of ctBool: boolWidth
   of ctInt, ctUint, ctFloat: t.bits div 8
   else: 0
 
 proc emitVectorComponent*(name: string): string =
-  ## Component letter of a CIRv2 vector component name (`F0`..`F3`).
-  ##
-  ## Returns "x", "y", "z" or "w", "" when the name is not a component.
   case name
   of "F0": "x"
   of "F1": "y"
@@ -406,13 +381,12 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   of eTernary, eAt, ePat, eDeref, eAddr:
     if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
-    # shared default forms for the kinds outside the printer's `targetExprKinds` set
     if e.kind in {eAt, ePat}:
       let base = if e.kind == eAt: e.atBase else: e.patBase
       let idx = if e.kind == eAt: e.atIndex else: e.patIndex
       var baseTxt = ctx.printExpr(base)
       if base.kind in {eCast, eConv}:
-        # a cast binds looser than the subscript: parenthesize the base
+        # a cast binds looser than the subscript, so parenthesize the base
         baseTxt = "(" & baseTxt & ")"
       return baseTxt & '[' & ctx.printExpr(idx) & ']'
     if e.kind == eDeref:
@@ -506,11 +480,7 @@ proc printCall*(ctx: var auto, s: CirStmt): string =
     result = pad & calleeName & "(" & args.join(", ") & ");"
 
 proc printStmtList(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string =
-  ## Prints one statement list, one line per printed statement:
-  ##
-  ## - `sWhile`: `printWhileText`, with the target's `style`
-  ## - every other statement: `ctx.printStmt`, an empty text drops out
-  ## - printed lines join with a newline separator
+  ## Only `sWhile` consumes `style`, every other statement prints through `ctx.printStmt`.
   var lines: seq[string]
   for s in stmts:
     let txt = case s.kind
@@ -521,7 +491,6 @@ proc printStmtList(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string
   return lines.join("\n")
 
 proc printStmts*(ctx: var auto, stmts: seq[CirStmt]): string =
-  ## Prints one statement list with the target's loop style from its kind row.
   printStmtList(ctx, stmts, ctx.policy.loop)
 
 proc moduleKernels*(m: CirModule): seq[CirProc] =
@@ -534,7 +503,6 @@ proc moduleKernels*(m: CirModule): seq[CirProc] =
       result.add fn
 
 proc moduleDeviceFns*(m: CirModule): seq[CirProc] =
-  ## Returns the device functions of `m.procs`: every proc that is not a kernel.
   for fn in m.procs:
     if not fn.isKernel:
       result.add fn

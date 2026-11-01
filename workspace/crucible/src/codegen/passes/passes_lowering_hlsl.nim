@@ -41,7 +41,6 @@ import ./passes_low_pointers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerHlslMaterializeNumWorkgroups*(reg: var PassRegistry) =
-  ## Registers the materialized dispatch-grid pass.
   reg.register("hlslMaterializeNumWorkgroups", pkTransform,
     "Rewrites threadgroups_per_grid reads to the materialized trailing" &
     " kernel parameter the engine stages",
@@ -49,7 +48,6 @@ func registerHlslMaterializeNumWorkgroups*(reg: var PassRegistry) =
   )
 
 func registerHlslExplodePointerLocals*(reg: var PassRegistry) =
-  ## Registers the HLSL pointer-local explosion pass over the shared walk.
   registerExplodePointerLocals(reg, "hlslExplodePointerLocals",
     "Rewrites pointer locals, pointer-holding struct locals and var" &
     " parameters to the HLSL storage model",
@@ -57,9 +55,6 @@ func registerHlslExplodePointerLocals*(reg: var PassRegistry) =
     explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
 
 func registerHlslHoistProgramScopeConstants*(reg: var PassRegistry) =
-  ## Registers the HLSL const_mem program-scope hoist:
-  ## - dxc folds the relocated declarations at compile time
-  ## - no register in the `$Globals`/cbuffer layout, visible to all functions
   reg.register("hlslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = hlslHoistProgramScopeConstants
@@ -75,7 +70,6 @@ const NumWorkgroupsParam* = "crucible_numworkgroups"
   ## member of the same name.
 
 proc findNumWorkgroupsExpr(e: CirExpr, coordTy: var CirType): bool =
-  ## True when the expression reads `threadgroups_per_grid`, with the coordinate struct type of the read in `coordTy`.
   if e.isNil:
     return false
   if e.kind == eSym and e.coordBuiltin == cbkThreadgroupsPerGrid:
@@ -87,7 +81,6 @@ proc findNumWorkgroupsExpr(e: CirExpr, coordTy: var CirType): bool =
   return false
 
 proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
-  ## Statement-walk overload of `findNumWorkgroupsExpr`.
   for s in ss:
     case s.kind
     of sVar, sConst:
@@ -123,7 +116,6 @@ proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
   return false
 
 proc rewriteNumWorkgroupsExpr(e: CirExpr, coordTy: CirType) =
-  ## Replaces every `threadgroups_per_grid` read in place with a read of the materialized trailing parameter.
   ## Expressions are refs, the rewrite applies to the node every sharer sees.
   if e.isNil:
     return
@@ -137,7 +129,6 @@ proc rewriteNumWorkgroupsExpr(e: CirExpr, coordTy: CirType) =
     rewriteNumWorkgroupsExpr(ch, coordTy)
 
 proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
-  ## Statement-walk overload of `rewriteNumWorkgroupsExpr`.
   for s in ss:
     case s.kind
     of sVar, sConst:
@@ -164,7 +155,6 @@ proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
       discard
 
 proc materializeNumWorkgroups(m: CirModule): string =
-  ## Rewrites every `threadgroups_per_grid` read in each kernel to a read of the trailing parameter.
   ## Kernels without such reads stay untouched, device functions never see one,
   ## a coordinate builtin in a device function refuses when printed.
   for fn in m.procs:
@@ -195,7 +185,6 @@ proc materializeNumWorkgroups(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc hasDeeperField(ctx: ExplodeCtx, path: string): bool =
-  ## True when an exploded leaf binds strictly below `path`.
   let prefix = path & "."
   for k in ctx.leafOf.keys:
     if k.startsWith(prefix):
@@ -203,8 +192,8 @@ proc hasDeeperField(ctx: ExplodeCtx, path: string): bool =
   return false
 
 proc hasLeafPrefix(ctx: ExplodeCtx, path: string): bool =
-  ## True when an exploded leaf binds a strict prefix of `path`: the read continues into the leaf's own value.
-  ## A bound `y.layout` leaf splices the read `y.layout.shape.F0` to the leaf symbol `y_layout`.
+  ## A bound `y.layout` leaf splices the read `y.layout.shape.F0` to the leaf
+  ## symbol `y_layout`, the read continues into the leaf's own value.
   for k in ctx.leafOf.keys:
     if path.startsWith(k & "."):
       return true
@@ -221,13 +210,9 @@ proc rewritePointerChildren(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): strin
   return ""
 
 proc hlslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  ## HLSL rewrite shapes outside the shared rewrite skeleton.
   case e.kind
   of eDot:
     proc spliceExplodedRead(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, root: CirExpr): string =
-      ## One unbound read through an exploded struct local.
-      ## A read continuing into a bound leaf's own value rewrites the inner chain node.
-      ## A deeper bound leaf defers to its own node, anything else refuses.
       let path = dottedPath(e)
       if ctx.hasLeafPrefix(path):
         return rewritePointerExpr(fn, ctx, e.dotBase)
@@ -301,16 +286,9 @@ proc hlslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
     return rewritePointerChildren(fn, ctx, e)
 
 proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  ## Rewrites one expression in place for the HLSL pointer model.
-  ## Returns "" when clean, else the first refusal.
-  ## The shared skeleton owns the symbol refusals plus the bound-leaf and pointee splices.
-  ## `hlslPointerArm` handles every shape outside the skeleton.
   rewritePointerExprShared(fn, ctx, e, "HLSL", hlslPointerArm)
 
 proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  ## `sVar` case: a pointer local binds its pointee or pends for a later
-  ## address-of binding, a pointer-holding struct local registers its field rewrites.
-  ## Anything else rewrites the initializer.
   if s.declType.kind == ctPtr and s.declType.space == caThread:
     if s.init != nil:
       if s.init.kind != eAddr or s.init.addrOperand.kind != eSym:
@@ -325,8 +303,6 @@ proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   return rewritePointerExpr(fn, ctx, s.init)
 
 proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  ## `sAsgn` case: a pointer local binds exactly once, a field of an exploded
-  ## struct local never assigns, anything else rewrites both operands.
   if s.lhs.kind == eSym and s.lhs.name in ctx.pendingPtrs:
     if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
       return refuseAt(fn, "pointer local " & s.lhs.name &
@@ -347,12 +323,10 @@ proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   return rewritePointerExpr(fn, ctx, s.rhs)
 
 proc explodeDropsVar(s: CirStmt, ctx: ExplodeCtx): bool =
-  ## A pointer local and an exploded struct local drop from their list.
   (s.declType.kind == ctPtr and s.declType.space == caThread) or
     (s.declType.kind == ctStruct and s.declType.containsPtrDeep)
 
 proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
-  ## A pointer-local binding drops from its list.
   s.lhs.kind == eSym and
     (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf)
 
@@ -373,13 +347,4 @@ proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc hlslHoistProgramScopeConstants(m: CirModule): string =
-  ## Relocates the `{.const_mem.}` locals of every proc into `m.globals` in encounter order,
-  ## the declarations dropped from their bodies.
-  ##
-  ## Contract:
-  ## - every proc and scope depth covered, a device-function or nested-scope
-  ##   local relocates like a kernel-top-level one
-  ## - the initializer is required, a const_mem local without one refuses
-  ## - runs after the reserved-word rename, relocated declaration names match
-  ##   the renamed body references
   hoistConstMemLocals(m)

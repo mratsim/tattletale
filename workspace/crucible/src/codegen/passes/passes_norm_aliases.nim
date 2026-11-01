@@ -87,13 +87,7 @@ proc assignBuiltinKinds(e: CirExpr) =
   e.shuffleBuiltin = shuffleBuiltinKind(e.name)
 
 proc assignBuiltinKindsExpr(e: CirExpr) =
-  ## Kind-assigns one expression's builtin-marked symbols in place.
-  ##
-  ## Contract:
-  ## - only builtin-marked symbols kind-assign
-  ## - a local or parameter sharing a builtin's name is an ordinary symbol,
-  ##   untouched
-  ## - expressions are refs, so the assignment applies to the shared node
+  ## Expressions are refs, so the assignment applies to the shared node.
   if e.isNil:
     return
   if e.kind == eSym:
@@ -104,8 +98,6 @@ proc assignBuiltinKindsExpr(e: CirExpr) =
     assignBuiltinKindsExpr(ch)
 
 proc assignBuiltinKindsStmts(ss: var seq[CirStmt]) =
-  ## Kind-assigns the builtin-marked symbols in one statement list,
-  ## nested bodies included.
   for s in mitems(ss):
     case s.kind
     of sVar, sConst:

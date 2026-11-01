@@ -99,9 +99,6 @@ proc splitSpanParams(fn: CirProc, sigs: seq[SpanSig]) =
 
 proc spanPtrLenParts(base, first, last: CirExpr): tuple[ptrPlus, lenExpr: CirExpr] =
   ## toOpenArray(base, first, last) -> (base + first, last - first + 1).
-  ##
-  ## - the pointer side states the base pointer's type
-  ## - the length side states the bounds' integer type
   let ptrTyp = getExprType(base)
   let idxTyp = getExprType(first)
   let lenSub = subE(idxTyp, last, first)
@@ -124,12 +121,9 @@ type
     ## split parameters and decomposed view bindings.
 
 proc splitSpanCall(callee: CirExpr, args: var seq[CirExpr], ctx: var SpanCtx, err: var string) =
-  ## Splits the span arguments of one call site and retypes the callee to the split signature:
-  ##
-  ## - a `toOpenArray` argument expands into `base + first` and `last - first + 1`
-  ## - a span symbol expands into the pointer and length bindings of its name
-  ## - a callee outside the module refuses, its span parameter would reach
-  ##   the printer unsplit
+  ## A `toOpenArray` argument expands into `base + first` and `last - first + 1`,
+  ## a span symbol into the pointer and length bindings of its name.
+  ## A callee outside the module refuses, its span parameter would reach the printer unsplit.
   if callee.kind != eSym or err.len > 0:
     return
   let sigs = ctx.sigs.getOrDefault(callee.name)
@@ -169,16 +163,9 @@ proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string)
   ## Forward declaration, statement lists recurse into their expressions.
 
 proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string) =
-  ## Rewrites the span uses of one expression in place:
+  ## A surviving `toOpenArray` call refuses: the frontend emits one only in a view binding, a call argument, or a `len` read.
   ##
-  ## - a span symbol retypes to the element pointer of its own name
-  ## - `len(s)` over a span binding folds to the length binding `s_len`
-  ## - `len(toOpenArray(p, a, b))` folds to `b - a + 1`
-  ## - a call site with span arguments splits them and retypes its callee
-  ##
-  ## A surviving `toOpenArray` call refuses. The frontend emits one only in three positions: a view binding, a call argument, a `len` read.
-  ##
-  ## Children descend through their own fields. A folded node replaces the node slot its parent references.
+  ## A folded node replaces the node slot its parent references (`e` is a `var` param).
   if err.len > 0 or e.isNil:
     return
   case e.kind
@@ -226,7 +213,6 @@ proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string) =
       rewriteSpanUsesExpr(children[i], ctx, err)
 
 proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
-  ## Statement-walk overload of `rewriteSpanUsesExpr`, nested bodies included.
   for s in ss:
     case s.kind
     of sVar, sConst:
@@ -261,13 +247,9 @@ proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
-  ## Decomposes the view bindings of one statement list in place:
-  ##
-  ## - the assignment of a `toOpenArray(p, a, b)` call to a preceding
-  ##   `var v: span T` declaration retypes the binding, its value is `p + a`
-  ## - the decomposition appends the `v_len` declaration bound to `b - a + 1`
-  ##
-  ## Nested statement lists recurse.
+  ## A `toOpenArray(p, a, b)` assignment to a preceding `var v: span T`
+  ## declaration retypes the binding to `p + a` and appends the matching
+  ## `v_len` declaration bound to `b - a + 1`.
   var lowered: seq[CirStmt]
   var i = 0
   while i < ss.len:
@@ -312,10 +294,6 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc typeHoldsSpan(t: CirType): bool =
-  ## True when `t` is a span or names one inside:
-  ##
-  ## - a pointer, array, or vector element
-  ## - a struct field, a proc parameter or return type
   if t.isNil:
     return false
   case t.kind
@@ -343,18 +321,9 @@ proc typeHoldsSpan(t: CirType): bool =
     result = false
 
 proc survivingSpanRejection(fn: CirProc): string =
-  ## Refusal naming the first openArray span that survived the split in one proc, "" when the proc is span-free.
-  ##
-  ## Refusal sites:
-  ##
-  ## - the return type
-  ## - a declaration that binds no `toOpenArray` assignment
-  ## - a span nested under another type
-  ## - an expression whose type resolves to a span
-  ##
-  ## Positions the rewrite skips, which the guard still checks:
-  ##
-  ## - `sAsm` and `sEmit` operands
+  ## Contract:
+  ## - the guard checks every position, including the ones the rewrite skips
+  ##   (`sAsm` and `sEmit` operands)
   for p in fn.params:
     if typeHoldsSpan(p.typ):
       return "parameter " & p.name & " keeps an openArray span"
@@ -379,10 +348,6 @@ proc survivingSpanRejection(fn: CirProc): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc lowerSpansPass(m: CirModule): string =
-  ## Splits the openArray spans of every proc into pointer + length pairs.
-  ##
-  ## Returns "" when clean, else the first refusal.
-  ##
   ## Parameter splits run before the body rewrites, which rebuild call-site
   ## callee types from the split signatures.
   let sigs = collectSpanSigs(m)

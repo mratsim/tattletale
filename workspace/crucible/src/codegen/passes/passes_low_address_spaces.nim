@@ -61,10 +61,6 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc wantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirType]): bool =
-  ## Computes the per-parameter types one call site selects.
-  ## Each `wanted[i]` re-types the formal's pointee to the argument's space whenever the argument names another space.
-  ##
-  ## Returns true when at least one pointer formal specializes.
   # Precondition: `args` covers every formal, `args.len == callee.params.len`.
   wanted.setLen(callee.params.len)
   for i in 0 ..< callee.params.len:
@@ -79,27 +75,21 @@ proc wantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirTy
       result = true
 
 proc instKey(callee: CirProc, wanted: seq[CirType]): string =
-  ## Instantiation key: the callee name plus one position/space pair per re-spaced parameter.
   result = callee.name
   for i in 0 ..< callee.params.len:
     if not sameType(wanted[i], callee.params[i].typ):
       result.add "\x1f" & $i & "\x1f" & $wanted[i].space
 
 proc retypeSymsExpr(e: CirExpr, name: string, typ: CirType) =
-  ## Retypes the symbol named `name` in place.
-  ## Expressions are refs: the rewrite applies to every sharer.
+  ## Expressions are refs, so the retyping applies to every sharer of the symbol.
   if e.kind == eSym and e.name == name:
     e.typ = typ
 
 proc retypeSymsStmts(ss: seq[CirStmt], name: string, typ: CirType) =
-  ## Retypes every symbol named `name` across one statement list, nested bodies included.
   ss.walkStmts(nil, proc(e: CirExpr) =
     e.retypeSymsExpr(name, typ))
 
 proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
-  ## One instantiation of `callee` over the re-spaced formals `wanted`.
-  ## Each re-spaced parameter retypes every body read of the formal.
-  ## Other parameters and the body copy pass through unchanged.
   result = CirProc(name: name, ret: callee.ret, isKernel: callee.isKernel,
                    inline: callee.inline, exportName: callee.exportName,
                    workgroup: callee.workgroup,
@@ -129,11 +119,9 @@ type
     err: string
 
 proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirProc, ctx: InstantiateCtx) =
-  ## Rewrites one call site onto the instantiation its argument spaces select:
-  ##
-  ## - a first-use combination creates the clone and queues it for the driver's body walk
-  ## - the effect is the `calleeExpr` rewrite plus the `ctx` updates, nothing is returned
-  ## - a name collision refuses the pass, `ctx.err` receives the refusal text and the call site stays untouched
+  ## Rewrites one call site onto the instantiation its argument spaces select.
+  ## The rewrite touches the `calleeExpr` and the `ctx` only, nothing returned.
+  ## A name collision refuses the pass, `ctx.err` receives the refusal text and the call site stays untouched.
   var wanted: seq[CirType]
   var instantiation: CirProc
   if not calleeProc.wantedParamTypes(args, wanted):
@@ -155,15 +143,8 @@ proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirPro
   calleeExpr.typ = freshProcType(wanted, instantiation.ret)
 
 proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx) =
-  ## Instantiates every call site in one statement list, calls nested inside expressions included.
-  ## The walk stops on the first refusal in `ctx.err`.
-  ##
-  ## Unspecialized shapes leave the call site untouched:
-  ##
-  ## - a callee outside the module
-  ## - an arity mismatch with the module callee
-  ##
-  ## The printers judge whatever survives.
+  ## Unspecialized call sites stay untouched: the printers judge whatever survives.
+  ## Unspecialized means a callee outside the module or an arity mismatch against the module callee.
   let onExpr = proc(e: CirExpr) =
     if ctx.err.len > 0 or e.kind != eCall or e.callee.kind != eSym:
       return
@@ -180,10 +161,7 @@ proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx) =
   ss.walkStmts(onStmt, onExpr)
 
 proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
-  ## Instantiates the module callees whose pointer arguments name another
-  ## address space than the formal.
-  ##
-  ## Clones append to `m.procs` after the walk, their bodies walked like any other proc's.
+  ## Clones join the walk, their bodies scanned like any other proc's body.
   var ctx = InstantiateCtx()
   for fn in m.procs:
     ctx.procs[fn.name] = fn

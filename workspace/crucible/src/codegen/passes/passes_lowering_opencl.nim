@@ -42,8 +42,6 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerOpenclHoistProgramScopeConstants*(reg: var PassRegistry) =
-  ## - the pass refuses a const_mem local without an initializer
-  ## - the printer keeps a nil-init shape guard on the relocated declarations
   reg.register("openclHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = openclHoistProgramScopeConstants
@@ -60,15 +58,6 @@ func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc openclHoistProgramScopeConstants(m: CirModule): string =
-  ## Relocates the `{.const_mem.}` locals of every proc into `m.globals`,
-  ## in encounter order, dropping the declarations from their bodies.
-  ##
-  ## Contract:
-  ## - every proc and scope depth covered, a device-function or nested-scope
-  ##   local relocates like a kernel-top-level one
-  ## - the initializer is required, a const_mem local without one refuses
-  ## - runs after the reserved-word rename, relocated declaration names match
-  ##   the renamed body references
   hoistConstMemLocals(m)
 
 
@@ -77,9 +66,7 @@ proc openclHoistProgramScopeConstants(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 func cirSizeBytes(t: CirType): int =
-  ## Byte size of a CIRv2 type under the C layout:
-  ## scalars from their bits, arrays elementwise, structs fieldwise,
-  ## pointers one machine word.
+  ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
   case t.kind
   of ctInt, ctUint, ctFloat:
     result = if t.bits > 0: t.bits div 8 else: 8
@@ -103,12 +90,9 @@ func isLargeStruct(t: CirType): bool =
   t != nil and t.kind == ctStruct and cirSizeBytes(t) >= 24
 
 proc wrapParamReads(e: CirExpr, oldName: string, ptrSym: CirExpr) =
-  ## Rewrites every read of the by-value param `oldName` into a deref of the hidden pointer `ptrSym`, in place over the expression tree.
   ## Expressions are refs, so the rewrite applies to the node every sharer sees.
-  ##
-  ## The rewritten read splices to `deref(ptrSym)` and the walk descends
-  ## into the spliced node's children: `ptrSym` names the hidden pointer
-  ## and never matches `oldName`.
+  ## The walk descends into the spliced read's children, `ptrSym` never matches
+  ## `oldName`, so the rewrite terminates.
   if e.isNil:
     return
   proc rewrite(e: CirExpr) =
@@ -121,14 +105,8 @@ proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int) =
   ## Wraps a call argument in an address when the formal travels as a hidden
   ## pointer and the argument is still the struct value.
   ##
-  ## A non-lvalue argument (a call result, a constructor) copies first into
-  ## a fresh local: `&` of a temporary is invalid C, so the copy provides the lvalue.
-  ##
-  ## - the hoisted declarations run in front of the statement
-  ## - nested calls hoist first, every reference reads a computed temp
-  ##
-  ## The descent goes through `getExprChildren` and the wrap logic reads
-  ## the children after it: a call node sees its arguments already rewritten.
+  ## A non-lvalue argument (a call result, a constructor) copies into a fresh local first, `&` of a temporary is invalid C.
+  ## Hoisted declarations insert in front of the statement, nested calls hoist first, so a call node sees its arguments already rewritten.
   if e.isNil:
     return
   for ch in getExprChildren(e):
@@ -159,7 +137,6 @@ proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int)
   ## Forward declaration: nested statement lists recurse into each other.
 
 proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int) =
-  ## Applies the call-site address wrap over one statement.
   case s.kind
   of sAsgn:
     addrWrapByrefArgs(s.rhs, pre, tmpCount)
@@ -187,8 +164,6 @@ proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int) =
     discard
 
 proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int) =
-  ## Applies the call-site address wrap over every statement of a body.
-  ## A hoisted temp declaration inserts in front of its statement.
   var i = 0
   while i < stmts.len:
     var pre: seq[CirStmt] = @[]
@@ -199,13 +174,6 @@ proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int) =
     i.inc
 
 proc openclLowerByrefParams(m: CirModule): string =
-  ## Rewrites a large struct (24 bytes or more) passed by value to a device
-  ## function into a hidden thread pointer.
-  ##
-  ## - the formal re-types to the hidden pointer and the body's reads deref
-  ## - call sites pass the address
-  ## - kernels keep their ABI
-  ##
   ## The callee's declaration and every call site share one proc-type object,
   ## a single rewrite updates both sides.
   for fn in m.procs:
@@ -236,12 +204,10 @@ proc openclLowerByrefParams(m: CirModule): string =
   return ""
 
 proc wrapParamReadsProc(stmts: seq[CirStmt], oldName: string, ptrSym: CirExpr) =
-  ## Applies the param-read deref wrap over every statement of a body.
   stmts.walkStmts(nil, proc(e: CirExpr) =
     e.wrapParamReads(oldName, ptrSym))
 
 proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
-  ## Points a call-site callee symbol's proc type at the rewritten formals.
   ## Symbols name no children, one visit per node covers the tree.
   if e.isNil:
     return

@@ -89,29 +89,36 @@ type HlslFlavor* = enum
 type
   PrintCtx = object
     fnName: string
-    ## First refusal of the walk, "" while clean.
+    ## Name of the proc in flight, the refusal messages name it.
     err: string
+    ## First refusal of the walk, "" while clean.
     indent: int
     policy: KindRow
     ## Kind row of the target. The shared walk reads its policy fields.
     lit: LitRow
     ## Literal token forms of the target. The shared literal head reads them.
     row: ScalarRow
-    ## Scalar row of the target. The narrow integer cast names its type from it..
+    ## Scalar row of the target. The narrow integer cast names its type from it.
     isKernel: bool
-    ## Scalar kernel parameters, their reads go through `push.<name>`.
+    ## True while printing the entry kernel, coordinate builtins and push-constant reads bind the entry only.
     pushParams: HashSet[string]
-    ## Buffer parameters of the proc in flight, bare use refuses.
+    ## Push-constant parameters of the proc in flight, reads print through
+    ## `push.<name>`, an assignment refuses.
     bufferParams: HashSet[string]
-    ## Buffer parameters classified read-write by the module write-scan.
+    ## Buffer parameters of the proc in flight, a bare use refuses (fvD3D12),
+    ## the fvVulkan route reads the u64 device address.
     rwBuffers: HashSet[string]
+    ## Buffer parameters classified read-write by the module write-scan,
+    ## an assignment through a read-only one refuses.
     flavor: HlslFlavor
-    ## Buffer parameters of the proc in flight by name, to their `aptr` type:
-    ## the fvVulkan access emitter reads the element type per access.
+    ## Resource-binding flavor in flight.
     addressParams: Table[string, CirType]
-    ## Coordinate semantics the kernel body reads, main takes only those.
+    ## Buffer parameters of the proc in flight by name to their `aptr` type:
+    ## the fvVulkan access emitter reads the element type per access.
     coordReads: set[CoordBuiltinKind]
+    ## Coordinate semantics the kernel body reads, main takes only those.
     workgroup: array[3, int]
+    ## Workgroup sizes of the entry, `threads_per_threadgroup` reads print the literal.
     procs: Table[string, CirProc]
     ## Module procs by name, by-reference call arguments read callee
     ## parameter types here.
@@ -177,7 +184,6 @@ proc emitHlslDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
     result = emitHlslScalar(ctx, t) & ' ' & ident
 
 proc emitBpName(t: CirType): string =
-  ## Typedef name of the `vk::BufferPointer` alias for one buffer element type
   case t.kind
   of ctInt: result = "BpI32"
   of ctUint: result = "BpU32"
@@ -203,8 +209,7 @@ proc bpElementStrideCheck*(elem: CirType): tuple[stride: int, err: string] =
       " the element envelope is 32-bit integers, float and double")
 
 proc bpElementStride(ctx: var PrintCtx, elem: CirType): int =
-  ## Byte stride of one buffer element on the fvVulkan route, its storage width.
-  ## The address arithmetic indexes buffers by it.
+  ## Address arithmetic indexes buffers by this stride.
   let (stride, err) = bpElementStrideCheck(elem)
   if err.len > 0:
     ctx.fail(err)
@@ -257,7 +262,6 @@ const CoordInputNames: array[CoordBuiltinKind, string] = [
 ]
 
 proc coordInputName(kind: CoordBuiltinKind): string =
-  ## Synthesized main input variable of a coordinate builtin kind.
   CoordInputNames[kind]
 
 ## Entry-input text per canonical coordinate builtin kind: the synthesized main input with its semantic.
@@ -340,7 +344,6 @@ proc emitCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string
 
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
-  ## One numeric conversion, the constructor-call form.
   return emitHlslTypeBare(ctx, e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
 
 proc printCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string =
@@ -627,8 +630,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
-  ## HLSL resource parameter of a buffer: StructuredBuffer / RWStructuredBuffer
-  ## over the element type, `rw` picks the read-write form.
   let resTy = if rw: "RWStructuredBuffer" else: "StructuredBuffer"
   result = resTy & "<" & ctx.emitHlslScalar(p.typ.pElem) & "> " & p.name
 
@@ -644,9 +645,7 @@ proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
   if fn.isKernel:
     let wg = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
     result = "[numthreads(" & $wg[0] & ", " & $wg[1] & ", " & $wg[2] & ")]\n"
-    # exportc renames a kernel entry for the host runtime lookup. Vulkan ingest reads
-    # back the entry name from the emitted `[numthreads]` line and passes it to dxc.
-    # Device functions keep the name their call sites reference, a bare kernel stays `main`.
+    # a bare kernel stays `main`, device functions keep the name their call sites reference
     let entryName = if fn.exportName.len > 0: fn.exportName else: "main"
     result &= "void " & entryName & "(" &
       emitEntryInputs(ctx.coordReads, hlslEntryInputs) & ")\n{\n"

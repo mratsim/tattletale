@@ -80,8 +80,7 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
-  ## Splices one expression node into a plain symbol reference, in place.
-  ## Expressions are refs, so the rewrite applies to the node every sharer sees.
+  ## Expressions are refs, so the splice applies to the node every sharer sees.
   e.kind = eSym
   e.name = name
   e.typ = typ
@@ -93,9 +92,7 @@ proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
   e.atomicsBuiltin = abkNone
 
 proc unwrapVarDerefsExpr(e: CirExpr, varParams: HashSet[string]) =
-  ## Rewrites one expression tree. Every deref of a `var` parameter
-  ## splices to the parameter itself, typed at the pointee the deref read.
-  ## Other derefs survive. Nested bodies recurse through the statement overload.
+  ## Every deref of a `var` parameter splices to the parameter itself at the pointee type. Other derefs survive.
   if e.isNil:
     return
   case e.kind
@@ -111,20 +108,13 @@ proc unwrapVarDerefsExpr(e: CirExpr, varParams: HashSet[string]) =
       ch.unwrapVarDerefsExpr(varParams)
 
 proc unwrapVarDerefsStmts(ss: seq[CirStmt], varParams: HashSet[string]) =
-  ## Statement-walk overload of `unwrapVarDerefsExpr`, nested bodies included.
-  ## The shared walk covers every expression position, and the deref unwrap
-  ## splices symbols in place.
   ss.walkStmts(nil, proc(e: CirExpr) =
     e.unwrapVarDerefsExpr(varParams))
 
 proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]): string =
-  ## Rewrites the call arguments of one expression tree:
-  ##
-  ## - an argument at a `var` parameter position drops its address-of wrapper
-  ## - an argument naming the enclosing proc's own `var` parameter re-types to the pointee
-  ## - anything else at a `var` position must be an lvalue
-  ##
-  ## Returns "" when clean.
+  ## Anything at a `var` parameter position that is neither an address-of
+  ## wrapper nor the enclosing proc's own `var` parameter must be an lvalue,
+  ## the rewrite refuses otherwise.
   if e.isNil:
     return ""
   if e.kind == eCall and e.callee.kind == eSym:
@@ -162,7 +152,6 @@ proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string],
   return ""
 
 proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashSet[string], procs: Table[string, CirProc]): string =
-  ## Statement-walk overload of `rewriteVarCallArgsExpr`, nested bodies included.
   for s in mitems(ss):
     case s.kind
     of sVar, sConst:
@@ -213,14 +202,7 @@ proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashS
   return ""
 
 proc qualifyVarParams(m: CirModule): string =
-  ## Lowers the Nim `var T` parameters of every proc to GLSL inout bindings:
-  ##
-  ## - each marked parameter retypes to its pointee
-  ## - its body derefs unwrap to the parameter
-  ## - its call sites pass the plain lvalue
-  ## - the printer emits the `inout` qualifier on the marked parameters
-  ##
-  ## Returns "" when clean, else the first refusal.
+  ## Marked parameters print with the `inout` qualifier.
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
     procs[fn.name] = fn
@@ -250,7 +232,6 @@ proc qualifyVarParams(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc isBindShape(e: CirExpr): bool =
-  ## Address-of binding shape: the address of a struct or array local.
   ## The pointee's name stands in for the pointer, only a composite local
   ## offers the reads that the alias resolves.
   e.kind == eAddr and e.addrOperand.kind == eSym and
@@ -262,8 +243,6 @@ proc bindPointee(e: CirExpr): string =
   e.addrOperand.name
 
 proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  ## Rewrites one expression in place for the GLSL storage model.
-  ## Returns "" when clean, else the first refusal.
   if e.isNil:
     return ""
   case e.kind
@@ -335,8 +314,6 @@ proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
     return ""
 
 proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  ## `sVar` case: a pointer local pends for its address-of binding or binds its pointee,
-  ## anything else rewrites the initializer.
   if s.declType.kind == ctPtr:
     if s.init == nil:
       ctx.pendingPtrs.incl(s.name)
@@ -350,7 +327,6 @@ proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   return rewritePointerExpr(fn, ctx, s.init)
 
 proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  ## `sAsgn` case: a pointer local binds exactly once, anything else rewrites both operands.
   if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
     if not isBindShape(s.rhs):
       return refuseAt(fn, "pointer local " & s.lhs.name &
@@ -368,14 +344,13 @@ proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
   return rewritePointerExpr(fn, ctx, s.rhs)
 
 proc explodeDropsVar(s: CirStmt, ctx: ExplodeCtx): bool =
-  ## A bound or pending pointer local drops from its list with its binding.
   s.declType.kind == ctPtr
 
 proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
-  ## A pointer-local binding drops from its list.
   s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr
 
 proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
+  # GLSL's pointer model needs only the pending and alias tables, no by-reference parameters, no callee argument checks
   ExplodeCtx()
 
 
@@ -397,9 +372,6 @@ proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirTyp
   blocks[name] = pointee
 
 proc registerTypeRefBlocks(blocks: var OrderedTable[string, CirType], t: CirType) =
-  ## Registers the buffer-reference blocks of every device pointer
-  ## reachable from the type tree, through pointer targets and array
-  ## elements and object fields, dedup by reference-block name.
   var found = blocks
   walkTypeTree(t, proc(tt: CirType) =
     if tt.kind == ctAptr:
@@ -407,10 +379,8 @@ proc registerTypeRefBlocks(blocks: var OrderedTable[string, CirType], t: CirType
   blocks = found
 
 proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr) =
-  ## Registers the buffer-reference blocks reachable from one expression:
-  ## every buffer pointer subexpression's pointee needs its block declared
+  ## Every buffer pointer subexpression's pointee needs its block declared
   ## before the module body prints, a cast target included.
-  ##
   ## Node visits run pre-order, in the printer's declaration-sequence order.
   var found = blocks
   e.walkExprs(proc(e: CirExpr) =
@@ -420,7 +390,6 @@ proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr
   blocks = found
 
 proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[CirStmt]) =
-  ## Registers the buffer-reference blocks reachable from one statement list.
   var found = blocks
   proc onDecl(s: CirStmt): bool =
     if s.declType.kind == ctAptr:
@@ -432,14 +401,6 @@ proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[Ci
   blocks = found
 
 proc glslRegisterRefBlocks(m: CirModule): string =
-  ## Registers every buffer-reference block that the printer will declare,
-  ## one entry per distinct block name in registration order:
-  ##
-  ## - every device pointer reachable from the module's type declarations,
-  ##   through pointer targets, array elements and object fields
-  ## - every proc parameter of pointer type
-  ## - every buffer pointer reachable from a proc body, a cast target included
-  ##
   ## Runs after the last transform: the walked declarations and bodies are
   ## final and the registry never invalidates the record.
   for t in m.types:
