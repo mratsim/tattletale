@@ -99,6 +99,8 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
         ctx.fail("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit floats have no WGSL type")
+  of ctBf16:
+    ctx.fail("bfloat16 has no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
     result = getVectorName(wgslVectorRule, wgslScalarRow, t)

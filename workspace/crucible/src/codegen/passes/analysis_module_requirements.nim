@@ -91,6 +91,9 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
   of ctStruct:
     for fl in t.fields:
       scanType(fl.typ, f, profile)
+  of ctBf16:
+    # no target needs a module feature for bfloat16
+    discard
   of ctVoid, ctBool, ctProc, ctSpan:
     discard
 

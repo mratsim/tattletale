@@ -40,8 +40,8 @@ func getBuiltinDistinctScalar(n: NimNode): CirType =
   ## The `{.builtin.}` marking is the type's identity: an unmarked distinct
   ## erases to its storage base and loses the float format.
   ## - `float16` resolves as the 16-bit float cell, a first-class float identity
-  ## - `bfloat16` and the fp8 formats name no type beyond raw bits, values
-  ##   travel in the storage width
+  ## - `bfloat16` resolves as the 16-bit bfloat cell, a first-class bfloat identity
+  ## - the fp8 formats have no type beyond raw bits and the storage width carries the value
   ## Nil when `n` is not one of the marked types.
   if n.kind != nnkSym or n.symKind != nskType:
     return nil
@@ -57,7 +57,7 @@ func getBuiltinDistinctScalar(n: NimNode): CirType =
     return nil
   case n.strVal
   of "float16": tFloat(16)
-  of "bfloat16": tUint(16)
+  of "bfloat16": tBf16()
   of "fp8e4m3", "fp8e5m2": tUint(8)
   else: nil
 

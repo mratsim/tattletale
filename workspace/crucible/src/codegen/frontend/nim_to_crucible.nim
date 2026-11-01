@@ -204,6 +204,9 @@ func zeroValue(t: CirType): CirExpr =
     result = intLit(0, t)
   of ctFloat:
     result = fltLit(0.0, t)
+  of ctBf16:
+    # bfloat16 literals have no target token form. The zero value is a conversion of the f32 zero.
+    result = convE(t, fltLit(0.0, tFloat(32)))
   of ctBool:
     result = falseE()
   of ctPtr, ctAptr:

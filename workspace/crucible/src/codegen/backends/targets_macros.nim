@@ -302,7 +302,7 @@ proc castRulesCtor(entries: seq[NimNode], display: string): NimNode {.compileTim
   ##
   ## - the rule's fields in schema names: `srcAny`, `srcKinds`, `srcWidths`,
   ##   `dstKinds`, `dstWidths`, `sameWidth`, kind sets over the `ctVoid`/
-  ##   `ctBool`/`ctInt`/`ctUint`/`ctFloat` names, with the every-kind
+  ##   `ctBool`/`ctInt`/`ctUint`/`ctFloat`/`ctBf16` names, with the every-kind
   ##   destination set as `dstKinds {low(CirTypeKind)..high(CirTypeKind)}`
   ## - then one bare format text or `refusal "text"`
   ## - set and text nodes splice into the generated constructor unchanged,

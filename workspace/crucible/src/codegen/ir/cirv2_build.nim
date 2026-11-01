@@ -35,6 +35,9 @@ proc tUint*(bits: int): CirType =
 proc tFloat*(bits: int): CirType =
   CirType(kind: ctFloat, bits: bits)
 
+proc tBf16*(): CirType =
+  CirType(kind: ctBf16, bits: 16)
+
 proc tVec*(n: int, elem: CirType): CirType =
   CirType(kind: ctVector, vN: n, vElem: elem)
 

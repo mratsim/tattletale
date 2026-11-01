@@ -47,7 +47,7 @@ proc scalarByteSize*(t: CirType, boolWidth: static int = 1): int =
   ## A bool is `boolWidth` wide: std430 packs a bool into 1 byte and the WGSL launch ABI into 4.
   case t.kind
   of ctBool: boolWidth
-  of ctInt, ctUint, ctFloat: t.bits div 8
+  of ctInt, ctUint, ctFloat, ctBf16: t.bits div 8
   else: 0
 
 proc emitVectorComponent*(name: string): string =
@@ -74,7 +74,7 @@ proc getScalarName*(row: ScalarRow, t: CirType): string =
     for c in row.cells:
       if c.kind == t.kind:
         return c.spelling
-  of ctInt, ctUint, ctFloat:
+  of ctInt, ctUint, ctFloat, ctBf16:
     for c in row.cells:
       if c.kind == t.kind and c.width == t.bits:
         return c.spelling
@@ -124,7 +124,7 @@ proc getLeafName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
   ## Returns "" for pointers, arrays, proc and span types. The caller composes
   ## the name or refuses, per its own policy.
   case t.kind
-  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
+  of ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16:
     result = getScalarName(row, t)
   of ctVector:
     result = getVectorName(rule, row, t)
@@ -155,7 +155,7 @@ proc getUnnamedScalarCell*(row: ScalarRow, t: CirType): CirType =
   var leaf = t
   while leaf.kind in {ctPtr, ctAptr, ctArray}:
     leaf = if leaf.kind == ctArray: leaf.aElem else: leaf.pElem
-  if leaf.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat} and
+  if leaf.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16} and
       getScalarName(row, leaf).len == 0:
     return leaf
   return nil

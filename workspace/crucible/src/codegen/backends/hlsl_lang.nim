@@ -151,6 +151,8 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
         ctx.fail("uint" & $t.bits & " has no HLSL type name")
       else:
         ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
+  of ctBf16:
+    ctx.fail("bfloat16 has no HLSL type name, bfloat16 types are outside the HLSL subset")
   of ctVector:
     let elem = emitHlslScalar(ctx, t.vElem)
     result = getVectorName(hlslVectorRule, hlslScalarRow, t)
@@ -692,6 +694,9 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
       return
     of ctInt, ctUint, ctFloat, ctBool, ctVoid, ctVector, ctStruct, ctSpan:
       # spans split to pointer + length in the shared lowering, none reaches the printer
+      if fn.isKernel:
+        pushParams.incl(p.name)
+    of ctBf16:
       if fn.isKernel:
         pushParams.incl(p.name)
     of ctProc:

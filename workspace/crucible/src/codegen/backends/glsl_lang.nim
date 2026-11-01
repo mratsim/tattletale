@@ -113,6 +113,11 @@ proc emitGlslParam(t: CirType, name: string, varParam: bool): string =
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## GLSL declaration text of one struct member: a buffer pointer member is
   ## the reference block handle, an array stacks the dimension behind the name.
+  block:
+    let missing = getUnnamedScalarCell(glslScalarRow, f.typ)
+    if missing != nil:
+      ctx.fail(scalarRefusal(printerTarget, glslScalarRow, missing))
+      return ""
   if f.typ.kind == ctArray:
     return emitGlslScalar(f.typ.aElem) & ' ' & f.name & "[" & $f.typ.aN & "]"
   if f.typ.kind in {ctAptr, ctPtr}:
@@ -343,6 +348,11 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   if s.space == caDevice:
     ctx.fail("local " & s.name & " in device space, GLSL locals are private")
     return ""
+  block:
+    let missing = getUnnamedScalarCell(glslScalarRow, s.declType)
+    if missing != nil:
+      ctx.fail(scalarRefusal(printerTarget, glslScalarRow, missing))
+      return ""
   var decl: string
   if s.declType.kind == ctAptr:
     # a buffer pointer local is the reference block handle
@@ -359,6 +369,11 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
 
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
   ## One local constant declaration, the `const` form.
+  block:
+    let missing = getUnnamedScalarCell(glslScalarRow, s.declType)
+    if missing != nil:
+      ctx.fail(scalarRefusal(printerTarget, glslScalarRow, missing))
+      return ""
   let pad = spaces(ctx.indent * 2)
   result = pad & "const " & emitTypeBare(s.declType) & ' ' &
     s.name & " = " & ctx.printExpr(s.init) & ";"
@@ -579,6 +594,11 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
   var pushDecls: seq[string]
   for kernel in kernels:
     for p in kernel.params:
+      block:
+        let missing = getUnnamedScalarCell(glslScalarRow, p.typ)
+        if missing != nil:
+          ctx.fail(scalarRefusal(printerTarget, glslScalarRow, missing))
+          return ""
       var decl: string
       case p.typ.kind
       of ctAptr:
