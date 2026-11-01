@@ -76,45 +76,17 @@ const MslConversionBuiltinNames: Table[string, string] = {
   "asU16": "$1",
 }.toTable()
 
+const mslScalarTokens = ScalarTokens(
+  void: "void", bool: "bool",
+  i8: "char", i16: "short", i32: "int", i64: "long",
+  u8: "uchar", u16: "ushort", u32: "uint", u64: "ulong",
+  f16: "half", f32: "float")
+
 proc emitMslScalar(t: CirType): string =
   ## MSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    result = "bool"
-  of ctInt:
-    case t.bits
-    of 8:
-      result = "char"
-    of 16:
-      result = "short"
-    of 32:
-      result = "int"
-    of 64:
-      result = "long"
-    else:
-      result = ""
-  of ctUint:
-    case t.bits
-    of 8:
-      result = "uchar"
-    of 16:
-      result = "ushort"
-    of 32:
-      result = "uint"
-    of 64:
-      result = "ulong"
-    else:
-      result = ""
-  of ctFloat:
-    case t.bits
-    of 16:
-      result = "half"
-    of 32:
-      result = "float"
-    else:
-      result = ""
+  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
+    result = emitScalarToken(mslScalarTokens, t)
   of ctPtr, ctAptr:
     result = emitMslScalar(t.pElem) & "*"
   of ctStruct:
@@ -169,39 +141,19 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
 # `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const mslFloatTokens = FloatLitTokens(
-  inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
-  inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
-  inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN")
+const mslLitTokens = LitTokens(
+  scalar: mslScalarTokens,
+  int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
+  f16Suffix: "h", f32Suffix: "f",
+  nilToken: "nullptr",
+  nonFinite: FloatLitTokens(
+    inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
+    inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
+    inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN"))
 
 proc emitMslLit(e: CirExpr): string =
   ## MSL token of a literal, typed by its literal type.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      case e.litType.bits
-      of 64: result = $e.value & "ULL"
-      of 32: result = $e.value & "U"
-      else: result = "(" & emitMslScalar(e.litType) & ")" & $e.value
-    of ctInt:
-      case e.litType.bits
-      of 64: result = $e.value & "LL"
-      of 32: result = $e.value
-      else: result = "(" & emitMslScalar(e.litType) & ")" & $e.value
-    else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, mslFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 16: result = $e.fValue & "h"
-      of 32: result = $e.fValue & "f"
-      else: result = $e.fValue
-  of eNil: result = "nullptr"
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<msl: not a literal>"
+  emitLiteral(e, mslLitTokens)
 
 
 proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
@@ -389,6 +341,11 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
+const mslLoopStyle = LoopStyle(
+  unrollDirective: "#pragma clang loop unroll(full)",
+  infiniteHead: "for (;;) {\n",
+  braceSameLine: true)
+
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
   ## Forward declaration, nested statement lists recurse into it.
 
@@ -439,7 +396,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
       ctx.indent.dec
       result &= " else {\n" & elseTxt & '\n' & pad & '}'
   of sLoop:
-    # loops print through printStmts
+    # loops print through printStmtList
     result = ""
   of sScope:
     result = pad & "{\n"
@@ -489,29 +446,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list.
-  var lines: seq[string]
-  for s in stmts:
-    var txt: string
-    if s.kind == sLoop:
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        spaces(ctx.indent * 2) & "#pragma clang loop unroll(full)\n"
-      else:
-        ""
-      let head = if s.loopCond != nil:
-        "while (" & ctx.printExpr(s.loopCond) & ") {\n"
-      else:
-        "for (;;) {\n"
-      txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
-        spaces(ctx.indent * 2) & '}'
-    else:
-      txt = ctx.printStmt(s)
-    if txt.len > 0:
-      lines.add txt
-  return lines.join("\n")
+  ## Prints one statement list, the shared walk with the MSL loop style.
+  printStmtList(ctx, stmts, mslLoopStyle)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules

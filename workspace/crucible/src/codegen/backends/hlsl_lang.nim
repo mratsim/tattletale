@@ -119,37 +119,30 @@ const FpConversionBuiltins = [
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
+const hlslScalarTokens = ScalarTokens(
+  void: "void", bool: "bool",
+  i32: "int", u32: "uint",
+  f32: "float", f64: "double")
+
 proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    result = "bool"
-  of ctInt:
-    case t.bits
-    of 32:
-      result = "int"
-    else:
-      ctx.fail("int" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
-        " are parse errors and int64_t is a parse error in the HLSL frontend," &
-        " 64-bit integers are rejected")
-  of ctUint:
-    case t.bits
-    of 32:
-      result = "uint"
-    else:
-      ctx.fail("uint" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
-        " are parse errors and uint64_t pulls the SPIR-V Int64 capability," &
-        " 64-bit integers are rejected")
-  of ctFloat:
-    case t.bits
-    of 32:
-      result = "float"
-    of 64:
-      result = "double"
-    else:
-      ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
+  of ctVoid, ctBool:
+    result = emitScalarToken(hlslScalarTokens, t)
+  of ctInt, ctUint, ctFloat:
+    result = emitScalarToken(hlslScalarTokens, t)
+    if result.len == 0:
+      case t.kind
+      of ctInt:
+        ctx.fail("int" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
+          " are parse errors and int64_t is a parse error in the HLSL frontend," &
+          " 64-bit integers are rejected")
+      of ctUint:
+        ctx.fail("uint" & $t.bits & " has no HLSL type name: the 8/16-bit forms" &
+          " are parse errors and uint64_t pulls the SPIR-V Int64 capability," &
+          " 64-bit integers are rejected")
+      else:
+        ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
   of ctVector:
     let elem = emitHlslScalar(ctx, t.vElem)
     let base = case elem
@@ -288,34 +281,20 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `asfloat` (32 bit) and `asdouble` (64 bit).
-const hlslFloatTokens = FloatLitTokens(
-  inf16: "asfloat(0x7f800000)", negInf16: "asfloat(0xff800000)", nan16: "asfloat(0x7fc00000)",
-  inf32: "asfloat(0x7f800000)", negInf32: "asfloat(0xff800000)", nan32: "asfloat(0x7fc00000)",
-  inf64: "asdouble(0u, 0x7ff00000u)",
-  negInf64: "asdouble(0u, 0xfff00000u)",
-  nan64: "asdouble(0u, 0x7ff80000u)")
+const hlslLitTokens = LitTokens(
+  int: IntLitTokens(u32Suffix: "u", u64Suffix: "u"),
+  f16Suffix: "f", f32Suffix: "f", f64Suffix: "l",
+  nonFinite: FloatLitTokens(
+    inf16: "asfloat(0x7f800000)", negInf16: "asfloat(0xff800000)", nan16: "asfloat(0x7fc00000)",
+    inf32: "asfloat(0x7f800000)", negInf32: "asfloat(0xff800000)", nan32: "asfloat(0x7fc00000)",
+    inf64: "asdouble(0u, 0x7ff00000u)",
+    negInf64: "asdouble(0u, 0xfff00000u)",
+    nan64: "asdouble(0u, 0x7ff80000u)"))
 
 proc emitHlslLit(e: CirExpr): string =
   ## HLSL token of a literal, typed by its literal type: without the suffix
   ## the HLSL frontend changes width or signedness.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      result = $e.value & "u"
-    else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, hlslFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 64:
-        result = $e.fValue & "l"
-      else:
-        result = $e.fValue & "f"
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<hlsl: not a literal>"
+  emitLiteral(e, hlslLitTokens)
 
 proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string
   ## Forward declaration, nested constructions flatten recursively.
@@ -723,27 +702,21 @@ proc isSelectArm(s: CirStmt, name: string): bool =
   ## matching one variant of a hoisted if-expression.
   s.kind == sAsgn and s.lhs.kind == eSym and s.lhs.name == name and s.rhs != nil
 
+const hlslLoopStyle = LoopStyle(
+  unrollDirective: "[unroll]",
+  infiniteHead: "for (;;)\n",
+  braceSameLine: false)
+
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list.
+  ## Prints one statement list, the select re-fusion peephole walks
+  ## alongside the shared statement dispatch.
   var lines: seq[string]
   var i = 0
   while i < stmts.len:
     let s = stmts[i]
     var txt: string
     if s.kind == sLoop:
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        spaces(ctx.indent * 2) & "[unroll]\n"
-      else:
-        ""
-      let head = if s.loopCond != nil:
-        "while (" & ctx.printExpr(s.loopCond) & ")\n"
-      else:
-        "for (;;)\n"
-      txt = directive & spaces(ctx.indent * 2) & head &
-        spaces(ctx.indent * 2) & "{\n" & bodyTxt & "\n" & spaces(ctx.indent * 2) & '}'
+      txt = printLoopText(ctx, s, hlslLoopStyle)
       i.inc
     elif s.kind == sVar and s.space == caThread and s.init == nil and
         s.declType.kind in {ctBool, ctInt, ctUint, ctFloat} and

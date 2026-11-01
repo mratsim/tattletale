@@ -47,47 +47,17 @@ const printerTarget = "glsl"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
+const glslScalarTokens = ScalarTokens(
+  void: "void", bool: "bool",
+  i8: "int8_t", i16: "int16_t", i32: "int", i64: "int64_t",
+  u8: "uint8_t", u16: "uint16_t", u32: "uint", u64: "uint64_t",
+  f16: "float16_t", f32: "float", f64: "double")
+
 proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    result = "bool"
-  of ctInt:
-    case t.bits
-    of 8:
-      result = "int8_t"
-    of 16:
-      result = "int16_t"
-    of 32:
-      result = "int"
-    of 64:
-      result = "int64_t"
-    else:
-      result = ""
-  of ctUint:
-    case t.bits
-    of 8:
-      result = "uint8_t"
-    of 16:
-      result = "uint16_t"
-    of 32:
-      result = "uint"
-    of 64:
-      result = "uint64_t"
-    else:
-      result = ""
-  of ctFloat:
-    case t.bits
-    of 16:
-      result = "float16_t"
-    of 32:
-      result = "float"
-    of 64:
-      result = "double"
-    else:
-      result = ""
+  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
+    result = emitScalarToken(glslScalarTokens, t)
   of ctVector:
     let elem = emitGlslScalar(t.vElem)
     let prefix = case elem
@@ -222,56 +192,32 @@ proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string
 
 # GLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `uintBitsToFloat` (32 bit) and the width conversion at the use site.
-const glslFloatTokens = FloatLitTokens(
-  inf16: "float16_t(uintBitsToFloat(0x7f800000u))",
-  negInf16: "float16_t(uintBitsToFloat(0xff800000u))",
-  nan16: "float16_t(uintBitsToFloat(0x7fc00000u))",
-  inf32: "uintBitsToFloat(0x7f800000u)",
-  negInf32: "uintBitsToFloat(0xff800000u)",
-  nan32: "uintBitsToFloat(0x7fc00000u)",
-  inf64: "double(uintBitsToFloat(0x7f800000u))",
-  negInf64: "double(uintBitsToFloat(0xff800000u))",
-  nan64: "double(uintBitsToFloat(0x7fc00000u))")
+const glslLitTokens = LitTokens(
+  scalar: glslScalarTokens,
+  int: IntLitTokens(
+    u64Prefix: "uint64_t(", u64Suffix: ")",
+    u32Suffix: "U",
+    i64Prefix: "int64_t(", i64Suffix: ")",
+    narrowCast: true),
+  f16Prefix: "float16_t(", f16Suffix: ")",
+  f32Suffix: "f",
+  f64Prefix: "double(", f64Suffix: ")",
+  nonFinite: FloatLitTokens(
+    inf16: "float16_t(uintBitsToFloat(0x7f800000u))",
+    negInf16: "float16_t(uintBitsToFloat(0xff800000u))",
+    nan16: "float16_t(uintBitsToFloat(0x7fc00000u))",
+    inf32: "uintBitsToFloat(0x7f800000u)",
+    negInf32: "uintBitsToFloat(0xff800000u)",
+    nan32: "uintBitsToFloat(0x7fc00000u)",
+    inf64: "double(uintBitsToFloat(0x7f800000u))",
+    negInf64: "double(uintBitsToFloat(0xff800000u))",
+    nan64: "double(uintBitsToFloat(0x7fc00000u))"))
 
 proc emitGlslLit(e: CirExpr): string =
   ## GLSL token of a literal, typed by its literal type.
   ## Wide integer literals print as constructor calls (`int64_t(5)`),
   ## the `LL` suffix is rejected by glslang.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      case e.litType.bits
-      of 64: result = "uint64_t(" & $e.value & ")"
-      of 32: result = $e.value & "U"
-      else: result = "(" & emitGlslScalar(e.litType) & ")" & $e.value
-    of ctInt:
-      case e.litType.bits
-      of 64: result = "int64_t(" & $e.value & ")"
-      of 32: result = $e.value
-      else: result = "(" & emitGlslScalar(e.litType) & ")" & $e.value
-    else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, glslFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 16: result = "float16_t(" & $e.fValue & ")"
-      of 32: result = $e.fValue & "f"
-      of 64: result = "double(" & $e.fValue & ")"
-      else: result = $e.fValue
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<glsl: not a literal>"
-
-proc emitVectorComponent(name: string): string =
-  ## GLSL component letter of a CIRv2 vector component name (`F0`..`F3`).
-  case name
-  of "F0": "x"
-  of "F1": "y"
-  of "F2": "z"
-  of "F3": "w"
-  else: ""
+  emitLiteral(e, glslLitTokens)
 
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   if ctx.failing():
@@ -482,6 +428,11 @@ proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
     ctx.printExpr(args[0])
   return "atomicAdd(" & addrTxt & ", " & ctx.printExpr(args[1]) & ")"
 
+const glslLoopStyle = LoopStyle(
+  unrollDirective: "[[unroll]]",
+  infiniteHead: "for (;;) {\n",
+  braceSameLine: true)
+
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
   ## Forward declaration, nested statement lists recurse into it.
 
@@ -541,7 +492,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
       ctx.indent.dec
       result &= " else {\n" & elseTxt & '\n' & pad & '}'
   of sLoop:
-    # loops print through printStmts
+    # loops print through printStmtList
     result = ""
   of sScope:
     result = pad & "{\n"
@@ -595,29 +546,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
     result = ""
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list.
-  var lines: seq[string]
-  for s in stmts:
-    var txt: string
-    if s.kind == sLoop:
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        spaces(ctx.indent * 2) & "[[unroll]]\n"
-      else:
-        ""
-      let head = if s.loopCond != nil:
-        "while (" & ctx.printExpr(s.loopCond) & ") {\n"
-      else:
-        "for (;;) {\n"
-      txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
-        spaces(ctx.indent * 2) & '}'
-    else:
-      txt = ctx.printStmt(s)
-    if txt.len > 0:
-      lines.add txt
-  return lines.join("\n")
+  ## Prints one statement list, the shared walk with the GLSL loop style.
+  printStmtList(ctx, stmts, glslLoopStyle)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules

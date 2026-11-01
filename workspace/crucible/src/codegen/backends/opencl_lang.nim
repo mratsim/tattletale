@@ -46,48 +46,18 @@ const printerTarget = "opencl"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
+# OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
+const openclScalarTokens = ScalarTokens(
+  void: "void", bool: "int",
+  i8: "char", i16: "short", i32: "int", i64: "long",
+  u8: "uchar", u16: "ushort", u32: "uint", u64: "ulong",
+  f16: "half", f32: "float", f64: "double")
+
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    # OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
-    result = "int"
-  of ctInt:
-    case t.bits
-    of 8:
-      result = "char"
-    of 16:
-      result = "short"
-    of 32:
-      result = "int"
-    of 64:
-      result = "long"
-    else:
-      result = ""
-  of ctUint:
-    case t.bits
-    of 8:
-      result = "uchar"
-    of 16:
-      result = "ushort"
-    of 32:
-      result = "uint"
-    of 64:
-      result = "ulong"
-    else:
-      result = ""
-  of ctFloat:
-    case t.bits
-    of 16:
-      result = "half"
-    of 32:
-      result = "float"
-    of 64:
-      result = "double"
-    else:
-      result = ""
+  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
+    result = emitScalarToken(openclScalarTokens, t)
   of ctVector:
     let elem = emitOpenclScalar(t.vElem)
     if elem.len > 0:
@@ -189,48 +159,26 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # OpenCL C defines `INFINITY` and `NAN` as float-typed constants.
 # A C cast forms the wider widths.
-const openclFloatTokens = FloatLitTokens(
-  inf16: "(half)INFINITY", negInf16: "(half)-INFINITY", nan16: "(half)NAN",
-  inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
-  inf64: "((double)INFINITY)", negInf64: "((double)-INFINITY)", nan64: "((double)NAN)")
+const openclLitTokens = LitTokens(
+  scalar: openclScalarTokens,
+  int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
+  f16Prefix: "(half)", f32Suffix: "f",
+  nilToken: "0",
+  nonFinite: FloatLitTokens(
+    inf16: "(half)INFINITY", negInf16: "(half)-INFINITY", nan16: "(half)NAN",
+    inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
+    inf64: "((double)INFINITY)", negInf64: "((double)-INFINITY)", nan64: "((double)NAN)"))
 
 proc emitOpenclLit(e: CirExpr): string =
   ## OpenCL C token of a literal, typed by its literal type.
   ## C suffixes mark the 32-bit and 64-bit widths, a cast forms the narrow widths.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      case e.litType.bits
-      of 64: result = $e.value & "ULL"
-      of 32: result = $e.value & "U"
-      else: result = "(" & emitOpenclScalar(e.litType) & ")" & $e.value
-    of ctInt:
-      case e.litType.bits
-      of 64: result = $e.value & "LL"
-      of 32: result = $e.value
-      else: result = "(" & emitOpenclScalar(e.litType) & ")" & $e.value
-    else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, openclFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 16: result = "(half)" & $e.fValue
-      of 32: result = $e.fValue & "f"
-      else: result = $e.fValue
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<opencl: not a literal>"
+  emitLiteral(e, openclLitTokens)
 
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   if ctx.failing():
     return ""
   case e.kind
-  of eNil:
-    # a null pointer prints as the plain 0, valid OpenCL C
-    return "0"
-  of eTrue, eFalse, eIntLit, eFloatLit:
+  of eNil, eTrue, eFalse, eIntLit, eFloatLit:
     return emitOpenclLit(e)
   of eSym:
     if e.coordBuiltin != cbkNone:
@@ -416,6 +364,11 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
+const openclLoopStyle = LoopStyle(
+  unrollDirective: "#pragma unroll",
+  infiniteHead: "for (;;) {\n",
+  braceSameLine: true)
+
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
   ## Forward declaration, nested statement lists recurse into it.
 
@@ -485,7 +438,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
       ctx.indent.dec
       result &= " else {\n" & elseTxt & '\n' & pad & '}'
   of sLoop:
-    # loops print through printStmts
+    # loops print through printStmtList
     result = ""
   of sScope:
     result = pad & "{\n"
@@ -534,29 +487,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
     result = ""
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list.
-  var lines: seq[string]
-  for s in stmts:
-    var txt: string
-    if s.kind == sLoop:
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        spaces(ctx.indent * 2) & "#pragma unroll\n"
-      else:
-        ""
-      let head = if s.loopCond != nil:
-        "while (" & ctx.printExpr(s.loopCond) & ") {\n"
-      else:
-        "for (;;) {\n"
-      txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
-        spaces(ctx.indent * 2) & '}'
-    else:
-      txt = ctx.printStmt(s)
-    if txt.len > 0:
-      lines.add txt
-  return lines.join("\n")
+  ## Prints one statement list, the shared walk with the OpenCL C loop style.
+  printStmtList(ctx, stmts, openclLoopStyle)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules

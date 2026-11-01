@@ -13,11 +13,15 @@
 ## | codegenModule                   | `(artifact, err)` to entry-point-result conversion                             |
 ## | roundUpMultiple, scalarByteSize | shared layout arithmetic over CIRv2 types                                      |
 ## | emitVectorComponent             | vector component letters (`F0`..`F3` to `x`..`w`)                              |
+## | ScalarTokens, emitScalarToken   | scalar type names per target table, one walker over the leaf kinds             |
+## | LitTokens, emitLiteral          | integer/float/nil literal token spellings per target table                     |
+## | LoopStyle, printLoopText        | loop text of one target: unroll directive, head, brace style                   |
+## | printStmtList                   | statement-list walk: sLoop through `printLoopText`, others through `printStmt` |
 ## | nonFiniteFloatLit               | non-finite float literal token, classified against the printer's token table   |
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
 
-import std/[macros, math]
+import std/[macros, math, strutils]
 import ../ir/cirv2_lang
 import ../ir/ast_datatypes
 
@@ -65,6 +69,54 @@ proc emitVectorComponent*(name: string): string =
   else: ""
 
 type
+  ScalarTokens* = object
+    ## Scalar type names of one printer target, by type kind and width.
+    ##
+    ## Widths name different C types on different targets: `long` is
+    ## 64-bit on LP64 targets and 32-bit on LLP64 hosts.
+    ## Plain `char` takes its signedness from the host ABI.
+    ##
+    ## Each target defines its own table. A "" field means the type
+    ## is refused by the caller.
+    void*, bool*: string
+    i8*, i16*, i32*, i64*: string
+    u8*, u16*, u32*, u64*: string
+    f16*, f32*, f64*: string
+
+proc emitScalarToken*(tok: ScalarTokens, t: CirType): string =
+  ## Scalar type name of a leaf type from the target table `tok`.
+  ##
+  ## Returns "" when the kind is not a leaf or the width has no name:
+  ## the caller composes the name or refuses, per its own policy.
+  ##
+  ##   of ctVoid, ctBool, ctInt, ctUint, ctFloat:
+  ##     result = emitScalarToken(targetScalarTokens, t)
+  case t.kind
+  of ctVoid: tok.void
+  of ctBool: tok.bool
+  of ctInt:
+    case t.bits
+    of 8: tok.i8
+    of 16: tok.i16
+    of 32: tok.i32
+    of 64: tok.i64
+    else: ""
+  of ctUint:
+    case t.bits
+    of 8: tok.u8
+    of 16: tok.u16
+    of 32: tok.u32
+    of 64: tok.u64
+    else: ""
+  of ctFloat:
+    case t.bits
+    of 16: tok.f16
+    of 32: tok.f32
+    of 64: tok.f64
+    else: ""
+  else: ""
+
+type
   FloatLitTokens* = object
     ## Non-finite float literal tokens for one printer target:
     ##
@@ -75,6 +127,36 @@ type
     inf16*, negInf16*, nan16*: string
     inf32*, negInf32*, nan32*: string
     inf64*, negInf64*, nan64*: string
+
+  IntLitTokens* = object
+    ## Integer literal token chosen by signedness and width:
+    ## `prefix & $value & suffix`.
+    ##
+    ## - 64-bit widths take `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
+    ## - 32-bit unsigned takes `u32Suffix`, 32-bit signed prints bare
+    ## - narrow (8/16-bit) widths print bare or, per `narrowCast`, as a cast
+    ##   to the scalar type name from `LitTokens.scalar`
+    u64Prefix*, u64Suffix*, u32Suffix*: string
+    i64Prefix*, i64Suffix*: string
+    narrowCast*: bool
+
+  LitTokens* = object
+    ## Literal token table of one printer target:
+    ##
+    ## - `int`: integer token fields by signedness and width
+    ## - `f16Prefix`/`f16Suffix`, `f32Suffix`, `f64Prefix`/`f64Suffix`:
+    ##   finite float forms around the numeric text
+    ## - `nilToken`: null pointer token, "" when the target refuses nil
+    ##   before the literal printer sees it
+    ## - `nonFinite` and `scalar`: non-finite float tokens and the scalar
+    ##   type names feeding the narrow integer cast, see `nonFiniteFloatLit`
+    int*: IntLitTokens
+    f16Prefix*, f16Suffix*: string
+    f32Suffix*: string
+    f64Prefix*, f64Suffix*: string
+    nilToken*: string
+    nonFinite*: FloatLitTokens
+    scalar*: ScalarTokens
 
 proc nonFiniteFloatLit*(e: CirExpr, tok: FloatLitTokens): string =
   ## Emission token of a non-finite float literal.
@@ -105,6 +187,103 @@ proc nonFiniteFloatLit*(e: CirExpr, tok: FloatLitTokens): string =
     else: result = tok.nan64
   else:
     result = ""
+
+template emitLiteral*(e: CirExpr, tok: LitTokens): string =
+  ## Returns the literal token of `e`, chosen from the target table `tok`
+  ## according to the literal type of `e`.
+  ##
+  ## - a width the table does not name prints the plain numeric text
+  ## - a non-finite float takes its bit-pattern token from `tok.nonFinite`
+  ## - a literal kind outside the table prints `<printerTarget: not a literal>`
+  mixin printerTarget
+  block:
+    var lit: string
+    case e.kind
+    of eIntLit:
+      if e.litType.bits notin {32, 64} and tok.int.narrowCast:
+        lit = "(" & emitScalarToken(tok.scalar, e.litType) & ")" & $e.value
+      else:
+        case e.litType.kind
+        of ctUint:
+          case e.litType.bits
+          of 64: lit = tok.int.u64Prefix & $e.value & tok.int.u64Suffix
+          of 32: lit = $e.value & tok.int.u32Suffix
+          else: lit = $e.value
+        else:
+          case e.litType.bits
+          of 64: lit = tok.int.i64Prefix & $e.value & tok.int.i64Suffix
+          else: lit = $e.value
+    of eFloatLit:
+      lit = nonFiniteFloatLit(e, tok.nonFinite)
+      if lit.len == 0:
+        case e.fLitType.bits
+        of 16: lit = tok.f16Prefix & $e.fValue & tok.f16Suffix
+        of 32: lit = $e.fValue & tok.f32Suffix
+        else: lit = tok.f64Prefix & $e.fValue & tok.f64Suffix
+    of eNil:
+      lit = tok.nilToken
+      if lit.len == 0:
+        lit = "<" & printerTarget & ": not a literal>"
+    of eTrue: lit = "true"
+    of eFalse: lit = "false"
+    else:
+      lit = "<" & printerTarget & ": not a literal>"
+    lit
+
+type
+  LoopStyle* = object
+    ## Loop text of one printer target:
+    ##
+    ## - `unrollDirective`: `{.unroll.}` directive text, printed before
+    ##   the loop at the loop indentation, "" prints no directive
+    ## - `infiniteHead`: head of a condition-less loop, with its open brace
+    ##   (`for (;;) {\n`, `loop {\n`)
+    ## - `braceSameLine`: the open brace sits on the head line, otherwise it
+    ##   prints on its own line under the head (HLSL)
+    unrollDirective*, infiniteHead*: string
+    braceSameLine*: bool
+
+proc printLoopText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
+  ## Returns the text of one `sLoop` statement: the unroll directive,
+  ## then the loop head with its indented body.
+  ##
+  ## The body recurses through `ctx.printStmts`, the head condition
+  ## prints through `ctx.printExpr`.
+  mixin printStmts, printExpr
+  ctx.indent.inc
+  let bodyTxt = ctx.printStmts(s.loopBody)
+  ctx.indent.dec
+  let pad = spaces(ctx.indent * 2)
+  let directive = if s.unroll and style.unrollDirective.len > 0:
+    pad & style.unrollDirective & "\n"
+  else:
+    ""
+  let head = if s.loopCond != nil:
+    if style.braceSameLine:
+      "while (" & ctx.printExpr(s.loopCond) & ") {\n"
+    else:
+      "while (" & ctx.printExpr(s.loopCond) & ")\n"
+  else:
+    style.infiniteHead
+  result = directive & pad & head
+  if not style.braceSameLine:
+    result &= pad & "{\n"
+  result &= bodyTxt & "\n" & pad & '}'
+
+proc printStmtList*(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string =
+  ## Prints one statement list, one line per printed statement:
+  ##
+  ## - `sLoop`: `printLoopText` with the target's `style`
+  ## - every other statement: `ctx.printStmt`, an empty text drops out
+  ## - printed lines join with a newline separator
+  mixin printStmt
+  var lines: seq[string]
+  for s in stmts:
+    let txt = if s.kind == sLoop: printLoopText(ctx, s, style)
+              else: ctx.printStmt(s)
+    if txt.len > 0:
+      lines.add txt
+  return lines.join("\n")
 
 proc codegenModule*[R](printed: (R, string)): R =
   ## Converts a printer result tuple into the `backends_api` entry-point return value.

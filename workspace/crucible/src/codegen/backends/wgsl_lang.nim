@@ -55,42 +55,22 @@ const printerTarget = "wgsl"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
+const wgslScalarTokens = ScalarTokens(
+  void: "void", bool: "bool",
+  i32: "i32", i64: "i64",
+  u32: "u32", u64: "u64",
+  f16: "f16", f32: "f32", f64: "f64")
+
 proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## WGSL name of a non-array leaf type, "" when the caller composes the name.
   ## A struct name registers the struct for reference-driven emission.
   case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    result = "bool"
-  of ctInt:
-    case t.bits
-    of 32:
-      result = "i32"
-    of 64:
-      result = "i64"
-    else:
+  of ctVoid, ctBool, ctFloat:
+    result = emitScalarToken(wgslScalarTokens, t)
+  of ctInt, ctUint:
+    result = emitScalarToken(wgslScalarTokens, t)
+    if result.len == 0:
       ctx.fail($t.bits & "-bit integers have no WGSL type, only 32 and 64")
-      result = ""
-  of ctUint:
-    case t.bits
-    of 32:
-      result = "u32"
-    of 64:
-      result = "u64"
-    else:
-      ctx.fail($t.bits & "-bit integers have no WGSL type, only 32 and 64")
-      result = ""
-  of ctFloat:
-    case t.bits
-    of 16:
-      result = "f16"
-    of 32:
-      result = "f32"
-    of 64:
-      result = "f64"
-    else:
-      result = ""
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
     if elem.len > 0:
@@ -185,38 +165,23 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # WGSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `bitcast` from the unsigned integer of the same width.
-const wgslFloatTokens = FloatLitTokens(
-  inf16: "bitcast<f16>(0x7c00u)", negInf16: "bitcast<f16>(0xfc00u)", nan16: "bitcast<f16>(0x7e00u)",
-  inf32: "bitcast<f32>(0x7f800000u)",
-  negInf32: "bitcast<f32>(0xff800000u)",
-  nan32: "bitcast<f32>(0x7fc00000u)",
-  inf64: "bitcast<f64>(0x7ff0000000000000u)",
-  negInf64: "bitcast<f64>(0xfff0000000000000u)",
-  nan64: "bitcast<f64>(0x7ff8000000000000u)")
+const wgslLitTokens = LitTokens(
+  int: IntLitTokens(u32Suffix: "u"),
+  f16Suffix: "h",
+  nonFinite: FloatLitTokens(
+    inf16: "bitcast<f16>(0x7c00u)", negInf16: "bitcast<f16>(0xfc00u)", nan16: "bitcast<f16>(0x7e00u)",
+    inf32: "bitcast<f32>(0x7f800000u)",
+    negInf32: "bitcast<f32>(0xff800000u)",
+    nan32: "bitcast<f32>(0x7fc00000u)",
+    inf64: "bitcast<f64>(0x7ff0000000000000u)",
+    negInf64: "bitcast<f64>(0xfff0000000000000u)",
+    nan64: "bitcast<f64>(0x7ff8000000000000u)"))
 
 proc emitWgslLit(e: CirExpr): string =
   ## WGSL token of a literal, typed by its literal type.
   ## Bare literals are abstract in WGSL and work in any typed context,
   ## u32 gains the `u` suffix, f16 the `h` suffix.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      if e.litType.bits == 32:
-        result = $e.value & "u"
-      else:
-        result = $e.value
-    else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, wgslFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 16: result = $e.fValue & "h"
-      else: result = $e.fValue
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<wgsl: not a literal>"
+  emitLiteral(e, wgslLitTokens)
 
 proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
   if ctx.failing():
@@ -400,6 +365,12 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
+const wgslLoopStyle = LoopStyle(
+  # WGSL has no unroll directive, the drop surfaces in the artifact
+  unrollDirective: "// {.unroll.} requested but not honored on WebGPU",
+  infiniteHead: "loop {\n",
+  braceSameLine: true)
+
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
   ## Forward declaration, nested statement lists recurse into it.
 
@@ -468,7 +439,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
       ctx.indent.dec
       result &= " else {\n" & elseTxt & '\n' & pad & '}'
   of sLoop:
-    # loops print through printStmts
+    # loops print through printStmtList
     result = ""
   of sScope:
     result = pad & "{\n"
@@ -517,30 +488,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
     result = ""
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list.
-  var lines: seq[string]
-  for s in stmts:
-    var txt: string
-    if s.kind == sLoop:
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        # WGSL has no unroll directive, surface the drop in the artifact
-        spaces(ctx.indent * 2) & "// {.unroll.} requested but not honored on WebGPU\n"
-      else:
-        ""
-      let head = if s.loopCond != nil:
-        "while (" & ctx.printExpr(s.loopCond) & ") {\n"
-      else:
-        "loop {\n"
-      txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
-        spaces(ctx.indent * 2) & '}'
-    else:
-      txt = ctx.printStmt(s)
-    if txt.len > 0:
-      lines.add txt
-  return lines.join("\n")
+  ## Prints one statement list, the shared walk with the WGSL loop style.
+  printStmtList(ctx, stmts, wgslLoopStyle)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules

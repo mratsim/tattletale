@@ -43,45 +43,18 @@ const printerTarget = "cuda"
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
+const cudaScalarTokens = ScalarTokens(
+  void: "void", bool: "bool",
+  i8: "signed char", i16: "short", i32: "int", i64: "long long",
+  u8: "unsigned char", u16: "unsigned short", u32: "unsigned int",
+  u64: "unsigned long long",
+  f32: "float", f64: "double")
+
 proc emitCudaScalar(t: CirType): string =
   ## CUDA name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    result = "bool"
-  of ctInt:
-    case t.bits
-    of 8:
-      result = "signed char"
-    of 16:
-      result = "short"
-    of 32:
-      result = "int"
-    of 64:
-      result = "long long"
-    else:
-      result = ""
-  of ctUint:
-    case t.bits
-    of 8:
-      result = "unsigned char"
-    of 16:
-      result = "unsigned short"
-    of 32:
-      result = "unsigned int"
-    of 64:
-      result = "unsigned long long"
-    else:
-      result = ""
-  of ctFloat:
-    case t.bits
-    of 32:
-      result = "float"
-    of 64:
-      result = "double"
-    else:
-      result = ""
+  of ctVoid, ctBool, ctInt, ctUint, ctFloat:
+    result = emitScalarToken(cudaScalarTokens, t)
   of ctPtr, ctAptr:
     result = emitCudaScalar(t.pElem) & "*"
   of ctStruct:
@@ -116,38 +89,19 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string
   ## Forward declaration, expressions recurse into themselves.
 
 # `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const cudaFloatTokens = FloatLitTokens(
-  inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
-  inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
-  inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN")
+const cudaLitTokens = LitTokens(
+  scalar: cudaScalarTokens,
+  int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
+  f32Suffix: "f",
+  nilToken: "nullptr",
+  nonFinite: FloatLitTokens(
+    inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
+    inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
+    inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN"))
 
 proc emitCudaLit(e: CirExpr): string =
   ## CUDA token of a literal, typed by its literal type.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      case e.litType.bits
-      of 64: result = $e.value & "ULL"
-      of 32: result = $e.value & "U"
-      else: result = "(" & emitCudaScalar(e.litType) & ")" & $e.value
-    of ctInt:
-      case e.litType.bits
-      of 64: result = $e.value & "LL"
-      of 32: result = $e.value
-      else: result = "(" & emitCudaScalar(e.litType) & ")" & $e.value
-    else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, cudaFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 32: result = $e.fValue & "f"
-      else: result = $e.fValue
-  of eNil: result = "nullptr"
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<cuda: not a literal>"
+  emitLiteral(e, cudaLitTokens)
 
 proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: string, coordTy: CirType): string =
   ## CUDA text of a canonical coordinate reference.
@@ -363,6 +317,11 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
 
+const cudaLoopStyle = LoopStyle(
+  unrollDirective: "#pragma unroll",
+  infiniteHead: "for (;;) {\n",
+  braceSameLine: true)
+
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string
   ## Forward declaration, nested statement lists recurse into it.
 
@@ -410,7 +369,7 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
       ctx.indent.dec
       result &= " else {\n" & elseTxt & '\n' & pad & '}'
   of sLoop:
-    # loops print through printStmts
+    # loops print through printStmtList
     result = ""
   of sScope:
     result = pad & "{\n"
@@ -460,29 +419,8 @@ proc printStmt(ctx: var PrintCtx, s: CirStmt): string =
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list.
-  var lines: seq[string]
-  for s in stmts:
-    var txt: string
-    if s.kind == sLoop:
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        spaces(ctx.indent * 2) & "#pragma unroll\n"
-      else:
-        ""
-      let head = if s.loopCond != nil:
-        "while (" & ctx.printExpr(s.loopCond) & ") {\n"
-      else:
-        "for (;;) {\n"
-      txt = directive & spaces(ctx.indent * 2) & head & bodyTxt & "\n" &
-        spaces(ctx.indent * 2) & '}'
-    else:
-      txt = ctx.printStmt(s)
-    if txt.len > 0:
-      lines.add txt
-  return lines.join("\n")
+  ## Prints one statement list, the shared walk with the CUDA loop style.
+  printStmtList(ctx, stmts, cudaLoopStyle)
 
 proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
   ## Butterfly warp-reduction template for one reduction kind: CUDA has no
