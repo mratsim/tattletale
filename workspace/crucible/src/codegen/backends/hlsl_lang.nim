@@ -92,12 +92,12 @@ type
     err: string
     ## First refusal of the walk, "" while clean.
     indent: int
-    policy: KindRow
-    ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitRow
+    policy: WalkPolicy
+    ## Walk policy of the target. The shared walk reads its fields.
+    lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
-    row: ScalarRow
-    ## Scalar row of the target. The narrow integer cast names its type from it.
+    scalarNames: ScalarNames
+    ## Scalar names of the target. The narrow integer cast takes its type name from them.
     isKernel: bool
     ## True while printing the entry kernel, coordinate builtins and push-constant reads bind the entry only.
     pushParams: HashSet[string]
@@ -140,9 +140,9 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid, ctBool:
-    result = getScalarName(hlslScalarRow, t)
+    result = getScalarName(hlslScalarNames, t)
   of ctInt, ctUint, ctFloat:
-    result = getScalarName(hlslScalarRow, t)
+    result = getScalarName(hlslScalarNames, t)
     if result.len == 0:
       case t.kind
       of ctInt:
@@ -153,7 +153,7 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
         ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
   of ctVector:
     let elem = emitHlslScalar(ctx, t.vElem)
-    result = getVectorName(hlslVectorRule, hlslScalarRow, t)
+    result = getVectorName(hlslVectorRule, hlslScalarNames, t)
     if result.len == 0:
       ctx.fail("vector of " & (if elem.len > 0: elem else: $t.vElem.kind) &
         "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
@@ -261,7 +261,7 @@ proc getCoordInputName(kind: CoordBuiltinKind): string =
 ## Entry-input text per canonical coordinate builtin kind: the synthesized main input with its semantic.
 ## "" for the kinds with no entry input: threads_per_threadgroup reads the workgroup literal.
 ## threadgroups_per_grid materializes in the lowering pass.
-const hlslEntryInputs*: EntryInputRow = [
+const hlslEntryInputs*: EntryInputs = [
   "",
   "uint3 gid : SV_DispatchThreadID",
   "uint3 groupId : SV_GroupID",
@@ -670,8 +670,8 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
   ##
   ## Classification runs at the signature-emission sites, so a module printed
   ## without the pipeline classifies exactly as one printed through it.
-  ## Parameters whose scalar-row cell is absent (the 64-bit integers and float16)
-  ## refuse at the declaration emission on the row-lookup channel.
+  ## Parameters whose scalar-names cell is absent (the 64-bit integers and float16)
+  ## refuse at the declaration emission on the names-lookup channel.
   for p in fn.params:
     case p.typ.kind
     of ctAptr:
@@ -847,7 +847,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   ## - fvD3D12: register resources and the `ConstantBuffer` push block
   ## - fvVulkan: the `[[vk::push_constant]]` struct with every member offset locked
   var ctx = PrintCtx(fnName: "<module>", flavor: flavor,
-    policy: hlslKindRow, lit: hlslLitRow, row: hlslScalarRow)
+    policy: hlslWalkPolicy, lit: hlslLitTokens, scalarNames: hlslScalarNames)
   var procsByName: Table[string, CirProc]
   for fn in m.procs:
     procsByName[fn.name] = fn

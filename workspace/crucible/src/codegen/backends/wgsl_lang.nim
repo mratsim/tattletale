@@ -41,12 +41,12 @@ type
     err: string
     ## First refusal of the walk, "" while clean.
     indent: int
-    policy: KindRow
-    ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitRow
+    policy: WalkPolicy
+    ## Walk policy of the target. The shared walk reads its fields.
+    lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
-    row: ScalarRow
-    ## Scalar row of the target. The narrow integer cast names its type from it.
+    scalarNames: ScalarNames
+    ## Scalar names of the target. The narrow integer cast takes its type name from them.
     inKernel: bool
     ## False inside a device function, the printer refuses a device function reading a coordinate builtin.
     paramNames: HashSet[string]
@@ -82,18 +82,18 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     if ctx.storageBoolSpelling:
       result = "NIM_BOOL"
     else:
-      result = getScalarName(wgslScalarRow, t)
+      result = getScalarName(wgslScalarNames, t)
   of ctVoid:
-    result = getScalarName(wgslScalarRow, t)
+    result = getScalarName(wgslScalarNames, t)
   of ctInt, ctUint:
-    result = getScalarName(wgslScalarRow, t)
+    result = getScalarName(wgslScalarNames, t)
     if result.len == 0:
       if t.bits == 64:
         ctx.fail("i64/u64 need the shader-int64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit integers have no WGSL type, only 32")
   of ctFloat:
-    result = getScalarName(wgslScalarRow, t)
+    result = getScalarName(wgslScalarNames, t)
     if result.len == 0:
       if t.bits == 64:
         ctx.fail("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
@@ -101,7 +101,7 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
         ctx.fail($t.bits & "-bit floats have no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
-    result = getVectorName(wgslVectorRule, wgslScalarRow, t)
+    result = getVectorName(wgslVectorRule, wgslScalarNames, t)
     if result.len == 0 and elem.len > 0:
       ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, only 2..4-wide vectors have a name")
   of ctStruct:
@@ -170,17 +170,17 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
   result = "vec3<i32>(i32(" & p.param & ".x), i32(" & p.param & ".y), i32(" &
     p.param & ".z))"
 
-const wgslEntryInputs*: EntryInputRow = block:
+const wgslEntryInputs*: EntryInputs = block:
   ## WGSL entry-input text per canonical coordinate builtin kind: the `@builtin(...)` parameter the entry signature declares.
   ##
   ## - built from the `getWgslBuiltinParam` table, one text per kind that has a parameter
   ## - "" for kinds without a WGSL builtin: `threads_per_threadgroup` reads refuse, WGSL has only the `@workgroup_size` attribute
-  var row: EntryInputRow
+  var inputs: EntryInputs
   for kind in CoordBuiltinKind:
     let p = getWgslBuiltinParam(kind)
     if p.attribute.len > 0:
-      row[kind] = "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
-  row
+      inputs[kind] = "@builtin(" & p.attribute & ") " & p.param & ": " & p.wgslType
+  inputs
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -250,13 +250,13 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("nil literal is outside the WGSL subset")
     return ""
   of eFloatLit:
-    # a 64-bit non-finite float has no token in the lit row:
+    # a 64-bit non-finite float has no token in the lit tokens:
     # - `bitcast<f64>` requires the shader-f64 device feature the runtime cannot request
     # - every bitcast operand form fails, a u32-suffixed 64-bit literal is a parse error
     if e.fValue.classify in {fcInf, fcNegInf, fcNan} and e.fLitType.bits == 64:
       ctx.fail("a 64-bit non-finite float has no WGSL token, bitcast<f64> needs the unrequestable shader-f64 feature")
       return ""
-    return emitLiteral(e, ctx.lit, ctx.row)
+    return emitLiteral(e, ctx.lit, ctx.scalarNames)
   of eSym:
     # coordinate builtins are entry-point parameters, names pass through,
     # pointer-value and whole-pointer-struct reads refuse in the lowering pass
@@ -585,8 +585,8 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 
 proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full WGSL module through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: wgslKindRow,
-    lit: wgslLitRow, row: wgslScalarRow)
+  var ctx = PrintCtx(fnName: "<module>", policy: wgslWalkPolicy,
+    lit: wgslLitTokens, scalarNames: wgslScalarNames)
   let kernel = getEntryKernel(ctx, m)
   if ctx.failing():
     return ("", ctx.err)

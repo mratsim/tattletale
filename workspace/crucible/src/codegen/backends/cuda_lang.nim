@@ -38,12 +38,12 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
-    policy: KindRow
-    ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitRow
+    policy: WalkPolicy
+    ## Walk policy of the target. The shared walk reads its fields.
+    lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
-    row: ScalarRow
-    ## Scalar row of the target. The narrow integer cast names its type from it.
+    scalarNames: ScalarNames
+    ## Scalar names of the target. The narrow integer cast takes its type name from them.
     inKernel: bool
     ## False inside a device function. Its smem local owns no storage, the printer refuses an initializer there.
 
@@ -57,13 +57,13 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 proc emitCudaScalar(t: CirType): string =
   ## CUDA bare name of a non-array leaf type, "" when the caller composes the name.
-  getBareName(cudaScalarRow, cudaVectorRule, t)
+  getBareName(cudaScalarNames, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## CUDA declaration text of `t` with `ident` appended, the shared C declarator
-  ## over the CUDA rows. Arrays take the identifier into the declarator
+  ## over the CUDA tables. Arrays take the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
-  cDecl(cudaScalarRow, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
+  cDecl(cudaScalarNames, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## CUDA declaration text of one struct member via the shared C declarator.
@@ -394,8 +394,8 @@ proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
 
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full CUDA translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow,
-    lit: cudaLitRow, row: cudaScalarRow)
+  var ctx = PrintCtx(fnName: "<module>", policy: cudaWalkPolicy,
+    lit: cudaLitTokens, scalarNames: cudaScalarNames)
   printModule(ctx, m, moduleKernels(m), cudaModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =

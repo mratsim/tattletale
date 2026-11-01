@@ -37,12 +37,12 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
-    policy: KindRow
-    ## Kind row of the target. The shared walk reads its policy fields.
-    lit: LitRow
+    policy: WalkPolicy
+    ## Walk policy of the target. The shared walk reads its fields.
+    lit: LitTokens
     ## Literal token forms of the target. The shared literal head reads them.
-    row: ScalarRow
-    ## Scalar row of the target. The narrow integer cast names its type from it.
+    scalarNames: ScalarNames
+    ## Scalar names of the target. The narrow integer cast takes its type name from them.
     inKernel: bool
     ## False inside a device function: `__local` and `__constant` locals are
     ## kernel-only storage, the pass refuses a device function declaring one.
@@ -58,11 +58,11 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
-  getLeafName(openclScalarRow, openclVectorRule, t)
+  getLeafName(openclScalarNames, openclVectorRule, t)
 
 proc emitTypeBare(t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
-  getBareName(openclScalarRow, openclVectorRule, t)
+  getBareName(openclScalarNames, openclVectorRule, t)
 
 proc emitOpenclArrayDecl(t: CirType, ident: string): string =
   ## OpenCL C declaration of an array local or field, the lengths move behind the identifier
@@ -474,8 +474,8 @@ const openclModuleShape = ModuleShape(
 
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full OpenCL C translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: openclKindRow,
-    lit: openclLitRow, row: openclScalarRow)
+  var ctx = PrintCtx(fnName: "<module>", policy: openclWalkPolicy,
+    lit: openclLitTokens, scalarNames: openclScalarNames)
   let kernels = moduleKernels(m)
   if kernels.len == 0:
     ctx.fail("no kernel in the module")

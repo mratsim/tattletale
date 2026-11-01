@@ -7,11 +7,11 @@
 
 ## Shared printer tier over CIRv2: the statement/expression walk, the C declarator engine, and the module assembly.
 ##
-## C declarator engine, driven by the registry rows that each printer supplies.
+## C declarator engine, driven by the registry tables that each printer supplies.
 ##
-## - `getScalarName`/`getLeafName`/`getBareName`: type names from `ScalarRow` and `VectorRule`
+## - `getScalarName`/`getLeafName`/`getBareName`: type names from `ScalarNames` and `VectorRule`
 ## - `cDecl`: C-style declaration text from type structure
-## - a leaf absent from the rows returns "", so the caller composes the name or refuses
+## - a leaf absent from the tables returns "", so the caller composes the name or refuses
 ##
 ## Every printer under `backends/` imports these, no printer owns a copy.
 ## A leaf belongs here when two or more printers need the same text.
@@ -59,51 +59,51 @@ proc emitVectorComponent*(name: string): string =
   else: ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Declarator engine: type names and declaration forms over the registry rows
+# Declarator engine: type names and declaration forms over the registry tables
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getScalarName*(row: ScalarRow, t: CirType): string =
-  ## Scalar type name of a leaf type from the target's scalar row.
+proc getScalarName*(names: ScalarNames, t: CirType): string =
+  ## Scalar type name of a leaf type from the target's scalar-name table.
   ##
-  ## Returns "" when the kind is not a scalar leaf or the (kind, width) cell is absent from the row.
+  ## Returns "" when the kind is not a scalar leaf or the table omits the (kind, width) cell.
   ## The caller composes the name or refuses, per its own policy.
   ##
-  ##   result = getScalarName(mslScalarRow(), t)  # "half" for a 16-bit float
+  ##   result = getScalarName(mslScalarNames, t)  # "half" for a 16-bit float
   case t.kind
   of ctVoid, ctBool:
-    for c in row.cells:
+    for c in names.cells:
       if c.kind == t.kind:
         return c.spelling
   of ctInt, ctUint, ctFloat:
-    for c in row.cells:
+    for c in names.cells:
       if c.kind == t.kind and c.width == t.bits:
         return c.spelling
   else:
     discard
   return ""
 
-proc scalarRefusal*(target: string, row: ScalarRow, t: CirType): string =
+proc scalarRefusal*(target: string, names: ScalarNames, t: CirType): string =
   ## Returns the one-line refusal message for a scalar leaf the target's scalar
-  ## row does not name: `<target>: no <cell>` with the row's stated reason appended.
+  ## names do not cover: `<target>: no <cell>` with the declared reason appended.
   ##
-  ##   result = scalarRefusal("msl", mslScalarRow, tFloat(64))
+  ##   result = scalarRefusal("msl", mslScalarNames, tFloat(64))
   ##   # "<msl: no f64, double has no Apple GPU support>"
   var tok = ""
   for a in ScalarCellAxis:
     if a.kind == t.kind and (t.kind in {ctVoid, ctBool} or a.width == t.bits):
       tok = a.tok
-  for r in row.refusals:
+  for r in names.refusals:
     if r.kind == t.kind and (t.kind in {ctVoid, ctBool} or r.width == t.bits):
       return "<" & target & ": no " & tok & ", " & r.reason & ">"
   return "<" & target & ": no " & tok & ">"
 
-proc getVectorName*(rule: VectorRule, row: ScalarRow, t: CirType): string =
+proc getVectorName*(rule: VectorRule, names: ScalarNames, t: CirType): string =
   ## Vector type name of `t` from the target's vector rule.
   ##
   ## Returns "" when `t` is not a vector, its element has no cell in the rule,
   ## or its lane count is outside `rule.lanes`. The caller refuses.
   ##
-  ##   result = getVectorName(glslVectorRule(), glslScalarRow(), t)  # "vec4"
+  ##   result = getVectorName(glslVectorRule(), glslScalarNames, t)  # "vec4"
   if t.kind != ctVector:
     return ""
   for e in rule.elems:
@@ -112,79 +112,79 @@ proc getVectorName*(rule: VectorRule, row: ScalarRow, t: CirType): string =
         return ""
       case rule.nameForm
       of vnfPrefixed:
-        let prefix = if e.prefix.len > 0: e.prefix else: getScalarName(row, t.vElem)
+        let prefix = if e.prefix.len > 0: e.prefix else: getScalarName(names, t.vElem)
         return prefix & $t.vN
       of vnfGenericElem:
-        return e.prefix & $t.vN & "<" & getScalarName(row, t.vElem) & ">"
+        return e.prefix & $t.vN & "<" & getScalarName(names, t.vElem) & ">"
   return ""
 
-proc getLeafName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
+proc getLeafName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
   ## Bare type name of a non-array leaf type: the scalar, vector or struct name.
   ##
   ## Returns "" for pointers, arrays, proc and span types. The caller composes
   ## the name or refuses, per its own policy.
   case t.kind
   of ctVoid, ctBool, ctInt, ctUint, ctFloat:
-    result = getScalarName(row, t)
+    result = getScalarName(names, t)
   of ctVector:
-    result = getVectorName(rule, row, t)
+    result = getVectorName(rule, names, t)
   of ctStruct:
     result = t.name
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
-proc getBareName*(row: ScalarRow, rule: VectorRule, t: CirType): string =
+proc getBareName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
   ## Bare type name of `t`: the form casts and compound literals use.
   ## No identifier, pointer stars trailing the pointee name.
   ##
   ## Returns "" for arrays, proc and span types.
   ## The caller composes the name or refuses, per its own policy.
   ##
-  ##   result = getBareName(cudaScalarRow(), cudaVectorRule(), t)  # "float**"
+  ##   result = getBareName(cudaScalarNames, cudaVectorRule, t)  # "float**"
   if t.kind in {ctPtr, ctAptr}:
-    return getBareName(row, rule, t.pElem) & "*"
-  return getLeafName(row, rule, t)
+    return getBareName(names, rule, t.pElem) & "*"
+  return getLeafName(names, rule, t)
 
-proc getUnnamedScalarCell*(row: ScalarRow, t: CirType): CirType =
-  ## Returns the scalar leaf of `t` when `row` names no type for it, after peeling pointer stars and array dimensions.
+proc getUnnamedScalarCell*(names: ScalarNames, t: CirType): CirType =
+  ## Returns the scalar leaf of `t` when the table has no name for it, after peeling pointer stars and array dimensions.
   ##
   ## Returns nil when every scalar leaf has a type name or when the leaf is not a scalar kind.
   ##
-  ##   let missing = getUnnamedScalarCell(mslScalarRow, tFloat(64))
+  ##   let missing = getUnnamedScalarCell(mslScalarNames, tFloat(64))
   ##   # tFloat(64) while msl names no f64, nil for tFloat(16) ("half")
   var leaf = t
   while leaf.kind in {ctPtr, ctAptr, ctArray}:
     leaf = if leaf.kind == ctArray: leaf.aElem else: leaf.pElem
   if leaf.kind in {ctVoid, ctBool, ctInt, ctUint, ctFloat} and
-      getScalarName(row, leaf).len == 0:
+      getScalarName(names, leaf).len == 0:
     return leaf
   return nil
 
-proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident: string, allowEmptyIdent: bool): string =
+proc cDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## Declaration text of `t` with `ident` appended in the C declarator form:
   ## the array dimensions move behind the identifier and nest into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
   ##
   ## - `allowEmptyIdent` permits no identifier, return types and casts use it
   ## - the printer refuses an array without an identifier with the `<target: array needs an identifier>` text
-  ## - the printer refuses a scalar leaf absent from the scalar row with the one-line
+  ## - the printer refuses a scalar leaf absent from the scalar names with the one-line
   ##   `scalarRefusal` message on the same `<target: ...>` channel
   ## - the leaf check runs before the printer composes the name, so the refusal
   ##   also fires when pointer stars or array dimensions wrap the absent cell
   ##
-  ##   result = cDecl(cudaScalarRow(), cudaVectorRule(), "cuda", t, "buf", false)
+  ##   result = cDecl(cudaScalarNames, cudaVectorRule, "cuda", t, "buf", false)
   if t.kind == ctArray:
     if ident.len == 0 and not allowEmptyIdent:
       return "<" & target & ": array needs an identifier>"
-  let missing = getUnnamedScalarCell(row, t)
+  let missing = getUnnamedScalarCell(names, t)
   if missing != nil:
-    return scalarRefusal(target, row, missing)
+    return scalarRefusal(target, names, missing)
   if t.kind == ctArray:
     if t.aElem.kind == ctArray:
-      return cDecl(row, rule, target, t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
+      return cDecl(names, rule, target, t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
         allowEmptyIdent)
-    return getBareName(row, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
-  result = getBareName(row, rule, t)
+    return getBareName(names, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
+  result = getBareName(names, rule, t)
   if ident.len > 0:
     result.add ' ' & ident
 
@@ -218,41 +218,41 @@ proc nonFiniteFloatLit*(e: CirExpr, tok: FloatLitTokens): string =
   else:
     result = ""
 
-template emitLiteral*(e: CirExpr, litRow: LitRow, row: ScalarRow): string =
-  ## Returns the literal token of `e`, chosen from the target's lit row
-  ## `litRow` according to the literal type of `e`.
+template emitLiteral*(e: CirExpr, tokens: LitTokens, names: ScalarNames): string =
+  ## Returns the literal token of `e`, chosen from the target's literal tokens
+  ## `tokens` according to the literal type of `e`.
   ##
-  ## - a narrow (8/16-bit) integer prints as a cast to its scalar row name
-  ##   when the lit row sets `narrowCast`, otherwise bare
-  ## - a non-finite float takes its bit-pattern token from `litRow.nonFinite`
-  ## - a literal kind outside the rows prints `<printerTarget: not a literal>`
+  ## - a narrow (8/16-bit) integer prints as a cast to its scalar name
+  ##   when the tokens set `narrowCast`, otherwise bare
+  ## - a non-finite float takes its bit-pattern token from `tokens.nonFinite`
+  ## - a literal kind outside the tables prints `<printerTarget: not a literal>`
   mixin printerTarget
   block:
     var lit: string
     case e.kind
     of eIntLit:
-      if e.litType.bits notin {32, 64} and litRow.int.narrowCast:
-        lit = "(" & getScalarName(row, e.litType) & ")" & $e.value
+      if e.litType.bits notin {32, 64} and tokens.int.narrowCast:
+        lit = "(" & getScalarName(names, e.litType) & ")" & $e.value
       else:
         case e.litType.kind
         of ctUint:
           case e.litType.bits
-          of 64: lit = litRow.int.u64Prefix & $e.value & litRow.int.u64Suffix
-          of 32: lit = $e.value & litRow.int.u32Suffix
+          of 64: lit = tokens.int.u64Prefix & $e.value & tokens.int.u64Suffix
+          of 32: lit = $e.value & tokens.int.u32Suffix
           else: lit = $e.value
         else:
           case e.litType.bits
-          of 64: lit = litRow.int.i64Prefix & $e.value & litRow.int.i64Suffix
+          of 64: lit = tokens.int.i64Prefix & $e.value & tokens.int.i64Suffix
           else: lit = $e.value
     of eFloatLit:
-      lit = nonFiniteFloatLit(e, litRow.nonFinite)
+      lit = nonFiniteFloatLit(e, tokens.nonFinite)
       if lit.len == 0:
         case e.fLitType.bits
-        of 16: lit = litRow.f16Prefix & $e.fValue & litRow.f16Suffix
-        of 32: lit = $e.fValue & litRow.f32Suffix
-        else: lit = litRow.f64Prefix & $e.fValue & litRow.f64Suffix
+        of 16: lit = tokens.f16Prefix & $e.fValue & tokens.f16Suffix
+        of 32: lit = $e.fValue & tokens.f32Suffix
+        else: lit = tokens.f64Prefix & $e.fValue & tokens.f64Suffix
     of eNil:
-      lit = litRow.nilToken
+      lit = tokens.nilToken
       if lit.len == 0:
         lit = "<" & printerTarget & ": not a literal>"
     of eTrue: lit = "true"
@@ -347,7 +347,7 @@ proc printIteElse(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
 
 proc printEmitOperand(ctx: var auto, op: CirExpr): string =
   ## Returns the splice text of one `{.emit.}` operand: the rendered expression
-  ## when the target's kind row lists `emitOperandRendersExpr`.
+  ## when the target's walk policy sets `emitOperandRendersExpr`.
   ## The symbol name is the default splice.
   if ctx.policy.emitOperandRendersExpr:
     ctx.printExpr(op)
@@ -376,7 +376,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## Prints one structured expression.
   ##
   ## - shared variants emit here: the operator branches and the literal head
-  ##   through `emitLiteral` over the context's lit and scalar rows
+  ##   through `emitLiteral` over the context's lit tokens and scalar names
   ## - the call skeleton prints through `printCallArgs` and `printCallText`
   ## - the kinds a printer emits itself route to its `printTargetExpr`,
   ##   named by its `targetExprKinds` set
@@ -388,7 +388,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   of eNil, eTrue, eFalse, eIntLit, eFloatLit:
     if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
-    return emitLiteral(e, ctx.lit, ctx.row)
+    return emitLiteral(e, ctx.lit, ctx.scalarNames)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let op = case e.kind
       of eAdd: "+"
@@ -560,15 +560,15 @@ proc moduleDeviceFns*(m: CirModule): seq[CirProc] =
 # Entry-input machinery of the shader entry heads
 # ═══════════════════════════════════════════════════════════════════════
 
-type EntryInputRow* = array[CoordBuiltinKind, string]
+type EntryInputs* = array[CoordBuiltinKind, string]
   ## Entry-input text of one coordinate builtin kind, in the form the target's entry signature declares:
   ## a WGSL `@builtin(...)` parameter, an HLSL semantic-carrying input.
   ##
   ## "" carries no entry input: the kind the target reads another way.
   ## Cases: the body's workgroup literal, a lowering-pass materialized parameter, no read at all.
 
-template emitEntryInputs*(kinds: untyped, row: EntryInputRow): string =
-  ## Returns the entry-input texts of one shader entry point: one row text per coordinate builtin kind the entry takes.
+template emitEntryInputs*(kinds: untyped, inputs: EntryInputs): string =
+  ## Returns the entry-input texts of one shader entry point: one text per coordinate builtin kind the entry takes.
   ##
   ## `kinds` is the set the entry's body walk collected (`ctx.builtins` on WGSL, `ctx.coordReads` on HLSL).
   ## The entry takes exactly the inputs its body reads, in the set's own iteration order: first use on WGSL, enum order on HLSL.
@@ -576,8 +576,8 @@ template emitEntryInputs*(kinds: untyped, row: EntryInputRow): string =
   ##   "fn k(" & emitEntryInputs(ctx.builtins, wgslEntryInputs) & ") {"
   var texts: seq[string]
   for k in kinds:
-    if row[k].len > 0:
-      texts.add row[k]
+    if inputs[k].len > 0:
+      texts.add inputs[k]
   texts.join(", ")
 
 # ═══════════════════════════════════════════════════════════════════════
