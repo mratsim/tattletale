@@ -34,7 +34,7 @@ import workspace/ceramic/src/kernels/k_layout_copy_gpu
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/tests/kernels/k_gemm/kernel_gemm_template
 import workspace/ceramic/src/kernels/k_layout_fillwith_cpu
-import std/[strformat, strutils]
+import std/strutils
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Bank-pattern analysis (pure, host side)

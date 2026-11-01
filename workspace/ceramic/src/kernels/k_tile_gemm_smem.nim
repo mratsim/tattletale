@@ -21,7 +21,6 @@
 ##   copy for the k-tail chunk, so no edge tile needs
 ##   a scalar pass
 
-import workspace/math
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
@@ -94,8 +93,8 @@ template loadFragTile*(dst: untyped, src: TensorView, tvm: static ThreadValueMap
   ##   coordinate with real data or with the zero the mma consumes.
   ##   The guarded fallback of tile.load has no work here
   ## - the source view points into threadgroup storage, so the loader
-  ##   stays a template: a harvested proc fixes its parameter space
-  ##   (caDevice) and rejects the smem-space argument
+  ##   stays a template: as a proc, the `TensorView` parameter fixes
+  ##   its memory space to `caDevice` and rejects the smem-backed view
   ##
   ## Pure layout math and field reads only, every step inlines.
   let lay = src.getLayout()
@@ -254,6 +253,8 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
     regC = mma.getMmaLayout(opC)
 
   var
+    # +8 words of headroom for aligning the stage base up to 16 bytes,
+    # slack words behind the aligned base stay unread
     stageA {.smem.}: array[2 * aStageWords + 8, uint32]
     stageB {.smem.}: array[2 * bStageWords + 8, uint32]
 

@@ -59,12 +59,13 @@ func operandClause(names: openArray[string], clause: string): string =
 
 func mmaOperandWidth(operandType: string): int {.compileTime.} =
   ## Elements per .b32 mma.sync operand register, by operand dtype:
-  ## PTX packs 16-bit operands two-per-register, 8-bit four-per-register,
-  ## 32-bit (tf32) one-per-register.
+  ## PTX packs 16-bit operands two-per-register and 32-bit (tf32)
+  ## one-per-register. The 8-bit dtypes pack four-per-register in PTX
+  ## but that packing is not implemented here, they error like any
+  ## unregistered operand dtype.
   case operandType
   of "tf32": 1
   of "f16", "bf16": 2
-  of "s8", "e4m3", "e5m2": 4
   else:
     error("unsupported mma.sync operand dtype: " & operandType)
 
@@ -78,7 +79,9 @@ func buildNvidiaMmaAsm*(instr: string, dNames, aNames, bNames: openArray[string]
   ##   - `dNames`: the staged accumulator scalars' names, one per value,
   ##     in the atom's per-lane value order
   ##   - `aNames`/`bNames`: the packed .b32 A/B operand register names,
-  ##     one name per register, staged as uint32 locals by gemm_mma
+  ##     one per register, 16-bit dtypes stage two scalars per uint32
+  ##     local and one-value-per-register dtypes stage the raw scalar,
+  ##     staged by gemm_mma
   ##   - `accType`: the accumulator register element type name
   ## Output: one extended-asm statement string.
   let vc = dNames.len
@@ -253,9 +256,9 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[typed]): untyped =
     # names against the enclosing scope, keeping redeclarations across
     # gemm_atom expansions correct
     let packedWidth = mmaOperandWidth(constStr(atom, "aType"))
-    doAssert (aV + bV) mod packedWidth == 0,
+    doAssert aV mod packedWidth == 0 and bV mod packedWidth == 0,
       "gemm_mma: mma operand values must pack into whole registers, got " &
-      $(aV + bV) & " values of width " & $packedWidth
+      $aV & " A / " & $bV & " B values of width " & $packedWidth
     var aRegs, bRegs: seq[string]
     for i in countup(0, aV - 1, packedWidth):
       case packedWidth

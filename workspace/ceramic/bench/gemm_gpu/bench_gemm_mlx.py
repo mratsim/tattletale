@@ -21,8 +21,8 @@ print("     MNK   iters   TFLOP/s")
 for mnk in SIZES:
     m = n = k = mnk
     iters = iters_for(mnk)
-    # deterministic fill, values don't matter for throughput; f16 arange
-    # keeps the peak footprint down, this box has under 1 GiB free VRAM
+    # deterministic fill, values don't matter for throughput, an f16 arange
+    # keeps the peak footprint down on the under-1-GiB-free-VRAM device
     a = (mx.arange(m * k, dtype=mx.float16) % 13).reshape(m, k)
     b = (mx.arange(n * k, dtype=mx.float16) % 17).reshape(n, k)
     batch = 20 if mnk <= 1024 else 1
