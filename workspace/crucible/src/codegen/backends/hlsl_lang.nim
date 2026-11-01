@@ -24,7 +24,7 @@
 ##   `ConstantBuffer<Push> push : register(bN, space0)` where N is the buffer count,
 ##   scalar reads go through `push.<dotted path>`
 ##
-## fvVulkan (zero-descriptor, SPIR-V through the engine's address route):
+## fvVulkan (zero-descriptor, SPIR-V through the engine's device-address binding):
 ## - every kernel parameter is a member of one `[[vk::push_constant]]` struct,
 ##   buffer parameters as `uint64_t` device addresses, every member offset
 ##   locked with `[[vk::offset]]` to the launch-side packing
@@ -32,8 +32,8 @@
 ## - a buffer access constructs `vk::BufferPointer<E>` from the address per use,
 ##   an lvalue for reads and writes, device-function buffer parameters take the address by value
 ## - buffer elements: 32-bit integers, float, double, a buffer parameter is
-##   writable regardless of the write-scan, the BDA route has no read-only
-##   binding to violate
+##   writable regardless of the write-scan, the buffer-device-address binding
+##   has no read-only form
 ##
 ## Shared:
 ## - the buffer/value split runs at the signature-emission sites (`classifyParams`)
@@ -78,7 +78,7 @@ type HlslFlavor* = enum
   fvVulkan  ## zero-descriptor Vulkan flavor: every parameter binds into one `[[vk::push_constant]]` block,
             ## buffers as device addresses,
             ## accesses construct `vk::BufferPointer` from the address,
-            ## dxc -spirv emits physical-storage-buffer words for the address route
+            ## dxc -spirv emits physical-storage-buffer words for the device-address binding
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -214,9 +214,9 @@ proc getBpElementStride(ctx: var PrintCtx, elem: CirType): int =
 
 proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size, align: int] =
   ## Packed size and alignment of one fvVulkan push-block value member.
-  ## Member offsets lock to the launch-side packing: scalars and vectors are
-  ## width-aligned, struct members stay flat over scalars, the alignment is
-  ## the max field width, the size rounds to it.
+  ## Member offsets match the launch-side packing: scalars and vectors are
+  ## width-aligned, struct members pack flat over scalars, the alignment is
+  ## the max field width, the size rounds up to it.
   case t.kind
   of ctInt, ctUint, ctFloat:
     let w = t.bits div 8
@@ -251,8 +251,8 @@ proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size,
 # ═══════════════════════════════════════════════════════════════════════
 
 ## Synthesized main input variable per coordinate builtin kind, "" for the kinds
-## without one: threads_per_threadgroup reads the workgroup literal,
-## threadgroups_per_grid materializes in the lowering pass.
+## without one: threads_per_threadgroup prints the workgroup literal,
+## the lowering pass materializes threadgroups_per_grid.
 const CoordInputNames: array[CoordBuiltinKind, string] = [
   "", "gid", "groupId", "groupThreadId", "", "", "gidx",
 ]
@@ -261,8 +261,8 @@ proc getCoordInputName(kind: CoordBuiltinKind): string =
   CoordInputNames[kind]
 
 ## Entry-input text per canonical coordinate builtin kind: the synthesized main input with its semantic.
-## "" for the kinds with no entry input: threads_per_threadgroup reads the workgroup literal.
-## threadgroups_per_grid materializes in the lowering pass.
+## "" for the kinds with no entry input: threads_per_threadgroup prints the workgroup literal,
+## the lowering pass materializes threadgroups_per_grid.
 const hlslEntryInputs*: EntryInputs = [
   "",
   "uint3 gid : SV_DispatchThreadID",
@@ -273,7 +273,7 @@ const hlslEntryInputs*: EntryInputs = [
   "uint gidx : SV_GroupIndex"]
 
 proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string): string =
-  ## One coordinate-builtin component, cast to the canonical int the CIRv2 vocabulary reads.
+  ## One coordinate-builtin component, cast to the canonical `int` type.
   ctx.coordReads.incl(kind)
   case kind
   of cbkThreadsPerThreadgroup:
@@ -329,7 +329,7 @@ proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string =
 
 proc emitCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string =
   ## One call argument: an address-of over a variable argument to a by-reference parameter
-  ## emits the variable itself, the `inout` binding takes lvalues directly.
+  ## emits the variable itself, the `inout` binding accepts lvalues directly.
   if a.kind == eAddr and a.addrOperand.kind == eSym and
       callee.kind == eSym and ctx.procs.hasKey(callee.name):
     let fn = ctx.procs[callee.name]
@@ -343,9 +343,8 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   return emitHlslTypeBare(ctx, e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
 
 proc printCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string =
-  ## One call argument: a buffer resource passes by name, each call site
-  ## supplies the resource bound to its own register, other arguments take
-  ## the address-of policy of `emitCallArg`.
+  ## One call argument: a buffer resource passes by name, each call site supplies
+  ## the resource bound to its own register, other arguments print through `emitCallArg`.
   if ctx.flavor == fvD3D12 and a.kind == eSym and
       ctx.bufferParams.contains(a.name):
     return a.name
@@ -396,7 +395,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## HLSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    # coordinate builtins resolve to kernel-entry semantics only
+    # coordinate builtins bind the kernel entry only
     if e.coordBuiltin != cbkNone:
       let rej = coordReadRejection(ctx, e.coordBuiltin)
       if rej.len > 0:
@@ -417,7 +416,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ""
     return e.name
   of eAt, ePat:
-    # zero-descriptor route reads through the u64 device address, buffer parameters index by name, arrays index plainly
     let base = if e.kind == eAt: e.atBase else: e.patBase
     let idx = if e.kind == eAt: e.atIndex else: e.patIndex
     let idxTxt = ctx.printExpr(idx)
@@ -441,8 +439,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("indexing an " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the HLSL subset")
     return ""
   of eDot:
-    # coordinate-builtin dots return the semantic name, vector dots return
-    # their field letter, other dots return base.fieldName
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       let rej = coordReadRejection(ctx, e.dotBase.coordBuiltin)
       if rej.len > 0:
@@ -464,7 +460,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("sizeof has no HLSL emission, HLSL struct layout differs from the buffer layout")
     return ""
   of eOconstr:
-    # vectors construct by call, valid in declaration initializers and assignments alike, where struct brace lists only initialize
+    # a vector constructor call is valid in assignments, a struct brace
+    # list only in declaration initializers (DXC)
     if e.ocType.kind == ctVector:
       var parts: seq[string]
       for kvv in e.kvFields:
@@ -506,12 +503,8 @@ proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, l
 # Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration:
-  ## - the buffer-local refusal and the storage-class refusals
-  ## - the declaration text with its initializer
-  ##
-  ## Thread-space pointer locals never reach here: the HLSL lowering pass
-  ## rewrites them to their pointees.
+  ## One local declaration. Thread-space pointer locals never reach here,
+  ## the HLSL lowering pass rewrites them to their pointees.
   let pad = spaces(ctx.indent * 2)
   if s.declType.kind == ctAptr:
     ctx.fail("buffer local " & s.name & " has no HLSL binding, buffers are kernel parameters")
@@ -536,7 +529,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   result = pad & decl & ";"
 
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local constant declaration, struct initializers print as a brace list.
+  ## One local constant declaration.
   let pad = spaces(ctx.indent * 2)
   if s.init != nil and s.init.kind == eOconstr and s.declType.kind == ctStruct:
     result = pad & "const " & ctx.emitHlslDecl(s.declType, s.name) &
@@ -546,7 +539,7 @@ proc printConst(ctx: var PrintCtx, s: CirStmt): string =
       " = " & ctx.printExpr(s.init) & ";"
 
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
-  ## One assignment: buffer, push-constant, struct and array-constructor policy, then the assignment text.
+  ## One assignment.
   let pad = spaces(ctx.indent * 2)
   let root = exprRootSym(s.lhs)
   if root != nil and ctx.bufferParams.contains(root.name):
@@ -560,7 +553,6 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
       ", push constants are read-only inputs")
     return ""
   if s.rhs != nil and s.rhs.kind == eOconstr and s.rhs.ocType.kind == ctStruct:
-    # member-wise leaf assignment, DXC rejects compound literals on assignment
     var lines: seq[string]
     ctx.printObjAssign(ctx.printExpr(s.lhs), s.rhs.ocType, s.rhs, lines)
     if ctx.failing():
@@ -573,7 +565,7 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
 proc printCall(ctx: var PrintCtx, s: CirStmt): string =
-  ## One call statement: the buffer-argument policy and barrier intrinsics, then the plain call form.
+  ## One call statement.
   let pad = spaces(ctx.indent * 2)
   var parts: seq[string]
   if s.callCallee.kind == eSym:
@@ -596,7 +588,6 @@ proc printCall(ctx: var PrintCtx, s: CirStmt): string =
     result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
-  ## One inline assembly statement: refused, the text names the target.
   ctx.fail("inline assembly has no HLSL form")
   result = ""
 
@@ -620,7 +611,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   if fn.isKernel:
     let wg = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
     result = "[numthreads(" & $wg[0] & ", " & $wg[1] & ", " & $wg[2] & ")]\n"
-    # a bare kernel stays `main`, device functions keep the name their call sites reference
+    # a bare kernel is `main`, device functions print under the name their call sites reference
     let entryName = if fn.exportName.len > 0: fn.exportName else: "main"
     result &= "void " & entryName & "(" &
       emitEntryInputs(ctx.coordReads, hlslEntryInputs) & ")\n{\n"
@@ -651,9 +642,8 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
 proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
   ## Splits one proc's parameters into buffer resources and values:
   ##
-  ## - kernels: values join the Push block, buffers bind register ordinals
-  ## - device functions: values pass by value (a `var T` binds `inout`),
-  ##   buffers are unbound resource params
+  ## - kernels: values pack into the Push block, buffer parameters map to register ordinals
+  ## - device functions: values pass by value with a `var T` parameter as `inout`, buffers are unbound resource params
   ##
   ## Classification runs at the signature-emission sites, so a module printed
   ## without the pipeline classifies as one printed through it.
@@ -699,7 +689,7 @@ proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   ##
   ## - the entry kernel: push-constant parameters from the stored classification record, buffer parameters to their resource or address route
   ## - a device function: its own buffer parameters, read-write classification from the stored call-graph record
-  ## - the kernel's workgroup sizes, which the `threads_per_threadgroup` reads read as the workgroup literal
+  ## - the kernel's workgroup sizes, the source of the `threads_per_threadgroup` component tokens
   ctx.isKernel = fn.isKernel
   ctx.pushParams = initHashSet[string]()
   ctx.bufferParams = initHashSet[string]()
@@ -728,7 +718,7 @@ proc prepProc(ctx: var PrintCtx, fn: CirProc) =
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `static const` declaration of one relocated const_mem local.
-  ## dxc folds them at compile time, they take no register in the cbuffer layout.
+  ## dxc folds them at compile time, no cbuffer register is reserved.
   if s.init == nil:
     ctx.fail("const_mem local " & s.name & " without an initializer")
     return ""
@@ -765,7 +755,6 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
   ## - fvD3D12: register resources on one global ordinal, read-only `t`, read-write `u`, then the Push block on `b`
   ## - fvVulkan: buffer-pointer aliases, then the `[[vk::push_constant]]` struct with every member offset locked to the launch-side packing
   if ctx.flavor == fvVulkan:
-    # buffer-pointer aliases, one per element type in encounter order
     var bpEmitted: HashSet[string]
     for p in ctx.kernelBuffers:
       let nm = emitBpName(p.typ.pElem)
@@ -776,8 +765,6 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
     if bpEmitted.len > 0:
       result &= "\n"
     if kernels[0].params.len > 0:
-      # one member per kernel parameter in host pack order, every member offset
-      # locked with [[vk::offset]] to the launch-side packing, the grid member 16-byte aligned
       result &= "struct Push {\n"
       var off = 0
       for p in kernels[0].params:
@@ -805,7 +792,6 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
       result &= "[[vk::push_constant]] Push push;\n"
       result &= "\n"
   else:
-    # one global register ordinal across the buffers, read-only `t`, read-write `u`, the Push block on `b`
     var ordinal = 0
     for p in ctx.kernelBuffers:
       let rw = ctx.graph.reached.contains(kernels[0].name & "/" & p.name)
@@ -832,9 +818,6 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
   ## Emits the full HLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  ##
-  ## - fvD3D12: register resources and the `ConstantBuffer` push block
-  ## - fvVulkan: the `[[vk::push_constant]]` struct with every member offset locked
   var ctx = PrintCtx(fnName: "<module>", flavor: flavor,
     policy: hlslWalkPolicy, lit: hlslLitTokens, scalarNames: hlslScalarNames)
   var procsByName: Table[string, CirProc]
