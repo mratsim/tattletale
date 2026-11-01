@@ -450,6 +450,19 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
                    else: entry.name
   return sym(calleeName, entry.fnType, calleeBuiltin)
 
+func arithExpr(op: string, t: CirType, x, y: CirExpr): CirExpr =
+  ## Primitive arithmetic node for one operator over one operand type.
+  ## Nim `/` is float division and `div` the integer one, both emit a division
+  ## node whose kind the operand type decides.
+  case op
+  of "+": addE(t, x, y)
+  of "-": subE(t, x, y)
+  of "*": mulE(t, x, y)
+  of "/", "div": divE(t, x, y)
+  of "mod": modE(t, x, y)
+  of "shl": shlE(t, x, y)
+  else: shrE(t, x, y)
+
 proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirExpr =
   ## A value-producing call as a call expression: the use site nests the call
   ## into its operator tree.
@@ -508,21 +521,15 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
         return nil
       let opType = getExprType(args[0])
       let rhs = operandLiteralTypedAs(args[1], opType)
-      case magic
-      of "AddI", "AddU", "AddF32", "AddF64":
-        return addE(opType, args[0], rhs)
-      of "SubI", "SubU", "SubF32", "SubF64":
-        return subE(opType, args[0], rhs)
-      of "MulI", "MulU", "MulF32", "MulF64":
-        return mulE(opType, args[0], rhs)
-      of "DivI", "DivU", "DivF32", "DivF64":
-        return divE(opType, args[0], rhs)
-      of "ModI", "ModU":
-        return modE(opType, args[0], rhs)
-      of "ShlI":
-        return shlE(opType, args[0], rhs)
-      else:
-        return shrE(opType, args[0], rhs)
+      let op = case magic
+        of "AddI", "AddU", "AddF32", "AddF64": "+"
+        of "SubI", "SubU", "SubF32", "SubF64": "-"
+        of "MulI", "MulU", "MulF32", "MulF64": "*"
+        of "DivI", "DivU", "DivF32", "DivF64": "/"
+        of "ModI", "ModU": "mod"
+        of "ShlI": "shl"
+        else: "shr"
+      return arithExpr(op, opType, args[0], rhs)
     else:
       ctx.fail("magic call " & callee.repr & " (" & magic & ") is outside the supported set")
       return nil
@@ -943,36 +950,12 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       else:
         result = bitXorE(at, a, b)
       return result
-    of "+", "-", "*", "div", "mod", "shl", "shr":
+    of "+", "-", "*", "/", "div", "mod", "shl", "shr":
       let b = ctx.lowerOperandExpr(n[2])
       if ctx.failing():
         return nil
       let opType = getExprType(a)
-      let bOp = operandLiteralTypedAs(b, opType)
-      case op
-      of "+":
-        result = addE(opType, a, bOp)
-      of "-":
-        result = subE(opType, a, bOp)
-      of "*":
-        result = mulE(opType, a, bOp)
-      of "div":
-        result = divE(opType, a, bOp)
-      of "mod":
-        result = modE(opType, a, bOp)
-      of "shl":
-        result = shlE(opType, a, bOp)
-      else:
-        result = shrE(opType, a, bOp)
-      return result
-    of "/":
-      # Nim `/` is float division, `div` is the integer one
-      let b = ctx.lowerOperandExpr(n[2])
-      if ctx.failing():
-        return nil
-      let opType = getExprType(a)
-      result = divE(opType, a, operandLiteralTypedAs(b, opType))
-      return result
+      return arithExpr(op, opType, a, operandLiteralTypedAs(b, opType))
     else:
       ctx.fail("operator " & op & " is outside the supported set")
       return nil
@@ -1335,11 +1318,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       # target and arithmetic read share one tree reference
       # a desugared `op=` left-hand side evaluates exactly once in Nim
       # temp-binding normalization splits the reads of a call-bearing target
-      let arith = case op
-        of "+=": addE(opType, lhs, rhsOp)
-        of "-=": subE(opType, lhs, rhsOp)
-        of "*=": mulE(opType, lhs, rhsOp)
-        else: divE(opType, lhs, rhsOp)
+      let arith = arithExpr(op[0 ..< op.len - 1], opType, lhs, rhsOp)
       return ctx.drainHoisted() & @[asgnS(lhs, arith)]
     return ctx.lowerVoidCall(n)
   of nnkIfStmt:
