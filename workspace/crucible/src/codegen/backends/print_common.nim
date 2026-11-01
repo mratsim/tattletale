@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Shared printer tier over CIRv2: the statement/expression walk and the C declarator engine.
+## Shared printer tier over CIRv2: the statement/expression walk, the C declarator engine, and the module assembly.
 ##
 ## C declarator engine, driven by the registry rows that each printer supplies.
 ##
@@ -17,7 +17,7 @@
 ## A leaf belongs here when two or more printers need the same text.
 ## Single-target emission stays in the printer.
 
-import std/[macros, math, strutils]
+import std/[macros, math, sets, strutils, tables]
 import ../ir/cirv2_lang
 import ./targets_registry
 export targets_registry
@@ -534,15 +534,294 @@ proc moduleKernels*(m: CirModule): seq[CirProc] =
   ## Returns the kernel procs of `m.procs`, in encounter order.
   ##
   ## The compute class emits every kernel of the module.
-  ## The shader class compiles exactly one through `selectShaderKernel`.
+  ## The shader class compiles exactly one through `getEntryKernel`.
   for fn in m.procs:
     if fn.isKernel:
       result.add fn
+
+proc getEntryKernel*(ctx: var auto, m: CirModule): CirProc =
+  ## Returns the module's one kernel: a shader engine compiles one entry point per module invocation.
+  ## Returns nil with a refusal recorded when the module has none or several kernels.
+  ##
+  ##   if ctx.failing():
+  ##     return ("", ctx.err)
+  let kernels = moduleKernels(m)
+  if kernels.len != 1:
+    ctx.fail("exactly one kernel per module, found " & $kernels.len)
+    return
+  result = kernels[0]
 
 proc moduleDeviceFns*(m: CirModule): seq[CirProc] =
   for fn in m.procs:
     if not fn.isKernel:
       result.add fn
+
+# ═══════════════════════════════════════════════════════════════════════
+# Entry-input machinery of the shader entry heads
+# ═══════════════════════════════════════════════════════════════════════
+
+type EntryInputRow* = array[CoordBuiltinKind, string]
+  ## Entry-input text of one coordinate builtin kind, in the form the target's entry signature declares:
+  ## a WGSL `@builtin(...)` parameter, an HLSL semantic-carrying input.
+  ##
+  ## "" carries no entry input: the kind the target reads another way.
+  ## Cases: the body's workgroup literal, a lowering-pass materialized parameter, no read at all.
+
+template emitEntryInputs*(kinds: untyped, row: EntryInputRow): string =
+  ## Returns the entry-input texts of one shader entry point: one row text per coordinate builtin kind the entry takes.
+  ##
+  ## `kinds` is the set the entry's body walk collected (`ctx.builtins` on WGSL, `ctx.coordReads` on HLSL).
+  ## The entry takes exactly the inputs its body reads, in the set's own iteration order: first use on WGSL, enum order on HLSL.
+  ##
+  ##   "fn k(" & emitEntryInputs(ctx.builtins, wgslEntryInputs) & ") {"
+  var texts: seq[string]
+  for k in kinds:
+    if row[k].len > 0:
+      texts.add row[k]
+  texts.join(", ")
+
+# ═══════════════════════════════════════════════════════════════════════
+# Proc assembly: the one proc printer over both entry models
+# ═══════════════════════════════════════════════════════════════════════
+
+type ModuleShape* = object
+  ## Static assembly plan of one target's module: the grammar knobs the shared
+  ## skeleton prints with, plus the optional sections the target supplies.
+  ## Targets pass a `const` and the skeleton's `when` guards specialize on it.
+  spaces*: set[AddressSpace]
+  ## Program-scope address spaces the target declares.
+  structTypedef*: bool
+  ## Struct declarations in the C `typedef struct { ... } Name` form.
+  structPadding*: string
+  ## Member text of the zero-field struct declaration:
+  ##
+  ## - no indentation, no member terminator
+  ## - every target compiler requires at least one struct member
+  structFieldTerm*: char
+  ## Member terminator: a semicolon on the C family, a comma on WGSL.
+  structClose*: string
+  ## Closing token of a non-typedef struct declaration: brace plus semicolon
+  ## on the C family, a bare brace on WGSL.
+  fwdDecls*: bool
+  ## Device functions forward-declare before their definitions.
+  moduleOrderProcs*: bool
+  ## Every proc prints in `m.procs` order, declaration before use:
+  ##
+  ## - CUDA C++ and MSL resolve calls at their declaration site, a callee
+  ##   prints before its caller
+  ## - the device-functions-then-kernels split is off
+  kernelSep*: string
+  ## Text after each kernel body in the fns-then-kernels assembly.
+  customProcHead*: bool
+  ## Targets with their own head grammar assemble the proc head: shader entry heads and the GLSL `local_size` qualifier.
+  printsRefBlocks*: bool
+  ## Declares the module's buffer-reference blocks when set.
+  printsParamBindings*: bool
+  ## Declares the kernel parameter bindings: resource slots, push-constant members.
+  printsReduceTemplates*: bool
+  ## Emits the warp-reduction templates that the module's feature scan lists.
+
+proc printSig*(ctx: var auto, fn: CirProc): string =
+  ## C signature line of one proc: linkage prefix, return type, name, parameters.
+  ##
+  ## A kernel's name is its exportc override when one is set, else the proc name:
+  ## the host runtime looks a kernel up by its emitted name.
+  ## Returns "" once the walk recorded a refusal.
+  ##
+  ##   printSig(ctx, fn)  # "static inline float f(float x)" on OpenCL C
+  mixin emitComputeParams, emitComputePrefix, emitTypeBare
+  ctx.fnName = fn.name
+  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
+  let params = ctx.emitComputeParams(fn)
+  if ctx.failing():
+    return ""
+  result = ctx.emitComputePrefix(fn) & emitTypeBare(fn.ret) & ' ' & name &
+    '(' & params.join(", ") & ")"
+
+proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
+    emitted: var HashSet[string], name: string, outp: var string,
+    shape: static ModuleShape) =
+  ## Emits one struct declaration into `outp`, member structs first,
+  ## deduplicated by name. A name absent from `byName` emits nothing.
+  mixin emitStructField
+  if name in emitted:
+    return
+  let t = byName.getOrDefault(name, nil)
+  if t == nil:
+    return
+  emitted.incl name
+  for f in t.fields:
+    if f.typ.kind == ctStruct:
+      ctx.printStructDecl(byName, emitted, f.typ.name, outp, shape)
+    elif f.typ.kind == ctArray and f.typ.aElem.kind == ctStruct:
+      ctx.printStructDecl(byName, emitted, f.typ.aElem.name, outp, shape)
+  if ctx.failing():
+    return
+  if shape.structTypedef:
+    outp.add "typedef struct {\n"
+  else:
+    outp.add "struct " & name & " {\n"
+  if t.fields.len == 0:
+    outp.add "  " & shape.structPadding & shape.structFieldTerm & "\n"
+  for f in t.fields:
+    outp.add "  " & ctx.emitStructField(t, f) & shape.structFieldTerm & "\n"
+  if shape.structTypedef:
+    outp.add "} " & name & ";\n\n"
+  else:
+    outp.add shape.structClose & "\n\n"
+
+proc printStructs*(ctx: var auto, m: CirModule, shape: static ModuleShape): string =
+  ## Returns the module's struct declaration text, "" once the walk recorded a refusal.
+  ##
+  ## - one declaration per struct of `CirModule.types`, member structs first,
+  ##   deduplicated by name
+  ## - declarations separated by a blank line, a non-struct type emits nothing
+  ## - the member text is the target's `emitStructField` grammar and the shell is the target's `ModuleShape` grammar
+  ##
+  ##   printStructs(ctx, m, mslModuleShape)  # "struct Pixel { ... }"
+  var byName: Table[string, CirType]
+  for t in m.types:
+    if t.kind == ctStruct:
+      byName[t.name] = t
+  var emitted: HashSet[string]
+  for t in m.types:
+    if t.kind != ctStruct:
+      continue
+    ctx.printStructDecl(byName, emitted, t.name, result, shape)
+
+proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
+  ## Returns the text of one device function or kernel, "" once the walk
+  ## recorded a refusal.
+  ##
+  ## Emission sequence: the target's per-proc state (`prepProc`), then the body, then the head.
+  ##
+  ## Contract:
+  ##
+  ## - the body prints before the head assembles: a shader entry head names
+  ##   the coordinate-builtin inputs the body walk collected
+  ## - a kernel head carries its own open brace in the target's placement
+  ## - a device function head is the bare signature, this proc opens the body
+  ##   on that line
+  ##
+  ##   ctx.printProc(fn, cudaModuleShape)  # 'extern "C" __global__ void k(float* o) { ... }'
+  mixin prepProc, printProcHead, printStmts
+  ctx.fnName = fn.name
+  ctx.indent = 0
+  ctx.prepProc(fn)
+  let bodyTxt = ctx.printStmts(fn.body)
+  if ctx.failing():
+    return ""
+  let head = when shape.customProcHead: ctx.printProcHead(fn)
+             else: printSig(ctx, fn) & (if fn.isKernel: " {\n" else: "")
+  if ctx.failing():
+    return ""
+  if fn.isKernel:
+    return head & bodyTxt & '\n' & '}'
+  return head & " {\n" & bodyTxt & '\n' & '}'
+
+proc declareExtensions*(features: ModuleFeatures, lines: openArray[tuple[on: bool, text: string]]): string =
+  ## Extension pragma block of one module over the target's feature table.
+  ##
+  ## Expected input:
+  ## - `features`: the stored module feature scan (`CirModule.features`)
+  ## - `lines`: the target's table, one (feature flag, pragma line) pair per
+  ##   line the block can emit, in emission order
+  ##
+  ## Output: one pragma line per set flag, table order, then a blank line.
+  ##
+  ##   declareExtensions(features, openclFeatureTable)  # pragma lines or ""
+  ##
+  for entry in lines:
+    if entry.on:
+      result.add entry.text
+  result.add "\n"
+
+proc printProgramScopeDecls*(ctx: var auto, m: CirModule, spaces: set[AddressSpace]): string =
+  ## Program-scope declarations of the relocated storage locals in `CirModule.globals`.
+  ##
+  ## Expected input:
+  ##
+  ## - `m.globals`: the program-scope declarations that the target's lowering
+  ##   pass relocated (const_mem, and smem on GLSL)
+  ## - `spaces`: the address spaces this target declares at program scope
+  ## - `emitComputeGlobal(s)` (mixin): one declaration's text, "" skips the entry
+  ##
+  ## Output: one declaration per `sVar` in `spaces`, encounter order, then a blank line after a non-empty section.
+  ##
+  ##   src &= printProgramScopeDecls(ctx, m, {caConstant})
+  mixin emitComputeGlobal
+  for s in m.globals:
+    if s.kind == sVar and s.space in spaces:
+      let decl = ctx.emitComputeGlobal(s)
+      if decl.len > 0:
+        result &= decl & '\n'
+  if result.len > 0:
+    result &= '\n'
+
+proc printModule*(ctx: var auto, m: CirModule, kernels: seq[CirProc], shape: static ModuleShape): tuple[src: string, err: string] =
+  ## Returns the full module assembly over the shared section skeleton, returning "" as the error when clean, else the first refusal.
+  ##
+  ## Sections in emission order, each `when`-guarded section specialized by the target's static `shape`:
+  ##
+  ## | section                  | content                                                                                                             |
+  ## | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+  ## | `printPrelude`           | the target's leading lines                                                                                          |
+  ## | `printRefBlocks`         | the buffer-reference block declarations                                                                             |
+  ## | `printStructs`           | the module's struct declarations                                                                                    |
+  ## | `printParamBindings`     | the kernel parameters' binding section                                                                              |
+  ## | `printProgramScopeDecls` | the hoisted program-scope declarations                                                                              |
+  ## | `printReduceTemplates`   | the warp-reduction templates in use                                                                                 |
+  ## | the proc set             | every proc in `m.procs` order under `moduleOrderProcs`, else the device functions under `fwdDecls` then the kernels |
+  ##
+  ## Every section checks the walk's first refusal, so a refusal anywhere
+  ## records once and returns.
+  mixin printPrelude, printRefBlocks, printParamBindings, printReduceTemplates
+  result.src = ctx.printPrelude(m)
+  if ctx.failing():
+    return ("", ctx.err)
+  when shape.printsRefBlocks:
+    result.src &= ctx.printRefBlocks(m)
+    if ctx.failing():
+      return ("", ctx.err)
+  result.src &= printStructs(ctx, m, shape)
+  if ctx.failing():
+    return ("", ctx.err)
+  when shape.printsParamBindings:
+    result.src &= ctx.printParamBindings(kernels)
+    if ctx.failing():
+      return ("", ctx.err)
+  result.src &= printProgramScopeDecls(ctx, m, shape.spaces)
+  if ctx.failing():
+    return ("", ctx.err)
+  when shape.printsReduceTemplates:
+    result.src &= ctx.printReduceTemplates(m)
+    if ctx.failing():
+      return ("", ctx.err)
+  if shape.moduleOrderProcs:
+    for fn in m.procs:
+      result.src &= ctx.printProc(fn, shape) & "\n\n"
+      if ctx.failing():
+        return ("", ctx.err)
+  else:
+    let fns = moduleDeviceFns(m)
+    if shape.fwdDecls:
+      for fn in fns:
+        when shape.customProcHead:
+          result.src &= ctx.printProcHead(fn) & ";\n"
+        else:
+          result.src &= printSig(ctx, fn) & ";\n"
+        if ctx.failing():
+          return ("", ctx.err)
+      if fns.len > 0:
+        result.src &= "\n"
+    for fn in fns:
+      result.src &= ctx.printProc(fn, shape) & "\n\n"
+    if ctx.failing():
+      return ("", ctx.err)
+    for kernel in kernels:
+      result.src &= ctx.printProc(kernel, shape) & shape.kernelSep
+      if ctx.failing():
+        return ("", ctx.err)
 
 proc codegenModule*[R](printed: (R, string)): R =
   ## Converts a printer result tuple into the `backends_api` entry-point return value.

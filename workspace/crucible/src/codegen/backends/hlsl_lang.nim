@@ -67,8 +67,6 @@ import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
 import ./print_common
-import ./print_compute
-import ./print_shaders
 import ./targets_registry
 
 type HlslFlavor* = enum
@@ -615,14 +613,14 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   result = ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules: shader-tier hooks over print_shaders
+# Procs and modules: the shader hooks over the shared engine
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitResourceParam(ctx: var PrintCtx, p: CirParam, rw: bool): string =
   let resTy = if rw: "RWStructuredBuffer" else: "StructuredBuffer"
   result = resTy & "<" & ctx.emitHlslScalar(p.typ.pElem) & "> " & p.name
 
-proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
+proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ## Head of one proc, signature and open brace:
   ##
   ## - a device function: the bare `RetType name(params)` signature, buffers as resources, `var T` device parameters as `inout`
@@ -706,7 +704,7 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
     of ctProc:
       ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
       return
-proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the HLSL walk:
   ##
   ## - the entry kernel: push-constant parameters from the stored classification record, buffer parameters to their resource or address route
@@ -750,52 +748,29 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   return "static const " & ctx.emitHlslDecl(s.declType, s.name) &
     " = " & ctx.printExpr(s.init) & ";"
 
-proc emitStructDecls(ctx: var PrintCtx, byName: Table[string, CirType], emitted: var HashSet[string], name: string, outp: var string) =
-  ## Emits one struct definition, member structs first, deduplicated by name.
-  ## HLSL resolves types at their declaration site: the printer refuses a struct holding a pointer,
-  ## HLSL structs cannot take resources.
-  if name in emitted:
-    return
-  let t = byName.getOrDefault(name, nil)
-  if t == nil:
-    ctx.fail("struct " & name & " is referenced but has no declaration")
-    return
-  if t.containsPtrDeep:
-    ctx.fail("struct " & name & " holds a pointer, HLSL structs cannot hold resources")
-    return
-  emitted.incl name
-  for f in t.fields:
-    if f.typ.kind == ctStruct:
-      ctx.emitStructDecls(byName, emitted, f.typ.name, outp)
-    elif f.typ.kind == ctArray:
-      if f.typ.aElem.kind == ctStruct:
-        ctx.emitStructDecls(byName, emitted, f.typ.aElem.name, outp)
-  if ctx.failing():
-    return
-  outp.add "struct " & name & " {\n"
-  if t.fields.len == 0:
-    # HLSL requires at least one member in a struct
-    outp.add "  uint _padding;\n"
-  else:
-    for f in t.fields:
-      outp.add "  " & ctx.emitHlslDecl(f.typ, f.name) & ";\n"
-  outp.add "};\n\n"
+const hlslModuleShape = ModuleShape(
+  spaces: {caConstant},
+  structTypedef: false,
+  structPadding: "uint _padding",
+  structFieldTerm: ';',
+  structClose: "};",
+  fwdDecls: true,
+  moduleOrderProcs: false,
+  kernelSep: "\n",
+  customProcHead: true,
+  printsRefBlocks: false,
+  printsParamBindings: true,
+  printsReduceTemplates: false)
 
-proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
-  ## Struct declarations for every struct of `CirModule.types`, member structs first,
-  ## deduplicated by name. HLSL accepts an unused struct declaration, so a struct
-  ## the lowering dissolved emits as dead text.
-  var byName: Table[string, CirType]
-  for t in m.types:
-    if t.kind == ctStruct:
-      byName[t.name] = t
-  var emitted = initHashSet[string]()
-  for t in m.types:
-    if t.kind == ctStruct:
-      ctx.emitStructDecls(byName, emitted, t.name, result)
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## HLSL declaration text of one struct member. A pointer-holding member refuses: HLSL structs cannot hold resources.
+  if f.typ.containsPtrDeep:
+    ctx.fail("struct " & t.name & " holds a pointer, HLSL structs cannot hold resources")
+    return ""
+  ctx.emitHlslDecl(f.typ, f.name)
 
-proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
-  ## Resource-binding section of the kernel, per flavor:
+proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
+  ## Resource-binding section of the module's one kernel, per flavor:
   ##
   ## - fvD3D12: register resources on one global ordinal, read-only `t`, read-write `u`, then the Push block on `b`
   ## - fvVulkan: buffer-pointer aliases, then the `[[vk::push_constant]]` struct with every member offset locked to the launch-side packing
@@ -810,12 +785,12 @@ proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
           ctx.emitHlslScalar(p.typ.pElem) & "> " & nm & ";\n"
     if bpEmitted.len > 0:
       result &= "\n"
-    if kernel.params.len > 0:
+    if kernels[0].params.len > 0:
       # one member per kernel parameter in host pack order, every member offset
       # locked with [[vk::offset]] to the launch-side packing, the grid member 16-byte aligned
       result &= "struct Push {\n"
       var off = 0
-      for p in kernel.params:
+      for p in kernels[0].params:
         if p.typ.kind == ctAptr:
           off = roundUpMultiple(off, 8)
           result &= "  [[vk::offset(" & $off & ")]] uint64_t " & p.name & ";\n"
@@ -843,14 +818,14 @@ proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
     # one global register ordinal across the buffers, read-only `t`, read-write `u`, the Push block on `b`
     var ordinal = 0
     for p in ctx.kernelBuffers:
-      let rw = ctx.graph.reached.contains(kernel.name & "/" & p.name)
+      let rw = ctx.graph.reached.contains(kernels[0].name & "/" & p.name)
       let reg = if rw: 'u' else: 't'
       result &= ctx.emitResourceParam(p, rw) & " : register(" & reg &
         $ordinal & ", space0);\n"
       ordinal.inc
     if ctx.kernelPush.len > 0:
       result &= "struct Push {\n"
-      for p in kernel.params:
+      for p in kernels[0].params:
         if p.name == "crucible_numworkgroups":
           # materialized dispatch grid size, an int3 the engine stages
           result &= "  int3 " & p.name & ";\n"
@@ -861,32 +836,22 @@ proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
         ", space0);\n"
       result &= "\n"
 
-proc emitShaderFns(ctx: var PrintCtx, m: CirModule): string =
-  ## Device functions: forward declarations first, a call resolves to a definition emitted later through them.
-  let fns = moduleDeviceFns(m)
-  for fn in fns:
-    ctx.fnName = fn.name
-    result &= ctx.emitShaderSig(fn) & ";\n"
-  if fns.len > 0:
-    result &= "\n"
-  for fn in fns:
-    result &= ctx.printShaderProc(fn) & "\n\n"
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
+  ## HLSL opens with no prelude lines.
+  ""
 
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
-  ## Emits the full HLSL translation unit: struct declarations, then the binding section, then the hoisted program-scope declarations,
-  ## the device function declarations and definitions, then `[numthreads]` and the kernel entry: `main`, or the `{.exportc: "name".}` override.
+  ## Emits the full HLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   ##
   ## - fvD3D12: register resources and the `ConstantBuffer` push block
   ## - fvVulkan: the `[[vk::push_constant]]` struct with every member offset locked
-  ##
-  ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", flavor: flavor,
     policy: hlslKindRow, lit: hlslLitRow, row: hlslScalarRow)
   var procsByName: Table[string, CirProc]
   for fn in m.procs:
     procsByName[fn.name] = fn
   ctx.procs = procsByName
-  let kernel = selectShaderKernel(ctx, m)
+  let kernel = getEntryKernel(ctx, m)
   if ctx.failing():
     return ("", ctx.err)
   if kernel.ret.kind != ctVoid:
@@ -897,7 +862,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   ctx.classifyParams(kernel, ctx.kernelPush, ctx.kernelBuffers)
   if ctx.failing():
     return ("", ctx.err)
-  printShaderModule(ctx, m, kernel, "", {caConstant})
+  printModule(ctx, m, @[kernel], hlslModuleShape)
 
 proc codegen*(ctx: var GpuContext, flavor: HlslFlavor = fvD3D12): string =
   ## Prints the module in `ctx` as HLSL source for `flavor`, the `backends_api` entry point.

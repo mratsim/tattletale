@@ -30,7 +30,6 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, tables, math]
 import ../ir/ast_datatypes
 import ./print_common
-import ./print_compute
 import ./targets_registry
 
 type
@@ -66,7 +65,7 @@ proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
   cDecl(cudaScalarRow, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
-proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## CUDA declaration text of one struct member via the shared C declarator.
   emitCudaType(f.typ, f.name, false)
 
@@ -353,44 +352,51 @@ proc emitTypeBare(t: CirType): string =
   ## CUDA C++ name of `t` with no identifier, as casts and sizeof print it.
   emitCudaType(t, "", true)
 
-proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full CUDA translation unit: struct declarations, program-scope constants,
-  ## the warp-reduction templates in use, then every function body.
-  ##
-  ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow,
-    lit: cudaLitRow, row: cudaScalarRow)
-  # NVRTC's default include path provides cuda_fp16.h, so __half and the fp16
-  # conversion builtins compile with no host-side include setup.
-  var src = "#include <cuda_fp16.h>\n" & printComputeStructs(ctx, m, false, "char _")
-  if ctx.failing():
-    return ("", ctx.err)
-  for s in m.globals:
-    if s.kind != sVar:
-      ctx.fail("module global " & s.name & " is not a variable")
-      break
-    var decl = emitCudaType(s.declType, s.name, false)
-    if s.init != nil:
-      decl &= " = " & ctx.printExpr(s.init)
-    src &= "__constant__ " & decl & ";\n"
-  if m.globals.len > 0:
-    src &= "\n"
-  # warp-reduction template set from the stored module feature scan
-  # (`CirModule.features`, filled by the feature-scan pass)
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ## Per-proc state of the CUDA walk: the kernel flag switches on the smem-initializer refusal in `printVar`.
+  ctx.inKernel = fn.isKernel
+
+const cudaModuleShape = ModuleShape(
+  spaces: {caThread, caThreadgroup, caConstant, caDevice},
+  structTypedef: false,
+  structPadding: "char _",
+  structFieldTerm: ';',
+  structClose: "};",
+  fwdDecls: false,
+  moduleOrderProcs: true,
+  kernelSep: "\n\n",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: true)
+
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
+  ## Translation-unit head of every CUDA module: the fp16 include.
+  ## NVRTC's default include path provides cuda_fp16.h, so __half and the fp16
+  ## conversion builtins compile with no host-side include setup.
+  "#include <cuda_fp16.h>\n"
+
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope `__constant__` declaration of one relocated global.
+  var decl = emitCudaType(s.declType, s.name, false)
+  if s.init != nil:
+    decl &= " = " & ctx.printExpr(s.init)
+  return "__constant__ " & decl & ";"
+
+proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
+  ## Warp-reduction template set from the stored module feature scan
+  ## (`CirModule.features`, filled by the feature-scan pass).
   let reduceKinds = m.features.reductions
   if rbkReduceAdd in reduceKinds:
-    src &= emitWarpReduceTemplate(rbkReduceAdd)
+    result &= emitWarpReduceTemplate(rbkReduceAdd)
   if rbkReduceMax in reduceKinds:
-    src &= emitWarpReduceTemplate(rbkReduceMax)
-  if ctx.failing():
-    return ("", ctx.err)
-  for fn in m.procs:
-    ctx.inKernel = fn.isKernel
-    let txt = printComputeProc(ctx, fn)
-    if ctx.err.len > 0:
-      break
-    src &= txt & "\n\n"
-  result = (src, ctx.err)
+    result &= emitWarpReduceTemplate(rbkReduceMax)
+
+proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
+  ## Emits the full CUDA translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow,
+    lit: cudaLitRow, row: cudaScalarRow)
+  printModule(ctx, m, moduleKernels(m), cudaModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as CUDA C++ source, the `backends_api` entry point.

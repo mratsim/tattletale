@@ -33,8 +33,6 @@ import ../passes/pass_helpers
 import std/[macros, math, sets, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
-import ./print_compute
-import ./print_shaders
 import ./targets_registry
 import ../passes/layout_std430
 
@@ -452,10 +450,10 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   result = ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules: shader-tier hooks over print_shaders
+# Procs and modules: the shader hooks over the shared engine
 # ═══════════════════════════════════════════════════════════════════════
 
-proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the WGSL walk:
   ##
   ## - the parameter names, whose pointer reads print as-is: WGSL device functions take real pointer parameters, only pointer locals refuse
@@ -465,7 +463,7 @@ proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
     ctx.paramNames.incl p.name
   ctx.inKernel = fn.isKernel
 
-proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
+proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ## Head of one proc, signature and open brace:
   ##
   ## - a device function: the bare `fn name(params) -> ret` signature, a void return emits no arrow (WGSL has no `void` type name)
@@ -543,53 +541,59 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitWgslTypeBare(p.typ) & ";"
 
-proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
-  ## One struct declaration, WGSL requires at least one member.
-  if t.containsPtrDeep:
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## WGSL declaration text of one struct member: `name: type`, a bool member
+  ## stores as NIM_BOOL, a pointer-holding member refuses.
+  if f.typ.containsPtrDeep:
     ctx.fail("struct " & t.name & " holds a pointer, WGSL has no pointer struct members")
     return ""
-  result = "struct " & t.name & " {\n"
-  if t.fields.len == 0:
-    result &= "  _padding: u32,\n"
-  else:
-    for f in t.fields:
-      ctx.storageBoolSpelling = f.typ.kind == ctBool
-      let field = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
-      ctx.storageBoolSpelling = false
-      result &= "  " & field & ",\n"
-  result &= '}'
+  ctx.storageBoolSpelling = f.typ.kind == ctBool
+  result = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
+  ctx.storageBoolSpelling = false
 
-proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
-  ## Struct declarations for every struct in `CirModule.types`, in declaration order.
-  ## WGSL accepts an unused struct declaration, so a struct the lowering
-  ## dissolved emits as dead text. `emitWgslStruct` refuses a pointer-holding struct.
-  for t in m.types:
-    if t.kind == ctStruct:
-      result &= ctx.emitWgslStruct(t) & "\n\n"
+const wgslModuleShape = ModuleShape(
+  spaces: {caThreadgroup, caConstant},
+  structTypedef: false,
+  structPadding: "_padding: u32",
+  structFieldTerm: ',',
+  structClose: "}",
+  fwdDecls: false,
+  moduleOrderProcs: false,
+  kernelSep: "\n",
+  customProcHead: true,
+  printsRefBlocks: false,
+  printsParamBindings: true,
+  printsReduceTemplates: false)
 
-proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
-  ## The per-parameter policy is `emitBinding`.
-  for i, p in kernel.params:
+proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
+  ## Per-parameter policy: `emitBinding` over the module's one kernel.
+  for i, p in kernels[0].params:
     result &= ctx.emitBinding(p, i) & "\n"
   if result.len > 0:
     result &= "\n"
 
-proc emitShaderFns(ctx: var PrintCtx, m: CirModule): string =
-  for fn in moduleDeviceFns(m):
-    result &= ctx.printShaderProc(fn) & "\n\n"
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
+  ## `enable f16` from the stored module feature scan `CirModule.features`,
+  ## filled by the feature-scan pass, then the `NIM_BOOL` alias when interface
+  ## storage or a declared struct field is bool.
+  var usesNimBool = ctx.nimBoolNames.len > 0
+  if not usesNimBool:
+    for t in m.types:
+      if t.kind == ctStruct:
+        for f in t.fields:
+          if f.typ.kind == ctBool:
+            usesNimBool = true
+  if m.features.fp16:
+    result = declareExtensions(m.features, [(true, "enable f16;\n")])
+  if usesNimBool:
+    result &= "alias NIM_BOOL = u32;\n\n"
 
 proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full WGSL module, one `@group(0) @binding(i)` per kernel parameter:
-  ##
-  ## - `enable f16` when any type in the module uses f16, and the `NIM_BOOL` alias when interface storage or a declared struct field is bool
-  ## - struct declarations for the referenced value structs, then bindings, then hoisted module-scope declarations, then device functions
-  ## - the `@compute` kernel last, its builtin parameters over the body-walk input set
-  ##
-  ## Returns "" as the error when clean, else the first refusal.
+  ## Emits the full WGSL module through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: wgslKindRow,
     lit: wgslLitRow, row: wgslScalarRow)
   ctx.layouts = m.layouts
-  let kernel = selectShaderKernel(ctx, m)
+  let kernel = getEntryKernel(ctx, m)
   if ctx.failing():
     return ("", ctx.err)
   # names whose storage binds as NIM_BOOL: kernel bool parameters and bool workgroup variables
@@ -600,22 +604,8 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   for s in m.globals:
     if s.kind == sVar and s.space == caThreadgroup and s.declType.kind == ctBool:
       ctx.nimBoolNames.incl s.name
-
-  # `enable f16` from the stored module feature scan `CirModule.features`, filled by the feature-scan pass
-  # NIM_BOOL appears in interface storage names and in bool fields of declared structs
-  var usesNimBool = ctx.nimBoolNames.len > 0
-  for t in m.types:
-    if t.kind == ctStruct:
-      for f in t.fields:
-        if f.typ.kind == ctBool:
-          usesNimBool = true
-  var prelude = ""
-  if m.features.fp16:
-    prelude = "enable f16;\n\n"
-  if usesNimBool:
-    prelude &= "alias NIM_BOOL = u32;\n\n"
-
-  printShaderModule(ctx, m, kernel, prelude, {caThreadgroup, caConstant})
+  ctx.fnName = kernel.name
+  printModule(ctx, m, @[kernel], wgslModuleShape)
 
 
 proc codegen*(ctx: var GpuContext): string =

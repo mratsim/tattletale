@@ -29,7 +29,6 @@ import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables]
 import ../ir/ast_datatypes
 import ./print_common
-import ./print_compute
 import ./targets_registry
 
 type
@@ -86,7 +85,7 @@ proc emitOpenclPtrField(t: CirType, ident: string): string =
   let sep = if qualifier.len > 0: " " else: ""
   result = qualifier & sep & emitTypeBare(t) & ' ' & ident
 
-proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## OpenCL C declaration text of one struct member.
   ##
   ## - an array stacks every dimension behind the name (`float a[4][8]`)
@@ -143,15 +142,15 @@ proc getAtomicOperandPtr(e: CirExpr): CirType =
   if t != nil and t.kind in {ctPtr, ctAptr}:
     return t
 
-proc emitExtensions(features: ModuleFeatures): string =
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
   ## OpenCL C extension pragma block from the stored module feature scan
   ## (`CirModule.features`, filled by the feature-scan pass), one line per
   ## feature in use.
-  emitFeatureLines(features, [
-    (features.fp64, "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"),
-    (features.fp16, "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n"),
-    (features.atomicFloat, "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n"),
-    (features.subgroup, "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n"),
+  declareExtensions(m.features, [
+    (m.features.fp64, "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"),
+    (m.features.fp16, "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n"),
+    (m.features.atomicFloat, "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n"),
+    (m.features.subgroup, "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n"),
   ])
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -454,53 +453,34 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
     return ""
   ctx.emitConstDecl(s)
 
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ## Per-proc state of the OpenCL walk: `__local` and `__constant` locals are
+  ## kernel-only storage, `printVar` refuses them inside a device function.
+  ctx.inKernel = fn.isKernel
+
+const openclModuleShape = ModuleShape(
+  spaces: {caConstant},
+  structTypedef: true,
+  structPadding: "char _padding_",
+  structFieldTerm: ';',
+  structClose: "};",
+  fwdDecls: true,
+  moduleOrderProcs: false,
+  kernelSep: "\n",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: false)
+
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full OpenCL C translation unit: extension pragmas, struct typedefs,
-  ## program-scope `__constant` declarations, the device functions,
-  ## and the kernels.
-  ##
-  ## Returns "" as the error when clean, else the first refusal.
+  ## Emits the full OpenCL C translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: openclKindRow,
     lit: openclLitRow, row: openclScalarRow)
   let kernels = moduleKernels(m)
   if kernels.len == 0:
     ctx.fail("no kernel in the module")
     return ("", ctx.err)
-
-  result.src = emitExtensions(m.features)
-
-  result.src &= printComputeStructs(ctx, m, true, "char _padding_")
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # program-scope `__constant` declarations from `m.globals`, relocated there by the OpenCL lowering pass in encounter order
-  result.src &= printComputeGlobals(ctx, m, {caConstant})
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # forward declarations, then device function definitions, then the kernel
-  let fns = moduleDeviceFns(m)
-  for fn in fns:
-    result.src &= printComputeSig(ctx, fn) & ";\n"
-    if ctx.failing():
-      return ("", ctx.err)
-  if fns.len > 0:
-    result.src &= "\n"
-  for fn in fns:
-    # device functions declare no kernel storage, printVar refuses it there
-    ctx.inKernel = false
-    result.src &= printComputeProc(ctx, fn) & "\n\n"
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # every kernel of the module, in encounter order: one OpenCL program per module, the engine launches each kernel by name
-  for kernel in kernels:
-    ctx.inKernel = true
-    result.src &= printComputeProc(ctx, kernel) & "\n"
-    if ctx.failing():
-      return ("", ctx.err)
-  return (result.src, "")
-
+  printModule(ctx, m, kernels, openclModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as OpenCL C source, the `backends_api` entry point.
