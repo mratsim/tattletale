@@ -744,6 +744,19 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
   of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSym, eSizeof:
     result = @[]
 
+proc hasCallDeep*(e: CirExpr): bool =
+  ## Returns true when a call occurs anywhere in `e`.
+  ##
+  ## Eager-evaluation forms (a conditional value, WGSL's `select`)
+  ## run both variants, a call in either would run unconditionally.
+  if e.isNil:
+    return false
+  if e.kind == eCall:
+    return true
+  for c in e.getExprChildren():
+    if c.hasCallDeep():
+      return true
+
 func provenanceSpace*(e: CirExpr): CirAddrSpace =
   ## Address space of the storage an expression's pointer provenance names:
   ## the innermost pointer type along the access chain.

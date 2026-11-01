@@ -63,15 +63,6 @@ proc tempBinderFor(fn: CirProc): TempBinder =
   fn.body.walkStmts(onStmt, onExpr)
   result.used = collected
 
-proc hasCallDeep(e: CirExpr): bool =
-  if e.isNil:
-    return false
-  var found = false
-  e.walkExprs(proc(x: CirExpr) =
-    if x.kind == eCall:
-      found = true)
-  result = found
-
 proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
   ## Binds one call-bearing operand into a fresh temp, returns the temp symbol.
   ## The operand evaluates once, both use sites read the temp.

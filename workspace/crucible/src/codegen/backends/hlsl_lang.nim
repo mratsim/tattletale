@@ -646,70 +646,14 @@ proc printEmitOperand(ctx: var PrintCtx, op: CirExpr): string =
   ## the expression policy of the target printer.
   ctx.printExpr(op)
 
-proc exprHasCall(e: CirExpr): bool =
-  ## True when any subexpression of `e` is a call.
-  ##
-  ## A call may write memory. A conditional expression can evaluate
-  ## both variants on some hardware, so only call-free variants may take
-  ## the conditional form.
-  if e == nil:
-    return false
-  if e.kind == eCall:
-    return true
-  for c in e.getExprChildren():
-    if exprHasCall(c):
-      return true
-
-proc isSelectArm(s: CirStmt, name: string): bool =
-  ## True when `s` assigns the local `name` exactly once from a plain expression,
-  ## matching one variant of a hoisted if-expression.
-  s.kind == sAsgn and s.lhs.kind == eSym and s.lhs.name == name and s.rhs != nil
-
 const hlslLoopStyle = LoopStyle(
   unrollDirective: "[unroll]",
   infiniteHead: "for (;;)\n",
   braceSameLine: false)
 
 proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list, the select re-fusion peephole walks
-  ## alongside the shared statement dispatch.
-  var lines: seq[string]
-  var i = 0
-  while i < stmts.len:
-    let s = stmts[i]
-    var txt: string
-    if s.kind == sLoop:
-      txt = printLoopText(ctx, s, hlslLoopStyle)
-      i.inc
-    elif s.kind == sVar and s.space == caThread and s.init == nil and
-        s.declType.kind in {ctBool, ctInt, ctUint, ctFloat} and
-        i + 1 < stmts.len and stmts[i + 1].kind == sIte and
-        stmts[i + 1].thenBody.len == 1 and stmts[i + 1].elseBody.len == 1 and
-        stmts[i + 1].thenBody[0].isSelectArm(s.name) and
-        stmts[i + 1].elseBody[0].isSelectArm(s.name) and
-        not exprHasCall(stmts[i + 1].cond) and
-        not exprHasCall(stmts[i + 1].thenBody[0].rhs) and
-        not exprHasCall(stmts[i + 1].elseBody[0].rhs):
-      # a hoisted if-expression temp with one assignment per variant prints
-      # as the conditional expression the source wrote, and the space check
-      # (`caThread`) keeps printStmt's storage-class refusals in reach
-      ctx.indent.inc
-      let condTxt = ctx.printExpr(stmts[i + 1].cond)
-      let thenTxt = ctx.printExpr(stmts[i + 1].thenBody[0].rhs)
-      let elseTxt = ctx.printExpr(stmts[i + 1].elseBody[0].rhs)
-      ctx.indent.dec
-      if ctx.failing():
-        txt = ""
-      else:
-        txt = spaces(ctx.indent * 2) & ctx.emitHlslDecl(s.declType, s.name) &
-          " = " & condTxt & " ? " & thenTxt & " : " & elseTxt & ";"
-      i.inc  # consumes the ite with the temp it assigns
-    else:
-      txt = ctx.printStmt(s)
-    if txt.len > 0:
-      lines.add txt
-    i.inc
-  return lines.join("\n")
+  ## Prints one statement list, the shared walk with the HLSL loop style.
+  printStmtList(ctx, stmts, hlslLoopStyle)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules

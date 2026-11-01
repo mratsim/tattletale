@@ -616,6 +616,7 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
   ## An elif chain nests one `ite` per branch, first match wins.
   ## The else statements sit innermost.
   ## The expression form assigns `dest` in every branch body.
+  ## A two-branch select over one scalar local folds into one conditional-value assignment, the boundary sits in the check below.
   var tail: seq[CirStmt] = @[]
   if not elseBody.isNil:
     tail = ctx.buildBranchBody(elseBody, dest)
@@ -633,6 +634,26 @@ proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]]
       return @[]
     tail = condHoists & @[iteS(cond, body, tail)]
   result = tail
+  # select re-fusion: one `ite` whose then and else bodies each hold a single
+  # assignment to the same scalar local becomes one conditional-value assignment.
+  # Both variants of a conditional value evaluate, in WGSL's `select` and the C-family `?:` alike.
+  # A call in the condition or in either value keeps the statement form: a call may write memory or synchronize.
+  # Elif chains, no-else ifs, multi-statement bodies and non-scalar
+  # destinations never match the shape tested here.
+  if result.len == 1 and result[0].kind == sIte:
+    let branch = result[0]
+    if branch.thenBody.len == 1 and branch.elseBody.len == 1 and
+        branch.thenBody[0].kind == sAsgn and branch.elseBody[0].kind == sAsgn and
+        branch.thenBody[0].lhs.kind == eSym and branch.elseBody[0].lhs.kind == eSym and
+        branch.thenBody[0].lhs.name == branch.elseBody[0].lhs.name:
+      let destSym = branch.thenBody[0].lhs
+      let destType = getExprType(destSym)
+      if destType != nil and destType.kind in {ctBool, ctInt, ctUint, ctFloat} and
+          not hasCallDeep(branch.cond) and
+          not hasCallDeep(branch.thenBody[0].rhs) and
+          not hasCallDeep(branch.elseBody[0].rhs):
+        result = @[asgnS(destSym, ternaryE(destType, branch.cond,
+          branch.thenBody[0].rhs, branch.elseBody[0].rhs))]
 
 proc lowerSplicedStmt(ctx: var FrontendCtx, c: NimNode): seq[CirStmt] =
   ## One non-final child of an expression block, a statement of the spliced expansion,
