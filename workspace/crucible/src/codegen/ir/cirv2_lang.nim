@@ -449,6 +449,15 @@ type
     ## - filled by the target's call-graph analysis pass after the last transform
     ## - valid only if no transform runs after the analysis: the pass registry has no invalidation
     ## - the printer reads the stored record, it never rescans
+    refBlocks*: OrderedTable[string, CirType]
+    ## GLSL buffer-reference blocks, block name -> pointee type.
+    ## One entry per distinct block, in registration order.
+    ## Filled by the GLSL ref-block analysis pass after its last transform.
+    ##
+    ## - valid only if no transform runs after the pass: the pass registry
+    ##   has no invalidation
+    ## - the printer emits one `layout(buffer_reference, std430) buffer`
+    ##   declaration per entry in order, it never registers a block itself
     layouts*: Table[string, StructLayout]
     ## Packed layout of each nominal struct type, keyed by struct name,
     ## filled by the target's layout analysis pass after its last transform.

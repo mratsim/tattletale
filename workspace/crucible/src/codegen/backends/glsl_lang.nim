@@ -18,6 +18,8 @@
 ## - `ptr` locals dissolve into their pointees (GLSL has no function-storage addressing), a surviving pointer local refuses, naming the pass
 ## - a `var T` device-function parameter binds as `inout`, the qualify pass retyped it to its pointee
 ## - `{.smem.}` and `{.const_mem.}` kernel locals relocate into `CirModule.globals`, emitted as program-scope `shared`/`const` declarations
+## - the ref-block pass registers every buffer-reference block into
+##   `CirModule.refBlocks`, the printer declares one per entry in order
 ##
 ## Remaining checks:
 ## - a threadgroup/constant local surviving in a nested scope or device function refuses, a `caDevice`-space local refuses too
@@ -41,8 +43,6 @@ type
     ## Kind row of the target. The shared walk reads its policy fields.
     lit: LitTokens
     ## Literal token table of the target, the shared literal head reads it.
-    refBlocks: OrderedTable[string, string]
-    ## Buffer-reference block declarations to emit, block name -> member text.
     layouts: Table[string, StructLayout]
     ## Stored struct layouts of the module, the layout pass filled them.
 
@@ -67,36 +67,30 @@ proc emitGlslTypeBare(t: CirType): string =
   else:
     result = emitGlslScalar(t)
 
-proc refTypeName(t: CirType): string =
-  ## GLSL name of the buffer-reference block binding `t`:
-  ## a pointer renders as its reference block type.
+proc refTypeName*(t: CirType): string =
+  ## Returns the GLSL name of the buffer-reference block binding `t`.
+  ## A pointer renders as its reference block type. The GLSL ref-block
+  ## analysis pass dedups blocks by this name.
   result = "Ref_" & emitGlslTypeBare(t).multiReplace(
     (" ", "_"), ("[", ""), ("]", ""), (",", "_"), ("(", ""), (")", ""))
 
-proc requireRefBlock(ctx: var PrintCtx, pointee: CirType) =
-  ## Registers the buffer-reference block of one runtime-array pointee,
-  ## deduped by block name. The block's member is the runtime array `x[]`:
+proc emitGlslRefBlockMember(ctx: var PrintCtx, pointee: CirType): string =
+  ## Member declaration of one buffer-reference block, the runtime array `x[]`:
   ## a fixed-array element nests after the runtime dimension (`uint8_t x[][32]`),
   ## the unsized dimension is only legal in the outermost position.
-  let name = refTypeName(pointee)
-  if ctx.refBlocks.hasKey(name):
-    return
-  let member =
-    case pointee.kind
-    of ctArray:
-      var base = pointee
-      var dims = ""
-      while base.kind == ctArray:
-        dims &= "[" & $base.aN & "]"
-        base = base.aElem
-      emitGlslScalar(base) & " x[]" & dims & ";"
-    of ctVoid, ctProc:
-      ctx.fail("buffer reference to " & $pointee.kind)
-      ""
-    else:
-      emitGlslScalar(pointee) & " x[];"
-  if member.len > 0:
-    ctx.refBlocks[name] = member
+  case pointee.kind
+  of ctArray:
+    var base = pointee
+    var dims = ""
+    while base.kind == ctArray:
+      dims &= "[" & $base.aN & "]"
+      base = base.aElem
+    result = emitGlslScalar(base) & " x[]" & dims & ";"
+  of ctVoid, ctProc:
+    ctx.fail("buffer reference to " & $pointee.kind)
+    result = ""
+  else:
+    result = emitGlslScalar(pointee) & " x[];"
 
 proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
   ## GLSL declaration of a buffer pointer: the reference block handle,
@@ -104,7 +98,6 @@ proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
   if t.space != caDevice:
     ctx.fail("buffer pointer in " & $t.space & " space")
     return ""
-  ctx.requireRefBlock(t.pElem)
   result = refTypeName(t.pElem) & ' ' & ident
 
 proc emitGlslParam(t: CirType, name: string, varParam: bool): string =
@@ -172,7 +165,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## from its element type.
   let t = e.castType
   if t.kind in {ctAptr, ctPtr}:
-    ctx.requireRefBlock(t.pElem)
     return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
   return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
 
@@ -286,7 +278,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
       # a cast binds looser than the subscript: parenthesize the base
       baseTxt = "(" & baseTxt & ")"
     if bt != nil and bt.kind == ctAptr:
-      ctx.requireRefBlock(bt.pElem)
       return baseTxt & ".x[" & idxTxt & "]"
     if bt != nil and bt.kind == ctArray:
       return baseTxt & "[" & idxTxt & "]"
@@ -316,7 +307,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     let op = e.derefOperand
     let ot = getExprType(op)
     if ot != nil and ot.kind == ctAptr:
-      ctx.requireRefBlock(ot.pElem)
       return ctx.printExpr(op) & ".x[0]"
     if ot != nil and ot.kind == ctPtr:
       ctx.fail("deref of a pointer, GLSL has no function-storage addressing," &
@@ -489,120 +479,6 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
     result = "const " & emitGlslTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
 
-proc registerTypeRefBlocks(ctx: var PrintCtx, t: CirType) =
-  ## Registers the buffer-reference blocks of every device pointer
-  ## reachable from the type tree, through pointer targets and array
-  ## elements and object fields, dedup by reference-block name.
-  if t.isNil:
-    return
-  case t.kind
-  of ctAptr:
-    ctx.requireRefBlock(t.pElem)
-    ctx.registerTypeRefBlocks(t.pElem)
-  of ctPtr:
-    ctx.registerTypeRefBlocks(t.pElem)
-  of ctArray:
-    ctx.registerTypeRefBlocks(t.aElem)
-  of ctVector:
-    ctx.registerTypeRefBlocks(t.vElem)
-  of ctStruct:
-    for f in t.fields:
-      ctx.registerTypeRefBlocks(f.typ)
-  else:
-    discard
-
-proc registerExprRefBlocks(ctx: var PrintCtx, e: CirExpr) =
-  ## Registers the buffer-reference blocks reachable from one expression:
-  ## every buffer pointer subexpression's pointee needs its block declared
-  ## before the module body prints, a cast target included.
-  if e.isNil:
-    return
-  let t = getExprType(e)
-  if t != nil and t.kind == ctAptr:
-    ctx.requireRefBlock(t.pElem)
-  case e.kind
-  of eCall:
-    ctx.registerExprRefBlocks(e.callee)
-    for a in e.args:
-      ctx.registerExprRefBlocks(a)
-  of eAt:
-    ctx.registerExprRefBlocks(e.atBase)
-    ctx.registerExprRefBlocks(e.atIndex)
-  of ePat:
-    ctx.registerExprRefBlocks(e.patBase)
-    ctx.registerExprRefBlocks(e.patIndex)
-  of eDot:
-    ctx.registerExprRefBlocks(e.dotBase)
-  of eDeref:
-    ctx.registerExprRefBlocks(e.derefOperand)
-  of eAddr:
-    ctx.registerExprRefBlocks(e.addrOperand)
-  of eCast, eConv:
-    ctx.registerExprRefBlocks(e.castOperand)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    ctx.registerExprRefBlocks(e.left)
-    ctx.registerExprRefBlocks(e.right)
-  of eAnd, eOr:
-    ctx.registerExprRefBlocks(e.andLeft)
-    ctx.registerExprRefBlocks(e.andRight)
-  of eTernary:
-    ctx.registerExprRefBlocks(e.cond)
-    ctx.registerExprRefBlocks(e.thenE)
-    ctx.registerExprRefBlocks(e.elseE)
-  of eEq, eNeq, eLt, eLe:
-    ctx.registerExprRefBlocks(e.a)
-    ctx.registerExprRefBlocks(e.b)
-  of eBitNot, eNeg:
-    ctx.registerExprRefBlocks(e.unOperand)
-  of eNot:
-    ctx.registerExprRefBlocks(e.notOperand)
-  of eOconstr:
-    for kvf in e.kvFields:
-      ctx.registerExprRefBlocks(kvf.value)
-  of eAconstr:
-    for el in e.elems:
-      ctx.registerExprRefBlocks(el)
-  of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof, eSym:
-    discard
-
-proc registerStmtRefBlocks(ctx: var PrintCtx, ss: seq[CirStmt]) =
-  ## Registers the buffer-reference blocks reachable from one statement list.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      if s.declType.kind == ctAptr:
-        ctx.requireRefBlock(s.declType.pElem)
-      ctx.registerExprRefBlocks(s.init)
-    of sAsgn:
-      ctx.registerExprRefBlocks(s.lhs)
-      ctx.registerExprRefBlocks(s.rhs)
-    of sIte:
-      ctx.registerExprRefBlocks(s.cond)
-      ctx.registerStmtRefBlocks(s.thenBody)
-      ctx.registerStmtRefBlocks(s.elseBody)
-    of sLoop:
-      ctx.registerExprRefBlocks(s.loopCond)
-      ctx.registerStmtRefBlocks(s.loopBody)
-    of sCase:
-      ctx.registerExprRefBlocks(s.selector)
-      for br in s.branches:
-        ctx.registerStmtRefBlocks(br.body)
-      ctx.registerStmtRefBlocks(s.caseElse)
-    of sScope:
-      ctx.registerStmtRefBlocks(s.scopeBody)
-    of sAssume:
-      ctx.registerExprRefBlocks(s.assumeCond)
-    of sRet:
-      ctx.registerExprRefBlocks(s.retVal)
-    of sDiscard:
-      ctx.registerExprRefBlocks(s.discardVal)
-    of sCall:
-      ctx.registerExprRefBlocks(s.callCallee)
-      for a in s.callArgs:
-        ctx.registerExprRefBlocks(a)
-    of sAsm, sEmit:
-      discard
-
 proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full GLSL translation unit: version and extensions,
   ## buffer-reference blocks, struct declarations, the push-constant block,
@@ -621,21 +497,18 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     ctx.fail("no kernel in the module")
     return ("", ctx.err)
 
-  # ref-block pre-pass: registers the blocks the declarations below use
-  for t in m.types:
-    ctx.registerTypeRefBlocks(t)
-  for fn in m.procs:
-    for p in fn.params:
-      if p.typ.kind in {ctAptr, ctPtr}:
-        ctx.requireRefBlock(p.typ.pElem)
-    ctx.registerStmtRefBlocks(fn.body)
-
+  # buffer-reference blocks, one declaration per entry of the registration
+  # record in `CirModule.refBlocks`, which the ref-block analysis pass
+  # filled after the last transform. The printer never registers a block.
   result.src = emitExtensions(m.features)
 
-  for name, member in ctx.refBlocks:
+  for name, pointee in m.refBlocks:
+    let member = ctx.emitGlslRefBlockMember(pointee)
     result.src &= "layout(buffer_reference, std430) buffer " & name &
       " { " & member & " };\n"
-  if ctx.refBlocks.len > 0:
+    if ctx.failing():
+      return ("", ctx.err)
+  if m.refBlocks.len > 0:
     result.src &= "\n"
 
   for t in m.types:

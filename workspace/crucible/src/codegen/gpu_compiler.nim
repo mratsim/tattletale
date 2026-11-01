@@ -159,6 +159,7 @@ macro codegenGLSL(body: typed): string =
   reg.registerGlslLoweringPasses()
   # analysis passes after the last transform: analysis results are valid
   # only if no transform runs after them (the registry never invalidates)
+  reg.registerGlslRefBlockPass()
   reg.registerGlslFeatureScan()
   reg.registerGlslLayoutPass()
   reg.registerValidationPostPasses()

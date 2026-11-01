@@ -10,7 +10,8 @@
 ## GLSL lowering: per-target transforms for the GLSL storage model,
 ## registered by the GLSL pipeline and run before printing.
 ##
-##   kernel body → glslQualifyVarParams → glslDissolvePointerLocals → glslHoistProgramScopeLocals → printed GLSL source
+##   kernel body → glslQualifyVarParams → glslDissolvePointerLocals → glslHoistProgramScopeLocals
+##   → glslRegisterRefBlocks → printed GLSL source
 ##
 ## GLSL has no function-storage addressing, a local cannot be addressed.
 ## Threadgroup and constant-storage locals must live at program scope:
@@ -22,6 +23,9 @@
 ##   reads through the alias rewrite to the pointee symbol
 ## - `glslHoistProgramScopeLocals`: `{.smem.}` kernel locals and `{.const_mem.}`
 ##   locals relocate into `CirModule.globals` in encounter order
+##
+## `glslRegisterRefBlocks` fills `CirModule.refBlocks` with one entry per
+## distinct buffer-reference block name, in registration order.
 ##
 ## Kernel and device-function pointer parameters stay for the printer to refuse.
 ##
@@ -38,6 +42,7 @@
 
 import std/[sets, tables]
 import ../ir/cirv2_lang
+import ../backends/glsl_lang
 import ./pass_datatypes
 import ./pass_helpers
 import ./passes_lowering_cfamily
@@ -437,3 +442,166 @@ proc glslRegisterDissolvePointerLocals(reg: var PassRegistry) =
     "Dissolves pointer locals into their pointee locals",
     DissolveCtx, newDissolveCtx, dissolveVarDecl, dissolveAsgn,
     dissolveDropsVar, dissolveDropsAsgn, rewriteDissolveExpr)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Buffer-reference block registration
+# ═══════════════════════════════════════════════════════════════════════
+
+proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirType) =
+  ## Registers the buffer-reference block of one runtime-array pointee,
+  ## deduped by block name.
+  ##
+  ## The block's member is the runtime array `x[]`: a fixed-array element nests
+  ## after the runtime dimension (`uint8_t x[][32]`), the unsized dimension is
+  ## only legal in the outermost position. The printer composes the member text
+  ## and refuses a void or proc pointee at the declaration site.
+  let name = refTypeName(pointee)
+  if name in blocks:
+    return
+  blocks[name] = pointee
+
+proc registerTypeRefBlocks(blocks: var OrderedTable[string, CirType], t: CirType) =
+  ## Registers the buffer-reference blocks of every device pointer
+  ## reachable from the type tree, through pointer targets and array
+  ## elements and object fields, dedup by reference-block name.
+  if t.isNil:
+    return
+  case t.kind
+  of ctAptr:
+    registerRefBlock(blocks, t.pElem)
+    registerTypeRefBlocks(blocks, t.pElem)
+  of ctPtr:
+    registerTypeRefBlocks(blocks, t.pElem)
+  of ctArray:
+    registerTypeRefBlocks(blocks, t.aElem)
+  of ctVector:
+    registerTypeRefBlocks(blocks, t.vElem)
+  of ctStruct:
+    for f in t.fields:
+      registerTypeRefBlocks(blocks, f.typ)
+  else:
+    discard
+
+proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr) =
+  ## Registers the buffer-reference blocks reachable from one expression:
+  ## every buffer pointer subexpression's pointee needs its block declared
+  ## before the module body prints, a cast target included.
+  if e.isNil:
+    return
+  let t = getExprType(e)
+  if t != nil and t.kind == ctAptr:
+    registerRefBlock(blocks, t.pElem)
+  case e.kind
+  of eCall:
+    registerExprRefBlocks(blocks, e.callee)
+    for a in e.args:
+      registerExprRefBlocks(blocks, a)
+  of eAt:
+    registerExprRefBlocks(blocks, e.atBase)
+    registerExprRefBlocks(blocks, e.atIndex)
+  of ePat:
+    registerExprRefBlocks(blocks, e.patBase)
+    registerExprRefBlocks(blocks, e.patIndex)
+  of eDot:
+    registerExprRefBlocks(blocks, e.dotBase)
+  of eDeref:
+    registerExprRefBlocks(blocks, e.derefOperand)
+  of eAddr:
+    registerExprRefBlocks(blocks, e.addrOperand)
+  of eCast, eConv:
+    registerExprRefBlocks(blocks, e.castOperand)
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    registerExprRefBlocks(blocks, e.left)
+    registerExprRefBlocks(blocks, e.right)
+  of eAnd, eOr:
+    registerExprRefBlocks(blocks, e.andLeft)
+    registerExprRefBlocks(blocks, e.andRight)
+  of eTernary:
+    registerExprRefBlocks(blocks, e.cond)
+    registerExprRefBlocks(blocks, e.thenE)
+    registerExprRefBlocks(blocks, e.elseE)
+  of eEq, eNeq, eLt, eLe:
+    registerExprRefBlocks(blocks, e.a)
+    registerExprRefBlocks(blocks, e.b)
+  of eBitNot, eNeg:
+    registerExprRefBlocks(blocks, e.unOperand)
+  of eNot:
+    registerExprRefBlocks(blocks, e.notOperand)
+  of eOconstr:
+    for kvf in e.kvFields:
+      registerExprRefBlocks(blocks, kvf.value)
+  of eAconstr:
+    for el in e.elems:
+      registerExprRefBlocks(blocks, el)
+  of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof, eSym:
+    discard
+
+proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[CirStmt]) =
+  ## Registers the buffer-reference blocks reachable from one statement list.
+  for s in ss:
+    case s.kind
+    of sVar, sConst:
+      if s.declType.kind == ctAptr:
+        registerRefBlock(blocks, s.declType.pElem)
+      registerExprRefBlocks(blocks, s.init)
+    of sAsgn:
+      registerExprRefBlocks(blocks, s.lhs)
+      registerExprRefBlocks(blocks, s.rhs)
+    of sIte:
+      registerExprRefBlocks(blocks, s.cond)
+      registerStmtRefBlocks(blocks, s.thenBody)
+      registerStmtRefBlocks(blocks, s.elseBody)
+    of sLoop:
+      registerExprRefBlocks(blocks, s.loopCond)
+      registerStmtRefBlocks(blocks, s.loopBody)
+    of sCase:
+      registerExprRefBlocks(blocks, s.selector)
+      for br in s.branches:
+        registerStmtRefBlocks(blocks, br.body)
+      registerStmtRefBlocks(blocks, s.caseElse)
+    of sScope:
+      registerStmtRefBlocks(blocks, s.scopeBody)
+    of sAssume:
+      registerExprRefBlocks(blocks, s.assumeCond)
+    of sRet:
+      registerExprRefBlocks(blocks, s.retVal)
+    of sDiscard:
+      registerExprRefBlocks(blocks, s.discardVal)
+    of sCall:
+      registerExprRefBlocks(blocks, s.callCallee)
+      for a in s.callArgs:
+        registerExprRefBlocks(blocks, a)
+    of sAsm, sEmit:
+      discard
+
+proc glslRegisterRefBlocks(m: CirModule): string =
+  ## Registers every buffer-reference block that the printer will declare,
+  ## one entry per distinct block name in registration order:
+  ##
+  ## - every device pointer reachable from the module's type declarations,
+  ##   through pointer targets, array elements and object fields
+  ## - every proc parameter of pointer type
+  ## - every buffer pointer reachable from a proc body, a cast target included
+  ##
+  ## Runs after the last transform: the walked declarations and bodies are
+  ## final and the registry never invalidates the record.
+  for t in m.types:
+    registerTypeRefBlocks(m.refBlocks, t)
+  for fn in m.procs:
+    for p in fn.params:
+      if p.typ.kind in {ctAptr, ctPtr}:
+        registerRefBlock(m.refBlocks, p.typ.pElem)
+    registerStmtRefBlocks(m.refBlocks, fn.body)
+  return ""
+
+proc registerGlslRefBlockPass*(reg: var PassRegistry) =
+  ## Registers the GLSL ref-block analysis pass:
+  ##
+  ## - the pass fills `CirModule.refBlocks` with one entry per block name,
+  ##   in registration order
+  ## - the printer reads the stored entries and registers nothing itself
+  reg.register("glslRegisterRefBlocks", pkAnalysis, phaseMain,
+    "Registers the buffer-reference blocks that the printer declares, one" &
+    " per distinct block name in registration order",
+    run = glslRegisterRefBlocks
+  )
