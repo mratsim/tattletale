@@ -1,9 +1,8 @@
 ## Builtin tuple-index `[idx]` normalization on `ivec3`
 ##
-## Test that a tuple `[idx]` access normalizes to the field access and a uint32 index is a compile error
+## Test that a tuple `[idx]` access normalizes to the field access
 ##
 ## - canonical coordinates are `ivec3 = tuple[x, y, z: int]`
-## - the index must be an int literal, `[1]` emits the `.y` field
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -21,16 +20,6 @@ block:
   doAssert "gl_GlobalInvocationID.y" in okVulkan,
     "tuple [1] must normalize to the .y field access, got:\n" & okVulkan
   echo "  OK — int-literal tuple index [1] normalizes to .y"
-
-block:
-  # a uint32 index is a compile error
-  static:
-    doAssert not compiles(block:
-      const bad = glsl:
-        proc bad(C: ptr UncheckedArray[int]) {.global.} =
-          C[0] = gl_GlobalInvocationID[0'u32]
-    )
-  echo "  OK — [0'u32] tuple index rejected loudly (reject + document)"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Summary

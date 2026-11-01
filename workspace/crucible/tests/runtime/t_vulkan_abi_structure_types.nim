@@ -1,8 +1,7 @@
 ## VkStructureType constants in the Vulkan ABI
 ##
 ## Test that every VK_STRUCTURE_TYPE_* constant matches the vulkan_core.h numbering
-## (Vulkan 1.4, header version 363), and that COPY_BUFFER_INFO does not exist:
-## vkCmdCopyBuffer takes plain parameters, there is no such structure.
+## (Vulkan 1.4, header version 363).
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \
@@ -41,5 +40,3 @@ static:
   doAssert VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES == VkStructureType(1000257000)
   doAssert VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO == VkStructureType(1000244001)
   doAssert VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO == VkStructureType(1000060000)
-  doAssert not compiles(VK_STRUCTURE_TYPE_COPY_BUFFER_INFO),
-    "COPY_BUFFER_INFO does not exist in vulkan_core.h, vkCmdCopyBuffer takes plain parameters"

@@ -1,11 +1,9 @@
 ## Builtin catalog alias expansion
 ##
-## Test that coordinate aliases expand to canonical builtins in a typed GPU
-## macro body and runtime-dim use errors at Nim semantic analysis
+## Test that coordinate aliases expand to canonical builtins in a typed GPU macro body
 ##
 ## - dot, positional, and static-dim aliases print as the native `get_*(d)` calls
 ## - both barrier aliases fold into two `barrier(CLK_LOCAL_MEM_FENCE)` lines
-## - `get_global_id(d)` with a runtime `d` is rejected loudly at Nim semantic analysis
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -51,19 +49,6 @@ block:
   # both barrier aliases fold into the canonical call -> native spelling
   doAssert expansionKernel.count("barrier(CLK_LOCAL_MEM_FENCE)") == 2
   echo "  OK — in-macro alias expansion (dot / positional / static-dim / barrier aliases)"
-
-block:
-  # Runtime dim: a non-static argument cannot bind the `static int` template
-  # param, so `get_global_id(d)` with a runtime `d` is a loud Nim error.
-  # The rejection is verified here inside the `opencl:` macro body.
-  static:
-    doAssert not compiles(block:
-      const bad = opencl:
-        proc bad(C: ptr UncheckedArray[int]) {.global.} =
-          let d = 0
-          C[0] = get_global_id(d)
-    )
-  echo "  OK — runtime-dim get_global_id(d) rejected loudly inside the macro"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Summary

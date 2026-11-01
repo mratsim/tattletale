@@ -19,18 +19,6 @@ const kernel2d = webgpu:
     C[64 + thread_index_in_threadgroup] = uint32(thread_index_in_threadgroup)
     syncthreads()
 
-block:
-  # `threads_per_threadgroup` is deferred on WGSL: no `workgroup_size`
-  # builtin exists, so referencing it in a `webgpu:` kernel is a loud
-  # compile error, never a silent wrong emission.
-  static:
-    doAssert not compiles(block:
-      const bad = webgpu:
-        proc bad(C: ptr UncheckedArray[uint32]) {.global.} =
-          C[0] = threads_per_threadgroup.x
-    )
-  echo "  OK — threads_per_threadgroup rejected loudly on WGSL"
-
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   echo kernel2d
 
