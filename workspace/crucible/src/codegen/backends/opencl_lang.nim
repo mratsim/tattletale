@@ -147,15 +147,12 @@ proc emitExtensions(features: ModuleFeatures): string =
   ## OpenCL C extension pragma block from the stored module feature scan
   ## (`CirModule.features`, filled by the feature-scan pass), one line per
   ## feature in use.
-  if features.fp64:
-    result.add "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"
-  if features.fp16:
-    result.add "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n"
-  if features.atomicFloat:
-    result.add "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n"
-  if features.subgroup:
-    result.add "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n"
-  result.add "\n"
+  emitFeatureLines(features, [
+    (features.fp64, "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"),
+    (features.fp16, "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n"),
+    (features.atomicFloat, "#pragma OPENCL EXTENSION cl_ext_float_atomics : enable\n"),
+    (features.subgroup, "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n"),
+  ])
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
