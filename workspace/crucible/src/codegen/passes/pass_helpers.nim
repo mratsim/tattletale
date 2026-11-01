@@ -519,11 +519,10 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
   return ""
 
 proc hoistConstMemLocals*(m: CirModule): string =
-  ## Relocates every `{.const_mem.}` local of every proc, see `hoistConstMemStmts`.
-  ##
-  ## Contract:
-  ## - runs after the reserved-word rename, so the relocated declaration names
-  ##   match the renamed body references
+  ## Relocates every `{.const_mem.}` local of every proc into the module's
+  ## constant section:
+  ## - runs after the reserved-word rename, so the relocated declaration
+  ##   names match the renamed body references
   for fn in m.procs:
     let err = hoistConstMemStmts(m, fn, fn.body)
     if err.len > 0:
