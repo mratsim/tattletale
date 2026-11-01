@@ -225,8 +225,7 @@ proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size,
     let w = t.bits div 8
     result = (w, w)
   of ctBool:
-    ctx.fail("bool push member " & label & ", the fvVulkan push block has no" &
-      " bool member")
+    ctx.fail("bool push member " & label & ", the fvVulkan push block has no bool member")
   of ctVector:
     let w = t.vElem.bits div 8
     result = (w * t.vN, w)
@@ -680,18 +679,15 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
   ## - device functions: values pass by value (a `var T` binds `inout`),
   ##   buffers are unbound resource params
   ##
-  ## Rejects the parameter shapes the HLSL resource model cannot bind:
-  ##
-  ## - the flavor selects the fvVulkan-only refusals, the buffer-element binding
-  ##   check and the bool push member
-  ## - classification runs at the signature-emission sites, so a module printed
-  ##   without the pipeline classifies exactly as one printed through it
+  ## Classification runs at the signature-emission sites, so a module printed
+  ## without the pipeline classifies exactly as one printed through it.
+  ## Parameters whose scalar-row cell is absent (the 64-bit integers and float16)
+  ## refuse at the declaration emission on the row-lookup channel.
   for p in fn.params:
     case p.typ.kind
     of ctAptr:
       if p.typ.space != caDevice:
-        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space &
-          " space, buffers address device memory")
+        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space & " space, buffers address device memory")
         return
       if ctx.flavor == fvVulkan:
         # element types are checked up front, the access emitter and the buffer-pointer typedef both read them
@@ -703,53 +699,23 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
     of ctPtr:
       if p.typ.space == caThread:
         if fn.isKernel:
-          ctx.fail("by-reference parameter " & p.name & " in kernel `" &
-            fn.name & "` has no binding, kernels take values and buffers")
+          ctx.fail("by-reference parameter " & p.name & " in kernel `" & fn.name & "` has no binding")
           return
         # device function: the `inout` binding, reads and writes are direct
         discard
       else:
-        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.space &
-          " space has no binding")
+        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.space & " space has no binding")
         return
     of ctArray:
-      ctx.fail("array parameter " & p.name & " in `" & fn.name &
-        "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
+      ctx.fail("array parameter " & p.name & " in `" & fn.name & "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
       return
-    of ctSpan:
-      ctx.fail("span parameter " & p.name & " in `" & fn.name &
-        "` has no HLSL binding, openArray spans split to pointer + length" &
-        " before printing")
-      return
-    of ctInt, ctUint:
-      if p.typ.bits != 32:
-        ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
-          "` is rejected: int64_t is a parse error in the HLSL frontend and" &
-          " uint64_t pulls the SPIR-V Int64 capability")
-        return
-      if fn.isKernel:
-        pushParams.incl(p.name)
-    of ctFloat:
-      if p.typ.bits == 16:
-        ctx.fail("float16 parameter " & p.name & " in `" & fn.name &
-          "`, float16 types are outside the HLSL subset")
-        return
-      if fn.isKernel:
-        pushParams.incl(p.name)
-    of ctBool:
-      if fn.isKernel:
-        if ctx.flavor == fvVulkan:
-          ctx.fail("bool parameter " & p.name & ", the fvVulkan push block has" &
-            " no bool member")
-          return
-        pushParams.incl(p.name)
-    of ctVoid, ctVector, ctStruct:
+    of ctInt, ctUint, ctFloat, ctBool, ctVoid, ctVector, ctStruct, ctSpan:
+      # spans split to pointer + length in the shared lowering, none reaches the printer
       if fn.isKernel:
         pushParams.incl(p.name)
     of ctProc:
       ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
       return
-
 proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
   ## Per-proc state of the HLSL walk:
   ##
