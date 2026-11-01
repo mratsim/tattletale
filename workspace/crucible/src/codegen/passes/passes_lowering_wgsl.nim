@@ -452,10 +452,9 @@ proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
 proc registerTypeStructs(needed: var HashSet[string], t: CirType) =
   ## Registers the struct names reachable from `t`: object fields, array elements, vector elements, pointer targets.
   var refs = needed
-  proc inclStruct(tt: CirType) =
+  walkTypeTree(t, proc(tt: CirType) =
     if tt.kind == ctStruct:
-      refs.incl(tt.name)
-  walkTypeTree(t, inclStruct)
+      refs.incl(tt.name))
   needed = refs
 
 proc scanBareTypeStructs(needed: var HashSet[string], t: CirType) =

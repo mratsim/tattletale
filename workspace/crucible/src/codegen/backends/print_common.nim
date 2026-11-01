@@ -308,7 +308,7 @@ proc printLoopBodyText(ctx: var auto, body: seq[CirStmt], unroll: bool, head: st
     result &= pad & "{\n"
   result &= bodyTxt & "\n" & pad & '}'
 
-proc printWhileText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
+proc printWhileText(ctx: var auto, s: CirStmt, style: LoopStyle): string =
   ## Returns the text of one `sWhile` statement: the unroll directive, then the `while (cond)` head.
   ## `cond` prints through `ctx.printExpr`.
   mixin printExpr
@@ -319,7 +319,7 @@ proc printWhileText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
     "while (" & condTxt & ")\n"
   printLoopBodyText(ctx, s.whileBody, s.whileUnroll, head, style)
 
-proc printIteElse*(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
+proc printIteElse(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
   ## Else tail of an `sIte` statement, appended after its then branch.
   ##
   ## Returns "" when the else body is empty, otherwise the braced form:
@@ -333,7 +333,7 @@ proc printIteElse*(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
   ctx.indent.dec
   result = " else {\n" & elseTxt & '\n' & pad & '}'
 
-proc printEmitOperand*(ctx: var auto, op: CirExpr): string =
+proc printEmitOperand(ctx: var auto, op: CirExpr): string =
   ## Returns the splice text of one `{.emit.}` operand: the rendered expression
   ## when the target's kind row states `emitOperandRendersExpr`.
   ## The symbol name is the default splice.
@@ -426,7 +426,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   of eSym, eDot, eCast, eConv, eSizeof, eOconstr, eAconstr, eCall:
     return ctx.printTargetExpr(e)
 
-proc printStmt*(ctx: var auto, s: CirStmt): string =
+proc printStmt(ctx: var auto, s: CirStmt): string =
   ## Prints one structured statement.
   ##
   ## Shared variants emit here: `sIte`, `sRet`, `sDiscard`, `sEmit`.
@@ -505,7 +505,7 @@ proc printCall*(ctx: var auto, s: CirStmt): string =
   else:
     result = pad & calleeName & "(" & args.join(", ") & ");"
 
-proc printStmtList*(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string =
+proc printStmtList(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string =
   ## Prints one statement list, one line per printed statement:
   ##
   ## - `sWhile`: `printWhileText`, with the target's `style`

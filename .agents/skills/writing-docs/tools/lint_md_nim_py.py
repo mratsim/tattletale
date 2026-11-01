@@ -457,7 +457,7 @@ BANNED = [
      "state the offset or position directly, or restate the layout"),
     (r"\blands?\b|\barrives?\b", None,
      "say what produces or holds the construct, arrival verbs hide the mechanism"),
-    (r"\bre?stamp(?:s|ed|ing)?\b", None,
+    (r"\b(?:re)?stamp(?:s|ed|ing)?\b", None,
      "name the mechanism (derives, carries, specializes, writes, re-types); stamp hides what changed, the type or the site"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),

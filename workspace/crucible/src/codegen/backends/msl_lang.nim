@@ -354,8 +354,8 @@ proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
     return "inline "
   return ""
 
-proc emitComputeRet(ctx: var PrintCtx, t: CirType): string =
-  ## MSL declaration text of a return type, no identifier.
+proc emitTypeBare(t: CirType): string =
+  ## MSL name of `t` with no identifier, as casts and sizeof print it.
   emitMslType(t, "", true)
 
 proc printProc(ctx: var PrintCtx, fn: CirProc): string =
