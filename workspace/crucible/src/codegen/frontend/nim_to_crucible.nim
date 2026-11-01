@@ -1084,15 +1084,11 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     var elseBody: NimNode = nil
     for c in n:
       case c.kind
-      of nnkElifBranch:
+      of nnkElifBranch, nnkElifExpr:
         # statement shape of an elif chain reaches the expression form
         # when the branch values sit in value position
         branches.add((cond: c[0], body: c[1]))
-      of nnkElse:
-        elseBody = c[0]
-      of nnkElifExpr:
-        branches.add((cond: c[0], body: c[1]))
-      of nnkElseExpr:
+      of nnkElse, nnkElseExpr:
         elseBody = c[0]
       else:
         ctx.fail("if expression: unexpected branch " & $c.kind)
