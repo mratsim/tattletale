@@ -399,10 +399,9 @@ proc registerTypeRefBlocks(blocks: var OrderedTable[string, CirType], t: CirType
   ## reachable from the type tree, through pointer targets and array
   ## elements and object fields, dedup by reference-block name.
   var found = blocks
-  proc registerAptr(tt: CirType) =
+  walkTypeTree(t, proc(tt: CirType) =
     if tt.kind == ctAptr:
-      registerRefBlock(found, tt.pElem)
-  walkTypeTree(t, registerAptr)
+      registerRefBlock(found, tt.pElem))
   blocks = found
 
 proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr) =
@@ -412,11 +411,10 @@ proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr
   ##
   ## Node visits run pre-order, in the printer's declaration-sequence order.
   var found = blocks
-  proc registerAptrNode(e: CirExpr) =
+  e.walkExprs(proc(e: CirExpr) =
     let t = getExprType(e)
     if t != nil and t.kind == ctAptr:
-      registerRefBlock(found, t.pElem)
-  e.walkExprs(registerAptrNode)
+      registerRefBlock(found, t.pElem))
   blocks = found
 
 proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[CirStmt]) =
