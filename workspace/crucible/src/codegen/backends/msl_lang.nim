@@ -36,8 +36,7 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
-    ## Literal token table of the target, the shared literal head reads it.
-    ## Per-kernel state.
+    ## Literal token table of the target, the shared literal head reads it, per kernel state.
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
@@ -304,7 +303,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   let pad = spaces(ctx.indent * 2)
   if s.space == caThreadgroup:
     # kernel-scope threadgroup storage: the MSL lowering pass keeps only
-    # a kernel's top-level smem locals here, a device function's smem local
+    # a kernel's smem locals here, a device function's smem local
     # refuses in the pass, any initializer is discarded
     result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
     return
