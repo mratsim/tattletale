@@ -29,9 +29,6 @@ type
     ctx: OpenCLContext
     kernelCache: OpenCLKernelCache
 
-template backendKind*(_: typedesc[OpenCLEngine]): BackendKind =
-  bkOpenCL
-
 proc newOpenCLEngine*(): OpenCLEngine {.inline.} =
   OpenCLEngine(ctx: newOpenCLContext())
 

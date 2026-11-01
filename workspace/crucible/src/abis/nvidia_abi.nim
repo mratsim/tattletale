@@ -880,8 +880,6 @@ proc cuLaunchKernel*(
 
 {.pop.} # {.push noconv, importc, dynlib: "libcuda.so"..}
 
-proc cuModuleGetGlobal*(dptr: var CUdeviceptr, bytes: ptr csize_t, hmod: CUmodule, name: cstring): CUresult {.v2.}
-
 proc cuMemAlloc*(devptr: var CUdeviceptr, size: csize_t): CUresult {.v2.}
 proc cuMemFree*(devptr: CUdeviceptr): CUresult {.v2.}
 proc cuMemcpyHtoD*(dst: CUdeviceptr, src: pointer, size: csize_t): CUresult {.v2.}
@@ -933,9 +931,6 @@ proc nvrtcCreateProgram*(prog: var nvrtcProgram; src: cstring; name: cstring;
                         numHeaders: cint; headers: cstringArray;
                         includeNames: cstringArray): nvrtcResult {.discardable, cdecl,
     importc: "nvrtcCreateProgram", dynlib: libNvrtc.}
-
-proc nvrtcVersion*(major, minor: var cint): nvrtcResult {.discardable, cdecl,
-    importc: "nvrtcVersion", dynlib: libNvrtc.}
 
 proc nvrtcDestroyProgram*(prog: var nvrtcProgram): nvrtcResult {.discardable, cdecl,
     importc: "nvrtcDestroyProgram", dynlib: libNvrtc.}
@@ -1632,199 +1627,6 @@ type
   CUuuid* = CUuuid_st
   cudaUUID_t* = CUuuid_st
 
-  cudaDeviceProp* {.bycopy.} = object
-    name*: array[256, char]
-    ## < ASCII string identifying device
-    uuid*: cudaUUID_t
-    ## < 16-byte unique identifier
-    luid*: array[8, char]
-    ## < 8-byte locally unique identifier. Value is undefined on TCC and non-Windows platforms
-    luidDeviceNodeMask*: cuint
-    ## < LUID device node mask. Value is undefined on TCC and non-Windows platforms
-    totalGlobalMem*: csize_t
-    ## < Global memory available on device in bytes
-    sharedMemPerBlock*: csize_t
-    ## < Shared memory available per block in bytes
-    regsPerBlock*: cint
-    ## < 32-bit registers available per block
-    warpSize*: cint
-    ## < Warp size in threads
-    memPitch*: csize_t
-    ## < Maximum pitch in bytes allowed by memory copies
-    maxThreadsPerBlock*: cint
-    ## < Maximum number of threads per block
-    maxThreadsDim*: array[3, cint]
-    ## < Maximum size of each dimension of a block
-    maxGridSize*: array[3, cint]
-    ## < Maximum size of each dimension of a grid
-    clockRate*: cint
-    ## < Deprecated, Clock frequency in kilohertz
-    totalConstMem*: csize_t
-    ## < Constant memory available on device in bytes
-    major*: cint
-    ## < Major compute capability
-    minor*: cint
-    ## < Minor compute capability
-    textureAlignment*: csize_t
-    ## < Alignment requirement for textures
-    texturePitchAlignment*: csize_t
-    ## < Pitch alignment requirement for texture references bound to pitched memory
-    deviceOverlap*: cint
-    ## < Device can concurrently copy memory and execute a kernel. Deprecated. Use instead asyncEngineCount.
-    multiProcessorCount*: cint
-    ## < Number of multiprocessors on device
-    kernelExecTimeoutEnabled*: cint
-    ## < Deprecated, Specified whether there is a run time limit on kernels
-    integrated*: cint
-    ## < Device is integrated as opposed to discrete
-    canMapHostMemory*: cint
-    ## < Device can map host memory with cudaHostAlloc/cudaHostGetDevicePointer
-    computeMode*: cint
-    ## < Deprecated, Compute mode (See ::cudaComputeMode)
-    maxTexture1D*: cint
-    ## < Maximum 1D texture size
-    maxTexture1DMipmap*: cint
-    ## < Maximum 1D mipmapped texture size
-    maxTexture1DLinear*: cint
-    ## < Deprecated, do not use. Use cudaDeviceGetTexture1DLinearMaxWidth() or cuDeviceGetTexture1DLinearMaxWidth() instead.
-    maxTexture2D*: array[2, cint]
-    ## < Maximum 2D texture dimensions
-    maxTexture2DMipmap*: array[2, cint]
-    ## < Maximum 2D mipmapped texture dimensions
-    maxTexture2DLinear*: array[3, cint]
-    ## < Maximum dimensions (width, height, pitch) for 2D textures bound to pitched memory
-    maxTexture2DGather*: array[2, cint]
-    ## < Maximum 2D texture dimensions if texture gather operations have to be performed
-    maxTexture3D*: array[3, cint]
-    ## < Maximum 3D texture dimensions
-    maxTexture3DAlt*: array[3, cint]
-    ## < Maximum alternate 3D texture dimensions
-    maxTextureCubemap*: cint
-    ## < Maximum Cubemap texture dimensions
-    maxTexture1DLayered*: array[2, cint]
-    ## < Maximum 1D layered texture dimensions
-    maxTexture2DLayered*: array[3, cint]
-    ## < Maximum 2D layered texture dimensions
-    maxTextureCubemapLayered*: array[2, cint]
-    ## < Maximum Cubemap layered texture dimensions
-    maxSurface1D*: cint
-    ## < Maximum 1D surface size
-    maxSurface2D*: array[2, cint]
-    ## < Maximum 2D surface dimensions
-    maxSurface3D*: array[3, cint]
-    ## < Maximum 3D surface dimensions
-    maxSurface1DLayered*: array[2, cint]
-    ## < Maximum 1D layered surface dimensions
-    maxSurface2DLayered*: array[3, cint]
-    ## < Maximum 2D layered surface dimensions
-    maxSurfaceCubemap*: cint
-    ## < Maximum Cubemap surface dimensions
-    maxSurfaceCubemapLayered*: array[2, cint]
-    ## < Maximum Cubemap layered surface dimensions
-    surfaceAlignment*: csize_t
-    ## < Alignment requirements for surfaces
-    concurrentKernels*: cint
-    ## < Device can possibly execute multiple kernels concurrently
-    ECCEnabled*: cint
-    ## < Device has ECC support enabled
-    pciBusID*: cint
-    ## < PCI bus ID of the device
-    pciDeviceID*: cint
-    ## < PCI device ID of the device
-    pciDomainID*: cint
-    ## < PCI domain ID of the device
-    tccDriver*: cint
-    ## < 1 if device is a Tesla device using TCC driver, 0 otherwise
-    asyncEngineCount*: cint
-    ## < Number of asynchronous engines
-    unifiedAddressing*: cint
-    ## < Device shares a unified address space with the host
-    memoryClockRate*: cint
-    ## < Deprecated, Peak memory clock frequency in kilohertz
-    memoryBusWidth*: cint
-    ## < Global memory bus width in bits
-    l2CacheSize*: cint
-    ## < Size of L2 cache in bytes
-    persistingL2CacheMaxSize*: cint
-    ## < Device's maximum l2 persisting lines capacity setting in bytes
-    maxThreadsPerMultiProcessor*: cint
-    ## < Maximum resident threads per multiprocessor
-    streamPrioritiesSupported*: cint
-    ## < Device supports stream priorities
-    globalL1CacheSupported*: cint
-    ## < Device supports caching globals in L1
-    localL1CacheSupported*: cint
-    ## < Device supports caching locals in L1
-    sharedMemPerMultiprocessor*: csize_t
-    ## < Shared memory available per multiprocessor in bytes
-    regsPerMultiprocessor*: cint
-    ## < 32-bit registers available per multiprocessor
-    managedMemory*: cint
-    ## < Device supports allocating managed memory on this system
-    isMultiGpuBoard*: cint
-    ## < Device is on a multi-GPU board
-    multiGpuBoardGroupID*: cint
-    ## < Unique identifier for a group of devices on the same multi-GPU board
-    hostNativeAtomicSupported*: cint
-    ## < Link between the device and the host supports native atomic operations
-    singleToDoublePrecisionPerfRatio*: cint
-    ## < Deprecated, Ratio of single precision performance (in floating-point operations per second) to double precision performance
-    pageableMemoryAccess*: cint
-    ## < Device supports coherently accessing pageable memory without calling cudaHostRegister on it
-    concurrentManagedAccess*: cint
-    ## < Device can coherently access managed memory concurrently with the CPU
-    computePreemptionSupported*: cint
-    ## < Device supports Compute Preemption
-    canUseHostPointerForRegisteredMem*: cint
-    ## < Device can access host registered memory at the same virtual address as the CPU
-    cooperativeLaunch*: cint
-    ## < Device supports launching cooperative kernels via ::cudaLaunchCooperativeKernel
-    cooperativeMultiDeviceLaunch*: cint
-    ## < Deprecated, cudaLaunchCooperativeKernelMultiDevice is deprecated.
-    sharedMemPerBlockOptin*: csize_t
-    ## < Per device maximum shared memory per block usable by special opt in
-    pageableMemoryAccessUsesHostPageTables*: cint
-    ## < Device accesses pageable memory via the host's page tables
-    directManagedMemAccessFromHost*: cint
-    ## < Host can directly access managed memory on the device without migration.
-    maxBlocksPerMultiProcessor*: cint
-    ## < Maximum number of resident blocks per multiprocessor
-    accessPolicyMaxWindowSize*: cint
-    ## < The maximum value of ::cudaAccessPolicyWindow::num_bytes.
-    reservedSharedMemPerBlock*: csize_t
-    ## < Shared memory reserved by CUDA driver per block in bytes
-    hostRegisterSupported*: cint
-    ## < Device supports host memory registration via ::cudaHostRegister.
-    sparseCudaArraySupported*: cint
-    ## < 1 if the device supports sparse CUDA arrays and sparse CUDA mipmapped arrays, 0 otherwise
-    hostRegisterReadOnlySupported*: cint
-    ## < Device supports using the ::cudaHostRegister flag cudaHostRegisterReadOnly to register memory that must be mapped as read-only to the GPU
-    timelineSemaphoreInteropSupported*: cint
-    ## < External timeline semaphore interop is supported on the device
-    memoryPoolsSupported*: cint
-    ## < 1 if the device supports using the cudaMallocAsync and cudaMemPool family of APIs, 0 otherwise
-    gpuDirectRDMASupported*: cint
-    ## < 1 if the device supports GPUDirect RDMA APIs, 0 otherwise
-    gpuDirectRDMAFlushWritesOptions*: cuint
-    ## < Bitmask to be interpreted according to the ::cudaFlushGPUDirectRDMAWritesOptions enum
-    gpuDirectRDMAWritesOrdering*: cint
-    ## < See the ::cudaGPUDirectRDMAWritesOrdering enum for numerical values
-    memoryPoolSupportedHandleTypes*: cuint
-    ## < Bitmask of handle types supported with mempool-based IPC
-    deferredMappingCudaArraySupported*: cint
-    ## < 1 if the device supports deferred mapping CUDA arrays and CUDA mipmapped arrays
-    ipcEventSupported*: cint
-    ## < Device supports IPC Events.
-    clusterLaunch*: cint
-    ## < Indicates device supports cluster launch
-    unifiedFunctionPointers*: cint
-    ## < Indicates device supports unified pointers
-    reserved2*: array[2, cint]
-    reserved1*: array[1, cint]
-    ## < Reserved for future use
-    reserved*: array[60, cint]
-    ## < Reserved for future use
-
   ##
   ##  CUDA memory copy types
   ##
@@ -1835,12 +1637,6 @@ type
     cudaMemcpyDeviceToDevice = 3, ## < Device -> Device
     cudaMemcpyDefault = 4     ## < Direction of the transfer is inferred from the pointer values. Requires unified virtual addressing
 
-
-proc cudaRuntimeGetVersion*(runtimeVersion: var cint): cudaError_t {.cdecl,
-    importc: "cudaRuntimeGetVersion", dynlib: libCudaRT.}
-
-proc cudaGetDeviceProperties*(prop: var cudaDeviceProp; device: cint): cudaError_t {.
-    cdecl, importc: "cudaGetDeviceProperties", dynlib: libCudaRT.}
 
 ######################################################################
 ################################ Utilities ###########################

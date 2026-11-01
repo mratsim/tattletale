@@ -13,16 +13,6 @@ proc sanitizePath*(name: string): string =
   if result != name or result in [".", ".."]:
     raiseAssert "Path traversal detected — name contains directory separators: \"" & name & "\""
 
-proc getDebugDir(): string =
-  ## getTempDir() / "tattletale" / "debug", all debug-only writes.
-  result = getTempDir() / "tattletale" / "debug"
-  createDir(result)
-proc getDebugPath*(name: string): string =
-  ## getDebugDir() / sanitizePath(name), parent dirs created.
-  let safe = sanitizePath(name)
-  result = getDebugDir() / safe
-  createDir(result.parentDir())
-
 proc getKernelDir*(segments: varargs[string, sanitizePath]): string =
   ## getTempDir() / "tattletale" / sanitizePath of each arg.
   ## with parent dirs created.

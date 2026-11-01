@@ -38,8 +38,6 @@ type
     isHlsl: bool
     caches: VulkanCaches
 
-template backendKind(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
-
 proc newVulkanEngine*(): VulkanEngine =
   let vctx = newVulkanContext()
   VulkanEngine(
