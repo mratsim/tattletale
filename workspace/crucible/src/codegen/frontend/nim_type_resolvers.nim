@@ -35,7 +35,7 @@ proc fail*(r: var CirTypeResolver, detail: string) =
   if r.err.len == 0:
     r.err = "cirv2 frontend: " & detail
 
-func builtinDistinctScalar(n: NimNode): CirType =
+func getBuiltinDistinctScalar(n: NimNode): CirType =
   ## CIRv2 identity of a `{.builtin.}` low-precision float type.
   ## The `{.builtin.}` marking is the type's identity: an unmarked distinct
   ## erases to its storage base and loses the float format.
@@ -61,7 +61,7 @@ func builtinDistinctScalar(n: NimNode): CirType =
   of "fp8e4m3", "fp8e5m2": tUint(8)
   else: nil
 
-func scalarShortName(n: NimNode): string =
+func getScalarShortName(n: NimNode): string =
   ## Short name of a builtin scalar type node used as a generic argument.
   ## `float32` renders `f32`, Nim `int` renders `i32`.
   ## Empty when `n` is not a builtin scalar.
@@ -101,7 +101,7 @@ func deriveStructName*(n: NimNode): string =
   of nnkBracketExpr:
     result = deriveStructName(n[0])
     if n.len == 2:
-      let short = scalarShortName(n[1])
+      let short = getScalarShortName(n[1])
       if short.len > 0:
         result.add("_" & short)
       elif n[1].kind in nnkIntLit .. nnkUInt64Lit:
@@ -163,7 +163,7 @@ proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   else:
     refuse("compile-time value expected, got node kind " & $n.kind)
 
-func fieldSpaceAt(valueSpaces: Table[string, AddressSpace], name: string): AddressSpace =
+func getFieldSpace(valueSpaces: Table[string, AddressSpace], name: string): AddressSpace =
   ## Pointer space a construction proves for the field `name`, `caDevice` when the construction names no space for it.
   valueSpaces.getOrDefault(name, caDevice)
 
@@ -182,7 +182,7 @@ proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
         for j in 0 ..< ch.len - 2:
           result.add(fld(sanitizeIdent(ch[j].strVal),
             r.resolveCirType(ch[ch.len - 2],
-              fieldSpaceAt(valueSpaces, sanitizeIdent(ch[j].strVal)))))
+              getFieldSpace(valueSpaces, sanitizeIdent(ch[j].strVal)))))
         if r.err.len > 0:
           return @[]
   of nnkTupleTy, nnkTupleConstr:
@@ -192,20 +192,20 @@ proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
         for j in 0 ..< ch.len - 2:
           result.add(fld(sanitizeIdent(ch[j].strVal),
             r.resolveCirType(ch[ch.len - 2],
-              fieldSpaceAt(valueSpaces, sanitizeIdent(ch[j].strVal)))))
+              getFieldSpace(valueSpaces, sanitizeIdent(ch[j].strVal)))))
       of nnkSym:
         result.add(fld("F" & $i, r.resolveCirType(ch,
-          fieldSpaceAt(valueSpaces, "F" & $i))))
+          getFieldSpace(valueSpaces, "F" & $i))))
       else:
         result.add(fld("F" & $i, r.resolveCirType(ch.getTypeInst(),
-          fieldSpaceAt(valueSpaces, "F" & $i))))
+          getFieldSpace(valueSpaces, "F" & $i))))
       if r.err.len > 0:
         return @[]
   of nnkBracketExpr:
     # `tuple[A, B]` is the bracket form of an anonymous tuple type
     for i in 1 ..< impl.len:
       result.add(fld("F" & $(i - 1), r.resolveCirType(impl[i].getTypeInst(),
-        fieldSpaceAt(valueSpaces, "F" & $(i - 1)))))
+        getFieldSpace(valueSpaces, "F" & $(i - 1)))))
   else:
     r.fail("struct fields: unexpected type implementation " & $impl.kind)
     return @[]
@@ -227,7 +227,7 @@ func followAliasHead(n: NimNode): NimNode =
       return
   return n
 
-func canonicalTypeNode(n: NimNode): NimNode =
+func canonicalizeTypeNode(n: NimNode): NimNode =
   ## Canonical type node: alias symbols replaced by the types they name, so one type
   ## identity derives one struct name. `V2F` aliasing `Vec2[float32]`
   ## reads back as `Vec2[float32]`.
@@ -240,13 +240,13 @@ func canonicalTypeNode(n: NimNode): NimNode =
     if n.typeKind == ntyGenericInst and n.symKind == nskType:
       let impl = n.getImpl()
       if impl.kind == nnkTypeDef and impl[2].kind in {nnkSym, nnkBracketExpr}:
-        return canonicalTypeNode(impl[2])
+        return canonicalizeTypeNode(impl[2])
     result = n
   of nnkBracketExpr:
     if n.len > 1:
       result = nnkBracketExpr.newTree(n[0])
       for i in 1 ..< n.len:
-        result.add(canonicalTypeNode(n[i]))
+        result.add(canonicalizeTypeNode(n[i]))
     else:
       result = n
   else:
@@ -263,7 +263,7 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   ## - two type nodes with different canonical text resolve to two structs, even
   ##   when their field lists agree, and each emits under its own name
   ## - the struct name hashes over the identity key
-  let canon = followAliasHead(canonicalTypeNode(n))
+  let canon = followAliasHead(canonicalizeTypeNode(n))
   # one instantiation per pointer-space combination over the fields:
   # threadgroup-pointer constructions instantiate a struct that is separate
   # from the device instantiation. Identity comes from the pointer-space key,
@@ -452,7 +452,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     # enums lower as their 32-bit storage and the type kinds have no enum entry
     result = tUint(32)
   of ntyDistinct:
-    let marked = builtinDistinctScalar(n)
+    let marked = getBuiltinDistinctScalar(n)
     if marked != nil:
       result = marked
     else:

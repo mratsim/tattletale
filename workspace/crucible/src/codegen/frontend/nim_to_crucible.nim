@@ -70,7 +70,7 @@ proc drainHoisted(ctx: var FrontendCtx): seq[CirStmt] =
 # Names and scopes
 # ═══════════════════════════════════════════════════════════════════════
 
-proc uniqueName(ctx: var FrontendCtx, base: string): string =
+proc mintUniqueName(ctx: var FrontendCtx, base: string): string =
   ## Per-proc unique CIRv2 name: the sanitized base, suffixed past every name
   ## already issued in the proc, user-declared or synthetic alike, so an issued
   ## name never doubles as a later declaration's emitted name.
@@ -288,7 +288,7 @@ proc isGenericDef(fn: NimNode): bool =
           return true
   return false
 
-func procIdentity(callee: NimNode): uint64 =
+func getProcIdentity(callee: NimNode): uint64 =
   ## Identity hash of a callee: the full 64-bit hash of the signature key,
   ## the repr and the signature hash. A generic adds the body hash,
   ## its instantiations share one signature.
@@ -322,7 +322,7 @@ proc registerOrGet(ctx: var FrontendCtx, calleeSym: NimNode): ProcEntry =
   ## Later calls read the entry.
   ##
   ## A `{.builtin.}` callee carries its canonical native name at the call site. The entry stores its type only.
-  let id = procIdentity(calleeSym)
+  let id = getProcIdentity(calleeSym)
   if ctx.procRegistry.hasKey(id):
     result = ctx.procRegistry[id]
     if result.fnType.isNil:
@@ -365,7 +365,7 @@ proc lowerCallArgs(ctx: var FrontendCtx, callee: NimNode, call: NimNode): seq[Ci
       return @[]
     result.add(operandLiteralTypedAs(arg, ftyp))
 
-proc nimMagicName(n: NimNode): string =
+proc getNimMagicName(n: NimNode): string =
   ## Value of the definition's `magic: "..."` pragma, "" when absent.
   ## System integer and float operators are magics:
   ## - their effect is the primitive operation
@@ -447,7 +447,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
   ## into its operator tree.
   ## A magic callee lowers to the primitive operation directly,
   ## no proc harvests, no call emits.
-  let magic = nimMagicName(callee)
+  let magic = getNimMagicName(callee)
   # toOpenArray builds a span and len reads a span's length: the span split
   # pass consumes both forms, no proc harvests, no call emits
   let targetName = if callee.kind == nnkSym: callee.strVal
@@ -533,7 +533,7 @@ proc isBuiltinScalar(ctx: var FrontendCtx, n: NimNode): bool =
     return false
   return isScalarType(t)
 
-func branchValueExpr(n: NimNode): NimNode =
+func getBranchValueExpr(n: NimNode): NimNode =
   result = n
   while result.kind == nnkStmtList and result.len == 1:
     result = result[0]
@@ -556,13 +556,13 @@ proc lowerNestedTernary(ctx: var FrontendCtx,
   let cond = ctx.lowerExpr(branches[idx].cond)
   if ctx.resolver.err.len > 0:
     return nil
-  let thenV = ctx.lowerExpr(branchValueExpr(branches[idx].body))
+  let thenV = ctx.lowerExpr(getBranchValueExpr(branches[idx].body))
   if ctx.resolver.err.len > 0:
     return nil
   let elseV = if idx + 1 < branches.len:
                  lowerNestedTernary(ctx, branches, elseBody, idx + 1, resType)
                else:
-                 ctx.lowerExpr(branchValueExpr(elseBody))
+                 ctx.lowerExpr(getBranchValueExpr(elseBody))
   if ctx.resolver.err.len > 0:
     return nil
   return ternaryE(resType, cond, thenV, elseV)
@@ -1029,12 +1029,12 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     # statement-bearing branches take the statement form
     var simple = true
     for br in branches:
-      if isStmtBody(branchValueExpr(br.body)):
+      if isStmtBody(getBranchValueExpr(br.body)):
         simple = false
         break
-    if simple and not isStmtBody(branchValueExpr(elseBody)):
+    if simple and not isStmtBody(getBranchValueExpr(elseBody)):
       return lowerNestedTernary(ctx, branches, elseBody, 0, resType)
-    let tmpName = ctx.uniqueName("iftmp")
+    let tmpName = ctx.mintUniqueName("iftmp")
     ctx.declareLocal(tmpName, sym(tmpName, resType))
     let stmts = ctx.lowerIfForm(branches, elseBody, sym(tmpName, resType))
     if ctx.resolver.err.len > 0:
@@ -1172,7 +1172,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
             # - `let q = cast[ptr T](addr scratch[0])` is a threadgroup pointer
             typ = getExprType(value)
         let hoists = ctx.drainHoisted()
-        let cirName = ctx.uniqueName(nimName)
+        let cirName = ctx.mintUniqueName(nimName)
         # lookup key: `repr` of the declaration, pragma wrapper included
         let lookupKey = if nameNode.kind == nnkPragmaExpr: nameNode[0].repr
                         else: nameNode.repr
@@ -1325,7 +1325,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     else:
       ctx.fail("for loop over " & $iter.kind & " is outside the supported set")
       return @[]
-    let varName = ctx.uniqueName($vars)
+    let varName = ctx.mintUniqueName($vars)
     let varType = ctx.resolver.resolveCirType(vars.getTypeInst())
     if ctx.resolver.err.len > 0:
       return @[]
@@ -1487,7 +1487,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
           var op = e
           if e.kind != eSym:
             # printers splice symbol names, a computed value needs a temp
-            let tmpName = ctx.uniqueName("emit_tmp")
+            let tmpName = ctx.mintUniqueName("emit_tmp")
             let tmpType = getExprType(e)
             op = sym(tmpName, tmpType)
             ctx.hoisted.add(varD(tmpName, tmpType))
@@ -1555,7 +1555,7 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
       ctx.popScope()
       return @[]
     for j in 0 ..< formal.len - 2:
-      let pname = ctx.uniqueName(formal[j].strVal)
+      let pname = ctx.mintUniqueName(formal[j].strVal)
       let psym = sym(pname, typ)
       params.add(CirParam(name: pname, typ: typ,
         varParam: ftype.kind == nnkVarTy))
@@ -1629,7 +1629,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   if isGenericDef(fn):
     return nil
   let formals = getFormalParams(fn)
-  let id = procIdentity(fn[0])
+  let id = getProcIdentity(fn[0])
   # a kernel keeps its plain name, launchKernel is ABI on it
   let base = if hasPragmaNim(fn, "global"): sanitizeIdent(fn[0].strVal)
              else: mangleOperatorName(fn[0].strVal)
@@ -1661,7 +1661,7 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   ## Lowers the body of a callee a call registered.
   ## Registry entry supplies the emitted name and the proc type, compile-time parameters erased.
   ## `hasBody` set before the body lowers guards the recursion, callers harvest only body-less entries.
-  let id = procIdentity(callee)
+  let id = getProcIdentity(callee)
   ctx.procRegistry[id].hasBody = true
   let impl = callee.getImpl()
   let formals = getFormalParams(callee.getTypeInst())
@@ -1730,7 +1730,7 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
     for c in body:
       if c.kind in {nnkProcDef, nnkFuncDef} and not isGenericDef(c) and
           hasPragmaNim(c, "global"):
-        discard ctx.claimProcName(procIdentity(c[0]), sanitizeIdent(c[0].strVal))
+        discard ctx.claimProcName(getProcIdentity(c[0]), sanitizeIdent(c[0].strVal))
     for c in body:
       case c.kind
       of nnkProcDef, nnkFuncDef:
