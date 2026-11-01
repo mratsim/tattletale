@@ -91,9 +91,9 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## - a pointer member prints its address-space qualifier, and only device
   ##   pointers nest in structs
   block:
-    let missing = getUnnamedScalarCell(openclScalarRow, f.typ)
+    let missing = getUnnamedScalarCell(openclScalarNames, f.typ)
     if missing != nil:
-      ctx.fail(scalarRefusal(printerTarget, openclScalarRow, missing))
+      ctx.fail(scalarRefusal(printerTarget, openclScalarNames, missing))
       return ""
   if f.typ.kind == ctArray:
     return emitOpenclArrayDecl(f.typ, f.name)
@@ -323,9 +323,9 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   ## One local declaration: storage-class refusals, the address-space qualifier, then the declaration text.
   block:
-    let missing = getUnnamedScalarCell(openclScalarRow, s.declType)
+    let missing = getUnnamedScalarCell(openclScalarNames, s.declType)
     if missing != nil:
-      ctx.fail(scalarRefusal(printerTarget, openclScalarRow, missing))
+      ctx.fail(scalarRefusal(printerTarget, openclScalarNames, missing))
       return ""
   let pad = spaces(ctx.indent * 2)
   if s.space == caThreadgroup:
@@ -396,9 +396,9 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
   ## A raw `ptr` parameter is legal C between device functions, the printer refuses it on a kernel.
   ## The engine binds device buffers and values, never raw pointers.
   block:
-    let missing = getUnnamedScalarCell(openclScalarRow, p.typ)
+    let missing = getUnnamedScalarCell(openclScalarNames, p.typ)
     if missing != nil:
-      ctx.fail(scalarRefusal(printerTarget, openclScalarRow, missing))
+      ctx.fail(scalarRefusal(printerTarget, openclScalarNames, missing))
       return ""
   case p.typ.kind
   of ctAptr:

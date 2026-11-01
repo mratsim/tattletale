@@ -114,9 +114,9 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## GLSL declaration text of one struct member: a buffer pointer member is
   ## the reference block handle, an array stacks the dimension behind the name.
   block:
-    let missing = getUnnamedScalarCell(glslScalarRow, f.typ)
+    let missing = getUnnamedScalarCell(glslScalarNames, f.typ)
     if missing != nil:
-      ctx.fail(scalarRefusal(printerTarget, glslScalarRow, missing))
+      ctx.fail(scalarRefusal(printerTarget, glslScalarNames, missing))
       return ""
   if f.typ.kind == ctArray:
     return emitGlslScalar(f.typ.aElem) & ' ' & f.name & "[" & $f.typ.aN & "]"
@@ -349,9 +349,9 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
     ctx.fail("local " & s.name & " in device space, GLSL locals are private")
     return ""
   block:
-    let missing = getUnnamedScalarCell(glslScalarRow, s.declType)
+    let missing = getUnnamedScalarCell(glslScalarNames, s.declType)
     if missing != nil:
-      ctx.fail(scalarRefusal(printerTarget, glslScalarRow, missing))
+      ctx.fail(scalarRefusal(printerTarget, glslScalarNames, missing))
       return ""
   var decl: string
   if s.declType.kind == ctAptr:
@@ -370,9 +370,9 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
 proc printConst(ctx: var PrintCtx, s: CirStmt): string =
   ## One local constant declaration, the `const` form.
   block:
-    let missing = getUnnamedScalarCell(glslScalarRow, s.declType)
+    let missing = getUnnamedScalarCell(glslScalarNames, s.declType)
     if missing != nil:
-      ctx.fail(scalarRefusal(printerTarget, glslScalarRow, missing))
+      ctx.fail(scalarRefusal(printerTarget, glslScalarNames, missing))
       return ""
   let pad = spaces(ctx.indent * 2)
   result = pad & "const " & emitTypeBare(s.declType) & ' ' &
@@ -595,9 +595,9 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
   for kernel in kernels:
     for p in kernel.params:
       block:
-        let missing = getUnnamedScalarCell(glslScalarRow, p.typ)
+        let missing = getUnnamedScalarCell(glslScalarNames, p.typ)
         if missing != nil:
-          ctx.fail(scalarRefusal(printerTarget, glslScalarRow, missing))
+          ctx.fail(scalarRefusal(printerTarget, glslScalarNames, missing))
           return ""
       var decl: string
       case p.typ.kind
