@@ -5179,6 +5179,12 @@ def tile_phase(path, text, findings, added):
                     path, no, "semicolons",
                     "a `;` on a Nim code line, split the statement or "
                     "use comma-separated single-line params"))
+            if "not compiles" in _blank_nim_strings(code):
+                findings.append(Finding(
+                    path, no, "negative-compile",
+                    "a doAssert not compiles assertion, banned: refusals "
+                    "surface as loud compile-time errors, pin behavior with "
+                    "an end-to-end kernel test instead"))
         if added and "tests/codegen/ir/" in _rel(path):
             findings.append(Finding(
                 path, min(added), "closed-ir-tests",
