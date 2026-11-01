@@ -71,16 +71,6 @@ static:
   doAssert kind.constructor == cofBraced
   doAssert kind.targetExprKinds == {}
 
-  let space = cudaSpaceRow()
-  for i in AddressSpace:
-    doAssert space.ptrQualifier[i] == ""
-    if i != caThreadgroup:
-      doAssert space.localPrefix[i] == ""
-  doAssert space.localPrefix[caThreadgroup] == "__shared__"
-  doAssert space.kernelParamScalar == ""
-  doAssert space.kernelParamPointer == ""
-  doAssert space.smemParam == ""
-
   let conv = cudaConvRow()
   doAssert conv.builtinNames.len == 0
   doAssert conv.fpRefusals.len == 0

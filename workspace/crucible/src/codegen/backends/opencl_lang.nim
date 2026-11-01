@@ -75,7 +75,11 @@ proc emitOpenclArrayDecl(t: CirType, ident: string): string =
 proc emitOpenclPtrField(t: CirType, ident: string): string =
   ## OpenCL C declaration of a pointer field or local, the address space qualifier leads.
   ## `restrict` is a function-parameter qualifier, struct fields and locals drop it.
-  let qualifier = openclSpaceRow().ptrQualifier[t.space]
+  let qualifier = case t.space
+    of caThread: ""
+    of caThreadgroup: "__local"
+    of caConstant: "__constant"
+    of caDevice: "__global"
   let sep = if qualifier.len > 0: " " else: ""
   result = qualifier & sep & emitOpenclTypeBare(t) & ' ' & ident
 

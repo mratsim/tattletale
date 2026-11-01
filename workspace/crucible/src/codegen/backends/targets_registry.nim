@@ -15,7 +15,6 @@
 ## | scalar | ScalarRow  | type names and support cells by (kind, width) |
 ## | lit    | LitRow     | literal token forms                           |
 ## | kind   | KindRow    | walk policy: loops, ternary, asm, routing set |
-## | space  | SpaceRow   | address-space qualifiers per context          |
 ## | conv   | ConvRow    | conversion name tables                        |
 ## | coord  | CoordRow   | coordinate builtin forms                      |
 ## | sig    | SigRow     | signature static parts, keyed per flavor      |
@@ -184,38 +183,6 @@ type
     targetExprKinds*: set[CirExprKind]
     ## Optional expression kinds the printer routes through its own `printTargetExpr` proc.
     ## Eight common kinds route unconditionally and are not members of this set.
-
-  SpaceRow* = object
-    ## Address-space qualifiers of one target, in the contexts its printer uses.
-    ## Qualifiers are bare names, emission sites add separators, a context the target does not have stays "".
-    ptrQualifier*: array[AddressSpace, string]
-    ## Qualifier before a pointer type in declarations and casts.
-    localPrefix*: array[AddressSpace, string]
-    ## Qualifier before a local variable's declared type.
-    kernelParamScalar*: string
-    ## Qualifier on a kernel's by-reference scalar parameters.
-    kernelParamPointer*: string
-    ## Qualifier on a kernel's pointer parameters.
-    smemParam*: string
-    ## Qualifier on a parameter carrying relocated shared-memory storage.
-    kernelParamPointerRestrict*: bool = false
-    ## Restrict qualifier on a kernel's device-space pointer parameter
-    ## (`__global T* restrict p`), a function-parameter qualifier in OpenCL C.
-    ptrSpace*: array[AddressSpace, string]
-    ## Address-space word inside the target's pointer type (`ptr<storage, T>`),
-    ## empty when the space has no pointer form and the printer refuses at the site.
-    ptrAccessMode*: string
-    ## Access mode after the pointee type inside a storage pointer (`ptr<storage, T, read_write>`),
-    ## empty when the target's pointer types take no access mode.
-    ## An array pointer has no pointer form at all, its binding is the array and the pointer form refuses at the site.
-    declVarPrefix*: string
-    ## Space prefix of the hoisted module-scope variable declaration of relocated threadgroup
-    ## storage (`var<workgroup>`), empty when the target does not relocate threadgroup storage
-    ## into a space-qualified module-scope variable.
-    bindingVarPrefix*: string
-    ## Storage-class prefix of a module-level bound value variable (`var<storage, read>`), empty when the target binds values without one.
-    bindingBufferPrefix*: string
-    ## Storage-class prefix of a bound device buffer (`var<storage, read_write>`), empty when the target binds buffers as resources.
 
   ConvRow* = object
     ## Name tables of one target: conversion data that is a pure name-to-text mapping.

@@ -73,20 +73,6 @@ static:
     doAssert kind.constructor == cofBraced
     doAssert kind.targetExprKinds == {}
 
-    let space = openclSpaceRow()
-    doAssert space.ptrQualifier[caThread] == ""
-    doAssert space.ptrQualifier[caThreadgroup] == "__local"
-    doAssert space.ptrQualifier[caConstant] == "__constant"
-    doAssert space.ptrQualifier[caDevice] == "__global"
-    doAssert space.localPrefix[caThread] == "__private"
-    doAssert space.localPrefix[caThreadgroup] == "__local"
-    doAssert space.localPrefix[caConstant] == ""
-    doAssert space.localPrefix[caDevice] == ""
-    doAssert space.kernelParamScalar == ""
-    doAssert space.kernelParamPointer == ""
-    doAssert space.kernelParamPointerRestrict
-    doAssert space.smemParam == ""
-
     let conv = openclConvRow()
     doAssert conv.builtinNames.len == 0
     doAssert conv.fpRefusals.len == 0
@@ -189,15 +175,6 @@ static:
     doAssert kind.constDecl == cdfConst
     doAssert kind.constructor == cofCall
     doAssert kind.targetExprKinds == {eNil, eAt, ePat, eDeref, eAddr}
-
-    let space = glslSpaceRow()
-    for i in AddressSpace:
-      doAssert space.ptrQualifier[i] == ""
-      doAssert space.localPrefix[i] == ""
-    doAssert space.kernelParamScalar == ""
-    doAssert space.kernelParamPointer == ""
-    doAssert not space.kernelParamPointerRestrict
-    doAssert space.smemParam == ""
 
     let conv = glslConvRow()
     doAssert conv.builtinNames.len == 0

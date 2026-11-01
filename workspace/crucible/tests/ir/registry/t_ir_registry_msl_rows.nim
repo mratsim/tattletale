@@ -54,17 +54,6 @@ static:
   doAssert kind.constructor == cofBraced
   doAssert kind.targetExprKinds == {}
 
-  let space = mslSpaceRow()
-  doAssert space.ptrQualifier[caThread] == "thread"
-  doAssert space.ptrQualifier[caThreadgroup] == "threadgroup"
-  doAssert space.ptrQualifier[caConstant] == "constant"
-  doAssert space.ptrQualifier[caDevice] == "device"
-  doAssert space.localPrefix[caThreadgroup] == "threadgroup"
-  doAssert space.localPrefix[caDevice] == ""
-  doAssert space.kernelParamScalar == "constant"
-  doAssert space.kernelParamPointer == "device"
-  doAssert space.smemParam == "threadgroup"
-
   let conv = mslConvRow()
   doAssert conv.builtinNames.len == 6
   doAssert conv.builtinNames["toFp16"] == "as_type<ushort>(half($1))"

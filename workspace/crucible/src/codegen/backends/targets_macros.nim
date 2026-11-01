@@ -13,7 +13,7 @@
 ##
 ## - block syntax: one `target <name>:` section per target key, one row expression per family.
 ##   A target with flavors keys its flavor-dependent families in a `target <name>(<flavor>):` section
-## - every one of the eight families resolves per target key, out of the key's own section
+## - every one of the seven families resolves per target key, out of the key's own section
 ##   plus its target's flavorless base section. A family declared in both the base
 ##   and a flavor section of one target fails the compile
 ## - one invocation registers every target of its module, generated lookup proc names would collide across invocations
@@ -24,8 +24,8 @@ import std/macros
 import std/strutils
 import ./targets_registry
 
-const genFamilies*: array[8, string] = [
-  "scalar", "lit", "kind", "space", "conv", "coord", "sig", "vector"]
+const genFamilies*: array[7, string] = [
+  "scalar", "lit", "kind", "conv", "coord", "sig", "vector"]
 
 proc rowTypeName(family: string): string {.compileTime.} =
   ## Schema type of one row family, "" for an unknown family.
@@ -33,7 +33,6 @@ proc rowTypeName(family: string): string {.compileTime.} =
   of "scalar": "ScalarRow"
   of "lit": "LitRow"
   of "kind": "KindRow"
-  of "space": "SpaceRow"
   of "conv": "ConvRow"
   of "coord": "CoordRow"
   of "sig": "SigRow"
@@ -90,7 +89,7 @@ macro genTargets*(body: untyped) =
       if fam[1].kind != nnkStmtList or fam[1].len != 1:
         error("genTargets: family '" & family & "' takes exactly one row expression", fam)
     fams.add seen
-  # Every consumable key resolves all eight row families. A plain target's
+  # Every consumable key resolves all seven row families. A plain target's
   # section states all of them. A flavored target's flavorless section states
   # its target-wide families, and each flavored section adds the flavor-dependent
   # ones beside them

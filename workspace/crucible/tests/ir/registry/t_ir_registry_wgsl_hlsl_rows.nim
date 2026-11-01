@@ -71,24 +71,6 @@ static:
     doAssert kind.constructor == cofCall
     doAssert kind.targetExprKinds == {eNil, eAt, ePat, eTernary}
 
-    let space = wgslSpaceRow()
-    for i in AddressSpace:
-      doAssert space.ptrQualifier[i] == ""
-      doAssert space.localPrefix[i] == ""
-    doAssert space.kernelParamScalar == ""
-    doAssert space.kernelParamPointer == ""
-    doAssert not space.kernelParamPointerRestrict
-    doAssert space.smemParam == ""
-    # Address-space words sit inside the pointer type, storage pointers declare the access mode.
-    doAssert space.ptrSpace[caThread] == "function"
-    doAssert space.ptrSpace[caThreadgroup] == "workgroup"
-    doAssert space.ptrSpace[caDevice] == "storage"
-    doAssert space.ptrSpace[caConstant] == ""
-    doAssert space.ptrAccessMode == "read_write"
-    doAssert space.declVarPrefix == "var<workgroup>"
-    doAssert space.bindingVarPrefix == "var<storage, read>"
-    doAssert space.bindingBufferPrefix == "var<storage, read_write>"
-
     let conv = wgslConvRow()
     doAssert conv.builtinNames.len == 0
     doAssert conv.fpRefusals.len == 0
@@ -205,19 +187,6 @@ static:
     doAssert kind.constDecl == cdfConst
     doAssert kind.constructor == cofMixed
     doAssert kind.targetExprKinds == {eNil, eAt, ePat, eDeref, eAddr}
-
-    let space = hlslSpaceRow()
-    for i in AddressSpace:
-      doAssert space.ptrQualifier[i] == ""
-      doAssert space.localPrefix[i] == ""
-    doAssert space.kernelParamScalar == ""
-    doAssert space.kernelParamPointer == ""
-    doAssert not space.kernelParamPointerRestrict
-    doAssert space.smemParam == ""
-    doAssert space.ptrAccessMode == ""
-    doAssert space.declVarPrefix == ""
-    doAssert space.bindingVarPrefix == ""
-    doAssert space.bindingBufferPrefix == ""
 
     let conv = hlslConvRow()
     doAssert conv.builtinNames.len == 0

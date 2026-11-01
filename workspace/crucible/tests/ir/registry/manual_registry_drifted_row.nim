@@ -20,7 +20,6 @@ genTargets:
       ScalarCell(kind: ctInt, width: 8, spelling: "signed char", supported: true)])
     lit: mslLitRow()
     kind: mslKindRow()
-    space: mslSpaceRow()
     conv: mslConvRow()
     coord: mslCoordRow()
     sig: mslSigRow()
