@@ -8,8 +8,8 @@
 import workspace/crucible/src/abis/nvidia_abi
 
 proc cudaGetComputeCapability*(): int =
-  ## Compute capability of device 0 packed as one int (120 for 12.0),
-  ## used to pick the NVRTC `--gpu-architecture` target at compile time.
+  ## Compute capability of device 0 as one int (120 for compute capability 12.0),
+  ## picking the NVRTC `--gpu-architecture` target at compile time.
   check cuInit(0)
   var device: CUdevice
   check cuDeviceGet(device, 0)

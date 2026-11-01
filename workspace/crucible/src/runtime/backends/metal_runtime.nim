@@ -9,9 +9,9 @@ import std/os
 import ../errors
 import workspace/crucible/src/abis/objc_abi as objc
 
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # Constants
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 const
   ## Shared + untracked storage, Apple's MLX allocator mode: contents() needs no staging.
@@ -26,9 +26,9 @@ const
   MTLLanguageVersion3_2 = objc.NSUInteger(0x30002)
   MTLLanguageVersion4_0 = objc.NSUInteger(0x40000)
 
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # Error policy and records
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   MetalContext* = ref MetalContextObj
@@ -45,9 +45,9 @@ proc `=destroy`(ctx: var MetalContextObj) =
       objc.release(ctx.queue)
       objc.release(ctx.device)
 
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # macOS-only execution primitives
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 when defined(macosx):
   # ═════════════════════════════════════════════════
@@ -92,7 +92,7 @@ when defined(macosx):
   # ═════════════════════════════════════════════════
 
   proc compileOptions*(): objc.ID =
-    ## MTLCompileOptions: fast math disabled, the OS's MSL version, +1 returned.
+    ## MTLCompileOptions: fast math disabled, MSL version from the OS, +1 returned.
     let cls = objc.getClass("MTLCompileOptions")
     if objc.isNil(cls):
       failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")

@@ -60,7 +60,7 @@ proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): se
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
 proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): seq[uint32] =
-  ## Compiles HLSL to SPIR-V via ``dxc``, the SPIR-V codegen backend, no DXIL leg.
+  ## Compiles HLSL to SPIR-V via ``dxc`` with its SPIR-V codegen backend, skipping the DXIL stage.
   ## `entryPoint` names the HLSL entry function, it becomes the OpEntryPoint
   ## Name operand the Vulkan pipeline looks up.
   let dxc = findExe("dxc")
@@ -94,7 +94,7 @@ func usesPhysicalStorageBuffer(spv: seq[uint32]): bool =
   ## The opcode and capability numbers come from the encoder table:
   ## one source of truth with the writer
   const opCapability = uint32(OpCapability)
-  # The 5-word module header (magic, version, generator, bound, schema) contains no instructions, the instruction stream starts after it
+  # 5 header words (magic, version, generator, bound, schema) precede the instruction stream
   var i = 5
   while i < spv.len:
     let wordCount = spv[i] shr 16
@@ -120,11 +120,11 @@ func getSpirvSquadron(spv: seq[uint32]): SpvSquadron =
   ## - localSize: the LocalSize literals of the execution mode bound to id
   ## - entryPoints: the OpEntryPoint instruction count
   ## Absent pieces stay zero-valued: name "", id 0, localSize (0, 0, 0)
-  # the opcode words and the LocalSize mode come from the encoder table,
+  # opcode words and the LocalSize mode come from the encoder table,
   # one source of truth with the writer
   const opEntryPoint = uint32(OpEntryPoint)
   const opExecutionMode = uint32(OpExecutionMode)
-  # the 5-word header contains no instructions, the stream begins at index 5
+  # 5 header words carry no instructions, and the stream begins at index 5
   var i = 5
   while i < spv.len:
     let wordCount = spv[i] shr 16
@@ -133,10 +133,10 @@ func getSpirvSquadron(spv: seq[uint32]): SpvSquadron =
     let opcode = spv[i] and 0xFFFF
     if opcode == opEntryPoint:
       inc result.entryPoints
-      # the first OpEntryPoint supplies the name. Its word layout:
-      # executionModel, entry-point id, then the literal string
-      # the string is NUL-terminated and padded to the word boundary
+      # OpEntryPoint word layout: executionModel, entry-point id, then the literal string
+      # string storage: NUL-terminated and padded to the word boundary
       # interface ids come after the string
+      # parsed name comes from the first OpEntryPoint
       if result.name.len == 0:
         result.id = spv[i + 2]
         var nameDone = false
@@ -151,8 +151,7 @@ func getSpirvSquadron(spv: seq[uint32]): SpvSquadron =
             result.name.add c
     elif opcode == opExecutionMode and wordCount.int >= 6 and
          spv[i + 2] == modeLocalSize and spv[i + 1] == result.id:
-      # the LocalSize mode is exactly three literal words
-      # the mode id must match the parsed entry-point id
-      # a mismatched LocalSize must not leak through
+      # LocalSize mode is exactly three literal words and the mode id must
+      # match the parsed entry-point id, so a mismatched LocalSize never leaks
       result.localSize = Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
     inc i, wordCount.int

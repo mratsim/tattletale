@@ -17,9 +17,9 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   WebgpuPipelineCache = object
@@ -53,9 +53,9 @@ proc newWebgpuEngine*(): WebgpuEngine =
     cache: WebgpuCache(pipelines: initTable[(string, seq[int]), WebgpuPipelineCache]())
   )
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 template check*(status: WGPUBufferMapAsyncStatus) =
   let code = status
@@ -106,9 +106,9 @@ proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: ptr T or ptr UncheckedA
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   handles: array[64, WGPUBuffer]
@@ -136,9 +136,9 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     copyMem(ctx.blob[ctx.pn].addr, blob[0].addr, size)
   inc ctx.pn, padded
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc parseShaderSquadron(wgsl: string): Dim3 =
   ## Extracts the shader-baked squadron from the WGSL preamble
@@ -165,8 +165,10 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
       inc j
   if result.x == 0:
     return Dim3(x: 0, y: 0, z: 0)   # absent or non-literal
-  if result.y == 0: result.y = 1
-  if result.z == 0: result.z = 1
+  if result.y == 0:
+    result.y = 1
+  if result.z == 0:
+    result.z = 1
 
 proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
@@ -186,8 +188,8 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
          "x" & $engine.shaderSquadron.z &
          " — launch config mismatch (squadron is shader-baked on WebGPU)")
 
-  # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment,
-  # the device keeps the spec-default limits, the spec-default alignment is 256.
+  # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment.
+  # Device limits give the alignment, spec default 256.
   const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer, bkWebGPU)
 
   var dctx = SerializationCtx()
