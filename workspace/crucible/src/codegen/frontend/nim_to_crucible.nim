@@ -556,11 +556,10 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
 # Expression translation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc isLatticeScalar(ctx: var FrontendCtx, n: NimNode): bool =
-  ## True when the expression's type resolves to a primitive scalar kind,
-  ## the kind the primitive arithmetic covers.
-  ## An overloaded operand (a register tile, an element-wise `-.`/`*.` proc)
-  ## lowers as the proc's call instead.
+proc isBasicScalar(ctx: var FrontendCtx, n: NimNode): bool =
+  ## True when the expression's type resolves to a primitive scalar kind
+  ## (bool, int, uint, float): the kind the primitive arithmetic operators
+  ## cover natively. Any other operand type lowers as a proc call.
   let t = ctx.resolver.resolveCirType(n.getTypeInst())
   if ctx.failing():
     return false
@@ -884,7 +883,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let op = n[0].strVal
     case op
     of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
-      if not (ctx.isLatticeScalar(n[1]) and ctx.isLatticeScalar(n[2])):
+      if not (ctx.isBasicScalar(n[1]) and ctx.isBasicScalar(n[2])):
         # overloaded operator over non-primitive-scalar operands: the check fails,
         # overload resolution picks the proc, lowered here as a call.
         # Example: `m_i - m_ij` over (MT x 1) tiles. Each operand lowers once,
