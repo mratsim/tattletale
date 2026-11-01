@@ -139,8 +139,12 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
         scanExpr(a, f, profile)
     of sDiscard:
       scanExpr(s.discardVal, f, profile)
-    of sAsm, sEmit:
-      discard
+    of sAsm:
+      for op in s.asmOperands:
+        scanExpr(op, f, profile)
+    of sEmit:
+      for op in s.emitOperands:
+        scanExpr(op, f, profile)
 
 proc scanModuleFeatures(m: CirModule, f: var ModuleFeatures, profile: ScanProfile) =
   for t in m.types:
@@ -174,26 +178,45 @@ proc wgslScanType(t: CirType, f: var ModuleFeatures) =
   of ctVoid, ctBool, ctInt, ctUint, ctProc, ctSpan:
     discard
 
+proc wgslScanExpr(e: CirExpr, f: var ModuleFeatures) =
+  ## Records the flags one expression tree needs: the type of every node
+  ## from the leaves to the root, so an fp16 value nested under a bool-typed
+  ## condition or inside a call's arguments still selects `enable f16`.
+  if e.isNil:
+    return
+  for c in getExprChildren(e):
+    wgslScanExpr(c, f)
+  wgslScanType(getExprType(e), f)
+
 proc wgslScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
   for s in ss:
     case s.kind
     of sVar, sConst:
       wgslScanType(s.declType, f)
-      if s.init != nil:
-        wgslScanType(getExprType(s.init), f)
+      wgslScanExpr(s.init, f)
     of sAsgn:
-      wgslScanType(getExprType(s.lhs), f)
-      wgslScanType(getExprType(s.rhs), f)
+      wgslScanExpr(s.lhs, f)
+      wgslScanExpr(s.rhs, f)
     of sIte:
+      wgslScanExpr(s.cond, f)
       wgslScanStmts(s.thenBody, f)
       wgslScanStmts(s.elseBody, f)
     of sWhile:
+      wgslScanExpr(s.whileCond, f)
       wgslScanStmts(s.whileBody, f)
     of sRet:
-      if s.retVal != nil:
-        wgslScanType(getExprType(s.retVal), f)
-    of sCall, sDiscard, sAsm, sEmit:
-      discard
+      wgslScanExpr(s.retVal, f)
+    of sDiscard:
+      wgslScanExpr(s.discardVal, f)
+    of sCall:
+      for a in s.callArgs:
+        wgslScanExpr(a, f)
+    of sAsm:
+      for op in s.asmOperands:
+        wgslScanExpr(op, f)
+    of sEmit:
+      for op in s.emitOperands:
+        wgslScanExpr(op, f)
 
 proc wgslScanFeatures(m: CirModule): string {.nimcall.} =
   var f = m.features
@@ -258,6 +281,9 @@ proc cudaScanStmts(ss: seq[CirStmt], f: var ModuleFeatures) =
       for a in s.callArgs:
         cudaScanExpr(a, f)
     of sAsm, sEmit:
+      # asm/emit splices symbol operands only, so no reduction callee can
+      # hide in an operand: a computed value temps into a hoisted
+      # `sVar` + `sAsgn` pair this walker already visits
       discard
 
 proc cudaScanFeatures(m: CirModule): string {.nimcall.} =
@@ -289,8 +315,7 @@ proc registerOpenclFeatureScan*(reg: var PassRegistry) =
   ## Registers the OpenCL feature scan over CIRv2 modules.
   ##
   ## Contract:
-  ## - fills `CirModule.features` with the flags the OpenCL extension pragma
-  ##   block maps
+  ## - fills `CirModule.features` with the flags the OpenCL pragma block maps
   ## - registers after the target's last transform, before the check-only
   ##   validation stage
   ## - runPasses refuses a transform registered after an analysis
