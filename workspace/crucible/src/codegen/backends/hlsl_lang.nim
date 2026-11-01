@@ -638,10 +638,10 @@ proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
   ##
   ## - a device function: the bare `RetType name(params)` signature, buffers as resources, `var T` device parameters as `inout`
   ##   an `{.inline.}` proc's signature opens with the `inline ` qualifier
-  ## - parameter legality refuses in the classification pass, the printer reads the stored records
+  ## - parameter legality refuses in the classification pass, and the printer reads the stored records
   ## - the entry kernel: the `[numthreads(...)]` attribute line, then `void <entry>(<entry inputs>)` over the body-walk semantics
   ##   exportc renames the entry for the host runtime lookup, Vulkan ingest reads the name back from the `[numthreads]` line
-  ## - the kernel's open brace prints on its own line (HLSL's brace style), the body and the closing brace are the caller's
+  ## - the kernel's open brace prints on its own line (HLSL's brace style) and the body and the closing brace are the caller's
   if fn.isKernel:
     let wg = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
     result = "[numthreads(" & $wg[0] & ", " & $wg[1] & ", " & $wg[2] & ")]\n"
@@ -680,7 +680,7 @@ proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
   ##
   ## - the entry kernel: push-constant parameters from the stored classification record, buffer parameters to their resource or address route
   ## - a device function: its own buffer parameters, read-write classification from the stored call-graph record
-  ## - the kernel's workgroup sizes, the `threads_per_threadgroup` reads read the workgroup literal
+  ## - the kernel's workgroup sizes, which the `threads_per_threadgroup` reads read as the workgroup literal
   ctx.isKernel = fn.isKernel
   ctx.pushParams = initHashSet[string]()
   ctx.bufferParams = initHashSet[string]()
@@ -845,7 +845,7 @@ proc emitShaderFns(ctx: var PrintCtx, m: CirModule): string =
     result &= ctx.printShaderProc(fn) & "\n\n"
 
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
-  ## Emits the full HLSL translation unit: struct declarations, the binding section, the hoisted program-scope declarations,
+  ## Emits the full HLSL translation unit: struct declarations, then the binding section, then the hoisted program-scope declarations,
   ## the device function declarations and definitions, then `[numthreads]` and the kernel entry: `main`, or the `{.exportc: "name".}` override.
   ##
   ## - fvD3D12: register resources and the `ConstantBuffer` push block
