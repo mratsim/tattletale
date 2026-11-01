@@ -234,7 +234,8 @@ const GemmSmemHighlights = [
   (alpha: 1.0'f32, A: ((1, 1), (1, 1)), B: ((1, 1), (1, 1)), beta: 0.0'f32, C: ((1, 1), (1, 1)))]
 
 proc checkGemmSmem[E: HwEngine, TIn](
-    rng: var Rand, engine: E, _: typedesc[TIn], cs: GemmCase) =
+    rng: var Rand, engine: E, _: typedesc[TIn],
+    MT, NT, KT: static int, cs: GemmCase) =
   let (aShape, aStrides) = cs.A
   let (bShape, bStrides) = cs.B
   let (cShape, cStrides) = cs.C
@@ -252,15 +253,15 @@ proc checkGemmSmem[E: HwEngine, TIn](
     bDev = engine.bridge(bHost)
     cDev = engine.bridge(cHost)
     dDev = engine.bridge(dHost)
-  # one (64, 64) block tile per launch block, 128 threads, the grid runs
-  # 1..2x the tile grid to stress the grid-stride loop and the barrier
-  # that guards the stage reuse between block tiles
-  engine.launchDeviceFn gemm_smem(tiledMma(float32, TIn, TIn, 32, 32, 64),
-      tiledMma(float32, TIn, TIn, 32, 32, 16),
+  # one (warpsPerDim·MT, warpsPerDim·NT) block tile per launch block,
+  # warpsPerBlock warps, launch grid randomized 1..2x the tile grid,
+  # to stress grid-stride looping and the barrier between block tiles
+  engine.launchDeviceFn gemm_smem(tiledMma(float32, TIn, TIn, MT, NT, KT),
+      tiledMma(float32, TIn, TIn, MT, NT, 16),
       dDev, cs.alpha, aDev, bDev, cs.beta, cDev) do:
-    grid = (rng.rand(1 .. 2 * ceil_div(M, 64)),
-            rng.rand(1 .. 2 * ceil_div(N, 64)))
-    blk = (128, 1)
+    grid = (rng.rand(1 .. 2 * ceil_div(M, warpsPerDim * MT)),
+            rng.rand(1 .. 2 * ceil_div(N, warpsPerDim * NT)))
+    blk = (warpsPerBlock * threadsPerWarp, 1)
   engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, dHost.len)
   gemm_ref(refHost, cs.alpha, aHost, bHost, cs.beta, cHost)
   assertAllClose(dHost.view(), refHost.view(), rtol = 1e-5, abstol = 1e-3,
@@ -268,16 +269,17 @@ proc checkGemmSmem[E: HwEngine, TIn](
           " " & $bStrides & " " & $cStrides)
 
 proc runGemmSmemChecks[E: HwEngine, TIn](
-    rng: var Rand, engine: E, _: typedesc[TIn],
+    rng: var Rand, engine: E, _: typedesc[TIn], MT, NT, KT: static int,
     cases: openArray[GemmCase], Iters: static int) =
   for iter in 0 ..< Iters:
     for cs in cases:
-      rng.checkGemmSmem(engine, TIn, cs)
+      rng.checkGemmSmem(engine, TIn, MT, NT, KT, cs)
 
 proc runGemmSmemFuzz[E: HwEngine, TIn](
-    rng: var Rand, engine: E, _: typedesc[TIn], cases: openArray[GemmCase]) =
+    rng: var Rand, engine: E, _: typedesc[TIn], MT, NT, KT: static int,
+    cases: openArray[GemmCase]) =
   for cs in cases:
-    rng.checkGemmSmem(engine, TIn, cs)
+    rng.checkGemmSmem(engine, TIn, MT, NT, KT, cs)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The suite
@@ -292,11 +294,11 @@ proc main =
   testStaging(engine)
 
   var rng = initRand(0xC16D_02B7)
-  rng.runGemmSmemChecks(engine, bfloat16, GemmSmemHighlights, Iters = 2)
-  rng.runGemmSmemChecks(engine, float16, GemmSmemHighlights, Iters = 2)
-  rng.runGemmSmemFuzz(engine, bfloat16, genGemmCases(
+  rng.runGemmSmemChecks(engine, bfloat16, 32, 32, 64, GemmSmemHighlights, Iters = 2)
+  rng.runGemmSmemChecks(engine, float16, 32, 32, 64, GemmSmemHighlights, Iters = 2)
+  rng.runGemmSmemFuzz(engine, bfloat16, 32, 32, 64, genGemmCases(
     (64, 64, 64), (100, 150, 200), (37, 61, 45), (128, 128, 128)))
-  rng.runGemmSmemFuzz(engine, float16, genGemmCases(
+  rng.runGemmSmemFuzz(engine, float16, 32, 32, 64, genGemmCases(
     (64, 64, 64), (100, 150, 200), (37, 61, 45), (128, 128, 128)))
 
 when isMainModule:

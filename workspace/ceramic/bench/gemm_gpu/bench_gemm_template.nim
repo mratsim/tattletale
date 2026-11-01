@@ -117,8 +117,9 @@ proc benchSmemCeramic*[E: HwEngine](engine: E, M, N, K, iters: int): auto =
         tiledMma(float32, bfloat16, bfloat16, 32, 32, 64),
         tiledMma(float32, bfloat16, bfloat16, 32, 32, 16),
         dDev, aDev, bDev, 5) do:
-      grid = (ceil_div(M, 64), ceil_div(N, 64))
-      blk = (128, 1)
+      # one (warpsPerDim·32, warpsPerDim·32) block tile per block
+      grid = (ceil_div(M, warpsPerDim * 32), ceil_div(N, warpsPerDim * 32))
+      blk = (warpsPerBlock * threadsPerWarp, 1)
   # timed, the launch overhead leaves the measurement
   let
     aDev = engine.bridge(aHost)
@@ -129,7 +130,8 @@ proc benchSmemCeramic*[E: HwEngine](engine: E, M, N, K, iters: int): auto =
         tiledMma(float32, bfloat16, bfloat16, 32, 32, 64),
         tiledMma(float32, bfloat16, bfloat16, 32, 32, 16),
         dDev, aDev, bDev, iters) do:
-      grid = (ceil_div(M, 64), ceil_div(N, 64))
-      blk = (128, 1)
+      # one (warpsPerDim·32, warpsPerDim·32) block tile per block
+      grid = (ceil_div(M, warpsPerDim * 32), ceil_div(N, warpsPerDim * 32))
+      blk = (warpsPerBlock * threadsPerWarp, 1)
   engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, M * N)
   dHost

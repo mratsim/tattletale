@@ -37,6 +37,24 @@ import workspace/ceramic/src/hardware/h_copy_dispatch
 import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Warp grid
+# ═══════════════════════════════════════════════════════════════════════
+
+const
+  threadsPerWarp* = 32
+    ## Threads per warp
+  warpsPerDim* = 2
+    ## Warp grid dimension per block tile, one (BM, BN) tile is covered
+    ## by a warpsPerDim x warpsPerDim grid of warps.
+    ## Warp (row, col) takes the quadrant
+    ## (warpsPerDim·mTile + row, warpsPerDim·nTile + col)
+  warpsPerBlock* = warpsPerDim * warpsPerDim
+    ## Warps per launch block
+  stageThreads* = warpsPerBlock * threadsPerWarp div 2
+    ## Staging threads per stageSmemTile call, the block's warps split
+    ## in two halves, one per operand
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Stage geometry
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -114,18 +132,29 @@ template stageSmemTile*(stageWords: untyped, src: TensorView, tid: int, stageRow
     chunkElems = 8
     chunkWords = 4
     chunksPerRow = stageChunksPerRow(stageK)
-    stageThreads = 64
     chunksPerThread = (stageRows * chunksPerRow) div stageThreads
+  static:
+    assert sizeof(src.data[0]) == 2,
+      "stageSmemTile: the chunk geometry fixes 2-byte elements (" &
+      $chunkElems & " per 16-byte chunk), got " &
+      $sizeof(src.data[0]) & "-byte elements"
+    doAssert stageK mod chunkElems == 0,
+      "stageSmemTile: stageK " & $stageK & " does not divide into whole " &
+      $chunkElems & "-element chunks, the row tails would never stage"
+    doAssert (stageRows * chunksPerRow) mod stageThreads == 0,
+      "stageSmemTile: " & $(stageRows * chunksPerRow) & " chunks do not " &
+      "divide evenly over " & $stageThreads & " staging threads, the tail " &
+      "chunks would drop"
   let
     elems = cast[ptr UncheckedArray[typeof(src.data[0])]](stageWords)
     zeroVal = zero(typeof(src.data[0]))
     lay = src.getLayout()
     kStride = lay.stride[1]
   const atom = getCopyAsyncAtom(uint32)
-  # Participation guard: both staging calls run on all 128 threads,
-  # one with the thread id and one with the id shifted down 64 lanes,
-  # so exactly one call matches a staging thread id and the other
-  # skips whole warps (no intra-warp divergence).
+  # Participation guard: both staging calls run on all warpsPerBlock threads,
+  # one call with the thread id and one with the id shifted down
+  # stageThreads lanes, so exactly one call matches a staging thread
+  # id and the other skips whole warps (no intra-warp divergence).
   if tid >= 0 and tid < stageThreads:
     for i in 0 ..< chunksPerThread:
       let c = tid + i * stageThreads
@@ -174,8 +203,9 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
   ## k-strided or misaligned stage elementwise through their layout.
   ##
   ## Args:
-  ## - mma: the warp tile schedule. A 2x2 warp grid covers one block
-  ##   tile of BM = 2·MT rows and BN = 2·NT columns, 128 threads.
+  ## - mma: the warp tile schedule. One block tile measures
+  ##   BM = warpsPerDim·MT rows by BN = warpsPerDim·NT columns over
+  ##   a warpsPerDim x warpsPerDim warp grid
   ## - mmaStep: the same schedule narrowed to one atom cell along k
   ##   (KT = 16), the fragment loads and the accumulate step work one
   ##   k16 step at a time
@@ -191,9 +221,26 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
   ## The warps load their mma fragments straight out of the stage
   ## through the atom thread->value map, one k16 step at a time.
   ## D accumulates in registers across the whole reduction.
+  ##
+  ## Refusal conditions, the kernel returns with D untouched:
+  ##
+  ## - the operand k sizes differ, a mismatched reduction length would
+  ##   zero-fill the shorter operand's tail into the result
+  ## - the block runs any other thread count, a mis-sized block reads
+  ##   and writes off the stage and the block tile
+  if A.shape[1] != B.shape[1]:
+    return
+  if threads_per_threadgroup.x * threads_per_threadgroup.y *
+      threads_per_threadgroup.z != warpsPerBlock * threadsPerWarp:
+    return
+  static:
+    assert mmaStep.MT == mma.MT and mmaStep.NT == mma.NT,
+      "gemm_smem: mmaStep must narrow mma to KT = 16 at the same MT/NT, " &
+      "got " & $mmaStep.MT & "x" & $mmaStep.NT & " vs " &
+      $mma.MT & "x" & $mma.NT
   const
-    BM = 2 * mma.MT
-    BN = 2 * mma.NT
+    BM = warpsPerDim * mma.MT
+    BN = warpsPerDim * mma.NT
     BK = mma.KT
     stageKPad = stageRowStride(BK)
     kSteps = BK div 16
@@ -214,8 +261,8 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
     thrID = getLocalThreadID()
     warpID = thrID div 32
     laneID = thrID mod 32
-    warpRow = warpID div 2
-    warpCol = warpID mod 2
+    warpRow = warpID div warpsPerDim
+    warpCol = warpID mod warpsPerDim
     aStage = cast[ptr UncheckedArray[uint32]](
       (cast[uint64](addr stageA[0]) + 15) and (not uint64(15)))
     bStage = cast[ptr UncheckedArray[uint32]](
@@ -241,7 +288,7 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
     # prologue: stage the first k tile into buffer 0
     stageSmemTile(aStage, A, thrID, BM, BK, 0, blockM0, 0,
                   A.shape[0], A.shape[1])
-    stageSmemTile(bStage, B, thrID - 64, BN, BK, 0, blockN0, 0,
+    stageSmemTile(bStage, B, thrID - stageThreads, BN, BK, 0, blockN0, 0,
                   B.shape[0], B.shape[1])
     commit_group(getCopyAsyncAtom(uint32))
 
@@ -257,8 +304,9 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
         # Next stage issues into the other buffer and overlaps the compute below.
         stageSmemTile(aStage, A, thrID, BM, BK, (1 - cur) * aStageWords,
                       blockM0, kNext, A.shape[0], A.shape[1])
-        stageSmemTile(bStage, B, thrID - 64, BN, BK, (1 - cur) * bStageWords,
-                      blockN0, kNext, B.shape[0], B.shape[1])
+        stageSmemTile(bStage, B, thrID - stageThreads, BN, BK,
+                      (1 - cur) * bStageWords, blockN0, kNext,
+                      B.shape[0], B.shape[1])
         commit_group(getCopyAsyncAtom(uint32))
       # Fragment consumption, one k16 step at a time: the warp's row
       # slice covers all steps and the tile id picks the k16 step,
@@ -289,8 +337,8 @@ proc gemm_smem*[TAcc, TA, TB, MT, NT, KT](
     if alpha != 1.0'f32:
       for i in 0 ..< regC.size():
         rD[i] = alpha * rD[i]
-    let dRow = 2 * mTile + warpRow
-    let dCol = 2 * nTile + warpCol
+    let dRow = warpsPerDim * mTile + warpRow
+    let dCol = warpsPerDim * nTile + warpCol
     if beta != 0.0'f32:
       let rC = tile(C.T, regC).load(C, tvmC, laneID, (dRow, dCol))
       for i in 0 ..< regC.size():
