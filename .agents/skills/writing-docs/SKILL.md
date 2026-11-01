@@ -83,6 +83,24 @@ A CS undergraduate is the comprehension floor.
   Fix: restore the connective ("the register slots that the thread coordinates own") or split into plain subject-verb-object sentences.
 - Code and data never act. Banned: "Scalar reads render `push.<name>`".
   Write who does what: "Reading a scalar parameter emits `push.<name>`".
+- A type, a value, a text, or a name never takes an agent verb.
+  Refuse, keep, stay, pair, travel, name, and live belong to code agents and specifications.
+  Banned: "float16 refuses", "the value stays untyped", "`bfloat16` names no MSL type".
+- Agent-verb rewrites. "float16 refuses" -> "the pass rejects float16 parameters",
+  or the capability form ("float16 has no HLSL form, the value emits as its bits").
+  "X stays untyped" -> "X is untyped" or "the body does not type X".
+  "keeps a guard" -> "retains a guard" or "a guard remains".
+- Agent-verb rewrites, movement and naming. "pairs with" corresponds to its pairing.
+  "travels as" becomes "emits as" or "is passed as" in receiver form.
+  "names no MSL type" becomes "MSL has no type for" or "no MSL type exists for" alike.
+- Worked pair: "`bfloat16` names no MSL type here, values travel as raw bits" reads
+  "no MSL type exists for bfloat16, the value emits as raw bits".
+- The agent-verb test: the comment's verb must be something the grammatical subject
+  can actually do in the real world. A compiler refuses, a spec keeps, a type does neither, it has or it lacks.
+- A file, a row, a module, or a doc never "states" its contents. The word "states"
+  is DSL-invented vocabulary for the content verbs: a file contains or declares,
+  a row lists or declares, an invocation contains. "the spec states" remains legal.
+  Declare or list is the plainer verb for content.
 - TODOs name the missing condition and the removal criterion.
 - Commits and PRs state the resulting behavior, the technical reason, the compatibility impact, and the validation.
 - Commits and PRs do not recount attempts or pivots.
