@@ -221,12 +221,6 @@ type
 proc dissolveFail(fn: CirProc, detail: string): string =
   "dissolvePointerLocals: at " & fn.name & ": " & detail
 
-proc toPlainSym(name: string, typ: CirType): CirExpr =
-  ## Every dissolved read rewrites to the symbol this proc returns.
-  result = CirExpr(kind: eSym, name: name, typ: typ, builtin: false,
-    coordBuiltin: cbkNone, synchroBuiltin: sbkNone,
-    reductionBuiltin: rbkNone, atomicsBuiltin: abkNone)
-
 proc registerDissolvedStruct(fn: CirProc, ctx: var DissolveCtx, path: string, t: CirType, c: CirExpr): string =
   ## Records the field rewrites of one pointer-holding struct local bound by a construction of symbols.
   ## Nested constructions recurse. Returns "" when clean, else the refusal.
