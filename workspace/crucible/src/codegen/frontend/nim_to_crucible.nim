@@ -1281,28 +1281,16 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         else:
           result.add(hoists & @[varD(cirName, typ, value, spc)])
   of nnkConstSection:
-    # a `const` section: the value must already be a compile-time literal
     for defs in n:
       defs.expectKind(nnkConstDef)
-      let constName = defs[0]
-      var nimName = if constName.kind == nnkPragmaExpr: constName[0].strVal
-                    else: constName.strVal
       let typeNode = defs[1]
       let valueNode = defs[2]
-      var typ: CirType = nil
       if typeNode.kind != nnkEmpty:
-        typ = ctx.resolver.resolveCirType(typeNode)
+        discard ctx.resolver.resolveCirType(typeNode)
       else:
-        typ = ctx.resolver.resolveCirType(valueNode.getTypeInst())
+        discard ctx.resolver.resolveCirType(valueNode.getTypeInst())
       if ctx.failing():
         return @[]
-      let value = ctx.lowerExpr(valueNode)
-      if ctx.failing():
-        return @[]
-      let hoists = ctx.drainHoisted()
-      let cirName = ctx.uniqueName(nimName)
-      ctx.declareLocal(constName, sym(cirName, typ))
-      result.add(hoists & @[constD(cirName, typ, value)])
   of nnkAsgn:
     let lhs = ctx.lowerExpr(n[0])
     if ctx.failing():
