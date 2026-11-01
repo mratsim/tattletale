@@ -62,8 +62,8 @@ static:
     doAssert m.layouts["Inner"].align == 8
     # outer scalar sits after the padded nested struct
     doAssert m.layouts["Outer"].size == 24
-    # std430 packs a bool in 1 byte so the second bool starts at offset 1
-    doAssert m.layouts["BoolPair"].size == 2
+    # std430 packs a bool in 4 bytes so the pair is two words
+    doAssert m.layouts["BoolPair"].size == 8
     # a vector's alignment is the component width so the trailing scalar
     # needs no padding before it
     doAssert m.layouts["VecStruct"].size == 20
