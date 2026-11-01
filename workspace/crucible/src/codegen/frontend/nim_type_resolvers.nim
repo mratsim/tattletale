@@ -464,7 +464,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
   of ntyStatic:
     result = r.resolveCirType(n.getTypeInst(), ptrSpace)
   of ntyOpenArray:
-    # openArray[T] travels as a span over the element type in the pointer space.
+    # openArray[T] passes through the frontend as a span over the element type in the pointer space.
     # Span split later decomposes a span into an element pointer
     # plus an int32 length, no span reaches the printers
     var span = n

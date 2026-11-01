@@ -289,7 +289,7 @@ proc applyProcPragmas*(fn: NimNode, p: CirProc): string =
         case prag[0].strVal
         of "exportc":
           # `exportc: "entry"` renames the emitted entry point.
-          # Bare `exportc` keeps the proc's own name.
+          # a proc keeps its own name under a bare `exportc`
           p.exportName = prag[1].strVal
         of "workgroup":
           # both call and colon forms: `workgroup(x, y, z)`, `workgroup: (x, y, z)`

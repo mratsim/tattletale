@@ -27,7 +27,7 @@
 ##
 ## - a formal declaring threadgroup or constant storage: its space names
 ##   the storage the callee declares, never a provenance the call site picks
-## - a callee outside the module: a builtin such as `__builtin_memcpy` states
+## - a callee outside the module: a builtin such as `__builtin_memcpy` carries
 ##   a nominal formal space. The printers re-space it at the call site
 ##
 ## Every C-family bundle registers the pass. The SPIR-V encoder derives
@@ -121,7 +121,7 @@ type
 proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirProc, ctx: InstantiateCtx) =
   ## Rewrites one call site onto the instantiation its argument spaces select.
   ## The rewrite touches the `calleeExpr` and the `ctx` only, nothing returned.
-  ## A name collision refuses the pass, `ctx.err` receives the refusal text and the call site stays untouched.
+  ## The pass refuses a name collision, `ctx.err` receives the refusal text and the call site remains untouched.
   var wanted: seq[CirType]
   var instantiation: CirProc
   if not calleeProc.wantedParamTypes(args, wanted):

@@ -14,12 +14,12 @@
 ## - coordinate builtins: attributed `uint3`/`uint` params, no slot
 ##
 ## Other emission rules:
-## - `{.smem.}` locals: a kernel's top-level local stays in-body as kernel-scope
-##   `threadgroup` storage (Metal allocates it per threadgroup),
+## - `{.smem.}` locals: the pass keeps a kernel's top-level local in-body
+##   as kernel-scope `threadgroup` storage (Metal allocates it per threadgroup),
 ##   any initializer is discarded, a local outside a kernel body drops,
-##   a device function still owning a smem local refuses in the pass
+##   the pass refuses a device function still owning a smem local
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
-##   program-scope `constant` output, a const_mem survivor refuses at the printer
+##   program-scope `constant` output, the printer refuses a const_mem survivor
 ## - a loop prints `while (cond)`, `{.unroll.}` adds the Metal unroll pragma
 ## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
 ##   through except the numeric conversions, which resolve to the MSL native call text
@@ -65,7 +65,7 @@ proc emitMslScalar(t: CirType): string =
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## MSL declaration text of `t` with `ident` appended, the shared C declarator
   ## over the MSL rows. Arrays take the identifier into the declarator
-  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
+  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
   cDecl(mslScalarRow, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: string, t: CirType, ident: string): string =
@@ -126,7 +126,7 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ##
   ## Shared by expression- and statement-position calls: the statement path
   ## bypasses `printExpr`, so a barrier printed as a bare name would lose
-  ## its memory flags, text MSL refuses to compile.
+  ## its memory flags, the Metal compiler refuses the text.
   ##
   ## `args` contains the already-printed argument texts.
   if callee.kind != eSym:

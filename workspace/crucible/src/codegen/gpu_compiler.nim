@@ -292,7 +292,7 @@ macro hlsl*(flavor: untyped, body: untyped): string =
   ##
   ## - resource binding per `flavor`, D3D12-native by default,
   ##   fvVulkan emits the zero-descriptor flavor for the engine's address route
-  ## - `flavor` stays untyped so overload resolution never sees the body,
+  ## - `flavor` is untyped so overload resolution never sees the body,
   ##   a typed parameter would evaluate it outside any DSL block
   var name = ""
   if flavor.kind in {nnkIdent, nnkSym}:

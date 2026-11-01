@@ -26,7 +26,7 @@ import std/[macros, tables, strutils, sets]
 type
   ProcEntry = object
     ## Registry entry of one proc identity: the emitted name is a printed string.
-    ## Identity stays the registry's int key.
+    ## Identity is the registry's int key.
     name: string
     fnType: CirType
     hasBody: bool
@@ -321,7 +321,7 @@ proc registerOrGet(ctx: var FrontendCtx, calleeSym: NimNode): ProcEntry =
   ## First registration derives the proc type once and claims the emitted name under the harvest contract: base plus identity-hash suffix.
   ## Later calls read the entry.
   ##
-  ## A `{.builtin.}` callee keeps its canonical native name at the call site. The entry stores its type only.
+  ## A `{.builtin.}` callee carries its canonical native name at the call site. The entry stores its type only.
   let id = procIdentity(calleeSym)
   if ctx.procRegistry.hasKey(id):
     result = ctx.procRegistry[id]
@@ -393,7 +393,7 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   ## Callee symbol of a call to a harvested or builtin proc:
   ## - the registry entry registers or reads
   ## - a body-less callee harvests
-  ## - a builtin keeps its canonical native name
+  ## - a builtin carries its canonical native name
   ##
   ## An instantiation hash would name a proc the backend never defines.
   ## Builtin-marking the callee symbol lets the alias canonicalization
@@ -458,7 +458,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     # a `toOpenArray(base, first, last)` call lowers into the span construction
     # for the span split pass, the span type comes from the base pointer's
     # element type and space. The base must be a pointer: the split's pointer
-    # side offsets the base by `first`, and CIRv2 states pointer arithmetic over pointers
+    # side offsets the base by `first`, and CIRv2 declares pointer arithmetic over pointers
     let base = ctx.lowerExpr(call[1])
     if ctx.resolver.err.len > 0:
       return nil

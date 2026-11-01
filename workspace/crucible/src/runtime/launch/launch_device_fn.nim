@@ -456,7 +456,7 @@ macro `>>`*(proxy: DeviceFnProxy, call: untyped): untyped =
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
   doAssert callNode.kind == nnkCall, "launchDeviceFn: expected fn(args...), got " & callNode.repr
-  # lang travels on the proxy type as a static string, baked in by the `<<` chevron
+  # lang is a static string on the proxy type, baked in by the `<<` chevron
   let t = proxy.getTypeInst()
   var lang = "spirv"
   if t.len > 2:

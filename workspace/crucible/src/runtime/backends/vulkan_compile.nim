@@ -22,7 +22,7 @@ proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): se
   ## Returns SPIR-V words:
   ## - subgroup sources (the KHR subgroup extensions the codegen emits)
   ##   compile with the vulkan1.1 target env, shuffles are SPIR-V 1.3
-  ## - every other source stays on the SPIR-V 1.0 default
+  ## - every other source remains on the SPIR-V 1.0 default
   let glslang = findExe("glslangValidator")
   if glslang.len == 0:
     failLoud("glslangValidator not found on PATH, the Vulkan engine needs it to compile GLSL sources")

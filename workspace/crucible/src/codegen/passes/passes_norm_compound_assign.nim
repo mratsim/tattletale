@@ -15,7 +15,7 @@
 ## a call in the shared tree would print and evaluate twice.
 ##
 ## This pass binds every call-bearing operand of the shared tree into a fresh temp.
-## Only the shared-tree shape binds: a target call the user wrote twice keeps both evaluations.
+## Only the shared-tree shape binds: the pass keeps both evaluations of a target call the user wrote twice.
 ##
 ## Runs first in the normalization stage: the shared-tree detection compares references, so reshaping passes run after it.
 
@@ -73,7 +73,7 @@ proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): C
   return tmp
 
 proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
-  ## Only operand positions bind: the lvalue spine (`x`, `x[i]`, `x.f`) stays structural.
+  ## Only operand positions bind: the lvalue spine (`x`, `x[i]`, `x.f`) is structural.
   ## An operand temp is legal on every target, an address temp is not:
   ## GLSL rewrites pointer locals to their pointees and keeps no function storage.
   if e.kind notin {eAt, ePat, eDot, eDeref}:

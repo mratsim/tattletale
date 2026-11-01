@@ -21,23 +21,23 @@
 ## - `mslHoistDeviceFnSmem`: a device function's `{.smem.}` local hoists
 ##   to a threadgroup reference parameter, Metal supports no threadgroup
 ##   allocation in device functions, a hoisted arena takes no initializer
-## - `mslRewriteSmemLocals`: a kernel's `{.smem.}` local at any body depth
-##   stays in-body as kernel-scope `threadgroup` storage.
-##   An initializer refuses: Metal drops threadgroup array initializers at runtime
+## - `mslRewriteSmemLocals`: the pass keeps a kernel's `{.smem.}` local at any
+##   body depth in-body as kernel-scope `threadgroup` storage.
+##   the pass refuses an initializer: Metal drops threadgroup array initializers at runtime
 ## - `mslThreadCoordinateBuiltins`: coordinate builtins thread down to device
 ##   functions as parameters (Metal rejects them outside kernel functions)
 ##
 ## Refusal homes:
-## - a const_mem local without an initializer refuses in the pass, a survivor
-##   outside the relocation refuses at the printer, which keeps a nil-init
-##   shape guard on the relocated declarations
-## - a device function's smem local outside the hoist's reach refuses in `mslRewriteSmemLocals`,
-##   only a kernel owns threadgroup storage
-## - a smem initializer on a hoisted arena refuses in `mslHoistDeviceFnSmem`,
+## - the pass refuses a const_mem local without an initializer, the printer
+##   refuses a survivor outside the relocation, keeping a nil-init shape
+##   guard on the relocated declarations
+## - the pass refuses a device function's smem local outside the hoist's
+##   reach in `mslRewriteSmemLocals`, only a kernel owns threadgroup storage
+## - `mslHoistDeviceFnSmem` refuses a smem initializer on a hoisted arena,
 ##   the arena is the caller's storage to lend, a kernel's own smem
 ##   initializer rewrote to stores before the pass
-## - a device function declaring a parameter named like a needed coordinate
-##   builtin refuses in `mslThreadCoordinateBuiltins`, as the call sites could
+## - `mslThreadCoordinateBuiltins` refuses a device function
+##   declaring a parameter named like a needed coordinate builtin, as the call sites could
 ##   not supply both values under one name
 
 import std/[sets, tables]
@@ -110,7 +110,7 @@ type
     ##   the object
 
 proc hoistSmemLocal(fn: CirProc, s: CirStmt, arenas: var seq[SmemArena]): string =
-  ## The arena is the caller's storage to lend, an initializer on it refuses.
+  ## An arena is the caller's storage to lend, the pass refuses an initializer on it.
   if s.init != nil:
     return "at " & fn.name & ": smem local " & s.name &
       " with an initializer, a hoisted {.smem.} arena takes no initializer"
@@ -135,7 +135,7 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]): string =
   return ""
 
 proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
-  ## An `at` over a hoisted array arena becomes a `pat`, the printed text stays `scratch[i]`.
+  ## An `at` over a hoisted array arena becomes a `pat`, the rewrite prints `scratch[i]`.
   ## Expressions are refs, so the rewrite applies to every sharer.
   if e.kind == eSym and arenaTypes.hasKey(e.name):
     e.typ = arenaTypes[e.name]
@@ -167,8 +167,8 @@ proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
   ##   an object arena binds by reference
   ## - a kernel caller without one gets the arena synthesized into its body
   ##   as the first statement (the launchDeviceFn wrapper)
-  ## - a device-function caller without one refuses, threadgroup storage is
-  ##   the caller's to lend
+  ## - the pass refuses a device-function caller without one, threadgroup
+  ##   storage is the caller's to lend
   ##
   ## A callee symbol's proc type grows by the arena types, idempotent per shared symbol node and matched to the appended arguments.
   if callee.typ.kind == ctProc and
@@ -340,7 +340,8 @@ proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
 proc mslThreadCoordinateBuiltins(m: CirModule): string =
   ## - every device function gains one parameter per transitively needed coordinate builtin in builtin-kind declaration order
   ## - a kernel body is untouched, it reads the builtins it forwards directly
-  ## - Metal only: the builtins stay legal reads inside device functions on other targets, so the pass is not registered there
+  ## - Metal only: the builtins are legal reads inside device functions
+  ##   on other targets, so the pass is not registered there
   var needs = initTable[string, HashSet[CoordBuiltinKind]]()
   var direct = initTable[string, HashSet[CoordBuiltinKind]]()
   var callTargets = initTable[string, HashSet[string]]()
@@ -392,7 +393,8 @@ proc mslRewriteSmemLocals(m: CirModule): string =
   ##
   ## - the printer emits kernel-scope `threadgroup` storage, allocated per
   ##   threadgroup by Metal, no launch-time staging and no parameter
-  ## - a device function's smem local refuses, only a kernel owns threadgroup storage
+  ## - the pass refuses a device function's smem local, only a kernel owns
+  ##   threadgroup storage
   ##
   ## - the hoist drains the locals it covers, this walk catches a survivor at any depth
   ## - the initializer rewrite ran earlier, a surviving local has no initializer

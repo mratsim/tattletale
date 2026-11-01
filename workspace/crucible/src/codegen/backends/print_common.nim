@@ -151,8 +151,8 @@ proc cDecl*(row: ScalarRow, rule: VectorRule, target: string, t: CirType, ident:
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
   ##
   ## - `allowEmptyIdent` permits no identifier, return types and casts use it
-  ## - an array without an identifier refuses with the `<target: array needs an identifier>` text
-  ## - a scalar leaf absent from the scalar row refuses with the one-line
+  ## - the printer refuses an array without an identifier with the `<target: array needs an identifier>` text
+  ## - the printer refuses a scalar leaf absent from the scalar row with the one-line
   ##   `scalarRefusal` message on the same `<target: ...>` channel
   ##
   ##   result = cDecl(cudaScalarRow(), cudaVectorRule(), "cuda", t, "buf", false)
@@ -174,7 +174,7 @@ proc nonFiniteFloatLit*(e: CirExpr, tok: FloatLitTokens): string =
   ##
   ## Returns "" when the value is finite.
   ##
-  ## Finite values keep the caller's own width suffix:
+  ## Finite values carry the caller's own width suffix:
   ##
   ##   of eFloatLit:
   ##     result = nonFiniteFloatLit(e, targetTokens)
@@ -328,7 +328,7 @@ proc printIteElse(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
 
 proc printEmitOperand(ctx: var auto, op: CirExpr): string =
   ## Returns the splice text of one `{.emit.}` operand: the rendered expression
-  ## when the target's kind row states `emitOperandRendersExpr`.
+  ## when the target's kind row lists `emitOperandRendersExpr`.
   ## The symbol name is the default splice.
   if ctx.policy.emitOperandRendersExpr:
     ctx.printExpr(op)

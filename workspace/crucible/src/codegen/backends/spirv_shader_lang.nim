@@ -362,8 +362,8 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
       var m = ctx.pushMemberTy(p)
       if p.typ.kind == ctStruct:
         # Push blocks have no bool member. A direct bool field maps to a u32
-        # storage word. A bool leaf nested inside a struct or array refuses,
-        # no mapped extraction form exists for it.
+        # storage word. The printer refuses a bool leaf nested inside
+        # a struct or array, no mapped extraction form exists for it.
         for i, f in p.typ.fields:
           if f.typ.kind == ctBool:
             m.members[i] = spvScalar(cirUint32())
@@ -1130,7 +1130,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   doAssert e.callee.kind == eSym, "call callee is not a symbol"
   let name = e.callee.name
   # builtin vocabulary dispatches on the typed kinds, never on names,
-  # `max`/`min` stay a name case, harvested magics outside the four categories
+  # `max`/`min` are a name case for the printer, harvested magics outside the four categories
   if e.callee.reductionBuiltin == rbkReduceAdd:
     doAssert e.args.len == 1, "reduceAdd takes one argument"
     let v = ctx.emitExpr(fn, e.args[0])
@@ -1338,7 +1338,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
     of sDiscard:
       discard
     of sCall:
-      # statement-position call: the call instruction emits, a value call's result id stays unused
+      # statement-position call: the call instruction emits, a value call's result id is unused
       if s.callCallee.kind != eSym:
         ctx.failSpv("statement call without a symbol callee, no destination binding")
         return

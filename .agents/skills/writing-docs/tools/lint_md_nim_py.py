@@ -64,6 +64,7 @@ Rule table (rule | trigger | severity):
 | duplicate-refusal-coverage | a refusal message fingerprint refused at 2 or more sites (refusal calls plus genTargets refusal row literals), the human disposes the duplicate | counted  |
 | refusal-essay       | a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses | counted  |
 | refusal-density     | 6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory | counted  |
+| agent-verb          | a comment gives a type, a value, a text, or a name an agent verb (refuses, keeps, stays, pairs, travels, names no), a file, a row, a module, or a doc never states its contents | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -520,9 +521,10 @@ BANNED = [
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
-    (r"\bcarries\b|\bholds\b",
+    (r"\bholds\b",
      None,
-     "state what the thing is or does, name the actor or the mechanism directly"),
+     "state what the thing is or does, name the actor or the mechanism directly "
+     "(carries stays legal as the content verb: an invocation carries the rows)"),
     (r"\blattice\b|\blattices\b",
      None, "use closed set of type kinds or name the kind"),
 ]
@@ -663,6 +665,8 @@ RULES = {
                           "a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses, state the fact"),
     "refusal-density": Rule("refusal-density", True,
                             "6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory"),
+    "agent-verb": Rule("agent-verb", True,
+                       "a comment gives a type, a value, a text, or a name an agent verb (refuses, keeps, stays, pairs, travels, names no), the code that acts or the specification names the actor"),
 }
 
 
@@ -2824,6 +2828,279 @@ def refusal_selftest(quiet=False):
     return failed
 
 
+# Agent-verb slop rule: agent-verb
+# A comment may not give agency to a non-agent. A type, a value, a text, or a
+# name never refuses, keeps, stays, pairs, travels, or names no X. The subject
+# of the verb is the code that acts (the pass, the printer, the compiler) or
+# the specification that rules (the spec, the row, the table). A file, a row,
+# a module, or a doc never states its contents: a file declares or contains,
+# a row lists, an invocation carries.
+AGENT_VERB_RE = re.compile(
+    r"\b(refuses?|kept|keeps?|stays?|pairs|travels?|names no|states)\b")
+
+# Nouns whose subject may carry the agent verbs: code agents, specification
+# nouns, and target languages ("the pass refuses the input", "the spec keeps
+# f16 out of the surface", "WGSL keeps pointer parameters untouched").
+AGENT_VERB_AGENTS = frozenset((
+    "compiler", "pass", "printer", "walker", "emitter", "checker", "macro",
+    "proc", "func", "template", "iterator", "frontend", "sem",
+    "spec", "row", "table", "schema", "grammar",
+    "wgsl", "hlsl", "glsl", "msl", "cuda", "opencl", "spirv", "metal"))
+
+# Type-like and value-like subjects: the banned class. A kind name, a value,
+# a literal, a pair, a builtin, or a callee never refuses, keeps, stays,
+# pairs, or travels.
+AGENT_VERB_TYPES = frozenset((
+    "float16", "bfloat16", "float32", "float64", "integer", "int8", "int16",
+    "int32", "int64", "uint8", "uint16", "uint32", "uint64", "int", "uint",
+    "float", "double", "bool", "half", "bf16", "f16", "f32", "f64", "u8",
+    "u16", "u32", "u64", "i8", "i16", "i32", "i64", "vec2", "vec3", "vec4",
+    "vector", "value", "values", "literal", "literals", "constant",
+    "constants", "pair", "pairs", "builtin", "builtins", "callee", "callees"))
+
+# The states verb convicts one subject class more: the content carriers.
+AGENT_VERB_CONTENT = frozenset((
+    "file", "row", "module", "doc", "invocation", "registry"))
+
+# Words the subject walk skips: articles, copulas, prepositions, conjunctions,
+# and pronouns carry no subject.
+AGENT_VERB_STOP = frozenset((
+    "the", "a", "an", "and", "or", "but", "so", "that", "this", "its", "it",
+    "is", "are", "was", "were", "be", "been", "being", "has", "have", "had",
+    "in", "on", "at", "to", "of", "as", "with", "for", "from", "by", "when",
+    "if", "while", "before", "after", "only", "no", "not", "never", "every",
+    "each", "one", "two", "any", "all", "then", "than", "there", "here",
+    "which", "whose", "what", "how", "why", "again", "also", "still", "would",
+    "could", "should", "may", "might", "must", "can", "cannot", "does", "do",
+    "did", "their", "they", "them", "we", "our", "your", "his", "her", "over",
+    "under", "into", "onto", "out", "up", "down", "both", "own", "same",
+    "other", "another", "such", "per", "via", "yet", "nor", "either",
+    "neither", "already", "upon", "about", "across", "against", "along",
+    "among", "around", "behind", "below", "beneath", "beside", "between",
+    "beyond", "during", "except", "inside", "outside", "since", "through",
+    "toward", "towards", "without", "within", "s"))
+
+_AGENT_VERB_TOKEN_RE = re.compile(r"`[^`]*`|[A-Za-z_][A-Za-z0-9_']*")
+_AGENT_VERB_CLAUSE_CUT = re.compile(r"[,;:()]|\.\s")
+
+
+def _agent_verb_singular(word):
+    """Returns the word's singular form, a trailing-s strip."""
+    return word[:-1] if word.endswith("s") and len(word) > 1 else word
+
+
+def _agent_verb_subject(prefix):
+    """Returns the nearest preceding noun-phrase token of one verb match,
+    None when the clause names no subject before the verb.
+
+    The clause is the text from the last boundary (comma, semicolon, colon,
+    paren, period) to the verb. Backticked camelCase reads as a proc name,
+    an agent, and yields None.
+    """
+    pos = -1
+    for m in _AGENT_VERB_CLAUSE_CUT.finditer(prefix):
+        pos = m.start()
+    clause = prefix[pos + 1:] if pos >= 0 else prefix
+    for tok in reversed(_AGENT_VERB_TOKEN_RE.findall(clause)):
+        if tok.startswith("`"):
+            inner = tok[1:-1]
+            if inner[:1].islower() and any(c.isupper() for c in inner):
+                return None
+            return tok
+        if tok.lower() in AGENT_VERB_STOP or tok.isdigit():
+            continue
+        return tok
+    return None
+
+
+def _agent_verb_comment(text):
+    """Yields (line no, comment text) pairs for one .nim file's comments:
+    whole-line ## and # comments plus trailing comments after code, string
+    literals blanked so a # inside a literal opens no comment, and
+    triple-quote interiors masked."""
+    lines = text.splitlines()
+    mask = _nim_triple_quote_mask(lines)
+    for no, raw in enumerate(lines, 1):
+        s = raw.strip()
+        comment = None
+        if s.startswith("##") or s.startswith("#"):
+            comment = s.lstrip("#").strip()
+        else:
+            blanked = _blank_nim_strings(raw)
+            m = re.search(r"\s##", blanked) or re.search(r"\s#(?!#)", blanked)
+            if m:
+                comment = raw[m.start():].strip().lstrip("#").strip()
+        if comment and no not in mask:
+            yield no, comment
+
+
+_AGENT_VERB_REASON = ("agent verb '%s' on a non-agent subject, a type, a value, "
+                      "a text, or a name never refuses, keeps, stays, pairs, or "
+                      "travels, the code that acts or the specification names the "
+                      "actor")
+_AGENT_VERB_STATES_REASON = ("a file, a row, a module, a doc, or an invocation "
+                             "never states its contents, a file declares or "
+                             "contains, a row lists, an invocation carries")
+
+
+def _agent_verb_hit(comment):
+    """Returns the finding reason of one comment's first agent-verb hit,
+    None when the comment names only agents and specifications.
+
+    A verb quoted inside backticks is code, never a hit. The subject walk
+    fires the check when the nearest preceding noun-phrase token is type-like
+    (backticked text, a capitalized identifier, a kind name) or value-like
+    (value, literal, pair, builtin, callee). For states the content carriers
+    (file, row, module, doc, invocation) convict too, the spec stays legal.
+    """
+    spans = [m.span() for m in re.finditer(r"`[^`]*`", comment)]
+    for m in AGENT_VERB_RE.finditer(comment):
+        if any(s <= m.start() < e for s, e in spans):
+            continue
+        subject = _agent_verb_subject(comment[:m.start()])
+        if subject is None:
+            continue
+        base = subject[1:-1] if subject.startswith("`") else subject
+        low = base.lower()
+        sing = _agent_verb_singular(low)
+        verb = m.group(0)
+        if verb == "states":
+            if (sing in AGENT_VERB_AGENTS or low in AGENT_VERB_AGENTS) \
+                    and sing != "row":
+                continue
+            if (sing in AGENT_VERB_TYPES or low in AGENT_VERB_TYPES
+                    or subject.startswith("`") or base[:1].isupper()
+                    or sing in AGENT_VERB_CONTENT or low in AGENT_VERB_CONTENT):
+                return _AGENT_VERB_STATES_REASON
+            continue
+        if sing in AGENT_VERB_AGENTS or low in AGENT_VERB_AGENTS:
+            continue
+        if (subject.startswith("`") or base[:1].isupper()
+                or sing in AGENT_VERB_TYPES or low in AGENT_VERB_TYPES):
+            return _AGENT_VERB_REASON % verb
+    return None
+
+
+AGENT_VERB_SELFTEST_CASES = (
+    ("agent-verb convicted specimens fire", (
+        ("src/codegen/backends/doc_demo.nim", '''## `bfloat16` names no MSL type here, values travel as raw bits.
+## `float16` keeps a first-class `half` identity: its conversions are plain native calls.
+## `flavor` stays untyped so overload resolution never sees the body.
+## an unprovenanced integer names no storage, only the default device.
+## Identity stays the registry's int key.
+## a 16-bit float pair refuses on the printer wiring state.
+## `float16` has no HLSL form, the value emits as its bits.
+## `ternary` states its own type.
+'''),
+    ), (
+        ("src/codegen/backends/doc_demo.nim", 1, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 2, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 3, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 4, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 5, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 6, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 8, "agent-verb", False),
+    )),
+    ("agent-verb honest agents and specifications stay clean", (
+        ("src/codegen/backends/ok_demo.nim", '''## the pass refuses the input.
+## the printer keeps the shape guard on the relocated declarations.
+## the spec keeps f16 out of the MSL surface.
+## the row refuses an omitted cell at the lookup.
+## the table stays at one row per kind.
+## the value is passed as raw bits.
+## retains a guard, a guard remains.
+## no MSL type exists for bfloat16, the value emits as raw bits.
+## `mslRewriteSmemLocals`, which keeps the kernel-owned arenas in-body.
+## the walk keeps going and the printer returns the recorded message.
+## the kept locals use the renamed names their body already references.
+## the compiler state stays consistent across runs.
+## the spec states the contract once.
+'''),
+    ), (
+    )),
+    ("agent-verb states class convicts the content carriers", (
+        ("src/codegen/backends/states_demo.nim", '''## a scalar row states any subset of the cells.
+## one invocation states every target's rows.
+## `targets_registry.nim` states every family of all six targets.
+## the doc states the field order.
+'''),
+    ), (
+        ("src/codegen/backends/states_demo.nim", 1, "agent-verb", False),
+        ("src/codegen/backends/states_demo.nim", 2, "agent-verb", False),
+        ("src/codegen/backends/states_demo.nim", 3, "agent-verb", False),
+        ("src/codegen/backends/states_demo.nim", 4, "agent-verb", False),
+    )),
+    ("agent-verb trailing comments join the scan", (
+        ("src/codegen/backends/trail_demo.nim", '''proc demo() =
+  discard # the value keeps its default
+
+proc demo2() =
+  discard # the pass keeps its default
+'''),
+    ), (
+        ("src/codegen/backends/trail_demo.nim", 2, "agent-verb", False),
+    )),
+)
+
+
+def agent_verb_selftest(quiet=False):
+    """Runs the agent-verb fixtures through agent_verb_slop_files and prints
+    one PASS or FAIL line per case unless quiet.
+
+    Returns the failed case count, 0 means every convicted specimen fires
+    and every honest agent or specification subject stays clean.
+    """
+    failed = 0
+    for name, files, expected in AGENT_VERB_SELFTEST_CASES:
+        got = agent_verb_slop_files([(Path(p), t) for p, t in files])
+        rows = sorted((str(f.path), f.line, f.rule, f.warning) for f in got)
+        want = sorted(expected)
+        if rows == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in rows:
+                    print("  got      %s" % (row,))
+    return failed
+
+
+def agent_verb_slop_files(entries, base=None, added_cache=None):
+    """Runs the agent-verb rule over the .nim files of one lint run,
+    returns the sorted findings.
+
+    A comment may not give agency to a non-agent: a type, a value, a text,
+    or a name never refuses, keeps, stays, pairs, travels, or names no X,
+    and a file, a row, a module, a doc, or an invocation never states its
+    contents. The check fires when the banned verb's nearest preceding
+    noun-phrase token is type-like (backticked text, a capitalized
+    identifier, a kind name) or value-like (value, literal, pair, builtin,
+    callee), and for states a content carrier convicts too. A code agent
+    (pass, printer, compiler) and a specification noun (spec, row, table,
+    schema, grammar) name the actor and stay clean.
+
+    Tests, runtime and manual fixture files stay out of scope.
+    """
+    findings = []
+    for path, text in entries:
+        sp = str(path).replace("\\", "/")
+        if "/tests/" in sp or "/runtime/" in sp or "manual_" in sp:
+            continue
+        added = added_lines(path, base, added_cache) if base else None
+        for no, comment in _agent_verb_comment(text):
+            if added is not None and no not in added:
+                continue
+            hit = _agent_verb_hit(comment)
+            if hit is not None:
+                findings.append(Finding(path, no, "agent-verb", hit))
+    findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
+    return findings
+
+
 def scan(path, text, findings):
     """Runs every rule over one file's prose, appending to findings."""
     entries, meta = extract(path, text)
@@ -3244,6 +3521,8 @@ def lint(paths, base=None):
     if refusal_inputs:
         findings.extend(refusal_slop_files(refusal_inputs, base,
                                            added_lines_cache))
+        findings.extend(agent_verb_slop_files(refusal_inputs, base,
+                                              added_lines_cache))
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
 
@@ -3914,7 +4193,8 @@ def main(argv):
         args = args[:i] + args[i + 2:]
     base = base or os.environ.get("DOC_LINT_BASE") or None
     if "--selftest-refusal" in args:
-        return 1 if refusal_selftest() else 0
+        failed = refusal_selftest() + agent_verb_selftest()
+        return 1 if failed else 0
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]
         if not paths:

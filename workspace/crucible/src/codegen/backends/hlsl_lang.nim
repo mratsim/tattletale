@@ -38,20 +38,20 @@
 ## Shared:
 ## - the printer classifies every proc's parameters at the signature-emission
 ##   sites (`classifyParams`), no stored record
-## - a whole-vector read of a 3-wide coordinate builtin refuses, components read
+## - the printer refuses a whole-vector read of a 3-wide coordinate builtin, components read
 ##   one by one, the scalar `thread_index_in_threadgroup` reads whole as `int(gidx)`
-## - the dispatch grid size has no HLSL semantic: a `threadgroups_per_grid` read refuses,
+## - the dispatch grid size has no HLSL semantic: the printer refuses a `threadgroups_per_grid` read,
 ##   the HLSL lowering pass materializes the read into the trailing `crucible_numworkgroups` parameter,
 ##   staged at launch as a descriptor-route uniform on fvD3D12, as a push block member on fvVulkan
 ##
 ## Addressing, memory classes, jumps:
 ## - HLSL has no pointer values: pointer locals, pointer-holding struct locals,
 ##   `var` parameter derefs all unwrap in the HLSL lowering pass,
-##   anything pointer shaped reaching the printer refuses
+##   the printer refuses anything pointer shaped reaching it
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the HLSL lowering pass,
-##   file-scope `static const` output, a smem, device-space or surviving
-##   constant-space local refuses
-## - the fp16/bf16/fp8 conversion builtins refuse, half-width types sit outside the HLSL subset
+##   file-scope `static const` output, the printer refuses a smem,
+##   device-space or surviving constant-space local
+## - the printer refuses the fp16/bf16/fp8 conversion builtins, half-width types sit outside the HLSL subset
 ##
 ## Statements and constructions:
 ## - a loop prints `while (cond)`, `{.unroll.}` adds `[unroll]`
@@ -103,13 +103,13 @@ type
     ## True while printing the entry kernel, coordinate builtins and push-constant reads bind the entry only.
     pushParams: HashSet[string]
     ## Push-constant parameters of the proc in flight, reads print through
-    ## `push.<name>`, an assignment refuses.
+    ## `push.<name>`, the printer refuses an assignment.
     bufferParams: HashSet[string]
-    ## Buffer parameters of the proc in flight, a bare use refuses (fvD3D12),
+    ## Buffer parameters of the proc in flight, the printer refuses a bare use (fvD3D12),
     ## the fvVulkan route reads the u64 device address.
     rwBuffers: HashSet[string]
     ## Buffer parameters classified read-write by the module write-scan,
-    ## an assignment through a read-only one refuses.
+    ## the printer refuses an assignment through a read-only one.
     flavor: HlslFlavor
     ## Resource-binding flavor in flight.
     addressParams: Table[string, CirType]
@@ -638,7 +638,7 @@ proc emitShaderSig(ctx: var PrintCtx, fn: CirProc): string =
   ##
   ## - a device function: the bare `RetType name(params)` signature, buffers as resources, `var T` device parameters as `inout`
   ##   an `{.inline.}` proc's signature opens with the `inline ` qualifier
-  ## - parameter legality refuses in the classification pass, and the printer reads the stored records
+  ## - the classification pass refuses illegal parameters, and the printer reads the stored records
   ## - the entry kernel: the `[numthreads(...)]` attribute line, then `void <entry>(<entry inputs>)` over the body-walk semantics
   ##   exportc renames the entry for the host runtime lookup, Vulkan ingest reads the name back from the `[numthreads]` line
   ## - the kernel's open brace prints on its own line (HLSL's brace style) and the body and the closing brace are the caller's
@@ -770,7 +770,7 @@ proc prepShaderProc(ctx: var PrintCtx, fn: CirProc) =
     ctx.pushParams = ctx.kernelPush
     ctx.workgroup = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
   else:
-    # a device function's values pass by value, its push half stays empty
+    # a device function's values pass by value, its push half is empty
     var devicePush: HashSet[string]
     var deviceBuffers: seq[CirParam]
     ctx.classifyParams(fn, devicePush, deviceBuffers)
@@ -796,7 +796,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 
 proc emitStructDecls(ctx: var PrintCtx, byName: Table[string, CirType], emitted: var HashSet[string], name: string, outp: var string) =
   ## Emits one struct definition, member structs first, deduplicated by name.
-  ## HLSL resolves types at their declaration site: a struct holding a pointer refuses,
+  ## HLSL resolves types at their declaration site: the printer refuses a struct holding a pointer,
   ## HLSL structs cannot take resources.
   if name in emitted:
     return

@@ -27,7 +27,7 @@ type EntryInputRow* = array[CoordBuiltinKind, string]
   ## Entry-input text of one coordinate builtin kind, in the form the target's entry signature declares:
   ## a WGSL `@builtin(...)` parameter, an HLSL semantic-carrying input.
   ##
-  ## "" names no entry input: the kind the target reads another way.
+  ## "" carries no entry input: the kind the target reads another way.
   ## Cases: the body's workgroup literal, a lowering-pass materialized parameter, no read at all.
 
 template emitEntryInputs*(kinds: untyped, row: EntryInputRow): string =

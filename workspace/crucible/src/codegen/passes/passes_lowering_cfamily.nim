@@ -42,7 +42,7 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ##
   ## Contract:
   ## - the smem relocation covers top-level kernel-body locals only, a nested
-  ##   or device-function one stays in place and refuses at the printer
+  ##   or device-function one remains in place and the printer refuses it
   ## - the initializer rewrite ran earlier, a relocated smem local has no initializer
   ## - the const_mem relocation covers every proc, nested branch and loop bodies included, at their encounter position
   ## - a const_mem initializer is required, the printer emits it from the relocated node
@@ -53,7 +53,7 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
       let s = fn.body[i]
       if s.kind == sVar and s.space == caThreadgroup:
         if not fn.isKernel:
-          # a device-function smem local stays in place and the printer refuses it,
+          # a device-function smem local remains in place and the printer refuses it,
           # program-scope workgroup storage belongs to the kernel
           i.inc
           continue

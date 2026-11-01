@@ -42,10 +42,10 @@ proc spaceCastRejection(e: CirExpr, fnName: string): string =
   ## Rejection message of one cast or conversion whose pointer target names
   ## storage the operand's provenance does not, "" when the cast passes:
   ##
-  ## - a provenanced operand keeps its storage: the frontend derives the cast
+  ## - a provenanced operand carries its storage: the frontend derives the cast
   ##   target from the operand at birth, so a mismatch means the target space
   ##   was written independently of the operand
-  ## - an unprovenanced integer names no storage, only the default device
+  ## - an unprovenanced integer has no storage, only the default device
   ##   space is claimable (the address route)
   if e.kind notin {eCast, eConv}:
     return ""
@@ -106,7 +106,7 @@ proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStora
   ## the parameters first, then the local declarations of the body.
   ##
   ## The hoisting passes relocate const-space locals on most targets.
-  ## The CUDA bundle keeps them in-body, and a write to one refuses here.
+  ## The CUDA bundle keeps them in-body, and the pass refuses a write to one here.
   var found = ConstStorage(constGlobals: constGlobals)
   for p in fn.params:
     found.otherLocals.incl p.name
@@ -123,7 +123,7 @@ proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStora
 
 proc constStorageTarget(e: CirExpr, storage: ConstStorage): string =
   ## Name of the constant-storage target an lvalue designates.
-  ## Returns "" when the lvalue lives in another memory class or names no storage.
+  ## Returns "" when the lvalue is in another memory class or has no storage.
   ##
   ## Resolution:
   ##

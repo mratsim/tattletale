@@ -22,7 +22,7 @@
 ##
 ## Storage relocation:
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the OpenCL lowering pass, program-scope `__constant` output
-## - a `{.const_mem.}` local surviving outside the relocation refuses, OpenCL C has no function-scope constant storage
+## - the printer refuses a `{.const_mem.}` local surviving outside the relocation, OpenCL C has no function-scope constant storage
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -46,7 +46,7 @@ type
     ## Scalar row of the target. The narrow integer cast names its type from it.
     inKernel: bool
     ## False inside a device function: `__local` and `__constant` locals are
-    ## kernel-only storage, a device function declaring one refuses.
+    ## kernel-only storage, the pass refuses a device function declaring one.
 
 const printerTarget = "opencl"
 
@@ -134,7 +134,7 @@ const OpenclFlatThreadIndex =
 proc atomicOperandPtr(e: CirExpr): CirType =
   ## Pointer type of an atomicFetchAdd address operand.
   ## The base of an element access, else the operand itself when it is
-  ## already a pointer. Nil when the operand names no pointer.
+  ## already a pointer. Nil when the operand has no pointer.
   if e.kind == ePat:
     let t = getExprType(e.patBase)
     if t != nil and t.kind in {ctPtr, ctAptr}:
@@ -239,7 +239,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     return openclConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
   return ""
 proc emitLocalDecl(s: CirStmt): string =
-  ## Declaration text of one local, the array form appends the length to the name, the init stays with the caller.
+  ## Declaration text of one local, the array form appends the length to the name, the init remains with the caller.
   ## Pointer types include the address-space qualifier in their own text, the caller adds no storage prefix (OpenCL rejects a doubled qualifier).
   if s.declType.kind == ctArray:
     result = emitOpenclArrayDecl(s.declType, s.name)
@@ -256,8 +256,8 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## OpenCL C text of the kinds in `targetExprKinds`.
   case e.kind
   of eSym:
-    # a whole-vector coordinate read refuses, the flat thread index takes
-    # its canonical token, a name passes through
+    # a whole-vector coordinate read meets the printer's refusal, the flat thread index
+    # takes its canonical token, a name passes through
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return OpenclFlatThreadIndex
@@ -388,7 +388,7 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 
 proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
   ## Parameter declaration of one kernel or device-function parameter.
-  ## A raw `ptr` parameter is legal C between device functions, a kernel refuses it.
+  ## A raw `ptr` parameter is legal C between device functions, the printer refuses it on a kernel.
   ## The engine binds device buffers and values, never raw pointers.
   case p.typ.kind
   of ctAptr:
@@ -425,8 +425,8 @@ proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
   ## OpenCL C linkage prefix of one proc or kernel.
   ##
   ## - a kernel is `__kernel`
-  ## - a device function is `static inline`: C99 linkage whose storage class
-  ##   keeps the name file-local to the program
+  ## - a device function is `static inline`: C99 linkage that keeps the name
+  ##   file-local to the program
   if fn.isKernel:
     return "__kernel "
   return "static inline "
@@ -447,8 +447,8 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated const_mem local.
-  ## A const_mem local without an initializer refuses: OpenCL C forbids
-  ## declaring `__constant` storage without one.
+  ## OpenCL C forbids declaring `__constant` storage without an initializer:
+  ## the printer refuses a const_mem local that lacks one.
   if s.init == nil:
     ctx.fail("const_mem local " & s.name & " without an initializer")
     return ""

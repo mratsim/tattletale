@@ -167,8 +167,8 @@ type
     ## A CIRv2 expression tree.
     ##
     ## Typed ops state their type in `opType` or the per-branch type field,
-    ## comparisons state their operand type and yield `bool`,
-    ## `ternary` states its own type,
+    ## comparisons carry their operand type and yield `bool`,
+    ## `ternary` carries its own type,
     ## and `and`/`or` combine bool operands into a bool result value.
     case kind*: CirExprKind
     of eNil:
@@ -272,7 +272,7 @@ type
     ## Control flow is statement-based:
     ## - `ite` takes a bool condition and two statement lists
     ## - `loop` runs unconditionally, `while` re-tests its condition before every iteration
-    ## - a `var` states the memory class of its declaration in `space`, `const` ignores `space`
+    ## - a `var` carries the memory class of its declaration in `space`, `const` ignores `space`
     ##   (`caThread` is per-thread registers and the unannotated default)
     case kind*: CirStmtKind
     of sVar, sConst:

@@ -34,12 +34,12 @@
 ## the printer emits `ptr<function, T>` parameters as-is.
 ##
 ## Refusal homes:
-## - a `caDevice`-space local refuses at the printer, the pass does not touch
+## - the printer refuses a `caDevice`-space local, the pass does not touch
 ##   device-space locals (WGSL locals are function or workgroup)
-## - a threadgroup/constant local surviving in a nested scope or device
-##   function refuses at the printer, the relocation covers top-level
+## - the printer refuses a threadgroup/constant local surviving in a nested
+##   scope or device function, the relocation covers top-level
 ##   kernel-body locals only
-## - a const_mem local without an initializer refuses in the pass,
+## - the pass refuses a const_mem local without an initializer,
 ##   the printer keeps the shape guard on the relocated declarations
 ## - a pointer local read as a value or before its address-of binding,
 ##   a pointer local rebound to a second pointee, an exploded struct local
@@ -194,7 +194,7 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
 
 proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]): string =
   ## A value-position call to a callee carrying a crossing pointer has no
-  ## statement form to splice into, so the call refuses.
+  ## statement form to splice into, so the pass refuses the call.
   if e.isNil:
     return ""
   if e.kind == eCall and e.callee.kind == eSym:
@@ -295,8 +295,8 @@ proc inlinePointerParamCalls(m: CirModule): string =
   ## Placement contract:
   ## - the pass runs after the pointer-local explosion pass, spliced bodies
   ##   therefore carry no pointer locals
-  ## - the pass runs after the per-address-space callee instantiation, a formal
-  ##   re-spaced by its call sites refuses here exactly when the re-spaced
+  ## - the per-address-space callee instantiation runs first, the pass refuses
+  ##   a formal re-spaced by its call sites exactly when the re-spaced
   ##   signature could not print
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
