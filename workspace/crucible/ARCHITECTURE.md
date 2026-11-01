@@ -35,7 +35,7 @@ One import: `import workspace/crucible`.
 ## CIRv2, the intermediate representation
 
 `src/codegen/ir/cirv2_lang.nim` defines CIRv2: a plain Nim object-variant tree, usable at macro time, shaped as a Final IR.
-The shape encodes the normal form:
+The shape rules:
 
 | Rule            | Form                                                                                       |
 | ---             | ---                                                                                        |
@@ -185,7 +185,7 @@ The two enums stay separate.
 
 ## Frontend
 
-`src/codegen/frontend/nim_to_crucible.nim` lowers the typed macro body to CIRv2, normal form by construction.
+`src/codegen/frontend/nim_to_crucible.nim` lowers the typed macro body to CIRv2, one Nim node in, one IR node out.
 `nim_type_resolvers.nim` resolves types and overloads during IR construction.
 
 Procs intern through the frontend's proc registry: one entry per proc identity.
