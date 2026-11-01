@@ -594,8 +594,14 @@ proc moduleDeviceFns*(m: CirModule): seq[CirProc] =
 # Entry-input machinery of the shader entry heads
 # ═══════════════════════════════════════════════════════════════════════
 
+func getWorkgroup*(fn: CirProc, dflt: array[3, int] = [256, 1, 1]): array[3, int] =
+  ## Baked launch shape of a kernel: the `{.workgroup.}` pragma's shape, `dflt` when the pragma is absent (the absent shape reads all zero).
+  if fn.workgroup == [0, 0, 0]:
+    dflt
+  else:
+    fn.workgroup
+
 type EntryInputs* = Table[string, string]
-  ## Entry-input text of one canonical coordinate builtin name, in the form the target's entry signature declares:
   ## a WGSL `@builtin(...)` parameter, an HLSL semantic-carrying input.
   ##
   ## A name absent from the table carries no entry input, the target reads it another way:

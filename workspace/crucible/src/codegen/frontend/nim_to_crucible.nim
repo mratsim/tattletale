@@ -166,66 +166,6 @@ func unwrapConv(n: NimNode): NimNode =
 
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr
 
-proc operandLiteralTypedAs(e: CirExpr, opType: CirType): CirExpr =
-  ## Returns a literal operand typed as the operation's operand type.
-  ## Nim types a literal at its default width and converts at the use site,
-  ## and the typed AST does not always carry the conversion around the literal.
-  ## Non-literals and kind-mismatched pairs return unchanged.
-  if e.isNil or opType.isNil:
-    return e
-  case e.kind
-  of eFloatLit:
-    if opType.kind == ctFloat and not sameType(e.fLitType, opType):
-      fltLit(e.fValue, opType)
-    else:
-      e
-  of eIntLit:
-    if opType.kind in {ctInt, ctUint} and not sameType(e.litType, opType):
-      intLit(e.value, opType)
-    else:
-      e
-  else:
-    e
-
-proc lowerOperandExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
-  ## Lowers one operator operand: the node unwraps, lowers, and a literal
-  ## is retyped to the operand node's own target type, an exact conversion.
-  let e = ctx.lowerExpr(unwrapConv(n))
-  if ctx.resolver.err.len > 0:
-    return nil
-  if e.kind notin {eIntLit, eFloatLit}:
-    return e
-  return operandLiteralTypedAs(e, ctx.resolver.resolveCirType(n.getTypeInst()))
-
-func zeroValue(t: CirType): CirExpr =
-  ## Zero value of a CIRv2 type, an omitted object-constructor field takes this zero value.
-  case t.kind
-  of ctInt, ctUint:
-    result = intLit(0, t)
-  of ctFloat:
-    result = fltLit(0.0, t)
-  of ctBf16:
-    # bfloat16 literals have no target token form. The zero value is a conversion of the f32 zero.
-    result = convE(t, fltLit(0.0, tFloat(32)))
-  of ctBool:
-    result = falseE()
-  of ctString:
-    result = strLit("")
-  of ctPtr, ctAptr:
-    result = nilE(t)
-  of ctArray:
-    var elems: seq[CirExpr] = @[]
-    for i in 0 ..< t.aN:
-      elems.add(zeroValue(t.aElem))
-    result = aconstrE(t, elems)
-  of ctStruct:
-    var fields: seq[CirKv] = @[]
-    for f in t.fields:
-      fields.add(kv(f.name, zeroValue(f.typ)))
-    result = oconstrE(t, fields)
-  of ctVoid, ctVector, ctProc, ctSpan:
-    result = nil
-
 proc resolveTypeSection(ctx: var FrontendCtx, n: NimNode) =
   ## Registers the section's concrete type definitions with the resolver.
   ## A generic definition registers nothing at declaration time,
@@ -361,11 +301,7 @@ proc lowerCallArgs(ctx: var FrontendCtx, callee: NimNode, call: NimNode): seq[Ci
     let arg = ctx.lowerExpr(call[argIdx])
     if ctx.resolver.err.len > 0:
       return @[]
-    # a literal argument re-types to the formal under this lowering, an exact conversion
-    let ftyp = ctx.resolver.resolveCirType(ftype)
-    if ctx.resolver.err.len > 0:
-      return @[]
-    result.add(operandLiteralTypedAs(arg, ftyp))
+    result.add(arg)
 
 proc getNimMagicName(n: NimNode): string =
   ## Value of the definition's `magic: "..."` pragma, "" when absent.
@@ -447,8 +383,8 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     let base = ctx.lowerExpr(call[1])
     if ctx.resolver.err.len > 0:
       return nil
-    let first = ctx.lowerOperandExpr(call[2])
-    let last = ctx.lowerOperandExpr(call[3])
+    let first = ctx.lowerExpr(unwrapConv(call[2]))
+    let last = ctx.lowerExpr(unwrapConv(call[3]))
     if ctx.resolver.err.len > 0:
       return nil
     let baseTyp = getExprType(base)
@@ -477,8 +413,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     if ctx.resolver.err.len > 0:
       return nil
     let opType = getExprType(args[0])
-    let rhs = operandLiteralTypedAs(args[1], opType)
-    return arithExpr(NimGpuNumericBuiltinsOps[magic], opType, args[0], rhs)
+    return arithExpr(NimGpuNumericBuiltinsOps[magic], opType, args[0], args[1])
   let calleeSym = resolveCallCallee(callee)
   # `abs` over scalars lowers as a builtin call, printers use the native name.
   # Only `abs` intercepts: system `abs` over floats has a refused body.
@@ -672,16 +607,15 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return fltLit(n.floatVal, typ)
   of nnkHiddenStdConv:
-    # int/int32 share one bit width and the standard conversion is the identity.
-    # Nim's semantic pass types a float literal at its default width.
-    # This lowering converts it to the context's float width here.
-    # A literal conversion is exact: the lowering re-types the literal to the target type
+    # int/int32 share one bit width and the standard conversion is the identity
+    # for values. A float literal sits at its default width: the conv node
+    # reaches the expression-form pass, which re-types it to the target
     let inner = n[1]
     if inner.kind in {nnkFloat32Lit, nnkFloat64Lit, nnkFloatLit}:
       let typ = ctx.resolver.resolveCirType(n.getTypeInst())
       if ctx.resolver.err.len > 0:
         return nil
-      return fltLit(inner.floatVal, typ)
+      return convE(typ, ctx.lowerExpr(inner))
     return ctx.lowerExpr(inner)
   of nnkHiddenSubConv, nnkConv:
     var typ = if n[0].kind == nnkEmpty:
@@ -698,14 +632,9 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       # an identity conversion: the layout algebra's static wrappers stack up and the value already has the target type
       return operand
     if operand.kind in {eIntLit, eFloatLit}:
-      # a literal conversion is exact, retyped to the cast's target:
-      # no runtime conversion node materializes.
-      # An int literal converting to a float type becomes that float literal.
-      if typ.kind == ctFloat and operand.kind == eIntLit:
-        return fltLit(operand.value.float, typ)
-      if operand.kind == eIntLit:
-        return intLit(operand.value, typ)
-      return fltLit(operand.fValue, typ)
+      # a literal conversion is exact, the expression-form pass re-types it
+      # to the conversion target
+      return convE(typ, operand)
     if typ.kind in {ctPtr, ctAptr}:
       # a pointer conversion preserves the operand's storage space and the cast target supplies the pointee type
       typ = typ.withAddressSpace(resolveAddressSpace(operand))
@@ -777,7 +706,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       loweredBase = ctx.lowerExpr(baseNode)
     if ctx.resolver.err.len > 0:
       return nil
-    let idx = ctx.lowerOperandExpr(n[1])
+    let idx = ctx.lowerExpr(unwrapConv(n[1]))
     if ctx.resolver.err.len > 0:
       return nil
     let bt = getExprType(loweredBase)
@@ -805,7 +734,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return dotE(base, sanitizeIdent(n[1].strVal))
   of nnkInfix:
-    # operators: arithmetic and bitwise directly, comparisons normalize into four kinds, `>` and `>=` swap operands
+    # operators: arithmetic and bitwise lower directly. Comparisons normalize into four kinds, `>` and `>=` swap operands
     let op = n[0].strVal
     case op
     of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
@@ -817,70 +746,47 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         return ctx.lowerCallValue(n[0], n)
     else:
       discard
-    let a = ctx.lowerOperandExpr(n[1])
+    let a = ctx.lowerExpr(unwrapConv(n[1]))
+    if ctx.resolver.err.len > 0:
+      return nil
+    let b = ctx.lowerExpr(unwrapConv(n[2]))
     if ctx.resolver.err.len > 0:
       return nil
     case op
     of "==", "!=", "<", "<=", ">", ">=":
-      let b = ctx.lowerOperandExpr(n[2])
-      if ctx.resolver.err.len > 0:
-        return nil
-      let at = getExprType(a)
-      let bCmp = operandLiteralTypedAs(b, at)
       case op
       of "==":
-        result = eqE(a, bCmp)
+        result = eqE(a, b)
       of "!=":
-        result = neqE(a, bCmp)
+        result = neqE(a, b)
       of "<":
-        result = ltE(a, bCmp)
+        result = ltE(a, b)
       of "<=":
-        result = leE(a, bCmp)
+        result = leE(a, b)
       of ">":
         result = ltE(b, a)
       else:
         result = leE(b, a)
       return result
     of "and", "or", "xor":
-      # bool domain: boolean operators emit directly over their operands
-      # (`xor` evaluates both sides and compares). Text targets apply
-      # short-circuit natively, SPIR-V's OpLogicalAnd/OpLogicalOr do not.
-      # int domain: bitwise operators.
+      # bool vs bitwise domain resolves in the expression-form pass: a bitwise form emits uniformly here, operand types decide in the pass
       let at = getExprType(a)
-      if at != nil and at.kind == ctBool:
-        let b = ctx.lowerOperandExpr(n[2])
-        if ctx.resolver.err.len > 0:
-          return nil
-        case op
-        of "and":
-          return andE(a, b)
-        of "or":
-          return orE(a, b)
-        else:
-          return neqE(a, b)
-      let b = ctx.lowerOperandExpr(n[2])
-      if ctx.resolver.err.len > 0:
-        return nil
       case op
       of "and":
-        result = bitAndE(at, a, b)
+        return bitAndE(at, a, b)
       of "or":
-        result = bitOrE(at, a, b)
+        return bitOrE(at, a, b)
       else:
-        result = bitXorE(at, a, b)
-      return result
+        return bitXorE(at, a, b)
     of "+", "-", "*", "/", "div", "mod", "shl", "shr":
-      let b = ctx.lowerOperandExpr(n[2])
-      if ctx.resolver.err.len > 0:
-        return nil
       let opType = getExprType(a)
-      return arithExpr(op, opType, a, operandLiteralTypedAs(b, opType))
+      return arithExpr(op, opType, a, b)
     else:
       ctx.fail("operator " & op & " is outside the supported set")
       return nil
   of nnkPrefix:
     let op = n[0].strVal
-    let operand = ctx.lowerOperandExpr(n[1])
+    let operand = ctx.lowerExpr(unwrapConv(n[1]))
     if ctx.resolver.err.len > 0:
       return nil
     case op
@@ -894,7 +800,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   of nnkCall, nnkCommand:
     let callee = n[0]
     if callee.kind notin {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
-      ctx.fail("call callee " & callee.repr & " is not a proc symbol")
+      ctx.fail("value call callee " & callee.repr & " is not a proc symbol")
       return nil
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
@@ -903,7 +809,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     for i in 1 ..< n.len:
       n[i].expectKind(nnkExprColonExpr)
       if n[i][1].kind == nnkEmpty:
-        # semantic analysis yields an Empty node for a nil field value, and the omitted-field zero fill below supplies the typed nil
+        # semantic analysis yields an Empty node for a nil field value, the zero-fill pass supplies the typed nil
         continue
       let v = ctx.lowerExpr(n[i][1])
       if ctx.resolver.err.len > 0:
@@ -915,21 +821,8 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let typ = ctx.resolver.resolveStructType(n.getTypeInst(), valueSpaces)
     if ctx.resolver.err.len > 0:
       return nil
-    # Nim binds constructor values by name while the target syntax binds positionally:
-    # normalize every constructor to the type's declaration order, omitted fields zero-initialize,
-    # an empty initializer list is invalid C
-    var ordered: seq[CirKv] = @[]
-    for f in typ.fields:
-      var value: CirExpr = nil
-      for kvf in fields:
-        if kvf.name == f.name:
-          value = kvf.value
-          break
-      if value != nil:
-        ordered.add(kv(f.name, value))
-      else:
-        ordered.add(kv(f.name, zeroValue(f.typ)))
-    fields = ordered
+    # Nim binds constructor values by name while the target syntax binds positionally.
+    # Zero-fill reorders every constructor to the type's declaration order, omitted fields fill
     return oconstrE(typ, fields)
   of nnkExprColonExpr:
     # a named field outside a constructor: the name is compile-time
@@ -1166,20 +1059,21 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     let rhs = ctx.lowerExpr(n[1])
     if ctx.resolver.err.len > 0:
       return @[]
-    # a literal rhs is retyped to the destination type, an exact conversion
-    let rhsT = operandLiteralTypedAs(rhs, getExprType(lhs))
-    return ctx.drainHoisted() & @[asgnS(lhs, rhsT)]
+    return ctx.drainHoisted() & @[asgnS(lhs, rhs)]
   of nnkInfix:
     # compound assignment lowers in statement position as an infix:
-    # primitive-scalar operands take the primitive arithmetic, any other `op=`
-    # (`qk -.= m_ij` over register tiles) resolves to its overloaded proc
-    # and lowers as a var-target call in statement position
+    # a user-defined `op=` lowers as the proc's var-target call,
+    # a system compound form lowers as primitive scalar arithmetic
     let op = n[0].strVal
-    # compound assignment lowers as primitive arithmetic on two primitive scalars.
-    # An overloaded operand (register tile, element-wise `op=` proc)
-    # lowers as the proc's call instead
-    var scalar = false
-    if n[0].kind in {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
+    if op in ["+=", "-=", "*=", "/="]:
+      # user operator vs system form, read off the callee definition:
+      # system compound ops are Inc/Dec magics or generic procs,
+      # a user overload is a plain proc of the module
+      let impl = resolveCallCallee(n[0]).getImpl()
+      if impl.kind in {nnkProcDef, nnkFuncDef} and not isGenericDef(impl):
+        return ctx.lowerVoidCall(n)
+      # a generic callee may still be a user operator over an aggregate:
+      # operand kinds decide, a non-scalar target lowers as the call
       let lt = ctx.resolver.resolveCirType(n[1].getTypeInst())
       let rt = ctx.resolver.resolveCirType(n[2].getTypeInst())
       if ctx.resolver.err.len > 0:
@@ -1187,28 +1081,26 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         # a statement-position call path needs a clean channel
         return @[]
       let lp = if lt != nil and lt.kind == ctPtr: lt.pElem else: lt
-      scalar = isScalarType(lp) and isScalarType(rt)
-    if op in ["+=", "-=", "*=", "/="] and scalar:
-      var lhs = ctx.lowerExpr(n[1])
-      if ctx.resolver.err.len > 0:
-        return @[]
-      # this lowering dereferences a var-returning `[]` call's element address, and the assignment target is the location behind it
-      if lhs.kind == eAddr:
-        lhs = lhs.addrOperand
-      elif lhs.kind == eSym and getExprType(lhs) != nil and
-          getExprType(lhs).kind == ctPtr:
-        # a var parameter carries its location through a pointer and the compound assignment operates on the pointee
-        lhs = derefE(lhs)
-      let rhs = ctx.lowerOperandExpr(n[2])
-      if ctx.resolver.err.len > 0:
-        return @[]
-      let opType = getExprType(lhs)
-      let rhsOp = operandLiteralTypedAs(rhs, opType)
-      # target and arithmetic share one tree reference
-      # a desugared `op=` left-hand side evaluates exactly once in Nim
-      # temp-binding normalization splits the reads of a call-bearing target
-      let arith = arithExpr(op[0 ..< op.len - 1], opType, lhs, rhsOp)
-      return ctx.drainHoisted() & @[asgnS(lhs, arith)]
+      if isScalarType(lp) and isScalarType(rt):
+        var lhs = ctx.lowerExpr(n[1])
+        if ctx.resolver.err.len > 0:
+          return @[]
+        # this lowering dereferences a var-returning `[]` call's element address, and the assignment target is the location behind it
+        if lhs.kind == eAddr:
+          lhs = lhs.addrOperand
+        elif lhs.kind == eSym and getExprType(lhs) != nil and
+            getExprType(lhs).kind == ctPtr:
+          # a var parameter carries its location through a pointer and the compound assignment operates on the pointee
+          lhs = derefE(lhs)
+        let rhs = ctx.lowerExpr(unwrapConv(n[2]))
+        if ctx.resolver.err.len > 0:
+          return @[]
+        let opType = getExprType(lhs)
+        # target and arithmetic share one tree reference
+        # a desugared `op=` left-hand side evaluates exactly once in Nim
+        # temp-binding normalization splits the reads of a call-bearing target
+        let arith = arithExpr(op[0 ..< op.len - 1], opType, lhs, rhs)
+        return ctx.drainHoisted() & @[asgnS(lhs, arith)]
     return ctx.lowerVoidCall(n)
   of nnkIfStmt:
     var branches: seq[tuple[cond, body: NimNode]] = @[]
@@ -1298,11 +1190,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     let stopV = ctx.lowerExpr(unwrapConv(stopNode))
     if ctx.resolver.err.len > 0:
       return @[]
-    # bounds and step are retyped to the loop variable. A literal conversion is exact, comparisons and increment then use one operand type
-    let startT = operandLiteralTypedAs(startV, varType)
-    let stopT = operandLiteralTypedAs(stopV, varType)
     var stepV: CirExpr = nil
-    var stepT: CirExpr = nil
     var stepIsConst = true
     if stepNode.isNil:
       stepV = intLit(1, varType)
@@ -1320,8 +1208,6 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
         stepIsConst = false
     if ctx.resolver.err.len > 0:
       return @[]
-    if stepIsConst:
-      stepT = operandLiteralTypedAs(stepV, varType)
     # a loop variable's Nim scope is the for statement, so the declaration
     # and the body share one scope
     ctx.pushScope()
@@ -1336,12 +1222,12 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     let bodyHoists = ctx.drainHoisted()
     ctx.popScope()
     let cmp = if inclusive:
-      leE(varSym, stopT)
+      leE(varSym, stopV)
     else:
-      ltE(varSym, stopT)
+      ltE(varSym, stopV)
     var incr: seq[CirStmt] = @[]
     if stepIsConst:
-      incr.add(asgnS(varSym, addE(varType, varSym, stepT)))
+      incr.add(asgnS(varSym, addE(varType, varSym, stepV)))
     else:
       # loop-variant step expressions lower inside the loop,
       # they re-evaluate at the continue point.
@@ -1349,11 +1235,10 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       let stepNow = ctx.lowerExpr(unwrapConv(stepNode))
       if ctx.resolver.err.len > 0:
         return @[]
-      let stepNowT = operandLiteralTypedAs(stepNow, varType)
-      incr.add(ctx.drainHoisted() & @[asgnS(varSym, addE(varType, varSym, stepNowT))])
+      incr.add(ctx.drainHoisted() & @[asgnS(varSym, addE(varType, varSym, stepNow))])
     var preamble = startHoists
     preamble.add(varD(varName, varType))
-    preamble.add(asgnS(varSym, startT))
+    preamble.add(asgnS(varSym, startV))
     result = preamble & @[whileS(cmp, bodyHoists & body & incr)]
   of nnkReturnStmt:
     var valueNode = n[0]

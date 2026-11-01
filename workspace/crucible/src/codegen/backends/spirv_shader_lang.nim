@@ -1520,8 +1520,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
     # PhysicalStorageBufferAddresses is extension-gated on SPIR-V 1.3
     ctx.builder.emitExtension("SPV_KHR_physical_storage_buffer")
   ctx.flushExtensions()
-  let lws = if kernel.workgroup == [0, 0, 0]: [256, 1, 1]
-            else: kernel.workgroup
+  let lws = getWorkgroup(kernel)
   # exportc renames a kernel entry for the host runtime lookup. Host launchers look up
   # an OpEntryPoint Name operand, so the rename patches that operand. No OpName debug
   # instruction is emitted for the entry, that operand is the whole rename.

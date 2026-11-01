@@ -447,7 +447,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ## - the entry kernel: `@compute @workgroup_size(...)` attribute lines, then `fn <entry>(<entry inputs>)` over the body-walk inputs
   ##   exportc renames the entry for the host runtime lookup.
   if fn.isKernel:
-    let wg = (if fn.workgroup == [0, 0, 0]: [64, 1, 1] else: fn.workgroup)
+    let wg = getWorkgroup(fn, [64, 1, 1])
     let entryName = if fn.exportName.len > 0: fn.exportName else: fn.name
     result = "@compute @workgroup_size(" & $wg[0] & ", " & $wg[1] & ", " &
       $wg[2] & ")\nfn " & entryName & "(" &

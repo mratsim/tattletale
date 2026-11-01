@@ -515,7 +515,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ## Head of one GLSL proc: the kernel's `local_size` layout qualifier precedes
   ## the shared C signature. The engine launches each entry point by name.
   if fn.isKernel:
-    let wg = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
+    let wg = getWorkgroup(fn)
     result = "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
       $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
     result &= printSig(ctx, fn) & " {\n"

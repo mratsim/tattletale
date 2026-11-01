@@ -11,9 +11,14 @@
 
 import ./pass_datatypes
 import ./passes_norm_compound_assign
+import ./passes_norm_expr_forms
 import ./passes_norm_unroll
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
-  # bindCompoundAssignTemps runs first, its shared-tree detection compares references
+  # settleExprForms decides the literal widths, the bool operator domain,
+  # constructor field order, before the later stages read them
+  reg.registerSettleExprForms()
+  # bindCompoundAssignTemps runs first among the reshaping passes:
+  # shared-tree detection compares references
   reg.registerCompoundAssignTemps()
   reg.registerMarkExplicitUnrolls()
