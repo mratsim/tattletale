@@ -29,14 +29,12 @@ const
 ## - one push-constant block binds the kernel parameters in parameter order, the host `store` packing order
 ## - buffer parameters contribute one u64 device address each, converted to physical storage buffer pointers in the kernel prologue
 
-import std/[algorithm, sets, strutils, tables, macros]
+import std/[algorithm, sets, strutils, tables]
 import ../ir/cirv2_lang
+import ../passes/pass_helpers
 import ./spirv_encoder {.all.}
 import ../ir/ast_datatypes
 import ./print_common
-
-template spvRefuse(what: string) =
-  error("SPIR-V backend does not support: " & what)
 
 proc cirUint32(): CirType =
   CirType(kind: ctUint, bits: 32)
@@ -182,6 +180,13 @@ type
     pushBoolFields*: HashSet[string]
       ## Kernel struct parameters whose direct bool fields map to u32 words
       ## in the push block, field reads coerce back to bool
+    dryRun*: bool
+      ## Planning-pass flag: one emission into a throwaway builder that walks
+      ## the body and records which locals no load reaches, so the real pass
+      ## can elide their storage
+    fnDeadLocals*: Table[string, HashSet[string]]
+      ## Proc name -> locals the planning pass proved unread.
+      ## Filled only in the dry pass, consumed by the real pass.
     err*: string
 
 proc initSpvLangCtx(): SpvLangCtx =
@@ -481,6 +486,16 @@ type
     ptrTargets*: Table[string, uint32]
       ## pointer-typed local name -> the Function-storage variable it names,
       ## a pointer to a Function object cannot live in a Function variable
+    fwd*: Table[string, uint32]
+      ## Local name -> value id its reads return: the value of the last store
+      ## the emission walk has passed, valid at every read the walk reaches
+      ## before the next store to the name
+    elided*: HashSet[string]
+      ## Locals whose storage the plan elided: every read reads the stored value.
+      ## No variable is declared and no store is emitted
+    localLoads*: Table[string, int]
+      ## Local name -> number of OpLoads the emission plans for it.
+      ## A zero count in the dry pass marks a local the real pass elides
     terminated*: bool
 
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
@@ -499,11 +514,12 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
         # a pointer-typed local resolves to its pointee variable, no storage
         discard
       else:
-        let vt = ctx.valueTy(s.declType)
-        let varId = ctx.builder.opVariableFn(
-          ctx.builder.tyPointer(scFunction, ctx.resolveTyId(vt)))
-        fn.locals[s.name] = varId
         fn.localTys[s.name] = s.declType
+        if s.name notin fn.elided:
+          let vt = ctx.valueTy(s.declType)
+          let varId = ctx.builder.opVariableFn(
+            ctx.builder.tyPointer(scFunction, ctx.resolveTyId(vt)))
+          fn.locals[s.name] = varId
     of sConst:
       discard
     of sIte:
@@ -771,9 +787,15 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       return fn.params[e.name]
     if fn.bdaParams.hasKey(e.name):
       return fn.bdaParams[e.name]
+    if fn.fwd.hasKey(e.name):
+      # a store the walk has already passed: the read returns its value
+      return fn.fwd[e.name]
     if fn.locals.hasKey(e.name):
+      fn.localLoads.mgetOrPut(e.name, 0).inc
       let t = fn.localTys.getOrDefault(e.name, ctx.resolveExprType(fn, e))
-      return ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(t)), fn.locals[e.name])
+      let loaded = ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(t)), fn.locals[e.name])
+      fn.fwd[e.name] = loaded
+      return loaded
     if fn.ptrTargets.hasKey(e.name):
       # a pointer-typed local, its value is the pointee variable's address
       return fn.ptrTargets[e.name]
@@ -975,11 +997,22 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
   ## Pointer of an addressable expression, the OpStore/OpAccessChain target.
   if ctx.err.len > 0:
     return
+  var e = e
+  if e.kind == ePat:
+    # a pattern write is an element write through a pointer value.
+    # It shares an `at` write's paths.
+    # A base resolving to no pointer errors before the normalization
+    let baseTy = ctx.resolveExprType(fn, e.patBase)
+    if baseTy == nil or baseTy.kind notin {ctPtr, ctAptr}:
+      ctx.failSpv("pattern write base is not a pointer")
+      return
+    e = CirExpr(kind: eAt, atBase: e.patBase, atIndex: e.patIndex)
   case e.kind
   of eSym:
     if fn.locals.hasKey(e.name):
       # stored value's type is the variable's member type
       # a pointer-typed local stores pointer values
+      fn.localLoads.mgetOrPut(e.name, 0).inc
       let t = fn.localTys.getOrDefault(e.name, ctx.resolveExprType(fn, e))
       return (fn.locals[e.name], t, false, false)
     if fn.addrParams.hasKey(e.name):
@@ -1003,41 +1036,13 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     if i < 0:
       ctx.failSpv("no field " & e.fieldName & " on " & rootTy.name)
       return
+    fn.localLoads.mgetOrPut(e.dotBase.name, 0).inc
     let memberPtrTy = ctx.builder.tyPointer(scFunction,
       ctx.resolveTyId(ctx.valueTy(rootTy.fields[i].typ)))
     let idx0 = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(i))
     let ptrId = ctx.builder.opAccessChain(memberPtrTy, fn.locals[e.dotBase.name],
       @[idx0])
     result = (ptrId, rootTy.fields[i].typ, false, false)
-  of ePat:
-    # element write through a pointer value: the base evaluates to a pointer
-    let baseTy = ctx.resolveExprType(fn, e.patBase)
-    if baseTy == nil or baseTy.kind notin {ctPtr, ctAptr}:
-      ctx.failSpv("pattern write base is not a pointer")
-      return
-    if baseTy.kind == ctAptr:
-      if baseTy.space != caDevice:
-        ctx.failSpv("pattern write through a " & $baseTy.space & " array pointer")
-        return
-      let idxVal = ctx.emitExpr(fn, e.patIndex)
-      let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.patIndex), cirInt32())
-      let elemTy = baseTy.pElem
-      let elemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
-        ctx.resolveTyId(ctx.valueTy(elemTy)))
-      let idx0 = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), 0)
-      let ptrId = ctx.builder.opAccessChain(elemPtrTy,
-        ctx.emitExpr(fn, e.patBase), @[idx0, idxInt])
-      return (ptrId, elemTy, true, false)
-    else:
-      # a pointer to array in Function storage: the parameter names the array
-      let idxVal = ctx.emitExpr(fn, e.patIndex)
-      let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.patIndex), cirInt32())
-      let elemTy = baseTy.pElem
-      let elemPtrTy = ctx.builder.tyPointer(scFunction,
-        ctx.resolveTyId(ctx.valueTy(elemTy)))
-      let ptrId = ctx.builder.opAccessChain(elemPtrTy,
-        ctx.emitExpr(fn, e.patBase), @[idxInt])
-      return (ptrId, elemTy, false, false)
   of eAt:
     # base chain rooted at a local: a plain local or the struct behind
     # a pointer-typed local: the access chain runs on the variable directly
@@ -1049,12 +1054,14 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       case walk.kind
       of eSym:
         if fn.locals.hasKey(walk.name):
+          fn.localLoads.mgetOrPut(walk.name, 0).inc
           rootVar = fn.locals[walk.name]
         else:
           chainOk = false
         break
       of eDeref:
         if walk.derefOperand.kind == eSym and fn.locals.hasKey(walk.derefOperand.name):
+          fn.localLoads.mgetOrPut(walk.derefOperand.name, 0).inc
           rootVar = fn.locals[walk.derefOperand.name]
           break
         if walk.derefOperand.kind == eSym and fn.ptrTargets.hasKey(walk.derefOperand.name):
@@ -1096,12 +1103,13 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     let elemTy =
       if baseTy.kind == ctArray: baseTy.aElem
       else: baseTy.pElem
-    let elemPtrTy = ctx.builder.tyPointer(scFunction,
-      ctx.resolveTyId(ctx.valueTy(elemTy)))
     if baseTy.kind == ctArray:
       if e.atBase.kind != eSym or not fn.locals.hasKey(e.atBase.name):
         ctx.failSpv("array element write outside a local array")
         return
+      fn.localLoads.mgetOrPut(e.atBase.name, 0).inc
+      let elemPtrTy = ctx.builder.tyPointer(scFunction,
+        ctx.resolveTyId(ctx.valueTy(elemTy)))
       let ptrId = ctx.builder.opAccessChain(elemPtrTy, fn.locals[e.atBase.name],
         @[idxInt])
       result = (ptrId, elemTy, false, false)
@@ -1117,6 +1125,8 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       result = (ptrId, elemTy, true, false)
     else:
       # a pointer to the element storage in Function scope, index directly
+      let elemPtrTy = ctx.builder.tyPointer(scFunction,
+        ctx.resolveTyId(ctx.valueTy(elemTy)))
       let basePtr = ctx.emitExpr(fn, e.atBase)
       let ptrId = ctx.builder.opAccessChain(elemPtrTy, basePtr, @[idxInt])
       result = (ptrId, elemTy, false, false)
@@ -1253,11 +1263,10 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
         let v = ctx.emitExpr(fn, s.init)
         let t = ctx.resolveExprType(fn, s.init)
         let target = fn.localTys[s.name]
-        if t != nil:
-          let value = ctx.convertValue(v, t, target)
+        let value = (if t != nil: ctx.convertValue(v, t, target) else: v)
+        fn.fwd[s.name] = value
+        if s.name notin fn.elided:
           ctx.builder.opStore(fn.locals[s.name], value)
-        else:
-          ctx.builder.opStore(fn.locals[s.name], v)
     of sConst:
       # a compile-time literal binding, reads use the constant id
       if s.init != nil and s.init.kind in {eIntLit, eFloatLit, eTrue, eFalse}:
@@ -1278,6 +1287,12 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
             return
           fn.ptrTargets[s.lhs.name] = fn.locals[s.rhs.addrOperand.name]
           continue
+        if s.lhs.name in fn.elided:
+          # every read of the name reads the stored value, no storage remains
+          let rhsV = ctx.emitExpr(fn, s.rhs)
+          let rhsTyV = ctx.resolveExprType(fn, s.rhs)
+          fn.fwd[s.lhs.name] = ctx.convertValue(rhsV, rhsTyV, lhsTy)
+          continue
       let rhs = ctx.emitExpr(fn, s.rhs)
       let (ptrId, pointee, isBda, isPush) = ctx.emitLhsPtr(fn, s.lhs)
       if isPush:
@@ -1285,6 +1300,8 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
         return
       let rhsTy = ctx.resolveExprType(fn, s.rhs)
       let value = ctx.convertValue(rhs, rhsTy, pointee)
+      if s.lhs.kind == eSym and fn.locals.hasKey(s.lhs.name):
+        fn.fwd[s.lhs.name] = value
       if isBda:
         let elemAlign = uint32(std430Layout(ctx.valueTy(pointee)).align)
         ctx.builder.opStoreAligned(ptrId, value, elemAlign)
@@ -1297,16 +1314,29 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       let elseLbl = ctx.builder.freshLabel()
       ctx.builder.opSelectionMerge(mergeLbl, selNone)
       ctx.builder.opBranchConditional(cond, thenLbl, elseLbl)
+      let savedFwd = fn.fwd
       ctx.builder.opLabelAt(thenLbl)
       fn.terminated = false
       ctx.emitStmts(fn, s.thenBody)
       if not fn.terminated:
         ctx.builder.opBranch(mergeLbl)
+      let thenFwd = fn.fwd
+      fn.fwd = savedFwd
       ctx.builder.opLabelAt(elseLbl)
       fn.terminated = false
       ctx.emitStmts(fn, s.elseBody)
       if not fn.terminated:
         ctx.builder.opBranch(mergeLbl)
+      # a name either branch stored has no known value at the merge.
+      # Only entries unchanged by both branches survive here
+      let elseFwd = fn.fwd
+      fn.fwd = savedFwd
+      for name, v in thenFwd:
+        if v != savedFwd.getOrDefault(name, 0):
+          fn.fwd.del(name)
+      for name, v in elseFwd:
+        if v != savedFwd.getOrDefault(name, 0):
+          fn.fwd.del(name)
       ctx.builder.opLabelAt(mergeLbl)
       fn.terminated = false
     of sWhile:
@@ -1319,13 +1349,19 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.builder.opBranch(headerLbl)
       ctx.builder.opLabelAt(headerLbl)
       fn.terminated = false
-      # cond emission sits in the header block so the back edge re-evaluates it every iteration
+      # cond emission sits in the header block so the back edge re-evaluates it every iteration.
+      # Every back edge re-executes the header: a value bound outside the loop
+      # has no known truth in it, so the forwarding scope resets here.
+      # Condition reads then emit loads that the body shares
+      fn.fwd.clear()
       let condV = ctx.emitExpr(fn, s.whileCond)
       # OpLoopMerge must immediately precede the branch instruction
       ctx.builder.opLoopMerge(mergeLbl, contLbl, if s.whileUnroll: lcUnroll else: lcNone)
       ctx.builder.opBranchConditional(condV, bodyLbl, mergeLbl)
       ctx.emitLoopTail(fn, s.whileBody, headerLbl, bodyLbl, contLbl, mergeLbl,
         savedMerge, savedCont)
+      # body stores have no known truth at the merge on the zero-iteration path
+      fn.fwd.clear()
     of sRet:
       if fn.terminated:
         ctx.failSpv("a second return in one basic block")
@@ -1355,70 +1391,17 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
 #  Function and kernel emission
 # ═══════════════════════════════════════════════════════════════════════
 
-proc scanCallExpr(e: CirExpr, calls: var seq[string]) =
-  ## Callee names of one expression tree, nested calls included.
-  if e.isNil:
+proc recordDeadLocals(ctx: var SpvLangCtx, fn: SpvFnCtx, name: string) =
+  ## Dead locals of one planned function: declared locals no OpLoad reaches,
+  ## every read reading a forwarded stored value instead.
+  ## Recorded in the dry pass only. The real pass elides their storage.
+  if not ctx.dryRun:
     return
-  case e.kind
-  of eCall:
-    if e.callee.kind == eSym:
-      calls.add e.callee.name
-    for a in e.args:
-      scanCallExpr(a, calls)
-  of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSizeof:
-    discard
-  of eSym:
-    discard
-  of eDeref: scanCallExpr(e.derefOperand, calls)
-  of eAt: scanCallExpr(e.atBase, calls); scanCallExpr(e.atIndex, calls)
-  of ePat: scanCallExpr(e.patBase, calls); scanCallExpr(e.patIndex, calls)
-  of eDot: scanCallExpr(e.dotBase, calls)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    scanCallExpr(e.left, calls); scanCallExpr(e.right, calls)
-  of eNeg: scanCallExpr(e.unOperand, calls)
-  of eEq, eNeq, eLt, eLe: scanCallExpr(e.a, calls); scanCallExpr(e.b, calls)
-  of eNot: scanCallExpr(e.notOperand, calls)
-  of eAnd, eOr: scanCallExpr(e.andLeft, calls); scanCallExpr(e.andRight, calls)
-  of eTernary:
-    scanCallExpr(e.cond, calls); scanCallExpr(e.thenE, calls)
-    scanCallExpr(e.elseE, calls)
-  of eCast, eConv: scanCallExpr(e.castOperand, calls)
-  of eAddr: scanCallExpr(e.addrOperand, calls)
-  of eOconstr:
-    for f in e.kvFields:
-      scanCallExpr(f.value, calls)
-  of eAconstr:
-    for el in e.elems:
-      scanCallExpr(el, calls)
-
-proc scanCalls(ss: seq[CirStmt], calls: var seq[string]) =
-  ## Callee names of one statement list, nested bodies and expressions included.
-  for s in ss:
-    case s.kind
-    of sCall:
-      if s.callCallee.kind == eSym:
-        calls.add s.callCallee.name
-      for a in s.callArgs:
-        scanCallExpr(a, calls)
-    of sAsgn:
-      scanCallExpr(s.lhs, calls)
-      scanCallExpr(s.rhs, calls)
-    of sVar, sConst:
-      if s.init != nil:
-        scanCallExpr(s.init, calls)
-    of sIte:
-      scanCallExpr(s.cond, calls)
-      scanCalls(s.thenBody, calls)
-      scanCalls(s.elseBody, calls)
-    of sWhile:
-      scanCallExpr(s.whileCond, calls)
-      scanCalls(s.whileBody, calls)
-    of sRet:
-      if s.retVal != nil:
-        scanCallExpr(s.retVal, calls)
-    else:
-      discard
-
+  var dead: HashSet[string]
+  for local in fn.locals.keys:
+    if fn.localLoads.getOrDefault(local, 0) == 0:
+      dead.incl local
+  ctx.fnDeadLocals[name] = dead
 
 proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
   ## One device function.
@@ -1438,6 +1421,7 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
   let fnTy = ctx.builder.tyFunction(retTyId, paramTyIds)
   result = ctx.builder.opFunction(retTyId, fnTy)
   var fn: SpvFnCtx = SpvFnCtx(name: "device fn " & procNode.name)
+  fn.elided = ctx.fnDeadLocals.getOrDefault(procNode.name)
   for i, p in procNode.params:
     let pid = ctx.builder.opFunctionParameter(paramTyIds[i])
     if p.typ.kind == ctPtr:
@@ -1451,6 +1435,7 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
   if not fn.terminated:
     ctx.builder.opReturn()
   ctx.builder.opFunctionEnd()
+  ctx.recordDeadLocals(fn, procNode.name)
 
 proc emitDeviceFnRec(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
   ## One device function with its transitive callees emitted first.
@@ -1460,8 +1445,8 @@ proc emitDeviceFnRec(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
     "recursive device function calls are outside the SPIR-V subset"
   ctx.emitting.incl procNode.name
   ctx.fnTypes[procNode.name] = procNode.ret
-  var calls: seq[string]
-  scanCalls(procNode.body, calls)
+  var calls: HashSet[string]
+  collectCallTargets(procNode.body, calls)
   var seen: HashSet[string]
   for c in calls:
     if ctx.fnProcs.hasKey(c) and c notin seen:
@@ -1479,8 +1464,8 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   doAssert kernel.ret.kind == ctVoid, "kernels are void"
   let push = ctx.buildPushBlock(kernel.params)
   # device fns emit first, an OpFunctionCall result id must exist at the call site
-  var calls: seq[string]
-  scanCalls(kernel.body, calls)
+  var calls: HashSet[string]
+  collectCallTargets(kernel.body, calls)
   var seen: HashSet[string]
   for c in calls:
     if ctx.fnProcs.hasKey(c) and c notin seen:
@@ -1490,6 +1475,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   let fnTy = ctx.builder.tyFunction(voidTy, @[])
   result = ctx.builder.opFunction(voidTy, fnTy)
   var fn: SpvFnCtx = SpvFnCtx(name: "kernel " & kernel.name)
+  fn.elided = ctx.fnDeadLocals.getOrDefault(kernel.name)
   discard ctx.builder.opLabel()
   # prologue: hoisted locals, then the parameter bindings
   ctx.hoistLocals(fn, kernel.body)
@@ -1523,6 +1509,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   if not fn.terminated:
     ctx.builder.opReturn()
   ctx.builder.opFunctionEnd()
+  ctx.recordDeadLocals(fn, kernel.name)
   let usePhys = capPhysicalStorageBufferAddresses in ctx.caps
   if usePhys:
     # PhysicalStorageBufferAddresses is extension-gated on SPIR-V 1.3
@@ -1563,6 +1550,14 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
   for fn in m.procs:
     if not fn.isKernel:
       lang.fnProcs[fn.name] = fn
+  # forwarding plan: one dry emission into a throwaway builder walks the body
+  # and records which locals no load reaches.
+  # Real emission then elides their storage, binding every read to the stored value
+  var dry = lang
+  dry.dryRun = true
+  dry.builder = initSpvBuilder()
+  discard dry.emitKernel(kernels[0])
+  lang.fnDeadLocals = dry.fnDeadLocals
   discard lang.emitKernel(kernels[0])
   if lang.err.len > 0:
     return (@[], lang.err)
