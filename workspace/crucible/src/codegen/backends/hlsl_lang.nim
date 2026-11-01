@@ -89,6 +89,9 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    policy: KindRow
+    ## Kind row of the target. The shared walk reads its policy fields.
+    lit: LitTokens
     ## Literal token table of the target, the shared literal head reads it.
     isKernel: bool
     ## Scalar kernel parameters, their reads go through `push.<name>`.
@@ -109,10 +112,6 @@ type
     ## parameter types here.
 
 const printerTarget = "hlsl"
-
-## Optional expression kinds this printer routes through
-## its own `printTargetExpr`, the shared dispatcher emits the rest.
-const targetExprKinds = {eNil, eAt, ePat, eDeref, eAddr}
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
@@ -282,15 +281,6 @@ proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string
 # HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `asfloat` (32 bit) and `asdouble` (64 bit). Without the suffix the HLSL
 # frontend changes width or signedness.
-const targetLitTokens = LitTokens(
-  int: IntLitTokens(u32Suffix: "u", u64Suffix: "u"),
-  f16Suffix: "f", f32Suffix: "f", f64Suffix: "l",
-  nonFinite: FloatLitTokens(
-    inf16: "asfloat(0x7f800000)", negInf16: "asfloat(0xff800000)", nan16: "asfloat(0x7fc00000)",
-    inf32: "asfloat(0x7f800000)", negInf32: "asfloat(0xff800000)", nan32: "asfloat(0x7fc00000)",
-    inf64: "asdouble(0u, 0x7ff00000u)",
-    negInf64: "asdouble(0u, 0xfff00000u)",
-    nan64: "asdouble(0u, 0x7ff80000u)"))
 proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string
   ## Forward declaration, nested constructions flatten recursively.
 
@@ -895,7 +885,8 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   ## - fvVulkan: the `[[vk::push_constant]]` struct with every member offset locked
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", flavor: flavor)
+  var ctx = PrintCtx(fnName: "<module>", flavor: flavor,
+    policy: hlslKindRow(), lit: litTokens(hlslLitRow(), hlslScalarRow()))
   var procsByName: Table[string, CirProc]
   for fn in m.procs:
     procsByName[fn.name] = fn

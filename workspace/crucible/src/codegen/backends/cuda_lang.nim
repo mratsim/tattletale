@@ -37,13 +37,12 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    policy: KindRow
+    ## Kind row of the target. The shared walk reads its policy fields.
+    lit: LitTokens
     ## Literal token table of the target, the shared literal head reads it.
 
 const printerTarget = "cuda"
-
-## Optional expression kinds this printer routes through
-## its own `printTargetExpr`, the shared dispatcher emits the rest.
-const targetExprKinds: set[CirExprKind] = {}
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
@@ -65,8 +64,6 @@ proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-# `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const targetLitTokens = litTokens(cudaLitRow(), cudaScalarRow())
 
 proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: string, coordTy: CirType): string =
   ## CUDA text of a canonical coordinate reference.
@@ -112,7 +109,7 @@ proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: st
   of cbkNone:
     result = name
 
-proc emitCudaBuiltinCall(callee: CirExpr, args: seq[string]): string =
+proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## Returns the CUDA text of a builtin call, "" when `callee` is not a builtin.
   ##
   ## Shared by expression- and statement-position calls: the statement path
@@ -228,7 +225,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     result.add "}"
   of eCall:
     let args = printCallArgs(ctx, e)
-    return printCallText(ctx, e, args, emitCudaBuiltinCall(e.callee, args))
+    return printCallText(ctx, e, args, emitBuiltinCall(e.callee, args))
   else:
     # dispatcher sends only the kinds above, anything else is a routing bug
     ctx.fail("expression kind " & $e.kind & " has no CUDA emission")
@@ -237,11 +234,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 # ═══════════════════════════════════════════════════════════════════════
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
-
-const cudaLoopStyle = LoopStyle(
-  unrollDirective: "#pragma unroll",
-  infiniteHead: "for (;;) {\n",
-  braceSameLine: true)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Statements: per-target policy arms, the shared dispatch lives in print_common
@@ -276,26 +268,6 @@ proc printConst(ctx: var PrintCtx, s: CirStmt): string =
     result = pad & "constexpr " & emitCudaScalar(s.declType) & ' ' & s.name &
       " = " & ctx.printExpr(s.init) & ";"
 
-proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
-  ## One assignment.
-  let pad = spaces(ctx.indent * 2)
-  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-
-proc printCall(ctx: var PrintCtx, s: CirStmt): string =
-  ## One call statement: the builtin call vocabulary, then the plain call form.
-  let pad = spaces(ctx.indent * 2)
-  let calleeName =
-    if s.callCallee.kind == eSym: s.callCallee.name
-    else: ctx.printExpr(s.callCallee)
-  var args: seq[string]
-  for a in s.callArgs:
-    args.add ctx.printExpr(a)
-  let builtinTxt = emitCudaBuiltinCall(s.callCallee, args)
-  if builtinTxt.len > 0:
-    result = pad & builtinTxt & ";"
-  else:
-    result = pad & calleeName & "(" & args.join(", ") & ");"
-
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: the spliced text in an `asm(...)` wrapper.
   let pad = spaces(ctx.indent * 2)
@@ -305,10 +277,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
     if i < s.asmOperands.len:
       text.add(s.asmOperands[i].name)
   result = pad & "asm(" & text.strip() & ");"
-
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list, the shared walk with the CUDA loop style.
-  printStmtList(ctx, stmts, cudaLoopStyle)
 
 proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
   ## Butterfly warp-reduction template for one reduction kind: CUDA has no
@@ -378,7 +346,8 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## the warp-reduction templates in use, then every function body.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>")
+  var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow(),
+    lit: litTokens(cudaLitRow(), cudaScalarRow()))
   var src = ""
   for t in m.types:
     if t.kind != ctStruct:

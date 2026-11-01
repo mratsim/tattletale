@@ -366,11 +366,6 @@ proc printLoopText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
     result &= pad & "{\n"
   result &= bodyTxt & "\n" & pad & '}'
 
-proc foldsIteElse*(ctx: var auto): bool =
-  ## Returns true when a single-`sIte` else body folds into
-  ## an `else if` chain, false for the default braced else.
-  false
-
 proc printIteElse*(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
   ## Else tail of an `sIte` statement, appended after its then branch.
   ##
@@ -386,11 +381,13 @@ proc printIteElse*(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
   result = " else {\n" & elseTxt & '\n' & pad & '}'
 
 proc printEmitOperand*(ctx: var auto, op: CirExpr): string =
-  ## Returns the splice text of one `{.emit.}` operand.
-  ##
-  ## The shared form splices the operand's symbol name, a printer whose
-  ## operands render as expressions overrides it.
-  op.name
+  ## Returns the splice text of one `{.emit.}` operand: the rendered expression
+  ## when the target's kind row states `emitOperandRendersExpr`.
+  ## The symbol name is the default splice.
+  if ctx.policy.emitOperandRendersExpr:
+    ctx.printExpr(op)
+  else:
+    op.name
 
 proc printCallArgs*(ctx: var auto, e: CirExpr): seq[string] =
   ## Printed texts of one `eCall`'s arguments in order, the plain expression form.
@@ -419,14 +416,14 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## - the kinds a printer emits itself route to its `printTargetExpr`,
   ##   named by its `targetExprKinds` set
   ## - subscript, dereference, address-of and ternary kinds without a target route take the shared default forms below
-  mixin printExpr, printTargetExpr, targetExprKinds, targetLitTokens
+  mixin printExpr, printTargetExpr
   if ctx.failing():
     return ""
   case e.kind
   of eNil, eTrue, eFalse, eIntLit, eFloatLit:
-    if e.kind in targetExprKinds:
+    if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
-    return emitLiteral(e, targetLitTokens)
+    return emitLiteral(e, ctx.lit)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let op = case e.kind
       of eAdd: "+"
@@ -454,7 +451,7 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
     let op = if e.kind == eAnd: "&&" else: "||"
     return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
   of eTernary, eAt, ePat, eDeref, eAddr:
-    if e.kind in targetExprKinds:
+    if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
     # shared default forms for the kinds outside the printer's `targetExprKinds` set
     if e.kind in {eAt, ePat}:
@@ -490,7 +487,7 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
   ## - `printCall`: barrier intrinsics and builtin call vocabulary
   ## - `printAsm`: inline assembly form, refusal text or raw splice
   mixin printStmts, printExpr, printVar, printConst, printAsgn, printCall, printAsm,
-        foldsIteElse, printIteElse, printEmitOperand
+        printIteElse, printEmitOperand
   if ctx.failing():
     return ""
   let pad = spaces(ctx.indent * 2)
@@ -506,7 +503,7 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
     let thenTxt = ctx.printStmts(s.thenBody)
     ctx.indent.dec
     result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len == 1 and s.elseBody[0].kind == sIte and ctx.foldsIteElse():
+    if s.elseBody.len == 1 and s.elseBody[0].kind == sIte and ctx.policy.foldsIteElse:
       # an else side of one ite is the elif chain, printed as `else if`
       result &= " else " & ctx.printStmt(s.elseBody[0])
     else:
@@ -543,6 +540,32 @@ proc printStmt*(ctx: var auto, s: CirStmt): string =
     ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
     result = ""
 
+proc printAsgn*(ctx: var auto, s: CirStmt): string =
+  ## One assignment, the plain form `lhs = rhs;`.
+  ##
+  ## - a printer with assignment policy over pointer rebinds, buffer writes
+  ##   or constructor assignments defines `printAsgn` itself
+  let pad = spaces(ctx.indent * 2)
+  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+
+proc printCall*(ctx: var auto, s: CirStmt): string =
+  ## One call statement: the target's builtin call vocabulary when the callee
+  ## is a builtin, else the plain call form. The builtin vocabulary resolves
+  ## through the printer's `emitBuiltinCall(callee, args)` proc.
+  mixin printExpr, emitBuiltinCall
+  let pad = spaces(ctx.indent * 2)
+  let calleeName =
+    if s.callCallee.kind == eSym: s.callCallee.name
+    else: ctx.printExpr(s.callCallee)
+  var args: seq[string]
+  for a in s.callArgs:
+    args.add ctx.printExpr(a)
+  let builtinTxt = emitBuiltinCall(s.callCallee, args)
+  if builtinTxt.len > 0:
+    result = pad & builtinTxt & ";"
+  else:
+    result = pad & calleeName & "(" & args.join(", ") & ");"
+
 proc printStmtList*(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string =
   ## Prints one statement list, one line per printed statement:
   ##
@@ -556,6 +579,10 @@ proc printStmtList*(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): strin
     if txt.len > 0:
       lines.add txt
   return lines.join("\n")
+
+proc printStmts*(ctx: var auto, stmts: seq[CirStmt]): string =
+  ## Prints one statement list with the target's loop style from its kind row.
+  printStmtList(ctx, stmts, ctx.policy.loop)
 
 proc codegenModule*[R](printed: (R, string)): R =
   ## Converts a printer result tuple into the `backends_api` entry-point return value.

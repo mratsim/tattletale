@@ -37,6 +37,9 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    policy: KindRow
+    ## Kind row of the target. The shared walk reads its policy fields.
+    lit: LitTokens
     ## Literal token table of the target, the shared literal head reads it.
     refBlocks: OrderedTable[string, string]
     ## Buffer-reference block declarations to emit, block name -> member text.
@@ -44,10 +47,6 @@ type
     ## Stored struct layouts of the module, the layout pass filled them.
 
 const printerTarget = "glsl"
-
-## Optional expression kinds this printer routes through
-## its own `printTargetExpr`, the shared dispatcher emits the rest.
-const targetExprKinds = {eNil, eAt, ePat, eDeref, eAddr}
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
@@ -171,7 +170,6 @@ proc emitExtensions(features: ModuleFeatures): string =
 # GLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `uintBitsToFloat` (32 bit) and the width conversion at the use site.
 # Wide integer literals print as constructor calls (`int64_t(5)`), glslang rejects the `LL` suffix.
-const targetLitTokens = litTokens(glslLitRow(), glslScalarRow())
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One conversion, the constructor-call form: a reference type constructs
@@ -370,11 +368,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail("expression kind " & $e.kind & " has no GLSL emission")
 
 
-const glslLoopStyle = LoopStyle(
-  unrollDirective: "[[unroll]]",
-  infiniteHead: "for (;;) {\n",
-  braceSameLine: true)
-
 # ═══════════════════════════════════════════════════════════════════════
 # Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
@@ -451,10 +444,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: refused, the text names the target.
   ctx.fail("inline assembly has no GLSL form")
   result = ""
-
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list, the shared walk with the GLSL loop style.
-  printStmtList(ctx, stmts, glslLoopStyle)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules
@@ -625,7 +614,8 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## and the kernel with its `local_size` layout qualifier.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>")
+  var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow(),
+    lit: litTokens(glslLitRow(), glslScalarRow()))
   ctx.layouts = m.layouts
   var kernels: seq[CirProc]
   for fn in m.procs:

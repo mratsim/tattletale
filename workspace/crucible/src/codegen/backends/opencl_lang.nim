@@ -37,16 +37,15 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    policy: KindRow
+    ## Kind row of the target. The shared walk reads its policy fields.
+    lit: LitTokens
     ## Literal token table of the target, the shared literal head reads it.
     inKernel: bool
     ## False inside a device function: `__local` and `__constant` locals are
     ## kernel-only storage, a device function declaring one refuses.
 
 const printerTarget = "opencl"
-
-## Optional expression kinds this printer routes through
-## its own `printTargetExpr`, the shared dispatcher emits the rest.
-const targetExprKinds: set[CirExprKind] = {}
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
@@ -144,7 +143,6 @@ proc emitExtensions(features: ModuleFeatures): string =
 
 # OpenCL C defines `INFINITY` and `NAN` as float-typed constants.
 # A C cast forms the wider widths.
-const targetLitTokens = litTokens(openclLitRow(), openclScalarRow())
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One conversion, the C-style cast form.
@@ -233,11 +231,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
     ctx.fail("barrier is a statement, a value-position barrier is outside the OpenCL subset")
     return ""
   return ""
-const openclLoopStyle = LoopStyle(
-  unrollDirective: "#pragma unroll",
-  infiniteHead: "for (;;) {\n",
-  braceSameLine: true)
-
 proc emitLocalDecl(s: CirStmt): string =
   ## Declaration text of one local, the array form appends the length to the name, the init stays with the caller.
   ## Pointer types include the address-space qualifier in their own text, the caller adds no storage prefix (OpenCL rejects a doubled qualifier).
@@ -362,11 +355,6 @@ proc printConst(ctx: var PrintCtx, s: CirStmt): string =
   result = pad & "const " & emitOpenclTypeBare(s.declType) & ' ' &
     s.name & " = " & ctx.printExpr(s.init) & ";"
 
-proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
-  ## One assignment.
-  let pad = spaces(ctx.indent * 2)
-  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-
 proc printCall(ctx: var PrintCtx, s: CirStmt): string =
   ## One call statement: the barrier vocabulary, then the plain call form.
   let pad = spaces(ctx.indent * 2)
@@ -388,10 +376,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: refused, the text names the target.
   ctx.fail("inline assembly has no OpenCL C form")
   result = ""
-
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list, the shared walk with the OpenCL C loop style.
-  printStmtList(ctx, stmts, openclLoopStyle)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules
@@ -463,7 +447,8 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## and the kernels.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>")
+  var ctx = PrintCtx(fnName: "<module>", policy: openclKindRow(),
+    lit: litTokens(openclLitRow(), openclScalarRow()))
   var kernels: seq[CirProc]
   for fn in m.procs:
     if fn.isKernel:

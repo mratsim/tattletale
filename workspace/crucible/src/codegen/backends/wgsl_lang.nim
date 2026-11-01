@@ -37,6 +37,9 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    policy: KindRow
+    ## Kind row of the target. The shared walk reads its policy fields.
+    lit: LitTokens
     ## Literal token table of the target, the shared literal head reads it.
     inKernel: bool
     ## False inside a device function, a device function reading a coordinate builtin refuses.
@@ -52,10 +55,6 @@ type
     ## Stored struct layouts of the module, the layout pass filled them.
 
 const printerTarget = "wgsl"
-
-## Optional expression kinds this printer routes through
-## its own `printTargetExpr`, the shared dispatcher emits the rest.
-const targetExprKinds = {eNil, eAt, ePat, eTernary}
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
@@ -165,7 +164,6 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
 # WGSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `bitcast` from the unsigned integer of the same width. Bare literals are
 # abstract and work in any typed context, u32 gains the `u` suffix, f16 the `h`.
-const targetLitTokens = litTokens(wgslLitRow(), wgslScalarRow())
 proc printCast(ctx: var PrintCtx, e: CirExpr): string =
   ## One bit reinterpret, WGSL's bitcast.
   return "bitcast<" & ctx.emitWgslTypeBare(e.castType) & ">(" &
@@ -214,12 +212,6 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       return "inverseSqrt(" & args.join(", ") & ")"
     else: discard
   return ""
-const wgslLoopStyle = LoopStyle(
-  # WGSL has no unroll directive, the drop surfaces in the artifact
-  unrollDirective: "// {.unroll.} requested but not honored on WebGPU",
-  infiniteHead: "loop {\n",
-  braceSameLine: true)
-
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Declaration text of one local, the init stays with the caller.
   ## A pointer-typed local refuses earlier, the WGSL lowering pass dissolves it.
@@ -411,10 +403,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ctx.fail("inline assembly has no WGSL form")
   result = ""
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list, the shared walk with the WGSL loop style.
-  printStmtList(ctx, stmts, wgslLoopStyle)
-
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
@@ -536,7 +524,8 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## - the device functions, then the `@compute` kernel with its builtin parameters
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>")
+  var ctx = PrintCtx(fnName: "<module>", policy: wgslKindRow(),
+    lit: litTokens(wgslLitRow(), wgslScalarRow()))
   ctx.layouts = m.layouts
   var kernels: seq[CirProc]
   for fn in m.procs:

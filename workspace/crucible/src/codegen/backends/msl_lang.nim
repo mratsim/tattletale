@@ -37,15 +37,14 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    policy: KindRow
+    ## Kind row of the target. The shared walk reads its policy fields.
+    lit: LitTokens
     ## Literal token table of the target, the shared literal head reads it, per kernel state.
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
 const printerTarget = "msl"
-
-## Optional expression kinds this printer routes through
-## its own `printTargetExpr`, the shared dispatcher emits the rest.
-const targetExprKinds: set[CirExprKind] = {}
 
 proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
@@ -95,8 +94,6 @@ proc emitMslPtr(t: CirType, ident: string): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-# `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const targetLitTokens = litTokens(mslLitRow(), mslScalarRow())
 
 proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
   ## MSL token of a builtin reference, the attributed parameter name.
@@ -111,7 +108,7 @@ proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
     return "int3((int)" & name & ".x, (int)" & name & ".y, (int)" & name & ".z)"
   return name
 
-proc emitMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
+proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## Returns the MSL text of a builtin call, "" when `callee` is not a builtin.
   ##
   ## Shared by expression- and statement-position calls: the statement path
@@ -224,7 +221,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     result.add "}"
   of eCall:
     let args = printCallArgs(ctx, e)
-    return printCallText(ctx, e, args, emitMslBuiltinCall(e.callee, args))
+    return printCallText(ctx, e, args, emitBuiltinCall(e.callee, args))
   else:
     # dispatcher sends only the kinds above, anything else is a routing bug
     ctx.fail("expression kind " & $e.kind & " has no MSL emission")
@@ -233,11 +230,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
 # ═══════════════════════════════════════════════════════════════════════
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
-
-const mslLoopStyle = LoopStyle(
-  unrollDirective: "#pragma clang loop unroll(full)",
-  infiniteHead: "for (;;) {\n",
-  braceSameLine: true)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Statements: per-target policy arms, the shared dispatch lives in print_common
@@ -275,26 +267,6 @@ proc printConst(ctx: var PrintCtx, s: CirStmt): string =
     result = pad & "constexpr " & emitMslScalar(s.declType) & ' ' & s.name &
       " = " & ctx.printExpr(s.init) & ";"
 
-proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
-  ## One assignment.
-  let pad = spaces(ctx.indent * 2)
-  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-
-proc printCall(ctx: var PrintCtx, s: CirStmt): string =
-  ## One call statement: the builtin call vocabulary, then the plain call form.
-  let pad = spaces(ctx.indent * 2)
-  let calleeName =
-    if s.callCallee.kind == eSym: s.callCallee.name
-    else: ctx.printExpr(s.callCallee)
-  var args: seq[string]
-  for a in s.callArgs:
-    args.add ctx.printExpr(a)
-  let builtinTxt = emitMslBuiltinCall(s.callCallee, args)
-  if builtinTxt.len > 0:
-    result = pad & builtinTxt & ";"
-  else:
-    result = pad & calleeName & "(" & args.join(", ") & ");"
-
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: the spliced text, MSL has no asm form.
   let pad = spaces(ctx.indent * 2)
@@ -304,10 +276,6 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
     if i < s.asmOperands.len:
       text.add(s.asmOperands[i].name)
   result = pad & text
-
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt]): string =
-  ## Prints one statement list, the shared walk with the MSL loop style.
-  printStmtList(ctx, stmts, mslLoopStyle)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules
@@ -395,7 +363,8 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## device-function forward declarations, then every function body.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>")
+  var ctx = PrintCtx(fnName: "<module>", policy: mslKindRow(),
+    lit: litTokens(mslLitRow(), mslScalarRow()))
   var src = "#include <metal_stdlib>\n"
   src &= "#include <metal_atomic>\n"
   src &= "using namespace metal;\n\n"
