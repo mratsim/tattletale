@@ -327,10 +327,7 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
     if not ctx.inKernel:
       ctx.fail("smem local " & s.name & " in a device function, __local is kernel storage")
       return ""
-    if s.init != nil:
-      ctx.fail("smem local " & s.name &
-        " with an initializer, OpenCL C forbids initializing __local variables")
-      return ""
+    # no initializer survives here, the rewrite ran before printing
     var decl = (if s.declType.kind in {ctPtr, ctAptr}: "" else: "__local ") &
       emitLocalDecl(s)
     result = pad & decl & ";"

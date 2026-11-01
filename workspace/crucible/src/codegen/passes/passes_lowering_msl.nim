@@ -29,9 +29,8 @@
 ## - a device function's smem local outside the hoist's reach refuses in `mslRewriteSmemLocals`,
 ##   only a kernel owns threadgroup storage
 ## - a smem initializer on a hoisted arena refuses in `mslHoistDeviceFnSmem`,
-##   the arena is the caller's storage to lend, one on a kernel's own smem
-##   local refuses in `mslRewriteSmemLocals`, Metal drops threadgroup array
-##   initializers at runtime
+##   the arena is the caller's storage to lend, a kernel's own smem
+##   initializer rewrote to stores before the pass
 ## - a device function declaring a parameter named like a needed coordinate
 ##   builtin refuses in `mslThreadCoordinateBuiltins`, the call sites could
 ##   not supply both values under one name
@@ -446,12 +445,8 @@ proc mslRewriteSmemLocals(m: CirModule): string =
   ##   threadgroup storage
   ## - the hoist drains the locals it covers, this walk catches a survivor
   ##   at any depth
-  ## - an initializer on a `{.smem.}` local refuses, Metal compiles
-  ##   threadgroup initializers but drops the array form at runtime,
-  ##   so the refusal is blanket
-  ##
-  ## Evidence: array reads read back zero, scalar and flat-struct reads
-  ## read the initialized values.
+  ## - the initializer rewrite ran earlier, a surviving local has no
+  ##   initializer
   ##
   ## - the pass runs after the reserved-word rename: the kept locals carry
   ##   the renamed names their body already references
@@ -461,11 +456,6 @@ proc mslRewriteSmemLocals(m: CirModule): string =
     let procName = fn.name
     let onStmt = proc(s: CirStmt) =
       if s.kind != sVar or s.space != caThreadgroup:
-        return
-      if s.init != nil:
-        err = "at " & procName & ": smem local " & s.name &
-          " with an initializer, Metal drops threadgroup array" &
-          " initializers at runtime"
         return
       if not kernel:
         err = "at " & procName & ": smem local " & s.name &

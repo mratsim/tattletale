@@ -44,6 +44,8 @@ type
     ## Literal token forms of the target. The shared literal head reads them.
     row: ScalarRow
     ## Scalar row of the target. The narrow integer cast names its type from it.
+    inKernel: bool
+    ## False inside a device function. Its smem local owns no storage and refuses an initializer there.
 
 const printerTarget = "cuda"
 
@@ -219,7 +221,9 @@ proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   if s.space == caThreadgroup:
     # kernel-scope shared storage in `__shared__` form,
     # NVRTC allocates it per threadgroup
-    if s.init != nil:
+    # a device function's smem local owns no storage, an initializer on it refuses
+    # kernel-body initializers rewrote to stores before printing
+    if s.init != nil and not ctx.inKernel:
       ctx.fail("smem local " & s.name &
         " with an initializer, CUDA C++ forbids initializing __shared__ variables")
       return ""
@@ -346,6 +350,7 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   if ctx.failing():
     return ("", ctx.err)
   for fn in m.procs:
+    ctx.inKernel = fn.isKernel
     let txt = printComputeProc(ctx, fn)
     if ctx.err.len > 0:
       break

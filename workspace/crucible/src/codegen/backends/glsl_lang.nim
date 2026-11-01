@@ -460,14 +460,9 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated storage local.
   ##
-  ## - a threadgroup local declares `shared`, its only legal initializer is
-  ##   the null initializer and anything else refuses
+  ## - a threadgroup local declares bare `shared` storage
   ## - a constant local declares `const`, an initializer-less one refuses
   if s.space == caThreadgroup:
-    if s.init != nil:
-      ctx.fail("smem local " & s.name &
-        " with an initializer, GLSL shared variables take only a null initializer")
-      return ""
     return emitSmemDecl(s.declType, s.name)
   if s.init == nil:
     ctx.fail("const_mem local " & s.name & " without an initializer")

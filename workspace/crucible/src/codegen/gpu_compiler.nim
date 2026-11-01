@@ -116,6 +116,9 @@ proc attachOpenclHoistConst(reg: var PassRegistry, flavor: HlslFlavor) =
 proc attachOpenclByref(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerOpenclLowerByrefParams()
 
+proc attachSmemInitRewrite(reg: var PassRegistry, flavor: HlslFlavor) =
+  reg.registerSmemInitRewrite()
+
 proc attachGlslQualifyVarParams(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerGlslQualifyVarParams()
 
@@ -193,8 +196,8 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       # Rename position: after decomposeArrayAssign, incidental placement.
       # Decompose creates only `__builtin_memcpy` calls, no generated name
       # collides with the execution-space qualifiers of CudaReserved.
-      attachDecompose, attachRenameCuda, attachSpaceGenerics,
-      attachCudaScan,
+      attachDecompose, attachRenameCuda, attachSmemInitRewrite,
+      attachSpaceGenerics, attachCudaScan,
       attachValidate,
     ],
     ctMetal: @[
@@ -203,7 +206,7 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       # procs and proc bodies, never `m.globals`. A declaration hoisted earlier
       # leaves the rename's reach unrenamed.
       attachRenameMetal,
-      attachDecompose, attachExplodeStructs,
+      attachDecompose, attachExplodeStructs, attachSmemInitRewrite,
       attachMslHoistProgramScopeConstants, attachMslHoistDeviceFnSmem,
       attachMslRewriteSmemLocals, attachMslThreadCoordinateBuiltins,
       attachSpaceGenerics,
@@ -212,7 +215,7 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
     ctOpenCL: @[
       attachLegalize, attachNormalize, attachLowerSpans,
       attachRenameOpencl,
-      attachDecompose, attachExplodeStructs,
+      attachDecompose, attachExplodeStructs, attachSmemInitRewrite,
       attachOpenclHoistConst, attachOpenclByref, attachSpaceGenerics,
       attachOpenclScan,
       attachValidate,
@@ -221,7 +224,7 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       attachLegalize, attachNormalize, attachLowerSpans,
       attachRenameGlsl,
       attachGlslQualifyVarParams, attachGlslExplodePointerLocals,
-      attachGlslHoistLocals, attachSpaceGenerics,
+      attachSmemInitRewrite, attachGlslHoistLocals, attachSpaceGenerics,
       attachGlslRefBlocks, attachGlslScan, attachGlslLayout,
       attachGlslPushConstValidation,
       attachValidate,
@@ -230,7 +233,7 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       attachLegalize, attachNormalize, attachLowerSpans,
       attachRenameWgsl,
       attachExplodeStructs, attachWgslExplodePointerLocals,
-      attachWgslHoistLocals, attachSpaceGenerics,
+      attachSmemInitRewrite, attachWgslHoistLocals, attachSpaceGenerics,
       attachWgslInlinePointerCalls,
       attachWgslStructRefs, attachWgslScan, attachWgslLayout,
       attachValidate,

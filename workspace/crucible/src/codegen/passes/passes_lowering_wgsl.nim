@@ -43,9 +43,8 @@
 ## - a threadgroup/constant local surviving in a nested scope or device
 ##   function refuses at the printer, the relocation covers top-level
 ##   kernel-body locals only
-## - a smem local with an initializer or a const_mem local without one
-##   refuses in the pass (WGSL workgroup variables are zero-initialized),
-##   the printer keeps both shape guards on the relocated declarations
+## - a const_mem local without an initializer refuses in the pass,
+##   the printer keeps the shape guard on the relocated declarations
 ## - a pointer local read as a value or before its address-of binding,
 ##   a pointer local rebound to a second pointee, an exploded struct local
 ##   used whole or read through an unbound field path
@@ -79,8 +78,7 @@ func registerWgslHoistProgramScopeLocals*(reg: var PassRegistry) =
   ## the relocated declarations use the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "wgslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
-    " program scope", smemInitRefuse,
-    "WGSL workgroup variables are zero-initialized")
+    " program scope")
 
 func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
   ## Registers the pointer-param call inlining pass.

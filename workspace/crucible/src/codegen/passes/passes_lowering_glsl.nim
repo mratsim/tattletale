@@ -71,8 +71,7 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
   ## the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
-    " program scope", smemInitRefuse,
-    "GLSL shared variables take only a null initializer")
+    " program scope")
 
 # ═══════════════════════════════════════════════════════════════════════
 # var-parameter qualification

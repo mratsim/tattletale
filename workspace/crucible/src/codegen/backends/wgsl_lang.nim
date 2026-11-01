@@ -654,14 +654,11 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   var hoisted: seq[string]
   for s in m.globals:
     if s.kind == sVar and s.space == caThreadgroup:
-      if s.init != nil:
-        ctx.fail("smem local " & s.name &
-          " with an initializer, WGSL workgroup variables are zero-initialized")
-      else:
-        ctx.storageBoolSpelling = true
-        let ty = ctx.emitWgslTypeBare(s.declType)
-        ctx.storageBoolSpelling = false
-        hoisted.add "var<workgroup> " & s.name & ": " & ty & ";"
+      # no initializer survives relocation, the rewrite ran before printing
+      ctx.storageBoolSpelling = true
+      let ty = ctx.emitWgslTypeBare(s.declType)
+      ctx.storageBoolSpelling = false
+      hoisted.add "var<workgroup> " & s.name & ": " & ty & ";"
     elif s.kind == sVar and s.space == caConstant:
       if s.init == nil:
         ctx.fail("const_mem local " & s.name & " without an initializer")
