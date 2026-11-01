@@ -15,8 +15,9 @@ import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/callgraph_analysis
 
 proc runCallGraph(m: CirModule): string =
-  ## Runs the call-graph analysis pass over `m` through the registry.
+  ## Runs the recursion refusal and the call-graph analysis over `m` through the registry.
   var reg = PassRegistry.new()
+  reg.registerDeviceRecursionPass()
   reg.registerHlslCallGraphPass()
   result = m.runPasses(reg)
 

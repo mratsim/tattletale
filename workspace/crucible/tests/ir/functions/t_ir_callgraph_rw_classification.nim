@@ -13,8 +13,9 @@ import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/callgraph_analysis
 
 proc runCallGraph(m: CirModule): string =
-  ## Runs the call-graph analysis pass over `m` through the registry.
+  ## Runs the recursion refusal and the call-graph analysis over `m` through the registry.
   var reg = PassRegistry.new()
+  reg.registerDeviceRecursionPass()
   reg.registerHlslCallGraphPass()
   result = m.runPasses(reg)
 
@@ -58,8 +59,7 @@ static:
       "the call argument rooted at the kernel parameter records one edge"
 
   block recursionRefusal:
-    # a device function calling itself refuses: the frontend accepts
-    # recursive source while miscompiling it
+    # a device function calling itself refuses: a recursion would not terminate
     let selfFn = procD("f", @[param("x", u32)], u32, @[
       callS(sym("f", tProcT(u32, u32)), sym("x", u32)),
       retS(sym("x", u32)),

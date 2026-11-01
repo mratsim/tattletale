@@ -5,17 +5,19 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Call-graph analysis: one `pkAnalysis` pass filling `CirModule.callGraph`
+## Call-graph analysis: the `pkAnalysis` pass filling `CirModule.callGraph`
 ## with the read-write classification of the module's buffer parameters,
-## plus the device-function recursion refusal.
+## and the shared device-function recursion refusal pass.
 ##
-## What the pass computes:
+## What the call-graph pass computes:
 ## - the argument-flow edges: each call argument rooted at a parameter symbol flows into the callee's matching parameter
 ## - the read-write classification: a buffer parameter is read-write when its proc stores through it or a transitive callee does
-## - the recursion refusal: a recursive device function would not terminate, the HLSL frontend accepts recursive source while miscompiling it
+##
+## What the recursion pass refuses:
+## - a recursive device function would not terminate
 ##
 ## Contract:
-## - the target registers the pass after the last transform, before the check-only validation stage
+## - the target registers each pass after the last transform, before the check-only validation stage
 ## - analysis results are valid only if no transform runs after them: the registry runs in registration order and never invalidates
 ## - the printer reads the stored record in `CirModule.callGraph`, it never rescans
 
@@ -185,17 +187,32 @@ proc hlslRun(m: CirModule): string {.nimcall.} =
     graph.scanCallStmts(fn, fn.body)
   graph.classifyRwBuffers()
   m.callGraph = graph
+
+proc deviceRecursionRefusal(m: CirModule): string {.nimcall.} =
+  ## Pass run over `m`: the device-function recursion refusal.
+  var graph = CallGraph()
+  for fn in m.procs:
+    graph.procs[fn.name] = fn
   result = checkDeviceFnRecursion(graph)
+
+proc registerDeviceRecursionPass*(reg: var PassRegistry) =
+  ## Registers the device-function recursion refusal over CIRv2 modules.
+  ##
+  ## Contract:
+  ## - refuses a recursive device function, which would not terminate
+  ## - registers after the last transform, before the check-only validation stage
+  reg.register("validateDeviceFnRecursion", pkValidation, phaseMain,
+    "Refuses recursive device functions: a recursion would not terminate",
+    run = deviceRecursionRefusal)
 
 proc registerHlslCallGraphPass*(reg: var PassRegistry) =
   ## Registers the HLSL call-graph analysis pass over CIRv2 modules.
   ##
   ## Contract:
   ## - fills `CirModule.callGraph` with the argument-flow edges and the read-write classification of every buffer parameter
-  ## - refuses recursive device functions
   ## - registers after the last transform, before the check-only validation stage
   ## - analysis results are valid only if no transform runs after them
   reg.register("hlslCallGraphAnalysis", pkAnalysis, phaseMain,
     "Builds the device-function call graph once: argument-flow edges, the" &
-    " read-write classification of buffer parameters, the recursion refusal",
+    " read-write classification of buffer parameters",
     run = hlslRun)
