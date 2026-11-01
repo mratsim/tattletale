@@ -166,33 +166,6 @@ func unwrapConv(n: NimNode): NimNode =
 
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr
 
-func zeroValue(t: CirType): CirExpr =
-  ## Zero value of a CIRv2 type, an omitted object-constructor field takes this zero value.
-  case t.kind
-  of ctInt, ctUint:
-    result = intLit(0, t)
-  of ctFloat:
-    result = fltLit(0.0, t)
-  of ctBf16:
-    # bfloat16 literals have no target token form. The zero value is a conversion of the f32 zero.
-    result = convE(t, fltLit(0.0, tFloat(32)))
-  of ctBool:
-    result = falseE()
-  of ctPtr, ctAptr:
-    result = nilE(t)
-  of ctArray:
-    var elems: seq[CirExpr] = @[]
-    for i in 0 ..< t.aN:
-      elems.add(zeroValue(t.aElem))
-    result = aconstrE(t, elems)
-  of ctStruct:
-    var fields: seq[CirKv] = @[]
-    for f in t.fields:
-      fields.add(kv(f.name, zeroValue(f.typ)))
-    result = oconstrE(t, fields)
-  of ctVoid, ctVector, ctProc, ctSpan:
-    result = nil
-
 proc resolveTypeSection(ctx: var FrontendCtx, n: NimNode) =
   ## Registers the section's concrete type definitions with the resolver.
   ## A generic definition registers nothing at declaration time,
@@ -634,16 +607,15 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return fltLit(n.floatVal, typ)
   of nnkHiddenStdConv:
-    # int/int32 share one bit width and the standard conversion is the identity.
-    # Nim's semantic pass types a float literal at its default width.
-    # This lowering converts it to the context's float width here.
-    # A literal conversion is exact: the lowering re-types the literal to the target type
+    # int/int32 share one bit width and the standard conversion is the identity
+    # for values. A float literal sits at its default width: the conv node
+    # reaches the expression-form pass, which re-types it to the target
     let inner = n[1]
     if inner.kind in {nnkFloat32Lit, nnkFloat64Lit, nnkFloatLit}:
       let typ = ctx.resolver.resolveCirType(n.getTypeInst())
       if ctx.resolver.err.len > 0:
         return nil
-      return fltLit(inner.floatVal, typ)
+      return convE(typ, ctx.lowerExpr(inner))
     return ctx.lowerExpr(inner)
   of nnkHiddenSubConv, nnkConv:
     var typ = if n[0].kind == nnkEmpty:
@@ -660,14 +632,9 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       # an identity conversion: the layout algebra's static wrappers stack up and the value already has the target type
       return operand
     if operand.kind in {eIntLit, eFloatLit}:
-      # a literal conversion is exact, retyped to the cast's target:
-      # no runtime conversion node materializes.
-      # An int literal converting to a float type becomes that float literal.
-      if typ.kind == ctFloat and operand.kind == eIntLit:
-        return fltLit(operand.value.float, typ)
-      if operand.kind == eIntLit:
-        return intLit(operand.value, typ)
-      return fltLit(operand.fValue, typ)
+      # a literal conversion is exact, the expression-form pass re-types it
+      # to the conversion target
+      return convE(typ, operand)
     if typ.kind in {ctPtr, ctAptr}:
       # a pointer conversion preserves the operand's storage space and the cast target supplies the pointee type
       typ = typ.withAddressSpace(resolveAddressSpace(operand))
@@ -863,7 +830,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     for i in 1 ..< n.len:
       n[i].expectKind(nnkExprColonExpr)
       if n[i][1].kind == nnkEmpty:
-        # semantic analysis yields an Empty node for a nil field value, and the omitted-field zero fill below supplies the typed nil
+        # semantic analysis yields an Empty node for a nil field value, the zero-fill pass supplies the typed nil
         continue
       let v = ctx.lowerExpr(n[i][1])
       if ctx.resolver.err.len > 0:
@@ -875,21 +842,8 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let typ = ctx.resolver.resolveStructType(n.getTypeInst(), valueSpaces)
     if ctx.resolver.err.len > 0:
       return nil
-    # Nim binds constructor values by name while the target syntax binds positionally:
-    # normalize every constructor to the type's declaration order, omitted fields zero-initialize,
-    # an empty initializer list is invalid C
-    var ordered: seq[CirKv] = @[]
-    for f in typ.fields:
-      var value: CirExpr = nil
-      for kvf in fields:
-        if kvf.name == f.name:
-          value = kvf.value
-          break
-      if value != nil:
-        ordered.add(kv(f.name, value))
-      else:
-        ordered.add(kv(f.name, zeroValue(f.typ)))
-    fields = ordered
+    # Nim binds constructor values by name while the target syntax binds positionally.
+    # Zero-fill reorders every constructor to the type's declaration order, omitted fields fill
     return oconstrE(typ, fields)
   of nnkExprColonExpr:
     # a named field outside a constructor: the name is compile-time
