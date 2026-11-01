@@ -1,6 +1,6 @@
 ## Hand-built CIRv2: the struct-layout pass packing rules, both rule-set variants.
 ##
-## Test that both layout passes store member offsets, struct alignment, and padded size under their own bool width.
+## Test that both layout passes store struct alignment and padded size under their own bool width.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

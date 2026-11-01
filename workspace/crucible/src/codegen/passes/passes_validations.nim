@@ -103,7 +103,7 @@ type
 
 proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStorage =
   ## Classifies the declarations one proc's constant-write check resolves a bare symbol against:
-  ## the parameters first, then the local declarations of the body, nested scopes and case branches included.
+  ## the parameters first, then the local declarations of the body.
   ##
   ## The hoisting passes relocate const-space locals on most targets.
   ## The CUDA bundle keeps them in-body, and a write to one refuses here.

@@ -220,7 +220,7 @@ proc whileS*(cond: CirExpr, whileBody: seq[CirStmt], unroll = false): CirStmt =
   ##
   ## Args:
   ## - `cond` is an ordinary expression, calls may appear in it
-  doAssert cond != nil, "whileS: a conditioned loop takes a condition, use loopS"
+  doAssert cond != nil, "whileS: a conditioned loop takes a condition"
   CirStmt(kind: sWhile, whileCond: cond, whileBody: whileBody, whileUnroll: unroll)
 
 proc retS*(retVal: CirExpr = nil): CirStmt =
