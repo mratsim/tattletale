@@ -20,8 +20,8 @@
 ##   and the struct size rounds up to the struct alignment
 ##
 ## Rule-set variant: `boolWidth`. A bool packs in `boolWidth` bytes:
-## - GLSL sets it to 4: a Vulkan std430 bool is a 4-byte word (glslang
-##   compiles a bool member to a 32-bit integer), the same word the launch
+## - GLSL sets it to 4: a Vulkan std430 bool is a 4-byte word, glslang
+##   compiles a bool member to a 32-bit integer, the same word the launch
 ##   ABI packs
 ## - WGSL sets it to 4, one launch-ABI word per bool
 ##
@@ -55,8 +55,8 @@ import ./pass_datatypes
 
 const std430BoolWidth* = 4
 ## Bool byte width under the `std430` packing that the GLSL blocks declare:
-## glslang gives a Vulkan std430 bool a full 4-byte word, matching the
-## launch ABI word.
+## glslang compiles a Vulkan std430 bool member to a 32-bit integer,
+## a full 4-byte word the launch ABI packs as well.
 
 const launchAbiBoolWidth* = 4
 ## Bool byte width under the launch ABI: one 4-byte word per bool.
