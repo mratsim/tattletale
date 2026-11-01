@@ -87,8 +87,9 @@ const cudaScalarRow* = ScalarRow(cells: @[
   ScalarCell(kind: ctUint, width: 16, spelling: "unsigned short"),
   ScalarCell(kind: ctUint, width: 32, spelling: "unsigned int"),
   ScalarCell(kind: ctUint, width: 64, spelling: "unsigned long long"),
-  # CUDA names fp16 `__half` behind cuda_fp16.h. This printer emits no
-  # includes and no fp16 type name, so the cell refuses.
+  # CUDA names fp16 `__half` behind cuda_fp16.h. This cell refuses:
+  # no includes are emitted, so no fp16 name, bit cast or conversion
+  # (the `__float2half_rn` family) prints.
   ScalarCell(kind: ctFloat, width: 16),
   ScalarCell(kind: ctFloat, width: 32, spelling: "float"),
   ScalarCell(kind: ctFloat, width: 64, spelling: "double")])
@@ -123,9 +124,12 @@ const cudaMathBuiltinNames* = {
 }.toTable()
 
 # Float/integer bit reinterprets print as intrinsics, a C-style cast
-# numerically converts and loses the bit pattern. A 16-bit float pair has no
-# intrinsic and refuses. Same-width integer pairs keep the conversion form,
-# a modular cast preserves every bit.
+# numerically converts and loses the bit pattern. Same-width integer pairs
+# keep the conversion form, a modular cast preserves every bit.
+#
+# A 16-bit float pair refuses on the printer wiring state:
+# `__ushort_as_half`/`__half_as_ushort` exist behind cuda_fp16.h,
+# no printer include reaches them.
 const cudaCastRules* = [
   CastRule(srcKinds: {ctFloat}, dstKinds: {ctUint}, srcWidths: {32},
     sameWidth: true, spelling: "__float_as_uint($1)"),
@@ -134,7 +138,8 @@ const cudaCastRules* = [
   CastRule(srcKinds: {ctFloat}, dstKinds: {ctInt, ctUint}, srcWidths: {64},
     sameWidth: true, spelling: "__double_as_longlong($1)"),
   CastRule(srcKinds: {ctFloat}, dstKinds: {ctInt, ctUint}, sameWidth: true,
-    refusal: "bit cast of a 16-bit float has no CUDA emission"),
+    refusal: "bit cast of a 16-bit float is unwired, the __half_as_ushort" &
+      " form lives behind cuda_fp16.h and this printer emits no includes"),
   CastRule(srcKinds: {ctUint}, dstKinds: {ctFloat}, srcWidths: {32},
     sameWidth: true, spelling: "__uint_as_float($1)"),
   CastRule(srcKinds: {ctInt}, dstKinds: {ctFloat}, srcWidths: {32},
@@ -142,7 +147,8 @@ const cudaCastRules* = [
   CastRule(srcKinds: {ctInt, ctUint}, dstKinds: {ctFloat}, srcWidths: {64},
     sameWidth: true, spelling: "__longlong_as_double($1)"),
   CastRule(srcKinds: {ctInt, ctUint}, dstKinds: {ctFloat}, sameWidth: true,
-    refusal: "bit cast to a 16-bit float has no CUDA emission")]
+    refusal: "bit cast to a 16-bit float is unwired, the __ushort_as_half" &
+      " form lives behind cuda_fp16.h and this printer emits no includes")]
 
 const openclScalarRow* = ScalarRow(cells: @[
   # OpenCL C is LP64 C: `char` and `long` name the 8-bit and 64-bit signed widths, as on msl.
