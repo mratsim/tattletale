@@ -152,7 +152,6 @@ src/
                                     resolveOverloadedOperators,
                                     deadCodeElimination,
                                     deEmbedForRangeAdjustment, mangleNames
-      passes_optimizations.nim      max/min folding, dead-local elimination.
       passes_lowering.nim           gtSpan -> ptr + len, compile-time parameter
                                     pruning, memcpy decomposition.
       passes_validations.nim        Pre/post validation (e.g. warnUnassigned).

@@ -142,7 +142,6 @@ workspace/crucible/
         passes_preprocessing.nim  Preprocessing (incl. mangleNames, backend phases)
         passes_lowering.nim       Lowering (gtSpan -> ptr+len, etc.)
         passes_validations.nim    Pre/post validation passes
-        passes_optimizations.nim  Optimizations
         passes_cuda.nim           Per-language passes
         passes_glsl.nim
         passes_msl.nim
