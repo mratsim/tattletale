@@ -36,11 +36,18 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    ## Literal token table of the target, the shared literal head reads it.
     inKernel: bool
     ## False inside a device function: `__local` and `__constant` locals are
     ## kernel-only storage, a device function declaring one refuses.
 
 const printerTarget = "opencl"
+
+## Optional expression kinds this printer routes through
+## its own `printTargetExpr`, the shared dispatcher emits the rest.
+const targetExprKinds: set[CirExprKind] = {}
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -154,12 +161,9 @@ proc emitExtensions(features: ModuleFeatures): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
-
 # OpenCL C defines `INFINITY` and `NAN` as float-typed constants.
 # A C cast forms the wider widths.
-const openclLitTokens = LitTokens(
+const targetLitTokens = LitTokens(
   scalar: openclScalarTokens,
   int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
   f16Prefix: "(half)", f32Suffix: "f",
@@ -169,201 +173,93 @@ const openclLitTokens = LitTokens(
     inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
     inf64: "((double)INFINITY)", negInf64: "((double)-INFINITY)", nan64: "((double)NAN)"))
 
-proc emitOpenclLit(e: CirExpr): string =
-  ## OpenCL C token of a literal, typed by its literal type.
-  ## C suffixes mark the 32-bit and 64-bit widths, a cast forms the narrow widths.
-  emitLiteral(e, openclLitTokens)
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  ## One conversion, the C-style cast form.
+  ##
+  ## - a pointer cast includes the address space, the C compiler rejects a silent change of the pointee's space
+  ## - other types take the bare name
+  let target = if e.castType.kind in {ctPtr, ctAptr}:
+      emitOpenclPtrField(e.castType, "").strip()
+    else:
+      emitOpenclTypeBare(e.castType)
+  return "(" & target & ")" & ctx.printExpr(e.castOperand)
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  if ctx.failing():
-    return ""
-  case e.kind
-  of eNil, eTrue, eFalse, eIntLit, eFloatLit:
-    return emitOpenclLit(e)
-  of eSym:
-    if e.coordBuiltin != cbkNone:
-      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
-        return OpenclFlatThreadIndex
-      ctx.fail("whole-vector coordinate read " & e.name &
-        ", OpenCL C has no vector form, read the components")
+proc printCast(ctx: var PrintCtx, e: CirExpr): string =
+  ## One bit reinterpret, OpenCL's `as_` builtin: a C cast between float
+  ## and integer types converts the value, it does not move bits.
+  let src = getExprType(e.castOperand)
+  let t = e.castType
+  if t.kind in {ctFloat, ctInt, ctUint} and src != nil and
+      src.kind in {ctFloat, ctInt, ctUint} and src.bits == t.bits and
+      ((t.kind == ctFloat) != (src.kind == ctFloat)):
+    return "as_" & emitOpenclScalar(t) & "(" & ctx.printExpr(e.castOperand) & ")"
+  return ctx.printConv(e)
+
+proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
+  ## Returns the OpenCL C text of an expression-position builtin call,
+  ## "" when `call.callee` is not a builtin.
+  if call.callee.kind == eSym:
+    # builtin vocabulary dispatches on the typed kinds, never on names
+    case call.callee.reductionBuiltin
+    of rbkReduceAdd:
+      return "sub_group_reduce_add(" & args.join(", ") & ")"
+    of rbkReduceMax:
+      return "sub_group_reduce_max(" & args.join(", ") & ")"
+    of rbkNone: discard
+  if call.callee.kind == eSym:
+    case call.callee.shuffleBuiltin
+    of shkSimdShuffle:
+      # `sub_group_shuffle` takes the subgroup-relative index as `uint`
+      return "sub_group_shuffle(" & args[0] & ", (uint)(" & args[1] & "))"
+    of shkSimdShuffleXor:
+      # `sub_group_shuffle_xor` takes the xor mask as `uint`, not the Nim `int`
+      return "sub_group_shuffle_xor(" & args[0] & ", (uint)(" & args[1] & "))"
+    of shkNone: discard
+  if call.callee.kind == eSym and call.callee.builtin and
+      call.callee.name in ["min", "max", "abs"] and call.args.len > 0:
+    # float operands take the f-prefixed OpenCL names, integer operands keep the plain names
+    let at = getExprType(call.args[0])
+    if at != nil and at.kind == ctFloat:
+      let mapped = case call.callee.name
+        of "max": "fmax"
+        of "min": "fmin"
+        else: "fabs"
+      return mapped & "(" & args.join(", ") & ")"
+  if call.callee.kind == eSym and call.callee.atomicsBuiltin == abkAtomicFetchAdd:
+    let pt = atomicOperandPtr(call.args[0])
+    if pt == nil or pt.pElem == nil:
+      ctx.fail("atomicFetchAdd on an operand with no pointee type")
       return ""
-    return e.name
-  of eAt, ePat:
-    let base = (if e.kind == eAt: e.atBase else: e.patBase)
-    let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
-    var baseTxt = ctx.printExpr(base)
-    if base.kind in {eCast, eConv}:
-      # a cast binds looser than the subscript: parenthesize the base
-      baseTxt = "(" & baseTxt & ")"
-    return baseTxt & "[" & idx & "]"
-  of eDeref:
-    return "(*" & ctx.printExpr(e.derefOperand) & ")"
-  of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      let mapped = openclCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
-      if mapped.len == 0:
-        ctx.fail("no coordinate component " & e.fieldName)
+    let qualifier = case pt.space
+      of caDevice: "__global"
+      of caThreadgroup: "__local"
+      of caConstant: "__constant"
+      of caThread:
+        ctx.fail("atomicFetchAdd on thread-private storage")
         return ""
-      return mapped
-    let bt = getExprType(e.dotBase)
-    if bt != nil and bt.kind == ctVector:
-      let comp = emitVectorComponent(e.fieldName)
-      if comp.len == 0:
-        ctx.fail("no vector component " & e.fieldName)
-        return ""
-      return ctx.printExpr(e.dotBase) & "." & comp
-    return ctx.printExpr(e.dotBase) & "." & e.fieldName
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    let op = case e.kind
-      of eAdd: "+"
-      of eSub: "-"
-      of eMul: "*"
-      of eDiv: "/"
-      of eMod: "%"
-      of eShl: "<<"
-      of eShr: ">>"
-      of eBitAnd: "&"
-      of eBitOr: "|"
-      else: "^"
-    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-      of eEq: "=="
-      of eNeq: "!="
-      of eLt: "<"
-      else: "<="
-    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
-  of eNot:
-    return "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    let op = if e.kind == eAnd: "&&" else: "||"
-    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
-  of eTernary:
-    return "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
-      " : " & ctx.printExpr(e.elseE) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
-  of eNeg:
-    return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eCast, eConv:
-    if e.kind == eCast:
-      # a bit reinterpretation needs OpenCL's as_ builtin: a C cast between
-      # float and integer types converts the value, it does not move bits
-      let src = getExprType(e.castOperand)
-      let t = e.castType
-      if t.kind in {ctFloat, ctInt, ctUint} and src != nil and
-          src.kind in {ctFloat, ctInt, ctUint} and src.bits == t.bits and
-          ((t.kind == ctFloat) != (src.kind == ctFloat)):
-        return "as_" & emitOpenclScalar(t) & "(" & ctx.printExpr(e.castOperand) & ")"
-    # a pointer cast includes the address space: the C compiler rejects
-    # a silent change of the pointee's space
-    let target = if e.castType.kind in {ctPtr, ctAptr}:
-        emitOpenclPtrField(e.castType, "").strip()
-      else:
-        emitOpenclTypeBare(e.castType)
-    return "(" & target & ")" & ctx.printExpr(e.castOperand)
-  of eSizeof:
-    # an array type names through the declaration form: the bare-name composer `emitOpenclTypeBare` prints "" for an array leaf
-    if e.ofType.kind == ctArray:
-      return "sizeof(" & emitOpenclArrayDecl(e.ofType, "") & ")"
-    return "sizeof(" & emitOpenclTypeBare(e.ofType) & ")"
-  of eAddr:
-    return "(&" & ctx.printExpr(e.addrOperand) & ")"
-  of eOconstr:
-    # C99 compound literal, a bare braced init list cannot be member-accessed
-    if e.kvFields.len == 0:
-      # a zero-field struct, the padding member zero-initializes
-      return "(" & emitOpenclTypeBare(e.ocType) & "){0}"
-    result = "(" & emitOpenclTypeBare(e.ocType) & "){"
-    for i, kvv in e.kvFields:
-      if i > 0:
-        result.add ", "
-      result.add ctx.printExpr(kvv.value)
-    result.add "}"
-  of eAconstr:
-    # an array member initializer takes plain braces, OpenCL C has no array
-    # compound-literal cast. Every other type casts: `(Type){...}`
-    let bare = emitOpenclTypeBare(e.acType)
-    result = if bare.len > 0: "(" & bare & "){" else: "{"
-    for i, el in e.elems:
-      if i > 0:
-        result.add ", "
-      result.add ctx.printExpr(el)
-    result.add "}"
-  of eCall:
-    let calleeName =
-      if e.callee.kind == eSym: e.callee.name
-      else: ctx.printExpr(e.callee)
-    var args: seq[string]
-    for a in e.args:
-      args.add ctx.printExpr(a)
-    if e.callee.kind == eSym:
-      # builtin vocabulary dispatches on the typed kinds, never on names
-      case e.callee.reductionBuiltin
-      of rbkReduceAdd:
-        return "sub_group_reduce_add(" & args.join(", ") & ")"
-      of rbkReduceMax:
-        return "sub_group_reduce_max(" & args.join(", ") & ")"
-      of rbkNone: discard
-    if e.callee.kind == eSym:
-      case e.callee.shuffleBuiltin
-      of shkSimdShuffle:
-        # `sub_group_shuffle` takes the subgroup-relative index as `uint`
-        return "sub_group_shuffle(" & args[0] & ", (uint)(" & args[1] & "))"
-      of shkSimdShuffleXor:
-        # `sub_group_shuffle_xor` takes the xor mask as `uint`, not the Nim `int`
-        return "sub_group_shuffle_xor(" & args[0] & ", (uint)(" & args[1] & "))"
-      of shkNone: discard
-    if e.callee.kind == eSym and e.callee.builtin and
-        e.callee.name in ["min", "max", "abs"] and e.args.len > 0:
-      # float operands take the f-prefixed OpenCL names, integer operands keep the plain names
-      let at = getExprType(e.args[0])
-      if at != nil and at.kind == ctFloat:
-        let mapped = case e.callee.name
-          of "max": "fmax"
-          of "min": "fmin"
-          else: "fabs"
-        return mapped & "(" & args.join(", ") & ")"
-    if e.callee.kind == eSym and e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-      let pt = atomicOperandPtr(e.args[0])
-      if pt == nil or pt.pElem == nil:
-        ctx.fail("atomicFetchAdd on an operand with no pointee type")
-        return ""
-      let qualifier = case pt.space
-        of caDevice: "__global"
-        of caThreadgroup: "__local"
-        of caConstant: "__constant"
-        of caThread:
-          ctx.fail("atomicFetchAdd on thread-private storage")
-          return ""
-      let atomicTy = case pt.pElem.kind
-        of ctFloat:
-          if pt.pElem.bits == 32: "atomic_float"
-          else: ""
-        of ctInt:
-          if pt.pElem.bits == 32: "atomic_int"
-          else: ""
-        of ctUint:
-          if pt.pElem.bits == 32: "atomic_uint"
-          else: ""
+    let atomicTy = case pt.pElem.kind
+      of ctFloat:
+        if pt.pElem.bits == 32: "atomic_float"
         else: ""
-      if atomicTy.len == 0:
-        ctx.fail("atomicFetchAdd on " & emitOpenclScalar(pt.pElem) &
-          ", only 32-bit int/uint/float pointees")
-        return ""
-      # atomic_fetch_add acts on `atomic_*` pointees: cast the raw
-      # qualified pointer at the call site
-      return "atomic_fetch_add((volatile " & qualifier & " " & atomicTy & "*)" &
-        ctx.printExpr(e.args[0]) & ", " & ctx.printExpr(e.args[1]) & ")"
-    if e.callee.kind == eSym and e.callee.synchroBuiltin != sbkNone:
-      ctx.fail("barrier is a statement, a value-position barrier is outside the OpenCL subset")
+      of ctInt:
+        if pt.pElem.bits == 32: "atomic_int"
+        else: ""
+      of ctUint:
+        if pt.pElem.bits == 32: "atomic_uint"
+        else: ""
+      else: ""
+    if atomicTy.len == 0:
+      ctx.fail("atomicFetchAdd on " & emitOpenclScalar(pt.pElem) &
+        ", only 32-bit int/uint/float pointees")
       return ""
-    return calleeName & "(" & args.join(", ") & ")"
-
-# ═══════════════════════════════════════════════════════════════════════
-# Statements
-# ═══════════════════════════════════════════════════════════════════════
-
+    # atomic_fetch_add acts on `atomic_*` pointees: cast the raw
+    # qualified pointer at the call site
+    return "atomic_fetch_add((volatile " & qualifier & " " & atomicTy & "*)" &
+      ctx.printExpr(call.args[0]) & ", " & ctx.printExpr(call.args[1]) & ")"
+  if call.callee.kind == eSym and call.callee.synchroBuiltin != sbkNone:
+    ctx.fail("barrier is a statement, a value-position barrier is outside the OpenCL subset")
+    return ""
+  return ""
 const openclLoopStyle = LoopStyle(
   unrollDirective: "#pragma unroll",
   infiniteHead: "for (;;) {\n",
@@ -382,6 +278,75 @@ proc emitLocalDecl(s: CirStmt): string =
 # ═══════════════════════════════════════════════════════════════════════
 # Statements: per-target policy arms, the shared dispatch lives in emit_common
 # ═══════════════════════════════════════════════════════════════════════
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## OpenCL C text of the kinds in `targetExprKinds`.
+  case e.kind
+  of eSym:
+    # a whole-vector coordinate read refuses, the flat thread index takes
+    # its canonical token, a name passes through
+    if e.coordBuiltin != cbkNone:
+      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+        return OpenclFlatThreadIndex
+      ctx.fail("whole-vector coordinate read " & e.name &
+        ", OpenCL C has no vector form, read the components")
+      return ""
+    return e.name
+  of eDot:
+    # a coordinate component takes its canonical token, a vector component
+    # takes its letter, names pass through
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+      let mapped = openclCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
+      if mapped.len == 0:
+        ctx.fail("no coordinate component " & e.fieldName)
+        return ""
+      return mapped
+    let bt = getExprType(e.dotBase)
+    if bt != nil and bt.kind == ctVector:
+      let comp = emitVectorComponent(e.fieldName)
+      if comp.len == 0:
+        ctx.fail("no vector component " & e.fieldName)
+        return ""
+      return ctx.printExpr(e.dotBase) & "." & comp
+    return ctx.printExpr(e.dotBase) & "." & e.fieldName
+  of eCast:
+    return ctx.printCast(e)
+  of eConv:
+    return ctx.printConv(e)
+  of eSizeof:
+    # an array type names through the declaration form, the bare-name composer `emitOpenclTypeBare` prints "" for an array leaf
+    if e.ofType.kind == ctArray:
+      return "sizeof(" & emitOpenclArrayDecl(e.ofType, "") & ")"
+    return "sizeof(" & emitOpenclTypeBare(e.ofType) & ")"
+  of eOconstr:
+    # C99 compound literal, a bare braced init list cannot be member-accessed
+    if e.kvFields.len == 0:
+      # a zero-field struct, the padding member zero-initializes
+      return "(" & emitOpenclTypeBare(e.ocType) & "){0}"
+    result = "(" & emitOpenclTypeBare(e.ocType) & "){"
+    for i, kvv in e.kvFields:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(kvv.value)
+    result.add "}"
+  of eAconstr:
+    # plain braces, OpenCL C has no array compound-literal cast,
+    # object constructions cast `(Type){...}`
+    let bare = emitOpenclTypeBare(e.acType)
+    result = if bare.len > 0: "(" & bare & "){" else: "{"
+    for i, el in e.elems:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(el)
+    result.add "}"
+  of eCall:
+    let args = printCallArgs(ctx, e)
+    return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
+  else:
+    # dispatcher sends only the kinds above, anything else is a routing bug
+    ctx.fail("expression kind " & $e.kind & " has no OpenCL C emission")
+
+
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   ## One local declaration: storage-class refusals, the address-space qualifier, then the declaration text.
   let pad = spaces(ctx.indent * 2)
@@ -617,7 +582,6 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     result.src &= "__kernel void " & entryName & '(' &
       params.join(", ") & ") {\n" & bodyTxt & '\n' & "}\n"
   return (result.src, "")
-
 
 
 proc codegen*(ctx: var GpuContext): string =

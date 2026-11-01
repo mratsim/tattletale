@@ -36,6 +36,7 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    ## Literal token table of the target, the shared literal head reads it.
     inKernel: bool
     ## False inside a device function, a device function reading a coordinate builtin refuses.
     paramNames: HashSet[string]
@@ -50,6 +51,12 @@ type
     ## Stored struct layouts of the module, the layout pass filled them.
 
 const printerTarget = "wgsl"
+
+## Optional expression kinds this printer routes through
+## its own `printTargetExpr`, the shared dispatcher emits the rest.
+const targetExprKinds = {eNil, eAt, ePat, eTernary}
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -160,12 +167,10 @@ proc wgslWholeVector(kind: CoordBuiltinKind): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
-
 # WGSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
-# `bitcast` from the unsigned integer of the same width.
-const wgslLitTokens = LitTokens(
+# `bitcast` from the unsigned integer of the same width. Bare literals are
+# abstract and work in any typed context, u32 gains the `u` suffix, f16 the `h`.
+const targetLitTokens = LitTokens(
   int: IntLitTokens(u32Suffix: "u"),
   f16Suffix: "h",
   nonFinite: FloatLitTokens(
@@ -177,22 +182,78 @@ const wgslLitTokens = LitTokens(
     negInf64: "bitcast<f64>(0xfff0000000000000u)",
     nan64: "bitcast<f64>(0x7ff8000000000000u)"))
 
-proc emitWgslLit(e: CirExpr): string =
-  ## WGSL token of a literal, typed by its literal type.
-  ## Bare literals are abstract in WGSL and work in any typed context,
-  ## u32 gains the `u` suffix, f16 the `h` suffix.
-  emitLiteral(e, wgslLitTokens)
+proc printCast(ctx: var PrintCtx, e: CirExpr): string =
+  ## One bit reinterpret, WGSL's bitcast.
+  return "bitcast<" & ctx.emitWgslTypeBare(e.castType) & ">(" &
+    ctx.printExpr(e.castOperand) & ")"
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  if ctx.failing():
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  ## One numeric conversion, the constructor-call form: WGSL has no bool
+  ## constructor and no bool-to-numeric conversion.
+  if e.castType.kind == ctBool:
+    ctx.fail("conversion to bool, WGSL has no bool constructor, compare" &
+      " against zero")
     return ""
+  let bt = getExprType(e.castOperand)
+  if bt != nil and bt.kind == ctBool:
+    ctx.fail("conversion from bool, WGSL has no bool-to-numeric conversion")
+    return ""
+  return ctx.emitWgslTypeBare(e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
+
+proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
+  ## Returns the WGSL text of an expression-position builtin call,
+  ## "" when `call.callee` is not a builtin.
+  if call.callee.kind == eSym:
+    # builtin vocabulary dispatches on the typed kinds, never on names,
+    # `rsqrt` stays a name case, a math intrinsic outside the four categories
+    case call.callee.reductionBuiltin
+    of rbkReduceAdd:
+      return "subgroupAdd(" & args.join(", ") & ")"
+    of rbkReduceMax:
+      return "subgroupMax(" & args.join(", ") & ")"
+    of rbkNone: discard
+    if call.callee.atomicsBuiltin == abkAtomicFetchAdd:
+      # WGSL atomics cover i32/u32 on atomic<T> storage types only,
+      # f32 atomics do not exist, and the atomic<T> retype of the binding
+      # is a declaration-site change the printer does not make
+      ctx.fail("atomicFetchAdd has no WGSL form, WGSL atomics cover i32/u32" &
+        " pointees through atomic<T> storage types only")
+      return ""
+    if call.callee.synchroBuiltin != sbkNone:
+      ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
+      return ""
+  # a math intrinsic reroutes only when the callee IS the builtin
+  # a user proc that shares the name stays an ordinary call
+  if call.callee.kind == eSym and call.callee.builtin:
+    case call.callee.name
+    of "rsqrt":
+      return "inverseSqrt(" & args.join(", ") & ")"
+    else: discard
+  return ""
+const wgslLoopStyle = LoopStyle(
+  # WGSL has no unroll directive, the drop surfaces in the artifact
+  unrollDirective: "// {.unroll.} requested but not honored on WebGPU",
+  infiniteHead: "loop {\n",
+  braceSameLine: true)
+
+proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
+  ## Declaration text of one local, the init stays with the caller.
+  ## A pointer-typed local refuses earlier, the WGSL lowering pass dissolves it.
+  result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Statements: per-target policy arms, the shared dispatch lives in emit_common
+# ═══════════════════════════════════════════════════════════════════════
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## WGSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eNil:
     ctx.fail("nil literal is outside the WGSL subset")
     return ""
-  of eTrue, eFalse, eIntLit, eFloatLit:
-    return emitWgslLit(e)
   of eSym:
+    # pointer-value and whole-struct refusals, coordinate builtins are
+    # entry-point parameters, names pass through
     if e.typ != nil and e.typ.kind == ctPtr and e.name notin ctx.paramNames:
       ctx.fail("pointer local " & e.name & " used as a value, WGSL has no" &
         " pointer values, the WGSL lowering pass dissolves pointer locals")
@@ -219,8 +280,10 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return wgslWholeVector(e.coordBuiltin)
     return e.name
   of eAt, ePat:
-    let base = (if e.kind == eAt: e.atBase else: e.patBase)
-    let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
+    # a pointer local indexes through an explicit dereference
+    let base = if e.kind == eAt: e.atBase else: e.patBase
+    let idx = if e.kind == eAt: e.atIndex else: e.patIndex
+    let idxTxt = ctx.printExpr(idx)
     let bt = getExprType(base)
     var baseTxt = ctx.printExpr(base)
     if base.kind in {eCast, eConv}:
@@ -228,12 +291,11 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       baseTxt = "(" & baseTxt & ")"
     if bt != nil and bt.kind in {ctPtr, ctAptr} and
         not (bt.kind == ctAptr and bt.space == caDevice):
-      # a pointer local indexes through an explicit dereference
-      return "(*" & baseTxt & ")[" & idx & "]"
-    return baseTxt & "[" & idx & "]"
-  of eDeref:
-    return "(*" & ctx.printExpr(e.derefOperand) & ")"
+      return "(*" & baseTxt & ")[" & idxTxt & "]"
+    return baseTxt & "[" & idxTxt & "]"
   of eDot:
+    # a coordinate component takes its canonical token, a vector component
+    # takes its letter, names pass through
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       if not ctx.inKernel:
         ctx.fail("coordinate builtin " & e.dotBase.name &
@@ -258,60 +320,21 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         return ""
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    let op = case e.kind
-      of eAdd: "+"
-      of eSub: "-"
-      of eMul: "*"
-      of eDiv: "/"
-      of eMod: "%"
-      of eShl: "<<"
-      of eShr: ">>"
-      of eBitAnd: "&"
-      of eBitOr: "|"
-      else: "^"
-    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-      of eEq: "=="
-      of eNeq: "!="
-      of eLt: "<"
-      else: "<="
-    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
-  of eNot:
-    return "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    let op = if e.kind == eAnd: "&&" else: "||"
-    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
   of eTernary:
-    # WGSL has no ternary operator: select(f, t, cond) returns t when cond is true, f when cond is false.
-    # select evaluates both branches eagerly, so a branch with side effects or a faulting read runs whatever the condition.
+    # WGSL's select, the ternary route:
+    # - `select(f, t, cond)` yields t when cond is true, f when cond is false
+    # - both branches evaluate eagerly, a faulting read in either branch runs whatever the condition
     return "select(" & ctx.printExpr(e.elseE) & ", " & ctx.printExpr(e.thenE) &
       ", " & ctx.printExpr(e.cond) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
-  of eNeg:
-    return "(-" & ctx.printExpr(e.unOperand) & ")"
   of eCast:
-    return "bitcast<" & ctx.emitWgslTypeBare(e.castType) & ">(" &
-      ctx.printExpr(e.castOperand) & ")"
+    return ctx.printCast(e)
   of eConv:
-    if e.castType.kind == ctBool:
-      ctx.fail("conversion to bool, WGSL has no bool constructor, compare" &
-        " against zero")
-      return ""
-    let bt = getExprType(e.castOperand)
-    if bt != nil and bt.kind == ctBool:
-      ctx.fail("conversion from bool, WGSL has no bool-to-numeric conversion")
-      return ""
-    return ctx.emitWgslTypeBare(e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
+    return ctx.printConv(e)
   of eSizeof:
     return $typeByteSize(ctx.layouts, e.ofType, launchAbiBoolWidth)
-  of eAddr:
-    return "(&" & ctx.printExpr(e.addrOperand) & ")"
   of eOconstr:
+    # constructor-call form, a zero-field struct's padding member zero-initializes
     if e.kvFields.len == 0:
-      # a zero-field struct, the padding member zero-initializes
       return ctx.emitWgslTypeBare(e.ocType) & "(0u)"
     result = ctx.emitWgslTypeBare(e.ocType) & "("
     for i, kvv in e.kvFields:
@@ -320,6 +343,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(kvv.value)
     result.add ")"
   of eAconstr:
+    # constructor-call form
     result = ctx.emitWgslTypeBare(e.acType) & "("
     for i, el in e.elems:
       if i > 0:
@@ -327,62 +351,13 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(el)
     result.add ")"
   of eCall:
-    let calleeName =
-      if e.callee.kind == eSym: e.callee.name
-      else: ctx.printExpr(e.callee)
-    var args: seq[string]
-    for a in e.args:
-      args.add ctx.printExpr(a)
-    if e.callee.kind == eSym:
-      # builtin vocabulary dispatches on the typed kinds, never on names,
-      # `rsqrt` stays a name case, a math intrinsic outside the four categories
-      case e.callee.reductionBuiltin
-      of rbkReduceAdd:
-        return "subgroupAdd(" & args.join(", ") & ")"
-      of rbkReduceMax:
-        return "subgroupMax(" & args.join(", ") & ")"
-      of rbkNone: discard
-      if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-        # WGSL atomics cover i32/u32 on atomic<T> storage types only,
-        # f32 atomics do not exist, and the atomic<T> retype of the binding
-        # is a declaration-site change the printer does not make
-        ctx.fail("atomicFetchAdd has no WGSL form, WGSL atomics cover i32/u32" &
-          " pointees through atomic<T> storage types only")
-        return ""
-      if e.callee.synchroBuiltin != sbkNone:
-        ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
-        return ""
-    # a math intrinsic reroutes only when the callee IS the builtin
-    # a user proc that shares the name stays an ordinary call
-    if e.callee.kind == eSym and e.callee.builtin:
-      case calleeName
-      of "rsqrt":
-        return "inverseSqrt(" & args.join(", ") & ")"
-      else: discard
-    return calleeName & "(" & args.join(", ") & ")"
-
-# ═══════════════════════════════════════════════════════════════════════
-# Statements
-# ═══════════════════════════════════════════════════════════════════════
-
-const wgslLoopStyle = LoopStyle(
-  # WGSL has no unroll directive, the drop surfaces in the artifact
-  unrollDirective: "// {.unroll.} requested but not honored on WebGPU",
-  infiniteHead: "loop {\n",
-  braceSameLine: true)
-
-proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
-  ## Declaration text of one local, the init stays with the caller.
-  ## A pointer-typed local refuses earlier, the WGSL lowering pass dissolves it.
-  case s.declType.kind
-  of ctArray:
-    result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
+    let args = printCallArgs(ctx, e)
+    return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
   else:
-    result = s.name & ": " & ctx.emitWgslTypeBare(s.declType)
+    # dispatcher sends only the kinds above, anything else is a routing bug
+    ctx.fail("expression kind " & $e.kind & " has no WGSL emission")
 
-# ═══════════════════════════════════════════════════════════════════════
-# Statements: per-target policy arms, the shared dispatch lives in emit_common
-# ═══════════════════════════════════════════════════════════════════════
+
 proc printVar(ctx: var PrintCtx, s: CirStmt): string =
   ## One local declaration: storage-class and pointer-shape refusals, then the declaration text.
   let pad = spaces(ctx.indent * 2)
@@ -698,7 +673,6 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
     result.src &= txt & "\n\n"
   result.src &= kernelSig & " {\n" & bodyTxt & '\n' & "}\n"
   return (result.src, "")
-
 
 
 proc codegen*(ctx: var GpuContext): string =

@@ -18,6 +18,9 @@
 ## | LoopStyle, printLoopText        | loop text of one target: unroll directive, head, brace style                                         |
 ## | printStmtList                   | statement-list walk: sLoop through `printLoopText`, others through `printStmt`                       |
 ## | printStmt                       | dispatch: shared variants inline, target policy via printVar/printConst/printAsgn/printCall/printAsm |
+## | printExpr                       | expression dispatch: shared branches inline, target kinds via printTargetExpr, default routes inline |
+## | printTargetExpr                 | the per-printer expression walk, owning the kinds in the printer's `targetExprKinds` set             |
+## | printCallArgs, printCallText    | call argument texts, then one call's text: builtin vocabulary when present, else the plain call form |
 ## | printIteElse, printEmitOperand  | sIte else tail and `{.emit.}` operand text, shared forms a printer overrides                         |
 ## | nonFiniteFloatLit               | non-finite float literal token, classified against the printer's token table                         |
 ##
@@ -297,6 +300,92 @@ proc printEmitOperand*(ctx: var auto, op: CirExpr): string =
   ## The shared form splices the operand's symbol name, a printer whose
   ## operands render as expressions overrides it.
   op.name
+
+proc printCallArgs*(ctx: var auto, e: CirExpr): seq[string] =
+  ## Printed texts of one `eCall`'s arguments in order, the plain expression form.
+  ## A printer with per-argument policy prints its own argument texts.
+  mixin printExpr
+  for a in e.args:
+    result.add ctx.printExpr(a)
+
+proc printCallText*(ctx: var auto, e: CirExpr, args: seq[string], builtinTxt: string): string =
+  ## Returns the text of one `eCall`: the builtin vocabulary `builtinTxt`
+  ## when non-empty, else the plain call form over the printed arguments.
+  mixin printExpr
+  if builtinTxt.len > 0:
+    return builtinTxt
+  let calleeName =
+    if e.callee.kind == eSym: e.callee.name
+    else: ctx.printExpr(e.callee)
+  calleeName & "(" & args.join(", ") & ")"
+
+proc printExpr*(ctx: var auto, e: CirExpr): string =
+  ## Prints one structured expression.
+  ##
+  ## - shared variants emit here: the operator branches, the literal head
+  ##   through `emitLiteral` over the printer's `targetLitTokens`
+  ## - the call skeleton prints through `printCallArgs` and `printCallText`
+  ## - the kinds a printer emits itself route to its `printTargetExpr`,
+  ##   named by its `targetExprKinds` set
+  ## - subscript, dereference, address-of and ternary kinds without a target route take the shared default forms below
+  mixin printExpr, printTargetExpr, targetExprKinds, targetLitTokens
+  if ctx.failing():
+    return ""
+  case e.kind
+  of eNil, eTrue, eFalse, eIntLit, eFloatLit:
+    if e.kind in targetExprKinds:
+      return ctx.printTargetExpr(e)
+    return emitLiteral(e, targetLitTokens)
+  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
+    let op = case e.kind
+      of eAdd: "+"
+      of eSub: "-"
+      of eMul: "*"
+      of eDiv: "/"
+      of eMod: "%"
+      of eShl: "<<"
+      of eShr: ">>"
+      of eBitAnd: "&"
+      of eBitOr: "|"
+      else: "^"
+    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
+  of eEq, eNeq, eLt, eLe:
+    let op = case e.kind
+      of eEq: "=="
+      of eNeq: "!="
+      of eLt: "<"
+      else: "<="
+    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
+  of eNot:
+    return "(!" & ctx.printExpr(e.notOperand) & ")"
+  of eAnd, eOr:
+    # C-family operators short-circuit, operands may carry calls
+    let op = if e.kind == eAnd: "&&" else: "||"
+    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
+  of eTernary, eAt, ePat, eDeref, eAddr:
+    if e.kind in targetExprKinds:
+      return ctx.printTargetExpr(e)
+    # shared default forms for the kinds outside the printer's `targetExprKinds` set
+    if e.kind in {eAt, ePat}:
+      let base = if e.kind == eAt: e.atBase else: e.patBase
+      let idx = if e.kind == eAt: e.atIndex else: e.patIndex
+      var baseTxt = ctx.printExpr(base)
+      if base.kind in {eCast, eConv}:
+        # a cast binds looser than the subscript: parenthesize the base
+        baseTxt = "(" & baseTxt & ")"
+      return baseTxt & '[' & ctx.printExpr(idx) & ']'
+    if e.kind == eDeref:
+      return "(*" & ctx.printExpr(e.derefOperand) & ")"
+    if e.kind == eAddr:
+      return "(&" & ctx.printExpr(e.addrOperand) & ")"
+    return "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
+      " : " & ctx.printExpr(e.elseE) & ")"
+  of eBitNot:
+    return "(~" & ctx.printExpr(e.unOperand) & ")"
+  of eNeg:
+    return "(-" & ctx.printExpr(e.unOperand) & ")"
+  of eSym, eDot, eCast, eConv, eSizeof, eOconstr, eAconstr, eCall:
+    return ctx.printTargetExpr(e)
 
 proc printStmt*(ctx: var auto, s: CirStmt): string =
   ## Prints one structured statement.

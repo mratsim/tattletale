@@ -36,12 +36,19 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    ## Literal token table of the target, the shared literal head reads it.
     refBlocks: OrderedTable[string, string]
     ## Buffer-reference block declarations to emit, block name -> member text.
     layouts: Table[string, StructLayout]
     ## Stored struct layouts of the module, the layout pass filled them.
 
 const printerTarget = "glsl"
+
+## Optional expression kinds this printer routes through
+## its own `printTargetExpr`, the shared dispatcher emits the rest.
+const targetExprKinds = {eNil, eAt, ePat, eDeref, eAddr}
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -184,15 +191,10 @@ proc emitExtensions(features: ModuleFeatures): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
-
-proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string
-  ## Forward declaration, shared by the value and statement call paths.
-
 # GLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
 # `uintBitsToFloat` (32 bit) and the width conversion at the use site.
-const glslLitTokens = LitTokens(
+# Wide integer literals print as constructor calls (`int64_t(5)`), glslang rejects the `LL` suffix.
+const targetLitTokens = LitTokens(
   scalar: glslScalarTokens,
   int: IntLitTokens(
     u64Prefix: "uint64_t(", u64Suffix: ")",
@@ -213,205 +215,44 @@ const glslLitTokens = LitTokens(
     negInf64: "double(uintBitsToFloat(0xff800000u))",
     nan64: "double(uintBitsToFloat(0x7fc00000u))"))
 
-proc emitGlslLit(e: CirExpr): string =
-  ## GLSL token of a literal, typed by its literal type.
-  ## Wide integer literals print as constructor calls (`int64_t(5)`),
-  ## the `LL` suffix is rejected by glslang.
-  emitLiteral(e, glslLitTokens)
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  ## One conversion, the constructor-call form: a reference type constructs
+  ## from its element type.
+  let t = e.castType
+  if t.kind in {ctAptr, ctPtr}:
+    ctx.requireRefBlock(t.pElem)
+    return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
+  return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  if ctx.failing():
+proc printCast(ctx: var PrintCtx, e: CirExpr): string =
+  ## One bit reinterpret, the GLSL floatBits builtins.
+  ##
+  ## - `uintBitsToFloat(u)` reads the pattern, a `T()` constructor call
+  ##   numerically converts
+  ## - core GLSL floatBits builtins cover the 32-bit float pairs only
+  ## - a same-width integer pair keeps the constructor, the modular
+  ##   conversion preserves every bit
+  ## - a wider float pair refuses, a numeric conversion would lose the bits
+  let t = e.castType
+  let src = getExprType(e.castOperand)
+  let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
+    src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
+  if scalar and src.kind == ctFloat and t.kind != ctFloat:
+    if src.bits == 32:
+      return (if t.kind == ctUint: "floatBitsToUint" else: "floatBitsToInt") &
+        "(" & ctx.printExpr(e.castOperand) & ")"
+    ctx.fail("bit cast of a 64-bit float has no GLSL emission, only the" &
+      " 32-bit floatBits builtins")
     return ""
-  case e.kind
-  of eNil:
-    ctx.fail("nil literal is outside the GLSL subset")
+  if scalar and t.kind == ctFloat and src.kind != ctFloat:
+    if t.bits == 32:
+      return (if src.kind == ctUint: "uintBitsToFloat" else: "intBitsToFloat") &
+        "(" & ctx.printExpr(e.castOperand) & ")"
+    ctx.fail("bit cast to a 64-bit float has no GLSL emission, only the" &
+      " 32-bit floatBits builtins")
     return ""
-  of eTrue, eFalse, eIntLit, eFloatLit:
-    return emitGlslLit(e)
-  of eSym:
-    if e.coordBuiltin != cbkNone:
-      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
-        return "int(gl_LocalInvocationIndex)"
-      let g = glslCoordName(e.coordBuiltin)
-      return "ivec3(int(" & g & ".x), int(" & g & ".y), int(" & g & ".z))"
-    if e.typ != nil and e.typ.kind == ctPtr and e.typ.space != caDevice:
-      ctx.fail("pointer local " & e.name & " used as a value, GLSL has no" &
-        " pointer values, the GLSL lowering pass dissolves pointer locals")
-      return ""
-    return e.name
-  of eAt, ePat:
-    let base = (if e.kind == eAt: e.atBase else: e.patBase)
-    let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
-    let bt = getExprType(base)
-    var baseTxt = ctx.printExpr(base)
-    if base.kind in {eCast, eConv}:
-      # a cast binds looser than the subscript: parenthesize the base
-      baseTxt = "(" & baseTxt & ")"
-    if bt != nil and bt.kind == ctAptr:
-      ctx.requireRefBlock(bt.pElem)
-      return baseTxt & ".x[" & idx & "]"
-    if bt != nil and bt.kind == ctArray:
-      return baseTxt & "[" & idx & "]"
-    if bt != nil and bt.kind == ctPtr:
-      ctx.fail("index through a pointer, the GLSL lowering pass dissolves" &
-        " pointer locals")
-      return ""
-    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
-      " base is outside the GLSL subset")
-    return ""
-  of eDeref:
-    let op = e.derefOperand
-    let ot = getExprType(op)
-    if ot != nil and ot.kind == ctAptr:
-      ctx.requireRefBlock(ot.pElem)
-      return ctx.printExpr(op) & ".x[0]"
-    if ot != nil and ot.kind == ctPtr:
-      ctx.fail("deref of a pointer, GLSL has no function-storage addressing," &
-        " the GLSL lowering pass dissolves pointer locals")
-      return ""
-    ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) &
-      " operand is outside the GLSL subset")
-    return ""
-  of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      # a component of an unsigned GLSL builtin, cast to the canonical int
-      return "int(" & glslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
-    let bt = getExprType(e.dotBase)
-    if bt != nil and bt.kind == ctVector:
-      let comp = emitVectorComponent(e.fieldName)
-      if comp.len == 0:
-        ctx.fail("no vector component " & e.fieldName)
-        return ""
-      return ctx.printExpr(e.dotBase) & "." & comp
-    return ctx.printExpr(e.dotBase) & "." & e.fieldName
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    let op = case e.kind
-      of eAdd: "+"
-      of eSub: "-"
-      of eMul: "*"
-      of eDiv: "/"
-      of eMod: "%"
-      of eShl: "<<"
-      of eShr: ">>"
-      of eBitAnd: "&"
-      of eBitOr: "|"
-      else: "^"
-    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-      of eEq: "=="
-      of eNeq: "!="
-      of eLt: "<"
-      else: "<="
-    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
-  of eNot:
-    return "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    let op = if e.kind == eAnd: "&&" else: "||"
-    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
-  of eTernary:
-    return "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
-      " : " & ctx.printExpr(e.elseE) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
-  of eNeg:
-    return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eConv:
-    let t = e.castType
-    if t.kind in {ctAptr, ctPtr}:
-      ctx.requireRefBlock(t.pElem)
-      return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
-    return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
-  of eCast:
-    # A bit reinterpret keeps the operand's bits: `uintBitsToFloat(u)` reads the pattern.
-    # A `T()` constructor call numerically converts.
-    # Core GLSL floatBits builtins cover the 32-bit float pairs only.
-    # A same-width integer pair keeps the constructor: the modular conversion preserves every bit.
-    # A wider float pair refuses over emitting a numeric conversion.
-    let t = e.castType
-    let src = getExprType(e.castOperand)
-    let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-      src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
-    if scalar and src.kind == ctFloat and t.kind != ctFloat:
-      if src.bits == 32:
-        return (if t.kind == ctUint: "floatBitsToUint" else: "floatBitsToInt") &
-          "(" & ctx.printExpr(e.castOperand) & ")"
-      ctx.fail("bit cast of a 64-bit float has no GLSL emission, only the" &
-        " 32-bit floatBits builtins")
-      return ""
-    if scalar and t.kind == ctFloat and src.kind != ctFloat:
-      if t.bits == 32:
-        return (if src.kind == ctUint: "uintBitsToFloat" else: "intBitsToFloat") &
-          "(" & ctx.printExpr(e.castOperand) & ")"
-      ctx.fail("bit cast to a 64-bit float has no GLSL emission, only the" &
-        " 32-bit floatBits builtins")
-      return ""
-    # pointers and same-width integer pairs keep the constructor call
-    if t.kind in {ctAptr, ctPtr}:
-      ctx.requireRefBlock(t.pElem)
-      return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
-    return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
-  of eSizeof:
-    return $typeByteSize(ctx.layouts, e.ofType, std430BoolWidth)
-  of eAddr:
-    # a buffer element's address is the indexed reference access
-    if e.addrOperand.kind == ePat:
-      return ctx.printExpr(e.addrOperand)
-    ctx.fail("cannot take the address of a local, GLSL has no " &
-      "function-storage addressing; only the address of a buffer element")
-    return ""
-  of eOconstr:
-    if e.kvFields.len == 0:
-      # a zero-field struct: the emitted padding member zero-initializes
-      return emitGlslTypeBare(e.ocType) & "(0)"
-    result = emitGlslTypeBare(e.ocType) & "("
-    for i, kvv in e.kvFields:
-      if i > 0:
-        result.add ", "
-      result.add ctx.printExpr(kvv.value)
-    result.add ")"
-  of eAconstr:
-    result = emitGlslTypeBare(e.acType) & "("
-    for i, el in e.elems:
-      if i > 0:
-        result.add ", "
-      result.add ctx.printExpr(el)
-    result.add ")"
-  of eCall:
-    if e.callee.kind == eSym and e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-      # atomicFetchAdd prints its own arguments, a pre-print into the shared arg list would print each argument twice
-      return ctx.printGlslAtomicFetchAdd(e.args)
-    let calleeName =
-      if e.callee.kind == eSym: e.callee.name
-      else: ctx.printExpr(e.callee)
-    var args: seq[string]
-    for a in e.args:
-      args.add ctx.printExpr(a)
-    if e.callee.kind == eSym:
-      # builtin vocabulary dispatches on the typed kinds, never on names
-      case e.callee.reductionBuiltin
-      of rbkReduceAdd:
-        return "subgroupAdd(" & args.join(", ") & ")"
-      of rbkReduceMax:
-        return "subgroupMax(" & args.join(", ") & ")"
-      of rbkNone: discard
-    if e.callee.kind == eSym:
-      case e.callee.shuffleBuiltin
-      of shkSimdShuffle:
-        # subgroupShuffle takes the subgroup-relative index as `uint`. A plain cast
-        # compiles without GL_NV_explicit_typecast
-        return "subgroupShuffle(" & args[0] & ", uint(" & args[1] & "))"
-      of shkSimdShuffleXor:
-        return "subgroupShuffleXor(" & args[0] & ", uint(" & args[1] & "))"
-      of shkNone: discard
-      if e.callee.synchroBuiltin != sbkNone:
-        ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
-        return ""
-    return calleeName & "(" & args.join(", ") & ")"
-
-# ═══════════════════════════════════════════════════════════════════════
-# Statements
-# ═══════════════════════════════════════════════════════════════════════
+  # pointers and same-width integer pairs keep the constructor call
+  return ctx.printConv(e)
 
 proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
   ## GLSL vocabulary for the atomic fetch-and-add builtin, shared by the value and statement call paths:
@@ -427,6 +268,149 @@ proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
   else:
     ctx.printExpr(args[0])
   return "atomicAdd(" & addrTxt & ", " & ctx.printExpr(args[1]) & ")"
+
+
+proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
+  ## Returns the GLSL text of an expression-position builtin call,
+  ## "" when `call.callee` is not a builtin.
+  if call.callee.kind == eSym and call.callee.atomicsBuiltin == abkAtomicFetchAdd:
+    # atomicFetchAdd prints its own arguments, a pre-print into the shared arg list would print each argument twice
+    return ctx.printGlslAtomicFetchAdd(call.args)
+  if call.callee.kind == eSym:
+    # builtin vocabulary dispatches on the typed kinds, never on names
+    case call.callee.reductionBuiltin
+    of rbkReduceAdd:
+      return "subgroupAdd(" & args.join(", ") & ")"
+    of rbkReduceMax:
+      return "subgroupMax(" & args.join(", ") & ")"
+    of rbkNone: discard
+  if call.callee.kind == eSym:
+    case call.callee.shuffleBuiltin
+    of shkSimdShuffle:
+      # subgroupShuffle takes the subgroup-relative index as `uint`. A plain cast
+      # compiles without GL_NV_explicit_typecast
+      return "subgroupShuffle(" & args[0] & ", uint(" & args[1] & "))"
+    of shkSimdShuffleXor:
+      return "subgroupShuffleXor(" & args[0] & ", uint(" & args[1] & "))"
+    of shkNone: discard
+    if call.callee.synchroBuiltin != sbkNone:
+      ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
+      return ""
+  return ""
+
+# ═══════════════════════════════════════════════════════════════════════
+# Statements
+# ═══════════════════════════════════════════════════════════════════════
+
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## GLSL text of the kinds in `targetExprKinds`.
+  case e.kind
+  of eNil:
+    ctx.fail("nil literal is outside the GLSL subset")
+    return ""
+  of eSym:
+    # a pointer-value refusal, coordinate builtins take component casts,
+    # names pass through
+    if e.coordBuiltin != cbkNone:
+      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+        return "int(gl_LocalInvocationIndex)"
+      let g = glslCoordName(e.coordBuiltin)
+      return "ivec3(int(" & g & ".x), int(" & g & ".y), int(" & g & ".z))"
+    if e.typ != nil and e.typ.kind == ctPtr and e.typ.space != caDevice:
+      ctx.fail("pointer local " & e.name & " used as a value, GLSL has no" &
+        " pointer values, the GLSL lowering pass dissolves pointer locals")
+      return ""
+    return e.name
+  of eAt, ePat:
+    # reference blocks index their storage element, arrays index plainly,
+    # pointers and untyped bases refuse
+    let base = if e.kind == eAt: e.atBase else: e.patBase
+    let idx = if e.kind == eAt: e.atIndex else: e.patIndex
+    let idxTxt = ctx.printExpr(idx)
+    let bt = getExprType(base)
+    var baseTxt = ctx.printExpr(base)
+    if base.kind in {eCast, eConv}:
+      # a cast binds looser than the subscript: parenthesize the base
+      baseTxt = "(" & baseTxt & ")"
+    if bt != nil and bt.kind == ctAptr:
+      ctx.requireRefBlock(bt.pElem)
+      return baseTxt & ".x[" & idxTxt & "]"
+    if bt != nil and bt.kind == ctArray:
+      return baseTxt & "[" & idxTxt & "]"
+    if bt != nil and bt.kind == ctPtr:
+      ctx.fail("index through a pointer, the GLSL lowering pass dissolves" &
+        " pointer locals")
+      return ""
+    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
+      " base is outside the GLSL subset")
+    return ""
+  of eDot:
+    # a coordinate component casts to the canonical int, a vector component
+    # takes its letter, names pass through
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
+      # a component of an unsigned GLSL builtin, cast to the canonical int
+      return "int(" & glslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
+    let bt = getExprType(e.dotBase)
+    if bt != nil and bt.kind == ctVector:
+      let comp = emitVectorComponent(e.fieldName)
+      if comp.len == 0:
+        ctx.fail("no vector component " & e.fieldName)
+        return ""
+      return ctx.printExpr(e.dotBase) & "." & comp
+    return ctx.printExpr(e.dotBase) & "." & e.fieldName
+  of eDeref:
+    # a reference block reads its storage element, pointers and untyped operands refuse
+    let op = e.derefOperand
+    let ot = getExprType(op)
+    if ot != nil and ot.kind == ctAptr:
+      ctx.requireRefBlock(ot.pElem)
+      return ctx.printExpr(op) & ".x[0]"
+    if ot != nil and ot.kind == ctPtr:
+      ctx.fail("deref of a pointer, GLSL has no function-storage addressing," &
+        " the GLSL lowering pass dissolves pointer locals")
+      return ""
+    ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) &
+      " operand is outside the GLSL subset")
+    return ""
+  of eAddr:
+    # a buffer element's address is the indexed reference access, anything else refuses
+    if e.addrOperand.kind == ePat:
+      return ctx.printExpr(e.addrOperand)
+    ctx.fail("cannot take the address of a local, GLSL has no " &
+      "function-storage addressing; only the address of a buffer element")
+    return ""
+  of eCast:
+    return ctx.printCast(e)
+  of eConv:
+    return ctx.printConv(e)
+  of eSizeof:
+    return $typeByteSize(ctx.layouts, e.ofType, std430BoolWidth)
+  of eOconstr:
+    # constructor-call form, a zero-field struct's padding member zero-initializes
+    if e.kvFields.len == 0:
+      return emitGlslTypeBare(e.ocType) & "(0)"
+    result = emitGlslTypeBare(e.ocType) & "("
+    for i, kvv in e.kvFields:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(kvv.value)
+    result.add ")"
+  of eAconstr:
+    # constructor-call form
+    result = emitGlslTypeBare(e.acType) & "("
+    for i, el in e.elems:
+      if i > 0:
+        result.add ", "
+      result.add ctx.printExpr(el)
+    result.add ")"
+  of eCall:
+    let args = printCallArgs(ctx, e)
+    return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
+  else:
+    # dispatcher sends only the kinds above, anything else is a routing bug
+    ctx.fail("expression kind " & $e.kind & " has no GLSL emission")
+
 
 const glslLoopStyle = LoopStyle(
   unrollDirective: "[[unroll]]",
@@ -814,7 +798,6 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
     result.src &= "void " & entryName & "() {\n" & bodyTxt & '\n' & "}\n\n"
   return (result.src, "")
-
 
 
 proc codegen*(ctx: var GpuContext): string =

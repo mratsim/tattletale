@@ -36,11 +36,18 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    ## Literal token table of the target, the shared literal head reads it.
     ## Per-kernel state.
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
 const printerTarget = "msl"
+
+## Optional expression kinds this printer routes through
+## its own `printTargetExpr`, the shared dispatcher emits the rest.
+const targetExprKinds: set[CirExprKind] = {}
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -137,11 +144,8 @@ proc emitMslPtr(t: CirType, ident: string): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
-
 # `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const mslLitTokens = LitTokens(
+const targetLitTokens = LitTokens(
   scalar: mslScalarTokens,
   int: IntLitTokens(u64Suffix: "ULL", u32Suffix: "U", i64Suffix: "LL", narrowCast: true),
   f16Suffix: "h", f32Suffix: "f",
@@ -150,11 +154,6 @@ const mslLitTokens = LitTokens(
     inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
     inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
     inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN"))
-
-proc emitMslLit(e: CirExpr): string =
-  ## MSL token of a literal, typed by its literal type.
-  emitLiteral(e, mslLitTokens)
-
 
 proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
   ## MSL token of a builtin reference, the attributed parameter name.
@@ -216,101 +215,55 @@ proc emitMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
   return ""
 
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  if ctx.failing():
-    return ""
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  ## One numeric conversion, the C-style cast form, pointer casts name
+  ## their address space.
+  let t = e.castType
+  var castTyp = emitMslType(t, "", true)
+  if t.kind in {ctPtr, ctAptr}:
+    castTyp = emitMslSpace(t.space) & ' ' & castTyp
+  return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
+
+proc printCast(ctx: var PrintCtx, e: CirExpr): string =
+  ## One bit reinterpret, `as_type<T>`.
+  ##
+  ## - a C-style cast converts numerically, 0xFF7FFFFF read as float32
+  ##   gives +4.29e9 and the same bits reinterpreted give -FLT_MAX
+  ## - pointer and machine-word casts keep the C-style text
+  ## - as_type accepts neither pointers nor width changes
+  let t = e.castType
+  let src = getExprType(e.castOperand)
+  if t.kind in {ctInt, ctUint, ctFloat} and src != nil and
+      src.kind in {ctInt, ctUint, ctFloat} and
+      t.bits in {8, 16, 32, 64} and src.bits == t.bits:
+    return "as_type<" & emitMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
+  return ctx.printConv(e)
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## MSL text of the kinds in `targetExprKinds`.
   case e.kind
-  of eNil, eTrue, eFalse, eIntLit, eFloatLit:
-    return emitMslLit(e)
   of eSym:
+    # a coordinate builtin takes its attributed parameter name, a name passes through
     if e.coordBuiltin != cbkNone:
       return ctx.printBuiltinRef(e.name, true)
     return e.name
-  of eAt:
-    var base = ctx.printExpr(e.atBase)
-    if e.atBase.kind in {eCast, eConv}:
-      # a cast binds looser than the subscript: parenthesize the base
-      base = "(" & base & ")"
-    return base & '[' & ctx.printExpr(e.atIndex) & ']'
-  of ePat:
-    var base = ctx.printExpr(e.patBase)
-    if e.patBase.kind in {eCast, eConv}:
-      base = "(" & base & ")"
-    return base & '[' & ctx.printExpr(e.patIndex) & ']'
   of eDot:
+    # a coordinate component casts to the canonical int, a dereferenced base parenthesizes
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      # a component of an unsigned MSL builtin, cast to the canonical int
       ctx.builtins.incl(e.dotBase.name)
       return "(int)(" & e.dotBase.name & '.' & e.fieldName & ")"
     let base = ctx.printExpr(e.dotBase)
     if e.dotBase.kind == eDeref:
       return "(" & base & ")." & e.fieldName
     return base & '.' & e.fieldName
-  of eDeref:
-    return "(*" & ctx.printExpr(e.derefOperand) & ")"
-  of eAddr:
-    return "(&" & ctx.printExpr(e.addrOperand) & ")"
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    let op = case e.kind
-      of eAdd: "+"
-      of eSub: "-"
-      of eMul: "*"
-      of eDiv: "/"
-      of eMod: "%"
-      of eShl: "<<"
-      of eShr: ">>"
-      of eBitAnd: "&"
-      of eBitOr: "|"
-      else: "^"
-    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-      of eEq: "=="
-      of eNeq: "!="
-      of eLt: "<"
-      else: "<="
-    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
-  of eNot:
-    return "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    # MSL's native operators short-circuit, the operands may carry calls
-    let op = if e.kind == eAnd: "&&" else: "||"
-    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
-  of eTernary:
-    return "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
-      " : " & ctx.printExpr(e.elseE) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
-  of eNeg:
-    return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eConv:
-    # a numeric conversion prints as the C-style cast
-    let t = e.castType
-    var castTyp = emitMslType(t, "", true)
-    if t.kind in {ctPtr, ctAptr}:
-      castTyp = emitMslSpace(t.space) & ' ' & castTyp
-    return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
   of eCast:
-    # A same-size scalar `cast` reinterprets the bits: the SPIR-V printer
-    # emits OpBitcast and the MSL text is `as_type<T>`. A C-style cast
-    # converts numerically instead: 0xFF7FFFFF read as float32 gives
-    # +4.29e9 and the same bits reinterpreted give -FLT_MAX.
-    #
-    # Pointer and machine-word casts keep the C-style text.
-    # as_type accepts neither pointers nor width changes.
-    let t = e.castType
-    let src = getExprType(e.castOperand)
-    if t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-        src.kind in {ctInt, ctUint, ctFloat} and
-        t.bits in {8, 16, 32, 64} and src.bits == t.bits:
-      return "as_type<" & emitMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
-    var castTyp = emitMslType(t, "", true)
-    if t.kind in {ctPtr, ctAptr}:
-      castTyp = emitMslSpace(t.space) & ' ' & castTyp
-    return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
+    return ctx.printCast(e)
+  of eConv:
+    return ctx.printConv(e)
   of eSizeof:
     return "sizeof(" & emitMslType(e.ofType, "", true) & ")"
   of eOconstr:
+    # one struct construction in braces
     result = emitMslType(e.ocType, "", true) & "{"
     for i, kv in e.kvFields:
       if i > 0:
@@ -318,6 +271,7 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       result.add ctx.printExpr(kv.value)
     result.add "}"
   of eAconstr:
+    # every element casts to the element type
     result = "{"
     for i, el in e.elems:
       if i > 0:
@@ -326,16 +280,12 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         ctx.printExpr(el)
     result.add "}"
   of eCall:
-    let calleeName =
-      if e.callee.kind == eSym: e.callee.name
-      else: ctx.printExpr(e.callee)
-    var args: seq[string]
-    for a in e.args:
-      args.add ctx.printExpr(a)
-    let builtinTxt = emitMslBuiltinCall(e.callee, args)
-    if builtinTxt.len > 0:
-      return builtinTxt
-    return calleeName & "(" & args.join(", ") & ")"
+    let args = printCallArgs(ctx, e)
+    return printCallText(ctx, e, args, emitMslBuiltinCall(e.callee, args))
+  else:
+    # dispatcher sends only the kinds above, anything else is a routing bug
+    ctx.fail("expression kind " & $e.kind & " has no MSL emission")
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Statements
@@ -543,7 +493,6 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
       break
     src &= txt & "\n\n"
   result = (src, ctx.err)
-
 
 
 proc codegen*(ctx: var GpuContext): string =

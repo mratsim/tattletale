@@ -88,6 +88,7 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    ## Literal token table of the target, the shared literal head reads it.
     isKernel: bool
     ## Scalar kernel parameters, their reads go through `push.<name>`.
     pushParams: HashSet[string]
@@ -107,6 +108,12 @@ type
     ## parameter types here.
 
 const printerTarget = "hlsl"
+
+## Optional expression kinds this printer routes through
+## its own `printTargetExpr`, the shared dispatcher emits the rest.
+const targetExprKinds = {eNil, eAt, ePat, eDeref, eAddr}
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 const FpConversionBuiltins = [
   "toFp16", "toFp32", "toBf16", "toBf32", "toFp8e4m3", "toFp8e5m2",
@@ -276,12 +283,10 @@ proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
-
 # HLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
-# `asfloat` (32 bit) and `asdouble` (64 bit).
-const hlslLitTokens = LitTokens(
+# `asfloat` (32 bit) and `asdouble` (64 bit). Without the suffix the HLSL
+# frontend changes width or signedness.
+const targetLitTokens = LitTokens(
   int: IntLitTokens(u32Suffix: "u", u64Suffix: "u"),
   f16Suffix: "f", f32Suffix: "f", f64Suffix: "l",
   nonFinite: FloatLitTokens(
@@ -290,12 +295,6 @@ const hlslLitTokens = LitTokens(
     inf64: "asdouble(0u, 0x7ff00000u)",
     negInf64: "asdouble(0u, 0xfff00000u)",
     nan64: "asdouble(0u, 0x7ff80000u)"))
-
-proc emitHlslLit(e: CirExpr): string =
-  ## HLSL token of a literal, typed by its literal type: without the suffix
-  ## the HLSL frontend changes width or signedness.
-  emitLiteral(e, hlslLitTokens)
-
 proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string
   ## Forward declaration, nested constructions flatten recursively.
 
@@ -340,16 +339,78 @@ proc emitCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string
       return a.addrOperand.name
   return ctx.printExpr(a)
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  if ctx.failing():
+proc printCast(ctx: var PrintCtx, e: CirExpr): string =
+  ## One bit reinterpret, the HLSL asint/asuint/asfloat reinterprets,
+  ## 32-bit widths only.
+  let t = e.castType
+  let fn = if t.kind == ctInt and t.bits == 32: "asint"
+    elif t.kind == ctUint and t.bits == 32: "asuint"
+    elif t.kind == ctFloat and t.bits == 32: "asfloat"
+    else: ""
+  if fn.len == 0:
+    ctx.fail("bit cast to " & emitHlslTypeBare(ctx, t) &
+      " has no HLSL emission, only the 32-bit asint/asuint/asfloat reinterprets")
     return ""
+  return fn & "(" & ctx.printExpr(e.castOperand) & ")"
+
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  ## One numeric conversion, the constructor-call form.
+  return emitHlslTypeBare(ctx, e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
+
+proc printCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): string =
+  ## One call argument: a buffer resource passes by name, each call site
+  ## supplies the resource bound to its own register, other arguments take
+  ## the address-of policy of `emitCallArg`.
+  if ctx.flavor == fvD3D12 and a.kind == eSym and
+      ctx.bufferParams.contains(a.name):
+    return a.name
+  return ctx.emitCallArg(callee, i, a)
+
+
+proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
+  ## Returns the HLSL text of an expression-position builtin call,
+  ## "" when `call.callee` is not a builtin.
+  if call.callee.kind == eSym:
+    case call.callee.synchroBuiltin
+    of sbkThreadgroupBarrier, sbkThreadgroupBarrierDevice:
+      ctx.fail("barrier is a statement, a value-position barrier is outside the HLSL subset")
+      return ""
+    else:
+      discard
+    if call.callee.reductionBuiltin != rbkNone:
+      ctx.fail("subgroup reductions have no emission, wave intrinsics are outside this backend")
+      return ""
+    if call.callee.atomicsBuiltin != abkNone:
+      ctx.fail("atomic builtins have no emission in this backend")
+      return ""
+    case call.callee.shuffleBuiltin
+    of shkSimdShuffle:
+      # simd_shuffle maps to WaveReadLaneAt, a dynamically uniform
+      # lane index is required by the intrinsic
+      return "WaveReadLaneAt(" & args.join(", ") & ")"
+    of shkSimdShuffleXor:
+      ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
+      return ""
+    of shkNone: discard
+    if call.callee.builtin and call.callee.name in FpConversionBuiltins:
+      ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8" &
+        " conversion builtins are outside the HLSL subset")
+      return ""
+  return ""
+
+# ═══════════════════════════════════════════════════════════════════════
+# Statements
+# ═══════════════════════════════════════════════════════════════════════
+
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## HLSL text of the kinds in `targetExprKinds`.
   case e.kind
   of eNil:
     ctx.fail("nil literal is outside the HLSL subset")
     return ""
-  of eTrue, eFalse, eIntLit, eFloatLit:
-    return emitHlslLit(e)
   of eSym:
+    # coordinate builtins bind the kernel entry point, push constants qualify, buffer parameters take the flavor's route, names pass through
     if e.coordBuiltin != cbkNone:
       if not ctx.isKernel:
         ctx.fail("coordinate builtin in a device function, coordinate" &
@@ -376,8 +437,10 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       return ""
     return e.name
   of eAt, ePat:
-    let base = (if e.kind == eAt: e.atBase else: e.patBase)
-    let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
+    # zero-descriptor route reads through the u64 device address, buffer parameters index by name, arrays index plainly
+    let base = if e.kind == eAt: e.atBase else: e.patBase
+    let idx = if e.kind == eAt: e.atIndex else: e.patIndex
+    let idxTxt = ctx.printExpr(idx)
     if ctx.flavor == fvVulkan and base.kind == eSym and
         ctx.addressParams.hasKey(base.name):
       let elem = ctx.addressParams[base.name].pElem
@@ -385,23 +448,22 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
       if ctx.failing():
         return ""
       return emitBpName(elem) & "(" & ctx.printExpr(base) &
-        " + (uint64_t)(" & idx & ") * " & $stride & ").Get()"
+        " + (uint64_t)(" & idxTxt & ") * " & $stride & ").Get()"
     if base.kind == eSym and ctx.bufferParams.contains(base.name):
-      return base.name & "[" & idx & "]"
+      return base.name & "[" & idxTxt & "]"
     let bt = getExprType(base)
     if bt != nil and bt.kind == ctArray:
       var baseTxt = ctx.printExpr(base)
       if base.kind in {eCast, eConv}:
         # a cast binds looser than the subscript: parenthesize the base
         baseTxt = "(" & baseTxt & ")"
-      return baseTxt & "[" & idx & "]"
+      return baseTxt & "[" & idxTxt & "]"
     ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
       " base is outside the HLSL subset")
     return ""
-  of eDeref:
-    ctx.fail("bare dereference has no emission, HLSL has no pointer values")
-    return ""
   of eDot:
+    # a coordinate component takes its semantic route, a vector component
+    # takes its letter, names pass through
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       if not ctx.isKernel:
         ctx.fail("coordinate builtin in a device function, coordinate" &
@@ -421,117 +483,47 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         return ""
       return ctx.printExpr(e.dotBase) & "." & comp
     return ctx.printExpr(e.dotBase) & "." & e.fieldName
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    let op = case e.kind
-      of eAdd: "+"
-      of eSub: "-"
-      of eMul: "*"
-      of eDiv: "/"
-      of eMod: "%"
-      of eShl: "<<"
-      of eShr: ">>"
-      of eBitAnd: "&"
-      of eBitOr: "|"
-      else: "^"
-    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-      of eEq: "=="
-      of eNeq: "!="
-      of eLt: "<"
-      else: "<="
-    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
-  of eNot:
-    return "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    let op = if e.kind == eAnd: "&&" else: "||"
-    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
-  of eTernary:
-    return "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
-      " : " & ctx.printExpr(e.elseE) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
-  of eNeg:
-    return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eCast:
-    let t = e.castType
-    let fn = if t.kind == ctInt and t.bits == 32: "asint"
-      elif t.kind == ctUint and t.bits == 32: "asuint"
-      elif t.kind == ctFloat and t.bits == 32: "asfloat"
-      else: ""
-    if fn.len == 0:
-      ctx.fail("bit cast to " & emitHlslTypeBare(ctx, t) &
-        " has no HLSL emission, only the 32-bit asint/asuint/asfloat reinterprets")
-      return ""
-    return fn & "(" & ctx.printExpr(e.castOperand) & ")"
-  of eConv:
-    return emitHlslTypeBare(ctx, e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
-  of eSizeof:
-    ctx.fail("sizeof has no HLSL emission, HLSL struct layout differs from the" &
-      " buffer layout the size would name")
+  of eDeref:
+    # refused, HLSL has no pointer values
+    ctx.fail("bare dereference has no emission, HLSL has no pointer values")
     return ""
   of eAddr:
+    # refused, buffers are index-only resources and locals dissolve to their pointee
     ctx.fail("address-of has no HLSL form, buffers are index-only resources" &
       " and locals dissolve to their pointee")
     return ""
+  of eCast:
+    return ctx.printCast(e)
+  of eConv:
+    return ctx.printConv(e)
+  of eSizeof:
+    # refused, HLSL struct layout differs from the buffer layout the size would name
+    ctx.fail("sizeof has no HLSL emission, HLSL struct layout differs from the" &
+      " buffer layout the size would name")
+    return ""
   of eOconstr:
+    # vectors construct by call, valid in declaration initializers and assignments alike, where struct brace lists only initialize
     if e.ocType.kind == ctVector:
-      # vectors construct by call, valid in declaration initializers and assignments alike,
-      # where struct brace lists only initialize
       var parts: seq[string]
       for kvv in e.kvFields:
         parts.add ctx.printExpr(kvv.value)
       return emitHlslScalar(ctx, e.ocType) & "(" & parts.join(", ") & ")"
     return ctx.printBraceList(e.ocType, e)
   of eAconstr:
+    # one array construction in braces
     var parts: seq[string]
     for el in e.elems:
       parts.add ctx.printExpr(el)
     return "{ " & parts.join(", ") & " }"
   of eCall:
-    let calleeName =
-      if e.callee.kind == eSym: e.callee.name
-      else: ctx.printExpr(e.callee)
     var args: seq[string]
     for i, a in e.args:
-      if ctx.flavor == fvD3D12 and a.kind == eSym and
-          ctx.bufferParams.contains(a.name):
-        # a buffer resource passes by name, each call site supplies the resource
-        # bound to its own register
-        args.add a.name
-      else:
-        args.add ctx.emitCallArg(e.callee, i, a)
-    if e.callee.kind == eSym:
-      case e.callee.synchroBuiltin
-      of sbkThreadgroupBarrier, sbkThreadgroupBarrierDevice:
-        ctx.fail("barrier is a statement, a value-position barrier is outside the HLSL subset")
-        return ""
-      else:
-        discard
-      if e.callee.reductionBuiltin != rbkNone:
-        ctx.fail("subgroup reductions have no emission, wave intrinsics are outside this backend")
-        return ""
-      if e.callee.atomicsBuiltin != abkNone:
-        ctx.fail("atomic builtins have no emission in this backend")
-        return ""
-      case e.callee.shuffleBuiltin
-      of shkSimdShuffle:
-        # simd_shuffle maps to WaveReadLaneAt, a dynamically uniform
-        # lane index is required by the intrinsic
-        return "WaveReadLaneAt(" & args.join(", ") & ")"
-      of shkSimdShuffleXor:
-        ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
-        return ""
-      of shkNone: discard
-      if e.callee.builtin and e.callee.name in FpConversionBuiltins:
-        ctx.fail(e.callee.name & " has no HLSL form, the fp16/bf16/fp8" &
-          " conversion builtins are outside the HLSL subset")
-        return ""
-    return calleeName & "(" & args.join(", ") & ")"
+      args.add ctx.printCallArg(e.callee, i, a)
+    return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
+  else:
+    # dispatcher sends only the kinds above, anything else is a routing bug
+    ctx.fail("expression kind " & $e.kind & " has no HLSL emission")
 
-# ═══════════════════════════════════════════════════════════════════════
-# Statements
-# ═══════════════════════════════════════════════════════════════════════
 
 proc printObjAssign(ctx: var PrintCtx, target: string, t: CirType, v: CirExpr, lines: var seq[string]) =
   ## Appends one `target.leaf = value` line per leaf field of a struct construction,
