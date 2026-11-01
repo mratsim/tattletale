@@ -179,9 +179,6 @@ proc attachHlslStructRefs(reg: var PassRegistry, flavor: HlslFlavor) =
 proc attachHlslCallGraph(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerHlslCallGraphPass()
 
-proc attachGlslPushConstValidation(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerGlslValidationPasses()
-
 proc attachValidate(reg: var PassRegistry, flavor: HlslFlavor) =
   reg.registerValidationPostPasses()
 
@@ -226,7 +223,6 @@ const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
       attachGlslQualifyVarParams, attachGlslExplodePointerLocals,
       attachSmemInitRewrite, attachGlslHoistLocals, attachSpaceGenerics,
       attachGlslRefBlocks, attachGlslScan, attachGlslLayout,
-      attachGlslPushConstValidation,
       attachValidate,
     ],
     ctWebGPU: @[

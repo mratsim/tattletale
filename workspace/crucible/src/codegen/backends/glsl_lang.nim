@@ -469,6 +469,71 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
     return ""
   ctx.emitConstDecl(s)
 
+# ═══════════════════════════════════════════════════════════════════════
+# Shared push-constant block contract (emission site)
+# ═══════════════════════════════════════════════════════════════════════
+
+proc pushParamText(p: CirParam): string =
+  ## Compact text of one kernel parameter for the refusal message,
+  ## `(i +32)`-style Leng type vocabulary.
+  const spaceName: array[AddressSpace, string] =
+    ["thread", "threadgroup", "constant", "device"]
+  case p.typ.kind
+  of ctBool: result = "bool"
+  of ctInt: result = "i" & $p.typ.bits
+  of ctUint: result = "u" & $p.typ.bits
+  of ctFloat: result = "f" & $p.typ.bits
+  of ctVector: result = "vec" & $p.typ.vN
+  of ctPtr: result = "ptr " & spaceName[p.typ.space]
+  of ctAptr: result = "aptr " & spaceName[p.typ.space]
+  of ctStruct: result = p.typ.name
+  of ctArray: result = "array"
+  of ctSpan: result = "span " & spaceName[p.typ.sSpace]
+  else: result = $p.typ.kind
+  result = p.name & ": " & result
+
+proc paramsText(params: seq[CirParam]): string =
+  ## One kernel's ordered parameter list in the refusal-message vocabulary.
+  for i, p in params:
+    if i > 0:
+      result.add ", "
+    result.add pushParamText(p)
+
+proc pushConstLayoutRejection(kernels: seq[CirProc]): string =
+  ## Refusal when the kernels of one module declare different ordered params,
+  ## "" when every kernel's params agree elementwise.
+  ##
+  ## Layout mechanics:
+  ##
+  ## - the GLSL printer unions every kernel's parameters into one module-wide
+  ##   push-constant block, same-name dedup by declaration text
+  ## - the engine serializes each launched kernel's arguments from offset 0
+  ##   in that kernel's own param order
+  ## - a member reads the same offset for every kernel only under identical
+  ##   ordered layouts
+  ## - scalars and pointers alike pack through the block, a pointer packs
+  ##   as its buffer-reference address
+  if kernels.len < 2:
+    return ""
+  let reference = kernels[0]
+  let referenceParams = reference.params.paramsText
+  for k in kernels[1 ..^ 1]:
+    block mismatch:
+      if k.params.len != reference.params.len:
+        break mismatch
+      for i in 0 ..< k.params.len:
+        if k.params[i].name != reference.params[i].name or
+            not sameType(k.params[i].typ, reference.params[i].typ):
+          break mismatch
+      continue
+    return "multi-kernel GLSL sources share one push-constant block, all kernels " &
+      "must declare the same ordered params, got kernel `" & k.name & "` (" &
+      k.params.paramsText & ") vs kernel `" & reference.name & "` (" &
+      referenceParams & "): a launch serializes its args at offsets another " &
+      "kernel reads as different members"
+  return ""
+
+
 proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full GLSL translation unit: version and extensions,
   ## buffer-reference blocks, struct declarations, the push-constant block,
@@ -506,11 +571,13 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     return ("", ctx.err)
 
   # one push block for the whole module: the union of every kernel's parameters,
-  # same-name dedup by declaration text
-  #
-  # validateSharedPushConstLayout refuses multi-kernel modules whose kernels
-  # declare different ordered params: an accepted block then maps one member
-  # to one offset for every kernel
+  # same-name dedup by declaration text. The engine serializes each launched
+  # kernel's arguments from offset 0, so the block is sound only under
+  # identical ordered layouts and the emission site refuses a divergence
+  let pushRejection = pushConstLayoutRejection(kernels)
+  if pushRejection.len > 0:
+    ctx.fail(pushRejection)
+    return ("", ctx.err)
   var pushDecls: seq[string]
   for kernel in kernels:
     for p in kernel.params:
