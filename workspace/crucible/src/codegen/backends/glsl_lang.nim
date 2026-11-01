@@ -34,7 +34,6 @@ import ../ir/ast_datatypes
 import ./print_common
 import ./print_compute
 import ./targets_registry
-import ../passes/layout_std430
 
 type
   PrintCtx = object
@@ -48,8 +47,6 @@ type
     ## Literal token forms of the target. The shared literal head reads them.
     row: ScalarRow
     ## Scalar row of the target. The narrow integer cast names its type from it.
-    layouts: Table[string, StructLayout]
-    ## Stored struct layouts of the module, the layout pass filled them.
 
 const printerTarget = "glsl"
 
@@ -305,8 +302,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     return ctx.printCast(e, glslCastRules, emitTypeBare(e.castType))
   of eConv:
     return ctx.printConv(e)
-  of eSizeof:
-    return $typeByteSize(ctx.layouts, e.ofType, std430BoolWidth)
   of eOconstr:
     # constructor-call form, a zero-field struct's padding member zero-initializes
     if e.kvFields.len == 0:
@@ -544,7 +539,6 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow,
     lit: glslLitRow, row: glslScalarRow)
-  ctx.layouts = m.layouts
   let kernels = moduleKernels(m)
   if kernels.len == 0:
     ctx.fail("no kernel in the module")

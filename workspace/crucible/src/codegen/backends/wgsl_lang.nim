@@ -36,7 +36,6 @@ import ./print_common
 import ./print_compute
 import ./print_shaders
 import ./targets_registry
-import ../passes/layout_std430
 
 type
   PrintCtx = object
@@ -58,8 +57,6 @@ type
     ## Only pointer locals refuse as values.
     builtins: OrderedSet[CoordBuiltinKind]
     ## Canonical coordinate builtin kinds the kernel body references, first-use order.
-    layouts: Table[string, StructLayout]
-    ## Stored struct layouts of the module, which the layout pass filled.
     nimBoolNames: HashSet[string]
     ## Names whose storage binds as `NIM_BOOL`: kernel bool parameters,
     ## bool workgroup variables.
@@ -338,8 +335,6 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
     return ctx.printCast(e, wgslCastRules, ctx.emitWgslTypeBare(e.castType))
   of eConv:
     return ctx.printConv(e)
-  of eSizeof:
-    return $typeByteSize(ctx.layouts, e.ofType, launchAbiBoolWidth)
   of eOconstr:
     # constructor-call form, a zero-field struct's padding member zero-initializes
     if e.kvFields.len == 0:
@@ -588,7 +583,6 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: wgslKindRow,
     lit: wgslLitRow, row: wgslScalarRow)
-  ctx.layouts = m.layouts
   let kernel = selectShaderKernel(ctx, m)
   if ctx.failing():
     return ("", ctx.err)
