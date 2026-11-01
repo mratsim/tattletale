@@ -21,7 +21,7 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import nim_type_resolvers
 import ../ir/cirv2_pretty
-import std/[macros, tables, strutils]
+import std/[macros, tables, strutils, sets]
 
 type
   ProcEntry = object
@@ -50,9 +50,10 @@ type
     ## Program-scope declarations, visible from every proc body, a fresh proc's scope tables seed from these.
     moduleGlobals: seq[CirStmt]
     ## Program-scope declarations in encounter order, `m.globals` of the module.
-    nameCounts: Table[string, int]
+    nameCounts: HashSet[string]
     ## Emitted names already issued in the proc under translation:
-    ## program-scope names seed it and the uniquer suffixes past every entry.
+    ## program-scope names and claimed proc names seed it and the uniquer
+    ## suffixes past every entry.
     hoisted: seq[CirStmt]
     ## Statements hoisted in front of the statement being lowered.
 
@@ -78,10 +79,10 @@ proc uniqueName(ctx: var FrontendCtx, base: string): string =
   let clean = sanitizeIdent(base)
   var candidate = clean
   var suffix = 0
-  while ctx.nameCounts.hasKey(candidate):
+  while candidate in ctx.nameCounts or ctx.claimedNames.hasKey(candidate):
     inc suffix
     candidate = clean & "_" & $suffix
-  ctx.nameCounts[candidate] = suffix
+  ctx.nameCounts.incl candidate
   result = candidate
 
 proc pushScope(ctx: var FrontendCtx) =
@@ -1672,7 +1673,7 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
   let ret = ctx.retType
   if ret.kind != ctVoid:
     # Nim lets a non-void proc declare its own `result`, that local suffixes
-    ctx.nameCounts["result"] = 0
+    ctx.nameCounts.incl "result"
     let rsym = sym("result", ret)
     ctx.declareLocal("result", rsym)
     result.add(varD("result", ret))
@@ -1716,10 +1717,13 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let savedScopes = ctx.scopes
   let savedSpaces = ctx.localSpaces
   ctx.fnName = cirName
-  ctx.nameCounts = initTable[string, int]()
-  # program-scope names are issued before any proc lowers, a local never takes one
+  ctx.nameCounts = initHashSet[string]()
+  # a local never takes a program-scope name or a claimed proc name,
+  # both kinds are issued before any proc lowers
   for g in ctx.moduleScope.keys:
-    ctx.nameCounts[g] = 0
+    ctx.nameCounts.incl g
+  for n in ctx.claimedNames.keys:
+    ctx.nameCounts.incl n
   ctx.scopes = @[ctx.moduleScope]
   ctx.localSpaces = @[ctx.moduleSpaces]
   ctx.retType = ctx.resolver.resolveCirType(formals[0])
@@ -1765,10 +1769,13 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
   # belong to the caller's statement, never to the callee's body
   ctx.hoisted = @[]
   ctx.fnName = cirName
-  ctx.nameCounts = initTable[string, int]()
-  # program-scope names are issued before any proc lowers, a local never takes one
+  ctx.nameCounts = initHashSet[string]()
+  # a local never takes a program-scope name or a claimed proc name,
+  # both kinds are issued before any proc lowers
   for g in ctx.moduleScope.keys:
-    ctx.nameCounts[g] = 0
+    ctx.nameCounts.incl g
+  for n in ctx.claimedNames.keys:
+    ctx.nameCounts.incl n
   ctx.scopes = @[ctx.moduleScope]
   ctx.localSpaces = @[ctx.moduleSpaces]
   ctx.retType = ctx.resolver.resolveCirType(formals[0])
