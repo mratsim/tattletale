@@ -50,17 +50,18 @@ const mslKindRow* = KindRow(
 
 # `{.builtin.}` numeric conversions resolve to the MSL native call text,
 # each entry a format string whose `$1` stands for the call's argument list.
-# CIRv2 has no fp16 or bf16 type kind,
-# `float16` and `bfloat16` are `distinct uint16` over raw bits in `ushort` storage.
-# Value-producing conversions move the bit pattern, not the numeric value.
+# `float16` keeps a first-class `half` identity: its conversions are plain native calls.
+# `asFp16`/`asU16` reinterpret through `as_type`.
+# `bfloat16` names no MSL type here, values travel as raw bits.
+# toBf16/toBf32 move the bit pattern through `as_type<ushort>` around the native `(bfloat)` cast.
 # fp8 conversions have no MSL native: the `{.builtin.}` name passes through and refuses at Metal compile time.
 const mslConvBuiltinNames* = {
-  "toFp16": "as_type<ushort>(half($1))",
-  "toFp32": "float(as_type<half>($1))",
+  "toFp16": "half($1)",
+  "toFp32": "float($1)",
   "toBf16": "as_type<ushort>((bfloat)($1))",
   "toBf32": "float(as_type<bfloat>($1))",
-  "asFp16": "$1",
-  "asU16": "$1",
+  "asFp16": "as_type<half>($1)",
+  "asU16": "as_type<ushort>($1)",
 }.toTable()
 
 # Coordinate builtins carry `ivec3`, so the builtin-threading parameters
