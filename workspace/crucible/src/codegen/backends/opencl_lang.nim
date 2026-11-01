@@ -510,6 +510,8 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   for kernel in kernels:
     ctx.inKernel = true
     result.src &= printComputeProc(ctx, kernel) & "\n"
+    if ctx.failing():
+      return ("", ctx.err)
   return (result.src, "")
 
 

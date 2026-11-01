@@ -569,6 +569,8 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     result.src &= "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
       $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
     result.src &= printComputeProc(ctx, kernel) & "\n\n"
+    if ctx.failing():
+      return ("", ctx.err)
   return (result.src, "")
 
 
