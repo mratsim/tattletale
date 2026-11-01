@@ -16,7 +16,7 @@
 import ../ir/cirv2_lang
 import ./print_common
 
-proc emitFeatureLines*(features: ModuleFeatures, lines: openArray[tuple[on: bool, text: string]]): string =
+proc declareExtensions*(features: ModuleFeatures, lines: openArray[tuple[on: bool, text: string]]): string =
   ## Extension pragma block of one module over the target's feature table.
   ##
   ## Expected input:
@@ -26,29 +26,9 @@ proc emitFeatureLines*(features: ModuleFeatures, lines: openArray[tuple[on: bool
   ##
   ## Output: one pragma line per set flag, table order, then a blank line.
   ##
-  ##   emitFeatureLines(features, openclFeatureTable)  # pragma lines or ""
+  ##   declareExtensions(features, openclFeatureTable)  # pragma lines or ""
   ##
   for entry in lines:
     if entry.on:
       result.add entry.text
   result.add "\n"
-
-proc printComputeGlobals*(ctx: var auto, m: CirModule, spaces: set[AddressSpace]): string =
-  ## Program-scope declarations of the relocated storage locals in `CirModule.globals`.
-  ##
-  ## Expected input:
-  ## - `m.globals`: the program-scope declarations that the target's lowering pass relocated (const_mem, and smem on GLSL)
-  ## - `spaces`: the address spaces this target declares at program scope
-  ## - `emitComputeGlobal(s)` (mixin): one declaration's text, "" skips the entry
-  ##
-  ## Output: one declaration per `sVar` in `spaces`, encounter order, then a blank line after a non-empty section.
-  ##
-  ##   src &= printComputeGlobals(ctx, m, {caConstant})
-  mixin emitComputeGlobal
-  for s in m.globals:
-    if s.kind == sVar and s.space in spaces:
-      let decl = ctx.emitComputeGlobal(s)
-      if decl.len > 0:
-        result &= decl & '\n'
-  if result.len > 0:
-    result &= '\n'

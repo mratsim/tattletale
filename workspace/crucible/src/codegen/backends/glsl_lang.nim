@@ -139,27 +139,27 @@ proc glslCoordName(kind: CoordBuiltinKind): string =
   of cbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
   of cbkNone: ""
 
-proc emitExtensions(features: ModuleFeatures): string =
-  ## GLSL extension block from the stored module feature scan (`CirModule.features`):
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
+  ## GLSL extension block over the stored module feature scan `CirModule.features`.
   ## `#version 450` prints first, then one line per feature in use.
   result = "#version 450\n"
   result.add "#extension GL_EXT_buffer_reference : enable\n"
   result.add "#extension GL_EXT_buffer_reference2 : enable\n"
-  result.add emitFeatureLines(features, [
-    (features.controlFlow, "#extension GL_EXT_control_flow_attributes : require\n"),
-    (features.fp64, "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"),
-    (features.fp16, "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n"),
-    (features.fp16, "#extension GL_EXT_shader_16bit_storage : enable\n"),
-    (features.int64, "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"),
-    (features.int16, "#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable\n"),
-    (features.int16, "#extension GL_EXT_shader_16bit_storage : enable\n"),
-    (features.int8, "#extension GL_EXT_shader_explicit_int8 : enable\n"),
-    (features.int8, "#extension GL_EXT_shader_8bit_storage : enable\n"),
-    (features.subgroup, "#extension GL_KHR_shader_subgroup_basic : enable\n"),
-    (features.subgroup, "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"),
-    (features.subgroupShuffle, "#extension GL_KHR_shader_subgroup_basic : enable\n"),
-    (features.subgroupShuffle, "#extension GL_KHR_shader_subgroup_shuffle : enable\n"),
-    (features.atomicFloat, "#extension GL_EXT_shader_atomic_float : enable\n")])
+  result.add declareExtensions(m.features, [
+    (m.features.controlFlow, "#extension GL_EXT_control_flow_attributes : require\n"),
+    (m.features.fp64, "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"),
+    (m.features.fp16, "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n"),
+    (m.features.fp16, "#extension GL_EXT_shader_16bit_storage : enable\n"),
+    (m.features.int64, "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"),
+    (m.features.int16, "#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable\n"),
+    (m.features.int16, "#extension GL_EXT_shader_16bit_storage : enable\n"),
+    (m.features.int8, "#extension GL_EXT_shader_explicit_int8 : enable\n"),
+    (m.features.int8, "#extension GL_EXT_shader_8bit_storage : enable\n"),
+    (m.features.subgroup, "#extension GL_KHR_shader_subgroup_basic : enable\n"),
+    (m.features.subgroup, "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"),
+    (m.features.subgroupShuffle, "#extension GL_KHR_shader_subgroup_basic : enable\n"),
+    (m.features.subgroupShuffle, "#extension GL_KHR_shader_subgroup_shuffle : enable\n"),
+    (m.features.atomicFloat, "#extension GL_EXT_shader_atomic_float : enable\n")])
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -535,6 +535,17 @@ proc pushConstLayoutRejection(kernels: seq[CirProc]): string =
   return ""
 
 
+proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
+  ## Head of one GLSL proc: the kernel's `local_size` layout qualifier precedes
+  ## the shared C signature. The engine launches each entry point by name.
+  if fn.isKernel:
+    let wg = (if fn.workgroup == [0, 0, 0]: [256, 1, 1] else: fn.workgroup)
+    result = "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
+      $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
+    result &= printSig(ctx, fn) & " {\n"
+  else:
+    result = printSig(ctx, fn)
+
 proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   ## GLSL keeps no per-proc walk state.
   discard
@@ -548,52 +559,34 @@ const glslModuleShape = ModuleShape(
   fwdDecls: true,
   moduleOrderProcs: false,
   kernelSep: "\n\n",
-  customProcHead: false,
+  customProcHead: true,
   printsRefBlocks: true,
   printsParamBindings: true,
   printsReduceTemplates: false)
 
-proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full GLSL translation unit: version and extensions,
-  ## buffer-reference blocks, struct declarations, the push-constant block,
-  ## program-scope `shared` and `const` declarations, the device functions,
-  ## and the kernel with its `local_size` layout qualifier.
+proc printRefBlocks(ctx: var PrintCtx, m: CirModule): string =
+  ## Buffer-reference block declarations, one per `CirModule.refBlocks` entry in registration order.
   ##
-  ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow,
-    lit: glslLitRow, row: glslScalarRow)
-  ctx.layouts = m.layouts
-  let kernels = moduleKernels(m)
-  if kernels.len == 0:
-    ctx.fail("no kernel in the module")
-    return ("", ctx.err)
-
-  # buffer-reference blocks, one declaration per entry of the registration
-  # record in `CirModule.refBlocks`, which the ref-block analysis pass
-  # filled after the last transform. The printer never registers a block.
-  result.src = emitExtensions(m.features)
-
+  ## Filled by the ref-block analysis pass after its last transform, never registered by the printer.
   for name, pointee in m.refBlocks:
     let member = ctx.emitGlslRefBlockMember(pointee)
-    result.src &= "layout(buffer_reference, std430) buffer " & name &
+    result &= "layout(buffer_reference, std430) buffer " & name &
       " { " & member & " };\n"
     if ctx.failing():
-      return ("", ctx.err)
+      return ""
   if m.refBlocks.len > 0:
-    result.src &= "\n"
+    result &= "\n"
 
-  result.src &= printStructs(ctx, m, glslModuleShape)
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # one push block for the whole module: the union of every kernel's parameters,
-  # same-name dedup by declaration text. The engine serializes each launched
-  # kernel's arguments from offset 0, so the block is sound only under
-  # identical ordered layouts and the emission site refuses a divergence
+proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
+  ## Push-constant block: one module-wide block over the union of every
+  ## kernel's parameters, same-name dedup by declaration text.
+  ##
+  ## The engine serializes each launched kernel's arguments from offset 0 in that kernel's own param order,
+  ## so the block is sound only under identical ordered layouts, and the emission site refuses a divergence.
   let pushRejection = pushConstLayoutRejection(kernels)
   if pushRejection.len > 0:
     ctx.fail(pushRejection)
-    return ("", ctx.err)
+    return ""
   var pushDecls: seq[string]
   for kernel in kernels:
     for p in kernel.params:
@@ -616,43 +609,23 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
       if decl notin pushDecls:
         pushDecls.add decl
   if ctx.failing():
-    return ("", ctx.err)
+    return ""
   if pushDecls.len > 0:
-    result.src &= "layout(push_constant, std430) uniform KernelParams {\n"
+    result &= "layout(push_constant, std430) uniform KernelParams {\n"
     for decl in pushDecls:
-      result.src &= "  " & decl & ";\n"
-    result.src &= "};\n\n"
+      result &= "  " & decl & ";\n"
+    result &= "};\n\n"
 
-  # program-scope `shared` and `const` declarations relocated into
-  # `m.globals` by the GLSL lowering pass, in encounter order
-  result.src &= printComputeGlobals(ctx, m, {caThreadgroup, caConstant})
-  if ctx.failing():
+proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
+  ## Emits the full GLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow,
+    lit: glslLitRow, row: glslScalarRow)
+  ctx.layouts = m.layouts
+  let kernels = moduleKernels(m)
+  if kernels.len == 0:
+    ctx.fail("no kernel in the module")
     return ("", ctx.err)
-
-  # forward declarations, then device function definitions, then the kernel
-  let fns = moduleDeviceFns(m)
-  for fn in fns:
-    result.src &= ctx.printSig(fn) & ";\n"
-    if ctx.failing():
-      return ("", ctx.err)
-  if fns.len > 0:
-    result.src &= "\n"
-  for fn in fns:
-    result.src &= ctx.printProc(fn, glslModuleShape) & "\n\n"
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # every kernel of the module, in encounter order, one local_size layout
-  # qualifier per kernel, the engine launches each entry point by name
-  for kernel in kernels:
-    let wg = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1] else: kernel.workgroup)
-    result.src &= "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
-      $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
-    result.src &= ctx.printProc(kernel, glslModuleShape) & "\n\n"
-    if ctx.failing():
-      return ("", ctx.err)
-  return (result.src, "")
-
+  printModule(ctx, m, kernels, glslModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as GLSL source, the `backends_api` entry point.

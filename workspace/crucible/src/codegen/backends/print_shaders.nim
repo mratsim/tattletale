@@ -1,21 +1,19 @@
-## Shader-tier emission shared by the WGSL and HLSL printers: the entry-point machinery and the module assembly both targets emit.
+## Entry-point machinery of the shader targets: the entry-input row grammar
+## and the module's one-kernel selection.
 ##
-## The two shader targets split from the compute class on the entry and runtime model:
+## Shader entry model:
 ##
 ## - a shader module compiles one entry point per engine invocation
 ## - the entry takes only the coordinate-builtin inputs its body reads
-## - kernel parameters bind as resources: WGSL `@group`/`@binding` slots, HLSL register or push-constant blocks
+## - kernel parameters bind as resources: WGSL `@group`/`@binding` slots and HLSL register or push-constant blocks
 ##
-## Section bodies stay in the printers: WGSL grammar and bindings in `wgsl_lang`, HLSL register and semantics glue in `hlsl_lang`.
-## Each printer owns a `PrintCtx` (`ctx: var auto`) and supplies the target's vocabulary as `mixin` procs beside it, per `print_common`:
+## The module assembly runs through the shared `printModule` skeleton in `print_common`:
 ##
-## | mixin proc                   | the printer supplies                          |
-## | ---------------------------- | --------------------------------------------- |
-## | `prepProc(fn)`               | the per-proc walk state of the target         |
-## | `printProcHead(fn)`          | the head, entry attributes and brace included |
-## | `emitShaderBindings(kernel)` | the kernel's resource-binding section         |
-## | `emitShaderFns(m)`           | the device-function section                   |
-## | `emitComputeGlobal(s)`       | one hoisted program-scope declaration         |
+## | engine item       | the printer supplies                                    |
+## | ----------------- | ------------------------------------------------------- |
+## | `EntryInputRow`   | the entry-input text of one coordinate builtin kind     |
+## | `emitEntryInputs` | the entry head's input list over the body-walk set      |
+## | `getEntryKernel`  | the module's one kernel, refusals recorded on multiples |
 import std/strutils
 
 import ../ir/cirv2_lang
@@ -42,7 +40,7 @@ template emitEntryInputs*(kinds: untyped, row: EntryInputRow): string =
       texts.add row[k]
   texts.join(", ")
 
-proc selectShaderKernel*(ctx: var auto, m: CirModule): CirProc =
+proc getEntryKernel*(ctx: var auto, m: CirModule): CirProc =
   ## Returns the module's one kernel: a shader engine compiles one entry point per module invocation.
   ## Returns nil with a refusal recorded when the module has none or several kernels.
   ##
@@ -53,35 +51,3 @@ proc selectShaderKernel*(ctx: var auto, m: CirModule): CirProc =
     ctx.fail("exactly one kernel per module, found " & $kernels.len)
     return
   result = kernels[0]
-
-proc printShaderModule*(ctx: var auto, m: CirModule, kernel: CirProc,
-    prelude: string, hoistedSpaces: set[AddressSpace],
-    shape: static ModuleShape): tuple[src: string, err: string] =
-  ## Returns the full shader module assembly: the section order both targets emit.
-  ## Returns "" as the error when clean, else the first refusal.
-  ##
-  ## Sections:
-  ## - `prelude`: the target's leading lines, WGSL's `enable f16` and the `NIM_BOOL` alias, "" on HLSL, printed first
-  ## - the referenced struct declarations, then the kernel's resource-binding section
-  ## - the hoisted program-scope declarations of `hoistedSpaces`, through `printComputeGlobals` and `emitComputeGlobal`
-  ## - the device functions, then the entry kernel last: its body walk fills the input set its signature reads
-  ##
-  ## Every section checks the walk's first refusal, so a refusal anywhere records once and returns.
-  mixin emitShaderBindings, emitShaderFns
-  ctx.fnName = kernel.name
-  result.src = prelude
-  result.src &= printStructs(ctx, m, shape)
-  if ctx.failing():
-    return ("", ctx.err)
-  result.src &= ctx.emitShaderBindings(kernel)
-  if ctx.failing():
-    return ("", ctx.err)
-  result.src &= printComputeGlobals(ctx, m, hoistedSpaces)
-  if ctx.failing():
-    return ("", ctx.err)
-  result.src &= ctx.emitShaderFns(m)
-  if ctx.failing():
-    return ("", ctx.err)
-  result.src &= ctx.printProc(kernel, shape) & "\n"
-  if ctx.failing():
-    return ("", ctx.err)

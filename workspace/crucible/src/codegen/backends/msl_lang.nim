@@ -377,44 +377,28 @@ const mslModuleShape = ModuleShape(
   printsParamBindings: false,
   printsReduceTemplates: false)
 
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
+  ## Translation-unit head of every MSL module: the metal headers.
+  result = "#include <metal_stdlib>\n"
+  result &= "#include <metal_atomic>\n"
+  result &= "using namespace metal;\n\n"
+
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope `constant` declaration of one relocated const_mem local.
+  ## MSL forbids declaring constant storage without an initializer.
+  if s.init == nil:
+    ctx.fail("const_mem local " & s.name & " without an initializer")
+    return ""
+  var decl = emitMslType(s.declType, s.name, false)
+  if s.declType.kind in {ctPtr, ctAptr}:
+    decl = emitMslPtr(s.declType, s.name)
+  return "constant " & decl & " = " & ctx.printExpr(s.init) & ";"
+
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full MSL translation unit: metal headers, struct declarations, program-scope constants,
-  ## device-function forward declarations, then every function body.
-  ##
-  ## Returns "" as the error when clean, else the first refusal.
+  ## Emits the full MSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", policy: mslKindRow,
     lit: mslLitRow, row: mslScalarRow)
-  var src = "#include <metal_stdlib>\n"
-  src &= "#include <metal_atomic>\n"
-  src &= "using namespace metal;\n\n"
-  src &= printStructs(ctx, m, mslModuleShape)
-  if ctx.failing():
-    return ("", ctx.err)
-  # program-scope `constant` declarations relocated into `m.globals` by the MSL lowering pass,
-  # in encounter order
-  var hoisted: seq[string]
-  for s in m.globals:
-    if s.kind == sVar and s.space == caConstant:
-      if s.init == nil:
-        ctx.fail("const_mem local " & s.name & " without an initializer")
-      else:
-        var decl = emitMslType(s.declType, s.name, false)
-        if s.declType.kind in {ctPtr, ctAptr}:
-          decl = emitMslPtr(s.declType, s.name)
-        hoisted.add "constant " & decl & " = " & ctx.printExpr(s.init) & ";"
-  for d in hoisted:
-    src &= d & "\n"
-  if hoisted.len > 0:
-    src &= "\n"
-  if ctx.failing():
-    return ("", ctx.err)
-  for fn in m.procs:
-    let txt = ctx.printProc(fn, mslModuleShape)
-    if ctx.err.len > 0:
-      break
-    src &= txt & "\n\n"
-  result = (src, ctx.err)
-
+  printModule(ctx, m, moduleKernels(m), mslModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as Metal Shading Language (MSL) source, the `backends_api` entry point.

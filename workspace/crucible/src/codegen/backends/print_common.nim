@@ -534,7 +534,7 @@ proc moduleKernels*(m: CirModule): seq[CirProc] =
   ## Returns the kernel procs of `m.procs`, in encounter order.
   ##
   ## The compute class emits every kernel of the module.
-  ## The shader class compiles exactly one through `selectShaderKernel`.
+  ## The shader class compiles exactly one through `getEntryKernel`.
   for fn in m.procs:
     if fn.isKernel:
       result.add fn
@@ -682,6 +682,93 @@ proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   if fn.isKernel:
     return head & bodyTxt & '\n' & '}'
   return head & " {\n" & bodyTxt & '\n' & '}'
+
+proc printProgramScopeDecls*(ctx: var auto, m: CirModule, spaces: set[AddressSpace]): string =
+  ## Program-scope declarations of the relocated storage locals in `CirModule.globals`.
+  ##
+  ## Expected input:
+  ##
+  ## - `m.globals`: the program-scope declarations that the target's lowering
+  ##   pass relocated (const_mem, and smem on GLSL)
+  ## - `spaces`: the address spaces this target declares at program scope
+  ## - `emitComputeGlobal(s)` (mixin): one declaration's text, "" skips the entry
+  ##
+  ## Output: one declaration per `sVar` in `spaces`, encounter order, then a blank line after a non-empty section.
+  ##
+  ##   src &= printProgramScopeDecls(ctx, m, {caConstant})
+  mixin emitComputeGlobal
+  for s in m.globals:
+    if s.kind == sVar and s.space in spaces:
+      let decl = ctx.emitComputeGlobal(s)
+      if decl.len > 0:
+        result &= decl & '\n'
+  if result.len > 0:
+    result &= '\n'
+
+proc printModule*(ctx: var auto, m: CirModule, kernels: seq[CirProc], shape: static ModuleShape): tuple[src: string, err: string] =
+  ## Returns the full module assembly over the shared section skeleton, returning "" as the error when clean, else the first refusal.
+  ##
+  ## Sections in emission order, each `when`-guarded section specialized by the target's static `shape`:
+  ##
+  ## | section                  | content                                                                                                             |
+  ## | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+  ## | `printPrelude`           | the target's leading lines                                                                                          |
+  ## | `printRefBlocks`         | the buffer-reference block declarations                                                                             |
+  ## | `printStructs`           | the module's struct declarations                                                                                    |
+  ## | `printParamBindings`     | the kernel parameters' binding section                                                                              |
+  ## | `printProgramScopeDecls` | the hoisted program-scope declarations                                                                              |
+  ## | `printReduceTemplates`   | the warp-reduction templates in use                                                                                 |
+  ## | the proc set             | every proc in `m.procs` order under `moduleOrderProcs`, else the device functions under `fwdDecls` then the kernels |
+  ##
+  ## Every section checks the walk's first refusal, so a refusal anywhere
+  ## records once and returns.
+  mixin printPrelude, printRefBlocks, printParamBindings, printReduceTemplates
+  result.src = ctx.printPrelude(m)
+  if ctx.failing():
+    return ("", ctx.err)
+  when shape.printsRefBlocks:
+    result.src &= ctx.printRefBlocks(m)
+    if ctx.failing():
+      return ("", ctx.err)
+  result.src &= printStructs(ctx, m, shape)
+  if ctx.failing():
+    return ("", ctx.err)
+  when shape.printsParamBindings:
+    result.src &= ctx.printParamBindings(kernels)
+    if ctx.failing():
+      return ("", ctx.err)
+  result.src &= printProgramScopeDecls(ctx, m, shape.spaces)
+  if ctx.failing():
+    return ("", ctx.err)
+  when shape.printsReduceTemplates:
+    result.src &= ctx.printReduceTemplates(m)
+    if ctx.failing():
+      return ("", ctx.err)
+  if shape.moduleOrderProcs:
+    for fn in m.procs:
+      result.src &= ctx.printProc(fn, shape) & "\n\n"
+      if ctx.failing():
+        return ("", ctx.err)
+  else:
+    let fns = moduleDeviceFns(m)
+    if shape.fwdDecls:
+      for fn in fns:
+        when shape.customProcHead:
+          result.src &= ctx.printProcHead(fn) & ";\n"
+        else:
+          result.src &= printSig(ctx, fn) & ";\n"
+        if ctx.failing():
+          return ("", ctx.err)
+      if fns.len > 0:
+        result.src &= "\n"
+    for fn in fns:
+      result.src &= ctx.printProc(fn, shape) & "\n\n"
+    if ctx.failing():
+      return ("", ctx.err)
+    for kernel in kernels:
+      result.src &= ctx.printProc(kernel, shape) & shape.kernelSep
+      if ctx.failing():
+        return ("", ctx.err)
 
 proc codegenModule*[R](printed: (R, string)): R =
   ## Converts a printer result tuple into the `backends_api` entry-point return value.
