@@ -46,10 +46,11 @@ func registerDecomposeArrayAssign*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
-  ## Builds the `__builtin_memcpy(&lhs, &rhs, sizeof(lhsType))` statement.
-  ## The address operands type as thread pointers: the printers emit `&`
-  ## without a space qualifier, and the per-address-space callee instantiation
-  ## re-spaces pointer arguments to the callee's parameter space.
+  ## Address operands type as thread pointers.
+  ##
+  ## - the printers emit `&` without a space qualifier
+  ## - the per-address-space callee instantiation re-spaces the pointer
+  ##   arguments to the callee's parameter space
   let callee = sym("__builtin_memcpy",
     tProcT([tPtr(caThread, lhsType), tPtr(caThread, lhsType), tUint(-1)], tVoid()))
   let dst = addrE(tPtr(caThread, lhsType), lhs)
@@ -57,15 +58,10 @@ proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
   callS(callee, dst, src, sizeofE(lhsType))
 
 proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
-  ## Rewrites the array-typed copies of one statement list in place:
-  ##
-  ## - `sVar` of array type with a value initializer splits into the plain
-  ##   declaration plus the memcpy call
-  ## - `sAsgn` whose left side is an array lvalue becomes the memcpy call
-  ##
-  ## An array constructor initializer stays: it prints as a braced init list.
-  ## A call initializer or a call right-hand side refuses, C-family targets cannot take the address of a call result.
-  ## A callee returning an array must write through a pointer parameter instead.
+  ## An array constructor initializer stays, it prints as a braced init list.
+  ## A call initializer or call right-hand side refuses: C-family targets cannot
+  ## take the address of a call result, a callee returning an array must write
+  ## through a pointer parameter instead.
   var lowered: seq[CirStmt]
   for s in body.mitems:
     case s.kind
@@ -108,8 +104,6 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt]): string =
   body = lowered
 
 proc decomposeArrayAssignPass(m: CirModule): string =
-  ## Rewrites every whole-array copy of every proc, in place.
-  ## Returns "" when clean, else the first refusal.
   for fn in m.procs:
     let err = decomposeArrayAssignStmts(fn.body)
     if err.len > 0:

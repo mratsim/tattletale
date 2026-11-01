@@ -46,11 +46,9 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc buildLeafConstr(t: CirType, name: string): CirExpr =
-  ## Rebuilds the exploded struct over its leaf parameters: field `f` reads the leaf `name_f`,
-  ## a nested pointer-holding struct recurses one level deeper.
-  ##
   ## For `AxpyView{p, n}` exploded under `y`:
   ##   oconstr AxpyView{p: sym y_p, n: sym y_n}
+  ## The leaf symbol of field `f` names `name_f`, nested structs recurse one level deeper.
   var fields: seq[CirKv]
   for f in t.fields:
     if f.typ.kind == ctVoid:
@@ -62,9 +60,6 @@ proc buildLeafConstr(t: CirType, name: string): CirExpr =
   result = oconstrE(t, fields)
 
 proc explodeGlobalStructWithPtrFields(m: CirModule): string =
-  ## Expands every kernel parameter of struct type with a pointer field into leaves, in place.
-  ## Returns "" when clean, else the first refusal.
-  ##
   ## Contract:
   ## - buffer leaves name the device address space, value leaves the thread space
   ## - the kernel body opens with the rebuilt struct local
@@ -133,8 +128,6 @@ template registerExplodePointerLocals*(reg: var PassRegistry, passName,
   # as explicit template arguments.
   # codeReordering keeps the registration call at the module top.
   proc explodeWalk(fn: CirProc, ctx: var ExplodeCtx, ss: var seq[CirStmt]): string =
-    ## Rewrites one statement list in place and drops the exploded declarations.
-    ## Returns "" when clean, else the first refusal.
     var i = 0
     while i < ss.len:
       let s = ss[i]
@@ -194,8 +187,6 @@ template registerExplodePointerLocals*(reg: var PassRegistry, passName,
       i.inc
     return ""
   proc explodePointerLocals(m: CirModule): string {.nimcall.} =
-    ## Rewrites the pointer locals of every proc in place.
-    ## Returns "" when clean, else the first refusal.
     for fn in m.procs:
       var ctx = newExplodeCtx(m, fn)
       let err = explodeWalk(fn, ctx, fn.body)
