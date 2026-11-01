@@ -1,4 +1,7 @@
-## HLSL: fp16 conversion builtins are rejected, float16 types are outside the subset.
+## HLSL: the fp16/bf16/fp8 conversion builtins refuse, half-width types are outside the subset.
+##
+## Test that an `hlsl:` kernel calling `toFp16` fails to compile naming
+## the printer refusal "toFp16 has no HLSL form, the fp16/bf16/fp8 conversion builtins are outside the HLSL subset".
 ##
 ## Run (must FAIL to compile):
 ##   nim c --hints:off --warnings:off \
@@ -13,7 +16,7 @@ const code = hlsl:
 
 proc runTest() =
   echo code
-  echo "UNREACHABLE — fp16 conversion call must be rejected at compile time"
+  echo "UNREACHABLE: the fp16 conversion call must refuse at compile time"
 
 when isMainModule:
   runTest()

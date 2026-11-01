@@ -331,8 +331,6 @@ proc lowerSym(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let impl = n.getImpl()
     if impl.kind == nnkConstDef:
       return ctx.lowerExpr(impl[2])
-    ctx.fail("const symbol " & name & " without a definition")
-    return nil
   else:
     ctx.fail("symbol " & name & " (" & $n.symKind & ") is not a value")
     return nil
@@ -343,54 +341,13 @@ proc lowerSym(ctx: var FrontendCtx, n: NimNode): CirExpr =
 
 proc getFormalParams(fn: NimNode): NimNode
 
-func getHeadName(n: NimNode): string =
-  ## Head name of a type node: the nominal or generic name the type instantiates.
-  ## `var`, `static`, `ptr`, and generic-argument wrappers unwrap to the head.
-  case n.kind
-  of nnkVarTy, nnkStaticTy, nnkPtrTy, nnkRefTy, nnkBracketExpr, nnkCall,
-      nnkHiddenStdConv, nnkHiddenSubConv:
-    if n.len > 0:
-      result = getHeadName(n[0])
-  of nnkSym, nnkIdent:
-    result = n.strVal
-  else:
-    result = ""
-
-proc resolveCallCallee(ctx: var FrontendCtx, callee: NimNode, call: NimNode): NimNode =
-  ## An overload choice resolves to the candidate whose formals fit
-  ## the argument types, head name per parameter against head name per argument.
-  ## The first candidate is only correct when every overload agrees.
-  if callee.kind notin {nnkOpenSymChoice, nnkClosedSymChoice}:
-    return callee
-  for cand in callee:
-    if cand.kind != nnkSym:
-      continue
-    let formals = getFormalParams(cand.getTypeInst())
-    if formals.isNil or formals.len - 1 < call.len - 1:
-      continue
-    let impl = cand.getImpl()
-    var generics: seq[string] = @[]
-    if impl.kind in {nnkProcDef, nnkFuncDef, nnkConverterDef, nnkMethodDef} and
-        impl[1].kind == nnkGenericParams:
-      for gp in impl[1]:
-        if gp.kind == nnkIdentDefs:
-          for j in 0 ..< gp.len - 2:
-            generics.add(gp[j].strVal)
-    var fits = true
-    for i in 1 ..< call.len:
-      let formal = formals[i]
-      if formal.kind != nnkIdentDefs or formal.len < 2:
-        fits = false
-        break
-      let fhead = getHeadName(formal[formal.len - 2])
-      let ahead = getHeadName(call[i].getTypeInst())
-      if ahead != "" and fhead != ahead and fhead notin generics:
-        fits = false
-        break
-    if fits:
-      return cand
-  ctx.fail("no overload of " & callee.repr & " matches the call's argument types")
-  return nil
+proc resolveCallCallee(callee: NimNode): NimNode =
+  ## Callee symbol of a sem-checked call. Overload resolution runs before
+  ## the macro sees the call. A resolved call names the symbol sem picked,
+  ## a surviving choice node names sem's pick as its first candidate.
+  if callee.kind in {nnkOpenSymChoice, nnkClosedSymChoice} and callee.len > 0:
+    return callee[0]
+  return callee
 
 proc getFormalParams(fn: NimNode): NimNode =
   for i, c in fn:
@@ -511,13 +468,6 @@ proc lowerCallArgs(ctx: var FrontendCtx, callee: NimNode, call: NimNode): seq[Ci
     if ctx.failing():
       return @[]
     result.add(operandLiteralTypedAs(arg, ftyp))
-  if argIdx + 1 < call.len:
-    ctx.fail("call has more arguments than the callee has parameters")
-    return @[]
-  if formalIdx + 1 < formals.len and not isCompileTimeFormal(
-      formals[formalIdx + 1][formals[formalIdx + 1].len - 2]):
-    ctx.fail("call has fewer arguments than the callee has runtime parameters")
-    return @[]
 
 proc resolveCalleeProcType(ctx: var FrontendCtx, callee: NimNode): CirType =
   ## Proc type of a callee symbol. An overload choice resolves to its first candidate,
@@ -527,14 +477,7 @@ proc resolveCalleeProcType(ctx: var FrontendCtx, callee: NimNode): CirType =
       callee[0]
     else:
       callee
-  if calleeSym.kind != nnkSym:
-    ctx.fail("callee " & callee.repr & " does not name a proc")
-    return nil
-  let procTy = calleeSym.getTypeInst()
-  if procTy.kind != nnkProcTy:
-    ctx.fail("callee " & callee.repr & " does not name a proc")
-    return nil
-  result = ctx.resolver.resolveCirType(procTy)
+  result = ctx.resolver.resolveCirType(calleeSym.getTypeInst())
   if ctx.failing():
     return nil
 
@@ -581,13 +524,7 @@ proc lowerMagicPrimitive(ctx: var FrontendCtx, callee: NimNode, call: NimNode, m
     let args = ctx.lowerCallArgs(callee, call)
     if ctx.failing():
       return nil
-    if args.len != 2:
-      ctx.fail("magic " & magic & " call with " & $args.len & " arguments, expected 2")
-      return nil
     let opType = getExprType(args[0])
-    if opType.isNil:
-      ctx.fail("magic " & magic & " call with an operand of no derivable type")
-      return nil
     let rhs = operandLiteralTypedAs(args[1], opType)
     case magic
     of "AddI", "AddU", "AddF32", "AddF64":
@@ -639,9 +576,6 @@ proc lowerToOpenArrayCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
   ##
   ## The base must be a pointer: the split's pointer side offsets the base by `first`,
   ## and CIRv2 states pointer arithmetic over pointers.
-  if call.len != 4:
-    ctx.fail("toOpenArray call with " & $(call.len - 1) & " arguments, expected 3")
-    return nil
   let base = ctx.lowerExpr(call[1])
   if ctx.failing():
     return nil
@@ -657,28 +591,16 @@ proc lowerToOpenArrayCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
     return nil
   let firstTyp = getExprType(first)
   let lastTyp = getExprType(last)
-  if firstTyp.isNil or firstTyp.kind notin {ctInt, ctUint} or
-      lastTyp.isNil or lastTyp.kind notin {ctInt, ctUint}:
-    ctx.fail("toOpenArray bounds must be integers")
-    return nil
   let spanTyp = tSpan(baseTyp.space, baseTyp.pElem)
   let callTyp = tProcT(baseTyp, firstTyp, lastTyp, spanTyp)
   return callE(sym("toOpenArray", callTyp), base, first, last)
 
 proc lowerSpanLenCall(ctx: var FrontendCtx, call: NimNode): CirExpr =
   ## Lowers a `len(s)` read over an openArray into the `len` call that the span split pass folds to the span's split length binding.
-  if call.len != 2:
-    ctx.fail("len call with " & $(call.len - 1) & " arguments, expected 1")
-    return nil
   let arg = ctx.lowerExpr(call[1])
   if ctx.failing():
     return nil
   let argTyp = getExprType(arg)
-  if argTyp.isNil or argTyp.kind != ctSpan:
-    ctx.fail("len over " &
-      (if argTyp.isNil: "an operand with no derivable type" else: "a " & $argTyp.kind) &
-      " is outside the supported set")
-    return nil
   let readTyp = tProcT(argTyp, tInt(32))
   return callE(sym("len", readTyp), arg)
 
@@ -702,7 +624,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
       ctx.fail("magic call " & callee.repr & " (" & magic & ") is outside the supported set")
       return nil
     return arith
-  let calleeSym = ctx.resolveCallCallee(callee, call)
+  let calleeSym = resolveCallCallee(callee)
   if ctx.failing():
     return nil
   let numeric = ctx.numericBuiltinCall(calleeSym, call)
@@ -816,9 +738,6 @@ proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if ctx.failing():
       return nil
     let opType = getExprType(a)
-    if opType.isNil:
-      ctx.fail("operator " & op & " has no derivable operand type")
-      return nil
     let bOp = operandLiteralTypedAs(b, opType)
     case op
     of "+":
@@ -842,9 +761,6 @@ proc lowerInfix(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if ctx.failing():
       return nil
     let opType = getExprType(a)
-    if opType.isNil or opType.kind != ctFloat:
-      ctx.fail("operator / on a non-float operand type: use div for integers")
-      return nil
     result = divE(opType, a, operandLiteralTypedAs(b, opType))
     return result
   else:
@@ -972,15 +888,9 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if ctx.failing():
       return nil
     return nilE(typ)
-  if n.isNil:
-    ctx.fail("missing expression")
-    return nil
   case n.kind
   of nnkSym:
     return ctx.lowerSym(n)
-  of nnkIdent, nnkOpenSymChoice, nnkClosedSymChoice:
-    ctx.fail("unresolved symbol " & n.repr & " in expression position")
-    return nil
   of nnkIntLit .. nnkUInt64Lit:
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
     if ctx.failing():
@@ -1045,9 +955,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if ctx.failing():
       return nil
     let bt = getExprType(base)
-    if bt != nil and bt.kind == ctAptr:
-      ctx.fail("deref of an array pointer: index it instead")
-      return nil
     if bt != nil and bt.kind == ctSpan:
       # a sem deref of a span names the span, an index over it selects one element
       return base
@@ -1057,9 +964,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if ctx.failing():
       return nil
     let bt = getExprType(base)
-    if bt.isNil:
-      ctx.fail("addr of an expression with no derivable type")
-      return nil
     # address space: the memory where the base value lives
     # an element of device memory gets a device pointer, a local a thread pointer
     var space = caThread
@@ -1090,9 +994,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return addrE(tPtr(space, bt), base)
   of nnkBracketExpr:
     let baseNode = n[0]
-    if baseNode.typeKind == ntyTypeDesc:
-      ctx.fail("type-level index " & n.repr & ": compile-time layout arithmetic is folded by Nim before lowering")
-      return nil
     var loweredBase: CirExpr = nil
     if baseNode.kind == nnkHiddenDeref:
       loweredBase = ctx.lowerExpr(baseNode[0])
@@ -1104,9 +1005,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if ctx.failing():
       return nil
     let bt = getExprType(loweredBase)
-    if bt.isNil:
-      ctx.fail("index base with no derivable type: " & n.repr)
-      return nil
     case bt.kind
     of ctAptr:
       return patE(loweredBase, idx)
@@ -1115,11 +1013,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     of ctPtr:
       # a var parameter of array type names the array through a pointer:
       # deref names that array, the index selects one element
-      let pointee = bt.pElem
-      if pointee.isNil or pointee.kind != ctArray:
-        ctx.fail("indexing over a pointer to " & $(pointee.kind) &
-          " is outside the supported set")
-        return nil
       return atE(derefE(loweredBase), idx)
     of ctSpan:
       # a span element read, the span split pass retypes the base symbol
@@ -1127,20 +1020,11 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return patE(loweredBase, idx)
     of ctStruct:
       # tuple-style `[i]` access over a named struct: the field of that index
-      if idx.kind != eIntLit:
-        ctx.fail("tuple index must be a literal")
-        return nil
-      if idx.value < 0 or idx.value >= bt.fields.len:
-        ctx.fail("tuple index out of range: " & $idx.value)
-        return nil
       return dotE(loweredBase, bt.fields[idx.value].name)
     else:
       ctx.fail("indexing over type " & $(bt.kind) & " is outside the supported set")
       return nil
   of nnkDotExpr:
-    if n[0].typeKind == ntyTypeDesc:
-      ctx.fail("type-level field access " & n.repr & ": compile-time layout algebra is folded by Nim before lowering")
-      return nil
     let base = ctx.lowerExpr(n[0])
     if ctx.failing():
       return nil
@@ -1149,8 +1033,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       for f in base.kvFields:
         if f.name == sanitizeIdent(n[1].strVal):
           return f.value
-      ctx.fail("field " & n[1].strVal & " is not part of the constructed value")
-      return nil
     return dotE(base, sanitizeIdent(n[1].strVal))
   of nnkInfix:
     return ctx.lowerInfix(n)
@@ -1161,27 +1043,18 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     case op
     of "-":
-      let opType = getExprType(operand)
-      if opType.isNil:
-        ctx.fail("negation of an expression with no derivable type")
-        return nil
-      return negE(opType, operand)
+      return negE(getExprType(operand), operand)
     of "not":
       return notE(operand)
     else:
+      # dispatch on a string, an unknown prefix operator would otherwise
+      # fall through uninitialized
       ctx.fail("prefix operator " & op & " is outside the supported set")
       return nil
   of nnkCall, nnkCommand:
     let callee = n[0]
     if callee.kind notin {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
       ctx.fail("call callee " & callee.repr & " is not a proc symbol")
-      return nil
-    if callee.getImpl().kind in {nnkTemplateDef, nnkMacroDef}:
-      ctx.fail("unexpanded template/macro call " & callee.repr &
-        ": templates must resolve before the kernel lowers")
-      return nil
-    if callee.getImpl().kind in {nnkIteratorDef}:
-      ctx.fail("iterator call " & callee.repr & " outside a for loop")
       return nil
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
@@ -1207,7 +1080,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     # normalize every constructor to the type's declaration order, omitted fields zero-initialize,
     # an empty initializer list is invalid C
     var ordered: seq[CirKv] = @[]
-    var matched = 0
     for f in typ.fields:
       var value: CirExpr = nil
       for kvf in fields:
@@ -1215,15 +1087,9 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
           value = kvf.value
           break
       if value != nil:
-        inc matched
         ordered.add(kv(f.name, value))
       else:
         ordered.add(kv(f.name, zeroValue(f.typ)))
-    if matched != fields.len:
-      # a written field matching no declared field would drop silently,
-      # omitted fields are legal and zero-fill above
-      ctx.fail("constructor fields do not match the type's fields: " & n.repr)
-      return nil
     fields = ordered
     return oconstrE(typ, fields)
   of nnkExprColonExpr:
@@ -1245,9 +1111,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
     if ctx.failing():
       return nil
-    if typ.kind != ctArray:
-      ctx.fail("array literal over a non-array type")
-      return nil
     var elems: seq[CirExpr] = @[]
     for el in n:
       let v = ctx.lowerExpr(el)
@@ -1258,8 +1121,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   of nnkPar:
     if n.len == 1:
       return ctx.lowerExpr(n[0])
-    ctx.fail("parenthesized expression list")
-    return nil
   of nnkStmtListExpr:
     var value: CirExpr = nil
     for i, c in n:
@@ -1292,17 +1153,11 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return value
   of nnkIfExpr:
     return ctx.lowerIfExpr(n)
-  of nnkCheckedFieldExpr:
-    ctx.fail("case object field access: variant records have no C representation")
-    return nil
   of nnkStrLit, nnkRStrLit, nnkTripleStrLit:
     ctx.fail("string literal: GPU kernels carry no strings")
     return nil
   of nnkCharLit:
     ctx.fail("char literal: outside the supported set")
-    return nil
-  of nnkStmtListType:
-    ctx.fail("statement-list type in expression position: " & n.repr)
     return nil
   else:
     ctx.fail("expression construct not supported: " & $n.kind & " " & n.repr)
@@ -1333,20 +1188,12 @@ proc buildBranchBody(ctx: var FrontendCtx, bodyNode: NimNode, dest: CirExpr): se
       stmts.add(ctx.lowerStmt(c))
   if ctx.failing():
     return @[]
-  if value.isNil:
-    ctx.fail("branch without a value in an if expression")
-    return @[]
   return stmts & ctx.drainHoisted() & @[asgnS(dest, value)]
 
 proc lowerIfForm(ctx: var FrontendCtx, branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode, dest: CirExpr): seq[CirStmt] =
   ## An elif chain nests one `ite` per branch, first match wins.
   ## The else statements sit innermost.
   ## The expression form assigns `dest` in every branch body.
-  if ctx.failing():
-    return @[]
-  if elseBody.isNil and dest != nil:
-    ctx.fail("if expression without an else branch")
-    return @[]
   var tail: seq[CirStmt] = @[]
   if not elseBody.isNil:
     tail = ctx.buildBranchBody(elseBody, dest)
@@ -1377,9 +1224,6 @@ proc lowerIfStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     else:
       ctx.fail("if statement: unexpected child " & $c.kind)
       return @[]
-  if branches.len == 0:
-    ctx.fail("if statement without a branch")
-    return @[]
   return ctx.lowerIfForm(branches, elseBody, nil)
 
 func isUnrollPragma(n: NimNode): bool =
@@ -1403,8 +1247,6 @@ func bodyMarksUnroll(body: NimNode): bool =
 proc lowerWhile(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## Statements spliced by the condition drain to the front of the loop body,
   ## a splice runs once per iteration after the test that admits it.
-  if ctx.failing():
-    return @[]
   let unroll = bodyMarksUnroll(n[1])
   let cond = ctx.lowerExpr(n[0])
   if ctx.failing():
@@ -1418,8 +1260,6 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `for` over a literal range or `countup`.
   ## The loop variable declares up front, bounds evaluate once at entry,
   ## the increment runs last.
-  if ctx.failing():
-    return @[]
   let vars = n[0]
   if vars.kind notin {nnkSym, nnkIdent, nnkIdentDefs}:
     ctx.fail("tuple unpacking in a for loop")
@@ -1457,9 +1297,6 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
             startNode = f[1]
           elif $f[0] == "b":
             stopNode = f[1]
-      if startNode.isNil or stopNode.isNil:
-        ctx.fail("for loop over a Slice without a and b bounds: " & n.repr)
-        return @[]
     elif name == "countup" or name == "countdown":
       if name == "countdown":
         ctx.fail("countdown loop: negative steps are outside the supported set")
@@ -1540,8 +1377,6 @@ proc lowerFor(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   result = preamble & @[whileS(cmp, bodyHoists & body & incr, unroll)]
 
 proc lowerReturn(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  if ctx.failing():
-    return @[]
   var valueNode = n[0]
   if valueNode.kind == nnkAsgn:
     valueNode = valueNode[1]
@@ -1552,16 +1387,11 @@ proc lowerReturn(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   let value = ctx.lowerExpr(valueNode)
   if ctx.failing():
     return @[]
-  if ctx.retType.kind == ctVoid:
-    ctx.fail("value returned from a void proc")
-    return @[]
   return ctx.drainHoisted() & @[retS(value)]
 
 proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A call in statement position: a barrier, a kernel call, or a discardable
   ## non-void call whose value drops.
-  if ctx.failing():
-    return @[]
   let callee = n[0]
   # a generic type instantiation left in statement position appears
   # as the `[]` choice, the first operand is the type
@@ -1573,12 +1403,7 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   if callee.kind notin {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
     ctx.fail("call callee " & callee.repr & " is not a proc symbol")
     return @[]
-  if callee.kind == nnkSym and
-      callee.getImpl().kind in {nnkTemplateDef, nnkMacroDef}:
-    ctx.fail("unexpanded template/macro call " & callee.repr &
-      ": templates must resolve before the kernel lowers")
-    return @[]
-  let calleeSym = ctx.resolveCallCallee(callee, n)
+  let calleeSym = resolveCallCallee(callee)
   if ctx.failing():
     return @[]
   let fnType = ctx.resolveCalleeProcType(calleeSym)
@@ -1626,15 +1451,7 @@ proc lowerLetSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `let`/`var` section: one typed declaration per name, a call-valued initializer
   ## binds through an `asgn` after the declaration.
   ## The memory class comes from the declaration's pragma list.
-  if ctx.failing():
-    return @[]
   for defs in n:
-    if defs.kind == nnkVarTuple:
-      ctx.fail("tuple unpacking declaration")
-      return @[]
-    if defs.kind notin {nnkIdentDefs, nnkConstDef}:
-      ctx.fail("declaration: unexpected child " & $defs.kind)
-      return @[]
     let typeNode = defs[^2]
     let initNode = defs[^1]
     for j in 0 ..< defs.len - 2:
@@ -1680,8 +1497,6 @@ proc lowerLetSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
 
 proc lowerConstSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   ## A `const` section: the value must already be a compile-time literal.
-  if ctx.failing():
-    return @[]
   for defs in n:
     defs.expectKind(nnkConstDef)
     let nameNode = defs[0]
@@ -1689,9 +1504,6 @@ proc lowerConstSection(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
                   else: nameNode.strVal
     let typeNode = defs[1]
     let valueNode = defs[2]
-    if valueNode.kind in {nnkCall, nnkCommand}:
-      ctx.fail("const " & nimName & " initialized by a call: layout arithmetic is folded by Nim before lowering")
-      return @[]
     var typ: CirType = nil
     if typeNode.kind != nnkEmpty:
       typ = ctx.resolver.resolveCirType(typeNode)
@@ -1756,7 +1568,12 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     # (`qk -.= m_ij` over register tiles) resolves to its overloaded proc
     # and lowers as a var-target call in statement position
     let op = n[0].strVal
-    if op in ["+=", "-=", "*=", "/="] and ctx.isScalarCompoundAssign(n):
+    let scalar = ctx.isScalarCompoundAssign(n)
+    if ctx.failing():
+      # operand type resolution failed, return with the pending failure,
+      # a statement-position call path needs a clean channel
+      return @[]
+    if op in ["+=", "-=", "*=", "/="] and scalar:
       var lhs = ctx.lowerExpr(n[1])
       if ctx.failing():
         return @[]
@@ -1840,9 +1657,6 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     return @[]
   of nnkCaseStmt:
     ctx.fail("case statement: outside the supported set")
-    return @[]
-  of nnkWhenStmt:
-    ctx.fail("when statement: resolve statically before lowering")
     return @[]
   of nnkTypeSection:
     ctx.resolveTypeSection(n)
@@ -1954,9 +1768,6 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   if isGenericDef(fn):
     return nil
   let formals = getFormalParams(fn)
-  if formals.isNil:
-    ctx.fail("proc " & $fn[0] & " without formal parameters")
-    return nil
   let savedName = ctx.fnName
   let savedRet = ctx.retType
   let savedCounts = ctx.nameCounts
@@ -1981,11 +1792,8 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   if ctx.failing():
     return nil
   result = procD(fnName, params, fnRet, body)
-  # identity key includes the signature, true overloads register under one plain name, and only a genuine redefinition refuses
+  # identity key includes the signature, true overloads register under one plain name
   let defKey = calleeSigKey(fn[0])
-  if ctx.procKeys.hasKey(defKey):
-    ctx.fail("duplicate proc name " & result.name)
-    return nil
   ctx.procKeys[defKey] = true
   ctx.declaredProcs[defKey] = result.name
   fn.applyProcPragmas(result)
@@ -1998,14 +1806,7 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
     return
   ctx.procKeys[cirName] = true
   let impl = callee.getImpl()
-  if impl.kind notin {nnkProcDef, nnkFuncDef}:
-    ctx.fail("callee " & callee.repr & " has no proc body to harvest (" &
-      $impl.kind & ")")
-    return
   let formals = getFormalParams(callee.getTypeInst())
-  if formals.isNil or formals.kind != nnkFormalParams:
-    ctx.fail("callee " & callee.repr & " without an instantiated signature")
-    return
   let savedName = ctx.fnName
   let savedRet = ctx.retType
   let savedCounts = ctx.nameCounts

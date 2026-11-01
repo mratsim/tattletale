@@ -153,9 +153,6 @@ proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
         if ch.kind == nnkRecCase:
           r.fail("case object: variant records have no C representation")
           return @[]
-        if ch.kind != nnkIdentDefs:
-          r.fail("struct field: unexpected record child " & $ch.kind)
-          return @[]
         for j in 0 ..< ch.len - 2:
           result.add(fld(sanitizeIdent(ch[j].strVal),
             r.resolveCirType(ch[ch.len - 2],
@@ -345,9 +342,6 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
   ## kernel parameters pass `caDevice`, a body-side `addr` result constructs
   ## its own `caThread` pointer.
   if r.err.len > 0:
-    return nil
-  if n.isNil:
-    r.fail("type node is missing")
     return nil
   if n.kind == nnkEmpty:
     # a missing return type is void

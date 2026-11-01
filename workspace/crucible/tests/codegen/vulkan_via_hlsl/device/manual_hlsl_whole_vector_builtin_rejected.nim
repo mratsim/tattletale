@@ -1,5 +1,8 @@
 ## HLSL: whole-vector use of a coordinate builtin is rejected, components are read one by one.
 ##
+## Test that binding a coordinate builtin to a whole variable refuses
+## in the HLSL printer, naming "whole-vector read of a coordinate builtin is outside the HLSL subset, read the components one by one".
+##
 ## Run (must FAIL to compile):
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
@@ -14,7 +17,7 @@ const code = hlsl:
 
 proc runTest() =
   echo code
-  echo "UNREACHABLE — whole-vector coordinate builtin use must be rejected at compile time"
+  echo "UNREACHABLE: the whole-vector coordinate builtin use must be rejected at compile time"
 
 when isMainModule:
   runTest()

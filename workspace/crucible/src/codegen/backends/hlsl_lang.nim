@@ -36,6 +36,8 @@
 ##   binding to violate
 ##
 ## Shared:
+## - a whole-vector read of a 3-wide coordinate builtin refuses, components read
+##   one by one, the scalar `thread_index_in_threadgroup` reads whole as `int(gidx)`
 ## - the dispatch grid size has no HLSL semantic: a `threadgroups_per_grid` read refuses,
 ##   the HLSL lowering pass materializes the read into the trailing `crucible_numworkgroups` parameter,
 ##   staged at launch as a descriptor-route uniform on fvD3D12, as a push block member on fvVulkan
@@ -47,6 +49,9 @@
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the HLSL lowering pass,
 ##   file-scope `static const` output, a smem, device-space or surviving
 ##   constant-space local refuses
+## - the fp16/bf16/fp8 conversion builtins refuse, half-width types sit outside the HLSL subset
+##
+## Statements and constructions:
 ## - a loop prints `while (cond)`, a conditionless loop prints the braceless
 ##   `for (;;)` head with the brace on its own line, `{.unroll.}` adds `[unroll]`
 ## - object constructions emit flat brace lists at any depth, `{ 0, 1, 2 }`,
@@ -102,6 +107,13 @@ type
     ## parameter types here.
 
 const printerTarget = "hlsl"
+
+const FpConversionBuiltins = [
+  "toFp16", "toFp32", "toBf16", "toBf32", "toFp8e4m3", "toFp8e5m2",
+  "asFp16", "asU16"]
+  ## `{.builtin.}` fp16/bf16/fp8 conversion calls. The frontend erases
+  ## half-width types to 16-bit storage before printing, so the call name
+  ## is the only signal the printer can match.
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -249,20 +261,6 @@ proc coordInputName(kind: CoordBuiltinKind): string =
   ## Synthesized main input variable of a coordinate builtin kind.
   CoordInputNames[kind]
 
-proc emitCoordWhole(ctx: var PrintCtx, kind: CoordBuiltinKind): string =
-  ## Whole-vector read of a coordinate builtin, cast to the canonical int
-  ## tuple the CIRv2 vocabulary reads.
-  ctx.coordReads.incl(kind)
-  case kind
-  of cbkThreadsPerThreadgroup:
-    result = "int3(" & $ctx.workgroup[0] & ", " & $ctx.workgroup[1] & ", " &
-      $ctx.workgroup[2] & ")"
-  of cbkThreadIndexInThreadgroup:
-    result = "int(" & coordInputName(kind) & ")"
-  else:
-    let n = coordInputName(kind)
-    result = "int3(int(" & n & ".x), int(" & n & ".y), int(" & n & ".z))"
-
 proc emitCoordComponent(ctx: var PrintCtx, kind: CoordBuiltinKind, field: string): string =
   ## One coordinate-builtin component, cast to the canonical int the CIRv2 vocabulary reads.
   ctx.coordReads.incl(kind)
@@ -383,7 +381,12 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
           " lowering pass materializes it as the " & "crucible_numworkgroups" &
           " parameter")
         return ""
-      return emitCoordWhole(ctx, e.coordBuiltin)
+      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+        ctx.coordReads.incl(e.coordBuiltin)
+        return "int(" & coordInputName(e.coordBuiltin) & ")"
+      ctx.fail("whole-vector read of a coordinate builtin is outside the" &
+        " HLSL subset, read the components one by one")
+      return ""
     if ctx.pushParams.contains(e.name):
       return "push." & e.name
     if ctx.bufferParams.contains(e.name):
@@ -541,6 +544,10 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
         return ""
       of shkNone: discard
+      if e.callee.builtin and e.callee.name in FpConversionBuiltins:
+        ctx.fail(e.callee.name & " has no HLSL form, the fp16/bf16/fp8" &
+          " conversion builtins are outside the HLSL subset")
+        return ""
     return calleeName & "(" & args.join(", ") & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
