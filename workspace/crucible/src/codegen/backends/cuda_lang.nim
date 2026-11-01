@@ -52,13 +52,13 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 proc emitCudaScalar(t: CirType): string =
   ## CUDA bare name of a non-array leaf type, "" when the caller composes the name.
-  bareName(cudaScalarRow(), cudaVectorRule(), t)
+  bareName(cudaScalarRow, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## CUDA declaration text of `t` with `ident` appended, the shared C declarator
   ## over the CUDA rows. Arrays take the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
-  cDecl(cudaScalarRow(), cudaVectorRule(), printerTarget, t, ident, allowEmptyIdent)
+  cDecl(cudaScalarRow, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -347,8 +347,8 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## the warp-reduction templates in use, then every function body.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow(),
-    lit: litTokens(cudaLitRow(), cudaScalarRow()))
+  var ctx = PrintCtx(fnName: "<module>", policy: cudaKindRow,
+    lit: litTokens(cudaLitRow, cudaScalarRow))
   var src = ""
   for t in m.types:
     if t.kind != ctStruct:

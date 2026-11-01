@@ -97,11 +97,11 @@ proc scalarName*(row: ScalarRow, t: CirType): string =
   case t.kind
   of ctVoid, ctBool:
     for c in row.cells:
-      if c.kind == t.kind and c.supported:
+      if c.kind == t.kind and c.spelling.len > 0:
         return c.spelling
   of ctInt, ctUint, ctFloat:
     for c in row.cells:
-      if c.kind == t.kind and c.width == t.bits and c.supported:
+      if c.kind == t.kind and c.width == t.bits and c.spelling.len > 0:
         return c.spelling
   else:
     discard
@@ -180,7 +180,7 @@ proc scalarTokens*(row: ScalarRow): ScalarTokens =
   ## Token-table view of a scalar row with the cell names by (kind, width).
   ## A refused cell names "". The result feeds `LitTokens.scalar`.
   for c in row.cells:
-    if not c.supported:
+    if c.spelling.len == 0:
       continue
     case c.kind
     of ctVoid: result.void = c.spelling
@@ -342,13 +342,11 @@ proc printLoopText*(ctx: var auto, s: CirStmt, style: LoopStyle): string =
     pad & style.unrollDirective & "\n"
   else:
     ""
-  let head = if s.loopCond != nil:
-    if style.braceSameLine:
-      "while (" & ctx.printExpr(s.loopCond) & ") {\n"
-    else:
-      "while (" & ctx.printExpr(s.loopCond) & ")\n"
+  let cond = ctx.printExpr(s.loopCond)
+  let head = if style.braceSameLine:
+    "while (" & cond & ") {\n"
   else:
-    style.infiniteHead
+    "while (" & cond & ")\n"
   result = directive & pad & head
   if not style.braceSameLine:
     result &= pad & "{\n"

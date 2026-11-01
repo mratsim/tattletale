@@ -5,25 +5,24 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Declarative registry of the text printers' target data.
+## Schema of the printers' static target data.
 ##
-## A row is a const object of plain data: strings, bools, ints, enums and tables of those.
+## A row is a const object of plain data: strings, bools, ints, enums, sets and tables of those.
 ## No field stores a proc or a placeholder whose value depends on a body walk.
 ##
-## | family | row        | contents                                      |
-## | ------ | ---------- | --------------------------------------------- |
-## | scalar | ScalarRow  | type names and support cells by (kind, width) |
-## | lit    | LitRow     | literal token forms                           |
-## | kind   | KindRow    | walk policy: loops, else folding, routing set |
-## | conv   | ConvRow    | conversion name tables                        |
-## | vector | VectorRule | a target's real vector coverage               |
+## | type       | contents                                      |
+## | ---------- | --------------------------------------------- |
+## | ScalarRow  | type names by (kind, width) cell              |
+## | LitRow     | literal token forms                           |
+## | KindRow    | walk policy: loops, else folding, routing set |
+## | VectorRule | a target's real vector coverage               |
 ##
-## Token types that the rows embed (`ScalarTokens`, `LitTokens`, `LoopStyle`) are defined here,
-## so the registry stays the one home of the printers' static data schema.
+## Each target's rows are plain constants in `targets_rows.nim`.
+## The printer that needs a row reads it directly, a missing row is a compile
+## error at that call site.
 ##
-## `genTargets` (targets_macros) parses row blocks into these types and generates one lookup proc per family and target.
-## Checks run at registration as one compile-time block: full (kind, width) coverage per key,
-## refused cells without a name, and cross-target name collisions. A missing or drifted row is a compile error.
+## The scalar rows carry one compile-time check block over all six targets,
+## see `checkScalarRowsTogether`.
 
 import std/tables
 import ../ir/cirv2_lang
@@ -87,11 +86,9 @@ type
     ##
     ## - `unrollDirective`: `{.unroll.}` directive text, printed before
     ##   the loop at the loop indentation, "" prints no directive
-    ## - `infiniteHead`: head of a condition-less loop, with its open brace
-    ##   (`for (;;) {\n`, `loop {\n`)
     ## - `braceSameLine`: the open brace sits on the head line, otherwise it
     ##   prints on its own line under the head (HLSL)
-    unrollDirective*, infiniteHead*: string
+    unrollDirective*: string
     braceSameLine*: bool
 
 type
@@ -102,7 +99,6 @@ type
     ## Bit width, 0 for the widthless kinds (void, bool).
     spelling*: string
     ## Type name the target prints, "" for a refused cell.
-    supported*: bool
 
   ScalarRow* = object
     ## Scalar type names of one target by (kind, width) cell.
@@ -133,14 +129,6 @@ type
     ## Optional expression kinds the printer routes through its own `printTargetExpr` proc.
     ## Eight common kinds route unconditionally and are not members of this set.
 
-  ConvRow* = object
-    ## Name tables of one target: conversion data that is a pure name-to-text mapping.
-    ## Conversions needing operand type analysis or multi-statement emission stay procedural in the printers.
-    builtinNames*: Table[string, string]
-    ## `{.builtin.}` numeric conversion name to call text, `$1` stands for the call's argument list.
-    fpRefusals*: seq[string]
-    ## `{.builtin.}` fp-conversion names the target refuses.
-
   VectorNameForm* = enum
     ## Composition of a vector type name from the element's prefix and the lane count.
     vnfPrefixed
@@ -148,20 +136,12 @@ type
     vnfGenericElem
     ## `prefix & $laneCount & '<' & elementName & '>'` forms the generic-element names (`vec3<f32>`).
 
-  VectorContext* = enum
-    ## Where a target's printer emits vector types.
-    vcNone
-    vcCoordinate
-    ## Only in coordinate-builtin context.
-    vcEverywhere
-
   VectorRule* = object
     ## A target's real vector coverage, as its printer emits it today.
-    context*: VectorContext
     elems*: seq[tuple[kind: CirTypeKind, width: int, prefix: string]]
     ## Element types the target names, with the vector name's prefix.
     ## The name composes from the prefix and the lane count per `nameForm`.
-    ## Empty for `vcNone`.
+    ## Empty when the target names no vectors.
     lanes*: seq[int]
     ## Lane counts the target emits.
     nameForm*: VectorNameForm = vnfPrefixed
@@ -174,10 +154,9 @@ const ScalarCellAxis*: array[13, tuple[kind: CirTypeKind, width: int]] = [
   (ctFloat, 16), (ctFloat, 32), (ctFloat, 64)]
 
 proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
-  ## Registration checks over one target's scalar row:
+  ## Compile-time checks over one target's scalar row:
   ##
   ## - every cell of `ScalarCellAxis` appears exactly once, a second row for an existing cell fails the compile
-  ## - a supported cell has a type name, a refused cell has none
   ## - a type name denotes at most one cell, a bool cell's name may repeat another
   ##   cell's name (OpenCL prints bool locals as `int` for the 4-byte launch ABI)
   ##
@@ -190,15 +169,6 @@ proc checkScalarRow*(row: ScalarRow, target: string) {.compileTime.} =
     doAssert count == 1, "target " & target & ": scalar cell (" &
       $axisCell.kind & ", " & $axisCell.width & ") appears " & $count &
       " times, exactly once required"
-  for c in row.cells:
-    if c.supported:
-      doAssert c.spelling.len > 0,
-        "target " & target & ": supported cell (" & $c.kind & ", " & $c.width &
-        ") needs a name"
-    else:
-      doAssert c.spelling.len == 0,
-        "target " & target & ": refused cell (" & $c.kind & ", " & $c.width &
-        ") needs no name"
   for i, a in row.cells:
     if a.spelling.len == 0 or a.kind == ctBool:
       continue

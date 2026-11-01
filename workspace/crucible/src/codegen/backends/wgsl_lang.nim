@@ -19,9 +19,8 @@
 ## - a smem/const_mem kernel local relocates into `CirModule.globals`, the WGSL lowering pass owns the relocation
 ## - struct declarations emit for the referenced value structs only, one declaration per entry of `CirModule.structRefs`.
 ##   The struct-reference pass fills that record after the last transform, and a pointer-holding struct refuses
-## - a loop prints `while (cond)`, a conditionless loop prints `loop {`
-##   (WGSL's `while` takes a condition), an unrolled loop notes the unroll
-##   directive has no WGSL form
+## - a loop prints `while (cond)` (WGSL's `while` takes a condition),
+##   an unrolled loop notes the unroll directive has no WGSL form
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -66,14 +65,14 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## A struct name registers the struct for reference-driven emission.
   case t.kind
   of ctVoid, ctBool, ctFloat:
-    result = scalarName(wgslScalarRow(), t)
+    result = scalarName(wgslScalarRow, t)
   of ctInt, ctUint:
-    result = scalarName(wgslScalarRow(), t)
+    result = scalarName(wgslScalarRow, t)
     if result.len == 0:
       ctx.fail($t.bits & "-bit integers have no WGSL type, only 32 and 64")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
-    result = vectorName(wgslVectorRule(), wgslScalarRow(), t)
+    result = vectorName(wgslVectorRule, wgslScalarRow, t)
     if result.len == 0 and elem.len > 0:
       ctx.fail("vector of " & elem & "x" & $t.vN &
         " has no WGSL type name, only 2..4-wide vectors have a name")
@@ -505,8 +504,8 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## - the device functions, then the `@compute` kernel with its builtin parameters
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: wgslKindRow(),
-    lit: litTokens(wgslLitRow(), wgslScalarRow()))
+  var ctx = PrintCtx(fnName: "<module>", policy: wgslKindRow,
+    lit: litTokens(wgslLitRow, wgslScalarRow))
   ctx.layouts = m.layouts
   var kernels: seq[CirProc]
   for fn in m.procs:

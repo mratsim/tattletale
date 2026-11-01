@@ -23,7 +23,7 @@
 ##
 ## Remaining checks:
 ## - a threadgroup/constant local surviving in a nested scope or device function refuses, a `caDevice`-space local refuses too
-## - a loop prints `while (cond)`, a conditionless loop prints `for (;;)`, `{.unroll.}` adds `[[unroll]]`
+## - a loop prints `while (cond)`, `{.unroll.}` adds `[[unroll]]`
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -56,7 +56,7 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
-  leafName(glslScalarRow(), glslVectorRule(), t)
+  leafName(glslScalarRow, glslVectorRule, t)
 
 proc emitGlslTypeBare(t: CirType): string =
   ## GLSL name of `t` with no identifier, array dimensions composed into
@@ -486,8 +486,8 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## and the kernel with its `local_size` layout qualifier.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow(),
-    lit: litTokens(glslLitRow(), glslScalarRow()))
+  var ctx = PrintCtx(fnName: "<module>", policy: glslKindRow,
+    lit: litTokens(glslLitRow, glslScalarRow))
   ctx.layouts = m.layouts
   var kernels: seq[CirProc]
   for fn in m.procs:

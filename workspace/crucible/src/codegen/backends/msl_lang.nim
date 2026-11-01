@@ -20,7 +20,7 @@
 ##   a device function still owning a smem local refuses in the pass
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
 ##   program-scope `constant` output, a const_mem survivor refuses at the printer
-## - a loop prints `while (cond)`, a conditionless loop prints `for (;;)`, `{.unroll.}` adds the Metal unroll pragma
+## - a loop prints `while (cond)`, `{.unroll.}` adds the Metal unroll pragma
 ## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
 ##   through except the numeric conversions, which resolve to the MSL native call text
 
@@ -57,13 +57,13 @@ proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
 
 proc emitMslScalar(t: CirType): string =
   ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
-  bareName(mslScalarRow(), mslVectorRule(), t)
+  bareName(mslScalarRow, mslVectorRule, t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## MSL declaration text of `t` with `ident` appended, the shared C declarator
   ## over the MSL rows. Arrays take the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), an array without an identifier refuses.
-  cDecl(mslScalarRow(), mslVectorRule(), printerTarget, t, ident, allowEmptyIdent)
+  cDecl(mslScalarRow, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc ptrField(row: ScalarRow, rule: VectorRule, target: string, qualifier: string, t: CirType, ident: string): string =
   ## Declaration text of a pointer or array pointer with its address-space qualifier:
@@ -89,7 +89,7 @@ proc mslPtrQualifier(space: AddressSpace): string =
 proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  ptrField(mslScalarRow(), mslVectorRule(), printerTarget,
+  ptrField(mslScalarRow, mslVectorRule, printerTarget,
     mslPtrQualifier(t.space), t, ident)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -152,8 +152,8 @@ proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
       error("atomic_fetch_add over a pointee without an MSL atomic type")
     return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
       "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
-  if callee.builtin and mslConvRow().builtinNames.hasKey(callee.name):
-    return mslConvRow().builtinNames.getOrDefault(callee.name) % args.join(", ")
+  if callee.builtin and mslConvBuiltinNames.hasKey(callee.name):
+    return mslConvBuiltinNames.getOrDefault(callee.name) % args.join(", ")
   return ""
 
 
@@ -365,8 +365,8 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## device-function forward declarations, then every function body.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: mslKindRow(),
-    lit: litTokens(mslLitRow(), mslScalarRow()))
+  var ctx = PrintCtx(fnName: "<module>", policy: mslKindRow,
+    lit: litTokens(mslLitRow, mslScalarRow))
   var src = "#include <metal_stdlib>\n"
   src &= "#include <metal_atomic>\n"
   src &= "using namespace metal;\n\n"

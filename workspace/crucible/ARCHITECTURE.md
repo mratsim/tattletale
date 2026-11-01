@@ -165,9 +165,8 @@ A printer refusal is a compile-time error naming the construct.
 
 Two shared layers keep the printers thin:
 
-- `print_common.nim`: the statement and expression walk, a C declarator engine, scalar and literal token tables, loop text
-- `targets_registry.nim` and `targets_rows.nim`: the printers' static data as plain rows, one row family per concern
-- `genTargets` in `targets_macros.nim` parses the rows and checks them at compile time, a missing or drifted row fails the compile
+- `print_common.nim`: the statement and expression walk, a C declarator engine, literal tokens, loop text
+- `targets_registry.nim` and `targets_rows.nim`: the printers' static rows as plain per-target constants
 
 `backends_api.nim` dispatches `codegen` on a static `Backend` value.
 The compiler folds the dispatch to a direct call.
@@ -205,7 +204,7 @@ The runtime layer turns it into an executing kernel:
 | A dependency runs before its dependent                          | `runPasses` refuses when a `dependsOn` entry has not run                                                          |
 | A refusal anywhere is a compile-time error naming the construct | The macros call `error()` on frontend and pipeline refusals, `codegenModule` calls `error()` on a printer refusal |
 | An analysis result survives only with no transform after it     | The registration sequence in `gpu_compiler.nim`, the registry has no invalidation                                 |
-| Target static data is complete and consistent                   | `genTargets` compile-time row checks                                                                              |
+| Target static data is complete and consistent                   | The `checkScalarRow`/`checkScalarRowsTogether` static block in `targets_rows.nim`                                  |
 | The passes layer exports only `register*` procs                 | The `passes-export` linter rule                                                                                   |
 
 ## Refusals and testing

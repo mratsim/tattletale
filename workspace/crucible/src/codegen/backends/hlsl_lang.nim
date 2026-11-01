@@ -54,8 +54,7 @@
 ## - the fp16/bf16/fp8 conversion builtins refuse, half-width types sit outside the HLSL subset
 ##
 ## Statements and constructions:
-## - a loop prints `while (cond)`, a conditionless loop prints the braceless
-##   `for (;;)` head with the brace on its own line, `{.unroll.}` adds `[unroll]`
+## - a loop prints `while (cond)`, `{.unroll.}` adds `[unroll]`
 ## - object constructions emit flat brace lists at any depth, `{ 0, 1, 2 }`,
 ##   the form DXC accepts over uniformly scalar members, a constructor assignment
 ##   lowers to member-wise leaves, DXC rejects compound literals on assignment.
@@ -125,9 +124,9 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of a non-array leaf type, "" when the caller composes the name.
   case t.kind
   of ctVoid, ctBool:
-    result = scalarName(hlslScalarRow(), t)
+    result = scalarName(hlslScalarRow, t)
   of ctInt, ctUint, ctFloat:
-    result = scalarName(hlslScalarRow(), t)
+    result = scalarName(hlslScalarRow, t)
     if result.len == 0:
       case t.kind
       of ctInt:
@@ -142,7 +141,7 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
         ctx.fail("float16 has no HLSL type name, float16 types are outside the HLSL subset")
   of ctVector:
     let elem = emitHlslScalar(ctx, t.vElem)
-    result = vectorName(hlslVectorRule(), hlslScalarRow(), t)
+    result = vectorName(hlslVectorRule, hlslScalarRow, t)
     if result.len == 0:
       ctx.fail("vector of " & (if elem.len > 0: elem else: $t.vElem.kind) &
         "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
@@ -370,7 +369,7 @@ proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): stri
       ctx.fail("simd_shuffle_xor has no wave-intrinsic form, no HLSL intrinsic exchanges with a lane-index xor")
       return ""
     of shkNone: discard
-    if call.callee.builtin and call.callee.name in hlslConvRow().fpRefusals:
+    if call.callee.builtin and call.callee.name in hlslConvFpRefusals:
       ctx.fail(call.callee.name & " has no HLSL form, the fp16/bf16/fp8" &
         " conversion builtins are outside the HLSL subset")
       return ""
@@ -736,7 +735,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
   ##
   ## Returns "" as the error when clean, else the first refusal.
   var ctx = PrintCtx(fnName: "<module>", flavor: flavor,
-    policy: hlslKindRow(), lit: litTokens(hlslLitRow(), hlslScalarRow()))
+    policy: hlslKindRow, lit: litTokens(hlslLitRow, hlslScalarRow))
   var procsByName: Table[string, CirProc]
   for fn in m.procs:
     procsByName[fn.name] = fn

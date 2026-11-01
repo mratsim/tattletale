@@ -18,7 +18,7 @@
 ## Addressing and memory classes:
 ## - a `ptr` local is a plain C pointer, `(&x)` addresses a local, `(*p)` dereferences
 ## - `{.smem.}` locals declare `__local` in the kernel body
-## - a loop prints `while (cond)`, a conditionless loop prints `for (;;)`, `{.unroll.}` adds `#pragma unroll`
+## - a loop prints `while (cond)`, `{.unroll.}` adds `#pragma unroll`
 ##
 ## Storage relocation:
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the OpenCL lowering pass, program-scope `__constant` output
@@ -56,11 +56,11 @@ proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 # OpenCL C bool storage is 1 byte, the launch ABI delivers 4-byte ints
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
-  leafName(openclScalarRow(), openclVectorRule(), t)
+  leafName(openclScalarRow, openclVectorRule, t)
 
 proc emitOpenclTypeBare(t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
-  bareName(openclScalarRow(), openclVectorRule(), t)
+  bareName(openclScalarRow, openclVectorRule, t)
 
 proc emitOpenclArrayDecl(t: CirType, ident: string): string =
   ## OpenCL C declaration of an array local or field, the lengths move behind the identifier
@@ -445,8 +445,8 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## and the kernels.
   ##
   ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: openclKindRow(),
-    lit: litTokens(openclLitRow(), openclScalarRow()))
+  var ctx = PrintCtx(fnName: "<module>", policy: openclKindRow,
+    lit: litTokens(openclLitRow, openclScalarRow))
   var kernels: seq[CirProc]
   for fn in m.procs:
     if fn.isKernel:
