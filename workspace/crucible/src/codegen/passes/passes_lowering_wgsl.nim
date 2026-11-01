@@ -55,6 +55,7 @@ import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
+import ./passes_lowering_cfamily
 import ./passes_low_address_spaces
 import ./passes_low_kernel_params
 import ./pass_helpers
@@ -74,20 +75,14 @@ func registerWgslLoweringPasses*(reg: var PassRegistry) =
   ## that their body already references, and a const_mem initializer reading a bool
   ## kernel parameter is patched before the relocation moves it out of the body.
   registerExplodeKernelStructs(reg)
-  reg.register("wgslDissolvePointerLocals", pkTransform, phaseMain,
-    "Dissolves pointer locals and pointer-holding struct locals into their" &
-    " pointees and leaf symbols",
-    run = dissolvePointerLocals
-  )
+  wgslRegisterDissolvePointerLocals(reg)
   reg.register("wgslRewriteBoolKernelParamReads", pkTransform, phaseMain,
     "Rewrites reads of the kernel's bool parameters to name != 0u comparisons",
     run = rewriteBoolKernelParamReads
   )
-  reg.register("wgslHoistProgramScopeLocals", pkTransform, phaseMain,
+  registerCfamilyHoistProgramScopeLocals(reg, "wgslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
-    " program scope",
-    run = hoistProgramScopeLocals
-  )
+    " program scope", "WGSL workgroup variables are zero-initialized")
   reg.registerInstantiateAddressSpaceGenerics()
   reg.register("wgslInlinePointerParamCalls", pkTransform, phaseMain,
     "Inlines calls whose pointer arguments cannot cross a WGSL function" &
@@ -531,127 +526,70 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string 
         return err
     return ""
 
-proc rewriteDissolveStmts(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string
-  ## Forward declaration, the structured statement bodies recurse.
-
-proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
-  ## Rewrites one statement in place. Returns "" when clean, else the refusal.
-  case s.kind
-  of sVar:
-    if s.declType.kind in {ctPtr, ctAptr}:
-      if s.init == nil:
-        ctx.pendingPtrs.incl(s.name)
-      elif s.init.kind == eAddr and s.init.addrOperand.kind == eSym:
-        ctx.aliasOf[s.name] = s.init.addrOperand.name
-      else:
-        return dissolveFail(fn, "pointer local " & s.name &
-          " without an address-of binding, WGSL has no pointer locals")
-      return ""
-    if s.declType.kind == ctStruct and s.declType.containsPtrDeep:
-      if s.init == nil or s.init.kind != eOconstr:
-        return dissolveFail(fn, "struct local " & s.name &
-          " without a construction, WGSL has no pointer struct members")
-      let err = registerDissolvedStruct(fn, ctx, s.name, s.declType, s.init)
-      if err.len > 0:
-        return err
-      ctx.structLocals.incl(s.name)
-      return ""
-    return rewriteDissolveExpr(fn, ctx, s.init)
-  of sConst:
-    return rewriteDissolveExpr(fn, ctx, s.init)
-  of sAsgn:
-    if s.lhs.kind == eSym and s.lhs.typ != nil and
-        s.lhs.typ.kind in {ctPtr, ctAptr}:
-      if s.lhs.name notin ctx.pendingPtrs and s.lhs.name notin ctx.aliasOf:
-        # a pointer parameter of the proc in flight, the pass never touches it
-        let rerr = rewriteDissolveExpr(fn, ctx, s.rhs)
-        if rerr.len > 0:
-          return rerr
-        return ""
-      if s.lhs.name in ctx.aliasOf:
-        return dissolveFail(fn, "pointer local " & s.lhs.name &
-          " rebound, WGSL has no pointer values")
-      if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
-        return dissolveFail(fn, "pointer local " & s.lhs.name &
-          " rebound to a non-address value, WGSL has no pointer values")
-      ctx.pendingPtrs.excl(s.lhs.name)
-      ctx.aliasOf[s.lhs.name] = s.rhs.addrOperand.name
-      return ""
-    let lerr = rewriteDissolveExpr(fn, ctx, s.lhs)
-    if lerr.len > 0:
-      return lerr
-    return rewriteDissolveExpr(fn, ctx, s.rhs)
-  of sIte:
-    let cerr = rewriteDissolveExpr(fn, ctx, s.cond)
-    if cerr.len > 0:
-      return cerr
-    let terr = rewriteDissolveStmts(fn, ctx, s.thenBody)
-    if terr.len > 0:
-      return terr
-    return rewriteDissolveStmts(fn, ctx, s.elseBody)
-  of sLoop:
-    let cerr = rewriteDissolveExpr(fn, ctx, s.loopCond)
-    if cerr.len > 0:
-      return cerr
-    return rewriteDissolveStmts(fn, ctx, s.loopBody)
-  of sScope:
-    return rewriteDissolveStmts(fn, ctx, s.scopeBody)
-  of sAssume:
-    return rewriteDissolveExpr(fn, ctx, s.assumeCond)
-  of sRet:
-    return rewriteDissolveExpr(fn, ctx, s.retVal)
-  of sDiscard:
-    return rewriteDissolveExpr(fn, ctx, s.discardVal)
-  of sCall:
-    let tmp = CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
-    let err = rewriteDissolveExpr(fn, ctx, tmp)
-    s.callCallee = tmp.callee
-    s.callArgs = tmp.args
-    return err
-  of sCase, sAsm, sEmit:
+proc dissolveVarDecl(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
+  ## `sVar` case: a pointer local pends for its address-of binding or binds its pointee,
+  ## a pointer-holding struct local registers its field rewrites,
+  ## anything else rewrites the initializer.
+  if s.declType.kind in {ctPtr, ctAptr}:
+    if s.init == nil:
+      ctx.pendingPtrs.incl(s.name)
+    elif s.init.kind == eAddr and s.init.addrOperand.kind == eSym:
+      ctx.aliasOf[s.name] = s.init.addrOperand.name
+    else:
+      return dissolveFail(fn, "pointer local " & s.name &
+        " without an address-of binding, WGSL has no pointer locals")
     return ""
-
-proc rewriteDissolveStmts(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string =
-  ## Rewrites one statement list in place, pointer-local declarations,
-  ## their bindings and dissolved struct-local constructions drop out.
-  ## Everything else rewrites where it stands, "" comes back when clean.
-  var i = 0
-  while i < ss.len:
-    let s = ss[i]
-    var drops = false
-    if s.kind == sVar:
-      if s.declType.kind in {ctPtr, ctAptr} or
-          (s.declType.kind == ctStruct and s.declType.containsPtrDeep):
-        let err = rewriteDissolveStmt(fn, ctx, s)
-        if err.len > 0:
-          return err
-        drops = true
-    elif s.kind == sAsgn and s.lhs.kind == eSym and s.lhs.typ != nil and
-        s.lhs.typ.kind in {ctPtr, ctAptr} and
-        (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf):
-      let err = rewriteDissolveStmt(fn, ctx, s)
-      if err.len > 0:
-        return err
-      drops = true
-    if drops:
-      ss.delete(i)
-      continue
-    let err = rewriteDissolveStmt(fn, ctx, s)
+  if s.declType.kind == ctStruct and s.declType.containsPtrDeep:
+    if s.init == nil or s.init.kind != eOconstr:
+      return dissolveFail(fn, "struct local " & s.name &
+        " without a construction, WGSL has no pointer struct members")
+    let err = registerDissolvedStruct(fn, ctx, s.name, s.declType, s.init)
     if err.len > 0:
       return err
-    i.inc
-  return ""
+    ctx.structLocals.incl(s.name)
+    return ""
+  return rewriteDissolveExpr(fn, ctx, s.init)
 
-proc dissolvePointerLocals(m: CirModule): string =
-  ## Dissolves the pointer locals of every proc into their pointees, in place.
-  ## The walk covers proc bodies only, pointer parameters stay untouched.
-  ## Returns "" when clean, else the first refusal.
-  for fn in m.procs:
-    var ctx = DissolveCtx()
-    let err = rewriteDissolveStmts(fn, ctx, fn.body)
-    if err.len > 0:
-      return err
-  return ""
+proc dissolveAsgn(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
+  ## `sAsgn` case: a pointer local binds exactly once, a pointer parameter
+  ## of the proc in flight keeps its assignment untouched.
+  ## Anything else rewrites both operands.
+  if s.lhs.kind == eSym and s.lhs.typ != nil and
+      s.lhs.typ.kind in {ctPtr, ctAptr}:
+    if s.lhs.name notin ctx.pendingPtrs and s.lhs.name notin ctx.aliasOf:
+      # a pointer parameter of the proc in flight, never touched by the pass
+      let rerr = rewriteDissolveExpr(fn, ctx, s.rhs)
+      if rerr.len > 0:
+        return rerr
+      return ""
+    if s.lhs.name in ctx.aliasOf:
+      return dissolveFail(fn, "pointer local " & s.lhs.name &
+        " rebound, WGSL has no pointer values")
+    if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
+      return dissolveFail(fn, "pointer local " & s.lhs.name &
+        " rebound to a non-address value, WGSL has no pointer values")
+    ctx.pendingPtrs.excl(s.lhs.name)
+    ctx.aliasOf[s.lhs.name] = s.rhs.addrOperand.name
+    return ""
+  let lerr = rewriteDissolveExpr(fn, ctx, s.lhs)
+  if lerr.len > 0:
+    return lerr
+  return rewriteDissolveExpr(fn, ctx, s.rhs)
+
+proc dissolveDropsVar(s: CirStmt, ctx: DissolveCtx): bool =
+  ## A pointer local and a dissolved struct local drop from their list.
+  s.declType.kind in {ctPtr, ctAptr} or
+    (s.declType.kind == ctStruct and s.declType.containsPtrDeep)
+
+proc dissolveDropsAsgn(s: CirStmt, ctx: DissolveCtx): bool =
+  ## A pointer-local binding drops from its list, a pointer parameter's
+  ## assignment stays in place.
+  s.lhs.kind == eSym and s.lhs.typ != nil and
+    s.lhs.typ.kind in {ctPtr, ctAptr} and
+    (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf)
+
+proc newDissolveCtx(m: CirModule, fn: CirProc): DissolveCtx =
+  DissolveCtx()
 
 # ═══════════════════════════════════════════════════════════════════════
 # Bool kernel parameter reads
@@ -722,69 +660,10 @@ proc rewriteBoolKernelParamReads(m: CirModule): string =
     fn.body.rewriteBoolReadsStmts(boolParams)
   return ""
 
-# ═══════════════════════════════════════════════════════════════════════
-# Program-scope hoisting
-# ═══════════════════════════════════════════════════════════════════════
-
-proc hoistProgramScopeLocals(m: CirModule): string =
-  ## Relocates the `{.smem.}` and `{.const_mem.}` locals of every proc into
-  ## `m.globals`, in encounter order, dropping them from their bodies.
-  ##
-  ## Contract:
-  ## - the smem relocation covers top-level kernel-body locals only, a nested
-  ##   or device-function one stays in place and refuses at the printer
-  ## - the const_mem relocation covers every proc and scope depth, the shared
-  ##   const_mem walk recurses into the nested scopes at their encounter position,
-  ##   the initializer is required and the printer emits it from the relocated node
-  ## - a smem local with an initializer refuses, WGSL workgroup variables are zero-initialized
-  ## - runs after the reserved-word rename, relocated declaration names match the renamed body references
-  for fn in m.procs:
-    var i = 0
-    while i < fn.body.len:
-      let s = fn.body[i]
-      if s.kind == sVar and s.space == caThreadgroup:
-        if not fn.isKernel:
-          # a device-function smem local stays, WGSL workgroup storage belongs
-          # to the kernel, the printer refuses the survivor
-          i.inc
-          continue
-        if s.init != nil:
-          return "at " & fn.name & ": smem local " & s.name &
-            " with an initializer, WGSL workgroup variables are zero-initialized"
-        m.globals.add s
-        fn.body.delete i
-      elif s.kind == sVar and s.space == caConstant:
-        if s.init == nil:
-          return "at " & fn.name & ": const_mem local " & s.name &
-            " without an initializer"
-        m.globals.add s
-        fn.body.delete i
-      else:
-        case s.kind
-        of sIte:
-          let thenErr = hoistConstMemStmts(m, fn, s.thenBody)
-          if thenErr.len > 0:
-            return thenErr
-          let elseErr = hoistConstMemStmts(m, fn, s.elseBody)
-          if elseErr.len > 0:
-            return elseErr
-        of sLoop:
-          let loopErr = hoistConstMemStmts(m, fn, s.loopBody)
-          if loopErr.len > 0:
-            return loopErr
-        of sCase:
-          for bi in 0 ..< s.branches.len:
-            let branchErr = hoistConstMemStmts(m, fn, s.branches[bi].body)
-            if branchErr.len > 0:
-              return branchErr
-          let elseErr = hoistConstMemStmts(m, fn, s.caseElse)
-          if elseErr.len > 0:
-            return elseErr
-        of sScope:
-          let scopeErr = hoistConstMemStmts(m, fn, s.scopeBody)
-          if scopeErr.len > 0:
-            return scopeErr
-        else:
-          discard
-        i.inc
-  return ""
+proc wgslRegisterDissolvePointerLocals(reg: var PassRegistry) =
+  ## Expands the shared dissolve template with the WGSL module-local procs.
+  registerCfamilyDissolvePointerLocals(reg, "wgslDissolvePointerLocals",
+    "Dissolves pointer locals and pointer-holding struct locals into their" &
+    " pointees and leaf symbols",
+    DissolveCtx, newDissolveCtx, dissolveVarDecl, dissolveAsgn,
+    dissolveDropsVar, dissolveDropsAsgn, rewriteDissolveExpr)

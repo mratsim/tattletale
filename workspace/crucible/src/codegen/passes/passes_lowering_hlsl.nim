@@ -32,6 +32,7 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_lowering_cfamily
 import ./passes_low_address_spaces
 import ./passes_low_reserved
 
@@ -40,26 +41,20 @@ import ./passes_low_reserved
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerHlslLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the HLSL per-target lowering passes, the pass order
+  ## Registers the HLSL per-target lowering passes in the order
   ## materialization -> dissolution -> reserved-word renaming -> printing.
   reg.register("hlslMaterializeNumWorkgroups", pkTransform, phaseMain,
     "Rewrites threadgroups_per_grid reads to the materialized trailing" &
     " kernel parameter the engine stages",
     run = materializeNumWorkgroups
   )
-  reg.register("hlslDissolvePointerLocals", pkTransform, phaseMain,
-    "Dissolves pointer locals, pointer-holding struct locals and var" &
-    " parameters into the HLSL storage model",
-    run = dissolvePointerLocals
-  )
+  hlslRegisterDissolvePointerLocals(reg)
   reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
   reg.register("hlslHoistProgramScopeConstants", pkTransform, phaseMain,
     "Relocates const_mem locals into the module's program scope",
     run = hlslHoistProgramScopeConstants
   )
   reg.registerInstantiateAddressSpaceGenerics()
-
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # The materialized dispatch-grid parameter
@@ -432,128 +427,72 @@ proc rewriteDissolveExpr(fn: CirProc, ctx: var DissolveCtx, e: CirExpr): string 
   else:
     return rewriteDissolveChildren(fn, ctx, e)
 
-proc rewriteDissolveStmts(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string
-  ## Forward declaration, statement lists recurse into themselves.
-
-proc rewriteDissolveStmt(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
-  ## Rewrites one statement in place. Returns "" when clean, else the refusal.
-  case s.kind
-  of sVar:
-    if s.declType.kind == ctPtr and s.declType.space == caThread:
-      if s.init != nil:
-        if s.init.kind != eAddr or s.init.addrOperand.kind != eSym:
-          return dissolveFail(fn, "pointer local " & s.name &
-            " without an address-of binding, HLSL has no pointer locals")
-        ctx.aliasOf[s.name] = s.init.addrOperand.name
-      else:
-        ctx.pendingPtrs.incl(s.name)
-      return ""
-    if s.declType.kind == ctStruct and s.declType.containsPtrDeep:
-      if s.init == nil:
-        return dissolveFail(fn, "struct local " & s.name &
-          " without a construction, HLSL has no pointer struct members")
-      let err = registerDissolvedStruct(fn, ctx, s.name, s.declType, s.init)
-      if err.len > 0:
-        return err
-      ctx.structLocals.incl(s.name)
-      return ""
-    return rewriteDissolveExpr(fn, ctx, s.init)
-  of sConst:
-    return rewriteDissolveExpr(fn, ctx, s.init)
-  of sAsgn:
-    if s.lhs.kind == eSym and s.lhs.name in ctx.pendingPtrs:
-      if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
-        return dissolveFail(fn, "pointer local " & s.lhs.name &
-          " rebound to a non-address value, HLSL has no pointer values")
-      ctx.pendingPtrs.excl(s.lhs.name)
-      ctx.aliasOf[s.lhs.name] = s.rhs.addrOperand.name
-      return ""
-    if s.lhs.kind == eSym and s.lhs.name in ctx.aliasOf:
-      return dissolveFail(fn, "pointer local " & s.lhs.name &
-        " rebound, HLSL has no pointer values")
-    if s.lhs.kind == eDot and s.lhs.dotBase.kind == eSym and
-        s.lhs.dotBase.name in ctx.structLocals:
-      return dissolveFail(fn, "field of dissolved struct local " &
-        s.lhs.dotBase.name & " assigned, HLSL has no pointer struct members")
-    let lerr = rewriteDissolveExpr(fn, ctx, s.lhs)
-    if lerr.len > 0:
-      return lerr
-    return rewriteDissolveExpr(fn, ctx, s.rhs)
-  of sIte:
-    let cerr = rewriteDissolveExpr(fn, ctx, s.cond)
-    if cerr.len > 0:
-      return cerr
-    let terr = rewriteDissolveStmts(fn, ctx, s.thenBody)
-    if terr.len > 0:
-      return terr
-    return rewriteDissolveStmts(fn, ctx, s.elseBody)
-  of sLoop:
-    let cerr = rewriteDissolveExpr(fn, ctx, s.loopCond)
-    if cerr.len > 0:
-      return cerr
-    return rewriteDissolveStmts(fn, ctx, s.loopBody)
-  of sScope:
-    return rewriteDissolveStmts(fn, ctx, s.scopeBody)
-  of sAssume:
-    return rewriteDissolveExpr(fn, ctx, s.assumeCond)
-  of sRet:
-    return rewriteDissolveExpr(fn, ctx, s.retVal)
-  of sDiscard:
-    return rewriteDissolveExpr(fn, ctx, s.discardVal)
-  of sCall:
-    let tmp = CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
-    let err = rewriteDissolveExpr(fn, ctx, tmp)
-    s.callCallee = tmp.callee
-    s.callArgs = tmp.args
-    return err
-  of sCase, sAsm, sEmit:
+proc dissolveVarDecl(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
+  ## `sVar` case: a pointer local binds its pointee or pends for a later
+  ## address-of binding, a pointer-holding struct local registers its field rewrites.
+  ## Anything else rewrites the initializer.
+  if s.declType.kind == ctPtr and s.declType.space == caThread:
+    if s.init != nil:
+      if s.init.kind != eAddr or s.init.addrOperand.kind != eSym:
+        return dissolveFail(fn, "pointer local " & s.name &
+          " without an address-of binding, HLSL has no pointer locals")
+      ctx.aliasOf[s.name] = s.init.addrOperand.name
+    else:
+      ctx.pendingPtrs.incl(s.name)
     return ""
-
-proc rewriteDissolveStmts(fn: CirProc, ctx: var DissolveCtx, ss: var seq[CirStmt]): string =
-  ## Rewrites one statement list in place, pointer-local declarations,
-  ## their bindings and dissolved struct-local constructions drop out.
-  ## Everything else rewrites where it stands, "" comes back when clean.
-  var i = 0
-  while i < ss.len:
-    let s = ss[i]
-    var drops = false
-    if s.kind == sVar:
-      if (s.declType.kind == ctPtr and s.declType.space == caThread) or
-          (s.declType.kind == ctStruct and s.declType.containsPtrDeep):
-        let err = rewriteDissolveStmt(fn, ctx, s)
-        if err.len > 0:
-          return err
-        drops = true
-    elif s.kind == sAsgn and s.lhs.kind == eSym and
-        (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf):
-      let err = rewriteDissolveStmt(fn, ctx, s)
-      if err.len > 0:
-        return err
-      drops = true
-    if drops:
-      ss.delete(i)
-      continue
-    let err = rewriteDissolveStmt(fn, ctx, s)
+  if s.declType.kind == ctStruct and s.declType.containsPtrDeep:
+    if s.init == nil:
+      return dissolveFail(fn, "struct local " & s.name &
+        " without a construction, HLSL has no pointer struct members")
+    let err = registerDissolvedStruct(fn, ctx, s.name, s.declType, s.init)
     if err.len > 0:
       return err
-    i.inc
-  return ""
+    ctx.structLocals.incl(s.name)
+    return ""
+  return rewriteDissolveExpr(fn, ctx, s.init)
 
-proc dissolvePointerLocals(m: CirModule): string =
-  ## Dissolves the pointer shapes of every proc into the HLSL storage model,
-  ## in place. Returns "" when clean, else the first refusal.
+proc dissolveAsgn(fn: CirProc, ctx: var DissolveCtx, s: CirStmt): string =
+  ## `sAsgn` case: a pointer local binds exactly once, a field of a dissolved
+  ## struct local never assigns, anything else rewrites both operands.
+  if s.lhs.kind == eSym and s.lhs.name in ctx.pendingPtrs:
+    if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
+      return dissolveFail(fn, "pointer local " & s.lhs.name &
+        " rebound to a non-address value, HLSL has no pointer values")
+    ctx.pendingPtrs.excl(s.lhs.name)
+    ctx.aliasOf[s.lhs.name] = s.rhs.addrOperand.name
+    return ""
+  if s.lhs.kind == eSym and s.lhs.name in ctx.aliasOf:
+    return dissolveFail(fn, "pointer local " & s.lhs.name &
+      " rebound, HLSL has no pointer values")
+  if s.lhs.kind == eDot and s.lhs.dotBase.kind == eSym and
+      s.lhs.dotBase.name in ctx.structLocals:
+    return dissolveFail(fn, "field of dissolved struct local " &
+      s.lhs.dotBase.name & " assigned, HLSL has no pointer struct members")
+  let lerr = rewriteDissolveExpr(fn, ctx, s.lhs)
+  if lerr.len > 0:
+    return lerr
+  return rewriteDissolveExpr(fn, ctx, s.rhs)
+
+proc dissolveDropsVar(s: CirStmt, ctx: DissolveCtx): bool =
+  ## A pointer local and a dissolved struct local drop from their list.
+  (s.declType.kind == ctPtr and s.declType.space == caThread) or
+    (s.declType.kind == ctStruct and s.declType.containsPtrDeep)
+
+proc dissolveDropsAsgn(s: CirStmt, ctx: DissolveCtx): bool =
+  ## A pointer-local binding drops from its list.
+  s.lhs.kind == eSym and
+    (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf)
+
+proc newDissolveCtx(m: CirModule, fn: CirProc): DissolveCtx =
+  ## Module procs go into the context for the by-reference call argument checks,
+  ## the `var T` parameters mark their derefs.
   var procs: Table[string, CirProc]
-  for fn in m.procs:
-    procs[fn.name] = fn
-  for fn in m.procs:
-    var ctx = DissolveCtx(procs: procs)
-    for p in fn.params:
-      if p.typ.kind == ctPtr and p.typ.space == caThread:
-        ctx.byRefParams.incl(p.name)
-    let err = rewriteDissolveStmts(fn, ctx, fn.body)
-    if err.len > 0:
-      return err
-  return ""
+  for f in m.procs:
+    procs[f.name] = f
+  result = DissolveCtx(procs: procs)
+  for p in fn.params:
+    if p.typ.kind == ctPtr and p.typ.space == caThread:
+      result.byRefParams.incl(p.name)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Const_mem locals to program-scope constants
@@ -570,3 +509,11 @@ proc hlslHoistProgramScopeConstants(m: CirModule): string =
   ## - runs after the reserved-word rename, relocated declaration names match
   ##   the renamed body references
   hoistConstMemLocals(m)
+
+proc hlslRegisterDissolvePointerLocals(reg: var PassRegistry) =
+  ## Expands the shared dissolve template with the HLSL module-local procs.
+  registerCfamilyDissolvePointerLocals(reg, "hlslDissolvePointerLocals",
+    "Dissolves pointer locals, pointer-holding struct locals and var" &
+    " parameters into the HLSL storage model",
+    DissolveCtx, newDissolveCtx, dissolveVarDecl, dissolveAsgn,
+    dissolveDropsVar, dissolveDropsAsgn, rewriteDissolveExpr)
