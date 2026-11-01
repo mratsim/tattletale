@@ -7,7 +7,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, GLSL, WebGPU, Metal.
-## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, GLSL, WebGPU, Metal.
 ##
 ## Public API, one import: `import workspace/crucible`.
 ## The curated surface lives in `src/crucible_public_api.nim`, the GPU builtin vocabulary
@@ -58,220 +57,126 @@ from ./backends/hlsl_lang import HlslFlavor, fvD3D12, fvVulkan
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  PipelineBind* = proc(reg: var PassRegistry, flavor: HlslFlavor) {.nimcall.}
-    ## Registers one pass into `reg`. The flavor parameter reaches the one
-    ## flavor-dependent row (`hlslClassifyParams`), every other binder ignores it.
+  PipelineBind* = proc(reg: var PassRegistry) {.closure.}
+    ## Registers one pass into `reg`.
 
-proc attachLegalize(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerLegalizationPasses()
-
-proc attachNormalize(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerNormalizationPasses()
-
-proc attachLowerSpans(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerSharedLoweringPasses()
-
-proc attachRenameMetal(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
-
-proc attachRenameCuda(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
-
-proc attachRenameOpencl(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
-
-proc attachRenameGlsl(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
-
-proc attachRenameWgsl(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
-
-proc attachRenameHlsl(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
-
-proc attachDecompose(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerDecomposeArrayAssign()
-
-proc attachExplodeStructs(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerExplodeStructWithPtrFields()
-
-proc attachSpaceGenerics(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerInstantiateAddressSpaceGenerics()
-
-proc attachMslHoistProgramScopeConstants(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerMslHoistProgramScopeConstants()
-
-proc attachMslHoistDeviceFnSmem(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerMslHoistDeviceFnSmem()
-
-proc attachMslRewriteSmemLocals(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerMslRewriteSmemLocals()
-
-proc attachMslThreadCoordinateBuiltins(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerMslThreadCoordinateBuiltins()
-
-proc attachOpenclHoistConst(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerOpenclHoistProgramScopeConstants()
-
-proc attachOpenclByref(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerOpenclLowerByrefParams()
-
-proc attachSmemInitRewrite(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerSmemInitRewrite()
-
-proc attachGlslQualifyVarParams(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerGlslQualifyVarParams()
-
-proc attachGlslExplodePointerLocals(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerGlslExplodePointerLocals()
-
-proc attachGlslHoistLocals(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerGlslHoistProgramScopeLocals()
-
-proc attachWgslExplodePointerLocals(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerWgslExplodePointerLocals()
-
-proc attachWgslHoistLocals(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerWgslHoistProgramScopeLocals()
-
-proc attachWgslInlinePointerCalls(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerWgslInlinePointerParamCalls()
-
-proc attachHlslMaterializeNumWorkgroups(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerHlslMaterializeNumWorkgroups()
-
-proc attachHlslExplodePointerLocals(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerHlslExplodePointerLocals()
-
-proc attachHlslHoistConst(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerHlslHoistProgramScopeConstants()
-
-proc attachGlslRefBlocks(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerGlslRefBlockPass()
-
-proc attachOpenclScan(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerOpenclFeatureScan()
-
-proc attachCudaScan(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerCudaFeatureScan()
-
-proc attachGlslScan(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerGlslFeatureScan()
-
-proc attachGlslLayout(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerGlslLayoutPass()
-
-proc attachWgslStructRefs(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerWgslStructRefPass()
-
-proc attachWgslScan(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerWgslFeatureScan()
-
-proc attachWgslLayout(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerWgslLayoutPass()
-
-proc attachHlslParamClass(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerHlslParamClassPass(flavor)
-
-proc attachHlslStructRefs(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerHlslStructRefPass()
-
-proc attachHlslCallGraph(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerHlslCallGraphPass()
-
-proc attachValidate(reg: var PassRegistry, flavor: HlslFlavor) =
-  reg.registerValidationPostPasses()
-
-const pipelineTable: array[CompileTarget, seq[PipelineBind]] = [
-    # Shared legalization, normalization and span lowering open every column.
-    # Analysis rows close every column that has them, check-only validation rows
-    # run last. Every compile machine-checks the grouping through runPasses,
-    # which refuses a transform registered after an analysis.
-    ctNone: @[],
-    ctCuda: @[
-      attachLegalize, attachNormalize, attachLowerSpans,
-      # Rename position: after decomposeArrayAssign, incidental placement.
-      # Decompose creates only `__builtin_memcpy` calls, no generated name
-      # collides with the execution-space qualifiers of CudaReserved.
-      attachDecompose, attachRenameCuda, attachSmemInitRewrite,
-      attachSpaceGenerics, attachCudaScan,
-      attachValidate,
-    ],
-    ctMetal: @[
-      attachLegalize, attachNormalize, attachLowerSpans,
-      # Rename position: before every hoist and explosion. The rename walks types,
-      # procs and proc bodies, never `m.globals`. A declaration hoisted earlier
-      # leaves the rename's reach unrenamed.
-      attachRenameMetal,
-      attachDecompose, attachExplodeStructs, attachSmemInitRewrite,
-      attachMslHoistProgramScopeConstants, attachMslHoistDeviceFnSmem,
-      attachMslRewriteSmemLocals, attachMslThreadCoordinateBuiltins,
-      attachSpaceGenerics,
-      attachValidate,
-    ],
-    ctOpenCL: @[
-      attachLegalize, attachNormalize, attachLowerSpans,
-      attachRenameOpencl,
-      attachDecompose, attachExplodeStructs, attachSmemInitRewrite,
-      attachOpenclHoistConst, attachOpenclByref, attachSpaceGenerics,
-      attachOpenclScan,
-      attachValidate,
-    ],
-    ctGlsl: @[
-      attachLegalize, attachNormalize, attachLowerSpans,
-      attachRenameGlsl,
-      attachGlslQualifyVarParams, attachGlslExplodePointerLocals,
-      attachSmemInitRewrite, attachGlslHoistLocals, attachSpaceGenerics,
-      attachGlslRefBlocks, attachGlslScan, attachGlslLayout,
-      attachValidate,
-    ],
-    ctWebGPU: @[
-      attachLegalize, attachNormalize, attachLowerSpans,
-      attachRenameWgsl,
-      attachExplodeStructs, attachWgslExplodePointerLocals,
-      attachSmemInitRewrite, attachWgslHoistLocals, attachSpaceGenerics,
-      attachWgslInlinePointerCalls,
-      attachWgslStructRefs, attachWgslScan, attachWgslLayout,
-      attachValidate,
-    ],
-    ctHlsl: @[
-      attachLegalize, attachNormalize, attachLowerSpans,
-      # Rename position: after the pointer-local dissolution, one named deviation
-      # from the shared dissolve template's documented contract (dissolve after
-      # rename). The rename matches names over declarations and uses.
-      # Spliced alias symbols rename together and the emitted names stay consistent.
-      attachHlslMaterializeNumWorkgroups, attachHlslExplodePointerLocals,
-      attachRenameHlsl, attachHlslHoistConst, attachSpaceGenerics,
-      attachHlslParamClass, attachHlslStructRefs, attachHlslCallGraph,
-      attachValidate,
-    ],
-    ctSpirvShader: @[
-      attachLegalize, attachNormalize, attachLowerSpans,
-      # No rename and no address-space callee instantiation: the encoder consumes typed words.
-      attachValidate,
-    ],
-  ]
+proc pipelineRows(target: CompileTarget, flavor: HlslFlavor): seq[PipelineBind] =
+  ## Pass rows of one target, in execution order: registration order is execution order.
+  ##
+  ## - shared legalization, normalization and span lowering open every column
+  ## - analysis rows close every column that has them, check-only validation
+  ##   rows run last
+  ## - every compile machine-checks the grouping through runPasses, which
+  ##   refuses a transform registered after an analysis
+  ##
+  ## The rows cite the pass modules' `register*` procs directly.
+  ## The rename rows and the HLSL flavor row bind their extra arguments inline.
+  case target
+  of ctNone:
+    @[]
+  of ctCuda:
+    # Rename position: after decomposeArrayAssign, incidental placement.
+    # Decompose creates only `__builtin_memcpy` calls, no generated name
+    # collides with the execution-space qualifiers of CudaReserved.
+    @[PipelineBind(registerLegalizationPasses), PipelineBind(registerNormalizationPasses),
+      PipelineBind(registerSharedLoweringPasses), PipelineBind(registerDecomposeArrayAssign),
+      proc(reg: var PassRegistry) =
+        reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved),
+      PipelineBind(registerSmemInitRewrite), PipelineBind(registerInstantiateAddressSpaceGenerics),
+      PipelineBind(registerCudaFeatureScan),
+      PipelineBind(registerValidationPostPasses)]
+  of ctMetal:
+    # Rename position: before every hoist and explosion. The rename walks types,
+    # procs and proc bodies, never `m.globals`. A declaration hoisted earlier
+    # leaves the rename's reach unrenamed.
+    @[PipelineBind(registerLegalizationPasses), PipelineBind(registerNormalizationPasses),
+      PipelineBind(registerSharedLoweringPasses),
+      proc(reg: var PassRegistry) =
+        reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved),
+      PipelineBind(registerDecomposeArrayAssign), PipelineBind(registerExplodeStructWithPtrFields),
+      PipelineBind(registerSmemInitRewrite),
+      PipelineBind(registerMslHoistProgramScopeConstants), PipelineBind(registerMslHoistDeviceFnSmem),
+      PipelineBind(registerMslRewriteSmemLocals), PipelineBind(registerMslThreadCoordinateBuiltins),
+      PipelineBind(registerInstantiateAddressSpaceGenerics),
+      PipelineBind(registerValidationPostPasses)]
+  of ctOpenCL:
+    @[PipelineBind(registerLegalizationPasses), PipelineBind(registerNormalizationPasses),
+      PipelineBind(registerSharedLoweringPasses),
+      proc(reg: var PassRegistry) =
+        reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved),
+      PipelineBind(registerDecomposeArrayAssign), PipelineBind(registerExplodeStructWithPtrFields),
+      PipelineBind(registerSmemInitRewrite),
+      PipelineBind(registerOpenclHoistProgramScopeConstants), PipelineBind(registerOpenclLowerByrefParams),
+      PipelineBind(registerInstantiateAddressSpaceGenerics),
+      PipelineBind(registerOpenclFeatureScan),
+      PipelineBind(registerValidationPostPasses)]
+  of ctGlsl:
+    @[PipelineBind(registerLegalizationPasses), PipelineBind(registerNormalizationPasses),
+      PipelineBind(registerSharedLoweringPasses),
+      proc(reg: var PassRegistry) =
+        reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved),
+      PipelineBind(registerGlslQualifyVarParams), PipelineBind(registerGlslExplodePointerLocals),
+      PipelineBind(registerSmemInitRewrite), PipelineBind(registerGlslHoistProgramScopeLocals),
+      PipelineBind(registerInstantiateAddressSpaceGenerics),
+      PipelineBind(registerGlslRefBlockPass), PipelineBind(registerGlslFeatureScan), PipelineBind(registerGlslLayoutPass),
+      PipelineBind(registerValidationPostPasses)]
+  of ctWebGPU:
+    @[PipelineBind(registerLegalizationPasses), PipelineBind(registerNormalizationPasses),
+      PipelineBind(registerSharedLoweringPasses),
+      proc(reg: var PassRegistry) =
+        reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_"),
+      PipelineBind(registerExplodeStructWithPtrFields), PipelineBind(registerWgslExplodePointerLocals),
+      PipelineBind(registerSmemInitRewrite), PipelineBind(registerWgslHoistProgramScopeLocals),
+      PipelineBind(registerInstantiateAddressSpaceGenerics),
+      PipelineBind(registerWgslInlinePointerParamCalls),
+      PipelineBind(registerWgslStructRefPass), PipelineBind(registerWgslFeatureScan), PipelineBind(registerWgslLayoutPass),
+      PipelineBind(registerValidationPostPasses)]
+  of ctHlsl:
+    # Rename position: after the pointer-local explosion, one named deviation
+    # from the shared explode template's documented contract (explode after
+    # rename). The rename matches names over declarations and uses.
+    # Spliced alias symbols rename together and the emitted names stay consistent.
+    @[PipelineBind(registerLegalizationPasses), PipelineBind(registerNormalizationPasses),
+      PipelineBind(registerSharedLoweringPasses),
+      PipelineBind(registerHlslMaterializeNumWorkgroups), PipelineBind(registerHlslExplodePointerLocals),
+      proc(reg: var PassRegistry) =
+        reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved),
+      PipelineBind(registerHlslHoistProgramScopeConstants), PipelineBind(registerInstantiateAddressSpaceGenerics),
+      proc(reg: var PassRegistry) =
+        reg.registerHlslParamClassPass(flavor),
+      PipelineBind(registerHlslStructRefPass), PipelineBind(registerHlslCallGraphPass),
+      PipelineBind(registerValidationPostPasses)]
+  of ctSpirvShader:
+    # No rename and no address-space callee instantiation: the encoder consumes typed words.
+    @[PipelineBind(registerLegalizationPasses), PipelineBind(registerNormalizationPasses),
+      PipelineBind(registerSharedLoweringPasses),
+      PipelineBind(registerValidationPostPasses)]
 
 proc buildPipeline*(target: CompileTarget, flavor: HlslFlavor = fvD3D12): PassRegistry =
-  ## Builds the target's pass pipeline from the table, in table order:
+  ## Builds the target's pass pipeline from the target's rows, in row order:
   ## registration order is execution order.
   result = PassRegistry.new()
-  for attach in pipelineTable[target]:
-    attach(result, flavor)
+  for row in pipelineRows(target, flavor):
+    row(result)
+
+template runGpuPipeline(body: NimNode, target: CompileTarget, flavor: HlslFlavor = fvD3D12): CirModule =
+  ## Lowers one DSL block body to CIRv2 and runs the target's pass pipeline.
+  ## A refusal anywhere in the chain is a compile-time error naming the construct.
+  let (m, lerr) = lowerCirv2(body)
+  if lerr.len > 0:
+    error(lerr)
+  var reg = buildPipeline(target, flavor)
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  m
 
 macro codegenMetal(body: typed): string =
   ## Compiles a `metal:` block body into Metal Shading Language (MSL) code:
   ## CIRv2 lowering, the pass pipeline, then the MSL printer.
   ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  var reg = buildPipeline(ctMetal)
-  let perr = runPasses(m, reg)
-  if perr.len > 0:
-    error(perr)
-  var ctx = GpuContext(module: m)
+  var ctx = GpuContext(module: runGpuPipeline(body, ctMetal))
   result = newLit(ctx.codegen(backendMetal))
 
 macro metal*(body: untyped): string =
@@ -286,14 +191,7 @@ macro codegenCuda(body: typed): string =
   ## the pass pipeline, then the CUDA printer.
   ## Refusals in the chain are compile-time
   ## errors naming the construct.
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  var reg = buildPipeline(ctCuda)
-  let perr = runPasses(m, reg)
-  if perr.len > 0:
-    error(perr)
-  var ctx = GpuContext(module: m)
+  var ctx = GpuContext(module: runGpuPipeline(body, ctCuda))
   result = newLit(ctx.codegen(backendCuda))
 
 macro cuda*(body: untyped): string =
@@ -306,14 +204,7 @@ macro codegenOpenCL(body: typed): string =
   ## the pass pipeline, then the OpenCL printer.
   ## Refusals in the chain are compile-time
   ## errors naming the construct.
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  var reg = buildPipeline(ctOpenCL)
-  let perr = runPasses(m, reg)
-  if perr.len > 0:
-    error(perr)
-  var ctx = GpuContext(module: m)
+  var ctx = GpuContext(module: runGpuPipeline(body, ctOpenCL))
   result = newLit(ctx.codegen(backendOpenCL))
 
 macro opencl*(body: untyped): string =
@@ -326,14 +217,7 @@ macro codegenGLSL(body: typed): string =
   ## CIRv2 lowering, the pass pipeline, then the GLSL printer.
   ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  var reg = buildPipeline(ctGlsl)
-  let perr = runPasses(m, reg)
-  if perr.len > 0:
-    error(perr)
-  var ctx = GpuContext(module: m)
+  var ctx = GpuContext(module: runGpuPipeline(body, ctGlsl))
   result = newLit(ctx.codegen(backendGLSL))
 
 macro glsl*(body: untyped): string =
@@ -348,14 +232,7 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   ##
   ## Any refusal in the chain is a compile-time error
   ## naming the construct.
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  var reg = buildPipeline(ctSpirvShader)
-  let perr = runPasses(m, reg)
-  if perr.len > 0:
-    error(perr)
-  var ctx = GpuContext(module: m)
+  var ctx = GpuContext(module: runGpuPipeline(body, ctSpirvShader))
   result = newLit(ctx.codegenSpirvShader())
 
 macro spirv*(body: untyped): seq[uint32] =
@@ -368,14 +245,7 @@ macro codegenWebGpu(body: typed): string =
   ## the pass pipeline, then the WGSL printer.
   ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  var reg = buildPipeline(ctWebGPU)
-  let perr = runPasses(m, reg)
-  if perr.len > 0:
-    error(perr)
-  var ctx = GpuContext(module: m)
+  var ctx = GpuContext(module: runGpuPipeline(body, ctWebGPU))
   result = newLit(ctx.codegen(backendWebGpu))
 
 macro webgpu*(body: untyped): string =
@@ -391,14 +261,7 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   ##   printer for `flavor`
   ## - a refusal in the chain is a compile-time
   ##   error naming the construct
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  var reg = buildPipeline(ctHlsl, flavor)
-  let perr = runPasses(m, reg)
-  if perr.len > 0:
-    error(perr)
-  var ctx = GpuContext(module: m)
+  var ctx = GpuContext(module: runGpuPipeline(body, ctHlsl, flavor))
   # a macro's static param is not a compile-time constant in the macro body,
   # so each flavor binds to the `codegen` static param as a literal below
   let printed = case flavor
