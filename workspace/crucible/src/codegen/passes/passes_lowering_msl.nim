@@ -7,12 +7,8 @@
 
 {.experimental: "codeReordering".}
 
-## MSL lowering: per-target transforms for the Metal storage model,
-## registered by the Metal pipeline and run before printing.
-##
-##   kernel body → decomposeArrayAssign → mslHoistProgramScopeConstants
-##   → mslHoistDeviceFnSmem → mslRewriteSmemLocals → mslThreadCoordinateBuiltins
-##   → printed MSL source
+## MSL lowering: per-target transforms for the Metal storage model.
+## The pipeline table in `gpu_compiler.nim` declares the registration order.
 ##
 ## - `mslHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into `CirModule.globals`
 ##   in encounter order, the printer emits them as program-scope `constant`
@@ -45,48 +41,43 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
-import ./passes_low_address_spaces
-import ./passes_low_array_assign
-import ./passes_low_pointers
 
 # ═══════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerMslLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the MSL per-target lowering passes:
-  ## - `decomposeArrayAssign`: whole-array copies that MSL cannot express
-  ## - the kernel struct-argument explosion, the flat resource target
-  ## - `mslHoistProgramScopeConstants`, `mslHoistDeviceFnSmem`,
-  ##   `mslRewriteSmemLocals`, `mslThreadCoordinateBuiltins`, in that order,
-  ##   before printing
-  ##
-  ## Registration contract: the passes sit after the reserved-word rename,
-  ## relocated declaration and appended parameter names match the renamed body references.
-  ##
-  ## Each pass appends its parameters and matching call-site arguments last,
-  ## the two orders stay consistent.
-  reg.registerDecomposeArrayAssign()
-  registerExplodeStructWithPtrFields(reg)
+func registerMslHoistProgramScopeConstants*(reg: var PassRegistry) =
+  ## Registers the const_mem program-scope hoist: a const_mem local without
+  ## an initializer refuses in the pass.
   reg.register("mslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
     run = mslHoistProgramScopeConstants
   )
+
+func registerMslHoistDeviceFnSmem*(reg: var PassRegistry) =
+  ## Registers the device-function smem hoist.
   reg.register("mslHoistDeviceFnSmem", pkTransform,
     "Hoists a device function's smem locals to threadgroup reference parameters," &
     " call sites pass the caller's arena",
     run = mslHoistDeviceFnSmem
   )
+
+func registerMslRewriteSmemLocals*(reg: var PassRegistry) =
+  ## Registers the kernel smem-local rewrite.
   reg.register("mslRewriteSmemLocals", pkTransform,
     "Keeps kernel smem locals in-body as threadgroup storage, refuses a device function's smem local",
     run = mslRewriteSmemLocals
   )
+
+func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
+  ## Registers the coordinate-builtin threading pass: each pass of the MSL
+  ## window appends its parameters and matching call-site arguments last.
+  ## The two orders stay consistent.
   reg.register("mslThreadCoordinateBuiltins", pkTransform,
     "Threads coordinate builtins down to device functions as parameters," &
     " call sites forward the caller's values",
     run = mslThreadCoordinateBuiltins
   )
-  reg.registerInstantiateAddressSpaceGenerics()
 
 # ═══════════════════════════════════════════════════════════════════════
 # Const_mem locals to program-scope constants

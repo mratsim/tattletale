@@ -21,11 +21,9 @@ import ./pass_helpers
 # Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerSpirvLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the SPIR-V per-target lowering passes:
-  ##
-  ## - `spirvPatchBoolToI32`, before printing: bool kernel parameters and bool
-  ##   globals retype to i32 storage, reads and stores wrap in conversions
+func registerSpirvPatchBoolToI32*(reg: var PassRegistry) =
+  ## Registers the SPIR-V bool-storage retype pass: bool kernel parameters
+  ## and bool globals retype to i32 storage, reads and stores wrap in conversions.
   reg.register("spirvPatchBoolToI32", pkTransform,
     "Retypes bool kernel parameters and bool globals to i32 storage",
     run = spirvPatchBoolToI32
