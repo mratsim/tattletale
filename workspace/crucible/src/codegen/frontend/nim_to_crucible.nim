@@ -734,7 +734,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return dotE(base, sanitizeIdent(n[1].strVal))
   of nnkInfix:
-    # operators: arithmetic and bitwise directly, comparisons normalize into four kinds, `>` and `>=` swap operands
+    # operators: arithmetic and bitwise lower directly. Comparisons normalize into four kinds, `>` and `>=` swap operands
     let op = n[0].strVal
     case op
     of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
@@ -749,11 +749,11 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let a = ctx.lowerExpr(unwrapConv(n[1]))
     if ctx.resolver.err.len > 0:
       return nil
+    let b = ctx.lowerExpr(unwrapConv(n[2]))
+    if ctx.resolver.err.len > 0:
+      return nil
     case op
     of "==", "!=", "<", "<=", ">", ">=":
-      let b = ctx.lowerExpr(unwrapConv(n[2]))
-      if ctx.resolver.err.len > 0:
-        return nil
       case op
       of "==":
         result = eqE(a, b)
@@ -769,37 +769,16 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         result = leE(b, a)
       return result
     of "and", "or", "xor":
-      # bool domain: boolean operators emit directly over their operands
-      # (`xor` evaluates both sides and compares). Text targets apply
-      # short-circuit natively, SPIR-V's OpLogicalAnd/OpLogicalOr do not.
-      # int domain: bitwise operators.
+      # bool vs bitwise domain resolves in the expression-form pass: a bitwise form emits uniformly here, operand types decide in the pass
       let at = getExprType(a)
-      if at != nil and at.kind == ctBool:
-        let b = ctx.lowerExpr(unwrapConv(n[2]))
-        if ctx.resolver.err.len > 0:
-          return nil
-        case op
-        of "and":
-          return andE(a, b)
-        of "or":
-          return orE(a, b)
-        else:
-          return neqE(a, b)
-      let b = ctx.lowerExpr(unwrapConv(n[2]))
-      if ctx.resolver.err.len > 0:
-        return nil
       case op
       of "and":
-        result = bitAndE(at, a, b)
+        return bitAndE(at, a, b)
       of "or":
-        result = bitOrE(at, a, b)
+        return bitOrE(at, a, b)
       else:
-        result = bitXorE(at, a, b)
-      return result
+        return bitXorE(at, a, b)
     of "+", "-", "*", "/", "div", "mod", "shl", "shr":
-      let b = ctx.lowerExpr(unwrapConv(n[2]))
-      if ctx.resolver.err.len > 0:
-        return nil
       let opType = getExprType(a)
       return arithExpr(op, opType, a, b)
     else:
@@ -821,7 +800,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   of nnkCall, nnkCommand:
     let callee = n[0]
     if callee.kind notin {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
-      ctx.fail("call callee " & callee.repr & " is not a proc symbol")
+      ctx.fail("value call callee " & callee.repr & " is not a proc symbol")
       return nil
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
