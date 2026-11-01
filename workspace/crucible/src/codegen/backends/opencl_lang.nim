@@ -86,7 +86,7 @@ proc emitOpenclPtrField(t: CirType, ident: string): string =
   let sep = if qualifier.len > 0: " " else: ""
   result = qualifier & sep & emitTypeBare(t) & ' ' & ident
 
-proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## OpenCL C declaration text of one struct member.
   ##
   ## - an array stacks every dimension behind the name (`float a[4][8]`)
@@ -464,6 +464,7 @@ const openclModuleShape = ModuleShape(
   structTypedef: true,
   structPadding: "char _padding_",
   structFieldTerm: ';',
+  structClose: "};",
   fwdDecls: true,
   moduleOrderProcs: false,
   kernelSep: "\n",
@@ -487,7 +488,7 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
 
   result.src = emitExtensions(m.features)
 
-  result.src &= printComputeStructs(ctx, m, true, "char _padding_")
+  result.src &= printStructs(ctx, m, openclModuleShape)
   if ctx.failing():
     return ("", ctx.err)
 

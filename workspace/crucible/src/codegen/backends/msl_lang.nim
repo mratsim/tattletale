@@ -95,7 +95,7 @@ proc emitMslPtr(t: CirType, ident: string): string =
   ptrField(mslScalarRow, mslVectorRule, printerTarget,
     mslPtrQualifier(t.space), t, ident)
 
-proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## MSL declaration text of one struct member: a pointer member names
   ## the address space of its pointee (`device float* p`), the rest takes
   ## the shared C declarator form.
@@ -368,6 +368,7 @@ const mslModuleShape = ModuleShape(
   structTypedef: false,
   structPadding: "char _",
   structFieldTerm: ';',
+  structClose: "};",
   fwdDecls: false,
   moduleOrderProcs: true,
   kernelSep: "\n\n",
@@ -386,7 +387,7 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   var src = "#include <metal_stdlib>\n"
   src &= "#include <metal_atomic>\n"
   src &= "using namespace metal;\n\n"
-  src &= printComputeStructs(ctx, m, false, "char _")
+  src &= printStructs(ctx, m, mslModuleShape)
   if ctx.failing():
     return ("", ctx.err)
   # program-scope `constant` declarations relocated into `m.globals` by the MSL lowering pass,

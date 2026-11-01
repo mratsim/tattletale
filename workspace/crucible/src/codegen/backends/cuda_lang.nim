@@ -66,7 +66,7 @@ proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
   cDecl(cudaScalarRow, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
-proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## CUDA declaration text of one struct member via the shared C declarator.
   emitCudaType(f.typ, f.name, false)
 
@@ -362,6 +362,7 @@ const cudaModuleShape = ModuleShape(
   structTypedef: false,
   structPadding: "char _",
   structFieldTerm: ';',
+  structClose: "};",
   fwdDecls: false,
   moduleOrderProcs: true,
   kernelSep: "\n\n",
@@ -379,7 +380,7 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
     lit: cudaLitRow, row: cudaScalarRow)
   # NVRTC's default include path provides cuda_fp16.h, so __half and the fp16
   # conversion builtins compile with no host-side include setup.
-  var src = "#include <cuda_fp16.h>\n" & printComputeStructs(ctx, m, false, "char _")
+  var src = "#include <cuda_fp16.h>\n" & printStructs(ctx, m, cudaModuleShape)
   if ctx.failing():
     return ("", ctx.err)
   for s in m.globals:

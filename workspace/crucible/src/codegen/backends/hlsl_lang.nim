@@ -750,42 +750,12 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   return "static const " & ctx.emitHlslDecl(s.declType, s.name) &
     " = " & ctx.printExpr(s.init) & ";"
 
-proc emitStructDecls(ctx: var PrintCtx, byName: Table[string, CirType], emitted: var HashSet[string], name: string, outp: var string) =
-  ## Emits one struct definition, member structs first, deduplicated by name.
-  ## HLSL resolves types at their declaration site: the printer refuses a struct holding a pointer,
-  ## HLSL structs cannot take resources.
-  if name in emitted:
-    return
-  let t = byName.getOrDefault(name, nil)
-  if t == nil:
-    ctx.fail("struct " & name & " is referenced but has no declaration")
-    return
-  if t.containsPtrDeep:
-    ctx.fail("struct " & name & " holds a pointer, HLSL structs cannot hold resources")
-    return
-  emitted.incl name
-  for f in t.fields:
-    if f.typ.kind == ctStruct:
-      ctx.emitStructDecls(byName, emitted, f.typ.name, outp)
-    elif f.typ.kind == ctArray:
-      if f.typ.aElem.kind == ctStruct:
-        ctx.emitStructDecls(byName, emitted, f.typ.aElem.name, outp)
-  if ctx.failing():
-    return
-  outp.add "struct " & name & " {\n"
-  if t.fields.len == 0:
-    # HLSL requires at least one member in a struct
-    outp.add "  uint _padding;\n"
-  else:
-    for f in t.fields:
-      outp.add "  " & ctx.emitHlslDecl(f.typ, f.name) & ";\n"
-  outp.add "};\n\n"
-
 const hlslModuleShape = ModuleShape(
   spaces: {caConstant},
   structTypedef: false,
   structPadding: "uint _padding",
   structFieldTerm: ';',
+  structClose: "};",
   fwdDecls: true,
   moduleOrderProcs: false,
   kernelSep: "\n",
@@ -794,18 +764,12 @@ const hlslModuleShape = ModuleShape(
   printsParamBindings: true,
   printsReduceTemplates: false)
 
-proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
-  ## Struct declarations for every struct of `CirModule.types`, member structs first,
-  ## deduplicated by name. HLSL accepts an unused struct declaration, so a struct
-  ## the lowering dissolved emits as dead text.
-  var byName: Table[string, CirType]
-  for t in m.types:
-    if t.kind == ctStruct:
-      byName[t.name] = t
-  var emitted = initHashSet[string]()
-  for t in m.types:
-    if t.kind == ctStruct:
-      ctx.emitStructDecls(byName, emitted, t.name, result)
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## HLSL declaration text of one struct member. A pointer-holding member refuses: HLSL structs cannot hold resources.
+  if f.typ.containsPtrDeep:
+    ctx.fail("struct " & t.name & " holds a pointer, HLSL structs cannot hold resources")
+    return ""
+  ctx.emitHlslDecl(f.typ, f.name)
 
 proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
   ## Resource-binding section of the kernel, per flavor:

@@ -543,27 +543,22 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitWgslTypeBare(p.typ) & ";"
 
-proc emitWgslStruct(ctx: var PrintCtx, t: CirType): string =
-  ## One struct declaration, WGSL requires at least one member.
-  if t.containsPtrDeep:
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## WGSL declaration text of one struct member: `name: type`, a bool member
+  ## stores as NIM_BOOL, a pointer-holding member refuses.
+  if f.typ.containsPtrDeep:
     ctx.fail("struct " & t.name & " holds a pointer, WGSL has no pointer struct members")
     return ""
-  result = "struct " & t.name & " {\n"
-  if t.fields.len == 0:
-    result &= "  _padding: u32,\n"
-  else:
-    for f in t.fields:
-      ctx.storageBoolSpelling = f.typ.kind == ctBool
-      let field = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
-      ctx.storageBoolSpelling = false
-      result &= "  " & field & ",\n"
-  result &= '}'
+  ctx.storageBoolSpelling = f.typ.kind == ctBool
+  result = f.name & ": " & ctx.emitWgslTypeBare(f.typ)
+  ctx.storageBoolSpelling = false
 
 const wgslModuleShape = ModuleShape(
   spaces: {caThreadgroup, caConstant},
   structTypedef: false,
   structPadding: "_padding: u32",
   structFieldTerm: ',',
+  structClose: "}",
   fwdDecls: false,
   moduleOrderProcs: false,
   kernelSep: "\n",
@@ -571,14 +566,6 @@ const wgslModuleShape = ModuleShape(
   printsRefBlocks: false,
   printsParamBindings: true,
   printsReduceTemplates: false)
-
-proc emitShaderStructs(ctx: var PrintCtx, m: CirModule): string =
-  ## Struct declarations for every struct in `CirModule.types`, in declaration order.
-  ## WGSL accepts an unused struct declaration, so a struct the lowering
-  ## dissolved emits as dead text. `emitWgslStruct` refuses a pointer-holding struct.
-  for t in m.types:
-    if t.kind == ctStruct:
-      result &= ctx.emitWgslStruct(t) & "\n\n"
 
 proc emitShaderBindings(ctx: var PrintCtx, kernel: CirProc): string =
   ## The per-parameter policy is `emitBinding`.

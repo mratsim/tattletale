@@ -114,7 +114,7 @@ proc emitGlslParam(t: CirType, name: string, varParam: bool): string =
   else:
     result = binding & emitTypeBare(t) & ' ' & name
 
-proc emitComputeStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## GLSL declaration text of one struct member: a buffer pointer member is
   ## the reference block handle, an array stacks the dimension behind the name.
   if f.typ.kind == ctArray:
@@ -544,6 +544,7 @@ const glslModuleShape = ModuleShape(
   structTypedef: false,
   structPadding: "uint _padding",
   structFieldTerm: ';',
+  structClose: "};",
   fwdDecls: true,
   moduleOrderProcs: false,
   kernelSep: "\n\n",
@@ -581,7 +582,7 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   if m.refBlocks.len > 0:
     result.src &= "\n"
 
-  result.src &= printComputeStructs(ctx, m, false, "uint _padding")
+  result.src &= printStructs(ctx, m, glslModuleShape)
   if ctx.failing():
     return ("", ctx.err)
 

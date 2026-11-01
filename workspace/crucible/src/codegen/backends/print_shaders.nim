@@ -13,7 +13,6 @@
 ## | ---------------------------- | --------------------------------------------- |
 ## | `prepProc(fn)`               | the per-proc walk state of the target         |
 ## | `printProcHead(fn)`          | the head, entry attributes and brace included |
-## | `emitShaderStructs(m)`       | the referenced struct declarations            |
 ## | `emitShaderBindings(kernel)` | the kernel's resource-binding section         |
 ## | `emitShaderFns(m)`           | the device-function section                   |
 ## | `emitComputeGlobal(s)`       | one hoisted program-scope declaration         |
@@ -68,10 +67,10 @@ proc printShaderModule*(ctx: var auto, m: CirModule, kernel: CirProc,
   ## - the device functions, then the entry kernel last: its body walk fills the input set its signature reads
   ##
   ## Every section checks the walk's first refusal, so a refusal anywhere records once and returns.
-  mixin emitShaderStructs, emitShaderBindings, emitShaderFns
+  mixin emitShaderBindings, emitShaderFns
   ctx.fnName = kernel.name
   result.src = prelude
-  result.src &= ctx.emitShaderStructs(m)
+  result.src &= printStructs(ctx, m, shape)
   if ctx.failing():
     return ("", ctx.err)
   result.src &= ctx.emitShaderBindings(kernel)

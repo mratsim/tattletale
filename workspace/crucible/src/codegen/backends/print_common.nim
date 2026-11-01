@@ -17,7 +17,7 @@
 ## A leaf belongs here when two or more printers need the same text.
 ## Single-target emission stays in the printer.
 
-import std/[macros, math, strutils]
+import std/[macros, math, sets, strutils, tables]
 import ../ir/cirv2_lang
 import ./targets_registry
 export targets_registry
@@ -563,6 +563,9 @@ type ModuleShape* = object
   ## - every target compiler requires at least one struct member
   structFieldTerm*: char
   ## Member terminator: a semicolon on the C family, a comma on WGSL.
+  structClose*: string
+  ## Closing token of a non-typedef struct declaration: brace plus semicolon
+  ## on the C family, a bare brace on WGSL.
   fwdDecls*: bool
   ## Device functions forward-declare before their definitions.
   moduleOrderProcs*: bool
@@ -598,6 +601,57 @@ proc printSig*(ctx: var auto, fn: CirProc): string =
     return ""
   result = ctx.emitComputePrefix(fn) & emitTypeBare(fn.ret) & ' ' & name &
     '(' & params.join(", ") & ")"
+
+proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
+    emitted: var HashSet[string], name: string, outp: var string,
+    shape: static ModuleShape) =
+  ## Emits one struct declaration into `outp`, member structs first,
+  ## deduplicated by name. A name absent from `byName` emits nothing.
+  mixin emitStructField
+  if name in emitted:
+    return
+  let t = byName.getOrDefault(name, nil)
+  if t == nil:
+    return
+  emitted.incl name
+  for f in t.fields:
+    if f.typ.kind == ctStruct:
+      ctx.printStructDecl(byName, emitted, f.typ.name, outp, shape)
+    elif f.typ.kind == ctArray and f.typ.aElem.kind == ctStruct:
+      ctx.printStructDecl(byName, emitted, f.typ.aElem.name, outp, shape)
+  if ctx.failing():
+    return
+  if shape.structTypedef:
+    outp.add "typedef struct {\n"
+  else:
+    outp.add "struct " & name & " {\n"
+  if t.fields.len == 0:
+    outp.add "  " & shape.structPadding & shape.structFieldTerm & "\n"
+  for f in t.fields:
+    outp.add "  " & ctx.emitStructField(t, f) & shape.structFieldTerm & "\n"
+  if shape.structTypedef:
+    outp.add "} " & name & ";\n\n"
+  else:
+    outp.add shape.structClose & "\n\n"
+
+proc printStructs*(ctx: var auto, m: CirModule, shape: static ModuleShape): string =
+  ## Returns the module's struct declaration text, "" once the walk recorded a refusal.
+  ##
+  ## - one declaration per struct of `CirModule.types`, member structs first,
+  ##   deduplicated by name
+  ## - declarations separated by a blank line, a non-struct type emits nothing
+  ## - the member text is the target's `emitStructField` grammar and the shell is the target's `ModuleShape` grammar
+  ##
+  ##   printStructs(ctx, m, mslModuleShape)  # "struct Pixel { ... }"
+  var byName: Table[string, CirType]
+  for t in m.types:
+    if t.kind == ctStruct:
+      byName[t.name] = t
+  var emitted: HashSet[string]
+  for t in m.types:
+    if t.kind != ctStruct:
+      continue
+    ctx.printStructDecl(byName, emitted, t.name, result, shape)
 
 proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   ## Returns the text of one device function or kernel, "" once the walk
