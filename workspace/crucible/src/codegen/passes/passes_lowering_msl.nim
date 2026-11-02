@@ -58,11 +58,11 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
   )
 
 func registerMetalLoweringPasses*(reg: var PassRegistry) =
-  ## Every pass a Metal codegen run runs between its normalization stage and its validation passes.
+  ## Pass sequence of a Metal codegen run between the normalization stage and the validation passes.
   ##
   ## Contract:
   ## - the `metal:` macro and the `bwd_diff` artifact pipeline share this pass sequence in registration order
-  ## - the reserved-identifier rename precedes every hoist and explosion so the rename reaches every name the hoists create
+  ## - the reserved-identifier rename precedes every hoist and explosion so that it walks every declaration the later passes add
   reg.registerSharedLoweringPasses()
   reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
   registerDecomposeArrayAssign(reg)

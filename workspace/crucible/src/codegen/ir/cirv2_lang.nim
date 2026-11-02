@@ -387,7 +387,7 @@ type
     adMetas*: Table[string, AdKernelsMetas]
     ## Backward-differentiation record: forward kernel name -> the kernel pair's signature metadata.
     ## The `autodiffBwdDerive` transform writes it from the same walk that built the backward kernel,
-    ## the pair artifact pipeline reads it. A module no AD transform touched leaves it empty.
+    ## the pair artifact pipeline reads it. A module that no AD transform touched is empty.
     adBwdKernels*: HashSet[string]
     ## Names of the backward and reduce kernels `autodiffBwdDerive` generated, a second AD pass never re-derives them.
 

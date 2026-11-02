@@ -54,7 +54,7 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
     " program scope")
 
 func registerGlslLoweringPasses*(reg: var PassRegistry) =
-  ## Every pass a GLSL codegen run runs between its normalization stage and its validation passes.
+  ## Pass sequence of a GLSL codegen run between the normalization stage and the validation passes.
   ##
   ## Contract:
   ## - the `glsl:` macro and the `bwd_diff` artifact pipeline share this pass sequence in registration order
