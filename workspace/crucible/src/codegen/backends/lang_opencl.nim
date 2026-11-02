@@ -304,6 +304,10 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
   ## A kernel's `ptr T` parameter binds a device buffer, the engine serializes
   ## it through the same pointer-leaf form as a `ptr UncheckedArray[T]` parameter.
   ## Array parameter values reach the kernel packed by the engine.
+  if p.passByRef and not isKernel:
+    # const Type* _p_name — pointer to const for large structs, no C++ references in OpenCL C
+    # Note: the by-ref lowering already renamed the param to _p_
+    return "const " & ctx.emitTypeName(p.typ) & "* " & p.name
   case p.typ.kind
   of ctAptr, ctPtr:
     let (qualifier, ident) = case p.typ.space

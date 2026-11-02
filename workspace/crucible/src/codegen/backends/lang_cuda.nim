@@ -241,6 +241,10 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ##
   ## A kernel's by-value array parameter is const-qualified, the printer lowers it to a read-only pointer.
   for p in fn.params:
+    if p.passByRef:
+      # const Type& name — C++ reference, no body changes needed
+      result.add "const " & emitTypeName(ctx, p.typ) & "& " & p.name
+      continue
     case p.typ.kind
     of ctAptr, ctPtr:
       result.add emitCudaType(p.typ, p.name, true)

@@ -300,6 +300,8 @@ type
     ## - the frontend marks it while the type is still the thread pointer
     ## - the GLSL lowering pass retypes the parameter to its pointee
     ## - the GLSL printer emits the `inout` qualifier on the mark
+    passByRef*: bool
+    ## Pass by hidden const reference (large structs > 24 bytes), buffers and pointers never mark.
 
   CirProc* = ref object
     ## One proc or kernel: name, typed params, return type, statement body.
@@ -381,6 +383,33 @@ type
     ## - valid only if no transform runs after the pass, which runPasses enforces
     ## - the printer emits one `layout(buffer_reference, std430) buffer`
     ##   declaration per entry in order, it never registers a block itself
+
+proc computeCirSizeBytes(t: CirType): int =
+  ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
+  case t.kind
+  of ctInt, ctUint, ctFloat, ctBf16:
+    result = if t.bits > 0: t.bits div 8 else: 8
+  of ctBool:
+    result = 1
+  of ctString:
+    # String values store as `const char*`, the pointer is the storage
+    result = 8
+  of ctPtr, ctAptr:
+    result = 8
+  of ctArray:
+    result = t.aN * computeCirSizeBytes(t.aElem)
+  of ctVector:
+    result = t.vN * computeCirSizeBytes(t.vElem)
+  of ctStruct:
+    result = 0
+    for f in t.fields:
+      result += computeCirSizeBytes(f.typ)
+  of ctVoid, ctProc, ctSpan:
+    result = 0
+
+func isLargeStruct*(t: CirType): bool =
+  ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
+  t != nil and t.kind == ctStruct and computeCirSizeBytes(t) >= 24
 
 proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
   ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.

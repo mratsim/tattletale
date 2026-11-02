@@ -1433,7 +1433,8 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
       let pname = ctx.mintUniqueName(formal[j].strVal)
       let psym = sym(pname, typ)
       params.add(CirParam(name: pname, typ: typ,
-        varParam: ftype.kind == nnkVarTy))
+        varParam: ftype.kind == nnkVarTy,
+        passByRef: isLargeStruct(typ)))
       ctx.declareLocal(formal[j].repr, psym)
   let ret = ctx.retType
   if ret.kind != ctVoid:
