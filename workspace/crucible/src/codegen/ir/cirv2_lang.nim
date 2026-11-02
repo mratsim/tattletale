@@ -5,23 +5,17 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Cirv2 datatypes: the Crucible IR v2 tree, Final-IR shaped.
-##
-## CIRv2 is a plain Nim object-variant tree usable at macro time.
-## The shape encodes the normal form:
-##
-## - control flow is statement-based
-## - `sWhile` re-tests its condition before every iteration
-## - a call is an ordinary expression node: the builders bind statement calls
-##   through `sCall` and value calls appear in any operand position
-## - every typed operation states its type in the `(add Type a b)` discipline of the Leng grammar
-##
-## The frontend refuses a construct that it cannot lower. The validation passes
-## check the semantics that the shape cannot encode.
-
 import std/[macros, hashes, sequtils, sets, strutils, tables]
+import ../../builtins/builtins_catalog
+export builtins_catalog
 
-const CoordBuiltinNames*: array[6, string] = [
+# ############################################################
+#
+#            CIRv2 language datatypes
+#
+# ############################################################
+
+const CoordBuiltinNames*: array[cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup, string] = [
   "thread_position_in_grid",
   "threadgroup_position_in_grid",
   "thread_position_in_threadgroup",
@@ -29,12 +23,13 @@ const CoordBuiltinNames*: array[6, string] = [
   "threadgroups_per_grid",
   "thread_index_in_threadgroup",
 ]
-## Canonical coordinate builtin names, in the order that passes declare
-## parameters and entry heads list inputs.
-## - The IR names every coordinate builtin by its canonical name.
-## - Consumers dispatch on the name.
-## - A symbol sharing a name without a `{.builtin.}` read is
-##   unrecognized (`builtin` false).
+## Canonical coordinate builtin names indexed by kind.
+## - Array order matches the parameter declaration order of the passes
+##   and the input order of the entry heads.
+## - The IR names every coordinate builtin by its canonical name,
+##   the family enums hold the dispatch.
+## - A symbol sharing a name without a `{.builtin.}` read has
+##   `builtin` false and every family kind at none.
 
 type
   AddressSpace* = enum
@@ -161,8 +156,18 @@ type
       typ*: CirType
       builtin*: bool
       ## True for a symbol born from a `{.builtin.}` read or call, false for a local or parameter sharing a builtin's name.
-      ## - Consumers recognize the builtin vocabulary from the canonical name alone, guarded by this flag.
-      ## - The categories dispatch through the consumers' own emit tables.
+      ## - The conv and math vocabulary dispatches on the canonical name through the registry tables, guarded by this flag.
+      ## - The five family kinds resolve the enum dispatch for the rest.
+      coordBuiltin*: CirCoordBuiltinKind
+      ## Coordinate builtin kind, `cbkNone` when the symbol is not a coordinate builtin.
+      synchroBuiltin*: CirSynchroBuiltinKind
+      ## Synchronization builtin kind, `cbkNone` when the symbol is not a barrier.
+      reductionBuiltin*: CirReductionBuiltinKind
+      ## Reduction builtin kind, `cbkNone` when the symbol is not a subgroup reduction.
+      shuffleBuiltin*: CirShuffleBuiltinKind
+      ## Shuffle builtin kind, `cbkNone` when the symbol is not a cross-lane shuffle.
+      atomicsBuiltin*: CirAtomicsBuiltinKind
+      ## Atomics builtin kind, `cbkNone` when the symbol is not an atomic builtin.
     of eIntLit:
       value*: int64
       litType*: CirType
@@ -295,6 +300,8 @@ type
     ## - the frontend marks it while the type is still the thread pointer
     ## - the GLSL lowering pass retypes the parameter to its pointee
     ## - the GLSL printer emits the `inout` qualifier on the mark
+    passByRef*: bool
+    ## Pass by hidden const reference (large structs > 24 bytes), buffers and pointers never mark.
 
   CirProc* = ref object
     ## One proc or kernel: name, typed params, return type, statement body.
@@ -376,6 +383,33 @@ type
     ## - valid only if no transform runs after the pass, which runPasses enforces
     ## - the printer emits one `layout(buffer_reference, std430) buffer`
     ##   declaration per entry in order, it never registers a block itself
+
+proc computeCirSizeBytes(t: CirType): int =
+  ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
+  case t.kind
+  of ctInt, ctUint, ctFloat, ctBf16:
+    result = if t.bits > 0: t.bits div 8 else: 8
+  of ctBool:
+    result = 1
+  of ctString:
+    # String values store as `const char*`, the pointer is the storage
+    result = 8
+  of ctPtr, ctAptr:
+    result = 8
+  of ctArray:
+    result = t.aN * computeCirSizeBytes(t.aElem)
+  of ctVector:
+    result = t.vN * computeCirSizeBytes(t.vElem)
+  of ctStruct:
+    result = 0
+    for f in t.fields:
+      result += computeCirSizeBytes(f.typ)
+  of ctVoid, ctProc, ctSpan:
+    result = 0
+
+func isLargeStruct*(t: CirType): bool =
+  ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
+  t != nil and t.kind == ctStruct and computeCirSizeBytes(t) > 24
 
 proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
   ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.
@@ -582,18 +616,18 @@ proc hasCallDeep*(e: CirExpr): bool =
       return true
 
 func resolveAddressSpace*(e: CirExpr): AddressSpace =
-  ## Address space of the storage an expression's pointer provenance names:
+  ## Address space of the storage an expression names:
   ## the innermost pointer type along the access chain.
   ##
-  ## - provenance survives element reads, field reads, value casts, and integer
+  ## - the space survives element reads, field reads, value casts, and integer
   ##   arithmetic over cast pointers
-  ## - `caDevice` reads as no provenance: a plain integer or an array value
-  ##   derives the unprovenanced default
+  ## - `caDevice` reads as no space: a scalar integer or an array value
+  ##   keeps the device default
   ##
-  ## One walker serves both consumers:
+  ## Both consumers of the derivation share this walker:
   ##
-  ## - the frontend sets a pointer cast's target space from this derivation when it builds the cast
-  ## - the cast validation reads the same derivation over the module's expressions
+  ## - the frontend sets a pointer cast's target space from it when it builds the cast
+  ## - the clone instantiation re-derives a clone's cast targets from it
   result = caDevice
   case e.kind
   of eSym:
@@ -630,13 +664,25 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   else:
     discard
 
+func withProvenance*(t: CirType, operand: CirExpr): CirType =
+  ## Returns pointer type `t` re-spaced to the operand's provenance space,
+  ## `t` unchanged for a non-pointer `t`.
+  ##
+  ## Birth rule of a pointer cast's target: the frontend applies it when it
+  ## builds a cast and the address-space instantiation re-applies it over
+  ## a clone's re-spaced formals.
+  if t != nil and t.kind in {ctPtr, ctAptr}:
+    result = t.withAddressSpace(resolveAddressSpace(operand))
+  else:
+    result = t
+
 func isLvalue*(e: CirExpr): bool =
   ## An expression that names storage: a symbol, a dereference, an index,
   ## a pointer index, or a field access. `addr` and assignment take lvalues.
   e.kind in {eSym, eDeref, eAt, ePat, eDot}
 
 # ═══════════════════════════════════════════════════════════════════════
-# Emitted-name vocabulary
+#  Emitted-name vocabulary
 # ═══════════════════════════════════════════════════════════════════════
 
 const Base58Alphabet* = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

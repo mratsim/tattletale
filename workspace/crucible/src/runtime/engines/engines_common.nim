@@ -10,8 +10,8 @@
 ## Type and allocator live in one scope, like the stdlib's memalloc and seqs_v2.
 ## Each release proc is private and never re-exported.
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
-export ast_datatypes.BackendKind
+import workspace/crucible/src/crucible_codegen
+export crucible_codegen.CodegenKind
 
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/objc_abi as objc

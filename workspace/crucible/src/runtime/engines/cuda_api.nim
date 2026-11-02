@@ -9,7 +9,7 @@
 import workspace/crucible/src/abis/c_abi
 import workspace/crucible/src/abis/nvidia_abi
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/cuda_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
@@ -68,15 +68,12 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
   $cast[cstring](addr name[0])
 
 proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[CUdeviceptr, T] {.inline.} =
-  ## Allocates len elements of T on the engine
   DeviceMem[CUdeviceptr, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[CUdeviceptr, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
 proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[CUdeviceptr, T], n: int) {.inline.} =
-  ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -91,17 +88,17 @@ proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   # CUdeviceptr values pack 8 bytes into heap-backed storage, addrs stay valid across the by-value return
-  const size = computeDeviceLayout(T, bkCuda).size
+  const size = computeDeviceLayout(T, cgCuda).size
   ctx.bytes[argIdx] = newSeq[byte](size)
   if size > 0:
     var off = 0
-    ctx.bytes[argIdx].packFrom(off, v, bkCuda)
+    ctx.bytes[argIdx].packFrom(off, v, cgCuda)
   ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
 
 proc cudaBindArgs(output: auto, args: tuple): auto =
-  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
+  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, cgCuda)
   result = SerializationCtx[n]()
-  bindArgs(result, output, args, store, CUdeviceptr, bkCuda)
+  bindArgs(result, output, args, store, CUdeviceptr, cgCuda)
 
 proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
@@ -179,7 +176,6 @@ proc compile(nvrtc: var NVRTC, compute_capability = cudaGetComputeCapability()) 
   var options = @[
     cstring arch,
     cstring "-default-device",           # namespace-scope vars default to __device__
-    # "--fmad=false", # and whatever other options for example
   ]
   let numberOfOptions = cint options.len
   let compileResult =  nvrtcCompileProgram(nvrtc.prog, numberOfOptions,

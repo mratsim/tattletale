@@ -5,16 +5,15 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Nim types to CirType: the frontend boundary translation.
-##
-## Each Nim type translates to a `CirType` over the closed set of type kinds.
-##
-## Nim `int`/`uint` lower to 32 bits.
-## Rejections go into `err` as the first refusal message.
-
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import std/[macros, tables, strutils, hashes]
+
+# ############################################################
+#
+#            Nim type resolution
+#
+# ############################################################
 
 type
   CirTypeResolver* = object
@@ -41,7 +40,7 @@ func getBuiltinDistinctScalar(n: NimNode): CirType =
   ## erases to its storage base and loses the float format.
   ## - `float16` resolves as the 16-bit float cell, a first-class float identity
   ## - `bfloat16` resolves as the 16-bit bfloat cell, a first-class bfloat identity
-  ## - the fp8 formats have no type beyond raw bits and the storage width carries the value
+  ## - the fp8 formats have no type beyond raw bits and the storage width is the value
   ## Nil when `n` is not one of the marked types.
   if n.kind != nnkSym or n.symKind != nskType:
     return nil
@@ -128,8 +127,7 @@ proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
     if impl.kind == nnkConstDef and impl[2].kind in nnkIntLit .. nnkUInt64Lit:
       result = impl[2].intVal
     else:
-      refuse("compile-time value expected, got symbol " & n.repr &
-        " whose value is not a literal")
+      refuse("compile-time value expected, got symbol " & n.repr & " whose value is not a literal")
   of nnkPar:
     if n.len == 1:
       result = r.evalConstInt(n[0])
@@ -281,7 +279,7 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
   let candidate = tStruct(deriveStructName(canon) & "_" &
     base58Short(typeIdentityHash(nameKey)), fields)
   # One dedup, the registration: an equal structure returns the registered
-  # struct under the name its first registration chose. The canonical text
+  # struct under the identifier its first registration chose. The canonical text
   # alone is not the identity: an alias instantiation can reach the resolver
   # through the generic body's own object text, and both name one struct.
   for registered in r.structs:
@@ -413,7 +411,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     result = tFloat(64)
   of ntyString:
     # a string literal's type. Only the C-family targets carry a type name
-    # for it (`const char*`), the wgsl and hlsl printers refuse the name.
+    # for it (`const char*`), the wgsl and hlsl printers refuse the type name.
     result = tString()
   of ntyPtr:
     let pointee = n[0]
@@ -445,7 +443,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
       arr = n.getTypeImpl()
     arr.expectKind(nnkBracketExpr)
     if arr[1].kind == nnkIdent:
-      # a named const length: the implementation tree keeps the name while the instantiation tree gives the value
+      # a named const length: the implementation tree keeps the identifier while the instantiation tree gives the value
       arr = arr.getTypeInst()
       arr.expectKind(nnkBracketExpr)
     let len = r.evalConstInt(arr[1])

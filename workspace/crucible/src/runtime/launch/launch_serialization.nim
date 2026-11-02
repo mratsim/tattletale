@@ -7,7 +7,7 @@
 
 import std/macros
 import std/typetraits
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/engines/engines_common
 import workspace/crucible/src/runtime/backends/runtime_utils
 
@@ -15,12 +15,12 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 # ▸ Compile-time binding
 # ═══════════════════════════════════════════════════════════════════════
 
-func getArgWidth[T](_: typedesc[T], backend: static BackendKind): int {.compileTime.} =
+func getArgWidth[T](_: typedesc[T], backend: static CodegenKind): int {.compileTime.} =
   ## Crucible-lowered byte width of scalar `T`
   when T is int|uint|enum:
     4
   elif T is bool:
-    when backend == bkCuda:
+    when backend == cgCuda:
       1
     else:
       4
@@ -81,10 +81,10 @@ func isBlobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} 
     result = true
   else: result = false
 
-func explodesStructArgs(backend: static BackendKind): bool {.compileTime.} =
-  backend in {bkMetal, bkWebGPU, bkOpenCL}
+func explodesStructArgs(backend: static CodegenKind): bool {.compileTime.} =
+  backend in {cgMetal, cgWebGPU, cgOpenCL}
 
-func computeDeviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple[size, align: int] {.compileTime.} =
+func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple[size, align: int] {.compileTime.} =
   ## Device size and alignment of `T` on `backend`: phantom and static types
   ## contribute zero bytes, Nim int/uint lower to 4 bytes
   when T is DeviceMem:
@@ -100,7 +100,7 @@ func computeDeviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple
         result.align = max(result.align, fl.align)
       result.size = round_multiple_up(result.size, result.align)
   elif T is array:
-    when backend == bkGlsl and hasBoolLeaf(T):
+    when backend == cgGlsl and hasBoolLeaf(T):
       # one 4-byte std430 word per bool, array elements stride at the device element layout, never Nim's 1-byte bool
       let el = computeDeviceLayout(typeof(default(T)[0]), backend)
       result = (default(T).len * el.size, el.align)
@@ -110,7 +110,7 @@ func computeDeviceLayout*[T](_: typedesc[T], backend: static BackendKind): tuple
   else:
     result = (getArgWidth(T, backend), getArgWidth(T, backend))
 
-func countArgs[T, H](_: typedesc[T], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
+func countArgs[T, H](_: typedesc[T], _: typedesc[H], backend: static CodegenKind): int {.compileTime.} =
   ## Device args one launch value delivers
   when T is H or T is DeviceMem or T is ptr or T is pointer:
     1
@@ -156,7 +156,7 @@ proc putBytes[T](dst: var openArray[byte], off: int, v: T, w: int) {.inline.} =
     else:
       copyMem(dst[off].addr, v.unsafeAddr, w)
 
-proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static BackendKind) {.inline.} =
+proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static CodegenKind) {.inline.} =
   ## Packs one value at its device layout, aligned, ints lowered to 32-bit
   when T is object|tuple:
     when not isStaticArg(T):
@@ -166,7 +166,7 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
         dst.packFrom(off, f, backend)
       off = round_multiple_up(off, a)
   elif T is array:
-    when backend == bkGlsl and hasBoolLeaf(T):
+    when backend == cgGlsl and hasBoolLeaf(T):
       # element-wise packing, one 4-byte std430 word per bool, same as the scalar getArgWidth rule
       let a = computeDeviceLayout(T, backend).align
       off = round_multiple_up(off, a)
@@ -183,7 +183,7 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
     putBytes(dst, off, v, a)
     off += a
 
-macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedesc, backend: static BackendKind) =
+macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedesc, backend: static CodegenKind) =
   ## Only whole-argument packing requires trivially-copyable args.
   ## Struct-explode packing writes the buffer handle plus trivial fields,
   ## so owning wrappers with destructors serialize fine there.
@@ -226,12 +226,12 @@ macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedes
 # ▸ PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════
 
-func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], backend: static BackendKind): int {.compileTime.} =
+func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], backend: static CodegenKind): int {.compileTime.} =
   result = countArgs(O, H, backend)
   for f in fields(default(A)):
     result += countArgs(typeof(f), H, backend)
 
-template bindArgs*(ctx: var auto, output: auto, args: untyped, store: untyped, H: typedesc, backend: static BackendKind) =
+template bindArgs*(ctx: var auto, output: auto, args: untyped, store: untyped, H: typedesc, backend: static CodegenKind) =
   var pos = 0
   serialize(ctx, output, pos, store, H, backend)
   for f in fields(args):

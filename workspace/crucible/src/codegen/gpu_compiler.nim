@@ -5,30 +5,14 @@
 #   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
-
-## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, GLSL, WebGPU, Metal.
-##
-## Public API, one import: `import workspace/crucible`.
-## The curated surface lives in `src/crucible_public_api.nim`, the GPU builtin vocabulary
-## in `src/crucible_gpu_builtins.nim`, both re-exported here in full.
-## Everything not exported there is internal, only compiler tests reach into the internals.
-##
-## Pipeline:
-## - the `metal:`-family macros lower the typed body to CIRv2
-## - `buildPipeline` materializes the target's pass pipeline from the table below
-## - `runPasses` executes it, `backends_api` dispatches the final module to the `*_lang` printer
-##
-## Modules: `src/codegen/frontend/nim_to_crucible`, the pass stages under
-## `src/codegen/passes/`, the printers under `src/codegen/backends/*_lang`.
-
 import std/macros
 
 import ../builtins/builtins
 export builtins
 import ../builtins/builtins_compilermagic
+import ../crucible_codegen
 export builtins_compilermagic
 
-import ./ir/ast_datatypes
 import ./frontend/nim_to_crucible
 import ./passes/pass_registry
 import ./passes/passes_normalizations
@@ -48,10 +32,17 @@ import ./passes/passes_low_array_assign
 import ./passes/passes_low_address_spaces
 import ./backends/backends_api
 import ./ir/cirv2_pretty
-from ./backends/hlsl_lang import HlslFlavor, fvD3D12, fvVulkan
+
+from ./backends/lang_hlsl import HlslFlavor, fvD3D12, fvVulkan
+
+# ############################################################
+#
+#            GPU compiler driver
+#
+# ############################################################
 
 # ═══════════════════════════════════════════════════════════════════════
-# Per-target pass pipelines, registration order is execution order
+#  Per-target pass pipelines
 # ═══════════════════════════════════════════════════════════════════════
 
 macro codegenMetal(body: typed): string =
@@ -80,8 +71,7 @@ macro codegenMetal(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegen(backendMetal))
+  result = newLit(codegen(m, cgMetal))
 
 macro metal*(body: untyped): string =
   ## Converts the body of this macro into Metal Shading Language (MSL) code.
@@ -113,8 +103,7 @@ macro codegenCuda(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegen(backendCuda))
+  result = newLit(codegen(m, cgCuda))
 
 macro cuda*(body: untyped): string =
   ## Converts the body of this macro into CUDA code.
@@ -144,8 +133,7 @@ macro codegenOpenCL(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegen(backendOpenCL))
+  result = newLit(codegen(m, cgOpenCL))
 
 macro opencl*(body: untyped): string =
   ## Converts the body of this macro into OpenCL C code.
@@ -162,7 +150,6 @@ macro codegenGLSL(body: typed): string =
   registerSharedLoweringPasses(reg)
   reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
   registerGlslQualifyVarParams(reg)
-  registerGlslExplodePointerLocals(reg)
   registerSmemInitRewrite(reg)
   registerGlslHoistProgramScopeLocals(reg)
   registerInstantiateAddressSpaceGenerics(reg)
@@ -175,8 +162,7 @@ macro codegenGLSL(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegen(backendGLSL))
+  result = newLit(codegen(m, cgGlsl))
 
 macro glsl*(body: untyped): string =
   ## Converts the body of this macro into GLSL compute shader code.
@@ -201,8 +187,7 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegenSpirvShader())
+  result = newLit(codegenSpirvShader(m))
 
 macro spirv*(body: untyped): seq[uint32] =
   ## Converts the body of this macro into binary SPIR-V words (Vulkan environment).
@@ -217,6 +202,7 @@ macro codegenWebGpu(body: typed): string =
   var reg = PassRegistry.new()
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
+  registerFoldMaxMinToBuiltins(reg)
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
   registerExplodeStructWithPtrFields(reg)
   registerWgslExplodePointerLocals(reg)
@@ -232,8 +218,7 @@ macro codegenWebGpu(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  var ctx = GpuContext(module: m)
-  result = newLit(ctx.codegen(backendWebGpu))
+  result = newLit(codegen(m, cgWebGPU))
 
 macro webgpu*(body: untyped): string =
   ## Converts the body of this macro into WebGPU WGSL code.
@@ -251,6 +236,7 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   var reg = PassRegistry.new()
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
+  registerFoldMaxMinToBuiltins(reg)
   registerHlslMaterializeNumWorkgroups(reg)
   registerHlslExplodePointerLocals(reg)
   # Rename position: after the pointer-local explosion, one named deviation
@@ -268,12 +254,11 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  var ctx = GpuContext(module: m)
   # a macro's static param is not a compile-time constant in the macro body,
   # so each flavor binds to the `codegen` static param as a literal below
   let printed = case flavor
-    of fvD3D12: ctx.codegen(backendHlsl, fvD3D12)
-    of fvVulkan: ctx.codegen(backendHlsl, fvVulkan)
+    of fvD3D12: codegen(m, cgHlsl, fvD3D12)
+    of fvVulkan: codegen(m, cgHlsl, fvVulkan)
   result = newLit(printed)
 
 macro hlsl*(flavor: untyped, body: untyped): string =
@@ -295,7 +280,7 @@ macro hlsl*(flavor: untyped, body: untyped): string =
   of "fvVulkan":
     flav = fvVulkan
   else:
-    error("hlsl: unknown flavor `" & name & "`, expected fvD3D12 or fvVulkan")
+    error("unknown flavor `" & name & "`, expected fvD3D12/fvVulkan")
   crucibleCompileTarget = ctHlsl
   result = newCall(bindSym"codegenHlsl", body, newLit(flav))
 

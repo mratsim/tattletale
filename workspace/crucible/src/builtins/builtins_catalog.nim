@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ./builtins_pragmas
+import std/macros
 
 
 type
@@ -15,33 +16,120 @@ type
     ## - tuple so `.x` and `[idx]` access both work, `nim_to_crucible` normalizes
     ##   tuple `[idx]` to a field access
 
-# ═══════════════════════════════════════════════════════════
-# 0. Canonical thread coordinates (Metal Shading Language)
-# ═══════════════════════════════════════════════════════════
-#
-# {.builtin.} are repl
+# ═══════════════════════════════════════════════════════════════════════
+# Builtin kinds
+# ═══════════════════════════════════════════════════════════════════════
 
-let thread_position_in_grid* {.builtin, compileTime.}: ivec3 = default(ivec3)
+type
+  CirCoordBuiltinKind* = enum
+    cbkNone
+    cbkThreadPositionInGrid
+    cbkThreadgroupPositionInGrid
+    cbkThreadPositionInThreadgroup
+    cbkThreadsPerThreadgroup
+    cbkThreadgroupsPerGrid
+    cbkThreadIndexInThreadgroup
+
+  CirSynchroBuiltinKind* = enum
+    cbkNone
+    cbkThreadgroupBarrier
+    cbkThreadgroupBarrierDevice
+
+  CirReductionBuiltinKind* = enum
+    cbkNone
+    cbkReduceAdd
+    cbkReduceMax
+
+  CirShuffleBuiltinKind* = enum
+    cbkNone
+    cbkSimdShuffle
+    cbkSimdShuffleXor
+
+  CirAtomicsBuiltinKind* = enum
+    cbkNone
+    cbkAtomicFetchAdd
+
+macro builtinKindLadder*(E: typedesc, fname: static string): untyped =
+  ## Generates `proc fname*(payload: NimNode): E {.compileTime.}`.
+  ##
+  ## Args:
+  ## - `E`: the family enum, its members enumerate the ladder
+  ## - `fname`: the exported name of the generated ladder proc
+  ##
+  ## Returns:
+  ## - an `eqIdent` ladder over the members of `E`
+  ## - the first member of `E` (the none value) when `payload` matches
+  ##   none of them
+  ##
+  ## `payload`:
+  ## - the argument of a `{.builtin: <member>.}` pragma, read back
+  ##   through `getImpl`
+  ## - the nil literal for a `{.builtin.}` without a payload
+  ##
+  ## The ladder enumerates the enum members, so the payload identifiers
+  ## and the enum members cannot drift apart.
+  let enumTy = E.getImpl[2]
+  if enumTy.kind != nnkEnumTy:
+    error("builtinKindLadder expects an enum type, found " & $enumTy.kind)
+  var members: seq[string]
+  for i in 1 ..< enumTy.len:
+    let m = enumTy[i]
+    case m.kind
+    of nnkIdent, nnkSym:
+      members.add m.strVal
+    of nnkEnumFieldDef:
+      members.add m[0].strVal
+    else:
+      error("unexpected enum member shape " & $m.kind)
+  var body = newTree(nnkIfStmt)
+  for name in members:
+    body.add newTree(nnkElifBranch,
+      newCall(bindSym"eqIdent", ident"payload", newLit(name)),
+      newTree(nnkStmtList, newAssignment(ident"result", ident(name))))
+  body.add newTree(nnkElse,
+    newTree(nnkStmtList, newAssignment(ident"result", ident(members[0]))))
+  result = newTree(nnkProcDef,
+    postfix(ident(fname), "*"),
+    newEmptyNode(),
+    newEmptyNode(),
+    newTree(nnkFormalParams,
+      ident(E.strVal),
+      newTree(nnkIdentDefs, ident"payload", ident"NimNode", newEmptyNode())),
+    newTree(nnkPragma, ident"compileTime"),
+    newEmptyNode(),
+    newTree(nnkStmtList, body))
+
+builtinKindLadder(CirCoordBuiltinKind, "coordBuiltinKindOf")
+builtinKindLadder(CirSynchroBuiltinKind, "synchroBuiltinKindOf")
+builtinKindLadder(CirReductionBuiltinKind, "reductionBuiltinKindOf")
+builtinKindLadder(CirShuffleBuiltinKind, "shuffleBuiltinKindOf")
+builtinKindLadder(CirAtomicsBuiltinKind, "atomicsBuiltinKindOf")
+
+# ═══════════════════════════════════════════════════════════
+# 0. Canonical thread coordinates
+# ═══════════════════════════════════════════════════════════
+
+let thread_position_in_grid* {.builtin: cbkThreadPositionInGrid, compileTime.}: ivec3 = default(ivec3)
   ## Global thread index: `threadgroup_position_in_grid × threads_per_threadgroup + thread_position_in_threadgroup` (per axis).
-let threadgroup_position_in_grid* {.builtin, compileTime.}: ivec3 = default(ivec3)
-let thread_position_in_threadgroup* {.builtin, compileTime.}: ivec3 = default(ivec3)
-let threads_per_threadgroup* {.builtin, compileTime.}: ivec3 = default(ivec3)
-let threadgroups_per_grid* {.builtin, compileTime.}: ivec3 = default(ivec3)
+let threadgroup_position_in_grid* {.builtin: cbkThreadgroupPositionInGrid, compileTime.}: ivec3 = default(ivec3)
+let thread_position_in_threadgroup* {.builtin: cbkThreadPositionInThreadgroup, compileTime.}: ivec3 = default(ivec3)
+let threads_per_threadgroup* {.builtin: cbkThreadsPerThreadgroup, compileTime.}: ivec3 = default(ivec3)
+let threadgroups_per_grid* {.builtin: cbkThreadgroupsPerGrid, compileTime.}: ivec3 = default(ivec3)
 
 # Not compileTime: host-side tile-op proc bodies call it at runtime,
 # a compileTime dummy would fold before the host link.
-let thread_index_in_threadgroup* {.builtin.}: int = 0
+let thread_index_in_threadgroup* {.builtin: cbkThreadIndexInThreadgroup.}: int = 0
   ## Flat thread index within the threadgroup:
   ## `thread_position_in_threadgroup` linearized in x-major order.
   ## Each printer emits its native flat index (WGSL `local_invocation_index`).
 
-proc threadgroup_barrier*() {.builtin.} = discard
+proc threadgroup_barrier*() {.builtin: cbkThreadgroupBarrier.} = discard
   ## Orders threadgroup-address-space accesses.
   ## Device-address-space exchanges need `threadgroup_barrier_device`:
   ## The backend's threadgroup flag does not order device stores.
 
 proc threadgroup_barrier_device*()
-    {.builtin.} =
+    {.builtin: cbkThreadgroupBarrierDevice.} =
   ## Orders device-address-space accesses,
   ## the reverse fence of `threadgroup_barrier`.
   discard

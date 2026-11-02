@@ -46,7 +46,6 @@ proc `=destroy`(ctx: var OpenCLContextObj) =
     ctx.context = nil
 
 proc `=destroy`(k: var OpenCLKernelObj) =
-  ## Releases the kernel and its program, nil fields skip.
   if k.kernel != nil:
     discard releaseKernel(k.kernel)
   if k.program != nil:
@@ -116,7 +115,6 @@ proc newOpenCLContext*(): OpenCLContext =
   let devices = listDevices()
   if devices.len == 0:
     failLoud("OpenCL: no devices found")
-  # Pick first GPU, fall back to first device
   var dev = devices[0]
   for d in devices:
     if d.isGpu():
@@ -143,7 +141,6 @@ proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
   )
 
 proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
-  ## Raw readback into a caller-provided buffer (used by the engines).
   if size > buffer.size:
     failLoud("OpenCL readBuffer: read of " & $size & " bytes exceeds buffer size " & $buffer.size)
   check buffer.commands.enqueueReadBuffer(
@@ -202,5 +199,4 @@ proc runKernel*(kernel: OpenCLKernel, globalWorkSize, localWorkSize: openArray[c
   check finish(kernel.commands)
 
 proc setArg*(kernel: var OpenCLKernel, index: int, size: int, data: pointer) =
-  ## Binds a scalar kernel argument by value (such as alpha/beta coefficients)
   check setKernelArg(kernel.kernel, cl_uint(index), cl_size_t(size), data)

@@ -7,22 +7,19 @@
 
 {.experimental: "codeReordering".}
 
-## Shared C-family lowering: program-scope hoisting.
-## One registration template per pass, one registration call per target.
-##
-## passes_low_pointers owns the pointer-local explosion walk.
-##
-## - `registerSmemInitRewrite`: an initializer on a `{.smem.}` local rewrites
-##   into a bare declaration plus element- or member-wise store statements,
-##   legal in every target's storage model
-
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
 
+# ############################################################
+#
+#            C-family lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerSmemInitRewrite*(reg: var PassRegistry) =
@@ -33,7 +30,7 @@ func registerSmemInitRewrite*(reg: var PassRegistry) =
   )
 
 # ═══════════════════════════════════════════════════════════════════════
-# Program-scope hoisting
+#  Program-scope hoisting
 # ═══════════════════════════════════════════════════════════════════════
 
 proc hoistProgramScopeLocalsCore(m: CirModule): string =
@@ -44,9 +41,9 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ## - the smem relocation covers top-level kernel-body locals only, a nested
   ##   or device-function one remains in place and the printer refuses it
   ## - the initializer rewrite ran earlier, a relocated smem local has no initializer
-  ## - the const_mem relocation covers every proc, nested branch and loop bodies included, at their encounter position
-  ## - a const_mem initializer is required, the printer emits it from the relocated node
-  ## - runs after the reserved-word rename, so relocated declarations use the renamed names their bodies already reference
+  ## - the const_mem relocation covers every proc at its encounter position,
+  ##   a const_mem initializer is required and prints from the relocated node
+  ## - runs after the reserved-word rename, relocated declarations use the renamed names their bodies already reference
   for fn in m.procs:
     var i = 0
     while i < fn.body.len:
@@ -94,7 +91,7 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
   )
 
 # ═══════════════════════════════════════════════════════════════════════
-# Smem initializer rewrite
+#  Smem initializer rewrite
 # ═══════════════════════════════════════════════════════════════════════
 
 proc buildSmemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt] =
@@ -142,7 +139,7 @@ proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
 proc rewriteSmemInits(m: CirModule): string =
   ## Kernel-body storage:
   ##
-  ## - a local at any depth: bare declaration plus stores
+  ## - a local at any depth: initializer-free declaration plus stores
   ##   at the declaration position. The store form is legal runtime storage where the initializer form is not
   ## - Metal drops threadgroup array initializers at runtime
   ## - OpenCL C and CUDA C++ and GLSL forbid the storage-class initializers
@@ -174,5 +171,4 @@ proc rewriteSmemInits(m: CirModule): string =
         grown.add fn.body
         fn.body = grown
   return ""
-
 

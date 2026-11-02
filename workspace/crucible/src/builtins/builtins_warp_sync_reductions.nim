@@ -6,12 +6,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ./builtins_pragmas
+import ./builtins_catalog
 
 # ═══════════════════════════════════════════════════════════════════════
 #   Warp-synchronous reductions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc reduceAdd*[T](v: T): T {.builtin.} = discard
+proc reduceAdd*[T](v: T): T {.builtin: cbkReduceAdd.} = discard
   ## Reduces `v` across the subgroup with addition and broadcasts
   ## the total to every active lane. The value of `v` is only read
   ## on the active lanes.
@@ -20,7 +21,7 @@ proc reduceAdd*[T](v: T): T {.builtin.} = discard
   ## WGSL `subgroupAdd`, OpenCL `sub_group_reduce_add`.
   ## CUDA lowers to a `__shfl_xor_sync` butterfly over deltas 16/8/4/2/1.
 
-proc reduceMax*[T](v: T): T {.builtin.} = discard
+proc reduceMax*[T](v: T): T {.builtin: cbkReduceMax.} = discard
   ## Reduces `v` across the subgroup with max and broadcasts
   ## the result to every active lane. The value of `v` is only read
   ## on the active lanes.
@@ -33,7 +34,7 @@ proc reduceMax*[T](v: T): T {.builtin.} = discard
 #   Cross-lane shuffles
 # ═══════════════════════════════════════════════════════════════════════
 
-proc simd_shuffle*[T](value: T, lane: int): T {.builtin.} = discard
+proc simd_shuffle*[T](value: T, lane: int): T {.builtin: cbkSimdShuffle.} = discard
   ## Gathers `value` from the lane at absolute subgroup-relative
   ## index `lane` and returns it on every lane of the subgroup.
   ##
@@ -55,7 +56,7 @@ proc simd_shuffle*[T](value: T, lane: int): T {.builtin.} = discard
   ## | SPIR-V        | `OpGroupNonUniformShuffle` (opcode 345), capability `GroupNonUniformShuffle` (65) | none in core SPIR-V 1.6: the result is poison only when the index leaves the subgroup                    |
   ## | HLSL          | `WaveReadLaneAt(value, lane)`                                                     | laneIndex need not be uniform, a non-uniform index is the shuffle operation (HLSL docs + WaveReadLaneAt) |
 
-proc simd_shuffle_xor*[T](value: T, mask: int): T {.builtin.} = discard
+proc simd_shuffle_xor*[T](value: T, mask: int): T {.builtin: cbkSimdShuffleXor.} = discard
   ## Pairs each lane with the lane whose subgroup-relative index is
   ## `callerLane xor mask` and exchanges `value`, returning the partner
   ## value on every lane.

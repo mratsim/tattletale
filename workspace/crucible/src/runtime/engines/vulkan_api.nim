@@ -10,7 +10,7 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/vulkan_abi as vk
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/runtime/backends/vulkan_compile {.all.}
@@ -67,8 +67,29 @@ proc ingest*(engine: VulkanEngine, source: string) =
              "(a `#version` first line) or HLSL (`[numthreads(`), got: " &
              source.splitLines()[0])
 
+proc countKernels(glsl: string): int =
+  const marker = "layout(local_size_x"
+  var i = glsl.find(marker)
+  while i >= 0:
+    inc result
+    i = glsl.find(marker, i + marker.len)
+
 proc ingestGlsl(engine: VulkanEngine, glsl: string) =
   engine.entryPoint = findFirstFunctionName(glsl, "layout(local_size_x", "void ")
+  # A member's offset in the deduped push block must be launch-invariant.
+  # Only scalar members can violate it, so multi-kernel sources refuse at ingest.
+  if countKernels(glsl) > 1:
+    var inPush = false
+    for line in glsl.splitLines():
+      if "layout(push_constant" in line:
+        inPush = true
+      elif inPush and line.strip().startsWith("}"):
+        inPush = false
+      elif inPush:
+        let t = line.strip()
+        if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
+          failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
+                   "use one kernel per source when passing by-value scalars")
   engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(glsl)
   engine.isHlsl = false
@@ -109,15 +130,12 @@ proc deviceName*(engine: VulkanEngine): string {.inline.} =
   engine.ctx.deviceName(engine.ctx.physicalDevice)
 
 proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[VulkanBuffer, T] {.inline.} =
-  ## Allocates len elements of T on the engine
   DeviceMem[VulkanBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
 proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[VulkanBuffer, T], n: int) {.inline.} =
-  ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -142,7 +160,7 @@ proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-  const lay = computeDeviceLayout(T, bkGlsl)
+  const lay = computeDeviceLayout(T, cgGlsl)
   if lay.align > 1:
     ctx.pn = round_multiple_up(ctx.pn, lay.align)
   if ctx.pn + lay.size > 128:
@@ -157,12 +175,12 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
       else:
-        blob.packFrom(off, f, bkGlsl)
+        blob.packFrom(off, f, cgGlsl)
     off = round_multiple_up(off, lay.align)
     doAssert off == lay.size,
       "host packing of " & $T & " does not match the device layout"
   else:
-    blob.packFrom(off, v, bkGlsl)
+    blob.packFrom(off, v, cgGlsl)
   if lay.size > 0:
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
@@ -254,7 +272,6 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
          "x" & $engine.shaderSquadron.z &
          ": launch config mismatch, squadron is shader-baked on Vulkan)")
 
-  # Entrypoint caching
   var entry = engine.entryPoint
   var spirv: seq[uint32]
   if engine.isHlsl:
@@ -279,7 +296,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
 proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
                         output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
   var dctx = SerializationCtx(vctx: engine.ctx)
-  bindArgs(dctx, output, args, store, VulkanBuffer, bkGlsl)
+  bindArgs(dctx, output, args, store, VulkanBuffer, cgGlsl)
   let pushConstLen = dctx.pn
 
   let pipelineKey = (kernel, pushConstLen)
@@ -322,7 +339,7 @@ proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: s
   template collectBuffer[T](ctx: var auto, v: T, argIdx: int) =
     failLoud("descriptor route: scalar kernel args are not supported, " &
              "the uniform-block layout model does not exist yet")
-  bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, bkGlsl)
+  bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, cgGlsl)
 
   let setLayout = engine.ctx.createDescriptorSetLayout(uint32(bufs.len))
   let pool = engine.ctx.createDescriptorPool(uint32(bufs.len))

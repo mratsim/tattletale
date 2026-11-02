@@ -14,8 +14,6 @@ proc sanitizePath*(name: string): string =
     raiseAssert "Path traversal detected — name contains directory separators: \"" & name & "\""
 
 proc getKernelDir*(segments: varargs[string, sanitizePath]): string =
-  ## getTempDir() / "tattletale" / sanitizePath of each arg.
-  ## with parent dirs created.
   result = getTempDir() / "tattletale"
   for s in segments:
     result = result / s
@@ -25,5 +23,4 @@ template ceil_div*(a, b: SomeInteger): SomeInteger =
   (a + b - 1) div b
 
 template round_multiple_up*(a, b: SomeInteger): SomeInteger =
-  ## Rounds a up to the next multiple of b.
   ceil_div(a, b) * b

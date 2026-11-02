@@ -2,7 +2,6 @@
 name: nim-type-system-faq
 description: Nim type system patterns and pitfalls
 license: MIT
-compatibility: opencode
 metadata:
   audience: nim-developers
   topic: types

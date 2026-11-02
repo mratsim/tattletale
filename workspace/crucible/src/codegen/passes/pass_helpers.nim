@@ -5,14 +5,15 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Shared pass helpers over CIRv2.
-##
-## Every pass file may import these, no pass owns them.
-## Rewrite helpers return the empty string when clean, else a refusal text naming the site.
-
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
+
+# ############################################################
+#
+#            Pass helpers
+#
+# ############################################################
 
 proc exprRootSym*(e: CirExpr): CirExpr =
   result = e
@@ -168,9 +169,8 @@ proc cloneExpr*(e: CirExpr): CirExpr =
   result = CirExpr(kind: e.kind)
   case e.kind
   of eSym:
-    result.name = e.name
-    result.typ = e.typ
-    result.builtin = e.builtin
+    # whole-branch copy, builtin family kinds included
+    result[] = e[]
   of eIntLit:
     result.value = e.value
     result.litType = e.litType
@@ -320,7 +320,7 @@ proc kernelParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
   collectLeaves(t, name, result)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Pointer-local explosion
+#  Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
 
 type
@@ -339,13 +339,12 @@ type
       ## `v.data` -> the symbol bound to `data`, `v.inner.f` -> the symbol bound to the nested `f`.
     byRefParams*: HashSet[string]
       ## `var T` parameters of the proc in flight: targets that bind them `inout`
-      ## unwrap their derefs to the bare parameter.
+      ## unwrap their derefs to the parameter itself.
     procs*: Table[string, CirProc]
       ## Module procs by name: targets that check call-site argument shapes against
       ## callee parameter types read them here.
 
 proc refuseAt*(fn: CirProc, detail: string): string =
-  ## Text the pass runner prefixes with the pass name.
   "at " & fn.name & ": " & detail
 
 proc getDottedPath*(e: CirExpr): string =
@@ -378,12 +377,9 @@ proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: 
   ## - `t`: the declared type of the local, `c` must construct it
   ## - `target`: the target's name in the refusal texts, `WGSL` or `HLSL`
   if c.kind != eOconstr:
-    return refuseAt(fn, "struct local " & path &
-      " initializer is not a construction, " & target &
-      " has no pointer struct members")
+    return refuseAt(fn, "struct local " & path & " initializer is not a construction, " & target & " has no pointer struct members")
   if c.ocType.name != t.name:
-    return refuseAt(fn, "struct local " & path & " initializer has type " &
-      c.ocType.name & ", expected " & t.name)
+    return refuseAt(fn, "struct local " & path & " initializer has type " & c.ocType.name & ", expected " & t.name)
   var bound: seq[string]
   for kvv in c.kvFields:
     bound.add kvv.name
@@ -400,19 +396,15 @@ proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: 
     elif kvv.value.kind == eSym:
       ctx.leafOf[path & "." & kvv.name] = (kvv.value.name, ft)
     else:
-      return refuseAt(fn, "field " & path & "." & kvv.name &
-        " initializer is not a leaf symbol, " & target &
-        " has no pointer struct members")
+      return refuseAt(fn, "field " & path & "." & kvv.name & " initializer is not a leaf symbol, " & target & " has no pointer struct members")
   for f in t.fields:
     if f.name notin bound:
-      return refuseAt(fn, "field " & f.name & " of " & path &
-        " is not bound by the construction")
+      return refuseAt(fn, "field " & f.name & " of " & path & " is missing from the construction")
   return ""
 
 proc explodeStructVarDecl*(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt, target: string): string =
   if s.init == nil or s.init.kind != eOconstr:
-    return refuseAt(fn, "struct local " & s.name &
-      " without a construction, " & target & " has no pointer struct members")
+    return refuseAt(fn, "struct local " & s.name & " without a construction, " & target & " has no pointer struct members")
   let err = registerExplodedStruct(fn, ctx, s.name, s.declType, s.init, target)
   if err.len > 0:
     return err
@@ -426,7 +418,7 @@ proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
   ##
   ## A deref operand stands for its pointee:
   ## - a bound alias reads as the pointee local that the address-of binding recorded
-  ## - a by-reference parameter reads as the bare parameter itself
+  ## - a by-reference parameter reads as the parameter itself
   ##
   ## `ownArm` handles every shape outside the skeleton, refusal set and recursion included.
   ## `target` is interpolated into the refusal texts.
@@ -435,14 +427,11 @@ proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
   case e.kind
   of eSym:
     if e.name in ctx.structLocals:
-      return refuseAt(fn, "struct local " & e.name &
-        " used whole, " & target & " has no pointer struct members, read the fields")
+      return refuseAt(fn, "struct local " & e.name & " reads whole, " & target & " dissolves it to its fields")
     if e.name in ctx.pendingPtrs:
-      return refuseAt(fn, "pointer local " & e.name &
-        " read before its address-of binding")
+      return refuseAt(fn, "pointer local " & e.name & " reads before any address-of binding")
     if e.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & e.name &
-        " used as a value, " & target & " has no pointer values")
+      return refuseAt(fn, "pointer local " & e.name & " reads as a value, the rewrite covers derefs only")
     return ""
   of eDot:
     let root = getStructRoot(e)
@@ -467,7 +456,7 @@ proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
     return ownArm(fn, ctx, e)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Const_mem locals to program scope
+#  Const_mem hoisting
 # ═══════════════════════════════════════════════════════════════════════
 
 proc freshProcType*(params: seq[CirType], ret: CirType): CirType =

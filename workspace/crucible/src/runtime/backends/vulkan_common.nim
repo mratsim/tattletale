@@ -196,10 +196,8 @@ proc newVulkanContext*(): VulkanContext =
   )
   check vkCreateInstance(instCI.addr, nil, result.instance.addr)
 
-  # Helper: load instance-level functions via GPA(instance, name)
   template gpa(name: cstring): pointer = gpaFn(result.instance, name)
 
-  # Enumerate physical devices
   var ep = cast[proc(instance: VkInstance, pPhysicalDeviceCount: ptr uint32,
     pPhysicalDevices: ptr VkPhysicalDevice): VkResult {.cdecl.}](gpa("vkEnumeratePhysicalDevices"))
   var devCount: uint32 = 0
@@ -209,7 +207,6 @@ proc newVulkanContext*(): VulkanContext =
   var devices = newSeq[VkPhysicalDevice](devCount.int)
   check ep(result.instance, devCount.addr, devices[0].addr)
 
-  # Queue families
   var gpqfp = cast[proc(physicalDevice: VkPhysicalDevice,
     pQueueFamilyPropertyCount: ptr uint32,
     pQueueFamilyProperties: pointer) {.cdecl.}](gpa("vkGetPhysicalDeviceQueueFamilyProperties"))
@@ -274,7 +271,6 @@ proc newVulkanContext*(): VulkanContext =
       result.queueFamilyIndex = i.uint32
       break
 
-  # Create device
   var cd = cast[proc(physicalDevice: VkPhysicalDevice,
     pCreateInfo: ptr VkDeviceCreateInfo, pAllocator: pointer,
     pDevice: ptr VkDevice): VkResult {.cdecl.}](gpa("vkCreateDevice"))
@@ -307,12 +303,10 @@ proc newVulkanContext*(): VulkanContext =
   )
   check cd(result.physicalDevice, dci.addr, nil, result.device.addr)
 
-  # Get compute queue
   var gdq = cast[proc(device: VkDevice, queueFamilyIndex: uint32,
     queueIndex: uint32, pQueue: ptr VkQueue) {.cdecl.}](gpa("vkGetDeviceQueue"))
   gdq(result.device, result.queueFamilyIndex, 0, result.queue.addr)
 
-  # Command pool
   var ccpool = cast[proc(device: VkDevice, pCreateInfo: ptr VkCommandPoolCreateInfo,
     pAllocator: pointer, pCommandPool: ptr VkCommandPool): VkResult {.cdecl.}
   ](gpa("vkCreateCommandPool"))
@@ -322,7 +316,6 @@ proc newVulkanContext*(): VulkanContext =
   )
   check ccpool(result.device, cpc.addr, nil, result.commandPool.addr)
 
-  # Pipeline cache
   var cpcache = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkPipelineCacheCreateInfo,
          pAllocator: pointer,

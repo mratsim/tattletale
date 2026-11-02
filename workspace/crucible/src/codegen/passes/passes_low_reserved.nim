@@ -7,28 +7,18 @@
 
 {.experimental: "codeReordering".}
 
-## Lowering: reserved-keyword renaming, one common pass registered per target
-## with the target's reserved set as data.
-##
-## The pass renames an identifier colliding with a target reserved word,
-## appending the `_nim` suffix at every emitted site, so the printers never rename.
-## - a target whose language reserves the double-underscore identifier head
-##   additionally prefixes every `__`-prefixed name (WGSL: `wgsl_`), suffix first
-##
-## - fn names, call sites, params and their body references
-## - locals (var/const) and their body references
-## - struct type names, struct fields and their field accesses
-## - object-construction field names
-##
-## The rename is name-based per site list. A local and a proc sharing a name
-## are one symbol after the frontend's flat lowering, they rename together.
-
 import std/[sets, strutils, tables]
 import ../ir/cirv2_lang
 import ./pass_datatypes
 
+# ############################################################
+#
+#            Reserved-keyword lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# The target reserved sets
+#  The target reserved sets
 # ═══════════════════════════════════════════════════════════════════════
 
 const MetalReserved* = [
@@ -121,7 +111,7 @@ const HlslReserved* = [
   "matrix", "float2x2", "float3x3", "float4x4", "int2x2", "int3x3", "int4x4",
   "uint2x2", "uint3x3", "uint4x4", "bool2x2", "bool3x3", "bool4x4",
   # fixed-width type names: int64_t and uint64_t are rejected by validation,
-  # remaining stdint names are plain parse errors in the HLSL frontend
+  # remaining stdint names are ordinary parse errors in the HLSL frontend
   "int32_t", "uint32_t", "float32_t", "float64_t", "int64_t", "uint64_t",
   # resource types the printer emits and their siblings
   "ConstantBuffer", "TextureBuffer", "StructuredBuffer", "RWStructuredBuffer",
@@ -143,7 +133,7 @@ const CudaReserved* = [
 ].toHashSet()
 
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: string, reserved: untyped, doubleUnderscorePrefix: string = "") =
@@ -163,7 +153,7 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
   )
 
 # ═══════════════════════════════════════════════════════════════════════
-# The pass
+#  The pass
 # ═══════════════════════════════════════════════════════════════════════
 
 func makeSafeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: string): string =

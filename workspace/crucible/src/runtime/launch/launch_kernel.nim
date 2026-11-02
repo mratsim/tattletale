@@ -37,7 +37,7 @@ proc launchKernel*[E](engine: E): LaunchSugar[E] {.inline.} =
   LaunchSugar[E](engine: engine)
 
 macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped]) =
-  ## Plain launch or `do:`-scheduled launch, dispatches to the backend's `launchKernelImpl`.
+  ## Immediate launch or `do:`-scheduled launch, dispatches to the backend's `launchKernelImpl`.
   ## - Chevrons:
   ##   `engine.launchKernel<<(16, 16), (32, 8)>>("k", out, (a, b))`
   ## - Do form:

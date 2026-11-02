@@ -7,11 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-# ############################################################
-#
-# Span and view lowering
-#
-# ############################################################
 #
 # openArray spans split into pointer + length pairs:
 #
@@ -36,8 +31,14 @@ import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
 
+# ############################################################
+#
+#            View lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerLowerSpans*(reg: var PassRegistry) =
@@ -50,7 +51,7 @@ func registerLowerSpans*(reg: var PassRegistry) =
     run = lowerSpansPass)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Span signatures
+#  Span signatures
 # ═══════════════════════════════════════════════════════════════════════
 
 type
@@ -81,7 +82,7 @@ proc collectSpanSigs(m: CirModule): SpanSigs =
 
 proc splitSpanParams(fn: CirProc, sigs: seq[SpanSig]) =
   ## Replaces every span parameter of `fn` with its pointer + length pair,
-  ## the pointer carries the parameter's name and the length is `<name>_len`.
+  ## the pointer is named for the parameter and the length is `<name>_len`.
   var newParams: seq[CirParam]
   var sigIdx = 0
   for i, p in fn.params:
@@ -94,7 +95,7 @@ proc splitSpanParams(fn: CirProc, sigs: seq[SpanSig]) =
   fn.params = newParams
 
 # ═══════════════════════════════════════════════════════════════════════
-# View splitting
+#  View splitting
 # ═══════════════════════════════════════════════════════════════════════
 
 proc spanPtrLenParts(base, first, last: CirExpr): tuple[ptrPlus, lenExpr: CirExpr] =
@@ -243,7 +244,7 @@ proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
       return
 
 # ═══════════════════════════════════════════════════════════════════════
-# View binding decomposition
+#  View binding decomposition
 # ═══════════════════════════════════════════════════════════════════════
 
 proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
@@ -290,7 +291,7 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Survivor guard
+#  Survivor guard
 # ═══════════════════════════════════════════════════════════════════════
 
 proc typeHoldsSpan(t: CirType): bool =
@@ -344,7 +345,7 @@ proc survivingSpanRejection(fn: CirProc): string =
   return err
 
 # ═══════════════════════════════════════════════════════════════════════
-# Pass runner
+#  Pass runner
 # ═══════════════════════════════════════════════════════════════════════
 
 proc lowerSpansPass(m: CirModule): string =

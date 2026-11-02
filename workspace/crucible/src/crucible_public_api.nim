@@ -9,7 +9,7 @@
 ##
 ## | Section       | Symbols                                                                                                               |
 ## | ------------- | --------------------------------------------------------------------------------------------------------------------- |
-## | Engines       | `newEngine`, `BackendKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
+## | Engines       | `newEngine`, `CodegenKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
 ## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
 ## | Geometry      | `Dim3`, `dim3`                                                                                                        |
@@ -50,5 +50,5 @@ export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.glsl,
        gpu_compiler.spirv
 # exporting the type also exports the non-pure enum's members by bare name,
 # individual enum fields cannot be exported ("enum field cannot be exported individually")
-from ./codegen/backends/hlsl_lang import HlslFlavor
+from ./codegen/backends/lang_hlsl import HlslFlavor
 export HlslFlavor

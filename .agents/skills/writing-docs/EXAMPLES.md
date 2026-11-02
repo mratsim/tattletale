@@ -76,7 +76,7 @@ A type, a value, a text, or a name never refuses, keeps, stays, pairs, travels,
 names, or lives. The subject of the verb is the code that acts (the pass, the
 printer, the compiler) or the specification that rules (the spec, the row, the
 table). A file, a row, a module, or a doc never "states" its contents: a file
-declares, a row lists, an invocation carries.
+declares, a row lists.
 
 | Banned (agent verb on a non-agent) | House style |
 |---|---|
@@ -87,9 +87,8 @@ declares, a row lists, an invocation carries.
 | "a 16-bit float pair refuses on the printer wiring state" | "the printer refuses a 16-bit float pair on the wiring state" |
 | "an unprovenanced integer names no storage" | "an unprovenanced integer has no storage, only the default device" |
 | "openArray[T] travels as a span over the element type" | "the frontend passes openArray[T] as a span over the element type" |
-| "the value lives in the type (phantom objects like Int[V])" | "the type carries the value (phantom objects like Int[V])" |
+| "the value lives in the type (phantom objects like Int[V])" | "the value is a phantom parameter of the type (phantom objects like Int[V])" |
 | "targets_registry.nim states every family" | "targets_registry.nim declares every family" |
-| "one invocation states every target's rows" | "one invocation carries every target's rows" |
 | "a scalar row states any subset of the cells" | "a scalar row lists any subset of the cells" |
 | "a whole-vector coordinate read meets the printer's refusal, the flat thread index takes its canonical token, a name passes through" | the noun-soup poster child: every clause makes a value the actor of a human verb (meets, takes, passes) — rewrite in the arm's own terms ("whole-vector coordinate reads refuse; the thread index returns its token; other names return unchanged") or delete when the branches and refusal messages already say it |
 

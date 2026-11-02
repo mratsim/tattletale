@@ -10,8 +10,14 @@ import ./pass_datatypes
 
 export pass_datatypes
 
+# ############################################################
+#
+#            Pass registry
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Default pipeline factory
+#  Default pipeline factory
 # ═══════════════════════════════════════════════════════════════════════
 
 func new*(_: typedesc[PassRegistry]): PassRegistry =

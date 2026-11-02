@@ -2,7 +2,6 @@
 name: writing-docs
 description: "Repository documentation contract for the Tattletale monorepo: the required style for doc comments, module headers, inline comments, and any committed prose (what-over-how, contracts over narration, banned-vocabulary blocklist, format rules, eight canonical reference files). Use when writing or updating doc comments, module headers, inline comments, or any prose in this repo, or when de-sloping existing comments."
 license: MIT
-compatibility: opencode
 metadata:
   audience: developers
   workflow: documentation

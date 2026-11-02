@@ -10,7 +10,7 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/objc_abi as objc
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/metal_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
@@ -43,9 +43,6 @@ when defined(macosx):
   proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int)
   proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int)
 
-  # ─────────────────────────────────────────────────────────────────────────
-
-  # ─────────────────────────────────────────────────────────────────────────
 
   proc newMetalContext(): MetalContext =
     result = MetalContext()
@@ -76,6 +73,7 @@ when defined(macosx):
   proc ingest*(engine: MetalEngine, source: string) =
     objc.withMemPool:
       let opts = compileOptions()
+
       let library = compileLibrary(engine.ctx.device, source, opts)
       objc.release(opts)
       when defined(debug):
@@ -95,15 +93,12 @@ when defined(macosx):
       result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
 
   proc allocDevice*[T](engine: MetalEngine, _: typedesc[T], len: int): DeviceMem[objc.ID, T] {.inline.} =
-    ## Allocates len elements of T on the engine
     DeviceMem[objc.ID, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
   proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[objc.ID, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-    ## Copies n elements from host to device
     engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
   proc copyToHostFromDevice*[T](engine: MetalEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[objc.ID, T], n: int) {.inline.} =
-    ## Copies n elements from device to host
     engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
   # ════════════════════════════════════════════════════════════════════════
@@ -119,10 +114,10 @@ when defined(macosx):
   proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     when T is ptr|pointer:
       {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-    const size = computeDeviceLayout(T, bkMetal).size
+    const size = computeDeviceLayout(T, cgMetal).size
     var blob: array[size, byte]
     var off = 0
-    blob.packFrom(off, v, bkMetal)
+    blob.packFrom(off, v, cgMetal)
     discard objc.msgSend(ctx.encoder, objc.`$$`("setBytes:length:atIndex:"),
                     blob[0].addr, objc.NSUInteger(size), objc.NSUInteger(argIdx))
 
@@ -187,7 +182,7 @@ when defined(macosx):
                         objc.NSUInteger(tgMem), objc.NSUInteger(0))
 
       var dctx = SerializationCtx(encoder: encoder)
-      bindArgs(dctx, output, args, store, objc.ID, bkMetal)
+      bindArgs(dctx, output, args, store, objc.ID, cgMetal)
       let gridSize = objc.MTLSize(width: objc.NSUInteger(cfg.grid.x),
                          height: objc.NSUInteger(cfg.grid.y),
                          depth: objc.NSUInteger(cfg.grid.z))
@@ -213,4 +208,4 @@ when defined(macosx):
 # ═══════════════════════════════════════════════════════════════════════
 else:
   proc newMetalEngine*(): MetalEngine =
-    failLoud("bkMetal requires macOS")
+    failLoud("cgMetal requires macOS")

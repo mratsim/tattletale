@@ -5,29 +5,19 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Module requirements analysis: one `pkAnalysis` pass per text target, filling
-## `CirModule.features` with the constructs the kernel source contains.
-##
-##   last target transform → glslScanModuleFeatures | openclScanModuleFeatures
-##                         | wgslScanModuleFeatures | cudaScanModuleFeatures → validation
-##
-## Consumers of the stored record:
-## - the GLSL extension block and the OpenCL pragma block (`declareExtensions`)
-## - the WGSL `enable f16` module directive
-## - the CUDA warp-reduction template list
-##
-## Contract:
-## - each target registers its pass in `gpu_compiler.nim` after its last transform, before check-only validation
-## - analysis results are valid only if no transform runs after them, which runPasses enforces
-## - the printer reads the stored record, it never rescans
-
 import std/sets
 import ../ir/cirv2_lang
 import ./pass_datatypes
 import ./pass_helpers
 
+# ############################################################
+#
+#            Module requirements analysis
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Shared walker, one per pass, profile-driven
+#  Shared walker
 # ═══════════════════════════════════════════════════════════════════════
 
 type ScanProfile = object
@@ -163,7 +153,7 @@ proc scanModuleRequirements(m: CirModule, f: var ModuleFeatures, profile: ScanPr
     scanStmts(fn.body, f, profile)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerGlslFeatureScan*(reg: var PassRegistry) =

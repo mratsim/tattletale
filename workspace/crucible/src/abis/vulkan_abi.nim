@@ -162,7 +162,7 @@ const
   VK_PHYSICAL_DEVICE_TYPE_CPU* = 4
 
 # ═══════════════════════════════════════════════════════════════════════
-# Structure types (simplified — only fields we need)
+# Structure types
 # ═══════════════════════════════════════════════════════════════════════
 
 type
@@ -421,8 +421,4 @@ const VulkanLib* =
   when defined(windows): "vulkan-1.dll"
   elif defined(macosx):  "libvulkan.1.dylib"
   else:                  "libvulkan.so.1"
-
-# ═══════════════════════════════════════════════════════════════════════
-# Instance API
-# ═══════════════════════════════════════════════════════════════════════
 

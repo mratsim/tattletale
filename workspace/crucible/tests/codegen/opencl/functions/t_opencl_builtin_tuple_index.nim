@@ -36,7 +36,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       "get_global_id(1) at global y " & $gy & ": got " & $res[gy * 3 + 1]
     doAssert res[gy * 3 + 2] == 0'u32,
       "get_global_id(2) at global y " & $gy & ": got " & $res[gy * 3 + 2]
-  echo "  OK — tuple bracket and native spellings read the right coordinate component"
+  echo "  OK — tuple bracket and native names read the right coordinate component"
 
 when isMainModule:
   runTest()

@@ -102,6 +102,30 @@ helper before writing a new one.
 - A transform placed in the frontend or a printer defeats that: nothing can observe
   the delta it produces.
 
+## No overdefensive code
+
+Guards, asserts, and capability checks must be **falsifiable**. A test fails
+them at will, in an environment where the test actually runs.
+
+An assert passing everywhere you can execute is code smell when it cannot
+fail on any reachable machine.
+
+**The stronger test: internal authoring mistakes get no guard in code.**
+
+- a duplicate row in a hand-maintained table
+- a typo in a const
+- a name misspelled in literal data
+
+The registry is written right in the first place.
+A wrong registry fails the consumer compile visibly. The author fixes the data.
+
+- Validation code defends against failures no compile surfaces without it.
+  A guard any test compile makes unnecessary is slop.
+  Delete it and write the data right.
+- An untestable platform limit is **recorded** in a comment naming the evidence.
+- Prefer correct by construction over guarding.
+  When a guard is genuinely needed, write the failing test first or name
+  the machine where it fails.
 ## TDD Workflow
 
 **Always: test first, fix second.**
@@ -251,7 +275,7 @@ The args tuple order matches the kernel params minus the output, scalars are by-
 | Metal | buffers, output at index 0 then inputs in order, scalars in one shared constant buffer at 16-byte slots |
 | Metal | more than 31 bindings rejected at ingest via NSError, readback from `contents()` after `waitUntilCompleted`, no staging or map path |
 | Vulkan | by-value params are push constants (`layout(push_constant) uniform KernelParams`), 4-byte only, loud quit otherwise |
-| Vulkan | multi-kernel `glsl:` sources must declare identical ordered params, scalars and pointers alike pack through the shared push-constant block, a conflict refuses at codegen |
+| Vulkan (address route: GLSL and fvVulkan HLSL) | scalars and pointers alike pack through the shared push-constant block, pointers as device addresses; a multi-kernel source with a by-value scalar in the block refuses at engine ingest, pointer-only kernels may differ in param count |
 
 ### Run commands
 

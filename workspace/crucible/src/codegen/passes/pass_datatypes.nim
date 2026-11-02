@@ -5,16 +5,16 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Pass machinery over CIRv2: pass record, registry, and runner.
-##
-## A pass run takes the module in place and returns its refusal:
-## "" when clean, else the first refusal.
-## The CIRv2 rejection channel is pure strings, no exceptions.
-
 import std/sets
 import ../ir/cirv2_lang
 
 export cirv2_lang
+
+# ############################################################
+#
+#            Pass datatypes
+#
+# ############################################################
 
 type
   PassKind* = enum

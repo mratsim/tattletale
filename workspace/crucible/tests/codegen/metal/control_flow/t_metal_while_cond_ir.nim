@@ -11,7 +11,7 @@ import std/unittest
 import workspace/crucible
 import workspace/crucible/src/codegen/ir/cirv2_lang
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/backends/msl_lang
+import workspace/crucible/src/codegen/backends/lang_msl
 
 const condMsl = block:
   let u32 = tUint(32)

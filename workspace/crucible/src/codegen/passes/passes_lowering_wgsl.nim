@@ -7,45 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## WGSL lowering: per-target transforms for the WGSL storage model,
-## registered by the WebGPU pipeline and run before printing.
-##
-##   kernel body → explodeGlobalStructWithPtrFields → wgslExplodePointerLocals → wgslHoistProgramScopeLocals → wgslInlinePointerParamCalls
-##   → printed WGSL source
-##
-## - `explodeGlobalStructWithPtrFields`: kernel parameters of struct type
-##   carrying pointer fields expand into flat ptr/scalar leaf parameters
-##   (WebGPU is a flat resource target)
-## - `wgslExplodePointerLocals`: pointer locals rewrite to their pointee,
-##   pointer-holding struct locals into per-field leaf rewrites,
-##   reads through an alias rewrite to the pointee or leaf symbol
-## - `wgslHoistProgramScopeLocals`: `{.smem.}` and `{.const_mem.}` kernel
-##   locals relocate into `CirModule.globals` in kernel-body order,
-##   the printer emits them at module scope, top-level kernel-body locals only
-##
-## `wgslInlinePointerParamCalls` runs last:
-##
-## - a statement call to a device function inlines the callee at the call site
-## - the trigger is a callee parameter of buffer-reference type, or a pointer
-##   parameter outside the function address space
-## - the inlined callee drops from the module
-##
-## Kernel and device-function pointer parameters are untouched in the pass,
-## the printer emits `ptr<function, T>` parameters as-is.
-##
-## Refusal homes:
-## - the printer refuses a `caDevice`-space local, the pass does not touch
-##   device-space locals (WGSL locals are function or workgroup)
-## - the printer refuses a threadgroup/constant local surviving in a nested
-##   scope or device function, the relocation covers top-level
-##   kernel-body locals only
-## - the pass refuses a const_mem local without an initializer,
-##   the printer keeps the shape guard on the relocated declarations
-## - a pointer local read as a value or before its address-of binding,
-##   a pointer local rebound to a second pointee, an exploded struct local
-##   used whole or read through an unbound field path
-##   refuse in the pass
-
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -54,16 +15,21 @@ import ./passes_lowering_cfamily
 import ./passes_low_pointers
 import ./pass_helpers
 
+# ############################################################
+#
+#            WGSL lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
   registerExplodePointerLocals(reg, "wgslExplodePointerLocals",
     "Rewrites pointer locals to their pointees and pointer-holding struct" &
     " locals to their leaf symbols",
-    newExplodeCtx, explodeVarDecl, explodeAsgn,
-    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
+    "WGSL")
 
 func registerWgslHoistProgramScopeLocals*(reg: var PassRegistry) =
   ## Rewritten aliases and relocated declarations use the renamed names that their body already references.
@@ -78,7 +44,7 @@ func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
     run = inlinePointerParamCalls)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Pointer-param call inlining
+#  Pointer-param call inlining
 # ═══════════════════════════════════════════════════════════════════════
 
 proc crossesWgslSignature(t: CirType): bool =
@@ -113,16 +79,6 @@ proc containsReturn(ss: seq[CirStmt]): bool =
         return true
     else:
       discard
-  return false
-
-proc containsCall(e: CirExpr): bool =
-  if e.isNil:
-    return false
-  if e.kind == eCall:
-    return true
-  for ch in getExprChildren(e):
-    if ch.containsCall:
-      return true
   return false
 
 proc callsCrossingCalleeTransitively(fn: CirProc, procs: Table[string, CirProc], seen: var HashSet[string]): bool =
@@ -187,7 +143,7 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
     of sAsm, sEmit:
       discard
 
-proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string
+proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string
   ## Forward declaration, nested statement lists recurse into each other.
 
 proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]): string =
@@ -200,106 +156,133 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
   if e.kind == eCall and e.callee.kind == eSym:
     let callee = procs.getOrDefault(e.callee.name)
     if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
-      return refuseAt(fn, "device function " & callee.name &
-        " takes a pointer that cannot cross a WGSL signature, the call is in value position")
+      return refuseAt(fn, "value-position call of " & callee.name & ", its pointer parameter cannot cross a WGSL signature")
   for ch in getExprChildren(e):
     let err = refuseValuePositionCalls(fn, ch, procs)
     if err.len > 0:
       return err
   return ""
 
-proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string =
+proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): tuple[err: string, spliced: bool] =
+  let s = ss[i]
+  let callee = procs.getOrDefault(s.callCallee.name)
+  if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
+    if callee.ret.kind != ctVoid:
+      return (refuseAt(fn, "inlining " & callee.name & " needs a void return, its pointer parameter cannot cross a WGSL signature"), false)
+    var body = cloneStmts(callee.body)
+    if body.len > 0 and body[^1].kind == sRet and body[^1].retVal == nil:
+      # an implicit fall-through return of the frontend, dropping it is
+      # semantics-preserving at the splice position
+      body.setLen(body.len - 1)
+    if body.containsReturn:
+      return (refuseAt(fn, "inlining " & callee.name & " needs a return-free body, its pointer parameter cannot cross a WGSL signature"), false)
+    var seen: HashSet[string]
+    if callee.callsCrossingCalleeTransitively(procs, seen):
+      return (refuseAt(fn, "inlining " & callee.name & " reaches a crossing call cycle, its pointer parameter cannot cross a WGSL signature"), false)
+    # substitution onto fresh aliases evaluates a call argument once
+    var bindings: seq[CirStmt]
+    var subst = initTable[string, CirExpr]()
+    for j, p in callee.params:
+      if p.typ.kind in {ctPtr, ctAptr}:
+        # a pointer argument has no WGSL local form, it substitutes directly
+        subst[p.name] = s.callArgs[j]
+        continue
+      var alias = "inl" & $fresh & "_" & p.name
+      fresh.inc
+      while alias in used:
+        alias.add "_"
+      used.incl(alias)
+      bindings.add CirStmt(kind: sVar, name: alias, declType: p.typ, init: s.callArgs[j])
+      subst[p.name] = sym(alias, p.typ)
+    body.substituteArgsStmts(subst)
+    ss = ss[0 ..< i] & bindings & body & ss[i + 1 .. ^1]
+    return ("", true)
+  for a in s.callArgs:
+    let aerr = refuseValuePositionCalls(fn, a, procs)
+    if aerr.len > 0:
+      return (aerr, false)
+  return ("", false)
+
+proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string =
+  ## One non-call statement: its subexpressions refuse value-position calls,
+  ## nested statement lists recurse through `inlineInStmts`.
+  case s.kind
+  of sVar, sConst:
+    let err = refuseValuePositionCalls(fn, s.init, procs)
+    if err.len > 0:
+      return err
+  of sAsgn:
+    let lerr = refuseValuePositionCalls(fn, s.lhs, procs)
+    if lerr.len > 0:
+      return lerr
+    let rerr = refuseValuePositionCalls(fn, s.rhs, procs)
+    if rerr.len > 0:
+      return rerr
+  of sIte:
+    let cerr = refuseValuePositionCalls(fn, s.cond, procs)
+    if cerr.len > 0:
+      return cerr
+    let terr = inlineInStmts(fn, s.thenBody, procs, used, fresh)
+    if terr.len > 0:
+      return terr
+    let eerr = inlineInStmts(fn, s.elseBody, procs, used, fresh)
+    if eerr.len > 0:
+      return eerr
+  of sWhile:
+    let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
+    if cerr.len > 0:
+      return cerr
+    let werr = inlineInStmts(fn, s.whileBody, procs, used, fresh)
+    if werr.len > 0:
+      return werr
+  of sRet:
+    let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
+    if rerr.len > 0:
+      return rerr
+  of sDiscard:
+    let derr = refuseValuePositionCalls(fn, s.discardVal, procs)
+    if derr.len > 0:
+      return derr
+  of sCall, sAsm, sEmit:
+    discard
+
+proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string =
   var i = 0
   while i < ss.len:
     let s = ss[i]
     if s.kind == sCall and s.callCallee.kind == eSym:
-      let callee = procs.getOrDefault(s.callCallee.name)
-      if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
-        if callee.ret.kind != ctVoid:
-          return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL signature, only a void callee inlines")
-        var body = cloneStmts(callee.body)
-        if body.len > 0 and body[^1].kind == sRet and body[^1].retVal == nil:
-          # an implicit fall-through return of the frontend, dropping it is
-          # semantics-preserving at the splice position
-          body.setLen(body.len - 1)
-        if body.containsReturn:
-          return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL signature, the body must not return")
-        for a in s.callArgs:
-          if a.containsCall:
-            return refuseAt(fn, "call argument of " & callee.name &
-              " contains a call, inlining would re-evaluate it")
-        var seen: HashSet[string]
-        if callee.callsCrossingCalleeTransitively(procs, seen):
-          return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL signature, its call chain reaches one too")
-        var subst = initTable[string, CirExpr]()
-        for j, p in callee.params:
-          subst[p.name] = s.callArgs[j]
-        body.substituteArgsStmts(subst)
-        ss = ss[0 ..< i] & body & ss[i + 1 .. ^1]
-        continue
-      for a in s.callArgs:
-        let aerr = refuseValuePositionCalls(fn, a, procs)
-        if aerr.len > 0:
-          return aerr
-    else:
-      case s.kind
-      of sVar, sConst:
-        let err = refuseValuePositionCalls(fn, s.init, procs)
-        if err.len > 0:
-          return err
-      of sAsgn:
-        let lerr = refuseValuePositionCalls(fn, s.lhs, procs)
-        if lerr.len > 0:
-          return lerr
-        let rerr = refuseValuePositionCalls(fn, s.rhs, procs)
-        if rerr.len > 0:
-          return rerr
-      of sIte:
-        let cerr = refuseValuePositionCalls(fn, s.cond, procs)
-        if cerr.len > 0:
-          return cerr
-        let terr = inlineInStmts(fn, s.thenBody, procs)
-        if terr.len > 0:
-          return terr
-        let eerr = inlineInStmts(fn, s.elseBody, procs)
-        if eerr.len > 0:
-          return eerr
-      of sWhile:
-        let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
-        if cerr.len > 0:
-          return cerr
-        let werr = inlineInStmts(fn, s.whileBody, procs)
-        if werr.len > 0:
-          return werr
-      of sRet:
-        let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
-        if rerr.len > 0:
-          return rerr
-      of sDiscard:
-        let derr = refuseValuePositionCalls(fn, s.discardVal, procs)
-        if derr.len > 0:
-          return derr
-      of sCall, sAsm, sEmit:
-        discard
+      let (r, spliced) = inlineCallSite(fn, ss, i, procs, used, fresh)
+      if r.len > 0:
+        return r
+      if not spliced:
+        i.inc
+      continue
+    let r = walkValuePositions(fn, s, procs, used, fresh)
+    if r.len > 0:
+      return r
     i.inc
   return ""
 
 proc inlinePointerParamCalls(m: CirModule): string =
   ## Placement contract:
-  ## - the pass runs after the pointer-local explosion pass, spliced bodies
-  ##   therefore carry no pointer locals
-  ## - the per-address-space callee instantiation runs first, the pass refuses
-  ##   a formal re-spaced by its call sites exactly when the re-spaced
-  ##   signature could not print
+  ## - the pass runs after the pointer-local explosion pass, so the spliced
+  ##   bodies carry no pointer locals
+  ## - the per-address-space callee instantiation runs first, a re-spaced formal
+  ##   refuses exactly when the new signature cannot print
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
     procs[fn.name] = fn
   for fn in mitems(m.procs):
+    var used = initHashSet[string]()
+    var locals: seq[tuple[name: string, typ: CirType]]
+    fn.body.collectDeclaredLocals(locals)
+    for l in locals:
+      used.incl(l.name)
+    for p in fn.params:
+      used.incl(p.name)
+    var fresh = 0
     while true:
-      let err = inlineInStmts(fn, fn.body, procs)
+      let err = inlineInStmts(fn, fn.body, procs, used, fresh)
       if err.len > 0:
         return err
       var changed = false
@@ -320,87 +303,3 @@ proc inlinePointerParamCalls(m: CirModule): string =
   m.procs = kept
   return ""
 
-# ═══════════════════════════════════════════════════════════════════════
-# Pointer-local explosion
-# ═══════════════════════════════════════════════════════════════════════
-
-proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
-
-proc wgslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  case e.kind
-  of eDot:
-    let err = rewritePointerExpr(fn, ctx, e.dotBase)
-    if err.len > 0:
-      return err
-    return ""
-  of eDeref:
-    let op = e.derefOperand
-    if op.kind == eSym:
-      if op.name in ctx.pendingPtrs:
-        return refuseAt(fn, "pointer local " & op.name &
-          " read before its address-of binding")
-      if op.name in ctx.structLocals:
-        return refuseAt(fn, "deref of exploded struct local " & op.name &
-          ", WGSL has no pointer struct members")
-    return rewritePointerExpr(fn, ctx, op)
-  else:
-    for ch in getExprChildren(e):
-      let err = rewritePointerExpr(fn, ctx, ch)
-      if err.len > 0:
-        return err
-    return ""
-
-proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  rewritePointerExprShared(fn, ctx, e, "WGSL", wgslPointerArm)
-
-proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  if s.declType.kind in {ctPtr, ctAptr}:
-    if s.init == nil:
-      ctx.pendingPtrs.incl(s.name)
-    elif s.init.kind == eAddr and s.init.addrOperand.kind == eSym:
-      ctx.aliasOf[s.name] = s.init.addrOperand.name
-    else:
-      return refuseAt(fn, "pointer local " & s.name &
-        " without an address-of binding, WGSL has no pointer locals")
-    return ""
-  if s.declType.kind == ctStruct and s.declType.containsPtrDeep:
-    return explodeStructVarDecl(fn, ctx, s, "WGSL")
-  return rewritePointerExpr(fn, ctx, s.init)
-
-proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  if s.lhs.kind == eSym and s.lhs.typ != nil and
-      s.lhs.typ.kind in {ctPtr, ctAptr}:
-    if s.lhs.name notin ctx.pendingPtrs and s.lhs.name notin ctx.aliasOf:
-      # a pointer parameter of the proc in flight, never touched by the pass
-      let rerr = rewritePointerExpr(fn, ctx, s.rhs)
-      if rerr.len > 0:
-        return rerr
-      return ""
-    if s.lhs.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & s.lhs.name &
-        " rebound, WGSL has no pointer values")
-    if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
-      return refuseAt(fn, "pointer local " & s.lhs.name &
-        " rebound to a non-address value, WGSL has no pointer values")
-    ctx.pendingPtrs.excl(s.lhs.name)
-    ctx.aliasOf[s.lhs.name] = s.rhs.addrOperand.name
-    return ""
-  let lerr = rewritePointerExpr(fn, ctx, s.lhs)
-  if lerr.len > 0:
-    return lerr
-  return rewritePointerExpr(fn, ctx, s.rhs)
-
-proc explodeDropsVar(s: CirStmt, ctx: ExplodeCtx): bool =
-  s.declType.kind in {ctPtr, ctAptr} or
-    (s.declType.kind == ctStruct and s.declType.containsPtrDeep)
-
-proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
-  s.lhs.kind == eSym and s.lhs.typ != nil and
-    s.lhs.typ.kind in {ctPtr, ctAptr} and
-    (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf)
-
-proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
-  # WGSL keeps pointer parameters untouched: the pass never emits a by-reference
-  # context and no callee table
-  ExplodeCtx()

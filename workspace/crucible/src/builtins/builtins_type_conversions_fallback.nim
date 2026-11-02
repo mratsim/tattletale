@@ -9,17 +9,19 @@
 ## conversion builtins over `float16`, `bfloat16`, `fp8e4m3`, `fp8e5m2`.
 ##
 ## A device call to these procs lowers to the backend native conversion
-## through the registry conv tables. The body runs on the host.
+## through the builtins ConvBuiltinNames table. The body runs on the host.
 ## `builtins_gpu_types` declares the types and the `to*` dispatch
 ## templates and imports this module for the bodies.
 
 import ./builtins_pragmas
 import ./builtins_gpu_types
 
+# ═══════════════════════════════════════════════════════════════════════
+#  The fp16 ↔ fp32 conversion primitives
+# ═══════════════════════════════════════════════════════════════════════
+
 func toFp16*(x: float32): float16 {.builtin.} =
   ## - Returns: the fp16 value nearest to `x`, round-to-nearest-even
-  ## - The {.builtin.} pragma lowers the device call to the backend
-  ##   native conversion and the body runs on the host
   let u = cast[uint32](x)
   let sign = (uint16(u shr 16) and 0x8000'u16)
   let exp32 = int32((u shr 23) and 0xFF'u32)
@@ -57,8 +59,6 @@ func toFp16*(x: float32): float16 {.builtin.} =
 
 func toFp32*(x: float16): float32 {.builtin.} =
   ## - Returns: the fp32 value of `x`, exact widening
-  ## - The {.builtin.} pragma lowers the device call to the backend
-  ##   native conversion and the body runs on the host
   let h = cast[uint16](x)
   let sign = uint32(h and 0x8000'u16) shl 16
   let exp16 = int32((h shr 10) and 0x1F'u16)
@@ -78,8 +78,6 @@ func toFp32*(x: float16): float32 {.builtin.} =
 
 func toBf16*(x: float32): bfloat16 {.builtin.} =
   ## - Returns: the bf16 value nearest to `x`, round-to-nearest-even
-  ## - The {.builtin.} pragma lowers the device call to the backend
-  ##   native conversion and the body runs on the host
   let u = cast[uint32](x)
   if (u and 0x7F800000'u32) == 0x7F800000'u32 and (u and 0x007FFFFF'u32) != 0:
     return bfloat16(uint16(u shr 16) or 0x0040'u16)
@@ -91,15 +89,11 @@ func toBf16*(x: float32): bfloat16 {.builtin.} =
 
 func toBf32*(x: bfloat16): float32 {.builtin.} =
   ## - Returns: the fp32 value of `x`, exact widening
-  ## - The {.builtin.} pragma lowers the device call to the backend
-  ##   native conversion and the body runs on the host
   cast[float32](uint32(cast[uint16](x)) shl 16)
 
 func toFp8e4m3*(x: float32): fp8e4m3 {.builtin.} =
   ## - Returns: the fp8e4m3 (OCP OFP8 E4M3fn) value nearest to `x`,
   ##   round-to-nearest-even, overflow saturates to the max finite
-  ## - Backends with a native fp8 type lower the device call there,
-  ##   elsewhere the body is the conversion
   let u = cast[uint32](x)
   let sign = uint8((u shr 24) and 0x80'u32)
   let exp32 = int32((u shr 23) and 0xFF'u32)
@@ -138,8 +132,6 @@ func toFp8e4m3*(x: float32): fp8e4m3 {.builtin.} =
 func toFp8e5m2*(x: float32): fp8e5m2 {.builtin.} =
   ## - Returns: the fp8e5m2 (OCP OFP8 E5M2) value nearest to `x`,
   ##   round-to-nearest-even
-  ## - Backends with a native fp8 type lower the device call there,
-  ##   elsewhere the body is the conversion
   let u = cast[uint32](x)
   let sign = uint8((u shr 24) and 0x80'u32)
   let exp32 = int32((u shr 23) and 0xFF'u32)
@@ -177,8 +169,6 @@ func toFp8e5m2*(x: float32): fp8e5m2 {.builtin.} =
 
 func toFp32*(x: fp8e4m3): float32 {.builtin.} =
   ## - Returns: the fp32 value of `x`, exact widening
-  ## - Backends with a native fp8 type lower the device call there,
-  ##   elsewhere the body is the conversion
   let b = cast[uint8](x)
   let sign = uint32(b and 0x80'u8) shl 24
   let exp8 = int32((b shr 3) and 0xF'u8)
@@ -197,8 +187,6 @@ func toFp32*(x: fp8e4m3): float32 {.builtin.} =
 
 func toFp32*(x: fp8e5m2): float32 {.builtin.} =
   ## - Returns: the fp32 value of `x`, exact widening
-  ## - Backends with a native fp8 type lower the device call there,
-  ##   elsewhere the body is the conversion
   let b = cast[uint8](x)
   let sign = uint32(b and 0x80'u8) shl 24
   let exp8 = int32((b shr 2) and 0x1F'u8)
@@ -215,3 +203,4 @@ func toFp32*(x: fp8e5m2): float32 {.builtin.} =
     let man = (man8 shl (23 - i)) and 0x007FFFFF'u32
     return cast[float32](sign or (uint32(111 + i) shl 23) or man)
   return cast[float32](sign or (uint32(exp8 + 112) shl 23) or (man8 shl 21))
+

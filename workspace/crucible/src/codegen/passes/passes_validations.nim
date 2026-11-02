@@ -7,92 +7,39 @@
 
 {.experimental: "codeReordering".}
 
-## Validation stage over CIRv2: semantic checks over the transformed module, right before printing.
 
 import std/[sequtils, sets, strutils]
 import ../ir/cirv2_lang
 import ./pass_datatypes
 import ./pass_helpers
 
+# ############################################################
+#
+#            Validation stage
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerValidationPostPasses*(reg: var PassRegistry) =
-  ## Two semantic checks.
+  ## One semantic check.
   ##
   ## Placement contract: the stage sits after every transform, before printing.
-  ##
-  ## - the constant-storage check reads hoisted declarations.
-  ##   The const_mem hoist relocates program-scope constants into `m.globals`
-  ## - the per-address-space callee instantiation settles which pointer
-  ##   spaces reach the printer, so the cast check reads final spaces
-  reg.register("validateAddressSpaceCasts", pkValidation,
-    "Rejects pointer casts whose target space differs from the operand's storage provenance",
-    run = validateAddressSpaceCastsPass)
+  ## The constant-storage check reads hoisted declarations: the const_mem hoist
+  ## relocates program-scope constants into `m.globals`
   reg.register("validateConstantWrites", pkValidation,
     "Rejects assignments into constant storage, direct or through a pointer",
     run = validateConstantWritesPass)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Address-space cast validation
-# ═══════════════════════════════════════════════════════════════════════
-
-proc spaceCastRejection(e: CirExpr, fnName: string): string =
-  ## Rejection message of one cast or conversion whose pointer target names
-  ## storage the operand's provenance does not, "" when the cast passes:
-  ##
-  ## - a provenanced operand carries its storage: the frontend derives the cast
-  ##   target from the operand at birth, so a mismatch means the target space
-  ##   was written independently of the operand
-  ## - an unprovenanced integer has no storage, only the default device
-  ##   space is claimable (the device-address binding)
-  if e.kind notin {eCast, eConv}:
-    return ""
-  let target = e.castType
-  if target == nil or target.kind notin {ctPtr, ctAptr}:
-    return ""
-  let space = resolveAddressSpace(e.castOperand)
-  if space == target.space:
-    return ""
-  let construct = if e.kind == eCast: "cast" else: "conversion"
-  let detail = if space == caDevice:
-    "the operand has no pointer provenance, the target space is " &
-    $target.space & ". An integer names no storage: derive the pointer " &
-    "from storage of the target space"
-  else:
-    "the operand accesses " & $space & " storage, the target space is " &
-    $target.space & ". Cross-space pointer casts are never implicit: " &
-    "derive the pointer from storage of the target space"
-  result = "at " & fnName & ": cross-space " & construct & ": " & detail
-
-proc checkSpaceCastsStmts(ss: seq[CirStmt], fnName: string): string =
-  ## First cross-space cast or conversion in one statement list, walk order,
-  ## nested bodies included.
-  var err = ""
-  let check = proc(e: CirExpr) =
-    if err.len > 0:
-      return
-    err = spaceCastRejection(e, fnName)
-  ss.walkStmts(nil, check)
-  return err
-
-proc validateAddressSpaceCastsPass(m: CirModule): string =
-  ## Rejects cross-space pointer casts and conversions over every module proc.
-  ## Returns "" when clean, else the first refusal.
-  for fn in m.procs:
-    let err = fn.body.checkSpaceCastsStmts(fn.name)
-    if err.len > 0:
-      return err
-  return ""
-
-# ═══════════════════════════════════════════════════════════════════════
-# Constant-storage write validation
+#  Constant-storage write validation
 # ═══════════════════════════════════════════════════════════════════════
 
 type
   ConstStorage = object
-    ## Name classes one constant-write check resolves a bare symbol against:
+    ## Name classes one constant-write check resolves an unqualified symbol against:
     ##
     ## - `constLocals`: the const-space locals of the checked statement list
     ## - `otherLocals`: every parameter and every other local declaration, they shadow the program-scope globals of the same name
@@ -102,7 +49,7 @@ type
     constGlobals*: HashSet[string]
 
 proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStorage =
-  ## Classifies the declarations one proc's constant-write check resolves a bare symbol against:
+  ## Classifies the declarations one proc's constant-write check resolves an unqualified symbol against:
   ## the parameters first, then the local declarations of the body.
   ##
   ## The hoisting passes relocate const-space locals on most targets.
@@ -127,7 +74,7 @@ proc resolveConstStorageTarget(e: CirExpr, storage: ConstStorage): string =
   ##
   ## Resolution:
   ##
-  ## Bare symbols:
+  ## Unqualified symbols:
   ##
   ## - a `const` declaration is constant storage whatever its space
   ## - a const-space local is constant storage

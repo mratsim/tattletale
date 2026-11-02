@@ -2,7 +2,6 @@
 name: testing
 description: How tests are written in this repo — fixture suites, analytic suites, the assert surface, the linters
 license: MIT
-compatibility: opencode
 metadata:
   audience: developers
   workflow: testing

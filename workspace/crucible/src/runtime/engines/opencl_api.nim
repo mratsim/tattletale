@@ -10,7 +10,7 @@ import std/[macros, tables]
 
 import workspace/crucible/src/abis/opencl_abi
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
@@ -50,15 +50,12 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
   engine.ctx.device.getName()
 
 proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[OpenCLBuffer, T] {.inline.} =
-  ## Allocates len elements of T on the engine
   DeviceMem[OpenCLBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[OpenCLBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
 proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[OpenCLBuffer, T], n: int) {.inline.} =
-  ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -75,10 +72,10 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     static:
       error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
-  const size = computeDeviceLayout(T, bkOpenCL).size
+  const size = computeDeviceLayout(T, cgOpenCL).size
   var blob: array[size, byte]
   var off = 0
-  blob.packFrom(off, v, bkOpenCL)
+  blob.packFrom(off, v, cgOpenCL)
   ctx.kern.setArg(argIdx, size, blob[0].addr)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -95,7 +92,7 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args:
   let kern = engine.kernelCache.kernels[kernel]
 
   var dctx = SerializationCtx(kern: kern)
-  bindArgs(dctx, output, args, store, OpenCLBuffer, bkOpenCL)
+  bindArgs(dctx, output, args, store, OpenCLBuffer, cgOpenCL)
 
   let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x),
                     cl_size_t(cfg.grid.y * cfg.blk.y),

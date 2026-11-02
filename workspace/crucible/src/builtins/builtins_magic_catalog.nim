@@ -19,5 +19,3 @@ const NimGpuNumericBuiltinsOps* = {
   "ModI": "mod", "ModU": "mod",
   "ShlI": "shl", "ShrI": "shr",
 }.toTable()
-  ## System `{.magic: "..."}` names that are primitive arithmetic.
-  ## Each entry maps a magic name to its Nim operator.

@@ -60,7 +60,6 @@ proc `=destroy`(c: var WebgpuContextObj) =
     c.instance = nil
 
 proc deviceName*(ctx: WebgpuContext): string =
-  ## Returns the WebGPU adapter device name (e.g. "NVIDIA RTX PRO 6000 ...").
   var info: WGPUAdapterInfo
   wgpuAdapterGetInfo(ctx.adapter, addr info)
   if info.device.data != nil and info.device.length > 0:
@@ -90,7 +89,6 @@ proc deviceCb(status: WGPURequestDeviceStatus,
   cast[ptr DeviceCallbackData](userdata1).done = true
 
 proc bufferMapCb*(status: WGPUBufferMapAsyncStatus, message: WGPUStringView, userdata1, userdata2: pointer) {.cdecl.} =
-  ## Records the map result into the caller's MapDoneData (userdata1).
   cast[ptr MapDoneData](userdata1).status = status
   cast[ptr MapDoneData](userdata1).done = true
 
@@ -99,7 +97,6 @@ proc popErrorScopeCb*(status: WGPUPopErrorScopeStatus,
                       message: WGPUStringView,
                       userdata1: pointer,
                       userdata2: pointer) {.cdecl.} =
-  ## Records the popped error scope result into the caller's PopErrorScopeData.
   let data = cast[ptr PopErrorScopeData](userdata1)
   data.errType = errType
   if message.data != nil and message.length > 0:
@@ -111,7 +108,6 @@ proc uncapturedErrorCb(device: ptr WGPUDevice, errType: WGPUErrorType,
                         message: WGPUStringView,
                         userdata1: pointer,
                         userdata2: pointer) {.cdecl.} =
-  ## Records an uncaptured device error (fires outside any error scope).
   gUncapturedError.errType = errType
   gUncapturedError.message.setLen(0)
   if message.data != nil and message.length > 0:
@@ -141,7 +137,6 @@ proc waitForRequest(instance: WGPUInstance, done: var bool, what: string) =
     sleep(2)
 
 proc newWebgpuContext*(): WebgpuContext =
-  ## Initializes wgpu-native: creates instance, picks adapter, opens device.
   doAssert fileExists(WgpuLibPath / (
     when defined(windows): "wgpu_native.dll"
     elif defined(macosx):  "libwgpu_native.dylib"

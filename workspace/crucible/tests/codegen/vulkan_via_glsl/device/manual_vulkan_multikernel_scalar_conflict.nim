@@ -1,7 +1,6 @@
-## Vulkan: a multi-kernel source whose kernels declare different scalar
-## push-constant params is rejected at codegen. The push block is shared
-## by every kernel of the source, a differing ordered layout would read
-## args at wrong offsets.
+## Vulkan: multi-kernel scalar push-constant conflict.
+##
+## Test that a multi-kernel source with a by-value scalar in the shared push-constant block refuses at engine ingest.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -19,7 +18,7 @@ const code = glsl:
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = newEngine(runVulkan)
   engine.ingest(code)
-  echo "UNREACHABLE — differing multi-kernel push-constant layouts must be rejected at codegen"
+  echo "UNREACHABLE — differing multi-kernel push-constant layouts must be rejected at engine ingest"
 
 when isMainModule:
   runTest()

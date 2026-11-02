@@ -8,7 +8,6 @@
 ## Test surface of the crucible internals
 
 import
-  ./codegen/ir/ast_datatypes,
   ./codegen/frontend/nim_to_crucible,
   ./codegen/frontend/nim_type_resolvers,
   ./codegen/passes/pass_datatypes,

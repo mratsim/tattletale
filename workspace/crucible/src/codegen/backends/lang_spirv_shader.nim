@@ -5,11 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## SPIR-V word constants shared by the printer (writer) and the runtime
-## module scanner (reader), one source of truth.
-## The opcode, capability, and execution-mode numbers are the SPIR-V core
-## grammar values (SPIRV.html, sections 3.3-3.6).
-
 const
   opEntryPoint* = 15'u32
   opExecutionMode* = 16'u32
@@ -18,23 +13,31 @@ const
   capPhysicalStorageBufferAddresses* = 5347'u32
   modeLocalSize* = 17'u32
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Value types
-# ═══════════════════════════════════════════════════════════════════════
 
-## SPIR-V emitter over CIRv2, Vulkan 1.4 environment on the encoder's
-## SPIR-V 1.3 baseline:
-##
-## - one `{.global.}` kernel per module, the device functions it calls emitted alongside
-## - one push-constant block binds the kernel parameters in parameter order, the host `store` packing order
-## - buffer parameters contribute one u64 device address each, converted to physical storage buffer pointers in the kernel prologue
+## SPIR-V emitter over CIRv2, Vulkan 1.4 environment on the encoder's SPIR-V 1.3 baseline.
 
+import ../../crucible_codegen
 import std/[algorithm, sets, strutils, tables]
 import ../ir/cirv2_lang
 import ../passes/pass_helpers
 import ./spirv_encoder {.all.}
-import ../ir/ast_datatypes
 import ./print_common
+
+# ############################################################
+#
+#            SPIR-V emitter
+#
+# ############################################################
+
+{.experimental: "codeReordering".}
+
+const
+  ## Scope and MemorySemantics grammar values for the barrier emission
+  ## (SPIRV.html sections 3.28-3.29).
+  ## Values: scope Workgroup, semantics bit WorkgroupMemory.
+  ## Encoder consts cover the subgroup and device set.
+  scopeWorkgroup = 2'u32
+  semWorkgroupMemory = 0x100'u32
 
 proc cirUint32(): CirType =
   CirType(kind: ctUint, bits: 32)
@@ -126,7 +129,7 @@ type SpvLayout = object
 proc std430Layout(t: SpvTy): SpvLayout =
   case t.kind
   of stkScalar:
-    let s = scalarByteSize(t.scalar)
+    let s = getScalarByteSize(t.scalar)
     SpvLayout(size: s, align: s)
   of stkVector:
     let e = std430Layout(t.vElem)
@@ -224,7 +227,6 @@ proc resolveScalarId(ctx: var SpvLangCtx, t: CirType): uint32 =
     ctx.failSpv("scalar id of " & $t.kind)
     return 0
 
-proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy
 
 proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
   ## SPIR-V value type of a CirType.
@@ -333,10 +335,10 @@ func hasBoolLeaf(t: CirType): bool =
   else: false
 
 proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
-  ## One push-block member per kernel parameter, in parameter order.
-  ## A device array pointer contributes its u64 device address and everything
-  ## else its value type. A bool parameter contributes its unsigned 32-bit
-  ## storage word: the push convention has no bool member.
+  ## One push-block member per kernel parameter in parameter order.
+  ## A device array pointer contributes its u64 address.
+  ## A bool contributes its u32 word. Everything else contributes
+  ## its value type.
   if p.typ.kind == ctAptr:
     spvScalar(cirUint64())
   elif p.typ.kind == ctBool:
@@ -416,17 +418,17 @@ proc loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int, 
   let raw = ctx.builder.opCompositeExtract(ctx.resolveScalarId(cirUint32()), v, @[component])
   ctx.convertValue(raw, cirUint32(), target)
 
-proc getCoordBuiltinEnumerant(ctx: var SpvLangCtx, name: string): uint32 =
+proc getCoordBuiltinEnumerant(ctx: var SpvLangCtx, k: CirCoordBuiltinKind): uint32 =
   ## Canonical coordinate vocabulary mapped onto the BuiltIn enumerants.
-  case name
-  of "thread_position_in_grid": result = biGlobalInvocationId
-  of "threadgroup_position_in_grid": result = biWorkgroupId
-  of "thread_position_in_threadgroup": result = biLocalInvocationId
-  of "threads_per_threadgroup": result = biWorkgroupSize
-  of "threadgroups_per_grid": result = biNumWorkgroups
-  of "thread_index_in_threadgroup": result = biLocalInvocationIndex
+  case k
+  of cbkThreadPositionInGrid: result = biGlobalInvocationId
+  of cbkThreadgroupPositionInGrid: result = biWorkgroupId
+  of cbkThreadPositionInThreadgroup: result = biLocalInvocationId
+  of cbkThreadsPerThreadgroup: result = biWorkgroupSize
+  of cbkThreadgroupsPerGrid: result = biNumWorkgroups
+  of cbkThreadIndexInThreadgroup: result = biLocalInvocationIndex
   else:
-    ctx.failSpv("not a coordinate builtin name")
+    ctx.failSpv("not a coordinate builtin kind")
 
 proc declareScalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if ctx.scalarBuiltins.hasKey(builtin):
@@ -489,7 +491,7 @@ type
     fwd*: Table[string, uint32]
       ## Local name -> value id its reads return: the value of the last store
       ## that the emission walk has passed, valid at every read that the walk
-      ## reaches before the next store to the name
+      ## reaches before the next store to the local
     elided*: HashSet[string]
       ## Locals whose storage the plan elided: every read reads the stored value.
       ## No variable is declared and no store is emitted
@@ -499,7 +501,6 @@ type
     terminated*: bool
 
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
-proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType
 
 proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
   ## Function-storage variables must all precede the entry block's first load.
@@ -693,7 +694,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
   of eCall:
     if e.callee.kind == eSym and ctx.fnTypes.hasKey(e.callee.name):
       result = ctx.fnTypes[e.callee.name]
-    elif e.callee.kind == eSym and e.callee.name == "atomicFetchAdd" and
+    elif e.callee.kind == eSym and e.callee.atomicsBuiltin == cbkAtomicFetchAdd and
         e.args.len == 2 and e.args[0].kind == eAddr:
       # an atomic add yields the addressed element, its first argument
       # names the address
@@ -774,18 +775,14 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let t = ctx.resolveTyId(ctx.valueTy(e.nilType))
     ctx.builder.freshInst(OpUndef, @[t])
   of eStrLit:
-    # a string literal has no SPIR-V value, the construct refuses
     ctx.failSpv("a string literal has no SPIR-V value")
     return 0'u32
   of eIntLit, eFloatLit, eTrue, eFalse:
     ctx.resolveConstId(fn, e)
   of eSym:
-    if e.builtin and e.name in CoordBuiltinNames:
-      if e.name == "thread_index_in_threadgroup":
+    if e.coordBuiltin != cbkNone:
+      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return ctx.loadScalarBuiltin(biLocalInvocationIndex, e.typ)
-      ctx.failSpv("whole-vector use of coordinate builtin " & e.name &
-        ", index a component instead")
-      return 0
     if fn.consts.hasKey(e.name):
       return fn.consts[e.name]
     if fn.params.hasKey(e.name):
@@ -906,9 +903,8 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     else:
       ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(pointee)), ptrId)
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.builtin and
-        e.dotBase.name in CoordBuiltinNames and
-        e.dotBase.name != "thread_index_in_threadgroup":
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone and
+        e.dotBase.coordBuiltin != cbkThreadIndexInThreadgroup:
       # a coordinate-builtin component, read from the builtin input variable
       let comp =
         case e.fieldName
@@ -921,7 +917,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       if comp < 0:
         return 0
       let compTy = ctx.resolveExprType(fn, e)
-      return ctx.loadBuiltinComponent(ctx.getCoordBuiltinEnumerant(e.dotBase.name),
+      return ctx.loadBuiltinComponent(ctx.getCoordBuiltinEnumerant(e.dotBase.coordBuiltin),
         comp, compTy)
     let baseTy = ctx.resolveExprType(fn, e.dotBase)
     if baseTy != nil and baseTy.kind == ctVector:
@@ -1049,7 +1045,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       @[idx0])
     result = (ptrId, rootTy.fields[i].typ, false, false)
   of eAt:
-    # base chain rooted at a local: a plain local or the struct behind
+    # base chain rooted at a local: a direct local or the struct behind
     # a pointer-typed local: the access chain runs on the variable directly
     var rootVar = 0'u32
     var memberIdxs: seq[int]
@@ -1138,6 +1134,14 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
   else:
     ctx.failSpv("assignment target " & $e.kind)
 
+proc emitBarrier(ctx: var SpvLangCtx) =
+  ## OpControlBarrier with Workgroup scope on both operands, semantics
+  ## WorkgroupMemory | AcquireRelease, no result id.
+  let scope = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeWorkgroup))
+  let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()),
+    uint64(semWorkgroupMemory or semAcquireRelease))
+  ctx.builder.module.emitInstSeq(ssFunctions, OpControlBarrier, @[scope, scope, sem])
+
 proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   ## Value of a call: builtin vocabulary maps to native instructions
   ## and a device function emits an OpFunctionCall.
@@ -1145,9 +1149,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     return 0
   doAssert e.callee.kind == eSym, "call callee is not a symbol"
   let name = e.callee.name
-  # builtin vocabulary dispatches on the canonical name through this table,
-  # `max`/`min` are a name case for the printer, harvested magics outside the categories
-  if e.callee.builtin and name == "reduceAdd":
+  if e.callee.reductionBuiltin == cbkReduceAdd:
     doAssert e.args.len == 1, "reduceAdd takes one argument"
     let v = ctx.emitExpr(fn, e.args[0])
     let resTy = ctx.resolveExprType(fn, e.args[0])
@@ -1158,7 +1160,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let scopeSub = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeSubgroup))
     return ctx.builder.freshInst(OpGroupNonUniformFAdd,
       @[ctx.resolveTyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
-  if e.callee.builtin and name in ["simd_shuffle", "simd_shuffle_xor"]:
+  if e.callee.shuffleBuiltin in {cbkSimdShuffle, cbkSimdShuffleXor}:
     doAssert e.args.len == 2, "simd_shuffle takes a value and a lane index"
     let v = ctx.emitExpr(fn, e.args[0])
     let lane = ctx.emitExpr(fn, e.args[1])
@@ -1170,10 +1172,10 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let laneU = ctx.convertValue(lane, ctx.resolveExprType(fn, e.args[1]), cirUint32())
     ctx.caps.incl capGroupNonUniformShuffle
     let scopeSub = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeSubgroup))
-    let op = if name == "simd_shuffle": OpGroupNonUniformShuffle
+    let op = if e.callee.shuffleBuiltin == cbkSimdShuffle: OpGroupNonUniformShuffle
              else: OpGroupNonUniformShuffleXor
     return ctx.builder.freshInst(op, @[ctx.resolveTyId(spvScalar(resTy)), scopeSub, v, laneU])
-  if e.callee.builtin and name == "atomicFetchAdd":
+  if e.callee.atomicsBuiltin == cbkAtomicFetchAdd:
     doAssert e.args.len == 2, "atomicFetchAdd takes a pointer and a value"
     if e.args[0].kind != eAddr or e.args[0].addrOperand.kind != ePat:
       ctx.failSpv("atomicFetchAdd address is not the address of an element")
@@ -1217,11 +1219,6 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     let cond = ctx.builder.freshInst(cmpOp, @[boolTy, a, b])
     return ctx.builder.opSelect(ctx.resolveTyId(spvScalar(opTy)), cond, a, b)
-  if e.callee.builtin and name == "threadgroup_barrier":
-    let scopeDev = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeDevice))
-    let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(semAcquireRelease))
-    discard ctx.builder.freshInst(OpControlBarrier, @[scopeDev, scopeDev, sem])
-    return 0
   # a device function call
   if not ctx.emittedFns.hasKey(name):
     ctx.failSpv("callee " & name & " was not pre-emitted")
@@ -1293,7 +1290,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
           fn.ptrTargets[s.lhs.name] = fn.locals[s.rhs.addrOperand.name]
           continue
         if s.lhs.name in fn.elided:
-          # every read of the name reads the stored value, no storage remains
+          # every read of the local reads the stored value, no storage remains
           let rhsV = ctx.emitExpr(fn, s.rhs)
           let rhsTyV = ctx.resolveExprType(fn, s.rhs)
           fn.fwd[s.lhs.name] = ctx.convertValue(rhsV, rhsTyV, lhsTy)
@@ -1384,10 +1381,13 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       if s.callCallee.kind != eSym:
         ctx.failSpv("statement call without a symbol callee, no destination binding")
         return
-      var callE = CirExpr(kind: eCall)
-      callE.callee = s.callCallee
-      callE.args = s.callArgs
-      discard ctx.emitCallValue(fn, callE)
+      if s.callCallee.synchroBuiltin == cbkThreadgroupBarrier:
+        ctx.emitBarrier()
+      else:
+        var callE = CirExpr(kind: eCall)
+        callE.callee = s.callCallee
+        callE.args = s.callArgs
+        discard ctx.emitCallValue(fn, callE)
     of sAsm, sEmit:
       ctx.failSpv("statement construct " & $s.kind &
         " outside the SPIR-V subset, it must lower earlier")
@@ -1397,9 +1397,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc recordDeadLocals(ctx: var SpvLangCtx, fn: SpvFnCtx, name: string) =
-  ## Dead locals of one planned function: declared locals that no OpLoad reaches,
-  ## every read reading a forwarded stored value instead.
-  ## Recorded in the dry pass only. The real pass elides their storage.
+  ## Dead locals of one planned function: declared locals no OpLoad reaches, recorded in the dry pass only.
   if not ctx.dryRun:
     return
   var dead: HashSet[string]
@@ -1482,7 +1480,6 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   var fn: SpvFnCtx = SpvFnCtx(name: "kernel " & kernel.name)
   fn.elided = ctx.fnDeadLocals.getOrDefault(kernel.name)
   discard ctx.builder.opLabel()
-  # prologue: hoisted locals, then the parameter bindings
   ctx.hoistLocals(fn, kernel.body)
   for i, p in kernel.params:
     if p.typ.kind == ctAptr:
@@ -1541,7 +1538,6 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
   ##
   ## Exactly one `{.global.}` kernel per module, the device functions it
   ## calls emitted alongside.
-  ## A refusal names the construct otherwise.
   var lang = initSpvLangCtx()
   var kernels: seq[CirProc]
   for fn in m.procs:
@@ -1568,9 +1564,5 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
   (lang.builder.module.finalize(), "")
 
 
-proc codegen*(ctx: var GpuContext): seq[uint32] =
-  ## Encodes the module in `ctx` as SPIR-V words for the Vulkan environment,
-  ## the `backends_api` entry point.
-  ## An encoder refusal raises, the macro layer turns it into a compile error
-  ## naming the construct.
-  codegenModule(printSpirvModule(ctx.module))
+proc codegen*(m: CirModule): seq[uint32] =
+  codegenModule(printSpirvModule(m))
