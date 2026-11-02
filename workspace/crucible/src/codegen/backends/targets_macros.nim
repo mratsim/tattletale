@@ -31,7 +31,7 @@ import ./targets_registry
 
 const genFamilies* = [
   ("scalar", "ScalarNames", true), ("lit", "LitTokens", true), ("kind", "WalkPolicy", true),
-  ("conv", "ConvBuiltinPairs", false), ("math", "MathBuiltinNames", false),
+  ("math", "MathBuiltinNames", false),
   ("vector", "VectorRule", true),
   ("bitcast", "CastRules", true)]
   ## Eight families. Each entry names the DSL family, gives the generated
@@ -211,41 +211,24 @@ proc litKindCtor(entries: seq[NimNode], family, suffix, display: string): NimNod
   nnkObjConstr.newTree(args & top)
 
 proc builtinTableCtor(entries: seq[NimNode], family, display: string): NimNode {.compileTime.} =
-  ## Builtin name table of one conv section or math section.
+  ## Builtin name table of a math section (`builtin width "text"`).
   ##
-  ## Shapes: `fromCell toCell "text"` (conv), `builtin width "text"` (math).
-  ##
-  ## - `$1` is the call's argument list
-  ## - a conv key is the (source, target) scalar-cell pair
-  ## - a math key is the (name, bit width) pair
-  let widthKeyed = family == "math"
+  ## - a math key is the (name, bit width) pair, `$1` the argument list
   var names: seq[string]
   var pairs: seq[NimNode]
   for line in entries:
-    # a math entry nests its `width "spelling"` pair, a conv entry nests
-    # its `toCell "spelling"` pair under the source cell
+    # a math entry nests its `width "spelling"` pair under the name
     let ok = line.kind == nnkCommand and line.len == 2 and line[0].kind == nnkIdent and
       line[1].kind == nnkCommand and line[1].len == 2 and
-      (if widthKeyed: line[1][0].kind == nnkIntLit
-       else: line[1][0].kind == nnkIdent) and line[1][1].kind == nnkStrLit
+      line[1][0].kind == nnkIntLit and line[1][1].kind == nnkStrLit
     if not ok:
-      error("genTargets: expected a 'builtin " & (if widthKeyed: "width " else: "fromCell toCell ") & "\"text\"' entry in the " & family & " section of " & display, line)
+      error("genTargets: expected a 'builtin width \"text\"' entry in the " & family & " section of " & display, line)
     let name = $line[0]
-    var key: string
-    var k: NimNode
-    if widthKeyed:
-      key = name & ":" & $line[1][0].intVal
-      k = nnkPar.newTree(newLit name, newLit line[1][0].intVal.int)
-    else:
-      for cellTok in [line[0], line[1][0]]:
-        if findCellIndex($cellTok) < 0:
-          error("genTargets: unknown cell '" & $cellTok & "' in the " & family & " section of " & display, line)
-      key = name & "->" & $line[1][0]
-      k = nnkPar.newTree(newLit name, newLit $line[1][0])
+    let key = name & ":" & $line[1][0].intVal
     if key in names:
       error("genTargets: builtin '" & key & "' appears twice in the " & family & " section of " & display, line)
     names.add key
-    pairs.add nnkExprColonExpr.newTree(k, line[1][1])
+    pairs.add nnkExprColonExpr.newTree(nnkPar.newTree(newLit name, newLit line[1][0].intVal.int), line[1][1])
   # generated `{key: value, ...}.toTable()` expression
   nnkCall.newTree(nnkDotExpr.newTree(nnkTableConstr.newTree(pairs), ident"toTable"))
 

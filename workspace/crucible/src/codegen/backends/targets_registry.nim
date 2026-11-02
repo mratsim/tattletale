@@ -188,8 +188,6 @@ genTargets:
     # `bfloat16` has a first-class `bfloat` identity (Metal 3.1+), its conversions are plain casts.
     # fp8 conversions have no MSL native, an unspelled `{.builtin.}` name emits unchanged
     # and Metal's compiler rejects it
-    conv f32 f16 "half($1)", f16 f32 "float($1)", f32 bf16 "(bfloat)($1)",
-      bf16 f32 "(float)($1)", u16 f16 "as_type<half>($1)", f16 u16 "as_type<ushort>($1)"
     vector:
       elems i32, u32
       lanes 2, 3, 4
@@ -222,9 +220,6 @@ genTargets:
     # `float16` has a first-class `__half` identity, both `asFp16`/`asU16` entries map to the half bit builtins.
     # `bfloat16` has a first-class `__nv_bfloat16` identity, its conversions are the bfloat value builtins.
     # fp8 conversions have no entry: no CUDA native exists.
-    conv f32 f16 "__float2half($1)", f16 f32 "__half2float($1)",
-      u16 f16 "__ushort_as_half($1)", f16 u16 "__half_as_ushort($1)",
-      f32 bf16 "__float2bfloat16($1)", bf16 f32 "__bfloat162float($1)"
     # Intrinsics cover the float/integer bit reinterprets, a C-style cast
     # numerically converts and loses the bit pattern. A same-width integer
     # pair uses the conversion form, a modular cast preserves every bit.
@@ -274,8 +269,6 @@ genTargets:
     # OpenCL C has no native half storage outside the fp16 extension.
     # `{.builtin.}` conversion names emit unchanged, the caller's module
     # defines their bodies.
-    conv f32 f16 "toFp16($1)", f16 f32 "toFp32($1)", f32 bf16 "toBf16($1)", bf16 f32 "toBf32($1)",
-      u16 f16 "as_half($1)", f16 u16 "as_ushort($1)"
 
   target glsl:
     # 8, 16 and 64-bit names compile behind the explicit-arithmetic-types extensions the module emits.
@@ -302,8 +295,6 @@ genTargets:
     # reinterpret through the float16 bit-level builtins.
     # `bfloat16` and fp8 conversions are outside the table: no GLSL native exists.
     # `{.builtin.}` names outside the table emit unchanged and fail at glslang compile time.
-    conv f32 f16 "float16_t($1)", f16 f32 "float($1)", u16 f16 "uint16BitsToFloat16($1)",
-      f16 u16 "float16BitsToUint16($1)"
     kind unrollDirective "[[unroll]]", braceSameLine true,
       targetExprKinds {eNil, eAt, ePat, eDeref, eAddr}
     vector:
@@ -351,7 +342,6 @@ genTargets:
     # reinterpret through `bitcast`.
     # `bfloat16` and fp8 conversions are outside the table: no WGSL native exists.
     # `{.builtin.}` names outside the table emit unchanged and fail at wgpu parse time.
-    conv f32 f16 "f16($1)", f16 f32 "f32($1)", u16 f16 "bitcast<f16>($1)", f16 u16 "bitcast<u16>($1)"
 
   target hlsl:
     # emitHlslScalar refuses an absent cell, the 8/16-bit and 64-bit integer
