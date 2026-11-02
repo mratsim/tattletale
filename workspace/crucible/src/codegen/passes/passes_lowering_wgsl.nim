@@ -182,38 +182,36 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
       return err
   return ""
 
-proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[string, CirProc]): string =
+proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[string, CirProc]): tuple[err: string, spliced: bool] =
   let s = ss[i]
-  ## One call statement whose callee's pointer parameter cannot cross
-  ## a WGSL signature, the callee inlines at the splice position, every precondition refuses.
   let callee = procs.getOrDefault(s.callCallee.name)
   if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
     if callee.ret.kind != ctVoid:
-      return refuseAt(fn, "inlining " & callee.name & " needs a void return, its pointer parameter cannot cross a WGSL signature")
+      return (refuseAt(fn, "inlining " & callee.name & " needs a void return, its pointer parameter cannot cross a WGSL signature"), false)
     var body = cloneStmts(callee.body)
     if body.len > 0 and body[^1].kind == sRet and body[^1].retVal == nil:
       # an implicit fall-through return of the frontend, dropping it is
       # semantics-preserving at the splice position
       body.setLen(body.len - 1)
     if body.containsReturn:
-      return refuseAt(fn, "inlining " & callee.name & " needs a return-free body, its pointer parameter cannot cross a WGSL signature")
+      return (refuseAt(fn, "inlining " & callee.name & " needs a return-free body, its pointer parameter cannot cross a WGSL signature"), false)
     for a in s.callArgs:
       if a.containsCall:
-        return refuseAt(fn, "call argument of " & callee.name & " contains a call, inlining would re-evaluate it")
+        return (refuseAt(fn, "call argument of " & callee.name & " contains a call, inlining would re-evaluate it"), false)
     var seen: HashSet[string]
     if callee.callsCrossingCalleeTransitively(procs, seen):
-      return refuseAt(fn, "inlining " & callee.name & " reaches another crossing callee, its pointer parameter cannot cross a WGSL signature")
+      return (refuseAt(fn, "inlining " & callee.name & " reaches another crossing callee, its pointer parameter cannot cross a WGSL signature"), false)
     var subst = initTable[string, CirExpr]()
     for j, p in callee.params:
       subst[p.name] = s.callArgs[j]
     body.substituteArgsStmts(subst)
     ss = ss[0 ..< i] & body & ss[i + 1 .. ^1]
-    return ""
+    return ("", true)
   for a in s.callArgs:
     let aerr = refuseValuePositionCalls(fn, a, procs)
     if aerr.len > 0:
-      return aerr
-  return ""
+      return (aerr, false)
+  return ("", false)
 
 proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc]): string =
   ## One non-call statement: its subexpressions refuse value-position calls,
@@ -263,9 +261,11 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
   while i < ss.len:
     let s = ss[i]
     if s.kind == sCall and s.callCallee.kind == eSym:
-      let r = inlineCallSite(fn, ss, i, procs)
+      let (r, spliced) = inlineCallSite(fn, ss, i, procs)
       if r.len > 0:
         return r
+      if not spliced:
+        i.inc
       continue
     let r = walkValuePositions(fn, s, procs)
     if r.len > 0:
