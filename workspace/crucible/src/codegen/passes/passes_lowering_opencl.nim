@@ -215,27 +215,4 @@ proc retargetProcTypeSyms(e: CirExpr, newFormals: Table[string, seq[CirType]]) =
   e.walkExprs(retarget)
 
 proc retargetProcTypeStmts(stmts: seq[CirStmt], newFormals: Table[string, seq[CirType]]) =
-  for st in stmts:
-    case st.kind
-    of sAsgn:
-      retargetProcTypeSyms(st.lhs, newFormals)
-      retargetProcTypeSyms(st.rhs, newFormals)
-    of sIte:
-      retargetProcTypeSyms(st.cond, newFormals)
-      retargetProcTypeStmts(st.thenBody, newFormals)
-      retargetProcTypeStmts(st.elseBody, newFormals)
-    of sWhile:
-      retargetProcTypeSyms(st.whileCond, newFormals)
-      retargetProcTypeStmts(st.whileBody, newFormals)
-    of sRet:
-      retargetProcTypeSyms(st.retVal, newFormals)
-    of sDiscard:
-      retargetProcTypeSyms(st.discardVal, newFormals)
-    of sCall:
-      retargetProcTypeSyms(st.callCallee, newFormals)
-      for a in st.callArgs.mitems:
-        retargetProcTypeSyms(a, newFormals)
-    of sVar, sConst:
-      retargetProcTypeSyms(st.init, newFormals)
-    of sAsm, sEmit:
-      discard
+  stmts.walkStmts(nil, proc(e: CirExpr) = retargetProcTypeSyms(e, newFormals))
