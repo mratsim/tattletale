@@ -150,7 +150,6 @@ macro codegenGLSL(body: typed): string =
   registerSharedLoweringPasses(reg)
   reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
   registerGlslQualifyVarParams(reg)
-  registerGlslExplodePointerLocals(reg)
   registerSmemInitRewrite(reg)
   registerGlslHoistProgramScopeLocals(reg)
   registerInstantiateAddressSpaceGenerics(reg)

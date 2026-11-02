@@ -69,12 +69,15 @@ func registerGlslQualifyVarParams*(reg: var PassRegistry) =
     run = qualifyVarParams
   )
 
-func registerGlslExplodePointerLocals*(reg: var PassRegistry) =
-  registerExplodePointerLocals(reg, "glslExplodePointerLocals",
-    "Rewrites pointer locals to their pointee locals, reads through the" &
-    " alias to the pointee symbol",
-    newExplodeCtx, explodeVarDecl, explodeAsgn,
-    explodeDropsVar, explodeDropsAsgn, rewritePointerExpr)
+proc registerGlslRefBlockPass*(reg: var PassRegistry) =
+  ## - the pass fills `CirModule.refBlocks` with one entry per block name,
+  ##   in registration order
+  ## - the printer reads the stored entries and registers nothing itself
+  reg.register("glslRegisterRefBlocks", pkAnalysis,
+    "Registers the buffer-reference blocks that the printer declares, one" &
+    " per distinct block name in registration order",
+    run = glslRegisterRefBlocks
+  )
 
 func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
   ## Relocated declarations use the renamed names that their body already references.
@@ -231,120 +234,6 @@ proc qualifyVarParams(m: CirModule): string =
 #  Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
 
-proc isBindShape(e: CirExpr): bool =
-  ## Pointee name stands in for the pointer, only a composite local
-  ## offers the reads that the alias resolves.
-  e.kind == eAddr and e.addrOperand.kind == eSym and
-    e.addrOperand.typ != nil and
-    e.addrOperand.typ.kind in {ctStruct, ctArray}
-
-proc bindPointee(e: CirExpr): string =
-  ## Pointee local name of an address-of binding, `isBindShape` checked by the caller.
-  e.addrOperand.name
-
-proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-  if e.isNil:
-    return ""
-  case e.kind
-  of eSym:
-    if e.name in ctx.pendingPtrs:
-      return refuseAt(fn, "pointer local " & e.name & " reads before its address-of binding, the pointee is the only storage")
-    if e.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & e.name & " reads as a value, GLSL has no pointer values")
-    return ""
-  of eDeref:
-    let op = e.derefOperand
-    if op.kind == eSym and op.name in ctx.aliasOf:
-      # pointee stands in for the pointer and the deref unwraps to it
-      e.spliceSym(ctx.aliasOf[op.name], op.typ.pElem)
-      return ""
-    for ch in getExprChildren(e):
-      let err = rewritePointerExpr(fn, ctx, ch)
-      if err.len > 0:
-        return err
-    let ot = getExprType(e.derefOperand)
-    if ot != nil and ot.kind == ctAptr:
-      # a buffer-reference deref for the printer to emit as the indexed access
-      return ""
-    if e.derefOperand.kind == eSym and e.derefOperand.name in ctx.aliasOf:
-      # a child rewrite spliced the operand to an aliased pointer's pointee
-      let op2 = e.derefOperand
-      e.spliceSym(ctx.aliasOf[op2.name], op2.typ.pElem)
-      return ""
-    return refuseAt(fn, "deref of a non-buffer-reference operand, GLSL keeps no function storage")
-  of eAt, ePat:
-    let base = (if e.kind == eAt: e.atBase else: e.patBase)
-    if base.kind == eSym:
-      if base.name in ctx.pendingPtrs:
-        return refuseAt(fn, "pointer local " & base.name & "'s base reads before its address-of binding, the pointee is the only storage")
-      if base.name in ctx.aliasOf:
-        # aliased local stands in for the pointer and the index goes to the pointee
-        let pointee = sym(ctx.aliasOf[base.name], base.typ.pElem)
-        if e.kind == eAt:
-          e.atBase = pointee
-        else:
-          e.patBase = pointee
-    for ch in getExprChildren(e):
-      let err = rewritePointerExpr(fn, ctx, ch)
-      if err.len > 0:
-        return err
-    return ""
-  of eAddr:
-    for ch in getExprChildren(e):
-      let err = rewritePointerExpr(fn, ctx, ch)
-      if err.len > 0:
-        return err
-    if e.addrOperand.kind == ePat:
-      # a buffer element's address is the indexed reference access
-      return ""
-    return refuseAt(fn, "address-of has no GLSL form outside a buffer element, GLSL keeps no function storage")
-  else:
-    for ch in getExprChildren(e):
-      let err = rewritePointerExpr(fn, ctx, ch)
-      if err.len > 0:
-        return err
-    return ""
-
-proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  if s.declType.kind == ctPtr:
-    if s.init == nil:
-      ctx.pendingPtrs.incl(s.name)
-    elif isBindShape(s.init):
-      ctx.aliasOf[s.name] = s.init.bindPointee
-    else:
-      return refuseAt(fn, "pointer local " & s.name & " must bind the address of a local, GLSL keeps no function storage")
-    return ""
-  return rewritePointerExpr(fn, ctx, s.init)
-
-proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
-  if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
-    if not isBindShape(s.rhs):
-      return refuseAt(fn, "pointer local " & s.lhs.name & " binds only the address of a local, GLSL keeps no function storage")
-    if s.lhs.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & s.lhs.name & " rebinds, GLSL has no pointer values")
-    ctx.pendingPtrs.excl(s.lhs.name)
-    ctx.aliasOf[s.lhs.name] = s.rhs.bindPointee
-    return ""
-  let lerr = rewritePointerExpr(fn, ctx, s.lhs)
-  if lerr.len > 0:
-    return lerr
-  return rewritePointerExpr(fn, ctx, s.rhs)
-
-proc explodeDropsVar(s: CirStmt, ctx: ExplodeCtx): bool =
-  s.declType.kind == ctPtr
-
-proc explodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
-  s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr
-
-proc newExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
-  # GLSL's pointer model needs only the pending and alias tables, no by-reference parameters, no callee argument checks
-  ExplodeCtx()
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Buffer-reference block registration
-# ═══════════════════════════════════════════════════════════════════════
-
 proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirType) =
   ## Registers the buffer-reference block of one runtime-array pointee,
   ## deduped by block name.
@@ -398,13 +287,3 @@ proc glslRegisterRefBlocks(m: CirModule): string =
         registerRefBlock(m.refBlocks, p.typ.pElem)
     registerStmtRefBlocks(m.refBlocks, fn.body)
   return ""
-
-proc registerGlslRefBlockPass*(reg: var PassRegistry) =
-  ## - the pass fills `CirModule.refBlocks` with one entry per block name,
-  ##   in registration order
-  ## - the printer reads the stored entries and registers nothing itself
-  reg.register("glslRegisterRefBlocks", pkAnalysis,
-    "Registers the buffer-reference blocks that the printer declares, one" &
-    " per distinct block name in registration order",
-    run = glslRegisterRefBlocks
-  )
