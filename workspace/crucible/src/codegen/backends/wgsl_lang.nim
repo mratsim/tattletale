@@ -51,7 +51,6 @@ type PrintCtx = object of WalkCtx
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string
-proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string
 proc printConv(ctx: var PrintCtx, e: CirExpr): string
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
@@ -327,9 +326,6 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
     ctx.fail(getUnhandledExprRejection(e.kind))
     ""
 
-proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
-  ## Conv text by canonical name out of the registry table.
-  convBuiltinText(wgslConvBuiltinPairs, call, args)
 
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string =
   ## Returns the WGSL barrier statement texts. WGSL has no combined barrier:
@@ -497,7 +493,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full WGSL module through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(wgslWalkPolicy, wgslLitTokens, wgslScalarNames,
-    wgslVectorRule, wgslCastRules, wgslEmit)
+    wgslVectorRule, wgslCastRules, wgslEmit, bkWebGPU)
   let kernel = getEntryKernel(ctx, m)
   if ctx.failing():
     return ("", ctx.err)

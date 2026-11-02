@@ -150,9 +150,6 @@ proc printBuiltinRef(ctx: var PrintCtx, k: CirCoordBuiltinKind, whole: bool): st
     return "int3((int)" & name & ".x, (int)" & name & ".y, (int)" & name & ".z)"
   return name
 
-proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
-  ## Conv text by canonical name out of the registry table.
-  convBuiltinText(mslConvBuiltinPairs, call, args)
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   ctx.printBuiltinRef(e.coordBuiltin, true)
@@ -323,7 +320,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full MSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(mslWalkPolicy, mslLitTokens, mslScalarNames,
-    mslVectorRule, mslCastRules, mslEmit)
+    mslVectorRule, mslCastRules, mslEmit, bkMetal)
   printModule(ctx, m, getModuleKernels(m), mslModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =

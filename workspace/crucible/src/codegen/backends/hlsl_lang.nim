@@ -785,7 +785,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
   ## Emits the full HLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(hlslWalkPolicy, hlslLitTokens, hlslScalarNames,
-    hlslVectorRule, hlslCastRules, hlslEmit)
+    hlslVectorRule, hlslCastRules, hlslEmit, bkHlsl)
   ctx.flavor = flavor
   ctx.procs = initTable[string, CirProc]()
   for fn in m.procs:

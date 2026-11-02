@@ -181,9 +181,6 @@ proc getGlslCoordName(k: CirCoordBuiltinKind): string =
   of cbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
   else: ""
 
-proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
-  ## Conv text by canonical name out of the registry table.
-  convBuiltinText(glslConvBuiltinPairs, call, args)
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   if e.coordBuiltin == cbkThreadIndexInThreadgroup:
@@ -449,7 +446,7 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
 proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full GLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(glslWalkPolicy, glslLitTokens, glslScalarNames,
-    glslVectorRule, glslCastRules, glslEmit)
+    glslVectorRule, glslCastRules, glslEmit, bkGlsl)
   let kernels = getModuleKernels(m)
   if kernels.len == 0:
     ctx.fail("module declares no kernel")

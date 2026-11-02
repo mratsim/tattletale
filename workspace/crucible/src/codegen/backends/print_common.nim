@@ -18,6 +18,8 @@
 
 import std/[macros, math, sets, strutils, tables]
 import ../ir/cirv2_lang
+import ../ir/ast_datatypes
+import ../../builtins/builtins_gpu_types
 import ./targets_registry
 export targets_registry
 
@@ -101,6 +103,7 @@ type WalkCtx* {.inheritable.} = object
   ## - the per-target derivation gives the shared procs one instantiation per target
   ## - the overlay procs resolve per target at that instantiation
   fnName*: string
+  backend*: BackendKind
   ## Name of the proc in flight, named by the refusal messages.
   err*: string
   ## First refusal of the walk, "" while clean.
@@ -128,7 +131,7 @@ type WalkCtx* {.inheritable.} = object
 
 template initPrintCtx*(walkPolicy: WalkPolicy, litTokens: LitTokens,
     names: ScalarNames, rule: VectorRule, rules: openArray[CastRule],
-    targetEmit: TargetEmit): untyped =
+    targetEmit: TargetEmit, bk: BackendKind): untyped =
   ## Walk context of one module print: the target's tables, clean state.
   ## Expands against the importing printer's own `PrintCtx` type.
   ## A target with registry math rows assigns `mathNames` after the init.
@@ -136,7 +139,7 @@ template initPrintCtx*(walkPolicy: WalkPolicy, litTokens: LitTokens,
   ## Returns: the initialized context, `fnName` the module-level kernel name.
   PrintCtx(fnName: "<module>", policy: walkPolicy, lit: litTokens,
     scalarNames: names, vectorRule: rule, castRules: @rules,
-    emit: targetEmit)
+    emit: targetEmit, backend: bk)
 
 proc roundUpMultiple*(v, multiple: int): int =
   doAssert multiple > 0
@@ -432,22 +435,23 @@ proc emitBuiltinCall*(ctx: var auto, callee: CirExpr, args: seq[string]): string
       return txt % args
   return ""
 
-proc convBuiltinText*(pairs: Table[(string, string), string], call: CirExpr, args: seq[string]): string =
-  ## Registry conv text by the call's scalar-cell pair
-  ## (`<target>ConvBuiltinPairs`).
+proc convBuiltinText*(ctx: var auto, call: CirExpr, args: seq[string]): string =
+  ## Builtins-driven conv text: the ConvBuiltinNames row keyed
+  ## (backend, source cell, target cell) for the call's signature.
   ##
-  ## Returns: the row's native text with `$1` for the argument list.
-  ## Returns "" when the pair passes through: the target compiler rejects it.
+  ## Returns: the row's native name formatted with the argument list.
+  ## Returns "" when the row is absent: the canonical name passes through.
   if call.callee.kind != eSym or not call.callee.builtin:
     return ""
   let pt = call.callee.typ
   if pt == nil or pt.kind != ctProc or pt.params.len != 1 or pt.ret == nil:
     return ""
-  let txt = pairs.getOrDefault((getCellToken(pt.params[0].kind, pt.params[0].bits),
+  let txt = ConvBuiltinNames.getOrDefault((ctx.backend,
+      getCellToken(pt.params[0].kind, pt.params[0].bits),
       getCellToken(pt.ret.kind, pt.ret.bits)), "")
   if txt.len == 0:
     return ""
-  return txt % args.join(", ")
+  txt & "(" & args.join(", ") & ")"
 
 proc mathBuiltinCallText*(names: Table[(string, int), string], call: CirExpr, args: seq[string]): string =
   ## Native text of one width-sensitive scalar-math call over

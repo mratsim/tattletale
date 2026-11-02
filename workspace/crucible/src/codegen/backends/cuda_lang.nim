@@ -170,9 +170,6 @@ proc getCudaCoordToken(k: CirCoordBuiltinKind, whole: bool, field: string, coord
         "+threadIdx." & field & ")"
   else: doAssert false
 
-proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
-  ## Conv text by canonical name out of the registry table.
-  convBuiltinText(cudaConvBuiltinPairs, call, args)
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   getCudaCoordToken(e.coordBuiltin, true, "", e.typ)
@@ -286,7 +283,7 @@ proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full CUDA translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(cudaWalkPolicy, cudaLitTokens, cudaScalarNames,
-    cudaVectorRule, cudaCastRules, cudaEmit)
+    cudaVectorRule, cudaCastRules, cudaEmit, bkCuda)
   ctx.mathNames = cudaMathBuiltinNames
   printModule(ctx, m, getModuleKernels(m), cudaModuleShape)
 

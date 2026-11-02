@@ -174,9 +174,6 @@ const OpenclFlatThreadIndex =
   "(int)(get_local_id(2)*get_local_size(0)*get_local_size(1) + " &
   "get_local_id(1)*get_local_size(0) + get_local_id(0))"
 
-proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
-  ## Conv text by canonical name out of the registry table.
-  convBuiltinText(openclConvBuiltinPairs, call, args)
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   if e.coordBuiltin == cbkThreadIndexInThreadgroup:
@@ -358,7 +355,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full OpenCL C translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(openclWalkPolicy, openclLitTokens, openclScalarNames,
-    openclVectorRule, openclCastRules, openclEmit)
+    openclVectorRule, openclCastRules, openclEmit, bkOpenCL)
   ctx.mathNames = openclMathBuiltinNames
   let kernels = getModuleKernels(m)
   if kernels.len == 0:

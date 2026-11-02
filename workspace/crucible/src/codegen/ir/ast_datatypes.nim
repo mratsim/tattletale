@@ -22,6 +22,8 @@ type
     bkOpenCL, ## OpenCL C backend
     bkGlsl,   ## GLSL backend, executed on Vulkan
     bkMetal,  ## Metal backend, MSL emitted
+    bkHlsl,   ## HLSL backend, DXC compiled
+    bkSpirv,  ## SPIR-V backend, direct emission
 
   GpuTypeKind* = enum
     gtVoid,
