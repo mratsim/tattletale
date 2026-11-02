@@ -78,6 +78,22 @@ const openclModuleShape = ModuleShape(
 #  Types
 # ═══════════════════════════════════════════════════════════════════════
 
+# Shared-walk mixin targets, declared so the overlay procs are module-scope
+# symbols when the walk's generics resolve (mixin ignores codeReordering).
+proc emitTypeName(ctx: var PrintCtx, t: CirType): string
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string
+proc coordRef(ctx: var PrintCtx, e: CirExpr): string
+proc coordDot(ctx: var PrintCtx, e: CirExpr): string
+proc printConv(ctx: var PrintCtx, e: CirExpr): string
+proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string
+proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
+proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
+proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
+proc constDecl(ctx: var PrintCtx, s: CirStmt): string
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string
+proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
+
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller builds the type name.
   getLeafTypeName(TargetVocabs[bkOpenCL].scalarNames, openclVectorRule, t)
