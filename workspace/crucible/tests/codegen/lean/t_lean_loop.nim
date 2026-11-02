@@ -16,10 +16,17 @@
 ## Run:
 ##   cd tattletale && nim test_crucible_lean
 
-import std/[os, strutils]
+import std/[json, os, strutils]
 import lean_testutils
 
 const genDir = leanProjectDir & "/generated"
+
+proc scaffoldEntry(manifest: JsonNode, kind: string): JsonNode =
+  ## Manifest scaffold entry of the given kind
+  for e in manifest["scaffolds"].items:
+    if e["kind"].getStr() == kind:
+      return e
+  doAssert false, "no " & kind & " scaffold in the manifest"
 
 proc runTest() =
   block: # loop-kernel emission + Lean elaboration (warningAsError, sorry-free)
@@ -152,6 +159,86 @@ proc runTest() =
           output[i] = a[i] - b[i]
     expectLeanRefusal("lean_lang: unsupported expression eSub", subKernel)
     echo "  refusals carried over from the guarded-thread shape: ok"
+
+  block: # right loop-guard invariant: proved, manifest `proven: true`, exit 0
+    let k = leanIrSpec:
+      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "i < 4".} =
+        for i in 0 ..< 4:
+          output[i] = a[i] + b[i]
+    doAssert k.refusal.len == 0, "unexpected refusal: " & k.refusal
+    let emitted = settleModule(k.text, k.scaffolds, genDir, "loop_inv.lean")
+    let hasInvScaffold = "theorem loopAddLoop_invariant" in emitted
+    let noDowngrade = "sorry" notin emitted
+    doAssert hasInvScaffold, "loop-invariant scaffold emitted"
+    doAssert noDowngrade, "no scaffold needed the downgrade"
+
+    let manifest = parseJson(readFile((genDir / "loop_inv.lean").changeFileExt("manifest.json")))
+    let namesKernel = manifest["kernel"].getStr() == "loopAdd"
+    doAssert namesKernel, "manifest names the kernel"
+    let inv = scaffoldEntry(manifest, "invariant")
+    let payloadOk = inv["payload"].getStr() == "i < 4"
+    let nameOk = inv["name"].getStr() == "loopAddLoop_invariant"
+    doAssert payloadOk
+    doAssert nameOk
+    doAssert inv["proven"].getBool(), "loop-guard invariant proved"
+    doAssert inv["error"].kind == JNull
+
+    let (outp, code) = elaborate("generated/loop_inv.lean")
+    doAssert code == 0, "Lean rejected the proven loop module:\n" & outp
+    echo "  right loop invariant: proven manifest + warningAsError elaboration: ok"
+
+  block: # unprovable-by-the-scaffold loop invariant: sorry downgrade, unproven manifest
+    # payload `i ≤ 4` is true over the loop counter, but the fixed proof
+    # attempt `exact h` of the scaffold cannot close it, so the proof downgrades
+    # to `sorry` and the manifest records unproven, a proof-status verdict
+    # that never judges the truth of the payload
+    let k = leanIrSpec:
+      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "i ≤ 4".} =
+        for i in 0 ..< 4:
+          output[i] = a[i] + b[i]
+    doAssert k.refusal.len == 0, "unexpected refusal: " & k.refusal
+    discard settleModule(k.text, k.scaffolds, genDir, "loop_inv_wrong.lean")
+    let manifest = parseJson(readFile((genDir / "loop_inv_wrong.lean").changeFileExt("manifest.json")))
+    let inv = scaffoldEntry(manifest, "invariant")
+    doAssert inv["proven"].getBool() == false, "unprovable-by-the-scaffold loop invariant recorded unproven"
+    doAssert inv["error"].getStr().len > 0, "Lean error excerpt recorded"
+
+    let emitted = readFile(genDir / "loop_inv_wrong.lean")
+    let downgraded = "sorry" in emitted
+    doAssert downgraded, "proof downgraded to a sorry-backed scaffold"
+    let (_, code) = elaborate("generated/loop_inv_wrong.lean")
+    doAssert code != 0, "the sorry-backed module must fail under warningAsError"
+    echo "  unprovable-by-the-scaffold loop invariant: unproven manifest + warningAsError rejection: ok"
+
+  block: # loud refusals on loop-shape pragma payloads
+    let withPrecondition = leanIrSpec:
+      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, precondition: "tid < n".} =
+        for i in 0 ..< 4:
+          output[i] = a[i] + b[i]
+    expectLeanRefusal("lean_lang: unsupported precondition payload 'tid < n' - the" &
+      " loop shape has no thread-id launch precondition", withPrecondition)
+
+    let withPostcondition = leanIrSpec:
+      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, postcondition: "tid < n".} =
+        for i in 0 ..< 4:
+          output[i] = a[i] + b[i]
+    expectLeanRefusal("lean_lang: unsupported postcondition payload 'tid < n' - the " &
+      "loop postcondition is the composed", withPostcondition)
+
+    let bufferInvariant = leanIrSpec:
+      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "a tid < 4".} =
+        for i in 0 ..< 4:
+          output[i] = a[i] + b[i]
+    expectLeanRefusal("lean_lang: unsupported invariant payload 'a tid < 4' - the " &
+      "loop-shape invariant must mention the loop counter 'i'", bufferInvariant)
+
+    let boundInvariant = leanIrSpec:
+      proc loopAdd(output, a, b: ptr UncheckedArray[uint32]) {.global, invariant: "i < n".} =
+        for i in 0 ..< 4:
+          output[i] = a[i] + b[i]
+    expectLeanRefusal("lean_lang: unsupported invariant payload 'i < n' - the loop-shape " &
+      "invariant may only mention the loop counter 'i'", boundInvariant)
+    echo "  refusals on loop-shape pragma payloads: ok"
 
   block: # refusal on a loop variable colliding with the emitted update binder
     let loopVarJ = leanIr:

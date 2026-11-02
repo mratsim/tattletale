@@ -23,7 +23,7 @@
 ## A write is a functional update over buffers modelled as total functions
 ## `Nat → UInt32`. `UInt32.add` wraps modulo 2^32 like the kernel's GPU arithmetic.
 
-import std/[os, sets, strutils]
+import std/[json, os, osproc, sets, strutils, tables]
 import ../ir/cirv2_lang
 import ./print_common
 
@@ -42,6 +42,7 @@ type
     kind: KernelKind
     kernelName: string   ## crucible kernel proc name, e.g. `addKernel`
     bodyName: string     ## emitted Lean def name, e.g. `addBody`
+    readBufs: seq[string]  ## buffer params never written, in declaration order
     writeBuf: string     ## the buffer param written by the body
     value: string        ## emitted Lean text of the stored value, in terms of `tid` or the update binder `j`
     nValue: int          ## the guard literal (guarded thread) or loop bound (loop shape)
@@ -289,6 +290,9 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
   result.kernelName = kernel.name
   result.bodyName = leanBodyName(result.kernelName)
   result.scalarName = scalarName
+  for p in kernel.params:
+    if isUint32Buffer(p.typ) and p.name != result.writeBuf:
+      result.readBufs.add p.name
 
 # ── Lean emission ────────────────────────────────────────────────────────────
 
@@ -507,3 +511,566 @@ proc codegen*(m: CirModule): string =
     raise leanRefusal("unsupported module - expected exactly one `{.global.}`" &
       " kernel, got " & $kernels.len)
   result = emitText(kernels[0])
+
+# ── Verification scaffolds ───────────────────────────────────────────────────
+
+## Lean properties cannot be written in Nim, so each pragma payload is a string holding
+## a Lean property expression over the kernel's parameter names,
+## plus the model binders `tid` (thread id) and `n` (buffer bound).
+##
+## - `{.precondition: "<payload>".}` - assumed at launch, never proved
+## - `{.invariant: "<payload>".}` - true whenever the guarded branch is entered, implied by the guard `tid < n`
+## - `{.postcondition: "<payload>".}` - true of the written buffer after the thread ran
+##
+## - `prop := cmp ('∧' cmp)*`
+## - `cmp  := sum ('=' | '≠' | '<' | '≤') sum`
+## - `sum  := term ('+' term)*`
+## - `term := ident | ident 'tid' | uint literal`
+##
+## Example: `{.postcondition: "output tid = a tid + b tid".}` on the add kernel.
+## A well-formed payload stating a false property fails its Lean proof attempt and is downgraded to a sorry-backed scaffold.
+## Anything the grammar cannot parse is refused loudly.
+
+type
+  RawSpec* = object
+    ## One pragma captured off the kernel proc, before the payload is parsed
+    name*: string    ## one of precondition, invariant, postcondition
+    payload*: string ## the string payload verbatim
+
+  SpecKind* = enum
+    skPrecondition
+    skInvariant
+    skPostcondition
+
+  ScaffoldData* = object
+    ## One prepared scaffold, a data record the compile-time capture hands
+    ## to the runtime settling
+    kind*: SpecKind
+    kernelName*: string ## crucible kernel proc name, for the scaffold docs and the manifest
+    payload*: string   ## pragma payload verbatim, for the manifest
+    leanName*: string  ## emitted theorem name, empty for the assumed precondition
+    statement*: string ## Lean property text between `:` and `:= by`
+    binders*: string   ## buffer binders of the theorem, e.g. `a b out`
+    attempt*: string   ## mechanical proof attempt, downgraded to `sorry` on failure
+    nValue*: int       ## the buffer bound, rendered in the loop-shape scaffold doc
+    loopShape*: bool   ## the loop-shape scaffold renders over the remaining count `k`
+
+const specPragmaNames* = ["precondition", "invariant", "postcondition"]
+  ## Verification pragma vocabulary: one source,
+  ## consumed by the pragma capture (test harness) and `specKindByName`
+
+proc specKindByName*(name: string): SpecKind =
+  ## Maps a captured pragma name to its kind, refusing anything else
+  for i, n in specPragmaNames:
+    if n == name:
+      return SpecKind(i)
+  raise leanRefusal("unsupported spec pragma '" & name & "'")
+
+static:
+  # array order matches the SpecKind enum order
+  doAssert specKindByName("precondition") == skPrecondition
+  doAssert specKindByName("invariant") == skInvariant
+  doAssert specKindByName("postcondition") == skPostcondition
+
+template precondition*(expr: static string) {.pragma.}
+  ## Payload: a Lean property assumed true at kernel launch, like `"tid < n"`.
+
+template invariant*(expr: static string) {.pragma.}
+  ## Payload: a Lean property implied by the guard of the guarded branch, `tid < n` in the model, like `"tid < n"`.
+
+template postcondition*(expr: static string) {.pragma.}
+  ## Payload: a Lean property over the kernel parameters, `tid` and `n`,
+  ## stating the written buffer's state after the thread ran, like `"output tid = a tid + b tid"`.
+
+# ── Payload grammar ──────────────────────────────────────────────────────────
+
+type
+  SpecTokenKind = enum
+    tkIdent  ## `[A-Za-z_][A-Za-z0-9_]*`
+    tkUint   ## `[0-9]+`
+    tkPlus   ## `+`
+    tkEq     ## `=`
+    tkNeq    ## `≠`
+    tkLt     ## `<`
+    tkLe     ## `≤`
+    tkAnd    ## `∧`
+    tkEof
+
+  SpecToken = object
+    kind*: SpecTokenKind
+    text*: string ## identifier name or literal digits
+
+  SpecExprKind* = enum
+    seIdent ## identifier binder: `tid` or `n`
+    seApp   ## buffer read: `<buffer> tid`
+    seUint  ## unsigned integer literal
+    seBin   ## binary operator: `+`, `=`, `≠`, `<`, `≤`, `∧`
+
+  SpecExpr* = ref object
+    ## Parsed payload. The grammar fixes precedence (`∧` < cmp < `+`).
+    ## `seBin` chains are left-associative, so rendering emits no parentheses.
+    case kind*: SpecExprKind
+    of seIdent:
+      name*: string
+    of seApp:
+      fn*: string ## the buffer parameter name, applied to `tid`
+    of seUint:
+      value*: string
+    of seBin:
+      op*: string
+      left*, right*: SpecExpr
+
+proc tokenizeSpec(payload: string): seq[SpecToken] =
+  ## Splits a payload into spec tokens, refusing characters outside the grammar with a `lean_lang: invalid spec payload` ValueError
+  var i = 0
+  while i < payload.len:
+    let c = payload[i]
+    if c in {' ', '\t'}:
+      inc i
+    elif c in IdentStartChars:
+      let start = i
+      while i < payload.len and payload[i] in IdentChars:
+        inc i
+      result.add SpecToken(kind: tkIdent, text: payload[start ..< i])
+    elif c in {'0' .. '9'}:
+      let start = i
+      while i < payload.len and payload[i] in {'0' .. '9'}:
+        inc i
+      result.add SpecToken(kind: tkUint, text: payload[start ..< i])
+    elif c == '+':
+      result.add SpecToken(kind: tkPlus, text: "+")
+      inc i
+    elif c == '=':
+      result.add SpecToken(kind: tkEq, text: "=")
+      inc i
+    elif c == '<':
+      result.add SpecToken(kind: tkLt, text: "<")
+      inc i
+    elif payload[i ..< min(i + 3, payload.len)] == "≠":
+      result.add SpecToken(kind: tkNeq, text: "≠")
+      inc i, 3
+    elif payload[i ..< min(i + 3, payload.len)] == "≤":
+      result.add SpecToken(kind: tkLe, text: "≤")
+      inc i, 3
+    elif payload[i ..< min(i + 3, payload.len)] == "∧":
+      result.add SpecToken(kind: tkAnd, text: "∧")
+      inc i, 3
+    else:
+      raise leanRefusal("invalid spec payload '" & payload &
+        "' - unexpected character '" & $c & "' at byte " & $i)
+
+proc peek(toks: seq[SpecToken], i: int): SpecToken =
+  ## Token at `i`, or `tkEof` at the end of input
+  if i < toks.len:
+    return toks[i]
+  result = SpecToken(kind: tkEof)
+
+proc parseSum(toks: seq[SpecToken], i: var int): SpecExpr
+proc parseCmp(toks: seq[SpecToken], i: var int): SpecExpr
+proc parseProp(toks: seq[SpecToken], i: var int): SpecExpr
+
+proc parseTerm(toks: seq[SpecToken], i: var int): SpecExpr =
+  ## term := ident | ident 'tid' | uint literal
+  let tok = toks.peek(i)
+  case tok.kind
+  of tkIdent:
+    inc i
+    if toks.peek(i).kind == tkIdent and toks.peek(i).text == "tid":
+      inc i
+      result = SpecExpr(kind: seApp, fn: tok.text)
+    else:
+      result = SpecExpr(kind: seIdent, name: tok.text)
+  of tkUint:
+    inc i
+    result = SpecExpr(kind: seUint, value: tok.text)
+  else:
+    raise leanRefusal("invalid spec payload - expected an identifier or a" &
+      " uint literal, got '" & tok.text & "'")
+
+proc parseSum(toks: seq[SpecToken], i: var int): SpecExpr =
+  ## sum := term ('+' term)*
+  result = parseTerm(toks, i)
+  while toks.peek(i).kind == tkPlus:
+    inc i
+    let r = parseTerm(toks, i)
+    result = SpecExpr(kind: seBin, op: "+", left: result, right: r)
+
+proc parseCmp(toks: seq[SpecToken], i: var int): SpecExpr =
+  ## cmp := sum ('=' | '≠' | '<' | '≤') sum
+  result = parseSum(toks, i)
+  let tok = toks.peek(i)
+  if tok.kind in {tkEq, tkNeq, tkLt, tkLe}:
+    inc i
+    let r = parseSum(toks, i)
+    result = SpecExpr(kind: seBin, op: tok.text, left: result, right: r)
+
+proc parseProp(toks: seq[SpecToken], i: var int): SpecExpr =
+  ## prop := cmp ('∧' cmp)*
+  result = parseCmp(toks, i)
+  while toks.peek(i).kind == tkAnd:
+    inc i
+    let r = parseCmp(toks, i)
+    result = SpecExpr(kind: seBin, op: "∧", left: result, right: r)
+
+proc parseSpecPayload*(payload: string): SpecExpr =
+  ## Parses one payload into a `SpecExpr`, refusing every construct outside
+  ## the grammar with a `lean_lang: invalid spec payload` ValueError
+  let toks = tokenizeSpec(payload)
+  var i = 0
+  result = parseProp(toks, i)
+  if toks.peek(i).kind != tkEof:
+    raise leanRefusal("invalid spec payload '" & payload &
+      "' - trailing input at token '" & toks.peek(i).text & "'")
+
+proc specRefs*(e: SpecExpr): seq[string] =
+  ## Names referenced by the payload: identifier binders (`tid`, `n`) and applied buffers, deduplicated in first-occurrence order
+  case e.kind
+  of seIdent:
+    if e.name notin result:
+      result.add e.name
+  of seApp:
+    if e.fn notin result:
+      result.add e.fn
+  of seUint:
+    discard
+  of seBin:
+    result = specRefs(e.left)
+    for r in specRefs(e.right):
+      if r notin result:
+        result.add r
+
+proc renderSpec*(e: SpecExpr, nameMap: Table[string, string], bareMap: Table[string, string] = initTable[string, string]()): string =
+  ## Renders the payload as Lean text over the model's names.
+  ##
+  ## - `nameMap` maps each kernel buffer parameter to its emitted Lean name,
+  ##   the written buffer to the post-state application of the per-thread body
+  ## - `bareMap` maps an identifier binder to its rendered Lean text: the loop
+  ##   shape renders the loop counter over the recursion's remaining-count
+  ##   parameter (`i` -> `4 - k`), any other identifier binder renders as itself
+  ##   (`tid`, `n`)
+  ## - a buffer read renders as `<mapped name> tid`
+  ## - everything else is refused loudly: an unapplied buffer name or unknown
+  ##   identifier is no Lean Prop over the model
+  case e.kind
+  of seIdent:
+    if e.name in bareMap:
+      return bareMap[e.name]
+    if e.name in ["tid", "n"]:
+      return e.name
+    if e.name in nameMap:
+      raise leanRefusal("invalid spec payload - '" & e.name &
+        "' must be applied to `tid`")
+    raise leanRefusal("invalid spec payload - '" & e.name &
+      "' is neither `tid`, `n` nor a kernel buffer parameter")
+  of seApp:
+    if e.fn notin nameMap:
+      raise leanRefusal("invalid spec payload - '" & e.fn &
+        " tid' is not a read of a kernel buffer parameter")
+    result = nameMap[e.fn] & " tid"
+  of seUint:
+    result = e.value
+  of seBin:
+    result = renderSpec(e.left, nameMap, bareMap) & " " & e.op & " " &
+      renderSpec(e.right, nameMap, bareMap)
+
+# ── Scaffold preparation (compile-time, against the kernel model) ───────────
+
+proc prepareSpec(model: KernelModel, spec: RawSpec): ScaffoldData =
+  ## Parses, validates and renders one captured pragma payload against the kernel model.
+  ##
+  ## - out-of-scope payloads are loud ValueErrors
+  ## - a false property is not judged here. It fails the Lean proof attempt
+  ##   and is downgraded (see `settleModule`)
+  let kind = specKindByName(spec.name)
+  if model.scalarName != "":
+    raise leanRefusal("unsupported spec pragma '" & spec.name & "' on kernel '" &
+      model.kernelName & "' - the scalar-parameter (axpy) shape is outside" &
+      " the scaffold model")
+  let expr = parseSpecPayload(spec.payload)
+  var nameMap: Table[string, string]
+  for r in model.readBufs:
+    nameMap[r] = r
+  var bareMap: Table[string, string]
+  if model.kind == kkLoopRange:
+    # loop-shape binders: remaining-count parameter `k` renders the loop
+    # counter as `n - k`
+    nameMap[model.writeBuf] = model.bodyName & " k a b out"
+    bareMap[model.loopVar] = $model.nValue & " - k"
+  else:
+    nameMap[model.writeBuf] = model.bodyName & " tid n " &
+      (model.readBufs.join(" ") & " out")
+  result = ScaffoldData(kind: kind, kernelName: model.kernelName,
+    payload: spec.payload, nValue: model.nValue,
+    loopShape: model.kind == kkLoopRange,
+    statement: renderSpec(expr, nameMap, bareMap))
+  case kind
+  of skPrecondition:
+    # a precondition is assumed, never proved: it must match the model's
+    # precondition `tid < n` exactly, anything else cannot be checked
+    if model.kind == kkLoopRange:
+      raise leanRefusal("unsupported precondition payload '" & spec.payload &
+        "' - the loop shape has no thread-id launch precondition; the emitted" &
+        " loop module proves the whole `[0, " & $model.nValue & ")` range")
+    if result.statement != "tid < n":
+      raise leanRefusal("unsupported precondition payload '" & spec.payload &
+        "' - the model's launch precondition is `tid < n`")
+  of skInvariant:
+    let refs = specRefs(expr)
+    if model.kind == kkLoopRange:
+      # a loop-counter invariant, implied by the loop guard: over the loop
+      # variable only. The running-buffer state property is outside the payload
+      # grammar (the emitter derives it as the `<loop>_eq` lemma)
+      if model.loopVar notin refs:
+        raise leanRefusal("unsupported invariant payload '" & spec.payload &
+          "' - the loop-shape invariant must mention the loop counter '" &
+          model.loopVar & "'")
+      for r in refs:
+        if r != model.loopVar:
+          raise leanRefusal("unsupported invariant payload '" & spec.payload &
+            "' - the loop-shape invariant may only mention the loop counter '" &
+            model.loopVar & "' (no `n`, no buffers: the loop bound is a" &
+            " compile-time literal and the buffer state is the emitted" &
+            " `" & leanLoopName(model.kernelName) & "_eq` lemma)")
+      result.leanName = leanLoopName(model.kernelName) & "_invariant"
+      result.attempt = "exact h"
+    else:
+      # a guard invariant is proved from the guard alone: over `tid` and `n` only
+      for r in ["tid", "n"]:
+        if r notin refs:
+          raise leanRefusal("unsupported invariant payload '" & spec.payload &
+            "' - the invariant must be implied by the guard `tid < n`" &
+            " and mention both `tid` and `n`")
+      for r in refs:
+        if r notin ["tid", "n"]:
+          raise leanRefusal("unsupported invariant payload '" & spec.payload &
+            "' - the invariant may only mention `tid` and `n`")
+      result.leanName = model.bodyName & "_invariant"
+      result.attempt = "exact h"
+  of skPostcondition:
+    # postcondition: the written buffer's post-state, the per-thread body
+    # applied at `tid`
+    if model.kind == kkLoopRange:
+      raise leanRefusal("unsupported postcondition payload '" & spec.payload &
+        "' - the loop postcondition is the composed `∀ j` contract, outside" &
+        " the payload grammar; the emitter derives it as `" &
+        model.bodyName & "_post`")
+    if model.writeBuf notin specRefs(expr):
+      raise leanRefusal("unsupported postcondition payload '" & spec.payload &
+        "' - it must mention the written buffer '" & model.writeBuf & "'")
+    result.leanName = model.bodyName & "_postcondition"
+    result.binders = model.readBufs.join(" ") & " out"
+    result.attempt = "simp [" & model.bodyName & ", h]"
+
+proc prepareScaffolds*(kernel: CirProc, specs: seq[RawSpec]): seq[ScaffoldData] =
+  ## Analyzes the kernel and prepares one scaffold per captured verification pragma, in the canonical precondition/invariant/postcondition order.
+  ## Raises a loud `lean_lang: ...` ValueError on any out-of-scope payload.
+  let model = analyzeKernel(kernel)
+  var ordered: array[3, RawSpec]
+  var seen: set[SpecKind]
+  for spec in specs:
+    let kind = specKindByName(spec.name)
+    if kind in seen:
+      raise leanRefusal("more than one '" & spec.name & "' pragma on the kernel")
+    seen.incl kind
+    ordered[ord(kind)] = spec
+  for i in 0 ..< 3:
+    if SpecKind(i) in seen:
+      result.add prepareSpec(model, ordered[i])
+
+proc scaffoldText(s: ScaffoldData, proof: string): string =
+  ## One Lean spec scaffold: the precondition comment, or a theorem carrying
+  ## the given proof text (the mechanical attempt, or `sorry` after downgrade)
+  case s.kind
+  of skPrecondition:
+    const doc = """
+/- Precondition from the `{.precondition.}` pragma on `@KERNEL@`: `@STMT@`.
+Assumed at launch, carried as the hypothesis `h` by the scaffolds below. A
+precondition is an assumption, so it gets no Lean declaration. -/
+"""
+    result = doc.replace("@KERNEL@", s.kernelName).replace("@STMT@", s.statement)
+  of skInvariant:
+    if s.loopShape:
+      const loopDoc = """
+/-- Invariant from the `{.invariant.}` pragma on `@KERNEL@`, payload
+`@PAYLOAD@`: a property of the loop counter, rendered over the recursion's
+remaining-count parameter `k` (the iteration at remaining count `k` writes
+index `@N@ - k`). Implied by the loop guard, so it holds whenever an
+iteration body runs. -/
+theorem @NAME@ {k : Nat} (h : @N@ - k < @N@) :
+    @STMT@ := by
+  @PROOF@
+"""
+      result = loopDoc.replace("@KERNEL@", s.kernelName)
+        .replace("@PAYLOAD@", s.payload).replace("@NAME@", s.leanName)
+        .replace("@N@", $s.nValue).replace("@STMT@", s.statement)
+        .replace("@PROOF@", proof)
+    else:
+      const doc = """
+/-- Invariant from the `{.invariant.}` pragma on `@KERNEL@`, payload
+`@PAYLOAD@`: a property implied by the guard `tid < n`, so it holds whenever
+the guarded branch is entered. -/
+theorem @NAME@ {tid n : Nat} (h : tid < n) :
+    @STMT@ := by
+  @PROOF@
+"""
+      result = doc.replace("@KERNEL@", s.kernelName).replace("@PAYLOAD@", s.payload)
+        .replace("@NAME@", s.leanName).replace("@STMT@", s.statement)
+        .replace("@PROOF@", proof)
+  of skPostcondition:
+    const doc = """
+/-- Postcondition from the `{.postcondition.}` pragma on `@KERNEL@`, payload
+`@PAYLOAD@`: the written buffer after thread `tid` of `n` ran. -/
+theorem @NAME@ {tid n : Nat} {@BINDERS@ : Nat → UInt32} (h : tid < n) :
+    @STMT@ := by
+  @PROOF@
+"""
+    result = doc.replace("@KERNEL@", s.kernelName).replace("@PAYLOAD@", s.payload)
+      .replace("@NAME@", s.leanName).replace("@BINDERS@", s.binders)
+      .replace("@STMT@", s.statement).replace("@PROOF@", proof)
+
+# ── Settling (runtime: `lake env lean` cannot run inside a compile-time macro) ─
+
+proc allDigits(s: string): bool =
+  ## Whether every character of `s` is a decimal digit, false when empty
+  if s.len == 0:
+    return false
+  for ch in s:
+    if ch notin {'0' .. '9'}:
+      return false
+  result = true
+
+proc parseLeanDiagnostics*(leanOutput: string): seq[tuple[line: int, excerpt: string]] =
+  ## Extracts the `error:` diagnostics of a Lean run as (line, message) pairs.
+  ##
+  ## Returns:
+  ## - one entry per error line: the `file:line:` position and the message text
+  ## - `line = -1` for an error line the head cannot position, so the caller
+  ##   treats it as unattributable and refuses on it
+  for ln in leanOutput.splitLines():
+    let idx = ln.find(": error: ")
+    if idx < 0:
+      continue
+    let head = ln[0 ..< idx].split(':')
+    var line = -1
+    if head.len >= 2 and allDigits(head[^2]):
+      line = parseInt(head[^2])
+    var excerpt = ln[idx + ": error: ".len .. ^1]
+    if excerpt.len > 160:
+      excerpt = excerpt[0 ..< 157] & "..."
+    result.add (line, excerpt)
+
+proc findLakeDir(outPath: string): string =
+  ## Walks up from `outPath` to the first directory containing a lakefile.lean
+  var dir = parentDir(outPath)
+  while dir != "" and not fileExists(dir / "lakefile.lean"):
+    dir = parentDir(dir)
+  if dir == "":
+    raise leanRefusal("no lakefile.lean above the emitted module " & outPath)
+  result = dir
+
+proc settleModule*(baseText: string, scaffolds: seq[ScaffoldData], genDir: string, module: string): string =
+  ## Settles the scaffold proof attempts of an emitted module and writes it:
+  ##
+  ## - stages the module with the mechanical proof attempts under
+  ##   `<module>.settling.lean` and elaborates it through `lake env lean`
+  ## - downgrades every failing proof to a `sorry`-backed scaffold recorded
+  ##   unproven in the JSON manifest beside the module
+  ## - writes the final module to `genDir / module`, returning the final text
+  ##
+  ## With no scaffolds the base module is written as-is, no manifest.
+  ## Settling failures publish nothing: the staged file is dropped and no
+  ## unverified module or manifest stays on disk
+  let outPath = genDir / module
+  createDir(parentDir(outPath))
+  if scaffolds.len == 0:
+    writeFile(outPath, baseText)
+    return baseText
+
+  # first pass: the mechanical proof attempts go to a staging file.
+  # module output at `outPath` appears only after the settling succeeds.
+  # a refusal drops the staged file, no unverified module stays on disk
+  var text = baseText
+  var startLines: seq[int]
+  for s in scaffolds:
+    text &= "\n"
+    startLines.add text.count('\n') + 1
+    text &= scaffoldText(s, s.attempt)
+  let lakeDir = findLakeDir(outPath)
+  let relFile = outPath.relativePath(lakeDir) ## the manifest's module field
+  let stagingPath = outPath.changeFileExt("settling.lean")
+  writeFile(stagingPath, text)
+
+  proc abortSettling(msg: string): ref ValueError =
+    ## Drops the staged module: nothing was settled, no artifact may stay
+    removeFile(stagingPath)
+    result = leanRefusal(msg)
+
+  # settle the proof attempts by elaboration (a failed proof errors, a `sorry` only warns)
+  let (outp, exitCode) = execCmdEx("lake env lean " & stagingPath.relativePath(lakeDir),
+    workingDir = lakeDir)
+  var failed: Table[int, string] ## scaffold index -> error excerpt
+  var positionless: seq[string] ## error lines with no file:line position
+  let lastLine = text.count('\n') + 1
+  for (line, excerpt) in parseLeanDiagnostics(outp):
+    if line < 0:
+      positionless.add excerpt
+      continue
+    var owner = -1
+    for i, startLine in startLines:
+      let endLine = if i + 1 < startLines.len: startLines[i + 1] - 1
+                    else: lastLine
+      if line >= startLine and line <= endLine:
+        owner = i
+    if owner < 0:
+      raise abortSettling("proof settling failed outside the pragma" &
+        " scaffolds (line " & $line & "): " & excerpt)
+    failed[owner] = excerpt
+  if exitCode != 0 and positionless.len > 0:
+    # an error line the extractor could not position: it may name the module
+    # itself (a duplicate declaration, a stale olean), so the scaffold
+    # verdicts below would be recorded over a module that does not elaborate
+    raise abortSettling("proof settling failed - " & $positionless.len &
+      " lean error line(s) carry no file:line position, the scaffold verdicts" &
+      " would be a guess: " & positionless.join(" | "))
+  if exitCode != 0 and failed.len == 0:
+    # no error line was attributable to a scaffold, so no proof was settled:
+    # a `proven` verdict would be a guess over a missing toolchain, a Lean crash or a diagnostic format change
+    var excerpt = outp
+    if excerpt.len > 800:
+      excerpt = excerpt[0 ..< 797] & "..."
+    raise abortSettling("proof settling failed - lean exited with " &
+      $exitCode & " but no error was attributable to a scaffold: " & excerpt)
+
+  if failed.len > 0:
+    # second pass: downgrade every failing proof to a sorry-backed scaffold
+    text = baseText
+    for i, s in scaffolds:
+      text &= "\n"
+      let proof = if i in failed: "sorry" else: s.attempt
+      text &= scaffoldText(s, proof)
+  writeFile(outPath, text)
+  removeFile(stagingPath)
+
+  # machine-readable extraction manifest
+  var entries = newJArray()
+  for i, s in scaffolds:
+    var e = newJObject()
+    e["kind"] = newJString(
+      case s.kind
+      of skPrecondition: "precondition"
+      of skInvariant: "invariant"
+      of skPostcondition: "postcondition")
+    e["payload"] = newJString(s.payload)
+    e["name"] = if s.leanName == "": newJNull() else: newJString(s.leanName)
+    if s.kind == skPrecondition:
+      e["proven"] = newJNull() # assumed, neither proved nor disproved
+    else:
+      e["proven"] = newJBool(i notin failed)
+    e["error"] = if i in failed: newJString(failed[i]) else: newJNull()
+    entries.add e
+  var manifest = newJObject()
+  manifest["kernel"] = newJString(scaffolds[0].kernelName)
+  manifest["module"] = newJString(relFile)
+  manifest["scaffolds"] = entries
+  writeFile(outPath.changeFileExt("manifest.json"), manifest.pretty & "\n")
+  result = text
