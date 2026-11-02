@@ -160,7 +160,7 @@ proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-  const lay = computeDeviceLayout(T, bkGlsl)
+  const lay = computeDeviceLayout(T, cgGlsl)
   if lay.align > 1:
     ctx.pn = round_multiple_up(ctx.pn, lay.align)
   if ctx.pn + lay.size > 128:
@@ -175,12 +175,12 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
       else:
-        blob.packFrom(off, f, bkGlsl)
+        blob.packFrom(off, f, cgGlsl)
     off = round_multiple_up(off, lay.align)
     doAssert off == lay.size,
       "host packing of " & $T & " does not match the device layout"
   else:
-    blob.packFrom(off, v, bkGlsl)
+    blob.packFrom(off, v, cgGlsl)
   if lay.size > 0:
     copyMem(ctx.pushBuf[ctx.pn].addr, blob[0].addr, lay.size)
   inc ctx.pn, lay.size
@@ -296,7 +296,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
 proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
                         output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
   var dctx = SerializationCtx(vctx: engine.ctx)
-  bindArgs(dctx, output, args, store, VulkanBuffer, bkGlsl)
+  bindArgs(dctx, output, args, store, VulkanBuffer, cgGlsl)
   let pushConstLen = dctx.pn
 
   let pipelineKey = (kernel, pushConstLen)
@@ -339,7 +339,7 @@ proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: s
   template collectBuffer[T](ctx: var auto, v: T, argIdx: int) =
     failLoud("descriptor route: scalar kernel args are not supported, " &
              "the uniform-block layout model does not exist yet")
-  bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, bkGlsl)
+  bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, cgGlsl)
 
   let setLayout = engine.ctx.createDescriptorSetLayout(uint32(bufs.len))
   let pool = engine.ctx.createDescriptorPool(uint32(bufs.len))

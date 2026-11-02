@@ -101,7 +101,7 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
 
 proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller builds the type name.
-  getLeafTypeName(TargetVocabs[bkGlsl].scalarNames, glslVectorRule, t)
+  getLeafTypeName(TargetVocabs[cgGlsl].scalarNames, glslVectorRule, t)
 
 proc glslTypeName(t: CirType): string =
   ## GLSL name of a type with no identifier, the printer appends the array
@@ -425,7 +425,7 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
 
 proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full GLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(glslWalkPolicy, glslVectorRule, glslEmit, bkGlsl)
+  var ctx = initPrintCtx(glslWalkPolicy, glslVectorRule, glslEmit, cgGlsl)
   let kernels = getModuleKernels(m)
   if kernels.len == 0:
     ctx.fail("module declares no kernel")

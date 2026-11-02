@@ -40,32 +40,32 @@ template to*(src: fp8e5m2, T: typedesc[float32]): float32 = toFp32(src)
 # ═══════════════════════════════════════════════════════════════════════
 
 convBuiltin:
-  bkMetal:
+  cgMetal:
     f32->f16: "half"
     f16->f32: "float"
     f32->bf16: "(bfloat)"
     bf16->f32: "float"
     u16->f16: "as_type<half>"
     f16->u16: "as_type<ushort>"
-  bkCuda:
+  cgCuda:
     f32->f16: "__float2half_rn"
     f16->f32: "__half2float"
     u16->f16: "__ushort_as_half"
     f16->u16: "__half_as_ushort"
     f32->bf16: "__float2bfloat16"
     bf16->f32: "__bfloat162float"
-  bkGlsl:
+  cgGlsl:
     f32->f16: "float16_t"
     f16->f32: "float"
     u16->f16: "uint16BitsToFloat16"
     f16->u16: "float16BitsToUint16"
-  bkWebGPU:
+  cgWebGPU:
     f32->f16: "f16"
     f16->f32: "f32"
     u16->f16: "bitcast<f16>"
 
 targetVocab:
-  bkMetal:
+  cgMetal:
     scalar void "void", bool "bool", i8 "char", i16 "short", i32 "int", i64 "long",
       u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "half", bf16 "bfloat", f32 "float",
       string "const char*"
@@ -79,7 +79,7 @@ targetVocab:
         "as_type<$2>($1)"
         sameWidth
 
-  bkCuda:
+  cgCuda:
     scalar void "void", bool "bool", i8 "signed char", i16 "short", i32 "int", i64 "long long",
       u8 "unsigned char", u16 "unsigned short", u32 "unsigned int", u64 "unsigned long long",
       f16 "__half", bf16 "__nv_bfloat16", f32 "float", f64 "double", string "const char*"
@@ -105,7 +105,7 @@ targetVocab:
       u16->bf16: "__ushort_as_bfloat16($1)"
       bf16->i16: "__bfloat16_as_ushort($1)"
       bf16->u16: "__bfloat16_as_ushort($1)"
-  bkOpenCL:
+  cgOpenCL:
     scalar void "void", bool "int", i8 "char", i16 "short", i32 "int", i64 "long",
       u8 "uchar", u16 "ushort", u32 "uint", u64 "ulong", f16 "ushort", bf16 "ushort",
       f32 "float", f64 "double", string "const char*"
@@ -128,7 +128,7 @@ targetVocab:
       i64->f64: "as_$2($1)"
       u64->f64: "as_$2($1)"
 
-  bkGlsl:
+  cgGlsl:
     scalar void "void", bool "bool", i8 "int8_t", i16 "int16_t", i32 "int", i64 "int64_t",
       u8 "uint8_t", u16 "uint16_t", u32 "uint", u64 "uint64_t", f16 "float16_t", f32 "float", f64 "double",
       string "const char*"
@@ -159,7 +159,7 @@ targetVocab:
       i64->f64: nil
       u64->f64: nil
 
-  bkWebGPU:
+  cgWebGPU:
     scalar void "void", bool "bool", i32 "i32", u32 "u32", f16 "f16", f32 "f32"
     lit u32Suffix "u", f16Suffix "h",
       inf16 "bitcast<f16>(0x7c00u)", negInf16 "bitcast<f16>(0xfc00u)", nan16 "bitcast<f16>(0x7e00u)",
@@ -171,7 +171,7 @@ targetVocab:
     storageBool:
       bool: "NIM_BOOL"
 
-  bkHlsl:
+  cgHlsl:
     scalar void "void", bool "bool", i32 "int", u32 "uint", f32 "float", f64 "double"
     lit u32Suffix "u", u64Suffix "u", f16Suffix "f", f32Suffix "f", f64Suffix "l",
       inf16 "asfloat(0x7f800000)", negInf16 "asfloat(0xff800000)", nan16 "asfloat(0x7fc00000)",

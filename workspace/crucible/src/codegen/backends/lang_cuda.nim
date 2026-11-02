@@ -104,13 +104,13 @@ proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string
 
 proc emitCudaScalar(t: CirType): string =
   ## CUDA name of a non-array leaf type, "" when the caller builds the type name.
-  getFullTypeName(TargetVocabs[bkCuda].scalarNames, cudaVectorRule, t)
+  getFullTypeName(TargetVocabs[cgCuda].scalarNames, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## CUDA declaration text of `t` with `ident` appended, the shared C declarator
   ## over the CUDA tables. Arrays put the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
-  printCDecl(TargetVocabs[bkCuda].scalarNames, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
+  printCDecl(TargetVocabs[cgCuda].scalarNames, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
   ## CUDA C++ name of `t` with no identifier, as casts and sizeof print it.
@@ -280,7 +280,7 @@ proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
 
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full CUDA translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(cudaWalkPolicy, cudaVectorRule, cudaEmit, bkCuda)
+  var ctx = initPrintCtx(cudaWalkPolicy, cudaVectorRule, cudaEmit, cgCuda)
   ctx.mathNames = cudaMathBuiltinNames
   printModule(ctx, m, getModuleKernels(m), cudaModuleShape)
 

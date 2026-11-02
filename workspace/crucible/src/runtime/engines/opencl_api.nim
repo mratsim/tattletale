@@ -72,10 +72,10 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     static:
       error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
-  const size = computeDeviceLayout(T, bkOpenCL).size
+  const size = computeDeviceLayout(T, cgOpenCL).size
   var blob: array[size, byte]
   var off = 0
-  blob.packFrom(off, v, bkOpenCL)
+  blob.packFrom(off, v, cgOpenCL)
   ctx.kern.setArg(argIdx, size, blob[0].addr)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -92,7 +92,7 @@ proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args:
   let kern = engine.kernelCache.kernels[kernel]
 
   var dctx = SerializationCtx(kern: kern)
-  bindArgs(dctx, output, args, store, OpenCLBuffer, bkOpenCL)
+  bindArgs(dctx, output, args, store, OpenCLBuffer, cgOpenCL)
 
   let globalSize = [cl_size_t(cfg.grid.x * cfg.blk.x),
                     cl_size_t(cfg.grid.y * cfg.blk.y),

@@ -96,11 +96,11 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 
 proc emitOpenclScalar(t: CirType): string =
   ## OpenCL C name of a non-array leaf type, "" when the caller builds the type name.
-  getLeafTypeName(TargetVocabs[bkOpenCL].scalarNames, openclVectorRule, t)
+  getLeafTypeName(TargetVocabs[cgOpenCL].scalarNames, openclVectorRule, t)
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.
-  getFullTypeName(TargetVocabs[bkOpenCL].scalarNames, openclVectorRule, t)
+  getFullTypeName(TargetVocabs[cgOpenCL].scalarNames, openclVectorRule, t)
 
 proc emitOpenclArrayDecl(t: CirType, ident: string): string =
   ## OpenCL C declaration of an array local or field, the lengths move behind the identifier
@@ -122,7 +122,7 @@ proc emitOpenclPtrField(t: CirType, ident: string): string =
     of caDevice: "__global"
   let sep = if qualifier.len > 0: " " else: ""
   result = qualifier & sep &
-    printCDecl(TargetVocabs[bkOpenCL].scalarNames, openclVectorRule, printerTarget, t, ident, true)
+    printCDecl(TargetVocabs[cgOpenCL].scalarNames, openclVectorRule, printerTarget, t, ident, true)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## OpenCL C declaration text of one struct member.
@@ -314,7 +314,7 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
       of caConstant: ("__constant ", p.name)
       of caThread: ("", p.name)
     result = qualifier &
-      printCDecl(TargetVocabs[bkOpenCL].scalarNames, openclVectorRule, printerTarget, p.typ, ident, true)
+      printCDecl(TargetVocabs[cgOpenCL].scalarNames, openclVectorRule, printerTarget, p.typ, ident, true)
   of ctArray:
     ctx.fail("array parameter " & p.name & ", OpenCL C array parameters decay to pointers")
     return ""
@@ -348,7 +348,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 
 proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full OpenCL C translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(openclWalkPolicy, openclVectorRule, openclEmit, bkOpenCL)
+  var ctx = initPrintCtx(openclWalkPolicy, openclVectorRule, openclEmit, cgOpenCL)
   ctx.mathNames = openclMathBuiltinNames
   let kernels = getModuleKernels(m)
   if kernels.len == 0:

@@ -99,7 +99,7 @@ type WalkCtx* {.inheritable.} = object
   ## - the per-target derivation gives the shared procs one instantiation per target
   ## - the overlay procs resolve per target at that instantiation
   fnName*: string
-  backend*: BackendKind
+  backend*: CodegenKind
   ## Name of the proc in flight, named by the refusal messages.
   err*: string
   ## First refusal of the walk, "" while clean.
@@ -119,7 +119,7 @@ type WalkCtx* {.inheritable.} = object
   workgroup*: array[3, int]
   ## Workgroup sizes of the entry in flight.
 
-template initPrintCtx*(walkPolicy: WalkPolicy, rule: VectorRule, targetEmit: TargetEmit, bk: BackendKind): untyped =
+template initPrintCtx*(walkPolicy: WalkPolicy, rule: VectorRule, targetEmit: TargetEmit, bk: CodegenKind): untyped =
   ## Walk context of one module print: the target's tables, clean state.
   ## Expands against the importing printer's own `PrintCtx` type.
   ## A target with registry math entries assigns `mathNames` after the init.

@@ -132,16 +132,16 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of a non-array leaf type, "" when the caller builds the type name.
   case t.kind
   of ctVoid, ctBool:
-    result = getScalarName(TargetVocabs[bkHlsl].scalarNames, t)
+    result = getScalarName(TargetVocabs[cgHlsl].scalarNames, t)
   of ctInt, ctUint, ctFloat:
-    result = getScalarName(TargetVocabs[bkHlsl].scalarNames, t)
+    result = getScalarName(TargetVocabs[cgHlsl].scalarNames, t)
     if result.len == 0:
       refuseHlslScalarName(ctx, t)
   of ctBf16:
     refuseHlslScalarName(ctx, t)
   of ctVector:
     let elem = emitHlslScalar(ctx, t.vElem)
-    result = getVectorName(hlslVectorRule, TargetVocabs[bkHlsl].scalarNames, t)
+    result = getVectorName(hlslVectorRule, TargetVocabs[cgHlsl].scalarNames, t)
     if result.len == 0:
       ctx.fail("vector of " & (if elem.len > 0: elem else: $t.vElem.kind) & "x" & $t.vN & " has no HLSL type name, only 2..4-wide float/int/uint/bool vectors have a name")
   of ctStruct:
@@ -728,7 +728,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =
   ## Emits the full HLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(hlslWalkPolicy, hlslVectorRule, hlslEmit, bkHlsl)
+  var ctx = initPrintCtx(hlslWalkPolicy, hlslVectorRule, hlslEmit, cgHlsl)
   ctx.flavor = flavor
   ctx.procs = initTable[string, CirProc]()
   for fn in m.procs:

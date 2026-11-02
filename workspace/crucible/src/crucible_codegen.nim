@@ -12,13 +12,13 @@
 # ############################################################
 
 type
-  BackendKind* = enum
+  CodegenKind* = enum
     ## One GPU target kind, the key of every per-target table:
     ## the `TargetVocabs` array, the engine dispatch, the printer sections.
-    bkCuda
-    bkWebGPU
-    bkOpenCL
-    bkGlsl
-    bkMetal
-    bkHlsl
-    bkSpirv
+    cgCuda
+    cgWebGPU
+    cgOpenCL
+    cgGlsl
+    cgMetal
+    cgHlsl
+    cgSpirv

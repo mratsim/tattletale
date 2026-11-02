@@ -11,7 +11,7 @@
 ## Each release proc is private and never re-exported.
 
 import workspace/crucible/src/crucible_codegen
-export crucible_codegen.BackendKind
+export crucible_codegen.CodegenKind
 
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/objc_abi as objc

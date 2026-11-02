@@ -90,7 +90,7 @@ const kernel3d = cuda:
 
 proc runTest() =   # private — engines are destroyed at proc return (F2 discipline)
   block: # 1D scalar: single block, single thread (field-read baseline)
-    var engine = bkCuda.init(kernelScalar)
+    var engine = cgCuda.init(kernelScalar)
     echo "PTX: ", engine.getArtifact().len, " bytes"
     var buf: array[4, uint32]
     let o0 = engine.allocDevice(uint32, buf.len)
@@ -104,7 +104,7 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
 
   block: # 1D addressing: 3 blocks x 5 threads, distinct linear gids (asymmetric
          # grid vs block so an exchange of the two extents is caught)
-    var engine = bkCuda.init(kernel1d)
+    var engine = cgCuda.init(kernel1d)
     var rec: array[3 * 5 * recordLen, uint32]
     let o1 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(3, 5)>>("threadState1d", o1, ())
@@ -121,7 +121,7 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     const gy = 3
     const bx = 4
     const by = 2
-    var engine = bkCuda.init(kernel2d)
+    var engine = cgCuda.init(kernel2d)
     var rec: array[gx * gy * bx * by * recordLen, uint32]
     let o2 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(grid: (gx, gy), blk: (bx, by))>>("threadState2d", o2, ())
@@ -146,7 +146,7 @@ proc runTest() =   # private — engines are destroyed at proc return (F2 discip
     const bx = 4
     const by = 2
     const bz = 3
-    var engine = bkCuda.init(kernel3d)
+    var engine = cgCuda.init(kernel3d)
     var rec: array[gx * gy * gz * bx * by * bz * recordLen, uint32]
     let o3 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(grid: (gx, gy, gz), blk: (bx, by, bz))>>("threadState3d", o3, ())

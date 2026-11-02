@@ -88,17 +88,17 @@ proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   # CUdeviceptr values pack 8 bytes into heap-backed storage, addrs stay valid across the by-value return
-  const size = computeDeviceLayout(T, bkCuda).size
+  const size = computeDeviceLayout(T, cgCuda).size
   ctx.bytes[argIdx] = newSeq[byte](size)
   if size > 0:
     var off = 0
-    ctx.bytes[argIdx].packFrom(off, v, bkCuda)
+    ctx.bytes[argIdx].packFrom(off, v, cgCuda)
   ctx.addrs[argIdx] = ctx.bytes[argIdx][0].addr
 
 proc cudaBindArgs(output: auto, args: tuple): auto =
-  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, bkCuda)
+  const n = launchArgCount(typeof(output), typeof(args), CUdeviceptr, cgCuda)
   result = SerializationCtx[n]()
-  bindArgs(result, output, args, store, CUdeviceptr, bkCuda)
+  bindArgs(result, output, args, store, CUdeviceptr, cgCuda)
 
 proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.

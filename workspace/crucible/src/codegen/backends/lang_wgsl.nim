@@ -107,16 +107,16 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## wgpu-native exposes no WGPUFeatureName to request them.
   case t.kind
   of ctVoid:
-    result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
+    result = getScalarName(TargetVocabs[cgWebGPU].scalarNames, t)
   of ctBool, ctInt, ctUint:
-    result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
+    result = getScalarName(TargetVocabs[cgWebGPU].scalarNames, t)
     if result.len == 0:
       if t.bits == 64:
         ctx.fail("i64/u64 need the shader-int64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit integers have no WGSL type, only 32")
   of ctFloat:
-    result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
+    result = getScalarName(TargetVocabs[cgWebGPU].scalarNames, t)
     if result.len == 0:
       if t.bits == 64:
         ctx.fail("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
@@ -126,7 +126,7 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     ctx.fail("bfloat16 has no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
-    result = getVectorName(wgslVectorRule, TargetVocabs[bkWebGPU].scalarNames, t)
+    result = getVectorName(wgslVectorRule, TargetVocabs[cgWebGPU].scalarNames, t)
     if result.len == 0 and elem.len > 0:
       ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, the vector needs 2 to 4 lanes")
   of ctStruct:
@@ -404,7 +404,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## No initializer survives relocation, the rewrite ran before printing.
   if s.space == caThreadgroup:
     let ty = if s.declType.kind == ctBool:
-      TargetVocabs[bkWebGPU].storageBool
+      TargetVocabs[cgWebGPU].storageBool
     else:
       ctx.emitTypeName(s.declType)
     return "var<workgroup> " & s.name & ": " & ty & ";"
@@ -440,7 +440,7 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
       ctx.emitTypeName(p.typ) & ";"
   of ctBool:
     result = attr & "var<storage, read> " & p.name & ": " &
-      TargetVocabs[bkWebGPU].storageBool & ";"
+      TargetVocabs[cgWebGPU].storageBool & ";"
   else:
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitTypeName(p.typ) & ";"
@@ -452,7 +452,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   if f.typ.containsPtrDeep:
     return ""
   result = f.name & ": " & (if f.typ.kind == ctBool:
-    TargetVocabs[bkWebGPU].storageBool
+    TargetVocabs[cgWebGPU].storageBool
   else:
     ctx.emitTypeName(f.typ))
 
@@ -489,7 +489,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 
 proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full WGSL module through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(wgslWalkPolicy, wgslVectorRule, wgslEmit, bkWebGPU)
+  var ctx = initPrintCtx(wgslWalkPolicy, wgslVectorRule, wgslEmit, cgWebGPU)
   ctx.mathNames = wgslMathBuiltinNames
   let kernel = getEntryKernel(ctx, m)
   if ctx.failing():

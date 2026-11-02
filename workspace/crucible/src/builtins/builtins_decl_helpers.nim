@@ -79,10 +79,10 @@ type
 const ConvCellTokens* = ["f16", "bf16", "f32", "f64", "i16", "i32", "i64", "u16", "u32", "u64"]
 
 macro convBuiltin*(body: untyped) =
-  ## Declarative conversion mapping: one `bkX:` section per backend,
+  ## Declarative conversion mapping: one `cgX:` section per backend,
   ## one arrow mapping per line, `f32->f16: "half"`.
   ##
-  ## - the sections key on the BackendKind members
+  ## - the sections key on the CodegenKind members
   ## - each mapping keys on the (source, target) cell tokens shared with
   ##   the codegen ScalarCellAxis vocabulary
   ## - the mapping's value names the native call, the emission appends
@@ -93,10 +93,10 @@ macro convBuiltin*(body: untyped) =
   for section in body:
     if section.kind != nnkCall or section[0].kind != nnkIdent or
         section[1].kind != nnkStmtList:
-      error("convBuiltin: expected a 'bkX:' section", section)
+      error("convBuiltin: expected a 'cgX:' section", section)
     let backend = $section[0]
     var known = false
-    for member in BackendKind:
+    for member in CodegenKind:
       if $member == backend:
         known = true
         break
@@ -332,10 +332,10 @@ proc castRulesCtor(entries: seq[NimNode], display: string): NimNode {.compileTim
 
 macro targetVocab*(body: untyped) =
   ## Declares every backend's vocabulary in one block and generates
-  ## the `TargetVocabs` array keyed by `BackendKind`:
+  ## the `TargetVocabs` array keyed by `CodegenKind`:
   ##
   ##   targetVocab:
-  ##     bkMetal:
+  ##     cgMetal:
   ##       scalar void "void", bool "bool", i8 "char", ...
   ##       lit u64Suffix "ULL", inf32 "INFINITY", ...
   ##       bitcast:
@@ -358,7 +358,7 @@ macro targetVocab*(body: untyped) =
   ##
   ## Failure contract:
   ##
-  ## - a section key must match a BackendKind member, an unknown key
+  ## - a section key must match a CodegenKind member, an unknown key
   ##   fails the compile
   ## - each backend declares the scalar and lit sections, a missing
   ##   section fails the compile
@@ -373,10 +373,10 @@ macro targetVocab*(body: untyped) =
   for section in body:
     if section.kind != nnkCall or section[0].kind != nnkIdent or
         section[1].kind != nnkStmtList:
-      error("targetVocab: expected a 'bkX:' section", section)
+      error("targetVocab: expected a 'cgX:' section", section)
     let backend = $section[0]
     var known = false
-    for member in BackendKind:
+    for member in CodegenKind:
       if $member == backend:
         known = true
         break
@@ -437,9 +437,9 @@ macro targetVocab*(body: untyped) =
         error("targetVocab: backend " & display & " is missing the '" & required & "' section", section)
     slots.add nnkObjConstr.newTree(@[ident"TargetVocab"] & fields)
   checkCellNames(vocabCells)
-  # Array slots fill in declaration order, one per BackendKind member
+  # Array slots fill in declaration order, one per CodegenKind member
   var elems: seq[NimNode]
-  for member in BackendKind:
+  for member in CodegenKind:
     var slot = nnkObjConstr.newTree(ident"TargetVocab")
     for i, b in backends:
       if $member == b:
@@ -448,7 +448,7 @@ macro targetVocab*(body: untyped) =
     elems.add slot
   result = nnkStmtList.newTree(nnkConstSection.newTree(nnkConstDef.newTree(
     nnkPostfix.newTree(ident"*", ident"TargetVocabs"),
-    nnkBracketExpr.newTree(ident"array", ident"BackendKind", ident"TargetVocab"),
+    nnkBracketExpr.newTree(ident"array", ident"CodegenKind", ident"TargetVocab"),
     nnkBracket.newTree(elems))))
 
 # ═══════════════════════════════════════════════════════════════════════

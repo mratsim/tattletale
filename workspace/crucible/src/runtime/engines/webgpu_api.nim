@@ -121,14 +121,14 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
       error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
   ctx.pn = round_multiple_up(ctx.pn, 256)
   ctx.chunkOff[argIdx] = ctx.pn
-  const size = computeDeviceLayout(T, bkWebGPU).size
+  const size = computeDeviceLayout(T, cgWebGPU).size
   let padded = round_multiple_up(size, 4)
   ctx.chunkLen[argIdx] = padded
   ctx.blob.setLen(ctx.pn + padded)
   if size > 0:
     var blob: array[size, byte]
     var off = 0
-    blob.packFrom(off, v, bkWebGPU)
+    blob.packFrom(off, v, cgWebGPU)
     copyMem(ctx.blob[ctx.pn].addr, blob[0].addr, size)
   inc ctx.pn, padded
 
@@ -186,10 +186,10 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
 
   # Storage-binding offsets must be multiples of minStorageBufferOffsetAlignment.
   # Device limits give the alignment, spec default 256.
-  const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer, bkWebGPU)
+  const n = launchArgCount(typeof(output), typeof(args), WGPUBuffer, cgWebGPU)
 
   var dctx = SerializationCtx()
-  bindArgs(dctx, output, args, store, WGPUBuffer, bkWebGPU)
+  bindArgs(dctx, output, args, store, WGPUBuffer, cgWebGPU)
   let scalarBytes = dctx.blob
 
   var scratch = WGPUBuffer(nil)

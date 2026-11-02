@@ -71,7 +71,7 @@ macro codegenMetal(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  result = newLit(codegen(m, bkMetal))
+  result = newLit(codegen(m, cgMetal))
 
 macro metal*(body: untyped): string =
   ## Converts the body of this macro into Metal Shading Language (MSL) code.
@@ -103,7 +103,7 @@ macro codegenCuda(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  result = newLit(codegen(m, bkCuda))
+  result = newLit(codegen(m, cgCuda))
 
 macro cuda*(body: untyped): string =
   ## Converts the body of this macro into CUDA code.
@@ -133,7 +133,7 @@ macro codegenOpenCL(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  result = newLit(codegen(m, bkOpenCL))
+  result = newLit(codegen(m, cgOpenCL))
 
 macro opencl*(body: untyped): string =
   ## Converts the body of this macro into OpenCL C code.
@@ -162,7 +162,7 @@ macro codegenGLSL(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  result = newLit(codegen(m, bkGlsl))
+  result = newLit(codegen(m, cgGlsl))
 
 macro glsl*(body: untyped): string =
   ## Converts the body of this macro into GLSL compute shader code.
@@ -218,7 +218,7 @@ macro codegenWebGpu(body: typed): string =
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
-  result = newLit(codegen(m, bkWebGPU))
+  result = newLit(codegen(m, cgWebGPU))
 
 macro webgpu*(body: untyped): string =
   ## Converts the body of this macro into WebGPU WGSL code.
@@ -257,8 +257,8 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   # a macro's static param is not a compile-time constant in the macro body,
   # so each flavor binds to the `codegen` static param as a literal below
   let printed = case flavor
-    of fvD3D12: codegen(m, bkHlsl, fvD3D12)
-    of fvVulkan: codegen(m, bkHlsl, fvVulkan)
+    of fvD3D12: codegen(m, cgHlsl, fvD3D12)
+    of fvVulkan: codegen(m, cgHlsl, fvVulkan)
   result = newLit(printed)
 
 macro hlsl*(flavor: untyped, body: untyped): string =

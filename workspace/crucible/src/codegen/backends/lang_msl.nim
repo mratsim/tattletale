@@ -92,13 +92,13 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 
 proc emitMslScalar(t: CirType): string =
   ## MSL name of a non-array leaf type, "" when the caller builds the type name.
-  getFullTypeName(TargetVocabs[bkMetal].scalarNames, mslVectorRule, t)
+  getFullTypeName(TargetVocabs[cgMetal].scalarNames, mslVectorRule, t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## MSL declaration text of `t` with `ident` appended, the shared C declarator
   ## over the MSL tables. Arrays put the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
-  printCDecl(TargetVocabs[bkMetal].scalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
+  printCDecl(TargetVocabs[cgMetal].scalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc getMslPtrQualifier(space: AddressSpace): string =
   ## MSL qualifier before a pointer declaration or cast, one word per space.
@@ -114,7 +114,7 @@ proc emitMslPtr(t: CirType, ident: string): string =
   let qualifier = getMslPtrQualifier(t.space)
   let sep = if qualifier.len > 0: " " else: ""
   result = qualifier & sep &
-    printCDecl(TargetVocabs[bkMetal].scalarNames, mslVectorRule, printerTarget, t, ident, true)
+    printCDecl(TargetVocabs[cgMetal].scalarNames, mslVectorRule, printerTarget, t, ident, true)
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
   ## MSL name of `t` with no identifier, as casts and sizeof print it.
@@ -262,7 +262,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
       case p.typ.kind
       of ctAptr, ctPtr:
         result.add "device " &
-          printCDecl(TargetVocabs[bkMetal].scalarNames, mslVectorRule, printerTarget, p.typ, p.name, true) &
+          printCDecl(TargetVocabs[cgMetal].scalarNames, mslVectorRule, printerTarget, p.typ, p.name, true) &
           " [[buffer(" & $slot & ")]]"
       of ctArray:
         # an array kernel argument binds in constant storage like a scalar one.
@@ -306,7 +306,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full MSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(mslWalkPolicy, mslVectorRule, mslEmit, bkMetal)
+  var ctx = initPrintCtx(mslWalkPolicy, mslVectorRule, mslEmit, cgMetal)
   printModule(ctx, m, getModuleKernels(m), mslModuleShape)
 
 proc codegen*(m: CirModule): string =
