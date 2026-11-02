@@ -55,8 +55,7 @@ const glslEmit = TargetEmit(
   vectorDots: true,
   noPointerValues: (spaces: {caThread, caThreadgroup, caConstant},
     text: "pointer local $1 used as a value, GLSL has no pointer values"),
-  noPointerRebind: "pointer local $1 rebound, GLSL has no pointer values, " &
-    "the GLSL lowering pass rewrites pointer locals to their pointees",
+  noPointerRebind: "pointer local $1 rebound, GLSL has no pointer values",
   prefixKernel: "",
   prefixInline: "",
   prefixDevice: "")
@@ -270,11 +269,10 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
-  ## GLSL has no function-storage addressing, the GLSL lowering pass rewrites
-  ## pointer locals to their pointees. The storage spaces relocate to program
-  ## scope through the GLSL lowering pass.
+  ## GLSL has no pointer values, buffer access goes through BDA address values.
+  ## A pointer local therefore has no lowering and the printer refuses it.
   if s.declType.kind == ctPtr:
-    ctx.fail("pointer local " & s.name & ", the GLSL lowering pass rewrites pointer locals to their pointees")
+    ctx.fail("pointer local " & s.name & ", GLSL has no pointer values")
     return false
   if s.space == caThreadgroup:
     ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering pass hoists threadgroup locals to program scope")
