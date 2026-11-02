@@ -167,8 +167,6 @@ proc defaultExplodeDropsAsgn(s: CirStmt, ctx: ExplodeCtx): bool =
     s.lhs.typ.kind in {ctPtr, ctAptr} and
     (s.lhs.name in ctx.pendingPtrs or s.lhs.name in ctx.aliasOf)
 
-proc defaultNewExplodeCtx(m: CirModule, fn: CirProc): ExplodeCtx =
-  ExplodeCtx()
 
 template registerExplodePointerLocalsImpl(reg: var PassRegistry, passName,
     description: string, newExplodeCtx, explodeVarDecl, explodeAsgn,
@@ -267,7 +265,7 @@ template registerExplodePointerLocals*(reg: var PassRegistry, passName, descript
   ## - reads rewrite to the pointee
   ## - struct locals with pointer fields dissolve
   registerExplodePointerLocalsImpl(reg, passName, description,
-    proc(m: CirModule, fn: CirProc): ExplodeCtx = defaultNewExplodeCtx(m, fn),
+    proc(m: CirModule, fn: CirProc): ExplodeCtx = ExplodeCtx(),
     proc(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string = defaultExplodeVarDecl(fn, ctx, s, target),
     proc(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string = defaultExplodeAsgn(fn, ctx, s, target),
     defaultExplodeDropsVar, defaultExplodeDropsAsgn,
