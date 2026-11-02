@@ -14,8 +14,14 @@ import ../ir/cirv2_lang
 import ./pass_datatypes
 import ./pass_helpers
 
+# ############################################################
+#
+#            Validation stage
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerValidationPostPasses*(reg: var PassRegistry) =
@@ -29,12 +35,12 @@ func registerValidationPostPasses*(reg: var PassRegistry) =
     run = validateConstantWritesPass)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Constant-storage write validation
+#  Constant-storage write validation
 # ═══════════════════════════════════════════════════════════════════════
 
 type
   ConstStorage = object
-    ## Name classes one constant-write check resolves a bare symbol against:
+    ## Name classes one constant-write check resolves an unqualified symbol against:
     ##
     ## - `constLocals`: the const-space locals of the checked statement list
     ## - `otherLocals`: every parameter and every other local declaration, they shadow the program-scope globals of the same name
@@ -44,7 +50,7 @@ type
     constGlobals*: HashSet[string]
 
 proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStorage =
-  ## Classifies the declarations one proc's constant-write check resolves a bare symbol against:
+  ## Classifies the declarations one proc's constant-write check resolves an unqualified symbol against:
   ## the parameters first, then the local declarations of the body.
   ##
   ## The hoisting passes relocate const-space locals on most targets.
@@ -69,7 +75,7 @@ proc resolveConstStorageTarget(e: CirExpr, storage: ConstStorage): string =
   ##
   ## Resolution:
   ##
-  ## Bare symbols:
+  ## Unqualified symbols:
   ##
   ## - a `const` declaration is constant storage whatever its space
   ## - a const-space local is constant storage

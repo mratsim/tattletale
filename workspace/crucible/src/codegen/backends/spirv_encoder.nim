@@ -17,6 +17,12 @@ import std/algorithm
 import std/macros
 import std/tables
 
+# ############################################################
+#
+#            SPIR-V word encoder
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Opcode table
 # ═══════════════════════════════════════════════════════════════════════
@@ -239,7 +245,7 @@ genSpvOpcodeTable:
   # between Scope and the value, the optional trailing IdRef is the ClusterSize
   op OpGroupNonUniformFAdd: 350: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvGroupOperation), o(spvIdRef), oOpt(spvIdRef)]
   # Shuffle ops carry no GroupOperation word: the last operand is the lane id
-  # (Shuffle) or the xor mask (ShuffleXor), both plain IdRef
+  # (Shuffle) or the xor mask (ShuffleXor), an IdRef in both cases
   op OpGroupNonUniformShuffle: 345: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
   op OpGroupNonUniformShuffleXor: 346: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
   # SPV_EXT_shader_atomic_float_add: fp atomic add, the extension string corresponds to the AtomicFloat32AddEXT capability
@@ -309,7 +315,7 @@ const
   scopeDevice = 1'u32
   scopeSubgroup = 3'u32
 
-  ## MemoryAccess bit values (core grammar BitEnum), the `Aligned` bit carries
+  ## MemoryAccess bit values (core grammar BitEnum), the `Aligned` bit is
   ## a trailing literal alignment word the operand list does not model
   maAligned = 2'u32
 

@@ -19,8 +19,14 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 
+# ############################################################
+#
+#            Array-assign lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerDecomposeArrayAssign*(reg: var PassRegistry) =
@@ -30,7 +36,7 @@ func registerDecomposeArrayAssign*(reg: var PassRegistry) =
     run = decomposeArrayAssignPass)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Decomposition
+#  Decomposition
 # ═══════════════════════════════════════════════════════════════════════
 
 proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
@@ -54,7 +60,7 @@ proc bindConstrLocal(rhs: CirExpr, lhsType: CirType, tmpCount: var int): tuple[d
   ## C-family targets cannot take its address in place.
   ##
   ## Returns the local's declaration and the local as an expression.
-  ## The name counts per proc, starting at `memcpy_tmp1`.
+  ## Identifiers count per proc, starting at `memcpy_tmp1`.
   inc tmpCount
   let name = "memcpy_tmp" & $tmpCount
   result.decl = varD(name, lhsType, rhs)

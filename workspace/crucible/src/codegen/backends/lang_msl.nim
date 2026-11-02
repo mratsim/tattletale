@@ -5,33 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Metal Shading Language (MSL) printer: a structured CIRv2 module to MSL source.
-## The universal walk lives in `print_common`, this overlay carries the MSL delta.
-##
-## Emission contract, one buffer slot per kernel parameter in order:
-## - pointers: `device T* name [[buffer(n)]]`
-## - scalars: unattributed `constant T& name`, Metal auto-assigns the free slot
-## - coordinate builtins: attributed `uint3`/`uint` params, no slot
-##
-## Other emission rules:
-## - `{.smem.}` locals: the pass keeps a kernel's top-level local in-body
-##   as kernel-scope `threadgroup` storage (Metal allocates it per threadgroup),
-##   any initializer is discarded, a local outside a kernel body drops,
-##   the pass refuses a device function still owning a smem local
-## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
-##   program-scope `constant` output, the printer refuses a const_mem survivor
-## - a loop prints `while (cond)`, `{.unroll.}` adds the Metal unroll pragma
-## - the builtin vocabulary dispatches on the kind over the `mslVocab` table,
-##   `{.builtin.}` names pass through except the numeric conversions:
-##   they resolve to the MSL native call text
-
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables, math]
-import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
 import ../../builtins/builtins_gpu_types
+import ../../crucible_codegen
+import ../../builtins/builtins_decl_helpers
+
+# ############################################################
+#
+#            MSL printer
+#
+# ############################################################
+{.experimental: "codeReordering".}
 
 const printerTarget = "msl"
 
@@ -39,19 +27,8 @@ type PrintCtx = object of WalkCtx
   ## Per-target walk context. The shared walk procs instantiate against
   ## the derived type and the overlay procs below resolve per target.
 
-proc coordRef(ctx: var PrintCtx, e: CirExpr): string
-proc coordDot(ctx: var PrintCtx, e: CirExpr): string
-proc printConv(ctx: var PrintCtx, e: CirExpr): string
-proc emitTypeName(ctx: var PrintCtx, t: CirType): string
-proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string
-proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
-proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
-proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
-
-
 # ═══════════════════════════════════════════════════════════════════════
-# Target tables
+#  Target tables
 # ═══════════════════════════════════════════════════════════════════════
 
 const mslVocab = BuiltinVocab(
@@ -76,7 +53,7 @@ const mslEmit = TargetEmit(
   noPointerRebind: "",
   prefixKernel: "kernel ",
   prefixInline: "inline ",
-  prefixPlain: "")
+  prefixDevice: "")
 
 const mslModuleShape = ModuleShape(
   spaces: {caConstant},
@@ -93,11 +70,11 @@ const mslModuleShape = ModuleShape(
   printsReduceTemplates: false)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Types
+#  Types
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitMslScalar(t: CirType): string =
-  ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
+  ## MSL name of a non-array leaf type, "" when the caller builds the type name.
   getFullTypeName(TargetVocabs[bkMetal].scalarNames, mslVectorRule, t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
@@ -134,7 +111,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   return emitMslType(f.typ, f.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Coordinate builtins
+#  Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printBuiltinRef(ctx: var PrintCtx, k: CirCoordBuiltinKind, whole: bool): string =
@@ -157,7 +134,7 @@ proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   "(int)(" & CoordBuiltinNames[e.dotBase.coordBuiltin] & '.' & e.fieldName & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Expressions: the MSL hooks over the universal arms
+#  Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
@@ -197,7 +174,7 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
   pad & txt & ";"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: the MSL space policy and declaration forms
+#  Statements: the MSL space policy and declaration forms
 # ═══════════════════════════════════════════════════════════════════════
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: the spliced text.
@@ -206,11 +183,10 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
-  ## Only a kernel's initializer-less smem local and plain locals reach here.
+  ## Only a kernel's initializer-less smem local and ordinary locals reach here.
   ## The lowering pass refuses a device function's smem local and hoists const_mem locals to program scope.
   if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
-      " pass hoists const_mem locals to program scope")
+    ctx.fail("local " & s.name & " in constant space, the MSL lowering pass hoists const_mem locals to program scope")
     return false
   true
 
@@ -225,7 +201,7 @@ proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
   "constexpr " & emitMslType(s.declType, s.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules
+#  Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitMslSmemParam(p: CirParam): string =
@@ -252,7 +228,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ##
   ## Kernel parameters:
   ## - a relocated smem local binds as threadgroup storage, no buffer slot
-  ## - a device pointer takes the next `[[buffer(n)]]` slot
+  ## - the printer assigns the next `[[buffer(n)]]` slot to a device pointer
   ## - a value parameter binds as `constant T&`, bool retypes to `int`
   ##   (Metal has no bool constant storage)
   ## - the coordinate builtins that the body references append as attributed parameters, no slot
@@ -305,7 +281,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `constant` declaration of one relocated const_mem local.
   ## MSL forbids declaring constant storage without an initializer.
   if s.init == nil:
-    ctx.fail("const_mem local " & s.name & " without an initializer")
+    ctx.refuseUninitializedConstMem(s.name)
     return ""
   var decl = emitMslType(s.declType, s.name, false)
   if s.declType.kind in {ctPtr, ctAptr}:
@@ -317,7 +293,5 @@ proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   var ctx = initPrintCtx(mslWalkPolicy, mslVectorRule, mslEmit, bkMetal)
   printModule(ctx, m, getModuleKernels(m), mslModuleShape)
 
-proc codegen*(ctx: var GpuContext): string =
-  ## Prints the module in `ctx` as Metal Shading Language (MSL) source, the `backends_api` entry point.
-  ## A printer refusal is a compile error naming the construct.
-  codegenModule(printMslModule(ctx.module))
+proc codegen*(m: CirModule): string =
+  codegenModule(printMslModule(m))

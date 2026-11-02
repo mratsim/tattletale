@@ -50,7 +50,7 @@ Rule table (rule | trigger | severity):
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
 | stmt-inline          | a statement keyword carries its body on the same line, one statement per line                     | counted  |
-| registration-top     | a register proc defined below the first implementation in a passes file, registration lives at the top | counted  |
+| registration-top     | a register proc defined below the first implementation in a passes or analysis file, registration lives at the top | counted  |
 | section-banner       | a malformed section banner: orphan bar, title without top bar, or bar width off 71                | counted  |
 | except-rewrap        | a raise inside an except clause, rewrapping eats the original stack trace                         | counted  |
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
@@ -436,6 +436,14 @@ BANNED = [
      None, "use counts or per-element counts"),
     (r"\bfacts?\b", None,
      "state the claim directly, the word fact adds nothing"),
+    (r"\bcomposes\b", None,
+     "name the actor with an active verb, builds or joins the parts"),
+    (r"\bplain\b", None,
+     "plain says nothing, name the form: ordinary, scalar, direct, or the symbol itself"),
+    (r"\bcarries\b", None,
+     "a type or a value carries nothing, name the actor that attaches or holds it"),
+    (r"\bthe name\b", None,
+     "name the identifier directly, the type name, the vector name, the kernel name"),
     (r"\bdraw\b|\bdraws\b", None, "use read, take, or use"),
     (r"\bride\b|\brides\b|\briding\b|\bridden\b|\brode\b", None,
      "use sit on, carry, or restate the mechanism"),
@@ -526,7 +534,7 @@ BANNED = [
     (r"\bholds\b",
      None,
      "state what the thing is or does, name the actor or the mechanism directly "
-     "(carries stays legal as the content verb: an invocation carries the rows)"),
+     "(contains, declares, lists and has state the content)"),
     (r"\blattice\b|\blattices\b",
      None, "use closed set of type kinds or name the kind"),
     (r"\bneeds no\b",
@@ -660,7 +668,7 @@ RULES = {
     "diag-downgrade": Rule("diag-downgrade", True,
                            "echo, debugEcho, raiseAssert or raise as a diagnostic, use error() or the warning builtin"),
     "registration-top": Rule("registration-top", True,
-                             "a register proc defined below the first implementation in a passes file, registration lives at the top"),
+                             "a register proc defined below the first implementation in a passes or analysis file, registration lives at the top"),
     "section-banner": Rule("section-banner", True,
                            "a malformed section banner: orphan bar, title without top bar, or bar width off 71"),
     "one-line-refusal": Rule("one-line-refusal", True,
@@ -5972,8 +5980,8 @@ def section_banner(path, text, findings, added):
 
 def registration_top(path, text, findings, added):
     """Flags register procs defined below the first implementation in a
-    passes file: the Registration section sits at the top, impls below."""
-    if not path.name.startswith("passes_"):
+    passes or analysis file: the Registration section sits at the top, impls below."""
+    if not path.name.startswith(("passes_", "analysis_")):
         return
     first_impl = None
     for no, raw in enumerate(text.splitlines(), 1):

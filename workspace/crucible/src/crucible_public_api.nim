@@ -50,5 +50,5 @@ export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.glsl,
        gpu_compiler.spirv
 # exporting the type also exports the non-pure enum's members by bare name,
 # individual enum fields cannot be exported ("enum field cannot be exported individually")
-from ./codegen/backends/hlsl_lang import HlslFlavor
+from ./codegen/backends/lang_hlsl import HlslFlavor
 export HlslFlavor

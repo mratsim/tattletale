@@ -21,8 +21,14 @@ import ./pass_datatypes
 import ./pass_registry
 import ./pass_helpers
 
+# ############################################################
+#
+#            Pointer lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
@@ -34,7 +40,7 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
   )
 
 # ═══════════════════════════════════════════════════════════════════════
-# Kernel struct-parameter explosion
+#  Kernel struct-parameter explosion
 # ═══════════════════════════════════════════════════════════════════════
 
 proc buildLeafConstr(t: CirType, name: string): CirExpr =
@@ -94,7 +100,7 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Pointer-local explosion
+#  Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
 
 template registerExplodePointerLocals*(reg: var PassRegistry, passName,

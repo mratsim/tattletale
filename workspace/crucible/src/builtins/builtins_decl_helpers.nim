@@ -16,8 +16,10 @@
 ## - a target that misses a required family
 ## - one type name that denotes two (kind, width) cells
 
+import ../crucible_codegen
 import std/[macros, sequtils, strutils, tables]
-import ../codegen/ir/ast_datatypes
+
+
 import ../codegen/ir/cirv2_lang
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -50,7 +52,7 @@ type
     ## eight common kinds route unconditionally outside this set.
 
   VectorNameForm* = enum
-    ## How the printer composes a vector type name from the element's
+    ## How the printer builds a vector type name from the element's
     ## prefix and the lane count.
     vnfPrefixed
     ## C-family names (`vec3`, `float4`) composed as `prefix & $laneCount`,
@@ -63,12 +65,12 @@ type
     ## A target's real vector coverage, as its printer emits it today.
     elems*: seq[tuple[kind: CirTypeKind, width: int, prefix: string]]
     ## Element types with the vector name's prefix, empty when the target
-    ## has no vectors. The printer composes the name from the prefix
+    ## has no vectors. The printer builds the vector name from the prefix
     ## and the lane count per `nameForm`.
     lanes*: seq[int]
     ## Lane counts the target emits.
     nameForm*: VectorNameForm = vnfPrefixed
-    ## How the printer composes the vector type name.
+    ## How the printer builds the vector type name.
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The conversion-builtin mapping macro
@@ -158,7 +160,7 @@ type
 
 proc parseCellPair*(arg: NimNode, display: string): ParsedCell {.compileTime.} =
   ## Returns the `ScalarCellAxis` index and type name of one `cell "name"` entry,
-  ## an unprefixed cell carries the empty name there.
+  ## an unprefixed cell gets the empty name there.
   if arg.kind == nnkIdent:
     result = (findCellIndex($arg), "", arg)
   elif arg.kind == nnkCommand and arg.len == 2 and arg[1].kind == nnkStrLit:
@@ -351,7 +353,7 @@ macro targetVocab*(body: untyped) =
   ##
   ## - a key token is a `ScalarCellAxis` cell, `any` covers
   ##   the width-carrying scalar cells, `all` covers any type
-  ## - a rule carries one emit text or nil for a refusal, `sameWidth`
+  ## - a rule has one emit text or nil for a refusal, `sameWidth`
   ##   requires equal widths
   ##
   ## Failure contract:
@@ -425,9 +427,11 @@ macro targetVocab*(body: untyped) =
         fields.add nnkExprColonExpr.newTree(ident"castRules", nnkCall.newTree(ident"@",
           castRulesCtor(entries, display)))
       of "storageBool":
-        if entries.len != 1 or entries[0].kind != nnkStrLit:
-          error("targetVocab: storageBool takes one string value in " & display, section)
-        fields.add nnkExprColonExpr.newTree(ident"storageBool", entries[0])
+        if entries.len != 1 or entries[0].kind != nnkCall or $entries[0][0] != "bool" or
+            entries[0][1].kind != nnkStmtList or entries[0][1].len != 1 or
+            entries[0][1][0].kind != nnkStrLit:
+          error("targetVocab: storageBool takes one `bool: \"text\"` row in " & display, section)
+        fields.add nnkExprColonExpr.newTree(ident"storageBool", entries[0][1][0])
     for required in ["scalar", "lit"]:
       if required notin seen:
         error("targetVocab: backend " & display & " is missing the '" & required & "' section", section)
@@ -461,7 +465,7 @@ type
     inf64*, negInf64*, nan64*: string
 
   IntLitTokens* = object
-    ## Integer literal token parts, the printer composes `prefix & $value & suffix`.
+    ## Integer literal token parts, the printer joins `prefix & $value & suffix`.
     ##
     ## - 64-bit widths take `u64Prefix`/`u64Suffix` or `i64Prefix`/`i64Suffix`
     ## - 32-bit unsigned takes `u32Suffix`, 32-bit signed takes none
@@ -481,7 +485,7 @@ type
 
   ScalarNames* = object
     ## Scalar type names of one target by (kind, width) cell.
-    ## The table carries one entry per named cell, the lookup fails on a missing cell and the target compiler rejects the emitted text.
+    ## The table has one entry per named cell, the lookup fails on a missing cell and the target compiler rejects the emitted text.
     cells*: seq[ScalarCell]
 
   LitTokens* = object
@@ -633,7 +637,7 @@ proc builtinTableCtor(entries: seq[NimNode], family, display: string): NimNode {
   var names: seq[string]
   var pairs: seq[NimNode]
   for line in entries:
-    # a math entry nests its `width "text"` pair under the name
+    # a math entry nests its `width "text"` pair under the builtin name
     let ok = line.kind == nnkCommand and line.len == 2 and line[0].kind == nnkIdent and
       line[1].kind == nnkCommand and line[1].len == 2 and
       line[1][0].kind == nnkIntLit and line[1][1].kind == nnkStrLit

@@ -10,7 +10,7 @@ import std/[strutils, tables]
 
 import workspace/crucible/src/abis/objc_abi as objc
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/metal_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils

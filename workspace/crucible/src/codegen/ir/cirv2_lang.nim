@@ -5,23 +5,15 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Cirv2 datatypes: the Crucible IR v2 tree, Final-IR shaped.
-##
-## CIRv2 is a plain Nim object-variant tree usable at macro time.
-## The shape encodes the normal form:
-##
-## - control flow is statement-based
-## - `sWhile` re-tests its condition before every iteration
-## - a call is an ordinary expression node: the builders bind statement calls
-##   through `sCall` and value calls appear in any operand position
-## - every typed operation states its type in the `(add Type a b)` discipline of the Leng grammar
-##
-## The frontend refuses a construct that it cannot lower. The validation passes
-## check the semantics that the shape cannot encode.
-
 import std/[macros, hashes, sequtils, sets, strutils, tables]
 import ../../builtins/builtins_catalog
 export builtins_catalog
+
+# ############################################################
+#
+#            CIRv2 language datatypes
+#
+# ############################################################
 
 const CoordBuiltinNames*: array[cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup, string] = [
   "thread_position_in_grid",
@@ -600,7 +592,7 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   ##
   ## - the space survives element reads, field reads, value casts, and integer
   ##   arithmetic over cast pointers
-  ## - `caDevice` reads as no space: a plain integer or an array value
+  ## - `caDevice` reads as no space: a scalar integer or an array value
   ##   keeps the device default
   ##
   ## Both consumers of the derivation share this walker:
@@ -661,7 +653,7 @@ func isLvalue*(e: CirExpr): bool =
   e.kind in {eSym, eDeref, eAt, ePat, eDot}
 
 # ═══════════════════════════════════════════════════════════════════════
-# Emitted-name vocabulary
+#  Emitted-name vocabulary
 # ═══════════════════════════════════════════════════════════════════════
 
 const Base58Alphabet* = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

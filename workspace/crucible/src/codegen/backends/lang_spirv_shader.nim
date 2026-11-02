@@ -5,11 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## SPIR-V word constants shared by the printer (writer) and the runtime
-## module scanner (reader), one source of truth.
-## The opcode, capability, and execution-mode numbers are the SPIR-V core
-## grammar values (SPIRV.html, sections 3.3-3.6).
-
 const
   opEntryPoint* = 15'u32
   opExecutionMode* = 16'u32
@@ -18,23 +13,23 @@ const
   capPhysicalStorageBufferAddresses* = 5347'u32
   modeLocalSize* = 17'u32
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Value types
-# ═══════════════════════════════════════════════════════════════════════
 
-## SPIR-V emitter over CIRv2, Vulkan 1.4 environment on the encoder's
-## SPIR-V 1.3 baseline:
-##
-## - one `{.global.}` kernel per module, the device functions it calls emitted alongside
-## - one push-constant block binds the kernel parameters in parameter order, the host `store` packing order
-## - buffer parameters contribute one u64 device address each, converted to physical storage buffer pointers in the kernel prologue
+## SPIR-V emitter over CIRv2, Vulkan 1.4 environment on the encoder's SPIR-V 1.3 baseline.
 
+import ../../crucible_codegen
 import std/[algorithm, sets, strutils, tables]
 import ../ir/cirv2_lang
 import ../passes/pass_helpers
 import ./spirv_encoder {.all.}
-import ../ir/ast_datatypes
 import ./print_common
+
+# ############################################################
+#
+#            SPIR-V emitter
+#
+# ############################################################
+
+{.experimental: "codeReordering".}
 
 const
   ## Scope and MemorySemantics grammar values for the barrier emission
@@ -232,7 +227,6 @@ proc resolveScalarId(ctx: var SpvLangCtx, t: CirType): uint32 =
     ctx.failSpv("scalar id of " & $t.kind)
     return 0
 
-proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy
 
 proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
   ## SPIR-V value type of a CirType.
@@ -497,7 +491,7 @@ type
     fwd*: Table[string, uint32]
       ## Local name -> value id its reads return: the value of the last store
       ## that the emission walk has passed, valid at every read that the walk
-      ## reaches before the next store to the name
+      ## reaches before the next store to the local
     elided*: HashSet[string]
       ## Locals whose storage the plan elided: every read reads the stored value.
       ## No variable is declared and no store is emitted
@@ -507,7 +501,6 @@ type
     terminated*: bool
 
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
-proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType
 
 proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
   ## Function-storage variables must all precede the entry block's first load.
@@ -715,8 +708,6 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
     elif e.callee.kind == eSym and e.args.len > 0:
       # a builtin call, the result type is the first argument's type
       result = ctx.resolveExprType(fn, e.args[0])
-    elif e.callee.kind == eSym and e.callee.synchroBuiltin == cbkThreadgroupBarrier:
-      ctx.failSpv("barrier is a statement, a value-position barrier is outside the SPIR-V subset")
     else:
       ctx.failSpv("call result type of " & (if e.callee.kind == eSym: e.callee.name else: "non-symbol callee"))
 
@@ -793,9 +784,6 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return ctx.loadScalarBuiltin(biLocalInvocationIndex, e.typ)
-      ctx.failSpv("whole-vector use of coordinate builtin " & CoordBuiltinNames[e.coordBuiltin] &
-        ", index a component instead")
-      return 0
     if fn.consts.hasKey(e.name):
       return fn.consts[e.name]
     if fn.params.hasKey(e.name):
@@ -1058,7 +1046,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       @[idx0])
     result = (ptrId, rootTy.fields[i].typ, false, false)
   of eAt:
-    # base chain rooted at a local: a plain local or the struct behind
+    # base chain rooted at a local: a direct local or the struct behind
     # a pointer-typed local: the access chain runs on the variable directly
     var rootVar = 0'u32
     var memberIdxs: seq[int]
@@ -1158,13 +1146,12 @@ proc emitBarrier(ctx: var SpvLangCtx) =
 proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   ## Value of a call: builtin vocabulary maps to native instructions
   ## and a device function emits an OpFunctionCall.
-  ## A barrier is statement-only, a value position refuses.
   if ctx.err.len > 0:
     return 0
   doAssert e.callee.kind == eSym, "call callee is not a symbol"
   let name = e.callee.name
   # builtin vocabulary dispatches on the kind, the max/min select lowering
-  # below is a name case for plain and harvested calls
+  # below is a name case for direct and harvested calls
   if e.callee.reductionBuiltin == cbkReduceAdd:
     doAssert e.args.len == 1, "reduceAdd takes one argument"
     let v = ctx.emitExpr(fn, e.args[0])
@@ -1235,13 +1222,6 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     let cond = ctx.builder.freshInst(cmpOp, @[boolTy, a, b])
     return ctx.builder.opSelect(ctx.resolveTyId(spvScalar(opTy)), cond, a, b)
-  if e.callee.synchroBuiltin == cbkThreadgroupBarrier:
-    ctx.failSpv("barrier is a statement, a value-position barrier is outside the SPIR-V subset")
-    return 0
-  # a builtin kind that reached no branch above has no lowering here
-  if e.callee.builtin:
-    ctx.failSpv("the builtin " & e.callee.name & " has no SPIR-V lowering")
-    return 0
   # a device function call
   if not ctx.emittedFns.hasKey(name):
     ctx.failSpv("callee " & name & " was not pre-emitted")
@@ -1313,7 +1293,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
           fn.ptrTargets[s.lhs.name] = fn.locals[s.rhs.addrOperand.name]
           continue
         if s.lhs.name in fn.elided:
-          # every read of the name reads the stored value, no storage remains
+          # every read of the local reads the stored value, no storage remains
           let rhsV = ctx.emitExpr(fn, s.rhs)
           let rhsTyV = ctx.resolveExprType(fn, s.rhs)
           fn.fwd[s.lhs.name] = ctx.convertValue(rhsV, rhsTyV, lhsTy)
@@ -1562,7 +1542,6 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
   ##
   ## Exactly one `{.global.}` kernel per module, the device functions it
   ## calls emitted alongside.
-  ## A refusal names the construct otherwise.
   var lang = initSpvLangCtx()
   var kernels: seq[CirProc]
   for fn in m.procs:
@@ -1589,7 +1568,5 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
   (lang.builder.module.finalize(), "")
 
 
-proc codegen*(ctx: var GpuContext): seq[uint32] =
-  ## Encodes the module as SPIR-V words for the Vulkan environment,
-  ## the `backends_api` entry point. A refusal raises into a compile error.
-  codegenModule(printSpirvModule(ctx.module))
+proc codegen*(m: CirModule): seq[uint32] =
+  codegenModule(printSpirvModule(m))

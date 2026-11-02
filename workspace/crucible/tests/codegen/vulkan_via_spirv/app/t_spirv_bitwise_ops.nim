@@ -17,7 +17,7 @@ import std/sets
 import std/strutils
 import workspace/crucible/src/codegen/ir/cirv2_lang
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/backends/spirv_shader_lang
+import workspace/crucible/src/codegen/backends/lang_spirv_shader
 
 proc buildBitOpsModule(): CirModule =
   ## One kernel whose body exercises every integer bit/shift operator

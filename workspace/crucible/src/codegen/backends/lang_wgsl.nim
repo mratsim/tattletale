@@ -5,67 +5,33 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## WebGPU WGSL printer: a structured CIRv2 module rendered as WGSL source.
-## The universal walk lives in `print_common`, this overlay carries the WGSL delta.
-##
-## Kernel parameter bindings, one `@group(0) @binding(i)` per parameter in host `store` packing order, output first:
-## - device buffers declare `var<storage, read_write> name: array<T>;`, bound writable by the engine
-## - scalars and value structs declare `var<storage, read> name: T;`, packed into the 256-byte-aligned scratch buffer
-## - a bool scalar or bool struct field binds as the `NIM_BOOL` alias of `u32`
-##   (bool is not host-shareable in WGSL storage)
-##
-## Bool storage and the kernel signature:
-## - reads of `NIM_BOOL` storage coerce to bool, writes coerce to NIM_BOOL
-## - the kernel signature takes only `@builtin(...)` coordinate parameters, first-use order
-##
-## Addressing, memory classes, jumps:
-## - the WGSL lowering pass rewrites pointer locals into their pointees,
-##   pointer-holding struct locals into their leaf symbols
-## - the WGSL lowering pass relocates a smem/const_mem kernel local into `CirModule.globals`
-## - struct declarations emit for every struct of `CirModule.types` in declaration order,
-##   a dissolved one included, an unused declaration is legal WGSL,
-##   a pointer field drops from the printed declaration (WGSL has no pointer struct members)
-## - a loop prints `while (cond)`, an unrolled loop notes the unroll directive
-##   has no WGSL form
-
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import ../passes/pass_helpers
 import std/[macros, math, sets, strutils, tables]
-import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
 import ../../builtins/builtins_gpu_types
+import ../../crucible_codegen
+import ../../builtins/builtins_decl_helpers
+
+# ############################################################
+#
+#            WGSL printer
+#
+# ############################################################
+{.experimental: "codeReordering".}
 
 const printerTarget = "wgsl"
 
 type PrintCtx = object of WalkCtx
   ## Per-target walk context. The shared walk procs instantiate against
   ## the derived type and the overlay procs below resolve per target.
-  nimBoolNames: HashSet[string]
-  ## Names whose storage binds as `NIM_BOOL`: kernel bool parameters,
-  ## bool workgroup variables.
-  ## Reads coerce to `bool`, writes coerce to `NIM_BOOL`.
-  storageBoolSpelling: bool
-  ## When set, a bool leaf in `emitWgslScalar` becomes `NIM_BOOL`.
-  ## Set only around interface-storage declarations.
-
-proc coordRef(ctx: var PrintCtx, e: CirExpr): string
-proc coordDot(ctx: var PrintCtx, e: CirExpr): string
-proc printConv(ctx: var PrintCtx, e: CirExpr): string
-proc emitTypeName(ctx: var PrintCtx, t: CirType): string
-proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
-proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string
-proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string
-proc getDotText(ctx: var PrintCtx, e: CirExpr, baseTxt: string): string
-proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string
-proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
-proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
-proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
+  m: CirModule
+  ## Module in flight.
 
 # ═══════════════════════════════════════════════════════════════════════
-# Target tables
+#  Target tables
 # ═══════════════════════════════════════════════════════════════════════
 
 const wgslVocab = BuiltinVocab(
@@ -87,7 +53,7 @@ const wgslEmit = TargetEmit(
   noPointerRebind: "",
   prefixKernel: "",
   prefixInline: "",
-  prefixPlain: "")
+  prefixDevice: "")
 
 const wgslModuleShape = ModuleShape(
   spaces: {caThreadgroup, caConstant},
@@ -108,24 +74,19 @@ const wgslModuleShape = ModuleShape(
 # are abstract and work in any typed context, u32 gains the `u` suffix, f16 the `h`.
 
 # ═══════════════════════════════════════════════════════════════════════
-# Types
+#  Types
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   ## Returns the WGSL name of a non-array leaf type, "" when the caller
-  ## composes the name.
+  ## builds the type name.
   ##
   ## 64-bit leaves refuse: their device features exist but the vendored
   ## wgpu-native exposes no WGPUFeatureName to request them.
   case t.kind
-  of ctBool:
-    if ctx.storageBoolSpelling:
-      result = TargetVocabs[bkWebGPU].storageBool
-    else:
-      result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
   of ctVoid:
     result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
-  of ctInt, ctUint:
+  of ctBool, ctInt, ctUint:
     result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
     if result.len == 0:
       if t.bits == 64:
@@ -145,7 +106,7 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     let elem = ctx.emitWgslScalar(t.vElem)
     result = getVectorName(wgslVectorRule, TargetVocabs[bkWebGPU].scalarNames, t)
     if result.len == 0 and elem.len > 0:
-      ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, only 2..4-wide vectors have a name")
+      ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, the vector needs 2 to 4 lanes")
   of ctStruct:
     result = t.name
   of ctString:
@@ -176,7 +137,7 @@ proc structFieldIsBool(t: CirType, field: string): bool =
   return false
 
 # ═══════════════════════════════════════════════════════════════════════
-# Coordinate builtins
+#  Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
 type WgslBuiltinParam = tuple[attribute, param, wgslType: string]
@@ -260,7 +221,7 @@ proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   mapped
 
 # ═══════════════════════════════════════════════════════════════════════
-# Expressions: the WGSL hooks over the universal variants
+#  Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
@@ -278,9 +239,21 @@ proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
   ctx.fail(getUnhandledExprRejection(e.kind))
   ""
 
+proc bindsNimBool(ctx: var PrintCtx, name: string): bool =
+  ## A kernel bool parameter or a bool workgroup variable stores as the vocab's `storageBool` word,
+  ## reads coerce to `bool`, writes wrap in `NIM_BOOL()`.
+  for p in getEntryKernel(ctx, ctx.m).params:
+    if p.name == name and p.typ.kind == ctBool:
+      return true
+  for g in ctx.m.globals:
+    if g.kind == sVar and g.space == caThreadgroup and
+        g.declType.kind == ctBool and g.name == name:
+      return true
+  false
+
 proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
   ## A NIM_BOOL storage word coerces to bool on read.
-  if e.typ != nil and e.typ.kind == ctBool and e.name in ctx.nimBoolNames:
+  if e.typ != nil and e.typ.kind == ctBool and ctx.bindsNimBool(e.name):
     return "bool(" & e.name & ")"
   e.name
 
@@ -319,9 +292,6 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
       baseTxt = "(*" & baseTxt & ")[" & idxTxt & "]"
     else:
       baseTxt = baseTxt & "[" & idxTxt & "]"
-    if base.kind == eSym and base.name in ctx.nimBoolNames:
-      # storage is a u32 word, element reads expect bool
-      return "bool(" & baseTxt & ")"
     baseTxt
   else:
     ctx.fail(getUnhandledExprRejection(e.kind))
@@ -340,23 +310,20 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
     ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: the WGSL space policy and declaration forms
+#  Statements: the WGSL space policy and declaration forms
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## WGSL locals are function or workgroup storage, the WGSL lowering pass
   ## hoists the storage spaces to program scope.
   if s.space == caThreadgroup:
-    ctx.fail("local " & s.name & " in threadgroup space, the WGSL lowering" &
-      " pass hoists threadgroup locals to program scope")
+    ctx.fail("local " & s.name & " in threadgroup space, the WGSL lowering pass gives it program scope")
     return false
   elif s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, the WGSL lowering" &
-      " pass hoists const_mem locals to program scope")
+    ctx.fail(s.name & " is a constant-space local the WGSL lowering pass relocates to program scope")
     return false
   elif s.space == caDevice:
-    ctx.fail("local " & s.name & " in device space, WGSL locals are" &
-      " function or workgroup")
+    ctx.fail("local " & s.name & " in device space, WGSL locals are function/workgroup")
     return false
   true
 
@@ -371,28 +338,23 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   ## a bool parameter, a bool struct member, a bool workgroup variable.
   let pad = spaces(ctx.indent * 2)
   var boolTarget = ""
-  if s.lhs.kind == eSym and s.lhs.name in ctx.nimBoolNames:
+  if s.lhs.kind == eSym and ctx.bindsNimBool(s.lhs.name):
     boolTarget = s.lhs.name
   elif s.lhs.kind == eDot and
       structFieldIsBool(getExprType(s.lhs.dotBase), s.lhs.fieldName):
     boolTarget = ctx.printExpr(s.lhs.dotBase) & "." & s.lhs.fieldName
-  elif s.lhs.kind in {eAt, ePat}:
-    let lhsBase = if s.lhs.kind == eAt: s.lhs.atBase else: s.lhs.patBase
-    if lhsBase.kind == eSym and lhsBase.name in ctx.nimBoolNames:
-      let idx = if s.lhs.kind == eAt: s.lhs.atIndex else: s.lhs.patIndex
-      boolTarget = lhsBase.name & "[" & ctx.printExpr(idx) & "]"
   if boolTarget.len > 0:
     return pad & boolTarget & " = NIM_BOOL(" & ctx.printExpr(s.rhs) & ");"
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules: the shader hooks over the shared engine
+#  Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ## Head of one proc, signature and open brace:
   ##
-  ## - a device function: the bare `fn name(params) -> ret` signature, a void return emits no arrow (WGSL has no `void` type name)
+  ## - a device function: the direct `fn name(params) -> ret` signature, a void return emits no arrow (WGSL has no `void` type name)
   ## - a pointer parameter takes the `ptr<function, T>` form
   ## - the entry kernel: `@compute @workgroup_size(...)` attribute lines, then `fn <entry>(<entry inputs>)` over the body-walk inputs
   ##   exportc renames the entry for the host runtime lookup.
@@ -419,12 +381,13 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated storage local.
   ## No initializer survives relocation, the rewrite ran before printing.
   if s.space == caThreadgroup:
-    ctx.storageBoolSpelling = true
-    let ty = ctx.emitTypeName(s.declType)
-    ctx.storageBoolSpelling = false
+    let ty = if s.declType.kind == ctBool:
+      TargetVocabs[bkWebGPU].storageBool
+    else:
+      ctx.emitTypeName(s.declType)
     return "var<workgroup> " & s.name & ": " & ty & ";"
   if s.init == nil:
-    ctx.fail("const_mem local " & s.name & " without an initializer")
+    ctx.refuseUninitializedConstMem(s.name)
     return ""
   printDeclStmt("", "const " & s.name & ": " & ctx.emitTypeName(s.declType), ctx.printExpr(s.init))
 
@@ -454,7 +417,8 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitTypeName(p.typ) & ";"
   of ctBool:
-    result = attr & "var<storage, read> " & p.name & ": NIM_BOOL;"
+    result = attr & "var<storage, read> " & p.name & ": " &
+      TargetVocabs[bkWebGPU].storageBool & ";"
   else:
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitTypeName(p.typ) & ";"
@@ -465,9 +429,10 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## returns "": the dissolution passes rewrote its uses.
   if f.typ.containsPtrDeep:
     return ""
-  ctx.storageBoolSpelling = f.typ.kind == ctBool
-  result = f.name & ": " & ctx.emitTypeName(f.typ)
-  ctx.storageBoolSpelling = false
+  result = f.name & ": " & (if f.typ.kind == ctBool:
+    TargetVocabs[bkWebGPU].storageBool
+  else:
+    ctx.emitTypeName(f.typ))
 
 proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
   for i, p in kernels[0].params:
@@ -479,13 +444,22 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
   ## `enable f16` from the stored module feature scan `CirModule.features`,
   ## filled by the feature-scan pass, then the `NIM_BOOL` alias when interface
   ## storage or a declared struct field is bool.
-  var usesNimBool = ctx.nimBoolNames.len > 0
-  if not usesNimBool:
+  var usesNimBool = false
+  block scan:
+    for p in getEntryKernel(ctx, m).params:
+      if p.typ.kind == ctBool:
+        usesNimBool = true
+        break scan
+    for g in m.globals:
+      if g.kind == sVar and g.space == caThreadgroup and g.declType.kind == ctBool:
+        usesNimBool = true
+        break scan
     for t in m.types:
       if t.kind == ctStruct:
         for f in t.fields:
           if f.typ.kind == ctBool:
             usesNimBool = true
+            break scan
   if m.features.fp16:
     result = declareExtensions(m.features, [(true, "enable f16;\n")])
   if usesNimBool:
@@ -498,16 +472,9 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   let kernel = getEntryKernel(ctx, m)
   if ctx.failing():
     return ("", ctx.err)
-  for p in kernel.params:
-    if p.typ.kind == ctBool:
-      ctx.nimBoolNames.incl p.name
-  for s in m.globals:
-    if s.kind == sVar and s.space == caThreadgroup and s.declType.kind == ctBool:
-      ctx.nimBoolNames.incl s.name
+  ctx.m = m
   ctx.fnName = kernel.name
   printModule(ctx, m, @[kernel], wgslModuleShape)
 
-proc codegen*(ctx: var GpuContext): string =
-  ## `backends_api` entry point: prints the module in `ctx` as WGSL source.
-  ## A printer refusal is a compile error naming the construct.
-  codegenModule(printWgslModule(ctx.module))
+proc codegen*(m: CirModule): string =
+  codegenModule(printWgslModule(m))

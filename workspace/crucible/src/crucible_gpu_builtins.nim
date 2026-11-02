@@ -47,13 +47,8 @@ export builtins_functions.exp2, builtins_functions.rsqrt
 
 export builtins_gpu_types.float16, builtins_gpu_types.bfloat16,
        builtins_gpu_types.fp8e4m3, builtins_gpu_types.fp8e5m2,
-       builtins_type_conversions_fallback.toFp16, builtins_type_conversions_fallback.toFp32,
-       builtins_type_conversions_fallback.toBf16, builtins_type_conversions_fallback.toBf32,
-       builtins_type_conversions_fallback.toFp8e4m3, builtins_type_conversions_fallback.toFp8e5m2,
-       builtins_gpu_types.asFp16, builtins_gpu_types.asU16,
-       builtins_gpu_types.`+`, builtins_gpu_types.`-`,
-       builtins_gpu_types.`*`, builtins_gpu_types.`/`,
        builtins_gpu_types.to
+export builtins_type_conversions_fallback
 
 export builtins_warp_sync_reductions.reduceAdd, builtins_warp_sync_reductions.reduceMax,
        builtins_warp_sync_reductions.simd_shuffle, builtins_warp_sync_reductions.simd_shuffle_xor,
@@ -65,4 +60,4 @@ export builtins_atomics
 
 export builtins_pragmas
 
-export builtins_compilermagic.CompileTarget, builtins_compilermagic.ccGetBackend
+export builtins_compilermagic.CompileTarget, builtins_compilermagic.ccGetBackend, builtins_compilermagic.crucibleCompileTarget

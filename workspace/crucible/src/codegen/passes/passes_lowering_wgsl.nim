@@ -23,8 +23,14 @@ import ./passes_lowering_cfamily
 import ./passes_low_pointers
 import ./pass_helpers
 
+# ############################################################
+#
+#            WGSL lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
@@ -47,7 +53,7 @@ func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
     run = inlinePointerParamCalls)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Pointer-param call inlining
+#  Pointer-param call inlining
 # ═══════════════════════════════════════════════════════════════════════
 
 proc crossesWgslSignature(t: CirType): bool =
@@ -169,90 +175,101 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
   if e.kind == eCall and e.callee.kind == eSym:
     let callee = procs.getOrDefault(e.callee.name)
     if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
-      return refuseAt(fn, "device function " & callee.name &
-        " takes a pointer that cannot cross a WGSL signature, the call is in value position")
+      return refuseAt(fn, "value-position call of " & callee.name & ", its pointer parameter cannot cross a WGSL signature")
   for ch in getExprChildren(e):
     let err = refuseValuePositionCalls(fn, ch, procs)
     if err.len > 0:
       return err
   return ""
 
+proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[string, CirProc]): string =
+  let s = ss[i]
+  ## One call statement whose callee's pointer parameter cannot cross
+  ## a WGSL signature, the callee inlines at the splice position, every precondition refuses.
+  let callee = procs.getOrDefault(s.callCallee.name)
+  if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
+    if callee.ret.kind != ctVoid:
+      return refuseAt(fn, "inlining " & callee.name & " needs a void return, its pointer parameter cannot cross a WGSL signature")
+    var body = cloneStmts(callee.body)
+    if body.len > 0 and body[^1].kind == sRet and body[^1].retVal == nil:
+      # an implicit fall-through return of the frontend, dropping it is
+      # semantics-preserving at the splice position
+      body.setLen(body.len - 1)
+    if body.containsReturn:
+      return refuseAt(fn, "inlining " & callee.name & " needs a return-free body, its pointer parameter cannot cross a WGSL signature")
+    for a in s.callArgs:
+      if a.containsCall:
+        return refuseAt(fn, "call argument of " & callee.name & " contains a call, inlining would re-evaluate it")
+    var seen: HashSet[string]
+    if callee.callsCrossingCalleeTransitively(procs, seen):
+      return refuseAt(fn, "inlining " & callee.name & " reaches another crossing callee, its pointer parameter cannot cross a WGSL signature")
+    var subst = initTable[string, CirExpr]()
+    for j, p in callee.params:
+      subst[p.name] = s.callArgs[j]
+    body.substituteArgsStmts(subst)
+    ss = ss[0 ..< i] & body & ss[i + 1 .. ^1]
+    return ""
+  for a in s.callArgs:
+    let aerr = refuseValuePositionCalls(fn, a, procs)
+    if aerr.len > 0:
+      return aerr
+  return ""
+
+proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc]): string =
+  ## One non-call statement: its subexpressions refuse value-position calls,
+  ## nested statement lists recurse through `inlineInStmts`.
+  case s.kind
+  of sVar, sConst:
+    let err = refuseValuePositionCalls(fn, s.init, procs)
+    if err.len > 0:
+      return err
+  of sAsgn:
+    let lerr = refuseValuePositionCalls(fn, s.lhs, procs)
+    if lerr.len > 0:
+      return lerr
+    let rerr = refuseValuePositionCalls(fn, s.rhs, procs)
+    if rerr.len > 0:
+      return rerr
+  of sIte:
+    let cerr = refuseValuePositionCalls(fn, s.cond, procs)
+    if cerr.len > 0:
+      return cerr
+    let terr = inlineInStmts(fn, s.thenBody, procs)
+    if terr.len > 0:
+      return terr
+    let eerr = inlineInStmts(fn, s.elseBody, procs)
+    if eerr.len > 0:
+      return eerr
+  of sWhile:
+    let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
+    if cerr.len > 0:
+      return cerr
+    let werr = inlineInStmts(fn, s.whileBody, procs)
+    if werr.len > 0:
+      return werr
+  of sRet:
+    let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
+    if rerr.len > 0:
+      return rerr
+  of sDiscard:
+    let derr = refuseValuePositionCalls(fn, s.discardVal, procs)
+    if derr.len > 0:
+      return derr
+  of sCall, sAsm, sEmit:
+    discard
+
 proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string =
   var i = 0
   while i < ss.len:
     let s = ss[i]
     if s.kind == sCall and s.callCallee.kind == eSym:
-      let callee = procs.getOrDefault(s.callCallee.name)
-      if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
-        if callee.ret.kind != ctVoid:
-          return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL signature, only a void callee inlines")
-        var body = cloneStmts(callee.body)
-        if body.len > 0 and body[^1].kind == sRet and body[^1].retVal == nil:
-          # an implicit fall-through return of the frontend, dropping it is
-          # semantics-preserving at the splice position
-          body.setLen(body.len - 1)
-        if body.containsReturn:
-          return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL signature, the body must not return")
-        for a in s.callArgs:
-          if a.containsCall:
-            return refuseAt(fn, "call argument of " & callee.name &
-              " contains a call, inlining would re-evaluate it")
-        var seen: HashSet[string]
-        if callee.callsCrossingCalleeTransitively(procs, seen):
-          return refuseAt(fn, "device function " & callee.name &
-            " takes a pointer that cannot cross a WGSL signature, its call chain reaches one too")
-        var subst = initTable[string, CirExpr]()
-        for j, p in callee.params:
-          subst[p.name] = s.callArgs[j]
-        body.substituteArgsStmts(subst)
-        ss = ss[0 ..< i] & body & ss[i + 1 .. ^1]
-        continue
-      for a in s.callArgs:
-        let aerr = refuseValuePositionCalls(fn, a, procs)
-        if aerr.len > 0:
-          return aerr
-    else:
-      case s.kind
-      of sVar, sConst:
-        let err = refuseValuePositionCalls(fn, s.init, procs)
-        if err.len > 0:
-          return err
-      of sAsgn:
-        let lerr = refuseValuePositionCalls(fn, s.lhs, procs)
-        if lerr.len > 0:
-          return lerr
-        let rerr = refuseValuePositionCalls(fn, s.rhs, procs)
-        if rerr.len > 0:
-          return rerr
-      of sIte:
-        let cerr = refuseValuePositionCalls(fn, s.cond, procs)
-        if cerr.len > 0:
-          return cerr
-        let terr = inlineInStmts(fn, s.thenBody, procs)
-        if terr.len > 0:
-          return terr
-        let eerr = inlineInStmts(fn, s.elseBody, procs)
-        if eerr.len > 0:
-          return eerr
-      of sWhile:
-        let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
-        if cerr.len > 0:
-          return cerr
-        let werr = inlineInStmts(fn, s.whileBody, procs)
-        if werr.len > 0:
-          return werr
-      of sRet:
-        let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
-        if rerr.len > 0:
-          return rerr
-      of sDiscard:
-        let derr = refuseValuePositionCalls(fn, s.discardVal, procs)
-        if derr.len > 0:
-          return derr
-      of sCall, sAsm, sEmit:
-        discard
+      let r = inlineCallSite(fn, ss, i, procs)
+      if r.len > 0:
+        return r
+      continue
+    let r = walkValuePositions(fn, s, procs)
+    if r.len > 0:
+      return r
     i.inc
   return ""
 
@@ -290,7 +307,7 @@ proc inlinePointerParamCalls(m: CirModule): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Pointer-local explosion
+#  Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
 
 proc rewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string
@@ -307,11 +324,9 @@ proc wgslPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
     let op = e.derefOperand
     if op.kind == eSym:
       if op.name in ctx.pendingPtrs:
-        return refuseAt(fn, "pointer local " & op.name &
-          " read before its address-of binding")
+        return refuseAt(fn, "pointer local " & op.name & " reads ahead of its address-of binding")
       if op.name in ctx.structLocals:
-        return refuseAt(fn, "deref of exploded struct local " & op.name &
-          ", WGSL has no pointer struct members")
+        return refuseAt(fn, "deref of exploded struct local " & op.name & ", WGSL has no pointer struct members")
     return rewritePointerExpr(fn, ctx, op)
   else:
     for ch in getExprChildren(e):
@@ -330,8 +345,7 @@ proc explodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
     elif s.init.kind == eAddr and s.init.addrOperand.kind == eSym:
       ctx.aliasOf[s.name] = s.init.addrOperand.name
     else:
-      return refuseAt(fn, "pointer local " & s.name &
-        " without an address-of binding, WGSL has no pointer locals")
+      return refuseAt(fn, "pointer local " & s.name & " binds no address, WGSL locals are values")
     return ""
   if s.declType.kind == ctStruct and s.declType.containsPtrDeep:
     return explodeStructVarDecl(fn, ctx, s, "WGSL")
@@ -347,11 +361,9 @@ proc explodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string =
         return rerr
       return ""
     if s.lhs.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & s.lhs.name &
-        " rebound, WGSL has no pointer values")
+      return refuseAt(fn, "pointer local " & s.lhs.name & " rebinds, WGSL keeps one binding")
     if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
-      return refuseAt(fn, "pointer local " & s.lhs.name &
-        " rebound to a non-address value, WGSL has no pointer values")
+      return refuseAt(fn, "pointer local " & s.lhs.name & " rebinds to a non-address value, WGSL keeps one binding")
     ctx.pendingPtrs.excl(s.lhs.name)
     ctx.aliasOf[s.lhs.name] = s.rhs.addrOperand.name
     return ""

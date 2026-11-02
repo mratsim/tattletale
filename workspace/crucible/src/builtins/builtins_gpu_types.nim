@@ -5,9 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import ../crucible_codegen
 import std/[macros, tables]
 import builtins_decl_helpers
-import ../codegen/ir/ast_datatypes
 import ../codegen/ir/cirv2_lang
 import ./builtins_pragmas
 
@@ -21,26 +21,6 @@ type
   fp8e5m2* {.builtin.} = distinct uint8
     ## OCP FP8 E5M2, IEEE-like, 1 sign, 5 exponent, 2 mantissa.
 
-template fp16Op(op: untyped): untyped =
-  func op*(a, b: float16): float16 {.inline.} =
-    raise newException(ValueError, "float16 arithmetic is GPU-side only")
-  func op*(a, b: bfloat16): bfloat16 {.inline.} =
-    raise newException(ValueError, "bfloat16 arithmetic is GPU-side only")
-
-fp16Op(`+`)
-fp16Op(`-`)
-fp16Op(`*`)
-fp16Op(`/`)
-
-func `+`*(a: float16): float16 {.inline.} =
-  raise newException(ValueError, "float16 arithmetic is GPU-side only")
-func `-`*(a: float16): float16 {.inline.} =
-  raise newException(ValueError, "float16 arithmetic is GPU-side only")
-func `+`*(a: bfloat16): bfloat16 {.inline.} =
-  raise newException(ValueError, "bfloat16 arithmetic is GPU-side only")
-func `-`*(a: bfloat16): bfloat16 {.inline.} =
-  raise newException(ValueError, "bfloat16 arithmetic is GPU-side only")
-
 import ./builtins_type_conversions_fallback
 
 # High-level element conversion, thin dispatch over the primitives above.
@@ -49,60 +29,14 @@ template to*(src: float32, T: typedesc[bfloat16]): bfloat16 = toBf16(src)
 template to*(src: float32, T: typedesc[fp8e4m3]): fp8e4m3 = toFp8e4m3(src)
 template to*(src: float32, T: typedesc[fp8e5m2]): fp8e5m2 = toFp8e5m2(src)
 template to*(src: float32, T: typedesc[float32]): float32 = src
-template to*(src: float32, T: typedesc[float64]): float64 = float64(src)
-
-template to*(src: int or int32 or int64, T: typedesc[float16]): float16 = toFp16(float32(src))
-template to*(src: int or int32 or int64, T: typedesc[bfloat16]): bfloat16 = toBf16(float32(src))
-template to*(src: int or int32 or int64, T: typedesc[fp8e4m3]): fp8e4m3 = toFp8e4m3(float32(src))
-template to*(src: int or int32 or int64, T: typedesc[fp8e5m2]): fp8e5m2 = toFp8e5m2(float32(src))
-template to*(src: int or int32 or int64, T: typedesc[float32]): float32 = float32(src)
-template to*(src: int or int32 or int64, T: typedesc[float64]): float64 = float64(src)
 
 template to*(src: float16, T: typedesc[float32]): float32 = toFp32(src)
 template to*(src: bfloat16, T: typedesc[float32]): float32 = toBf32(src)
 template to*(src: fp8e4m3, T: typedesc[float32]): float32 = toFp32(src)
 template to*(src: fp8e5m2, T: typedesc[float32]): float32 = toFp32(src)
 
-template to*(src: float16, T: typedesc[float64]): float64 = float64(toFp32(src))
-template to*(src: bfloat16, T: typedesc[float64]): float64 = float64(toBf32(src))
-template to*(src: fp8e4m3, T: typedesc[float64]): float64 = float64(toFp32(src))
-template to*(src: fp8e5m2, T: typedesc[float64]): float64 = float64(toFp32(src))
-
-func asFp16*(x: uint16): float16 {.builtin.} =
-  ## Bit-pattern reinterpret u16 → fp16.
-  raise newException(ValueError, "fp16 reinterpret is GPU-side only")
-
-func asU16*(x: float16): uint16 {.builtin.} =
-  ## Bit-pattern reinterpret fp16 → u16.
-  raise newException(ValueError, "fp16 reinterpret is GPU-side only")
-proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
-  if n.kind != nnkSym:
-    return gtVoid
-  let impl = n.getImpl()
-  if impl.kind != nnkTypeDef or impl[0].kind != nnkPragmaExpr:
-    return gtVoid
-  let pragmaNode = impl[0][1]
-  if pragmaNode.kind != nnkPragma:
-    return gtVoid
-  var hasTag = false
-  for p in pragmaNode:
-    if p.kind in {nnkSym, nnkIdent} and p.strVal == "builtin":
-      hasTag = true
-  if not hasTag:
-    return gtVoid
-  case n.strVal
-  of "float16":   gtFloat16
-  of "bfloat16":  gtBf16
-  of "fp8e4m3":   gtF8E4M3
-  of "fp8e5m2":   gtF8E5M2
-  else:           gtVoid
-
 # ═══════════════════════════════════════════════════════════════════════
-#  The conversion mapping: builtins drive, the backends read
-# ═══════════════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The conversion mapping data
+#  The conversion mapping
 # ═══════════════════════════════════════════════════════════════════════
 
 convBuiltin:
@@ -234,6 +168,8 @@ targetVocab:
       nan32 "bitcast<f32>(0x7fc00000u)"
     bitcast:
       all->all: "bitcast<$2>($1)"
+    storageBool:
+      bool: "NIM_BOOL"
 
   bkHlsl:
     scalar void "void", bool "bool", i32 "int", u32 "uint", f32 "float", f64 "double"

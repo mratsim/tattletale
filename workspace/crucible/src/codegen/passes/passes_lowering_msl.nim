@@ -19,8 +19,14 @@ import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
 
+# ############################################################
+#
+#            MSL lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerMslHoistProgramScopeConstants*(reg: var PassRegistry) =
@@ -52,14 +58,14 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
   )
 
 # ═══════════════════════════════════════════════════════════════════════
-# Const_mem locals to program-scope constants
+#  Const_mem locals to program-scope constants
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mslHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Device-function `{.smem.}` locals to threadgroup reference parameters
+#  Device-function `{.smem.}` locals to threadgroup reference parameters
 # ═══════════════════════════════════════════════════════════════════════
 
 proc extendedProcType(t: CirType, extra: seq[CirType]): CirType =
@@ -211,7 +217,7 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Coordinate builtins threaded down to device functions
+#  Coordinate builtins threaded down to device functions
 # ═══════════════════════════════════════════════════════════════════════
 
 proc collectCoordReads(e: CirExpr, kinds: var HashSet[CirCoordBuiltinKind]) =
@@ -252,8 +258,8 @@ proc orderedCoordKinds(kinds: HashSet[CirCoordBuiltinKind]): seq[CirCoordBuiltin
       result.add(k)
 
 proc appendCoordParam(fn: CirProc, k: CirCoordBuiltinKind): string =
-  ## A parameter uses the builtin's canonical name so the body's
-  ## builtin-marked reads print that name unchanged, in a kernel the name
+  ## A parameter uses the builtin's canonical identifier so the body's
+  ## builtin-marked reads print it unchanged, in a kernel the identifier
   ## binds to the attributed parameter, in a device function to this parameter.
   let name = CoordBuiltinNames[k]
   for p in fn.params:
@@ -270,7 +276,7 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
   ## One argument per needed builtin in the callee's parameter order, the callee symbol's proc type grows to match.
   ##
   ## - a kernel forwards the builtin-marked symbol with its kind included
-  ## - a device function forwards its own parameter, printed as a plain name
+  ## - a device function forwards its own parameter, printed as its own name
   if callee.kind != eSym or not needs.hasKey(callee.name):
     return ""
   let calleeKinds = orderedCoordKinds(needs[callee.name])
@@ -354,7 +360,7 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Kernel smem locals to kernel-scope threadgroup storage
+#  Kernel smem locals to kernel-scope threadgroup storage
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mslRewriteSmemLocals(m: CirModule): string =

@@ -45,8 +45,14 @@ import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
 
+# ############################################################
+#
+#            Address-space lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
@@ -59,7 +65,7 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
     run = instantiateAddressSpaceGenericsPass)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Instantiation
+#  Instantiation
 # ═══════════════════════════════════════════════════════════════════════
 
 proc resolveWantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirType]): bool =

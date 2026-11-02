@@ -5,32 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## OpenCL C printer: a structured CIRv2 module rendered as OpenCL C source.
-## The universal walk lives in `print_common`, this overlay carries the OpenCL delta.
-##
-## Emission contract:
-## - every kernel of the module prints, in encounter order: one OpenCL program per module,
-##   the device functions print alongside, forward-declared
-## - the kernel signature is `__kernel void <name>(...)`: one parameter per kernel parameter, the host `store` packing order
-## - device pointers render as `__global T* restrict` parameters, element access `p[index]`
-## - `eSizeof` prints C `sizeof`, OpenCL C is C99
-##
-## Addressing and memory classes:
-## - a `ptr` local is a plain C pointer, `(&x)` addresses a local, `(*p)` dereferences
-## - `{.smem.}` locals declare `__local` in the kernel body
-## - a loop prints `while (cond)`, `{.unroll.}` adds `#pragma unroll`
-##
-## Storage relocation:
-## - `{.const_mem.}` locals relocate into `CirModule.globals` through the OpenCL lowering pass, program-scope `__constant` output
-## - the printer refuses a `{.const_mem.}` local surviving outside the relocation, OpenCL C has no function-scope constant storage
-
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables]
-import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
 import ../../builtins/builtins_gpu_types
+import ../../crucible_codegen
+import ../../builtins/builtins_decl_helpers
+
+# ############################################################
+#
+#            OpenCL C printer
+#
+# ############################################################
+{.experimental: "codeReordering".}
 
 const printerTarget = "opencl"
 
@@ -38,19 +27,8 @@ type PrintCtx = object of WalkCtx
   ## Per-target walk context. The shared walk procs instantiate against
   ## the derived type and the overlay procs below resolve per target.
 
-proc coordRef(ctx: var PrintCtx, e: CirExpr): string
-proc coordDot(ctx: var PrintCtx, e: CirExpr): string
-proc printConv(ctx: var PrintCtx, e: CirExpr): string
-proc emitTypeName(ctx: var PrintCtx, t: CirType): string
-proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string
-proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
-proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
-proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
-
-
 # ═══════════════════════════════════════════════════════════════════════
-# Target tables
+#  Target tables
 # ═══════════════════════════════════════════════════════════════════════
 
 const openclVocab = BuiltinVocab(
@@ -61,7 +39,7 @@ const openclVocab = BuiltinVocab(
     # subgroup-relative indices cast to `uint` for the intrinsic's parameter type
     (cbkSimdShuffle, "sub_group_shuffle($1, (uint)($2))"),
     (cbkSimdShuffleXor, "sub_group_shuffle_xor($1, (uint)($2))")]),
-  stmt: makeTexts([
+  stmtText: makeTexts([
     (cbkThreadgroupBarrier, "barrier(CLK_LOCAL_MEM_FENCE)"),
     # global fence bit orders device-address-space accesses
     (cbkThreadgroupBarrierDevice, "barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)")]))
@@ -80,7 +58,7 @@ const openclEmit = TargetEmit(
   noPointerRebind: "",
   prefixKernel: "__kernel ",
   prefixInline: "static inline ",
-  prefixPlain: "static inline ")
+  prefixDevice: "static inline ")
 
 const openclModuleShape = ModuleShape(
   spaces: {caConstant},
@@ -97,11 +75,11 @@ const openclModuleShape = ModuleShape(
   printsReduceTemplates: false)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Types
+#  Types
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitOpenclScalar(t: CirType): string =
-  ## OpenCL C name of a non-array leaf type, "" when the caller composes the name.
+  ## OpenCL C name of a non-array leaf type, "" when the caller builds the type name.
   getLeafTypeName(TargetVocabs[bkOpenCL].scalarNames, openclVectorRule, t)
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
@@ -133,21 +111,20 @@ proc emitOpenclPtrField(t: CirType, ident: string): string =
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## OpenCL C declaration text of one struct member.
   ##
-  ## - an array stacks every dimension behind the name (`float a[4][8]`)
+  ## - the printer stacks every dimension behind the identifier for an array (`float a[4][8]`)
   ## - a pointer member prints its address-space qualifier, and only device
   ##   pointers nest in structs
   if f.typ.kind == ctArray:
     return emitOpenclArrayDecl(f.typ, f.name)
   if f.typ.kind in {ctAptr, ctPtr}:
     if f.typ.kind == ctAptr and f.typ.space != caDevice:
-      ctx.fail("struct field " & t.name & "." & f.name &
-        " in " & $f.typ.space & " space, only device pointers nest in structs")
+      ctx.fail("struct field " & t.name & "." & f.name & " in " & $f.typ.space & " space, only device pointers nest in structs")
       return ""
     return emitOpenclPtrField(f.typ, f.name)
   return ctx.emitTypeName(f.typ) & ' ' & f.name
 
 # ═══════════════════════════════════════════════════════════════════════
-# Coordinate builtins
+#  Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getOpenclCoordComponent(k: CirCoordBuiltinKind, field: string): string =
@@ -202,14 +179,14 @@ proc getAtomicOperandPtr(e: CirExpr): CirType =
     return t
 
 # ═══════════════════════════════════════════════════════════════════════
-# Expressions: the OpenCL hooks over the universal arms
+#  Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## One conversion, the C-style cast form.
   ##
   ## - a pointer cast includes the address space, the C compiler rejects a silent change of the pointee's space
-  ## - other types take the bare name
+  ## - the printer passes other types through unchanged
   let target = if e.castType.kind in {ctPtr, ctAptr}:
       emitOpenclPtrField(e.castType, "").strip()
     else:
@@ -255,7 +232,7 @@ proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
   return "sizeof(" & ctx.emitTypeName(e.ofType) & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: the OpenCL space policy and declaration forms
+#  Statements: the OpenCL space policy and declaration forms
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
@@ -268,17 +245,17 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   if s.space == caConstant:
     # OpenCL lowering pass relocates const_mem locals at every scope,
     # a survivor here was never relocated
-    ctx.fail("local " & s.name & " in constant space, the OpenCL lowering" &
-      " pass hoists const_mem locals to program scope")
+    ctx.fail("local " & s.name & " in constant space, the OpenCL lowering pass already relocated it")
     return false
   if s.space == caDevice:
-    ctx.fail("local " & s.name & " in device space, OpenCL locals are private or local")
+    ctx.fail(s.name & " needs a function/workgroup home in OpenCL")
     return false
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
-  ## Storage prefix by space. A pointer type carries its own qualifier
-  ## in its text and drops the prefix, OpenCL rejects a doubled qualifier.
+  ## Storage prefix by space. The printer prepends the space qualifier,
+  ## a pointer type already includes its own qualifier and OpenCL rejects
+  ## a doubled one.
   if s.declType.kind in {ctPtr, ctAptr}:
     return emitOpenclPtrField(s.declType, s.name)
   let prefix = case s.space
@@ -293,7 +270,7 @@ proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
   "const " & ctx.emitTypeName(s.declType) & ' ' & s.name
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules
+#  Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
@@ -310,6 +287,7 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
   ## Parameter declaration of one kernel or device-function parameter.
   ## A kernel's `ptr T` parameter binds a device buffer, the engine serializes
   ## it through the same pointer-leaf form as a `ptr UncheckedArray[T]` parameter.
+  ## Array parameter values reach the kernel packed by the engine.
   case p.typ.kind
   of ctAptr, ctPtr:
     let (qualifier, ident) = case p.typ.space
@@ -320,8 +298,7 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
     result = qualifier &
       printCDecl(TargetVocabs[bkOpenCL].scalarNames, openclVectorRule, printerTarget, p.typ, ident, true)
   of ctArray:
-    ctx.fail("array parameter " & p.name &
-      ", OpenCL C array parameters decay to pointers, the engine packs the value")
+    ctx.fail("array parameter " & p.name & ", OpenCL C array parameters decay to pointers")
     return ""
   else:
     result = ctx.emitTypeName(p.typ) & ' ' & p.name
@@ -337,7 +314,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## OpenCL C forbids declaring `__constant` storage without an initializer:
   ## the printer refuses a const_mem local that lacks one.
   if s.init == nil:
-    ctx.fail("const_mem local " & s.name & " without an initializer")
+    ctx.refuseUninitializedConstMem(s.name)
     return ""
   # program-scope `__constant` declaration of a const_mem local
   if s.declType.kind == ctArray:
@@ -362,7 +339,5 @@ proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
     return ("", ctx.err)
   printModule(ctx, m, kernels, openclModuleShape)
 
-proc codegen*(ctx: var GpuContext): string =
-  ## Prints the module in `ctx` as OpenCL C source, the `backends_api` entry point.
-  ## A printer refusal is a compile error naming the construct.
-  codegenModule(printOpenclModule(ctx.module))
+proc codegen*(m: CirModule): string =
+  codegenModule(printOpenclModule(m))

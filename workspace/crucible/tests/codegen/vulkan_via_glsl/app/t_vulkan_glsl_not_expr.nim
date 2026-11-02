@@ -10,7 +10,7 @@
 import workspace/crucible
 import workspace/crucible/src/codegen/ir/cirv2_lang
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/backends/glsl_lang
+import workspace/crucible/src/codegen/backends/lang_glsl
 
 proc buildNotModule(): CirModule =
   ## One kernel with a bool local bound to `not (a == 0)`

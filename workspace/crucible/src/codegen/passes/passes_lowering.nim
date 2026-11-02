@@ -7,10 +7,16 @@ import ./pass_datatypes
 import ./pass_helpers
 import ./passes_low_views
 
+# ############################################################
+#
+#            Shared lowering passes
+#
+# ############################################################
+
 {.experimental: "codeReordering".}
 
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerFoldMaxMinToBuiltins*(reg: var PassRegistry) =
@@ -73,7 +79,7 @@ proc leOfCond(cond: CirExpr): tuple[le: CirExpr, guarded: bool] =
   return (nil, false)
 
 proc foldMinMax(e: CirExpr): bool =
-  ## Replaces a max/min-idiom ternary with a plain `max`/`min` call, in place.
+  ## Replaces a max/min-idiom ternary with a direct `max`/`min` call, in place.
   ## max folds `(B <= A) ? A : B`, min folds `(A <= B) ? A : B`.
   ## Both operands are scalars of one basic numeric kind, bf16 included.
   ## Float operands require the NaN guard.

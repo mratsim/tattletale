@@ -5,24 +5,19 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Shared printer tier over CIRv2: the statement/expression walk, the C declarator engine, and the module assembly.
-##
-## C declarator engine, driven by the registry tables that each printer supplies.
-##
-## - `getScalarName`/`getLeafTypeName`/`getFullTypeName`: type names from `ScalarNames` and `VectorRule`
-## - `printCDecl`: C-style declaration text from type structure
-##
-## Every printer under `backends/` imports these, no printer owns a copy.
-## A leaf belongs here when two or more printers need the same text.
-## Single-target emission stays in the printer.
-
 import std/[macros, math, sets, strutils, tables]
 import ../ir/cirv2_lang
-import ../ir/ast_datatypes
 import ../../builtins/builtins_gpu_types
+import ../../crucible_codegen
 import ../../builtins/builtins_decl_helpers
 import ./targets_registry
 export targets_registry
+
+# ############################################################
+#
+#            Shared print walk
+#
+# ############################################################
 
 template failing*(ctx: auto): bool =
   ctx.err.len > 0
@@ -47,7 +42,7 @@ proc getUnhandledExprRejection*(kind: CirExprKind): string =
   "expression kind " & $kind & " has no printer emission"
 
 # ═══════════════════════════════════════════════════════════════════════
-# The shared print context: one walk state over the target's tables
+#  The shared print context: one walk state over the target's tables
 # ═══════════════════════════════════════════════════════════════════════
 
 type BuiltinVocab* = object
@@ -58,10 +53,10 @@ type BuiltinVocab* = object
   shuffleText*: array[CirShuffleBuiltinKind, string]
   atomicsText*: array[CirAtomicsBuiltinKind, string]
   ## Call text in value position, `$1`..`$9` for the printed arguments.
-  ## "" when the kind has no text: the canonical name passes through,
+  ## "" when the kind has no text: the printer passes the canonical name through,
   ## the target compiler rejects what it cannot parse.
-  stmt*: array[CirSynchroBuiltinKind, string]
-  ## Statement-position call text of one plain single-line statement,
+  stmtText*: array[CirSynchroBuiltinKind, string]
+  ## Statement-position call text of one single-line statement,
   ## `$1`..`$9` for the printed arguments.
 
 func makeTexts*[K: enum](pairs: openArray[tuple[k: K, txt: string]]):
@@ -94,8 +89,8 @@ type TargetEmit* = object
   ## space is in `spaces`. An empty set means pointers are values.
   noPointerRebind*: string
   ## Refusal fingerprint for a pointer rebind, `$1` for the symbol name, "" when pointers rebind.
-  prefixKernel*, prefixInline*, prefixPlain*: string
-  ## Linkage prefixes: kernel, inline device function, plain device function.
+  prefixKernel*, prefixInline*, prefixDevice*: string
+  ## Linkage prefixes: kernel, inline device function, device function.
 
 type WalkCtx* {.inheritable.} = object
   ## Shared walk state of one print run over one module and the base type
@@ -180,7 +175,7 @@ proc printVectorDot*(ctx: var auto, e: CirExpr): string =
   return ctx.printExpr(e.dotBase) & "." & comp
 
 # ═══════════════════════════════════════════════════════════════════════
-# Declarator engine: type names and declaration forms over the registry tables
+#  Declarator engine: type names and declaration forms over the registry tables
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getScalarName*(names: ScalarNames, t: CirType): string =
@@ -337,6 +332,12 @@ proc matchCastRule(rules: openArray[CastRule], src: CirType, dst: CirType): int 
     return i
   return -1
 
+template refuseUninitializedConstMem*(ctx: var auto, name: string): untyped =
+  ## Refusal of a const_mem local without an initializer.
+  ## The target compilers reject constant storage that lacks an initializer.
+  mixin fail
+  ctx.fail("const_mem local " & name & " without an initializer")
+
 template printCast*(ctx: var auto, e: CirExpr, rules: openArray[CastRule], dstName: untyped): string =
   ## One bit reinterpret `e` through the target's cast rules.
   ## The first matching rule decides, no match keeps `ctx.printConv`.
@@ -404,7 +405,7 @@ proc emitBuiltinCall*(ctx: var auto, callee: CirExpr, args: seq[string]): string
   ## Target text of one builtin call over the family tables.
   ##
   ## Returns:
-  ## - the native text when the kind carries one, `$1`..`$9` for the arguments
+  ## - the native text when the kind has one, `$1`..`$9` for the arguments
   ## - "" for a canonical-name pass-through: the target compiler rejects
   ##   what it cannot parse
   if callee.kind != eSym or not callee.builtin:
@@ -733,7 +734,7 @@ proc printConst*(ctx: var auto, s: CirStmt): string =
   printDeclStmt(pad, ctx.constDecl(s), ctx.getInitText(s))
 
 proc printAsgn*(ctx: var auto, s: CirStmt): string =
-  ## One assignment in the plain form, refusing pointer rebinds per the target knobs.
+  ## One assignment in the direct form, refusing pointer rebinds per the target knobs.
   let pad = spaces(ctx.indent * 2)
   if ctx.emit.noPointerRebind.len > 0 and s.lhs.kind == eSym and
       s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
@@ -742,8 +743,8 @@ proc printAsgn*(ctx: var auto, s: CirStmt): string =
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
 proc getStmtBuiltinText*(ctx: var auto, s: CirStmt, pad: string, args: seq[string]): string =
-  ## Statement-position text of one builtin call, "" for the plain form.
-  let txt = ctx.emit.vocab.stmt[s.callCallee.synchroBuiltin]
+  ## Statement-position text of one builtin call, "" for the direct form.
+  let txt = ctx.emit.vocab.stmtText[s.callCallee.synchroBuiltin]
   if txt.len > 0:
     return pad & (txt % args) & ";"
   return ""
@@ -804,7 +805,7 @@ proc getModuleDeviceFns*(m: CirModule): seq[CirProc] =
       result.add fn
 
 # ═══════════════════════════════════════════════════════════════════════
-# Entry-input machinery of the shader entry heads
+#  Entry-input machinery of the shader entry heads
 # ═══════════════════════════════════════════════════════════════════════
 
 func getWorkgroup*(fn: CirProc, dflt: array[3, int] = [256, 1, 1]): array[3, int] =
@@ -817,7 +818,7 @@ type EntryInputs* = array[cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup, 
   ## A WGSL `@builtin(...)` parameter or an HLSL semantic-carrying input:
   ## one text per coordinate builtin kind.
   ##
-  ## An empty text carries no entry input. The read happens another way:
+  ## An empty text has no entry input. The read happens another way:
   ##
   ## - the body's workgroup literal
   ## - a lowering-pass materialized parameter
@@ -834,7 +835,7 @@ template emitEntryInputs*(kinds: untyped, inputs: EntryInputs): string =
   texts.join(", ")
 
 # ═══════════════════════════════════════════════════════════════════════
-# Proc assembly: the one proc printer over both entry models
+#  Proc assembly: the one proc printer over both entry models
 # ═══════════════════════════════════════════════════════════════════════
 
 type ModuleShape* = object
@@ -854,7 +855,7 @@ type ModuleShape* = object
   ## Member terminator: a semicolon on the C family, a comma on WGSL.
   structClose*: string
   ## Closing token of a non-typedef struct declaration: brace plus semicolon
-  ## on the C family, a bare brace on WGSL.
+  ## on the C family, a semicolon-free brace on WGSL.
   fwdDecls*: bool
   ## Device functions forward-declare before their definitions.
   moduleOrderProcs*: bool
@@ -883,7 +884,7 @@ proc emitComputePrefix*(ctx: var auto, fn: CirProc): string =
     return ctx.emit.prefixKernel
   if fn.inline:
     return ctx.emit.prefixInline
-  return ctx.emit.prefixPlain
+  return ctx.emit.prefixDevice
 
 proc printSig*(ctx: var auto, fn: CirProc): string =
   ## C signature line of one proc. The kernel name comes from exportc.

@@ -5,42 +5,41 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Text backend dispatch: one entry point for the six text printers.
-##
-## - `codegen` prints `ctx.module` as the source text that a static `Backend` names
-## - each `metal:`-family macro passes its backend as a compile-time constant,
-##   so the compiler folds the dispatch to a direct call
-## - `codegenSpirvShader` is separate: it returns binary SPIR-V words,
-##   a binary artifact that no text printer produces
+import ./lang_cuda, ./lang_wgsl, ./lang_opencl, ./lang_glsl, ./lang_msl, ./lang_hlsl,
+       ./lang_spirv_shader
+import ../ir/cirv2_lang
+import ../../crucible_codegen
 
-import ./cuda_lang, ./wgsl_lang, ./opencl_lang, ./glsl_lang, ./msl_lang, ./hlsl_lang,
-       ./spirv_shader_lang
-import ../ir/ast_datatypes
-from ./hlsl_lang import HlslFlavor, fvD3D12
+from ./lang_hlsl import HlslFlavor, fvD3D12
 
-type Backend* = enum
-  ## Names the text backend a `codegen` call prints, one value per `*_lang` printer.
-  backendCuda, backendWebGpu, backendOpenCL, backendGLSL, backendMetal, backendHlsl
+# ############################################################
+#
+#            Backend API
+#
+# ############################################################
 
-proc codegen*(ctx: var GpuContext, B: static Backend, flavor: static HlslFlavor = fvD3D12): string =
-  ## Prints the module in `ctx` as the source text that `B` names.
+proc codegen*(m: CirModule, B: static BackendKind, flavor: static HlslFlavor = fvD3D12): string =
+  ## Prints `m` as the source text that `B` names.
   ##
   ## - the `metal:`-family macros call this proc after the pass registry
-  ## - `ctx.module` is never mutated
-  ## - `flavor` selects the HLSL resource-binding flavor, `backendHlsl` only:
+  ## - `m` is never mutated
+  ## - `flavor` selects the HLSL resource-binding flavor, `bkHlsl` only:
   ##   any other backend refuses a non-default flavor
-  when B == backendHlsl:
-    hlsl_lang.codegen(ctx, flavor)
+  when B == bkSpirv:
+    {.error: "codegen: bkSpirv prints through codegenSpirvShader".}
+  when B == bkHlsl:
+    lang_hlsl.codegen(m, flavor)
   else:
     when flavor != fvD3D12:
-      {.error: "codegen: `flavor` applies only to backendHlsl".}
+      {.error: "codegen: `flavor` applies only to bkHlsl".}
     case B
-    of backendCuda: cuda_lang.codegen(ctx)
-    of backendWebGpu: wgsl_lang.codegen(ctx)
-    of backendOpenCL: opencl_lang.codegen(ctx)
-    of backendGLSL: glsl_lang.codegen(ctx)
-    of backendMetal: msl_lang.codegen(ctx)
-    of backendHlsl: hlsl_lang.codegen(ctx, flavor)
+    of bkCuda: lang_cuda.codegen(m)
+    of bkWebGPU: lang_wgsl.codegen(m)
+    of bkOpenCL: lang_opencl.codegen(m)
+    of bkGlsl: lang_glsl.codegen(m)
+    of bkMetal: lang_msl.codegen(m)
+    of bkHlsl: lang_hlsl.codegen(m, flavor)
+    of bkSpirv: ""
 
-proc codegenSpirvShader*(ctx: var GpuContext): seq[uint32] =
-  spirv_shader_lang.codegen(ctx)
+proc codegenSpirvShader*(m: CirModule): seq[uint32] =
+  lang_spirv_shader.codegen(m)

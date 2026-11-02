@@ -5,35 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## CUDA C++ printer: a structured CIRv2 module to NVRTC-compilable CUDA C++ source.
-## The universal walk lives in `print_common`, this overlay carries the CUDA delta.
-##
-## Signature and storage contract:
-##
-## - kernels: `extern "C" __global__ void name(args)`, the host runtime
-##   looks up the kernel by unmangled name
-## - device functions: `__device__` with no extern "C", each device function keeps its C++ mangled name.
-## - parameters print plainly, CUDA has one generic address space,
-##   `{.smem.}` locals print `__shared__` in the body, and program-scope variables in `CirModule.globals` print `__constant__`
-## - the translation unit opens with the fp16/bf16 includes, NVRTC's default
-##   include path provides cuda_fp16.h and cuda_bf16.h
-##
-## Statement and builtin contract:
-##
-## - coordinate builtins map to the CUDA vocabulary: blockIdx, blockDim,
-##   gridDim, threadIdx. The canonical Nim type is int, the CUDA builtins are unsigned, reads cast to int
-## - `{.unroll.}` prints `#pragma unroll` in front of the loop, a loop prints `while (cond)` or `for (;;)`
-## - the builtin vocabulary dispatches on the kind over the `cudaVocab` table,
-##   `{.builtin.}` names pass through, the warp reductions are the exception
-## - a warp-reduction call makes its butterfly template emit at module scope on first use
-
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables, math]
-import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
 import ../../builtins/builtins_gpu_types
+import ../../crucible_codegen
+import ../../builtins/builtins_decl_helpers
+
+# ############################################################
+#
+#            CUDA C++ printer
+#
+# ############################################################
+{.experimental: "codeReordering".}
 
 const printerTarget = "cuda"
 
@@ -41,18 +27,10 @@ type PrintCtx = object of WalkCtx
   ## Per-target walk context. The shared walk procs instantiate against
   ## the derived type and the overlay procs below resolve per target.
 
-proc coordRef(ctx: var PrintCtx, e: CirExpr): string
-proc coordDot(ctx: var PrintCtx, e: CirExpr): string
-proc printConv(ctx: var PrintCtx, e: CirExpr): string
-proc emitTypeName(ctx: var PrintCtx, t: CirType): string
-proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
-proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
-proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Target tables
+#  Target tables
 # ═══════════════════════════════════════════════════════════════════════
 
 const cudaVocab = BuiltinVocab(
@@ -87,7 +65,7 @@ const cudaEmit = TargetEmit(
   noPointerRebind: "",
   prefixKernel: "extern \"C\" __global__ ",
   prefixInline: "__forceinline__ __device__ ",
-  prefixPlain: "__device__ ")
+  prefixDevice: "__device__ ")
 
 const cudaModuleShape = ModuleShape(
   spaces: {caThread, caThreadgroup, caConstant, caDevice},
@@ -104,11 +82,11 @@ const cudaModuleShape = ModuleShape(
   printsReduceTemplates: true)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Types
+#  Types
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitCudaScalar(t: CirType): string =
-  ## CUDA bare name of a non-array leaf type, "" when the caller composes the name.
+  ## CUDA name of a non-array leaf type, "" when the caller builds the type name.
   getFullTypeName(TargetVocabs[bkCuda].scalarNames, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
@@ -126,7 +104,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   emitCudaType(f.typ, f.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Coordinate builtins
+#  Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getCudaCoordToken(k: CirCoordBuiltinKind, whole: bool, field: string, coordTy: CirType): string =
@@ -179,7 +157,7 @@ proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   getCudaCoordToken(e.dotBase.coordBuiltin, false, e.fieldName, e.dotBase.typ)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Expressions: the CUDA hooks over the universal arms
+#  Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
@@ -193,7 +171,7 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
   pad & txt & ";"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: the CUDA space policy and declaration forms
+#  Statements: the CUDA space policy and declaration forms
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
@@ -201,13 +179,11 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## initializing shared variables, and kernel-body initializers rewrote to stores before printing.
   if s.space == caThreadgroup:
     if s.init != nil and not ctx.inKernel:
-      ctx.fail("smem local " & s.name &
-        " with an initializer, CUDA C++ forbids initializing __shared__ variables")
+      ctx.fail("smem local " & s.name & " with an initializer, CUDA C++ forbids initializing __shared__ variables")
       return false
     return true
   if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, CUDA constant storage" &
-      " is program scope only")
+    ctx.fail("local " & s.name & " in constant space, CUDA constant storage is program scope only")
     return false
   true
 
@@ -225,7 +201,7 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   pad & "asm(" & s.asmSpliceText().strip() & ");"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules
+#  Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitWarpReduceTemplate(name: string): string =
@@ -246,7 +222,7 @@ proc emitWarpReduceTemplate(name: string): string =
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ## CUDA parameter texts of one proc or kernel, in declaration order.
   ##
-  ## A kernel's by-value array parameter is const-qualified: the array decays to a pointer and is read-only.
+  ## A kernel's by-value array parameter is const-qualified, the printer lowers it to a read-only pointer.
   for p in fn.params:
     case p.typ.kind
     of ctAptr, ctPtr:
@@ -287,7 +263,5 @@ proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ctx.mathNames = cudaMathBuiltinNames
   printModule(ctx, m, getModuleKernels(m), cudaModuleShape)
 
-proc codegen*(ctx: var GpuContext): string =
-  ## Prints the module in `ctx` as CUDA C++ source, the `backends_api` entry point.
-  ## A printer refusal is a compile error naming the construct.
-  codegenModule(printCudaModule(ctx.module))
+proc codegen*(m: CirModule): string =
+  codegenModule(printCudaModule(m))

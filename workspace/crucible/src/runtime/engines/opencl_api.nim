@@ -10,7 +10,7 @@ import std/[macros, tables]
 
 import workspace/crucible/src/abis/opencl_abi
 
-import workspace/crucible/src/codegen/ir/ast_datatypes
+import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization

@@ -5,18 +5,19 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Call-graph analysis: one `pkAnalysis` pass fills `CirModule.callGraph` with the read-write classification of the buffer parameters.
-##
-## - a buffer parameter is read-write when its proc or a transitive callee stores through it
-## - a recursive device function refuses (the HLSL frontend accepts recursive source while miscompiling it)
-## - the pass registers after the last transform and before check-only validation, the printer reads the stored record, never rescans
 import std/[sets, strutils, tables]
 import ../ir/cirv2_lang
 import ./pass_helpers
 import ./pass_datatypes
 
+# ############################################################
+#
+#            HLSL analysis
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Argument-flow edges
+#  Argument-flow edges
 # ═══════════════════════════════════════════════════════════════════════
 
 proc directCalls(ss: seq[CirStmt], outp: var seq[CirExpr]) =
@@ -106,7 +107,7 @@ proc scanCallStmts(procs: Table[string, CirProc],
   edges = es
 
 # ═══════════════════════════════════════════════════════════════════════
-# Read-write fixpoint and recursion refusal
+#  Read-write fixpoint and recursion refusal
 # ═══════════════════════════════════════════════════════════════════════
 
 proc classifyRwBuffers(stored: HashSet[string], edges: seq[tuple[caller, arg, callee, param: string]], reached: var HashSet[string]) =
@@ -166,7 +167,7 @@ proc checkDeviceFnRecursion(procs: Table[string, CirProc]): string =
         return
 
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 proc hlslRun(m: CirModule): string {.nimcall.} =

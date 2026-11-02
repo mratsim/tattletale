@@ -22,8 +22,14 @@ import ./pass_datatypes
 import ./passes_low_pointers
 import ./pass_helpers
 
+# ############################################################
+#
+#            OpenCL lowering
+#
+# ############################################################
+
 # ═══════════════════════════════════════════════════════════════════════
-# Registration
+#  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerOpenclHoistProgramScopeConstants*(reg: var PassRegistry) =
@@ -39,7 +45,7 @@ func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
   )
 
 # ═══════════════════════════════════════════════════════════════════════
-# Const_mem locals to program-scope constants
+#  Const_mem locals to program-scope constants
 # ═══════════════════════════════════════════════════════════════════════
 
 proc openclHoistProgramScopeConstants(m: CirModule): string =
@@ -47,7 +53,7 @@ proc openclHoistProgramScopeConstants(m: CirModule): string =
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Large-struct params as hidden pointers
+#  Large-struct params as hidden pointers
 # ═══════════════════════════════════════════════════════════════════════
 
 func computeCirSizeBytes(t: CirType): int =
@@ -163,7 +169,7 @@ proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int) =
     i.inc
 
 proc openclLowerByrefParams(m: CirModule): string =
-  ## The callee's declaration and every call site share one proc-type object,
+  ## Callee declaration and every call site share one proc-type object,
   ## a single rewrite updates both sides.
   for fn in m.procs:
     if fn.isKernel:

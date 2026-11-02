@@ -16,7 +16,7 @@ import std/osproc
 import std/strutils
 import workspace/crucible/src/codegen/ir/cirv2_lang
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/backends/spirv_shader_lang
+import workspace/crucible/src/codegen/backends/lang_spirv_shader
 
 proc buildVecLayoutModule(): CirModule =
   ## Push members, in order: vec2<f32>, vec3<f32>, vec4<f32>, array[2] of vec3<f32>

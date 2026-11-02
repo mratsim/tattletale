@@ -5,12 +5,14 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Cirv2 debug renderer for tests and pass development:
-## one node per line, s-expression shaped, in the Leng vocabulary
-## (`(add Type a b)`, `(i +32)`, `aptr`, `ite`, `lab`/`jmp`).
-
 import cirv2_lang
 import std/strutils
+
+# ############################################################
+#
+#            CIRv2 pretty printer
+#
+# ############################################################
 
 type
   RenderBuf* = object

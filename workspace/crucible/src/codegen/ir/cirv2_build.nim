@@ -5,18 +5,14 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Cirv2 builders: ergonomic constructors for the CIRv2 tree.
-##
-## Builders produce well-shaped nodes by construction:
-##
-## - typed ops and ternaries get their type from the caller
-## - comparisons derive their operand type from the first operand
-## - statement calls go through `callS`
-##
-## A construct that the builders cannot express correctly has no node: build no such shape.
-
 import cirv2_lang
 import std/macros
+
+# ############################################################
+#
+#            CIRv2 builders
+#
+# ############################################################
 
 # Type constructors
 
@@ -251,7 +247,7 @@ proc moduleD*(name: string, types: seq[CirType], procs: seq[CirProc]): CirModule
   CirModule(name: name, types: types, procs: procs)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Proc pragmas
+#  Proc pragmas
 # ═══════════════════════════════════════════════════════════════════════
 
 proc applyProcPragmas*(fn: NimNode, p: CirProc): string =
@@ -282,7 +278,7 @@ proc applyProcPragmas*(fn: NimNode, p: CirProc): string =
         case prag[0].strVal
         of "exportc":
           # `exportc: "entry"` renames the emitted entry point.
-          # a proc keeps its own name under a bare `exportc`
+          # a proc keeps its own name under an argumentless `exportc`
           p.exportName = prag[1].strVal
         of "workgroup":
           # both call and colon forms: `workgroup(x, y, z)`, `workgroup: (x, y, z)`

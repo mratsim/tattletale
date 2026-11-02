@@ -5,35 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GLSL 450 (Vulkan compute) printer: a structured CIRv2 module rendered as GLSL source.
-## The universal walk lives in `print_common`, this overlay carries the GLSL delta.
-##
-## Emission contract:
-## - one `{.global.}` kernel per module, the device functions it calls emitted alongside
-## - kernel signature `void <name>()`: one push-constant block member per kernel parameter, in host `store` packing order
-## - buffer pointers render as buffer-reference handles (`GL_EXT_buffer_reference`), element access `<handle>.x[index]`
-## - `eSizeof` reports the packed byte size from the stored module layout records, GLSL has no `sizeof`
-##
-## Lowering-pass contract (`passes_lowering_glsl.nim` runs before printing):
-## - `ptr` locals rewrite to their pointees (GLSL has no function-storage addressing),
-##   the pass refuses a surviving pointer local, the refusal message
-##   identifies the pass
-## - a `var T` device-function parameter binds as `inout`, the qualify pass retyped it to its pointee
-## - `{.smem.}` and `{.const_mem.}` kernel locals relocate into `CirModule.globals`, emitted as program-scope `shared`/`const` declarations
-## - the ref-block pass registers every buffer-reference block into
-##   `CirModule.refBlocks`, the printer declares one per entry in order
-##
-## Remaining checks:
-## - the printer refuses a threadgroup/constant local surviving in a nested scope or device function, and a `caDevice`-space local too
-## - a loop prints `while (cond)`, `{.unroll.}` adds `[[unroll]]`
-
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, tables]
-import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
 import ../../builtins/builtins_gpu_types
+import ../../crucible_codegen
+import ../../builtins/builtins_decl_helpers
+
+# ############################################################
+#
+#            GLSL printer
+#
+# ############################################################
+{.experimental: "codeReordering".}
 
 const printerTarget = "glsl"
 
@@ -41,22 +27,10 @@ type PrintCtx = object of WalkCtx
   ## Per-target walk context. The shared walk procs instantiate against
   ## the derived type and the overlay procs below resolve per target.
 
-proc coordRef(ctx: var PrintCtx, e: CirExpr): string
-proc coordDot(ctx: var PrintCtx, e: CirExpr): string
-proc printConv(ctx: var PrintCtx, e: CirExpr): string
-proc emitTypeName(ctx: var PrintCtx, t: CirType): string
-proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string
-proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
-proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string
-proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
-proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
-proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc checkConstDecl(ctx: var PrintCtx, s: CirStmt): bool
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Target tables
+#  Target tables
 # ═══════════════════════════════════════════════════════════════════════
 
 const glslVocab = BuiltinVocab(
@@ -64,7 +38,7 @@ const glslVocab = BuiltinVocab(
     (cbkReduceAdd, "subgroupAdd($1)"),
     (cbkReduceMax, "subgroupMax($1)")]),
   shuffleText: makeTexts([
-    # subgroupShuffle's index parameter is `uint`, a plain cast
+    # subgroupShuffle's index parameter is `uint`, a direct cast
     # compiles without GL_NV_explicit_typecast
     (cbkSimdShuffle, "subgroupShuffle($1, uint($2))"),
     (cbkSimdShuffleXor, "subgroupShuffleXor($1, uint($2))")]))
@@ -85,7 +59,7 @@ const glslEmit = TargetEmit(
     "the GLSL lowering pass rewrites pointer locals to their pointees",
   prefixKernel: "",
   prefixInline: "",
-  prefixPlain: "")
+  prefixDevice: "")
 
 const glslModuleShape = ModuleShape(
   spaces: {caThreadgroup, caConstant},
@@ -102,16 +76,16 @@ const glslModuleShape = ModuleShape(
   printsReduceTemplates: false)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Types
+#  Types
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitGlslScalar(t: CirType): string =
-  ## GLSL name of a non-array leaf type, "" when the caller composes the name.
+  ## GLSL name of a non-array leaf type, "" when the caller builds the type name.
   getLeafTypeName(TargetVocabs[bkGlsl].scalarNames, glslVectorRule, t)
 
 proc glslTypeName(t: CirType): string =
-  ## GLSL name of a type with no identifier, array dimensions composed into
-  ## the name (`float[4]`).
+  ## GLSL name of a type with no identifier, the printer appends the array
+  ## dimensions to the type name (`float[4]`).
   if t.kind == ctArray:
     glslTypeName(t.aElem) & "[" & $t.aN & "]"
   else:
@@ -155,7 +129,7 @@ proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## GLSL declaration text of one struct member: a buffer pointer member is
-  ## the reference block handle, an array stacks the dimension behind the name.
+  ## the reference block handle, the printer stacks the dimension behind the type name for an array.
   if f.typ.kind == ctArray:
     return emitGlslScalar(f.typ.aElem) & ' ' & f.name & "[" & $f.typ.aN & "]"
   if f.typ.kind in {ctAptr, ctPtr}:
@@ -163,12 +137,12 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   return ctx.emitTypeName(f.typ) & ' ' & f.name
 
 # ═══════════════════════════════════════════════════════════════════════
-# Coordinate builtins
+#  Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getGlslCoordName(k: CirCoordBuiltinKind): string =
   ## GLSL name of a canonical coordinate builtin: all six are native
-  ## GLSL builtins, a plain rename.
+  ## GLSL builtins, a direct rename.
   case k
   of cbkThreadPositionInGrid: "gl_GlobalInvocationID"
   of cbkThreadgroupPositionInGrid: "gl_WorkGroupID"
@@ -190,7 +164,7 @@ proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   "int(" & getGlslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
-# Expressions: the GLSL hooks over the universal arms
+#  Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
@@ -271,7 +245,7 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
     ""
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements: the GLSL space policy and declaration forms
+#  Statements: the GLSL space policy and declaration forms
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
@@ -279,16 +253,13 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## pointer locals to their pointees. The storage spaces relocate to program
   ## scope through the GLSL lowering pass.
   if s.declType.kind == ctPtr:
-    ctx.fail("pointer local " & s.name & ", GLSL has no function-storage" &
-      " addressing, the GLSL lowering pass rewrites pointer locals to their pointees")
+    ctx.fail("pointer local " & s.name & ", the GLSL lowering pass rewrites pointer locals to their pointees")
     return false
   if s.space == caThreadgroup:
-    ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering" &
-      " pass hoists threadgroup locals to program scope")
+    ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering pass hoists threadgroup locals to program scope")
     return false
   if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, the GLSL lowering" &
-      " pass hoists const_mem locals to program scope")
+    ctx.fail("local " & s.name & " in constant space, the GLSL lowering pass hoists const_mem locals to program scope")
     return false
   if s.space == caDevice:
     ctx.fail("local " & s.name & " in device space, GLSL locals are private")
@@ -311,7 +282,7 @@ proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
   "const " & ctx.emitTypeName(s.declType) & ' ' & s.name
 
 # ═══════════════════════════════════════════════════════════════════════
-# Procs and modules
+#  Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
@@ -327,7 +298,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
     of ctAptr, ctPtr:
       result.add ctx.emitGlslPtrDecl(p.typ, p.name)
     else:
-      # a `var` binding gains an inout qualifier, an array composes the dimension after the name
+      # a `var` binding gains an inout qualifier, the printer appends the dimension after the variable name for an array
       let binding = if p.varParam: "inout " else: ""
       if p.typ.kind == ctArray:
         result.add binding & emitGlslScalar(p.typ.aElem) & ' ' & p.name & "[" & $p.typ.aN & "]"
@@ -338,7 +309,7 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `const` declaration of one hoisted const_mem local.
   ## The lowering pass refuses an initializer-less const_mem local before relocation, this check fails on a malformed node.
   if s.init == nil:
-    ctx.fail("const_mem local " & s.name & " without an initializer")
+    ctx.refuseUninitializedConstMem(s.name)
     return ""
   if s.declType.kind == ctArray:
     result = "const " & emitGlslScalar(s.declType.aElem) & ' ' & s.name &
@@ -356,7 +327,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
         "[" & $s.declType.aN & "];"
     return "shared " & ctx.emitTypeName(s.declType) & ' ' & s.name & ";"
   if s.init == nil:
-    ctx.fail("const_mem local " & s.name & " without an initializer")
+    ctx.refuseUninitializedConstMem(s.name)
     return ""
   ctx.emitConstDecl(s)
 
@@ -445,7 +416,5 @@ proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
     return ("", ctx.err)
   printModule(ctx, m, kernels, glslModuleShape)
 
-proc codegen*(ctx: var GpuContext): string =
-  ## Prints the module in `ctx` as GLSL source, the `backends_api` entry point.
-  ## A printer refusal is a compile error naming the construct.
-  codegenModule(printGlslModule(ctx.module))
+proc codegen*(m: CirModule): string =
+  codegenModule(printGlslModule(m))

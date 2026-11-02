@@ -87,7 +87,7 @@ declares, a row lists, an invocation carries.
 | "a 16-bit float pair refuses on the printer wiring state" | "the printer refuses a 16-bit float pair on the wiring state" |
 | "an unprovenanced integer names no storage" | "an unprovenanced integer has no storage, only the default device" |
 | "openArray[T] travels as a span over the element type" | "the frontend passes openArray[T] as a span over the element type" |
-| "the value lives in the type (phantom objects like Int[V])" | "the type carries the value (phantom objects like Int[V])" |
+| "the value lives in the type (phantom objects like Int[V])" | "the value is a phantom parameter of the type (phantom objects like Int[V])" |
 | "targets_registry.nim states every family" | "targets_registry.nim declares every family" |
 | "one invocation states every target's rows" | "one invocation carries every target's rows" |
 | "a scalar row states any subset of the cells" | "a scalar row lists any subset of the cells" |
