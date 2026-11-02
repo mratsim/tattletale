@@ -3,8 +3,7 @@
 // both map onto pthreads here.
 #pragma once
 
-#if defined(__APPLE__)
-
+#include <stdint.h>
 #include <pthread.h>
 
 typedef pthread_t thrd_t;
@@ -16,13 +15,12 @@ static inline int thrd_create(thrd_t* thr, thrd_start_t fn, void* arg) {
   return pthread_create(thr, NULL, (void* (*)(void*))fn, arg) == 0 ? thrd_success : thrd_error;
 }
 
-static inline int thrd_join(thrd_t thr, void** ret) {
+// C11 moves the start routine's int return into the void* join value
+static inline int thrd_join(thrd_t thr, int* res) {
   void* value = NULL;
   int rc = pthread_join(thr, &value);
-  if (ret != NULL) {
-    *ret = value;
+  if (res != NULL) {
+    *res = (int)(intptr_t)value;
   }
   return rc == 0 ? thrd_success : thrd_error;
 }
-
-#endif

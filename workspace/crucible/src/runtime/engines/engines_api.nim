@@ -67,7 +67,5 @@ when defined(macosx):
   export metal_api.newMetalEngine, metal_api.ingest,  metal_api.getArtifact, metal_api.deviceName,
          metal_api.allocDevice, metal_api.copyToDeviceFromHost, metal_api.copyToHostFromDevice
 
-# CPU engine exemption from the HwEngine concept: no ingest/getArtifact/
-# DeviceMem - args are host values and kernels are compile-time generated
-# Nim (launchCpuFn). Its surface is runCpu + launchCpuFn.
+# CPU engine exemption from the HwEngine concept, contract in cpu_api.nim
 export cpu_api.CpuEngine, cpu_api.newCpuEngine, cpu_api.destroyCpuEngine

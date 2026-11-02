@@ -8,22 +8,12 @@
 ## CPU engine types for the Crucible CPU backend.
 ##
 ## `CpuEngine` owns the threadpool_compute worker pool.
-## `launchCpuFn` executes compile-time-generated kernels on it.
 ##
-## - kernels compile at the launch site into a loop nest with the body inlined,
-##   one task per workgroup, threads serial inside the task
-## - the engine is exempt from the HwEngine concept
-##
-##   - arguments are host values, there is no ingest, no artifact and no
-##     DeviceMem
-##   - the surface is `runCpu` plus `launchCpuFn`
-##
-## - with `--threads:on` the pool runs one workgroup task per workgroup
-##   through the threadpool_compute C runtime, the launch emits C
-## - without threads the launch runs serially on the caller thread, the parallel variant must reproduce that output bitwise
+## The engine is exempt from the HwEngine concept:
+## arguments are host values, there is no ingest, no artifact and no DeviceMem.
 
 import std/os
-import std/osproc
+import std/cpuinfo
 import ./engines_common
 when compileOption("threads"):
   import workspace/threadpool_compute
