@@ -11,12 +11,11 @@
 ## one lookup const per (target, flavor) key and family.
 ## Every failure is a compile error at the section definition:
 ##
-## - a target key that misses a required family fails the compile, naming
-##   the family at the target's section
-## - an unknown field, cell or value shape fails the compile at its line
+## - a target key that misses a required family, an unknown field, cell
+##   or value shape: each fails the compile at its line, naming the family
+##   at the target's section
 ## - a type name that denotes two cells fails the compile naming both targets
 ## - a scalar section lists any subset of the `ScalarCellAxis` cells, an omitted
-##   cell refuses at the lookup with its one-line `refused <cell> "reason"`
 ##   message declared in the section
 ## - one invocation registers every target of its module, generated names
 ##   would collide across invocations
@@ -32,12 +31,12 @@ import ./targets_registry
 
 const genFamilies* = [
   ("scalar", "ScalarNames", true), ("lit", "LitTokens", true), ("kind", "WalkPolicy", true),
-  ("conv", "ConvBuiltinNames", false), ("math", "MathBuiltinNames", false),
-  ("refusals", "ConvFpRefusals", false), ("vector", "VectorRule", true),
+  ("conv", "ConvBuiltinPairs", false), ("math", "MathBuiltinNames", false),
+  ("vector", "VectorRule", true),
   ("bitcast", "CastRules", true)]
   ## Eight families. Each entry names the DSL family, gives the generated
   ## lookup's name suffix and marks whether every target key must carry it.
-  ## Optional families (`conv`, `math`, `refusals`) are declared only by targets
+  ## Optional families (`conv`, `math`) are declared only by targets
   ## whose printers read them. One lookup const per (target, flavor) key.
 
 const genBoolFields = ["narrowCast", "braceSameLine", "foldsIteElse", "emitOperandRendersExpr"]
@@ -104,8 +103,8 @@ type
     ## the name checks anchor.
 
 proc parseCellPair(arg: NimNode, display: string): ParsedCell {.compileTime.} =
-  ## One `cell "name"` entry, also the vector-element form: a bare cell
-  ## states an empty prefix there.
+  ## One `cell "name"` entry, also the vector-element form:
+  ## a cell without a prefix states the empty prefix there.
   if arg.kind == nnkIdent:
     result = (findCellIndex($arg), "", arg)
   elif arg.kind == nnkCommand and arg.len == 2 and arg[1].kind == nnkStrLit:
@@ -113,8 +112,7 @@ proc parseCellPair(arg: NimNode, display: string): ParsedCell {.compileTime.} =
   else:
     error("genTargets: expected a 'cell \"name\"' entry in " & display, arg)
   if result.idx < 0:
-    error("genTargets: unknown cell '" &
-      (if arg.kind == nnkIdent: $arg else: $arg[0]) & "' in " & display, arg)
+    error("genTargets: unknown cell '" & (if arg.kind == nnkIdent: $arg else: $arg[0]) & "' in " & display, arg)
 
 proc cellKey(idx: int): string {.compileTime.} =
   ## One cell's "(kind, width)" form in check messages.
@@ -149,12 +147,9 @@ proc checkCellNames(all: seq[tuple[display: string, cells: seq[ParsedCell]]]) {.
                {ctFloat, ctBf16, ctInt, ctUint} == {}):
             continue
           if i == j:
-            error("genTargets: name '" & ca.spelling & "' denotes two cells of " &
-              all[i].display & ", " & cellKey(ca.idx) & " and " & cellKey(cb.idx), cb.node)
+            error("genTargets: name '" & ca.spelling & "' denotes two cells of " & all[i].display & ", " & cellKey(ca.idx) & " and " & cellKey(cb.idx), cb.node)
           elif cb.idx != ca.idx:
-            error("genTargets: name '" & ca.spelling & "' denotes " & cellKey(ca.idx) &
-              " on " & all[i].display & " but " & cellKey(cb.idx) &
-              " on " & all[j].display, cb.node)
+            error("genTargets: name '" & ca.spelling & "' denotes " & cellKey(ca.idx) & " on " & all[i].display & " but " & cellKey(cb.idx) & " on " & all[j].display, cb.node)
 
 proc cellCtor(idx: int, spelling: string): NimNode {.compileTime.} =
   ## One ScalarCell constructor from a `ScalarCellAxis` entry.
@@ -216,57 +211,49 @@ proc litKindCtor(entries: seq[NimNode], family, suffix, display: string): NimNod
   nnkObjConstr.newTree(args & top)
 
 proc builtinTableCtor(entries: seq[NimNode], family, display: string): NimNode {.compileTime.} =
-  ## Builtin name table of a conv section (`builtin "text"`) or a math section
-  ## (`builtin width "text"`). `$1` is the call's argument list, a math key
-  ## is the (name, bit width) pair.
+  ## Builtin name table of one conv section or math section.
+  ##
+  ## Shapes: `fromCell toCell "text"` (conv), `builtin width "text"` (math).
+  ##
+  ## - `$1` is the call's argument list
+  ## - a conv key is the (source, target) scalar-cell pair
+  ## - a math key is the (name, bit width) pair
   let widthKeyed = family == "math"
   var names: seq[string]
   var pairs: seq[NimNode]
   for line in entries:
-    # a math entry nests its `width "spelling"` pair, a conv entry's pair is flat
+    # a math entry nests its `width "spelling"` pair, a conv entry nests
+    # its `toCell "spelling"` pair under the source cell
     let ok = line.kind == nnkCommand and line.len == 2 and line[0].kind == nnkIdent and
-      (if widthKeyed: line[1].kind == nnkCommand and line[1].len == 2 and
-        line[1][0].kind == nnkIntLit and line[1][1].kind == nnkStrLit
-       else: line[1].kind == nnkStrLit)
+      line[1].kind == nnkCommand and line[1].len == 2 and
+      (if widthKeyed: line[1][0].kind == nnkIntLit
+       else: line[1][0].kind == nnkIdent) and line[1][1].kind == nnkStrLit
     if not ok:
-      error("genTargets: expected a 'builtin " &
-        (if widthKeyed: "width " else: "") & "\"text\"' entry in the " & family &
-        " section of " & display, line)
+      error("genTargets: expected a 'builtin " & (if widthKeyed: "width " else: "fromCell toCell ") & "\"text\"' entry in the " & family & " section of " & display, line)
     let name = $line[0]
-    let key = if widthKeyed: name & ":" & $line[1][0].intVal else: name
+    var key: string
+    var k: NimNode
+    if widthKeyed:
+      key = name & ":" & $line[1][0].intVal
+      k = nnkPar.newTree(newLit name, newLit line[1][0].intVal.int)
+    else:
+      for cellTok in [line[0], line[1][0]]:
+        if findCellIndex($cellTok) < 0:
+          error("genTargets: unknown cell '" & $cellTok & "' in the " & family & " section of " & display, line)
+      key = name & "->" & $line[1][0]
+      k = nnkPar.newTree(newLit name, newLit $line[1][0])
     if key in names:
-      error("genTargets: builtin '" & name & "' appears twice in the " & family & " section of " & display, line)
+      error("genTargets: builtin '" & key & "' appears twice in the " & family & " section of " & display, line)
     names.add key
-    let k = if widthKeyed: nnkPar.newTree(newLit name, newLit line[1][0].intVal.int)
-            else: newLit name
-    pairs.add nnkExprColonExpr.newTree(k,
-      (if widthKeyed: line[1][1] else: line[1]))
+    pairs.add nnkExprColonExpr.newTree(k, line[1][1])
   # generated `{key: value, ...}.toTable()` expression
   nnkCall.newTree(nnkDotExpr.newTree(nnkTableConstr.newTree(pairs), ident"toTable"))
 
-proc refusalsCtor(entries: seq[NimNode], display: string): NimNode {.compileTime.} =
-  ## Refused builtin names of a refusals section, one bare name per entry.
-  ## The generated value is the string array the printer matches against.
-  var names: seq[string]
-  var items: seq[NimNode]
-  for line in entries:
-    var name: string
-    if line.kind == nnkIdent:
-      name = $line
-    elif line.kind == nnkStrLit:
-      name = line.strVal
-    else:
-      error("genTargets: expected a builtin name in the refusals section of " & display, line)
-    if name in names:
-      error("genTargets: builtin '" & name & "' appears twice in the refusals section of " & display, line)
-    names.add name
-    items.add newLit name
-  nnkBracket.newTree(items)
 
 proc vectorCtor(entries: seq[NimNode], display: string): NimNode {.compileTime.} =
   ## Vector coverage rule of a vector section:
   ##
-  ## - `elems` entries of `cell "prefix"` elements, a bare cell an empty prefix
+  ## - `elems` entries of `cell "prefix"` elements, a cell with no prefix an empty prefix
   ## - one `lanes n, ...` entry, an optional `nameForm` entry
   ## - a target with no vectors lists `vector ()`
   var elems: seq[NimNode]
@@ -312,7 +299,7 @@ proc castRulesCtor(entries: seq[NimNode], display: string): NimNode {.compileTim
   ##   `dstKinds`, `dstWidths`, `sameWidth`, kind sets over the `ctVoid`/
   ##   `ctBool`/`ctInt`/`ctUint`/`ctFloat`/`ctBf16` names, with the every-kind
   ##   destination set as `dstKinds {low(CirTypeKind)..high(CirTypeKind)}`
-  ## - then one bare format text or `refusal "text"`
+  ## - then one format text or `refusal "text"`
   ## - set and text nodes splice into the generated constructor unchanged,
   ##   so a bad member name fails the compile at the section
   var rules: seq[NimNode]
@@ -393,52 +380,22 @@ macro genTargets*(body: untyped) =
       of "scalar":
         var cells: seq[ParsedCell]
         var seenCells: seq[int]
-        var refused: seq[tuple[idx: int, reason: NimNode]]
-        var refusedIdxs: seq[int]
         for entry in entries:
-          if entry.kind == nnkCommand and entry.len == 2 and $entry[0] == "refused":
-            if entry[1].kind != nnkCommand or entry[1].len != 2 or
-                entry[1][0].kind != nnkIdent or entry[1][1].kind != nnkStrLit:
-              error("genTargets: expected a 'refused <cell> \"reason\"' entry in " &
-                display, entry)
-            let idx = findCellIndex($entry[1][0])
-            if idx < 0:
-              error("genTargets: unknown cell '" & $entry[1][0] & "' in " & display, entry[1][0])
-            if '\n' in entry[1][1].strVal:
-              error("genTargets: the reason of refused cell '" & $entry[1][0] &
-                "' is one line, in " & display, entry)
-            if idx in refusedIdxs:
-              error("genTargets: refused cell '" & $entry[1][0] & "' appears twice in " & display, entry)
-            refusedIdxs.add idx
-            refused.add (idx, entry[1][1])
-            continue
           let c = parseCellPair(entry, display)
           if c.spelling.len == 0:
-            error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' of " & display & " needs a type name, a refused cell is omitted", entry)
+            error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' of " & display & " needs a type name", entry)
           if c.idx in seenCells:
-            error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok &
-              "' appears twice in " & display, entry)
+            error("genTargets: scalar cell '" & ScalarCellAxis[c.idx].tok & "' appears twice in " & display, entry)
           seenCells.add c.idx
           cells.add c
-        for r in refused:
-          if r.idx in seenCells:
-            error("genTargets: refused cell '" & ScalarCellAxis[r.idx].tok &
-              "' is also stated in " & display, r.reason)
         scalarCells.add (display, cells)
         var ctorArgs = @[ident"ScalarNames", colon("cells", nnkCall.newTree(ident"@",
           nnkBracket.newTree(cells.mapIt(cellCtor(it.idx, it.spelling)))))]
-        if refused.len > 0:
-          ctorArgs.add colon("refusals", nnkCall.newTree(ident"@",
-            nnkBracket.newTree(refused.mapIt(nnkPar.newTree(
-              ident $ScalarCellAxis[it.idx].kind, newLit ScalarCellAxis[it.idx].width,
-              it.reason)))))
         ctor = nnkObjConstr.newTree(ctorArgs)
       of "lit", "kind":
         ctor = litKindCtor(entries, family, suffix, display)
       of "conv", "math":
         ctor = builtinTableCtor(entries, family, display)
-      of "refusals":
-        ctor = refusalsCtor(entries, display)
       of "vector":
         ctor = vectorCtor(entries, display)
       of "bitcast":
