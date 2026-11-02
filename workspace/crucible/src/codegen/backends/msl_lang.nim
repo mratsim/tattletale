@@ -138,12 +138,8 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
 
 proc printBuiltinRef(ctx: var PrintCtx, k: CirCoordBuiltinKind, whole: bool): string =
   ## MSL token of a builtin reference, the attributed parameter name.
-  ##
-  ## - whole-value use of a vector builtin: an `int3` constructor,
-  ##   the attribute params are `uint3`, the canonical Nim type is int
-  ## - component use: a cast to `int`
-  ## - the flat thread index: a scalar `uint`, whole value is the bare name
-  ##   (uint converts to int implicitly)
+  ## A whole vector use constructs `int3`, a component use casts to `int`,
+  ## the flat thread index is a scalar `uint`.
   ctx.builtins.incl(k)
   let name = CoordBuiltinNames[k]
   if whole and k != cbkThreadIndexInThreadgroup:
@@ -232,12 +228,10 @@ proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitMslSmemParam(p: CirParam): string =
-  ## MSL parameter of a relocated smem local: threadgroup storage by pointer
-  ## for an array local (`threadgroup T* name`), by reference otherwise
-  ## (`threadgroup T& name`).
-  ##
-  ## No binding, no buffer slot, the appended parameters trail the regular
-  ## parameters of the kernel signature.
+  ## MSL parameter of a relocated smem local.
+  ## An array local reads `threadgroup T* name`, any other local
+  ## reads `threadgroup T& name`, trailing the regular parameters
+  ## with no binding.
   let inner = p.typ.pElem
   if inner.kind == ctArray:
     return "threadgroup " & emitMslType(inner.aElem, "", true) & "* " & p.name

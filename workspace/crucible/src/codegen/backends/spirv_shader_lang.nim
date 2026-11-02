@@ -341,10 +341,10 @@ func hasBoolLeaf(t: CirType): bool =
   else: false
 
 proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
-  ## One push-block member per kernel parameter, in parameter order.
-  ## A device array pointer contributes its u64 device address and everything
-  ## else its value type. A bool parameter contributes its unsigned 32-bit
-  ## storage word: the push convention has no bool member.
+  ## One push-block member per kernel parameter in parameter order.
+  ## A device array pointer contributes its u64 address.
+  ## A bool contributes its u32 word. Everything else contributes
+  ## its value type.
   if p.typ.kind == ctAptr:
     spvScalar(cirUint64())
   elif p.typ.kind == ctBool:
@@ -1148,14 +1148,8 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     ctx.failSpv("assignment target " & $e.kind)
 
 proc emitBarrier(ctx: var SpvLangCtx) =
-  ## One workgroup barrier.
-  ##
-  ## - both scope operands are Workgroup: every invocation in the workgroup
-  ##   reaches the barrier, no invocation beyond it
-  ## - semantics are WorkgroupMemory | AcquireRelease, matching the atomic
-  ##   emission's UniformMemory | AcquireRelease form
-  ## - OpControlBarrier has no result id, the emission writes the four-word
-  ##   layout directly
+  ## OpControlBarrier with Workgroup scope on both operands, semantics
+  ## WorkgroupMemory | AcquireRelease, no result id.
   let scope = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeWorkgroup))
   let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()),
     uint64(semWorkgroupMemory or semAcquireRelease))
@@ -1426,9 +1420,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc recordDeadLocals(ctx: var SpvLangCtx, fn: SpvFnCtx, name: string) =
-  ## Dead locals of one planned function: declared locals that no OpLoad reaches,
-  ## every read reading a forwarded stored value instead.
-  ## Recorded in the dry pass only. The real pass elides their storage.
+  ## Dead locals of one planned function: declared locals no OpLoad reaches, recorded in the dry pass only.
   if not ctx.dryRun:
     return
   var dead: HashSet[string]
@@ -1598,8 +1590,6 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
 
 
 proc codegen*(ctx: var GpuContext): seq[uint32] =
-  ## Encodes the module in `ctx` as SPIR-V words for the Vulkan environment,
-  ## the `backends_api` entry point.
-  ## An encoder refusal raises, the macro layer turns it into a compile error
-  ## naming the construct.
+  ## Encodes the module as SPIR-V words for the Vulkan environment,
+  ## the `backends_api` entry point. A refusal raises into a compile error.
   codegenModule(printSpirvModule(ctx.module))

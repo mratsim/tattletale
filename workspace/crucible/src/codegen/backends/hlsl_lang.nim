@@ -281,9 +281,9 @@ proc getCoordInputName(k: CirCoordBuiltinKind): string =
   else: ""
 
 proc getCoordEntryInput(k: CirCoordBuiltinKind): string =
-  ## Entry-input text of one coordinate builtin kind, the synthesized main input with its semantic.
-  ## "" for the kinds with no entry input: threads_per_threadgroup prints the workgroup literal,
-  ## the lowering pass materializes threadgroups_per_grid.
+  ## Entry-input text of one coordinate builtin kind with its semantic.
+  ## "" for the kinds with no entry input: the workgroup literal prints
+  ## directly and the lowering pass materializes threadgroups_per_grid.
   case k
   of cbkThreadPositionInGrid: "uint3 gid : SV_DispatchThreadID"
   of cbkThreadgroupPositionInGrid: "uint3 groupId : SV_GroupID"

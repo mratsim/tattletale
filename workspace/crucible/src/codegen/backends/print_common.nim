@@ -832,13 +832,9 @@ type EntryInputs* = array[cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup, 
   ## - no read at all
 
 template emitEntryInputs*(kinds: untyped, inputs: EntryInputs): string =
-  ## Returns the entry-input texts of one shader entry point: one text per
-  ## coordinate builtin that the entry reads.
-  ##
-  ## `kinds` is the collection that the entry's body walk collected (`ctx.builtins` on WGSL, the canonically ordered reads on HLSL).
-  ## The entry declares exactly the inputs its body reads, in the collection's own order: first use on WGSL, canonical order on HLSL.
-  ##
-  ##   "fn k(" & emitEntryInputs(ctx.builtins, wgslEntryInputs) & ") {"
+  ## Returns the entry-input texts of one shader entry point.
+  ## One text per coordinate builtin the entry reads.
+  ## The order is the collection's: first use on WGSL, then the canonical HLSL order.
   var texts: seq[string]
   for k in kinds:
     if inputs[k].len > 0:

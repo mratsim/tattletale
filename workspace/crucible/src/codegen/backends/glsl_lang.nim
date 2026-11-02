@@ -121,12 +121,8 @@ proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
   glslTypeName(t)
 
 proc refTypeName*(t: CirType): string =
-  ## Returns the GLSL name of the buffer-reference block binding `t`.
-  ## A pointer renders as its reference block type. The GLSL ref-block
-  ## analysis pass dedups blocks by this name.
-  ##
-  ## The type name composes array dimensions into the name (`float[4]`),
-  ## the punctuation then sanitizes out of the identifier.
+  ## GLSL name of the buffer-reference block binding `t`,
+  ## the `Ref_` prefix. The ref-block analysis pass dedups blocks by this name.
   "Ref_" & glslTypeName(t).multiReplace(
     (" ", "_"), ("[", ""), ("]", ""), (",", "_"), ("(", ""), (")", ""))
 
@@ -204,13 +200,9 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   return ctx.emitTypeName(t) & "(" & ctx.printExpr(e.castOperand) & ")"
 
 proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
-  ## GLSL vocabulary for the atomic fetch-and-add builtin, shared by the value and statement call paths:
-  ##
-  ## - int atomicAdd is core
-  ## - fp needs GL_EXT_shader_atomic_float, enabled at module scope
-  ##   for an fp atomicFetchAdd in the module
-  ## - atomicAdd increments through one indirection, the address operand
-  ##   is the reference's element 0
+  ## GLSL text of the atomic fetch-and-add call, shared by the value
+  ## and statement paths: int is core, fp needs GL_EXT_shader_atomic_float,
+  ## the address operand is the reference's element 0.
   let addrTxt = if getExprType(args[0]) != nil and getExprType(
       args[0]).kind in {ctAptr, ctPtr}:
     ctx.printExpr(args[0]) & ".x[0]"

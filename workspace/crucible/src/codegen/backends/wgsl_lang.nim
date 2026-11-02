@@ -459,9 +459,9 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
       ctx.emitTypeName(p.typ) & ";"
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## WGSL declaration text of one struct member, a bool member stores as NIM_BOOL.
-  ## A pointer-holding member returns "": WGSL has no pointer struct members.
-  ## The dissolution passes rewrote its uses, so the declaration drops it.
+  ## WGSL declaration text of one struct member.
+  ## A bool member stores as NIM_BOOL. A pointer-holding member
+  ## returns "": the dissolution passes rewrote its uses.
   if f.typ.containsPtrDeep:
     return ""
   ctx.storageBoolSpelling = f.typ.kind == ctBool

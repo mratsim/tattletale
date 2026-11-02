@@ -190,8 +190,8 @@ proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
 
 proc getAtomicOperandPtr(e: CirExpr): CirType =
   ## Pointer type of an atomicFetchAdd address operand.
-  ## The base of an element access, else the operand itself when it is
-  ## already a pointer. Nil when the operand has no pointer.
+  ## The base of an element access, else the operand itself,
+  ## nil without a pointer.
   if e.kind == ePat:
     let t = getExprType(e.patBase)
     if t != nil and t.kind in {ctPtr, ctAptr}:
@@ -296,9 +296,8 @@ proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
-  ## OpenCL C extension pragma block from the stored module feature scan
-  ## (`CirModule.features`, filled by the feature-scan pass), one line per
-  ## feature in use.
+  ## OpenCL C extension pragmas from the stored module feature scan,
+  ## one line per feature in use.
   declareExtensions(m.features, [
     (m.features.fp64, "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"),
     (m.features.fp16, "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n"),
