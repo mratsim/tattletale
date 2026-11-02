@@ -1,12 +1,5 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-
-## Shared helpers for the Lean backend test binaries
-## (`t_lean_emit`, `t_lean_loop`, `t_lean_execute`, `t_lean_pragmas`)
+## Shared helpers for the Lean verification suites: compile-time CIRv2 capture,
+## `lake env lean` elaboration and execution, refusal assertions
 
 import std/[macros, os, osproc, strutils]
 import workspace/crucible/src/builtins/builtins
@@ -141,10 +134,10 @@ proc expectRefusal*(prefix: string, body: proc) =
   ## Runs `body`, expects the `lean_lang: ...` ValueError whose message
   ## starts with `prefix`.
   ##
-  ## Contract:
-  ## - `prefix` is the refusal's documented reason, so a refusal raised for
-  ##   the wrong reason fails with expected and got in the message
-  ## - no ValueError at all fails with the expected prefix in the message
+  ## - Precondition: `prefix` is the refusal's documented reason, a refusal
+  ##   raised for the wrong reason fails with expected and got in the message
+  ## - Raises: AssertionError when no ValueError is raised, with the expected
+  ##   prefix in the message
   try:
     body()
   except ValueError as e:

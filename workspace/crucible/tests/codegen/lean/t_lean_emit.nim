@@ -1,18 +1,6 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-
 ## Lean backend emitter, end-to-end
 ##
-## Test that the emitter produces the add kernel's Lean verification module:
-##
-## - the module elaborates via `lake env lean -DwarningAsError=true`, byte-matching
-##   the hand-written `AddKernel.lean` statements
-## - the `lean:` macro and the `leanIr` test path emit the same text
-## - kernels outside the supported shape are refused loudly
+## Test that the emitter byte-matches the hand-written AddKernel.lean statements and elaborates green
 ##
 ## Run:
 ##   cd tattletale && nim test_crucible_lean

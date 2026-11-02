@@ -1,17 +1,6 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-
 ## Loop-kernel emission
 ##
-## Test that one `for` over a compile-time constant `[0, n)` range with one
-## indexed write emits a Lean module keeping the loop as a loop:
-##
-## - the loop module elaborates under warningAsError, sorry-free
-## - loop kernels outside the supported shape are refused loudly
+## Test that one constant-range `for` with one indexed write emits the loop as a structural recursion
 ##
 ## Run:
 ##   cd tattletale && nim test_crucible_lean

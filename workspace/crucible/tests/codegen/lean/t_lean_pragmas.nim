@@ -1,20 +1,6 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-
 ## Verification pragma extraction to Lean spec scaffolds
 ##
-## Test that pragma payloads extract into Lean scaffolds with an honest
-## proven/unproven verdict:
-##
-## - correct properties elaborate under warningAsError, recorded proven
-## - a wrong property is downgraded to a sorry-backed scaffold, recorded
-##   unproven in the manifest with its Lean error
-## - wrong modules fail the warningAsError elaboration, out-of-scope payloads
-##   are refused loudly
+## Test that pragma payloads extract into scaffolds with an honest proven or unproven verdict
 ##
 ## Run:
 ##   cd tattletale && nim test_crucible_lean

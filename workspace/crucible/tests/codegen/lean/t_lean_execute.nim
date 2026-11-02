@@ -1,19 +1,6 @@
-# Tattletale
-# Copyright (c) 2026 Mamy André-Ratsimbazafy
-# Licensed and distributed under either of
-#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
-#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
-# at your option. This file may not be copied, modified, or distributed except according to those terms.
-
 ## Lean axpy execution, end-to-end
 ##
-## Test that the emitted axpy Lean module executes over concrete buffers:
-##
-## - a=[2,3], b=[10,20], alpha=4 run through `lake env lean --run`, the outputs
-##   18 and 32 plus the preserved out-of-range index asserted in Nim
-## - the axpy kernel (one loop over a constant range, one uint32 scalar)
-##   elaborates under warningAsError, sorry-free
-## - kernels outside the axpy shape refuse loudly
+## Test that the emitted axpy Lean module executes a=[2,3] b=[10,20] alpha=4 into 18 and 32
 ##
 ## Run:
 ##   cd tattletale && nim test_crucible_lean

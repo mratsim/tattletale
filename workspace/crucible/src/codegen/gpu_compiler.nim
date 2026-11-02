@@ -222,12 +222,11 @@ macro hlsl*(body: untyped): string =
   result = newCall(bindSym"hlslImpl", body)
 
 proc registerLeanPasses*(reg: var PassRegistry) {.compileTime.} =
-  ## Registers the Lean verification pipeline: the normalization-equivalent
-  ## passes only, no GPU lowering, no reserved-identifier rename.
+  ## Registers the Lean verification pipeline:
   ##
-  ## - the emitter reasons over semantic names, so the rename pass stays out
-  ## - settleExprForms split into resolveBoolDomain + typeLiterals +
-  ##   completeConstructors, the three together reproduce its contract
+  ## - value normalizations, reshaping and bool-domain resolution
+  ## - no GPU lowering
+  ## - no reserved-identifier rename: the emitter reasons over semantic names
   reg.registerResolveBoolDomain()
   reg.registerValueNormalizations()
   reg.registerReshapingPasses()

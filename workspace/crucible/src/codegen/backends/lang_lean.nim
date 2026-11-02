@@ -226,7 +226,7 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
     stmts = stmts[0 ..< stmts.len - 1]
 
   var valueAst: CirExpr = nil
-  if stmts.len == 3 and stmts[0].kind == sVar and stmts[0].init.isNil and
+  if stmts.len == 3 and stmts[0].kind == sVar and stmts[0].init.isNil() and
       stmts[1].kind == sAsgn and stmts[2].kind == sWhile:
     # loop shape: the frontend lowers `for` to a declaration, a start assignment and a while loop ending on the increment
     result.kind = kkLoopRange
@@ -1026,7 +1026,7 @@ proc settleModule*(baseText: string, scaffolds: seq[ScaffoldData], genDir: strin
         " scaffolds (line " & $line & "): " & excerpt)
     failed[owner] = excerpt
   if exitCode != 0 and positionless.len > 0:
-    # an error line the extractor could not position: it may name the module
+    # an error line the extractor could not position may refer to the module
     # itself (a duplicate declaration, a stale olean), so the scaffold
     # verdicts below would be recorded over a module that does not elaborate
     raise abortSettling("proof settling failed - " & $positionless.len &
