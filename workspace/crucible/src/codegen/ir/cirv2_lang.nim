@@ -409,7 +409,7 @@ proc computeCirSizeBytes(t: CirType): int =
 
 func isLargeStruct*(t: CirType): bool =
   ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
-  t != nil and t.kind == ctStruct and computeCirSizeBytes(t) >= 24
+  t != nil and t.kind == ctStruct and computeCirSizeBytes(t) > 24
 
 proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
   ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.
