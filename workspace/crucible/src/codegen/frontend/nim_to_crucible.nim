@@ -20,6 +20,7 @@
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import nim_type_resolvers
+import ../../builtins/builtins_catalog
 import ../../builtins/builtins_magic_catalog
 import ../ir/cirv2_pretty
 import std/[macros, tables, strutils, sets]
@@ -100,33 +101,52 @@ proc declareLocal(ctx: var FrontendCtx, key: string, sym: CirExpr, spc = caThrea
   ctx.scopes[^1][key] = sym
   ctx.localSpaces[^1][key] = spc
 
-proc hasPragmaNim(n: NimNode, name: string): bool =
-  ## True when `name` appears in the node's pragma list or in the pragma list
-  ## of the definition behind a symbol: `{.builtin.}` of the builtins catalog,
-  ## `{.magic: "..." .}` of the system operators, bare or colon form.
+proc getPragmaItem(n: NimNode, name: string): NimNode =
+  ## Pragma item of `name` in the node's pragma list or in the pragma list
+  ## of the definition behind a symbol:
+  ## - `{.builtin.}` of the builtins catalog
+  ## - `{.magic: "..." .}` of the system operators
+  ## - with or without a payload, nil when absent
   case n.kind
   of nnkProcDef, nnkFuncDef:
     for p in n.pragma:
       if p.kind in {nnkIdent, nnkSym} and p.strVal == name:
-        return true
+        return p
       if p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 1 and
           p[0].kind in {nnkIdent, nnkSym} and p[0].strVal == name:
-        return true
+        return p
   of nnkSym:
     let impl = n.getImpl()
     case impl.kind
     of nnkProcDef, nnkFuncDef:
-      return hasPragmaNim(impl, name)
+      return getPragmaItem(impl, name)
     of nnkIdentDefs, nnkConstDef:
       if impl.len > 0 and impl[0].kind == nnkPragmaExpr:
         for p in impl[0][1]:
           if p.kind in {nnkIdent, nnkSym} and p.strVal == name:
-            return true
+            return p
+          if p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 1 and
+              p[0].kind in {nnkIdent, nnkSym} and p[0].strVal == name:
+            return p
     else:
       discard
   else:
     discard
-  return false
+  return nil
+
+proc hasPragmaNim(n: NimNode, name: string): bool =
+  ## True when `name` appears in the node's pragma list or in the pragma list
+  ## of the definition behind a symbol, bare or colon form.
+  getPragmaItem(n, name) != nil
+
+proc builtinKindPayload(n: NimNode): NimNode =
+  ## Kind payload of a symbol's `{.builtin.}` pragma: the family enum
+  ## member from `builtins_catalog.nim`. A payload-less `{.builtin.}`
+  ## yields the nil literal, an absent pragma yields nil.
+  let item = getPragmaItem(n, "builtin")
+  if item != nil and item.kind in {nnkExprColonExpr, nnkCall} and item.len >= 2:
+    return item[1]
+  return nil
 
 proc containsCall(n: NimNode): bool =
   ## True when a call occurs anywhere in the node, `StmtListExpr`-wrapped operands included.
@@ -183,12 +203,13 @@ proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
 
 proc builtinSymExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## A `{.builtin.}` value reference: the canonical coordinate vectors and the flat thread index,
-  ## emitted as a plain symbol. The printers map the name onto the target vocabulary.
+  ## emitted as a plain symbol. The printers map the kind onto the target vocabulary.
   let name = sanitizeIdent(n.strVal)
   let typ = ctx.resolver.resolveCirType(n.getTypeInst())
   if ctx.resolver.err.len > 0:
     return nil
   result = sym(name, typ, builtin = true)
+  result.coordBuiltin = coordBuiltinKindOf(builtinKindPayload(n))
 
 # ═══════════════════════════════════════════════════════════════════════
 # Call translation
@@ -334,8 +355,12 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   ## - a builtin maps to its canonical native name
   ##
   ## An instantiation hash would name a proc the backend never defines.
-  ## Builtin-marking the callee symbol lets the alias canonicalization
-  ## pass kind-assign from the canonical tables.
+  ## A builtin callee reads its family kinds off the `{.builtin.}` pragma
+  ## payload of its symbol at the ingest boundary:
+  ## - every printer and pass dispatches on those kinds
+  ## - an untagged builtin resolves every family at none
+  ## - the conv and math vocabulary dispatches on the canonical name
+  ##   through the registry tables
   let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
   let entry = ctx.registerOrGet(calleeSym)
   if ctx.resolver.err.len > 0:
@@ -353,7 +378,14 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
       return nil
   let calleeName = if calleeBuiltin: calleeSym.strVal
                    else: entry.name
-  return sym(calleeName, entry.fnType, calleeBuiltin)
+  result = sym(calleeName, entry.fnType, calleeBuiltin)
+  if calleeBuiltin:
+    let payload = builtinKindPayload(calleeSym)
+    result.synchroBuiltin = synchroBuiltinKindOf(payload)
+    result.reductionBuiltin = reductionBuiltinKindOf(payload)
+    result.shuffleBuiltin = shuffleBuiltinKindOf(payload)
+    result.atomicsBuiltin = atomicsBuiltinKindOf(payload)
+  return result
 
 func arithExpr(op: string, t: CirType, x, y: CirExpr): CirExpr =
   case op
@@ -648,7 +680,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     if typ.kind in {ctPtr, ctAptr}:
       # a pointer cast preserves the operand's storage space: the cast target
-      # supplies the pointee type and the space derives from the value's provenance
+      # supplies the pointee type and the space resolves from the operand
       typ = typ.withAddressSpace(resolveAddressSpace(operand))
     return castE(typ, operand)
   of nnkHiddenDeref, nnkDerefExpr:
@@ -1021,7 +1053,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
               value.ocType.kind == ctStruct:
             # a constructor value is typed by the struct it instantiates,
             # its declaration uses that type, and the field address spaces
-            # come from the value's provenance
+            # come from the value's type
             typ = value.ocType
           elif typ != nil and typ.kind in {ctPtr, ctAptr} and
               getExprType(value) != nil and getExprType(value).kind == typ.kind and
