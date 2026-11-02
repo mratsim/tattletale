@@ -280,7 +280,6 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   else:
     for p in fn.params:
       if p.passByRef:
-        # Reference params bind the caller's storage: `thread const T&`
         result.add "thread const " & emitMslType(p.typ, "", true) & "& " & p.name
         continue
       case p.typ.kind
