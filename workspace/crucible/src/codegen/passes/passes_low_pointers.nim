@@ -103,10 +103,6 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
 #  Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════════════════
-#  The built-in explosion semantics: pointer locals are values, one binding
-# ═══════════════════════════════════════════════════════════════════════
-
 proc defaultRewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, target: string): string
 
 proc defaultPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, target: string): string =
