@@ -41,7 +41,7 @@ func registerHlslExplodePointerLocals*(reg: var PassRegistry) =
 func registerHlslHoistProgramScopeConstants*(reg: var PassRegistry) =
   reg.register("hlslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
-    run = hlslHoistProgramScopeConstants
+    run = hoistConstMemLocals
   )
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -140,5 +140,3 @@ proc materializeNumWorkgroups(m: CirModule): string =
     rewriteNumWorkgroupsStmts(fn.body, coordTy)
   return ""
 
-proc hlslHoistProgramScopeConstants(m: CirModule): string =
-  hoistConstMemLocals(m)

@@ -26,7 +26,7 @@ import ./pass_helpers
 func registerMslHoistProgramScopeConstants*(reg: var PassRegistry) =
   reg.register("mslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
-    run = mslHoistProgramScopeConstants
+    run = hoistConstMemLocals
   )
 
 func registerMslHoistDeviceFnSmem*(reg: var PassRegistry) =
@@ -54,9 +54,6 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 #  Const_mem locals to program-scope constants
 # ═══════════════════════════════════════════════════════════════════════
-
-proc mslHoistProgramScopeConstants(m: CirModule): string =
-  hoistConstMemLocals(m)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Device-function `{.smem.}` locals to threadgroup reference parameters
