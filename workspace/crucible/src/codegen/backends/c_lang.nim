@@ -13,9 +13,9 @@
 ## - the iteration function over one task's contiguous workgroup range,
 ##   the task plumbing in TPC_DEFINE_PARFOR shape
 ##
-## Splicing: the launch macro inserts the text into the enclosing C function through `{.emit.}`.
-## Printed functions are block-scope nested definitions, a GNU extension
-## of the same class as the macro frontend's `typeof` and statement-expression requirements.
+## Emission split: the launch macro writes the printed text to a generated
+## C translation unit registered `{.compile.}`, the launch tail emits inline
+## through `{.emit.}` with `extern` declarations for the functions it calls.
 ##
 ## Layout bridge, the launch copies Nim arguments into the C data struct:
 ## - Nim value objects are C-compatible structs, a struct argument
@@ -552,7 +552,7 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   ## Callee proc emission as C function definitions.
   ##
   ## - callees print under their CIRv2 names plus the launch-site suffix,
-  ##   the launch splices them as block-scope nested definitions
+  ##   as file-scope definitions in the generated launch TU
   ## - `{.inline.}` callees print the C `inline` qualifier
   ## - the kernel wrapper and the inlined kernel proc print nothing,
   ##   their bodies print at the launch site through emitCpuWorkgroupLaunchC

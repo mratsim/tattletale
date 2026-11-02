@@ -71,3 +71,6 @@ uv.lock
 # -----------------------------------------------------------------------------------------
 *.pt
 __pycache__/
+
+# Generated C translation units of the crucible CPU launch macro
+crucibleGenerated/
