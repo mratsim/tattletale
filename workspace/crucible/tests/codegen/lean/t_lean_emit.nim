@@ -9,9 +9,8 @@
 ##
 ## Test that the emitter produces the add kernel's Lean verification module:
 ##
-## - the module elaborates via `lake env lean -DwarningAsError=true` (a sorry fails)
-## - the emitted def plus postcondition theorems byte-match the hand-written
-##   `AddKernel.lean` statements
+## - the module elaborates via `lake env lean -DwarningAsError=true`, byte-matching
+##   the hand-written `AddKernel.lean` statements
 ## - the `lean:` macro and the `leanIr` test path emit the same text
 ## - kernels outside the supported shape are refused loudly
 ##
@@ -63,7 +62,7 @@ proc runTest() =
     doAssert noSorry, "no sorry under warningAsError"
 
     let expected = referenceStatements(leanProjectDir & "/AddKernel.lean")
-    let generated = statementTail(genDir / "add.autogen.lean")
+    let generated = statementTail(genDir / autogenModule("addKernel"))
     if expected != generated:
       let refLines = expected.splitLines()
       let genLines = generated.splitLines()
@@ -81,7 +80,7 @@ proc runTest() =
         let i = thread_position_in_grid.x
         if i < 2:
           output[i] = a[i] + b[i]
-    let macroMatchesFile = macroModule == readFile(genDir / "add.autogen.lean")
+    let macroMatchesFile = macroModule == readFile(genDir / autogenModule("addKernel"))
     doAssert macroMatchesFile,
       "the lean: macro emits the same module text as the leanIr test path"
     echo "  lean: macro path matches the runtime test path: ok"
@@ -277,6 +276,16 @@ proc runTest() =
       " guarded-thread shape",
       scalar)
     echo "  refusal on a scalar parameter on the guarded-thread shape: ok"
+
+  block: # refusal on a written buffer other than output
+    let writesA = leanIr:
+      proc writesAKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
+        let i = thread_position_in_grid.x
+        if i < 2:
+          a[i] = a[i] + b[i]
+    expectLeanRefusal("lean_lang: unsupported assignment - the written buffer" &
+      " must be `output` - got 'a'", writesA)
+    echo "  refusal on a written buffer other than output: ok"
 
   block: # refusal on arithmetic outside the supported operators
     let sub = leanIr:
