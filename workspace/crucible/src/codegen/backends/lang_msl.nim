@@ -165,7 +165,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
 proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string =
   ## MSL text of the atomic fetch-and-add call.
   ## Pointer casts to the atomic pointee type, relaxed order only,
-  # fp32 needs Metal 3+, device address space implies the scope.
+  ## fp32 needs Metal 3+, device address space implies the scope.
   var atomicTy = ""
   let p0 = if callee.typ != nil and callee.typ.kind == ctProc and
       callee.typ.params.len > 0: callee.typ.params[0]
@@ -275,7 +275,6 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
         result.add "constant " & elem & "& " & p.name
       inc slot
     for k in ctx.builtins:
-      # coordinate builtins are attributed params, no binding, no slot
       result.add emitBuiltinParam(k)
   else:
     for p in fn.params:

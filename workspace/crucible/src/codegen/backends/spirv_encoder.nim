@@ -407,7 +407,6 @@ func emitInstSeq(m: var SpvModule, section: SpvSection, opcode: SpvOp, operands:
   m.addWords(section, operands)
 
 func finalize(m: SpvModule): seq[uint32] =
-  # Header words: magic, version, generator (0), bound, schema (0).
   # Bound word is nextId at finalize time, covering all allocated ids.
   result = @[spvMagic, m.version, spvGeneratorNone, m.nextId, spvSchemaNone]
   for section in SpvSection:

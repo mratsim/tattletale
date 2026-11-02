@@ -252,7 +252,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   return emitHlslTypeBare(ctx, e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
 
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
-  ## Sizeof has no emission, HLSL struct layout differs from the buffer layout.
   ctx.fail("sizeof has no HLSL emission, HLSL struct layout differs from the buffer layout")
   ""
 
@@ -412,8 +411,6 @@ proc emitCoordComponent(ctx: var PrintCtx, k: CirCoordBuiltinKind, field: string
 #  Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-  ## Forward declaration, nested constructions flatten recursively.
-
 proc constructionLeaves(ctx: var PrintCtx, t: CirType, v: CirExpr, path: string, outp: var seq[tuple[p, txt: string]]): bool =
   ## Appends one (dotted path, leaf text) entry per bound leaf field.
   ##
@@ -479,16 +476,12 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
-  ## Returns the declaration text of one local, `emitHlslDecl` names the type.
   ctx.emitHlslDecl(s.declType, s.name)
 
 proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  ## Returns the constant-declaration text of one local constant.
   "const " & ctx.emitHlslDecl(s.declType, s.name)
 
 proc getInitText(ctx: var PrintCtx, s: CirStmt): string =
-  ## Returns the initializer text, `emitHlslInit` prints struct
-  ## constructions as the member-wise brace list DXC accepts.
   ctx.emitHlslInit(s.declType, s.init)
 
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =

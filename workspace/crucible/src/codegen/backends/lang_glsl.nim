@@ -289,7 +289,6 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   if s.declType.kind == ctAptr:
-    # a buffer pointer local is the reference block handle
     return ctx.emitGlslPtrDecl(s.declType, s.name)
   if s.declType.kind == ctArray:
     return emitGlslScalar(s.declType.aElem) & ' ' & s.name &
@@ -319,7 +318,6 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
     of ctAptr, ctPtr:
       result.add ctx.emitGlslPtrDecl(p.typ, p.name)
     else:
-      # a `var` binding gains an inout qualifier, the printer appends the dimension after the variable name for an array
       let binding = if p.varParam: "inout " else: ""
       if p.typ.kind == ctArray:
         result.add binding & emitGlslScalar(p.typ.aElem) & ' ' & p.name & "[" & $p.typ.aN & "]"
@@ -342,7 +340,6 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated storage local.
   if s.space == caThreadgroup:
-    # program-scope `shared` declaration of a threadgroup local
     if s.declType.kind == ctArray:
       return "shared " & emitGlslScalar(s.declType.aElem) & ' ' & s.name &
         "[" & $s.declType.aN & "];"

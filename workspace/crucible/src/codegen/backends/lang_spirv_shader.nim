@@ -775,7 +775,6 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let t = ctx.resolveTyId(ctx.valueTy(e.nilType))
     ctx.builder.freshInst(OpUndef, @[t])
   of eStrLit:
-    # a string literal has no SPIR-V value, the construct refuses
     ctx.failSpv("a string literal has no SPIR-V value")
     return 0'u32
   of eIntLit, eFloatLit, eTrue, eFalse:
@@ -1150,8 +1149,6 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     return 0
   doAssert e.callee.kind == eSym, "call callee is not a symbol"
   let name = e.callee.name
-  # builtin vocabulary dispatches on the kind, the max/min select lowering
-  # below is a name case for direct and harvested calls
   if e.callee.reductionBuiltin == cbkReduceAdd:
     doAssert e.args.len == 1, "reduceAdd takes one argument"
     let v = ctx.emitExpr(fn, e.args[0])
@@ -1483,7 +1480,6 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   var fn: SpvFnCtx = SpvFnCtx(name: "kernel " & kernel.name)
   fn.elided = ctx.fnDeadLocals.getOrDefault(kernel.name)
   discard ctx.builder.opLabel()
-  # prologue: hoisted locals, then the parameter bindings
   ctx.hoistLocals(fn, kernel.body)
   for i, p in kernel.params:
     if p.typ.kind == ctAptr:

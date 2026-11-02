@@ -665,7 +665,6 @@ proc printStmt(ctx: var auto, s: CirStmt): string =
     else:
       result &= ctx.printIteElse(s.elseBody, pad)
   of sWhile:
-    # loops print through printStmtList
     result = ""
   of sRet:
     if s.retVal != nil:

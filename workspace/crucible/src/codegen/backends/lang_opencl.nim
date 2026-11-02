@@ -259,8 +259,6 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
       return false
     return true
   if s.space == caConstant:
-    # OpenCL lowering pass relocates const_mem locals at every scope,
-    # a survivor here was never relocated
     ctx.fail("local " & s.name & " in constant space, the OpenCL lowering pass already relocated it")
     return false
   if s.space == caDevice:
@@ -336,7 +334,6 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   if s.init == nil:
     ctx.refuseUninitializedConstMem(s.name)
     return ""
-  # program-scope `__constant` declaration of a const_mem local
   if s.declType.kind == ctArray:
     result = "__constant " & emitOpenclArrayDecl(s.declType, s.name)
     if s.init != nil and s.init.kind == eAconstr:
