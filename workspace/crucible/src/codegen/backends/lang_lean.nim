@@ -22,6 +22,7 @@
 
 import std/[os, sets, strutils]
 import ../ir/cirv2_lang
+import ./print_common
 
 proc leanRefusal(msg: string): ref ValueError =
   ## Loud refusal for every construct outside the supported kernel shapes
@@ -33,22 +34,18 @@ type
   KernelModel = object
     kernelName: string   ## crucible kernel proc name, e.g. `addKernel`
     bodyName: string     ## emitted Lean def name, e.g. `addBody`
-    readBufs: seq[string]  ## buffer params never written, in declaration order
     writeBuf: string     ## the buffer param written by the body
     value: string        ## emitted Lean text of the stored value, in terms of `tid`
-    nValue: int          ## the guard literal, the buffer length of the emitted def
 
 proc isUint32Buffer(t: CirType): bool =
   ## A kernel buffer: an aptr to uint32 elements
   t != nil and t.kind == ctAptr and t.pElem != nil and
     t.pElem.kind == ctUint and t.pElem.bits == 32
 
-proc emitExpr(e: CirExpr, idxName, idxLean: string, paramNames: HashSet[string], mulAllowed: bool): string =
+proc emitExpr(e: CirExpr, idxName, idxLean: string, mulAllowed: bool): string =
   ## Renders one CIRv2 expression as Lean text:
   ##
   ## - the index variable `idxName` renders as its Lean name `idxLean`
-  ## - `paramNames` is the set of kernel parameters: buffers plus the axpy
-  ##   scalar
   ## - an indexed buffer read renders as a function application
   ## - the multiply is emitted only when `mulAllowed` is true (the axpy shape)
   case e.kind
@@ -65,8 +62,8 @@ proc emitExpr(e: CirExpr, idxName, idxLean: string, paramNames: HashSet[string],
       raise leanRefusal("unsupported expression eMul - the multiply is in scope" &
         " for the axpy shape only (a loop kernel with a scalar parameter)")
     let leanOp = if e.kind == eAdd: "+" else: "*"
-    let l = emitExpr(e.left, idxName, idxLean, paramNames, mulAllowed)
-    let r = emitExpr(e.right, idxName, idxLean, paramNames, mulAllowed)
+    let l = emitExpr(e.left, idxName, idxLean, mulAllowed)
+    let r = emitExpr(e.right, idxName, idxLean, mulAllowed)
     let lp = if e.left.kind in {eAdd, eSub, eMul}: "(" & l & ")" else: l
     let rp = if e.right.kind in {eAdd, eSub, eMul}: "(" & r & ")" else: r
     result = lp & " " & leanOp & " " & rp
@@ -75,22 +72,21 @@ proc emitExpr(e: CirExpr, idxName, idxLean: string, paramNames: HashSet[string],
       raise leanRefusal("unsupported expression ePat - index expression is not" &
         " the index variable (the model covers reads at the thread's own index" &
         " or the loop variable's index only)")
-    result = emitExpr(e.patBase, idxName, idxLean, paramNames, mulAllowed) &
-      " " & idxLean
+    result = emitExpr(e.patBase, idxName, idxLean, mulAllowed) & " " & idxLean
   else:
     raise leanRefusal("unsupported expression " & $e.kind)
 
-proc emitGuard(cond: CirExpr, tidName: string): int =
-  ## Recognizes the guard `tidVar < literal` and returns the literal.
-  ## The literal becomes the buffer length parameter `n` of the emitted def
-  ## and must be positive: the model runs thread 0 of a non-empty buffer.
+proc checkGuard(cond: CirExpr, tidName: string) =
+  ## Recognizes the guard `tidVar < literal`. The literal becomes the buffer
+  ## length parameter `n` of the emitted def and must be positive: the model runs
+  ## thread 0 of a non-empty buffer.
+  if cond.kind == eLt and cond.a.kind == eSym and cond.a.name == tidName and
+      cond.b.kind == eIntLit and cond.b.value > 0:
+    return
   if cond.kind == eLt and cond.a.kind == eSym and cond.a.name == tidName and
       cond.b.kind == eIntLit:
-    let n = parseInt($cond.b.value)
-    if n <= 0:
-      raise leanRefusal("unsupported guard - literal must be positive (got " &
-        $cond.b.value & ")")
-    return n
+    raise leanRefusal("unsupported guard - literal must be positive (got " &
+      $cond.b.value & ")")
   raise leanRefusal("unsupported guard - not of the shape `tidVar < literal`")
 
 proc checkWriteTarget(lhs: CirExpr): string =
@@ -117,12 +113,16 @@ proc indexedReadBufs(e: CirExpr, bufNames: HashSet[string], found: var HashSet[s
   else:
     discard
 
+proc stripKernelSuffix(kernelName: string): string =
+  ## `addKernel` -> `add`, the base name of the emitted defs and modules
+  if kernelName.endsWith("Kernel"):
+    kernelName[0 ..< ^6]
+  else:
+    kernelName
+
 proc leanBodyName(kernelName: string): string =
   ## `addKernel` -> `addBody`, the naming of the hand-written AddKernel.lean module
-  if kernelName.endsWith("Kernel"):
-    kernelName[0 ..^ 7] & "Body"
-  else:
-    kernelName & "Body"
+  stripKernelSuffix(kernelName) & "Body"
 
 proc analyzeKernel(kernel: CirProc): KernelModel =
   ## Walks one global kernel and derives the body model
@@ -136,16 +136,11 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
   var bufSeq: seq[string]
   var bufNames: HashSet[string]
   var scalarName = ""
-  var scalarCount = 0
   for p in kernel.params:
     if isUint32Buffer(p.typ):
       bufSeq.add p.name
       bufNames.incl p.name
     elif p.typ.kind == ctUint and p.typ.bits == 32:
-      inc scalarCount
-      if scalarCount > 1:
-        raise leanRefusal("unsupported kernel - more than one uint32 scalar" &
-          " parameter, the model covers exactly one uniform scalar (the axpy shape)")
       scalarName = p.name
     else:
       raise leanRefusal("unsupported kernel - parameter '" & p.name &
@@ -182,12 +177,15 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
       if stmt.elseBody.len > 0:
         raise leanRefusal("unsupported statement sIte - elif/else branches" &
           " (the model kernel is a bare if)")
-      result.nValue = emitGuard(stmt.cond, tidName)
+      checkGuard(stmt.cond, tidName)
       for w in stmt.thenBody:
         if w.kind != sAsgn:
           raise leanRefusal("unsupported statement " & $w.kind &
             " - statement inside the guarded branch")
         let buf = checkWriteTarget(w.lhs)
+        if buf != "output":
+          raise leanRefusal("unsupported assignment - the written buffer must" &
+            " be `output` - got '" & buf & "'")
         if w.lhs.patIndex.kind != eSym or w.lhs.patIndex.name != tidName:
           raise leanRefusal("unsupported assignment - write index is not the" &
             " thread id (write-set analysis covers the own-index shape only)")
@@ -195,7 +193,7 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
           raise leanRefusal("unsupported assignment - more than one write per thread")
         result.writeBuf = buf
         valueAst = w.rhs
-        result.value = emitExpr(w.rhs, tidName, "tid", bufNames, false)
+        result.value = emitExpr(w.rhs, tidName, "tid", false)
     else:
       raise leanRefusal("unsupported statement " & $stmt.kind &
         " - statement at kernel-body top level")
@@ -214,9 +212,6 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
 
   result.kernelName = kernel.name
   result.bodyName = leanBodyName(result.kernelName)
-  for p in kernel.params:
-    if isUint32Buffer(p.typ) and p.name != result.writeBuf:
-      result.readBufs.add p.name
   if scalarName != "":
     raise leanRefusal("unsupported kernel - scalar parameter '" & scalarName &
       "' on the guarded-thread shape, the guarded-thread shape takes no scalar" &
@@ -301,19 +296,12 @@ proc autogenModule*(kernelName: string): string =
   ## Returns the default emitted-module file name of a kernel:
   ## `addKernel` emits `add.autogen.lean`. The `.autogen.lean` suffix marks
   ## machine-emitted modules and separates them from the hand-written ones
-  let base = if kernelName.endsWith("Kernel"):
-      kernelName[0 ..< ^6]
-    else:
-      kernelName
-  result = base & ".autogen.lean"
+  result = stripKernelSuffix(kernelName) & ".autogen.lean"
 
 proc codegen*(m: CirModule): string =
   ## Lean verification module of the module's single `{.global.}` kernel,
   ## the dispatch target of `codegen(m, cgLean)`
-  var kernels: seq[CirProc]
-  for p in m.procs:
-    if p.isKernel:
-      kernels.add p
+  let kernels = getModuleKernels(m)
   if kernels.len != 1:
     raise leanRefusal("unsupported module - expected exactly one `{.global.}`" &
       " kernel, got " & $kernels.len)
