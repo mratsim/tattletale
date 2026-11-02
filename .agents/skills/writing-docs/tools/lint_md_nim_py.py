@@ -427,6 +427,8 @@ BANNED = [
      r"|\bno longer\b|\bused to \b|\bas of \b",
      None, "historical and temporal prose is banned, state the present contract "
            "(the schema before X, absent keys, the pre-005 frames)"),
+    (r"\brows?\b",
+     None, "'row' says nothing, name the section, the entry, the mapping or the line"),
     (r"\bpin\b|\bpins\b|\bpinned\b|\bpinning\b",
      None, "use verified against, checked by, locked"),
     (r"\bgate\b|\bgates\b|\bgating\b",
