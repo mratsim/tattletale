@@ -275,7 +275,7 @@ The args tuple order matches the kernel params minus the output, scalars are by-
 | Metal | buffers, output at index 0 then inputs in order, scalars in one shared constant buffer at 16-byte slots |
 | Metal | more than 31 bindings rejected at ingest via NSError, readback from `contents()` after `waitUntilCompleted`, no staging or map path |
 | Vulkan | by-value params are push constants (`layout(push_constant) uniform KernelParams`), 4-byte only, loud quit otherwise |
-| Vulkan | scalars and pointers alike pack through the shared push-constant block, pointers as device addresses; a multi-kernel source with a by-value scalar in the block refuses at engine ingest, pointer-only kernels may differ in param count |
+| Vulkan (address route: GLSL and fvVulkan HLSL) | scalars and pointers alike pack through the shared push-constant block, pointers as device addresses; a multi-kernel source with a by-value scalar in the block refuses at engine ingest, pointer-only kernels may differ in param count |
 
 ### Run commands
 
