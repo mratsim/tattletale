@@ -21,7 +21,6 @@ import ./pass_datatypes
 #  The target reserved sets
 # ═══════════════════════════════════════════════════════════════════════
 
-
 const MetalReserved* = [
   # C++/MSL keyword table (MSL is C++14-based)
   "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor",
@@ -137,7 +136,6 @@ const CudaReserved* = [
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: string, reserved: untyped, doubleUnderscorePrefix: string = "") =
   ## Run order: name-matching passes -> reserved renaming -> printing.
   ##
@@ -157,7 +155,6 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
 # ═══════════════════════════════════════════════════════════════════════
 #  The pass
 # ═══════════════════════════════════════════════════════════════════════
-
 
 func makeSafeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: string): string =
   var safe = if name in reserved: name & "_nim" else: name

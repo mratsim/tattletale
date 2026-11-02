@@ -23,7 +23,6 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerMslHoistProgramScopeConstants*(reg: var PassRegistry) =
   reg.register("mslHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
@@ -56,14 +55,12 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
 #  Const_mem locals to program-scope constants
 # ═══════════════════════════════════════════════════════════════════════
 
-
 proc mslHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Device-function `{.smem.}` locals to threadgroup reference parameters
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc extendedProcType(t: CirType, extra: seq[CirType]): CirType =
   ## Callee types are interned, structurally identical signatures share one
@@ -217,7 +214,6 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
 #  Coordinate builtins threaded down to device functions
 # ═══════════════════════════════════════════════════════════════════════
 
-
 proc collectCoordReads(e: CirExpr, kinds: var HashSet[CirCoordBuiltinKind]) =
   if e.kind == eSym and e.builtin and e.coordBuiltin != cbkNone:
     kinds.incl(e.coordBuiltin)
@@ -360,7 +356,6 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 #  Kernel smem locals to kernel-scope threadgroup storage
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc mslRewriteSmemLocals(m: CirModule): string =
   ## A kernel keeps its `{.smem.}` local in its body, top-level or nested:

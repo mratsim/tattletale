@@ -16,7 +16,6 @@ import ./passes_low_views
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerFoldMaxMinToBuiltins*(reg: var PassRegistry) =
   reg.register("foldMaxMinToBuiltins", pkTransform,
     "Folds ternary max/min idioms to the native max/min builtins",
@@ -32,7 +31,6 @@ func registerSharedLoweringPasses*(reg: var PassRegistry) =
   ## - the push-block targets (GLSL, HLSL, SPIR-V) pack them into the block
   ## - the flat resource targets register the explosion per target
   reg.registerLowerSpans()
-
 
 proc sameExpr(a, b: CirExpr): bool =
   ## Structural equality of two idiom operands: symbols and literals by value,

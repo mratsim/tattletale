@@ -26,7 +26,6 @@ import ./passes_low_pointers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerGlslQualifyVarParams*(reg: var PassRegistry) =
   reg.register("glslQualifyVarParams", pkTransform,
     "Retypes var parameters to their pointee, unwraps their body derefs and" &
@@ -53,7 +52,6 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 #  var-parameter qualification
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
   ## Expressions are refs, so the splice applies to the node every sharer sees.
@@ -199,7 +197,6 @@ proc qualifyVarParams(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 #  Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirType) =
   ## Registers the buffer-reference block of one runtime-array pointee,

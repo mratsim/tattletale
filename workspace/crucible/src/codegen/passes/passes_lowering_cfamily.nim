@@ -7,7 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
@@ -23,7 +22,6 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerSmemInitRewrite*(reg: var PassRegistry) =
   reg.register("smemInitRewrite", pkTransform,
     "Rewrites smem initializers into a bare declaration plus" &
@@ -34,7 +32,6 @@ func registerSmemInitRewrite*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 #  Program-scope hoisting
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ## Relocates the `{.smem.}` and `{.const_mem.}` locals of every proc into
@@ -96,7 +93,6 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
 # ═══════════════════════════════════════════════════════════════════════
 #  Smem initializer rewrite
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc buildSmemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt] =
   let base = sym(name, declType)
@@ -175,5 +171,4 @@ proc rewriteSmemInits(m: CirModule): string =
         grown.add fn.body
         fn.body = grown
   return ""
-
 

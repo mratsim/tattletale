@@ -25,7 +25,6 @@ import ./passes_low_pointers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerHlslMaterializeNumWorkgroups*(reg: var PassRegistry) =
   reg.register("hlslMaterializeNumWorkgroups", pkTransform,
     "Rewrites threadgroups_per_grid reads to the materialized trailing" &
@@ -48,7 +47,6 @@ func registerHlslHoistProgramScopeConstants*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 #  The materialized dispatch-grid parameter
 # ═══════════════════════════════════════════════════════════════════════
-
 
 const NumWorkgroupsParam* = "crucible_numworkgroups"
   ## Trailing kernel parameter the dispatch grid size materializes into:
@@ -145,7 +143,6 @@ proc materializeNumWorkgroups(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 #  Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc hlslHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)

@@ -41,7 +41,6 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerLowerSpans*(reg: var PassRegistry) =
   ## Placement contract: the shared lowering stage, before every per-target transform,
   ## so the per-address-space callee instantiation sees the split
@@ -54,7 +53,6 @@ func registerLowerSpans*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 #  Span signatures
 # ═══════════════════════════════════════════════════════════════════════
-
 
 type
   SpanSig = object
@@ -99,7 +97,6 @@ proc splitSpanParams(fn: CirProc, sigs: seq[SpanSig]) =
 # ═══════════════════════════════════════════════════════════════════════
 #  View splitting
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc spanPtrLenParts(base, first, last: CirExpr): tuple[ptrPlus, lenExpr: CirExpr] =
   ## toOpenArray(base, first, last) -> (base + first, last - first + 1).
@@ -250,7 +247,6 @@ proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
 #  View binding decomposition
 # ═══════════════════════════════════════════════════════════════════════
 
-
 proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
   ## A `toOpenArray(p, a, b)` assignment to a preceding `var v: span T`
   ## declaration retypes the binding to `p + a` and appends the matching
@@ -297,7 +293,6 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
 # ═══════════════════════════════════════════════════════════════════════
 #  Survivor guard
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc typeHoldsSpan(t: CirType): bool =
   if t.isNil:
@@ -352,7 +347,6 @@ proc survivingSpanRejection(fn: CirProc): string =
 # ═══════════════════════════════════════════════════════════════════════
 #  Pass runner
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc lowerSpansPass(m: CirModule): string =
   ## Parameter splits run before the body rewrites, which rebuild call-site

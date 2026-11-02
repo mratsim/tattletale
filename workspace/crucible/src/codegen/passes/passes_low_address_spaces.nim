@@ -23,7 +23,6 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
   ## Registration position: after the target's other lowering transforms,
   ## whose rewrites append parameters and call-site arguments by callee name
@@ -36,7 +35,6 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 #  Instantiation
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc resolveWantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirType]): bool =
   # Precondition: `args` covers every formal, `args.len == callee.params.len`.

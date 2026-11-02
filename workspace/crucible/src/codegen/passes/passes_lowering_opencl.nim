@@ -24,7 +24,6 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerOpenclHoistProgramScopeConstants*(reg: var PassRegistry) =
   reg.register("openclHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
@@ -41,15 +40,12 @@ func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
 #  Const_mem locals to program-scope constants
 # ═══════════════════════════════════════════════════════════════════════
 
-
 proc openclHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)
-
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Large-struct params as hidden pointers
 # ═══════════════════════════════════════════════════════════════════════
-
 
 func computeCirSizeBytes(t: CirType): int =
   ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.

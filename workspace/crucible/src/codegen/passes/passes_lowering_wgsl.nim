@@ -25,7 +25,6 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-
 func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
   registerExplodePointerLocals(reg, "wgslExplodePointerLocals",
     "Rewrites pointer locals to their pointees and pointer-holding struct" &
@@ -47,7 +46,6 @@ func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 #  Pointer-param call inlining
 # ═══════════════════════════════════════════════════════════════════════
-
 
 proc crossesWgslSignature(t: CirType): bool =
   ## WGSL function signatures accept values and `ptr<function>` pointers only,
