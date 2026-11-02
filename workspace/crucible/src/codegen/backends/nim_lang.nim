@@ -160,12 +160,10 @@ proc emitStructDefs(m: CirModule): NimNode =
   for t in m.types:
     if t.kind != ctStruct:
       continue
-    var obj = nnkObjectTy.newTree(
-      newEmptyNode(), newEmptyNode(), newEmptyNode())
     var recList = nnkRecList.newTree()
     for f in t.fields:
       recList.add(nnkIdentDefs.newTree(ident(f.name), emitType(f.typ, EmitCtx(procName: "module")), newEmptyNode()))
-    obj.add(recList)
+    let obj = nnkObjectTy.newTree(newEmptyNode(), newEmptyNode(), recList)
     section.add(nnkTypeDef.newTree(ident(t.name), newEmptyNode(), obj))
   if section.len == 0:
     return nnkStmtList.newTree()
