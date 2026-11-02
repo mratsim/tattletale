@@ -20,6 +20,7 @@
 ##
 ## - `--threads:on`: the kernel machinery (c_lang C printer) emits to a generated
 ##   .c file registered {.compile.}, the inline launch tail packs the data struct, spawns the loop task, syncAll waits
+##   the tail translation unit duplicates the struct definitions, identical defs per unit are legal C
 ## - without threads: serial spliced Nim loops on the caller thread, the parallel variant must match that output bitwise
 ##
 ## Schedule: a `do:` block with `grid = ...` / `blk = ...`, both optional.
@@ -35,7 +36,7 @@
 ##
 ## - coordinate-free kernels run on the (1,1,1) x (1,1,1) schedule
 ## - coordinate kernels without a schedule refuse at compile time
-## - tile-layout schedule derivation is P2 work
+## - tile-layout schedule derivation is unimplemented
 ##
 ## Other:
 ##
@@ -44,9 +45,7 @@
 ## - each launch splices into a fresh block scope
 ## - the same kernel at two sites emits two copies under per-site suffixes
 
-import std/macros
-import std/os
-import std/strutils
+import std/[macros, os, strutils, tables]
 
 import workspace/crucible/src/codegen/cpu_compiler
 import workspace/crucible/src/codegen/ir/cirv2_lang
@@ -155,13 +154,13 @@ proc forLoop(varName: string, bound: NimNode, body: NimNode): NimNode {.compileT
   nnkForStmt.newTree(ident(varName),
     nnkInfix.newTree(ident"..<", newLit(0), bound), body)
 
-macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: untyped, siteSuffix, siteFile: static string, args: varargs[typed]): untyped =
+macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: untyped, siteSuffix: static string, args: varargs[typed]): untyped =
   ## Pipeline and launch: CIRv2 lowering of the typed wrapper, Nim emission,
   ## and the loop nest with the kernel body inlined.
   ##
   ## - the wrapper's formals are the kernel's runtime formals verbatim
   ## - runtime arguments hoist into locals under those names, one evaluation per launch
-  ##   an argument that already states the formal name skips the hoist,
+  ##   an argument that is the formal name itself skips the hoist,
   ##   the user variable stays in scope and the body reads it directly
   ## - schedule: both nil means derivation, coordinate kernels refuse there
   ## - with `--threads:on` each pool task covers workgroupsPerTask workgroups,
@@ -179,7 +178,6 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
 
   let m = lowerCpuKernel(wrapper)
 
-  # schedule: both nil means derivation, coordinate kernels refuse there
   var gridNeff = gridN
   var blkNeff = blkN
   if gridN.kind == nnkNilLit and blkN.kind == nnkNilLit:
@@ -202,9 +200,6 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
   proc gridDot(field: string): NimNode = nnkDotExpr.newTree(gridVar, ident(field))
   proc blkDot(field: string): NimNode = nnkDotExpr.newTree(blkVar, ident(field))
 
-  # runtime formals hoist under their own names, one evaluation per launch
-  # an argument that already states the formal name skips the hoist,
-  # its user variable stays in scope and the body reads it directly
   var hoists = nnkStmtList.newTree()
   for i, nameNode in runtimeNames:
     let name = $nameNode
@@ -251,7 +246,7 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     let (typesAndData, funcsC, coordUseC) = emitCpuWorkgroupLaunchC(
         m, siteSuffix, coordsC, runtimeParams)
     if gridN.kind == nnkNilLit and blkN.kind == nnkNilLit and coordUseC:
-      error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule in v0, pass grid/blk in the do block")
+      error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule, pass grid/blk in the do block")
     let calleesC = emitCpuCalleesC(m, siteSuffix)
 
     # file-scope unit, written at macro time under the project and registered
@@ -263,7 +258,7 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     unitC.add(funcsC)
     let genDir = getProjectPath() / "crucibleGenerated"
     createDir(genDir)
-    let genPath = genDir / ("crucibleLaunch_" & siteFile & siteSuffix & ".c")
+    let genPath = genDir / ("crucibleLaunch_" & siteSuffix & ".c")
     writeFile(genPath, unitC)
     launchBody.add(parseStmt("{.compile: \"" & genPath & "\".}"))
 
@@ -296,9 +291,8 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     ctext.add("        (int32_t)(((`crucibleGrid`.x * `crucibleGrid`.y * `crucibleGrid`.z) + `crucibleWgsPerTask` - 1) / `crucibleWgsPerTask`), 1, true);\n")
     ctext.add("    tpc_schedule(crucibleCtx, crucibleTaskH, false);\n")
     ctext.add("    tpc_syncAll(`crucibleTpHandle`);\n")
-    # pool handle: read through Nim semantics, a var engine parameter
-    # is a pointer at the C level, the local binds the value
-    # declare the local before the emit, backtick lookups resolve symbols declared earlier
+    # pool handle: read through Nim first, the emit backtick resolves a declared
+    # Nim symbol, C text cannot reach into the engine object
     launchBody.add(nnkLetSection.newTree(nnkIdentDefs.newTree(
       ident"crucibleTpHandle", newEmptyNode(),
       nnkDotExpr.newTree(engine, ident"tp"))))
@@ -325,7 +319,7 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     # kernel body, inlined, returns become breaks of the per-thread block
     let (body, coordUse) = emitCpuKernelBody(m, siteSuffix, coords)
     if gridN.kind == nnkNilLit and blkN.kind == nnkNilLit and coordUse:
-      error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule in v0, pass grid/blk in the do block")
+      error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule, pass grid/blk in the do block")
     let threadBlock = nnkBlockStmt.newTree(ident"crucibleThread", body)
 
     proc threadLoops(): NimNode =
@@ -344,7 +338,9 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
   result = nnkStmtList.newTree(
     nnkBlockStmt.newTree(newEmptyNode(), launchBody))
 
-macro launchCpuCall(engine: CpuEngine, kernel: typed, gridN, blkN, coarsenN: untyped, siteSuffix, siteFile: static string, args: varargs[typed]): untyped =
+var launchSiteCounts {.global, compileTime.}: Table[string, int]
+
+macro launchCpuCall(engine: CpuEngine, kernel: typed, gridN, blkN, coarsenN: untyped, siteSuffix: static string, args: varargs[typed]): untyped =
   ## Overload resolution and the compile-time/runtime split, then the handoff to the lowering macro.
   ## Semantic analysis of the generated proc happens before `cpuExecLower` runs, with the wrapper traveling as a typed argument.
   let k = kernel.resolveKernelOverload(args.len)
@@ -367,7 +363,7 @@ macro launchCpuCall(engine: CpuEngine, kernel: typed, gridN, blkN, coarsenN: unt
     else:
       runtimeArgs.add(a)
   let wrapper = buildCpuKernel(k, statics, nnkBracket.newTree(runtimeArgs), siteSuffix)
-  result = bindSym"cpuExecLower".newCall(engine, wrapper, gridN, blkN, coarsenN, newLit(siteSuffix), newLit(siteFile))
+  result = bindSym"cpuExecLower".newCall(engine, wrapper, gridN, blkN, coarsenN, newLit(siteSuffix))
   for a in runtimeArgs:
     result.add(a)
 
@@ -384,7 +380,7 @@ macro launchCpuFn*(engine: CpuEngine, call: untyped): untyped =
   ## - no schedule: the derived launch
   ##   - coordinate-free kernels run on the (1, 1, 1) x (1, 1, 1) schedule
   ##   - kernels reading coordinate builtins refuse at compile time
-  ##   - schedule derivation over tile layouts is P2 work
+  ##   - schedule derivation over tile layouts is unimplemented
   var schedule: NimNode = nil
   var callNode = call
   if callNode[^1].kind == nnkStmtList:
@@ -398,8 +394,10 @@ macro launchCpuFn*(engine: CpuEngine, call: untyped): untyped =
       doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk", "workgroupsPerTask"],
         "launchCpuFn: schedule expects grid = ... / blk = ... / workgroupsPerTask = ..., got " & a.repr
       case $a[0]
-      of "grid": gridN = a[1]
-      of "blk": blkN = a[1]
+      of "grid":
+        gridN = a[1]
+      of "blk":
+        blkN = a[1]
       of "workgroupsPerTask":
         # an integer literal validates here, any other expression hits the runtime guard of the parallel launch
         if a[1].kind == nnkIntLit and a[1].intVal < 1:
@@ -408,13 +406,18 @@ macro launchCpuFn*(engine: CpuEngine, call: untyped): untyped =
   for i in 1 ..< callNode.len:
     doAssert callNode[i].kind notin {nnkExprEqExpr, nnkExprColonExpr},
       "launchCpuFn " & $callNode[0] & ": named arguments are not supported, pass arguments positionally"
-  let siteSuffix = "_L" & $callNode[0].lineInfoObj.line & "C" & $callNode[0].lineInfoObj.column
-  # launch-site file stems uniquify the generated file name across modules,
-  # a _L<line>C<col> suffix alone is a line/column pair two files can share
   let sitePath = callNode[0].lineInfo[0 ..< callNode[0].lineInfo.rfind('(')]
+  let siteBase = splitFile(sitePath).dir / splitFile(sitePath).name
   var siteFile = ""
-  for c in splitFile(sitePath).name:
+  for c in siteBase:
     siteFile.add(if c in {'a'..'z', 'A'..'Z', '0'..'9', '_'}: c else: '_')
-  result = bindSym"launchCpuCall".newCall(engine, callNode[0], gridN, blkN, coarsenN, newLit(siteSuffix), newLit(siteFile))
+  # launch symbols and the generated file name carry the sanitized module path
+  # plus an occurrence counter. Module files share line/column pairs.
+  # Templates reuse their body site
+  let siteKey = siteFile & "_L" & $callNode[0].lineInfoObj.line & "C" & $callNode[0].lineInfoObj.column
+  let expansion = launchSiteCounts.getOrDefault(siteKey, 0) + 1
+  launchSiteCounts[siteKey] = expansion
+  let siteSuffix = if expansion > 1: siteKey & "_" & $expansion else: siteKey
+  result = bindSym"launchCpuCall".newCall(engine, callNode[0], gridN, blkN, coarsenN, newLit(siteSuffix))
   for i in 1 ..< callNode.len:
     result.add(callNode[i])
