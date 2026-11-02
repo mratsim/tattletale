@@ -104,7 +104,6 @@ proc foldMinMax(e: CirExpr): bool =
   return true
 
 proc foldMaxMinToBuiltins(m: CirModule): string {.nimcall.} =
-  ## Folds ternary max/min idioms to the native max/min builtins over every proc body.
   let fold = proc(e: CirExpr) =
     discard foldMinMax(e)
   for fn in m.procs:
