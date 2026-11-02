@@ -90,6 +90,30 @@ const hlslEmit = TargetEmit(
 #  Types
 # ═══════════════════════════════════════════════════════════════════════
 
+# Shared-walk mixin targets, declared so the overlay procs are module-scope
+# symbols when the walk's generics resolve (mixin ignores codeReordering).
+proc emitTypeName(ctx: var PrintCtx, t: CirType): string
+proc coordRef(ctx: var PrintCtx, e: CirExpr): string
+proc coordDot(ctx: var PrintCtx, e: CirExpr): string
+proc printConv(ctx: var PrintCtx, e: CirExpr): string
+proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
+proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string
+proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string
+proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string
+proc printOconstr(ctx: var PrintCtx, e: CirExpr): string
+proc printAconstr(ctx: var PrintCtx, e: CirExpr): string
+proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
+proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
+proc constDecl(ctx: var PrintCtx, s: CirStmt): string
+proc getInitText(ctx: var PrintCtx, s: CirStmt): string
+proc printCallArgTexts(ctx: var PrintCtx, callee: CirExpr, args: seq[CirExpr]): seq[string]
+proc printAsgn(ctx: var PrintCtx, s: CirStmt): string
+proc prepProc(ctx: var PrintCtx, fn: CirProc)
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string
+proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string
+
 proc refuseHlslScalarName(ctx: var PrintCtx, t: CirType): void =
   ## Refusal side of the leaf-name lookup, the width exists in Nim, HLSL names only the subset.
   case t.kind
@@ -295,6 +319,10 @@ proc printCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): strin
       return a.addrOperand.name
   return ctx.printExpr(a)
 
+
+proc printCallArgTexts(ctx: var PrintCtx, callee: CirExpr, args: seq[CirExpr]): seq[string] =
+  for i, a in args:
+    result.add ctx.printCallArg(callee, i, a)
 
 proc printOconstr(ctx: var PrintCtx, e: CirExpr): string =
   ## Returns one object construction:
