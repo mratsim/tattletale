@@ -183,6 +183,10 @@ proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[stri
     var bindings: seq[CirStmt]
     var subst = initTable[string, CirExpr]()
     for j, p in callee.params:
+      if p.typ.kind in {ctPtr, ctAptr}:
+        # a pointer argument has no WGSL local form, it substitutes directly
+        subst[p.name] = s.callArgs[j]
+        continue
       var alias = "inl" & $fresh & "_" & p.name
       fresh.inc
       while alias in used:
