@@ -123,7 +123,7 @@ macro convBuiltin*(body: untyped) =
 # ═══════════════════════════════════════════════════════════════════════
 
 ## Cell axis: the shared (kind, width) vocabulary for the scalar names,
-## the literal rows and the vector elements.
+## the literal entries and the vector elements.
 ##
 ## - the same bit width has different C type names on different hosts:
 ##   64-bit `long` on LP64 hosts, 32-bit on LLP64 hosts
@@ -310,17 +310,17 @@ proc castRulesCtor(entries: seq[NimNode], display: string): NimNode {.compileTim
       error("targetVocab: expected a 'src->dst:' rule in the bitcast section of " & display, entry)
     var fields = castKeyCtor(entry[1], true, display) & castKeyCtor(entry[2], false, display)
     var terminal = 0
-    for row in entry[3]:
-      if row.kind == nnkIdent and $row == "sameWidth":
+    for rule in entry[3]:
+      if rule.kind == nnkIdent and $rule == "sameWidth":
         fields.add nnkExprColonExpr.newTree(ident"sameWidth", ident"true")
-      elif row.kind == nnkStrLit:
-        fields.add nnkExprColonExpr.newTree(ident"conv", row)
+      elif rule.kind == nnkStrLit:
+        fields.add nnkExprColonExpr.newTree(ident"conv", rule)
         terminal.inc
-      elif row.kind == nnkNilLit:
+      elif rule.kind == nnkNilLit:
         # no conv field: the object constructor leaves it nil
         terminal.inc
       else:
-        error("targetVocab: unknown bitcast rule row in " & display, row)
+        error("targetVocab: unknown bitcast rule in " & display, rule)
     if terminal != 1:
       error("targetVocab: bitcast rule takes one conv text or nil in " & display, entry)
     rules.add nnkObjConstr.newTree(@[ident"CastRule"] & fields)
@@ -430,7 +430,7 @@ macro targetVocab*(body: untyped) =
         if entries.len != 1 or entries[0].kind != nnkCall or $entries[0][0] != "bool" or
             entries[0][1].kind != nnkStmtList or entries[0][1].len != 1 or
             entries[0][1][0].kind != nnkStrLit:
-          error("targetVocab: storageBool takes one `bool: \"text\"` row in " & display, section)
+          error("targetVocab: storageBool takes one `bool: \"text\"` entry in " & display, section)
         fields.add nnkExprColonExpr.newTree(ident"storageBool", entries[0][1][0])
     for required in ["scalar", "lit"]:
       if required notin seen:

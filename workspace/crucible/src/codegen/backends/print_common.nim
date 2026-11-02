@@ -122,7 +122,7 @@ type WalkCtx* {.inheritable.} = object
 template initPrintCtx*(walkPolicy: WalkPolicy, rule: VectorRule, targetEmit: TargetEmit, bk: BackendKind): untyped =
   ## Walk context of one module print: the target's tables, clean state.
   ## Expands against the importing printer's own `PrintCtx` type.
-  ## A target with registry math rows assigns `mathNames` after the init.
+  ## A target with registry math entries assigns `mathNames` after the init.
   ##
   ## Returns: the initialized context, `fnName` the module-level kernel name.
   PrintCtx(fnName: "<module>", policy: walkPolicy, vectorRule: rule,
@@ -429,11 +429,11 @@ proc emitBuiltinCall*(ctx: var auto, callee: CirExpr, args: seq[string]): string
   return ""
 
 proc convBuiltinText*(ctx: var auto, call: CirExpr, args: seq[string]): string =
-  ## Builtins-driven conv text: the ConvBuiltinNames row keyed
+  ## Builtins-driven conv text: the ConvBuiltinNames mapping keyed
   ## (backend, source cell, target cell) for the call's signature.
   ##
-  ## Returns: the row's native name formatted with the argument list.
-  ## Returns "" when the row is absent: the canonical name passes through.
+  ## Returns: the mapping's native name formatted with the argument list.
+  ## Returns "" when the mapping is absent: the canonical name passes through.
   if call.callee.kind != eSym or not call.callee.builtin:
     return ""
   let pt = call.callee.typ
