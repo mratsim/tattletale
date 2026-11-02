@@ -36,6 +36,14 @@ import ./spirv_encoder {.all.}
 import ../ir/ast_datatypes
 import ./print_common
 
+const
+  ## Scope and MemorySemantics grammar values for the barrier emission
+  ## (SPIRV.html sections 3.28-3.29).
+  ## Values: scope Workgroup, semantics bit WorkgroupMemory.
+  ## Encoder consts cover the subgroup and device set.
+  scopeWorkgroup = 2'u32
+  semWorkgroupMemory = 0x100'u32
+
 proc cirUint32(): CirType =
   CirType(kind: ctUint, bits: 32)
 
@@ -126,7 +134,7 @@ type SpvLayout = object
 proc std430Layout(t: SpvTy): SpvLayout =
   case t.kind
   of stkScalar:
-    let s = scalarByteSize(t.scalar)
+    let s = getScalarByteSize(t.scalar)
     SpvLayout(size: s, align: s)
   of stkVector:
     let e = std430Layout(t.vElem)
@@ -416,17 +424,17 @@ proc loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int, 
   let raw = ctx.builder.opCompositeExtract(ctx.resolveScalarId(cirUint32()), v, @[component])
   ctx.convertValue(raw, cirUint32(), target)
 
-proc getCoordBuiltinEnumerant(ctx: var SpvLangCtx, name: string): uint32 =
+proc getCoordBuiltinEnumerant(ctx: var SpvLangCtx, k: CirCoordBuiltinKind): uint32 =
   ## Canonical coordinate vocabulary mapped onto the BuiltIn enumerants.
-  case name
-  of "thread_position_in_grid": result = biGlobalInvocationId
-  of "threadgroup_position_in_grid": result = biWorkgroupId
-  of "thread_position_in_threadgroup": result = biLocalInvocationId
-  of "threads_per_threadgroup": result = biWorkgroupSize
-  of "threadgroups_per_grid": result = biNumWorkgroups
-  of "thread_index_in_threadgroup": result = biLocalInvocationIndex
+  case k
+  of cbkThreadPositionInGrid: result = biGlobalInvocationId
+  of cbkThreadgroupPositionInGrid: result = biWorkgroupId
+  of cbkThreadPositionInThreadgroup: result = biLocalInvocationId
+  of cbkThreadsPerThreadgroup: result = biWorkgroupSize
+  of cbkThreadgroupsPerGrid: result = biNumWorkgroups
+  of cbkThreadIndexInThreadgroup: result = biLocalInvocationIndex
   else:
-    ctx.failSpv("not a coordinate builtin name")
+    ctx.failSpv("not a coordinate builtin kind")
 
 proc declareScalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if ctx.scalarBuiltins.hasKey(builtin):
@@ -693,7 +701,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
   of eCall:
     if e.callee.kind == eSym and ctx.fnTypes.hasKey(e.callee.name):
       result = ctx.fnTypes[e.callee.name]
-    elif e.callee.kind == eSym and e.callee.name == "atomicFetchAdd" and
+    elif e.callee.kind == eSym and e.callee.atomicsBuiltin == cbkAtomicFetchAdd and
         e.args.len == 2 and e.args[0].kind == eAddr:
       # an atomic add yields the addressed element, its first argument
       # names the address
@@ -707,6 +715,8 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
     elif e.callee.kind == eSym and e.args.len > 0:
       # a builtin call, the result type is the first argument's type
       result = ctx.resolveExprType(fn, e.args[0])
+    elif e.callee.kind == eSym and e.callee.synchroBuiltin == cbkThreadgroupBarrier:
+      ctx.failSpv("barrier is a statement, a value-position barrier is outside the SPIR-V subset")
     else:
       ctx.failSpv("call result type of " & (if e.callee.kind == eSym: e.callee.name else: "non-symbol callee"))
 
@@ -780,10 +790,10 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   of eIntLit, eFloatLit, eTrue, eFalse:
     ctx.resolveConstId(fn, e)
   of eSym:
-    if e.builtin and e.name in CoordBuiltinNames:
-      if e.name == "thread_index_in_threadgroup":
+    if e.coordBuiltin != cbkNone:
+      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return ctx.loadScalarBuiltin(biLocalInvocationIndex, e.typ)
-      ctx.failSpv("whole-vector use of coordinate builtin " & e.name &
+      ctx.failSpv("whole-vector use of coordinate builtin " & CoordBuiltinNames[e.coordBuiltin] &
         ", index a component instead")
       return 0
     if fn.consts.hasKey(e.name):
@@ -906,9 +916,8 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     else:
       ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(pointee)), ptrId)
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.builtin and
-        e.dotBase.name in CoordBuiltinNames and
-        e.dotBase.name != "thread_index_in_threadgroup":
+    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone and
+        e.dotBase.coordBuiltin != cbkThreadIndexInThreadgroup:
       # a coordinate-builtin component, read from the builtin input variable
       let comp =
         case e.fieldName
@@ -921,7 +930,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       if comp < 0:
         return 0
       let compTy = ctx.resolveExprType(fn, e)
-      return ctx.loadBuiltinComponent(ctx.getCoordBuiltinEnumerant(e.dotBase.name),
+      return ctx.loadBuiltinComponent(ctx.getCoordBuiltinEnumerant(e.dotBase.coordBuiltin),
         comp, compTy)
     let baseTy = ctx.resolveExprType(fn, e.dotBase)
     if baseTy != nil and baseTy.kind == ctVector:
@@ -1138,16 +1147,31 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
   else:
     ctx.failSpv("assignment target " & $e.kind)
 
+proc emitBarrier(ctx: var SpvLangCtx) =
+  ## One workgroup barrier.
+  ##
+  ## - both scope operands are Workgroup: every invocation in the workgroup
+  ##   reaches the barrier, no invocation beyond it
+  ## - semantics are WorkgroupMemory | AcquireRelease, matching the atomic
+  ##   emission's UniformMemory | AcquireRelease form
+  ## - OpControlBarrier has no result id, the emission writes the four-word
+  ##   layout directly
+  let scope = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeWorkgroup))
+  let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()),
+    uint64(semWorkgroupMemory or semAcquireRelease))
+  ctx.builder.module.emitInstSeq(ssFunctions, OpControlBarrier, @[scope, scope, sem])
+
 proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   ## Value of a call: builtin vocabulary maps to native instructions
   ## and a device function emits an OpFunctionCall.
+  ## A barrier is statement-only, a value position refuses.
   if ctx.err.len > 0:
     return 0
   doAssert e.callee.kind == eSym, "call callee is not a symbol"
   let name = e.callee.name
-  # builtin vocabulary dispatches on the canonical name through this table,
-  # `max`/`min` are a name case for the printer, harvested magics outside the categories
-  if e.callee.builtin and name == "reduceAdd":
+  # builtin vocabulary dispatches on the kind, the max/min select lowering
+  # below is a name case for plain and harvested calls
+  if e.callee.reductionBuiltin == cbkReduceAdd:
     doAssert e.args.len == 1, "reduceAdd takes one argument"
     let v = ctx.emitExpr(fn, e.args[0])
     let resTy = ctx.resolveExprType(fn, e.args[0])
@@ -1158,7 +1182,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let scopeSub = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeSubgroup))
     return ctx.builder.freshInst(OpGroupNonUniformFAdd,
       @[ctx.resolveTyId(spvScalar(resTy)), scopeSub, groupOpReduce, v])
-  if e.callee.builtin and name in ["simd_shuffle", "simd_shuffle_xor"]:
+  if e.callee.shuffleBuiltin in {cbkSimdShuffle, cbkSimdShuffleXor}:
     doAssert e.args.len == 2, "simd_shuffle takes a value and a lane index"
     let v = ctx.emitExpr(fn, e.args[0])
     let lane = ctx.emitExpr(fn, e.args[1])
@@ -1170,10 +1194,10 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let laneU = ctx.convertValue(lane, ctx.resolveExprType(fn, e.args[1]), cirUint32())
     ctx.caps.incl capGroupNonUniformShuffle
     let scopeSub = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeSubgroup))
-    let op = if name == "simd_shuffle": OpGroupNonUniformShuffle
+    let op = if e.callee.shuffleBuiltin == cbkSimdShuffle: OpGroupNonUniformShuffle
              else: OpGroupNonUniformShuffleXor
     return ctx.builder.freshInst(op, @[ctx.resolveTyId(spvScalar(resTy)), scopeSub, v, laneU])
-  if e.callee.builtin and name == "atomicFetchAdd":
+  if e.callee.atomicsBuiltin == cbkAtomicFetchAdd:
     doAssert e.args.len == 2, "atomicFetchAdd takes a pointer and a value"
     if e.args[0].kind != eAddr or e.args[0].addrOperand.kind != ePat:
       ctx.failSpv("atomicFetchAdd address is not the address of an element")
@@ -1217,10 +1241,12 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     let cond = ctx.builder.freshInst(cmpOp, @[boolTy, a, b])
     return ctx.builder.opSelect(ctx.resolveTyId(spvScalar(opTy)), cond, a, b)
-  if e.callee.builtin and name == "threadgroup_barrier":
-    let scopeDev = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeDevice))
-    let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(semAcquireRelease))
-    discard ctx.builder.freshInst(OpControlBarrier, @[scopeDev, scopeDev, sem])
+  if e.callee.synchroBuiltin == cbkThreadgroupBarrier:
+    ctx.failSpv("barrier is a statement, a value-position barrier is outside the SPIR-V subset")
+    return 0
+  # a builtin kind that reached no branch above has no lowering here
+  if e.callee.builtin:
+    ctx.failSpv("the builtin " & e.callee.name & " has no SPIR-V lowering")
     return 0
   # a device function call
   if not ctx.emittedFns.hasKey(name):
@@ -1384,10 +1410,13 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       if s.callCallee.kind != eSym:
         ctx.failSpv("statement call without a symbol callee, no destination binding")
         return
-      var callE = CirExpr(kind: eCall)
-      callE.callee = s.callCallee
-      callE.args = s.callArgs
-      discard ctx.emitCallValue(fn, callE)
+      if s.callCallee.synchroBuiltin == cbkThreadgroupBarrier:
+        ctx.emitBarrier()
+      else:
+        var callE = CirExpr(kind: eCall)
+        callE.callee = s.callCallee
+        callE.args = s.callArgs
+        discard ctx.emitCallValue(fn, callE)
     of sAsm, sEmit:
       ctx.failSpv("statement construct " & $s.kind &
         " outside the SPIR-V subset, it must lower earlier")

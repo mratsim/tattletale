@@ -5,8 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Metal Shading Language (MSL) printer: a structured CIRv2 module to MSL source,
-## table-driven over the closed set of type kinds.
+## Metal Shading Language (MSL) printer: a structured CIRv2 module to MSL source.
+## The universal walk lives in `print_common`, this overlay carries the MSL delta.
 ##
 ## Emission contract, one buffer slot per kernel parameter in order:
 ## - pointers: `device T* name [[buffer(n)]]`
@@ -21,8 +21,9 @@
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
 ##   program-scope `constant` output, the printer refuses a const_mem survivor
 ## - a loop prints `while (cond)`, `{.unroll.}` adds the Metal unroll pragma
-## - the builtin vocabulary dispatches on the canonical name, `{.builtin.}` names pass
-##   through except the numeric conversions, which resolve to the MSL native call text
+## - the builtin vocabulary dispatches on the kind over the `mslVocab` table,
+##   `{.builtin.}` names pass through except the numeric conversions:
+##   they resolve to the MSL native call text
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
@@ -31,41 +32,78 @@ import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
 
-type
-  PrintCtx = object
-    fnName: string
-    ## First refusal of the walk, "" while clean.
-    err: string
-    indent: int
-    policy: WalkPolicy
-    ## Walk policy of the target. The shared walk reads its fields.
-    lit: LitTokens
-    ## Literal token forms of the target. The shared literal head reads them.
-    scalarNames: ScalarNames
-    ## Scalar names of the target. The narrow integer cast names its type from them.
-    builtins: OrderedSet[string]
-    ## Canonical builtin names that the kernel body references, first-use order.
-
 const printerTarget = "msl"
 
-proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
+type PrintCtx = object of WalkCtx
+  ## Per-target walk context. The shared walk procs instantiate against
+  ## the derived type and the overlay procs below resolve per target.
+
+proc coordRef(ctx: var PrintCtx, e: CirExpr): string
+proc coordDot(ctx: var PrintCtx, e: CirExpr): string
+proc printConv(ctx: var PrintCtx, e: CirExpr): string
+proc emitTypeName(ctx: var PrintCtx, t: CirType): string
+proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string
+proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
+proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
+proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
+proc constDecl(ctx: var PrintCtx, s: CirStmt): string
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Target tables
+# ═══════════════════════════════════════════════════════════════════════
+
+const mslVocab = BuiltinVocab(
+  synchroText: makeTexts([
+    (cbkThreadgroupBarrier, "threadgroup_barrier(mem_flags::mem_threadgroup)"),
+    (cbkThreadgroupBarrierDevice, "threadgroup_barrier(mem_flags::mem_device)")]),
+  reductionText: makeTexts([
+    (cbkReduceAdd, "simd_sum($1)"),
+    (cbkReduceMax, "simd_max($1)")]))
+
+const mslEmit = TargetEmit(
+  vocab: mslVocab,
+  functionalCtor: false,
+  ctorOpen: "{",
+  ctorClose: "}",
+  ctorCast: false,
+  ctorZero: "",
+  aconstrCasts: true,
+  dotDerefParens: true,
+  vectorDots: false,
+  noPointerValues: (spaces: {}, text: ""),
+  noPointerRebind: "",
+  prefixKernel: "kernel ",
+  prefixInline: "inline ",
+  prefixPlain: "")
+
+const mslModuleShape = ModuleShape(
+  spaces: {caConstant},
+  structTypedef: false,
+  structPadding: "char _",
+  structFieldTerm: ';',
+  structClose: "};",
+  fwdDecls: false,
+  moduleOrderProcs: true,
+  kernelSep: "\n\n",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: false)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
-  ## Forward declaration, arrays recurse into themselves.
-
 proc emitMslScalar(t: CirType): string =
   ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
-  getBareName(mslScalarNames, mslVectorRule, t)
+  getFullTypeName(mslScalarNames, mslVectorRule, t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## MSL declaration text of `t` with `ident` appended, the shared C declarator
   ## over the MSL tables. Arrays put the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
-  cDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
+  printCDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc getMslPtrQualifier(space: AddressSpace): string =
   ## MSL qualifier before a pointer declaration or cast, one word per space.
@@ -81,7 +119,11 @@ proc emitMslPtr(t: CirType, ident: string): string =
   let qualifier = getMslPtrQualifier(t.space)
   let sep = if qualifier.len > 0: " " else: ""
   result = qualifier & sep &
-    cDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, true)
+    printCDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, true)
+
+proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
+  ## MSL name of `t` with no identifier, as casts and sizeof print it.
+  emitMslType(t, "", true)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   ## MSL declaration text of one struct member: a pointer member names
@@ -91,11 +133,10 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   return emitMslType(f.typ, f.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
-# Expressions
+# Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
-
-proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
+proc printBuiltinRef(ctx: var PrintCtx, k: CirCoordBuiltinKind, whole: bool): string =
   ## MSL token of a builtin reference, the attributed parameter name.
   ##
   ## - whole-value use of a vector builtin: an `int3` constructor,
@@ -103,55 +144,27 @@ proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
   ## - component use: a cast to `int`
   ## - the flat thread index: a scalar `uint`, whole value is the bare name
   ##   (uint converts to int implicitly)
-  ctx.builtins.incl(name)
-  if whole and name != "thread_index_in_threadgroup":
+  ctx.builtins.incl(k)
+  let name = CoordBuiltinNames[k]
+  if whole and k != cbkThreadIndexInThreadgroup:
     return "int3((int)" & name & ".x, (int)" & name & ".y, (int)" & name & ".z)"
   return name
 
-proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
-  ## Returns the MSL text of a builtin call, "" when `callee` is not a builtin.
-  ##
-  ## Shared by expression- and statement-position calls: the statement path
-  ## bypasses `printExpr`, so a barrier printed as a bare name would lose
-  ## its memory flags, the Metal compiler refuses the text.
-  ##
-  ## `args` contains the already-printed argument texts.
-  if callee.kind != eSym or not callee.builtin:
-    return ""
-  # builtin vocabulary dispatches on the canonical name through this table
-  case callee.name
-  of "threadgroup_barrier":
-    return "threadgroup_barrier(mem_flags::mem_threadgroup)"
-  of "threadgroup_barrier_device":
-    return "threadgroup_barrier(mem_flags::mem_device)"
-  of "reduceAdd":
-    return "simd_sum(" & args.join(", ") & ")"
-  of "reduceMax":
-    return "simd_max(" & args.join(", ") & ")"
-  of "atomicFetchAdd":
-    # pointer casts to the atomic pointee type, relaxed order only,
-    # fp32 needs Metal 3+, device address space implies the scope
-    var atomicTy = ""
-    let p0 = if callee.typ != nil and callee.typ.kind == ctProc and
-        callee.typ.params.len > 0: callee.typ.params[0]
-    else: nil
-    if p0 != nil and p0.kind in {ctPtr, ctAptr} and p0.pElem != nil:
-      let pointee = p0.pElem
-      if pointee.kind == ctFloat and pointee.bits == 32:
-        atomicTy = "atomic_float"
-      elif pointee.kind == ctInt and pointee.bits == 32:
-        atomicTy = "atomic_int"
-      elif pointee.kind == ctUint and pointee.bits == 32:
-        atomicTy = "atomic_uint"
-    if atomicTy.len == 0:
-      error("atomic_fetch_add over a pointee without an MSL atomic type")
-    return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
-      "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
-  else:
-    if mslConvBuiltinNames.hasKey(callee.name):
-      return mslConvBuiltinNames.getOrDefault(callee.name) % args.join(", ")
-  return ""
+proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
+  ## Conv text by canonical name out of the registry table.
+  convBuiltinText(mslConvBuiltinPairs, call, args)
 
+proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
+  ctx.printBuiltinRef(e.coordBuiltin, true)
+
+proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
+  ## One component of an attributed `uint3` builtin parameter, cast to `int`.
+  ctx.builtins.incl(e.dotBase.coordBuiltin)
+  "(int)(" & CoordBuiltinNames[e.dotBase.coordBuiltin] & '.' & e.fieldName & ")"
+
+# ═══════════════════════════════════════════════════════════════════════
+# Expressions: the MSL hooks over the universal arms
+# ═══════════════════════════════════════════════════════════════════════
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## Pointer casts name their address space.
@@ -161,92 +174,61 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
     castTyp = getMslPtrQualifier(t.space) & ' ' & castTyp
   return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
 
+proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string =
+  ## MSL text of the atomic fetch-and-add call.
+  ## Pointer casts to the atomic pointee type, relaxed order only,
+  # fp32 needs Metal 3+, device address space implies the scope.
+  var atomicTy = ""
+  let p0 = if callee.typ != nil and callee.typ.kind == ctProc and
+      callee.typ.params.len > 0: callee.typ.params[0]
+  else: nil
+  if p0 != nil and p0.kind in {ctPtr, ctAptr} and p0.pElem != nil:
+    let pointee = p0.pElem
+    if pointee.kind == ctFloat and pointee.bits == 32:
+      atomicTy = "atomic_float"
+    elif pointee.kind == ctInt and pointee.bits == 32:
+      atomicTy = "atomic_int"
+    elif pointee.kind == ctUint and pointee.bits == 32:
+      atomicTy = "atomic_uint"
+  if atomicTy.len == 0:
+    error("atomic_fetch_add over a pointee without an MSL atomic type")
+  return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
+    "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
 
-proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
-  ## MSL text of the kinds in `targetExprKinds`.
-  case e.kind
-  of eSym:
-    if e.builtin and e.name in CoordBuiltinNames:
-      return ctx.printBuiltinRef(e.name, true)
-    return e.name
-  of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.builtin and
-        e.dotBase.name in CoordBuiltinNames:
-      ctx.builtins.incl(e.dotBase.name)
-      return "(int)(" & e.dotBase.name & '.' & e.fieldName & ")"
-    let base = ctx.printExpr(e.dotBase)
-    if e.dotBase.kind == eDeref:
-      return "(" & base & ")." & e.fieldName
-    return base & '.' & e.fieldName
-  of eCast:
-    return ctx.printCast(e, mslCastRules, emitMslType(e.castType, "", true))
-  of eConv:
-    return ctx.printConv(e)
-  of eSizeof:
-    return "sizeof(" & emitMslType(e.ofType, "", true) & ")"
-  of eOconstr:
-    result = emitMslType(e.ocType, "", true) & "{"
-    for i, kv in e.kvFields:
-      if i > 0:
-        result.add ", "
-      result.add ctx.printExpr(kv.value)
-    result.add "}"
-  of eAconstr:
-    result = "{"
-    for i, el in e.elems:
-      if i > 0:
-        result.add ", "
-      result.add "(" & emitMslType(e.acType.aElem, "", true) & ")" &
-        ctx.printExpr(el)
-    result.add "}"
-  of eCall:
-    let args = printCallArgs(ctx, e)
-    return printCallText(ctx, e, args, emitBuiltinCall(e.callee, args))
-  else:
-    ctx.fail("expression kind " & $e.kind & " has no MSL emission")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Statements: per-target policy arms, the shared dispatch lives in print_common
-# ═══════════════════════════════════════════════════════════════════════
-proc printVar(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local declaration.
-  let pad = spaces(ctx.indent * 2)
-  if s.space == caThreadgroup:
-    # Only a kernel's initializer-less smem locals reach here: the MSL lowering pass refuses a device function's smem local and any initializer
-    result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
-    return
-  if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
-      " pass hoists const_mem locals to program scope")
+proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string =
+  ## MSL resolves statement-position builtins through the value vocabulary.
+  let txt = ctx.emitBuiltinCall(s.callCallee, args)
+  if txt.len == 0:
     return ""
-  var decl = emitMslType(s.declType, s.name, false)
-  if s.declType.kind in {ctPtr, ctAptr}:
-    decl = emitMslPtr(s.declType, s.name)
-  result = pad & decl
-  if s.init != nil:
-    result &= " = " & ctx.printExpr(s.init)
-  result &= ";"
+  pad & txt & ";"
 
-proc printConst(ctx: var PrintCtx, s: CirStmt): string =
-  ## One local constant declaration.
-  let pad = spaces(ctx.indent * 2)
-  if s.declType.kind == ctArray:
-    result = pad & "constexpr " &
-      emitMslType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
-  else:
-    result = pad & "constexpr " & emitMslScalar(s.declType) & ' ' & s.name &
-      " = " & ctx.printExpr(s.init) & ";"
-
+# ═══════════════════════════════════════════════════════════════════════
+# Statements: the MSL space policy and declaration forms
+# ═══════════════════════════════════════════════════════════════════════
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: the spliced text.
   let pad = spaces(ctx.indent * 2)
-  var text = ""
-  for i, part in s.asmParts:
-    text.add(part)
-    if i < s.asmOperands.len:
-      text.add(s.asmOperands[i].name)
-  result = pad & text
+  pad & s.asmSpliceText()
+
+
+proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
+  ## Only a kernel's initializer-less smem local and plain locals reach here.
+  ## The lowering pass refuses a device function's smem local and hoists const_mem locals to program scope.
+  if s.space == caConstant:
+    ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
+      " pass hoists const_mem locals to program scope")
+    return false
+  true
+
+proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
+  if s.space == caThreadgroup:
+    return "threadgroup " & emitMslType(s.declType, s.name, false)
+  if s.declType.kind in {ctPtr, ctAptr}:
+    return emitMslPtr(s.declType, s.name)
+  emitMslType(s.declType, s.name, false)
+
+proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
+  "constexpr " & emitMslType(s.declType, s.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules
@@ -264,11 +246,12 @@ proc emitMslSmemParam(p: CirParam): string =
     return "threadgroup " & emitMslType(inner.aElem, "", true) & "* " & p.name
   return "threadgroup " & emitMslScalar(inner) & "& " & p.name
 
-proc emitBuiltinParam(name: string): string =
-  ## Attributed MSL parameter of a canonical builtin reference:
+proc emitBuiltinParam(k: CirCoordBuiltinKind): string =
+  ## Attributed MSL parameter of a coordinate builtin reference:
   ## `uint3 name [[name]]` for the coordinate vectors, a scalar `uint` for the flat thread index.
   ## No binding, no buffer slot.
-  if name == "thread_index_in_threadgroup":
+  let name = CoordBuiltinNames[k]
+  if k == cbkThreadIndexInThreadgroup:
     return "uint " & name & " [[" & name & "]]"
   return "uint3 " & name & " [[" & name & "]]"
 
@@ -294,17 +277,21 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
       case p.typ.kind
       of ctAptr, ctPtr:
         result.add "device " &
-          cDecl(mslScalarNames, mslVectorRule, printerTarget, p.typ, p.name, true) &
+          printCDecl(mslScalarNames, mslVectorRule, printerTarget, p.typ, p.name, true) &
           " [[buffer(" & $slot & ")]]"
+      of ctArray:
+        # an array kernel argument binds in constant storage like a scalar one.
+        # xcrun metal rejects an unqualified `const T name[N]` kernel argument
+        result.add "constant " & emitMslType(p.typ, p.name, false)
       else:
         var elem = emitMslScalar(p.typ)
         if p.typ.kind == ctBool:
           elem = "int"
         result.add "constant " & elem & "& " & p.name
       inc slot
-    for b in ctx.builtins:
+    for k in ctx.builtins:
       # coordinate builtins are attributed params, no binding, no slot
-      result.add emitBuiltinParam(b)
+      result.add emitBuiltinParam(k)
   else:
     for p in fn.params:
       case p.typ.kind
@@ -315,36 +302,6 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
           result.add emitMslPtr(p.typ, p.name)
       else:
         result.add emitMslType(p.typ, p.name, true)
-
-proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
-  if fn.isKernel:
-    return "kernel "
-  if fn.inline:
-    return "inline "
-  return ""
-
-proc emitTypeBare(t: CirType): string =
-  ## MSL name of `t` with no identifier, as casts and sizeof print it.
-  emitMslType(t, "", true)
-
-proc prepProc(ctx: var PrintCtx, fn: CirProc) =
-  ## Resets the builtin set before the body walk, the signature reads it
-  ## after the body prints.
-  ctx.builtins = initOrderedSet[string]()
-
-const mslModuleShape = ModuleShape(
-  spaces: {caConstant},
-  structTypedef: false,
-  structPadding: "char _",
-  structFieldTerm: ';',
-  structClose: "};",
-  fwdDecls: false,
-  moduleOrderProcs: true,
-  kernelSep: "\n\n",
-  customProcHead: false,
-  printsRefBlocks: false,
-  printsParamBindings: false,
-  printsReduceTemplates: false)
 
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
   ## Translation-unit head of every MSL module: the metal headers.
@@ -365,9 +322,9 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full MSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>", policy: mslWalkPolicy,
-    lit: mslLitTokens, scalarNames: mslScalarNames)
-  printModule(ctx, m, moduleKernels(m), mslModuleShape)
+  var ctx = initPrintCtx(mslWalkPolicy, mslLitTokens, mslScalarNames,
+    mslVectorRule, mslCastRules, mslEmit)
+  printModule(ctx, m, getModuleKernels(m), mslModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as Metal Shading Language (MSL) source, the `backends_api` entry point.
