@@ -16,6 +16,9 @@
 ## - guarded thread (the `AddKernel.lean` model): buffers `a`, `b` (read) plus `output` (written), all aptr-to-uint32 parameters
 ## - a let-bound `thread_position_in_grid.x` (the Lean `tid`), one `if` with no
 ##   elif/else branch, guard `tidVar < literal`, positive literal `n`
+## - loop (the axpy shape): one `for` over the compile-time constant `[0, n)`
+##   range (start 0, step 1, exclusive), one indexed write, an optional uint32
+##   scalar mapping to a trailing `UInt32` argument
 ##
 ## A write is a functional update over buffers modelled as total functions
 ## `Nat → UInt32`. `UInt32.add` wraps modulo 2^32 like the kernel's GPU arithmetic.
@@ -181,8 +184,7 @@ proc analyzeLoopKernel(decl, start, loop: CirStmt, scalarName: string, model: va
     raise leanRefusal("unsupported assignment - write index is not the loop" &
       " variable (write-set analysis covers the whole-range shape only)")
   model.writeBuf = checkWriteTarget(w.lhs)
-  # no increment check: every supported range lowers with the literal-1 increment,
-  # every other condition shape already refuses at the condition check above
+  # increment: every supported range lowers with increment 1, any other condition shape refuses above
   result = w.rhs
   model.value = emitExpr(w.rhs, loopVar, "j", scalarName != "")
 
@@ -369,8 +371,6 @@ proc scalarArg(model: KernelModel): string =
 
 proc emitBodyDef(model: KernelModel): string =
   ## Emits the body def(s) of the module for the kernel shape.
-  ## Guarded-thread shape: the per-thread body def.
-  ## Loop shape: the remaining-count recursion plus its entry point.
   const doc = """
 /-- Per-thread body of the kernel: returns the output buffer after thread
 `tid` of `n` has run.
@@ -430,8 +430,8 @@ proc emitLoopTheorems(model: KernelModel): string =
   result = "/-- Loop-state lemma: with the iterations at remaining count `k` still to\n" &
     "run, index `j` of the running buffer ends at the stored value iff it lies\n" &
     "in the not-yet-written range `[" & n & " - k, " & n & ")`, and keeps its old value\n" &
-    "otherwise. The loop's induction hypothesis, every spec theorem below\n" &
-    "derives from it at the entry count. -/\n" &
+    "otherwise. Every spec theorem below derives from this induction\n" &
+    "hypothesis at the entry count. -/\n" &
     "theorem " & loopName & "_eq (k : Nat) (a b out : Nat → UInt32)" & model.scalarBinder & " (j : Nat) :\n" &
     "    " & loopName & " k a b out" & model.scalarArg & " j =\n" &
     "      if " & n & " - k ≤ j ∧ j < " & n & " then " & model.value & " else out j := by\n" &
@@ -462,7 +462,7 @@ proc emitLoopTheorems(model: KernelModel): string =
     "  rw [" & model.bodyName & ", " & loopName & "_eq, if_neg (by omega)]\n"
 
 proc emitTheorems(model: KernelModel): string =
-  ## Emits the spec theorems of the hand-written AddKernel.lean module.
+  ## Emits the spec theorems of the kernel's shape.
   ## Every proof depends on the def shape alone, never on the stored value.
   if model.kind == kkLoopRange:
     return emitLoopTheorems(model)
