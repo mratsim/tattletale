@@ -278,9 +278,6 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
       result.add emitBuiltinParam(k)
   else:
     for p in fn.params:
-      if p.passByRef:
-        result.add "thread const " & emitMslType(p.typ, "", true) & "& " & p.name
-        continue
       case p.typ.kind
       of ctAptr, ctPtr:
         if p.typ.space == caThreadgroup and p.typ.kind == ctPtr:
