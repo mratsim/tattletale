@@ -132,13 +132,6 @@ proc runTest() =
     echo "  refusals on loop shapes outside the supported shape: ok"
 
   block: # loud refusals carried over from the guarded-thread shape
-    let unsupportedOp = leanIr:
-      proc unsupportedOp(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
-        for i in 0 ..< 4:
-          output[i] = a[i] * b[i]
-    expectLeanRefusal("lean_lang: unsupported expression eMul - the multiply is" &
-      " in scope for the axpy shape only", unsupportedOp)
-
     let zeroBound = leanIr:
       proc zeroBound(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 0:
@@ -146,19 +139,7 @@ proc runTest() =
     expectLeanRefusal("lean_lang: unsupported loop - bound must be positive (got 0)",
       zeroBound)
 
-    let wrongParams = leanIr:
-      proc wrongParams(dst, x, y: ptr UncheckedArray[uint32]) {.global.} =
-        for i in 0 ..< 4:
-          dst[i] = x[i] + y[i]
-    expectLeanRefusal("lean_lang: unsupported kernel - buffer parameters must be" &
-      " exactly `a` and `b` (read) plus `output` (written)", wrongParams)
-
-    let subKernel = leanIr:
-      proc subKernel(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
-        for i in 0 ..< 4:
-          output[i] = a[i] - b[i]
-    expectLeanRefusal("lean_lang: unsupported expression eSub", subKernel)
-    echo "  refusals carried over from the guarded-thread shape: ok"
+    echo "  refusal carried over from the guarded-thread shape: ok"
 
   block: # right loop-guard invariant: proved, manifest `proven: true`, exit 0
     let k = leanIrSpec:

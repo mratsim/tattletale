@@ -436,8 +436,8 @@ proc emitLoopTheorems(model: KernelModel): string =
     "in the not-yet-written range `[" & n & " - k, " & n & ")`, and keeps its old value\n" &
     "otherwise. Every spec theorem below derives from this induction\n" &
     "hypothesis at the entry count. -/\n" &
-    "theorem " & loopName & "_eq (k : Nat) (a b out : Nat → UInt32)" & model.scalarBinder & " (j : Nat) :\n" &
-    "    " & loopName & " k a b out" & model.scalarArg & " j =\n" &
+    "theorem " & loopName & "_eq (k : Nat) (a b out : Nat → UInt32)" & scalarBinder & " (j : Nat) :\n" &
+    "    " & loopName & " k a b out" & scalarArg & " j =\n" &
     "      if " & n & " - k ≤ j ∧ j < " & n & " then " & model.value & " else out j := by\n" &
     "  induction k generalizing out j with\n" &
     "  | zero => rw [" & loopName & ", if_neg (by omega)]\n" &

@@ -22,7 +22,8 @@ import std/[os, strutils]
 import lean_testutils
 
 const genDir = leanProjectDir & "/generated"
-const genAxpyExecRelPath = leanProjectDir & "/generated/axpy_exec.lean"
+const genAxpyModuleRelPath = "generated/" & autogenModule("axpyKernel")
+const genAxpyExecRelPath = "generated/axpy_exec.lean"
 
 proc runTest() =
   block: # axpy emission + elaboration: the scalar becomes a Lean UInt32 argument
@@ -41,8 +42,8 @@ proc runTest() =
     doAssert hasMultiply, "the multiply is in the stored value"
 
     createDir(genDir)
-    writeFile(genDir / autogenModule("axpyKernel"), ir.text)
-    let (outp, code) = elaborate("generated/" & autogenModule("axpyKernel"))
+    writeFile(leanProjectDir / genAxpyModuleRelPath, ir.text)
+    let (outp, code) = elaborate(genAxpyModuleRelPath)
     doAssert code == 0, "Lean rejected the emitted axpy module:\n" & outp
     echo "  axpy emission + elaboration (warningAsError): ok"
 
@@ -58,7 +59,7 @@ proc runTest() =
     for j in 0 ..< 2:
       expected[j] = 4'u32 * a[j] + b[j]
 
-    let harness = readFile(genDir / autogenModule("axpyKernel")) & """
+    let harness = readFile(leanProjectDir / genAxpyModuleRelPath) & """
 
 def main : IO Unit := do
   let a : Nat → UInt32 := fun i => if i = 0 then 2 else if i = 1 then 3 else 0
@@ -69,7 +70,7 @@ def main : IO Unit := do
   IO.println ("res 1 = " ++ toString (res 1))
   IO.println ("res 2 = " ++ toString (res 2))
 """
-    writeFile(genAxpyExecRelPath, harness)
+    writeFile(leanProjectDir / genAxpyExecRelPath, harness)
     let (outp, code) = execute("generated/axpy_exec.lean")
     doAssert code == 0, "the Lean run of the emitted axpy failed:\n" & outp
     let gotLines = outp.splitLines()
