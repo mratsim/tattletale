@@ -1,7 +1,7 @@
-## Vulkan: a multi-kernel source whose kernels declare different scalar
-## push-constant params is rejected at codegen. The push block is shared
-## by every kernel of the source, a differing ordered layout would read
-## args at wrong offsets.
+## Vulkan: a multi-kernel source with a by-value scalar in the shared
+## push-constant block is refused at engine ingest. A scalar member's
+## offset must be launch-invariant, one kernel's scalar sits between
+## another kernel's block members.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
