@@ -33,6 +33,7 @@ import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
+import ../../builtins/builtins_gpu_types
 
 const printerTarget = "cuda"
 
@@ -108,13 +109,13 @@ const cudaModuleShape = ModuleShape(
 
 proc emitCudaScalar(t: CirType): string =
   ## CUDA bare name of a non-array leaf type, "" when the caller composes the name.
-  getFullTypeName(cudaScalarNames, cudaVectorRule, t)
+  getFullTypeName(TargetVocabs[bkCuda].scalarNames, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## CUDA declaration text of `t` with `ident` appended, the shared C declarator
   ## over the CUDA tables. Arrays put the identifier into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
-  printCDecl(cudaScalarNames, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
+  printCDecl(TargetVocabs[bkCuda].scalarNames, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
   ## CUDA C++ name of `t` with no identifier, as casts and sizeof print it.
@@ -282,8 +283,7 @@ proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
 
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full CUDA translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(cudaWalkPolicy, cudaLitTokens, cudaScalarNames,
-    cudaVectorRule, cudaCastRules, cudaEmit, bkCuda)
+  var ctx = initPrintCtx(cudaWalkPolicy, cudaVectorRule, cudaEmit, bkCuda)
   ctx.mathNames = cudaMathBuiltinNames
   printModule(ctx, m, getModuleKernels(m), cudaModuleShape)
 

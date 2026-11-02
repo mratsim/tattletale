@@ -35,6 +35,7 @@ import std/[macros, math, sets, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
+import ../../builtins/builtins_gpu_types
 
 const printerTarget = "wgsl"
 
@@ -119,20 +120,20 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
   case t.kind
   of ctBool:
     if ctx.storageBoolSpelling:
-      result = "NIM_BOOL"
+      result = TargetVocabs[bkWebGPU].storageBool
     else:
-      result = getScalarName(wgslScalarNames, t)
+      result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
   of ctVoid:
-    result = getScalarName(wgslScalarNames, t)
+    result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
   of ctInt, ctUint:
-    result = getScalarName(wgslScalarNames, t)
+    result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
     if result.len == 0:
       if t.bits == 64:
         ctx.fail("i64/u64 need the shader-int64 device feature, the vendored wgpu-native cannot request it")
       else:
         ctx.fail($t.bits & "-bit integers have no WGSL type, only 32")
   of ctFloat:
-    result = getScalarName(wgslScalarNames, t)
+    result = getScalarName(TargetVocabs[bkWebGPU].scalarNames, t)
     if result.len == 0:
       if t.bits == 64:
         ctx.fail("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
@@ -142,7 +143,7 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     ctx.fail("bfloat16 has no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
-    result = getVectorName(wgslVectorRule, wgslScalarNames, t)
+    result = getVectorName(wgslVectorRule, TargetVocabs[bkWebGPU].scalarNames, t)
     if result.len == 0 and elem.len > 0:
       ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, only 2..4-wide vectors have a name")
   of ctStruct:
@@ -303,7 +304,7 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
     if e.fValue.classify in {fcInf, fcNegInf, fcNan} and e.fLitType.bits == 64:
       ctx.fail("a 64-bit non-finite float has no WGSL token, bitcast<f64> needs the unrequestable shader-f64 feature")
       return ""
-    emitLiteral(e, ctx.lit, ctx.scalarNames)
+    emitLiteral(e, TargetVocabs[ctx.backend].lit, TargetVocabs[ctx.backend].scalarNames)
   of eTernary:
     # select(f, t, cond) puts the false value first, both branches evaluate
     # eagerly and a faulting read in either branch runs whatever the condition
@@ -492,8 +493,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 
 proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full WGSL module through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(wgslWalkPolicy, wgslLitTokens, wgslScalarNames,
-    wgslVectorRule, wgslCastRules, wgslEmit, bkWebGPU)
+  var ctx = initPrintCtx(wgslWalkPolicy, wgslVectorRule, wgslEmit, bkWebGPU)
   ctx.mathNames = wgslMathBuiltinNames
   let kernel = getEntryKernel(ctx, m)
   if ctx.failing():

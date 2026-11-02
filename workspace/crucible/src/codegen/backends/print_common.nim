@@ -20,6 +20,7 @@ import std/[macros, math, sets, strutils, tables]
 import ../ir/cirv2_lang
 import ../ir/ast_datatypes
 import ../../builtins/builtins_gpu_types
+import ../../builtins/builtins_decl_helpers
 import ./targets_registry
 export targets_registry
 
@@ -110,14 +111,8 @@ type WalkCtx* {.inheritable.} = object
   indent*: int
   policy*: WalkPolicy
   ## Walk policy of the target as the shared walk reads it.
-  lit*: LitTokens
-  ## Literal token forms of the target as the shared literal head reads them.
-  scalarNames*: ScalarNames
-  ## Scalar names of the target as read by the narrow integer cast.
   vectorRule*: VectorRule
   ## Vector coverage of the target as read by the declaration procs.
-  castRules*: seq[CastRule]
-  ## Bit-cast coverage rules of the target as read by the shared cast case.
   emit*: TargetEmit
   ## Static emission knobs of the target.
   mathNames*: Table[(string, int), string]
@@ -129,16 +124,13 @@ type WalkCtx* {.inheritable.} = object
   workgroup*: array[3, int]
   ## Workgroup sizes of the entry in flight.
 
-template initPrintCtx*(walkPolicy: WalkPolicy, litTokens: LitTokens,
-    names: ScalarNames, rule: VectorRule, rules: openArray[CastRule],
-    targetEmit: TargetEmit, bk: BackendKind): untyped =
+template initPrintCtx*(walkPolicy: WalkPolicy, rule: VectorRule, targetEmit: TargetEmit, bk: BackendKind): untyped =
   ## Walk context of one module print: the target's tables, clean state.
   ## Expands against the importing printer's own `PrintCtx` type.
   ## A target with registry math rows assigns `mathNames` after the init.
   ##
   ## Returns: the initialized context, `fnName` the module-level kernel name.
-  PrintCtx(fnName: "<module>", policy: walkPolicy, lit: litTokens,
-    scalarNames: names, vectorRule: rule, castRules: @rules,
+  PrintCtx(fnName: "<module>", policy: walkPolicy, vectorRule: rule,
     emit: targetEmit, backend: bk)
 
 proc roundUpMultiple*(v, multiple: int): int =
@@ -198,11 +190,11 @@ proc getScalarName*(names: ScalarNames, t: CirType): string =
   of ctVoid, ctBool, ctString:
     for c in names.cells:
       if c.kind == t.kind:
-        return c.spelling
+        return c.name
   of ctInt, ctUint, ctFloat, ctBf16:
     for c in names.cells:
       if c.kind == t.kind and c.width == t.bits:
-        return c.spelling
+        return c.name
   else:
     discard
   return ""
@@ -353,10 +345,10 @@ template printCast*(ctx: var auto, e: CirExpr, rules: openArray[CastRule], dstNa
     let src = getExprType(e.castOperand)
     let i = matchCastRule(rules, src, e.castType)
     if i >= 0:
-      if rules[i].spelling.len > 0:
-        rules[i].spelling % [ctx.printExpr(e.castOperand), dstName]
+      if rules[i].conv.len > 0:
+        rules[i].conv % [ctx.printExpr(e.castOperand), dstName]
       else:
-        ctx.fail(rules[i].refusal % ["", dstName])
+        ctx.fail("no bit cast to " & dstName)
         ""
     else:
       ctx.printConv(e)
@@ -548,7 +540,7 @@ proc printTargetExpr*(ctx: var auto, e: CirExpr): string =
       return "(" & base & ")." & e.fieldName
     return ctx.getDotText(e, base)
   of eCast:
-    return ctx.printCast(e, ctx.castRules, ctx.emitTypeName(e.castType))
+    return ctx.printCast(e, TargetVocabs[ctx.backend].castRules, ctx.emitTypeName(e.castType))
   of eConv:
     return ctx.printConv(e)
   of eSizeof:
@@ -591,11 +583,11 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
     if e.kind in ctx.policy.targetExprKinds:
       ctx.fail(nilLiteralRejection)
       return ""
-    return emitLiteral(e, ctx.lit, ctx.scalarNames)
+    return emitLiteral(e, TargetVocabs[ctx.backend].lit, TargetVocabs[ctx.backend].scalarNames)
   of eTrue, eFalse, eIntLit, eFloatLit, eStrLit:
     if e.kind in ctx.policy.targetExprKinds:
       return ctx.printTargetExpr(e)
-    return emitLiteral(e, ctx.lit, ctx.scalarNames)
+    return emitLiteral(e, TargetVocabs[ctx.backend].lit, TargetVocabs[ctx.backend].scalarNames)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let op = case e.kind
       of eAdd: "+"

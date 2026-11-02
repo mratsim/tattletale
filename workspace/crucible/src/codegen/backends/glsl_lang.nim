@@ -33,6 +33,7 @@ import std/[macros, strutils, tables]
 import ../ir/ast_datatypes
 import ./print_common
 import ./targets_registry
+import ../../builtins/builtins_gpu_types
 
 const printerTarget = "glsl"
 
@@ -106,7 +107,7 @@ const glslModuleShape = ModuleShape(
 
 proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
-  getLeafTypeName(glslScalarNames, glslVectorRule, t)
+  getLeafTypeName(TargetVocabs[bkGlsl].scalarNames, glslVectorRule, t)
 
 proc glslTypeName(t: CirType): string =
   ## GLSL name of a type with no identifier, array dimensions composed into
@@ -437,8 +438,7 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
 
 proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full GLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
-  var ctx = initPrintCtx(glslWalkPolicy, glslLitTokens, glslScalarNames,
-    glslVectorRule, glslCastRules, glslEmit, bkGlsl)
+  var ctx = initPrintCtx(glslWalkPolicy, glslVectorRule, glslEmit, bkGlsl)
   let kernels = getModuleKernels(m)
   if kernels.len == 0:
     ctx.fail("module declares no kernel")
