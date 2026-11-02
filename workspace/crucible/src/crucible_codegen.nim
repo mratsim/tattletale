@@ -22,3 +22,4 @@ type
     cgMetal
     cgHlsl
     cgSpirv
+    cgCpu      ## CPU backend, C or Nim text for the host compiler
