@@ -22,10 +22,14 @@
 ##   through the threadpool_compute C runtime, the launch emits C
 ## - without threads the launch runs serially on the caller thread, the parallel variant must reproduce that output bitwise
 
+import std/os
 import std/osproc
 import ./engines_common
 when compileOption("threads"):
   import workspace/threadpool_compute
+  when defined(macosx):
+    # Apple's SDK ships no C11 threads.h, threadpool.h includes it for thrd_create and thrd_join, the shim maps those onto pthreads
+    {.passc: "-I\"" & currentSourcePath.parentDir / "c11threads_darwin" & "\"".}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Engine
