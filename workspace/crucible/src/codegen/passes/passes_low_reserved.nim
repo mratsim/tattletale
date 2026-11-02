@@ -10,10 +10,10 @@
 ## Lowering: reserved-keyword renaming, one common pass registered per target
 ## with the target's reserved set as data.
 ##
-## An identifier colliding with a target reserved word takes the `_nim` suffix
-## at every emitted site, so the printers never rename. A target whose language
-## reserves the double-underscore identifier head additionally prefixes every
-## `__`-prefixed name (WGSL: `wgsl_`), the suffix applies first:
+## The pass renames an identifier colliding with a target reserved word,
+## appending the `_nim` suffix at every emitted site, so the printers never rename.
+## - a target whose language reserves the double-underscore identifier head
+##   additionally prefixes every `__`-prefixed name (WGSL: `wgsl_`), suffix first
 ##
 ## - fn names, call sites, params and their body references
 ## - locals (var/const) and their body references
@@ -147,8 +147,7 @@ const CudaReserved* = [
 # ═══════════════════════════════════════════════════════════════════════
 
 template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: string, reserved: untyped, doubleUnderscorePrefix: string = "") =
-  ## Registers the reserved-keyword renaming for one target, the run order
-  ## name-matching passes -> reserved renaming -> printing.
+  ## Run order: name-matching passes -> reserved renaming -> printing.
   ##
   ## Args:
   ## - `passName`: the registry key, one registration per target
@@ -157,7 +156,7 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
   ##   `CudaReserved`
   ## - `doubleUnderscorePrefix`: the prefix every `__`-prefixed name gains,
   ##   "" for targets without a reserved double-underscore head (WGSL: `wgsl_`)
-  reg.register(passName, pkTransform, phaseMain,
+  reg.register(passName, pkTransform,
     "Renames identifiers colliding with backend reserved words: fn names, call sites, params, locals, struct fields, field accesses",
     run = proc(m: CirModule): string {.nimcall.} =
       renameReservedIdentifiers(m, reserved, doubleUnderscorePrefix)
@@ -167,20 +166,14 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
 # The pass
 # ═══════════════════════════════════════════════════════════════════════
 
-func safeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: string): string =
-  ## Returns `name` unchanged when it is neither reserved nor `__`-prefixed,
-  ## else the renamed form:
-  ##
-  ## - a reserved word takes the `_nim` suffix
-  ## - a surviving `__` head gains `doubleUnderscorePrefix` in front, the suffix applies first
+func makeSafeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: string): string =
   var safe = if name in reserved: name & "_nim" else: name
   if doubleUnderscorePrefix.len > 0 and safe.startsWith("__"):
     safe = doubleUnderscorePrefix & safe
   result = safe
 
 proc renameFieldAccesses(e: CirExpr, fieldRenames, symRenames: Table[string, string]) =
-  ## Renames field accesses and symbol references through the maps, in place.
-  ## Expressions are refs, the rename applies to the shared node.
+  ## Expressions are refs, so the rename applies to the shared node.
   if e.isNil:
     return
   case e.kind
@@ -194,7 +187,7 @@ proc renameFieldAccesses(e: CirExpr, fieldRenames, symRenames: Table[string, str
     renameFieldAccesses(e.dotBase, fieldRenames, symRenames)
     return
   of eOconstr:
-    # constructed field names take the struct fields' renames, the member values walk through the children below
+    # object-construction field names are not child nodes, so the children walk never sees them
     for f in mitems(e.kvFields):
       if fieldRenames.hasKey(f.name):
         f.name = fieldRenames[f.name]
@@ -204,7 +197,6 @@ proc renameFieldAccesses(e: CirExpr, fieldRenames, symRenames: Table[string, str
     renameFieldAccesses(ch, fieldRenames, symRenames)
 
 proc renameStmts(ss: var seq[CirStmt], fieldRenames, symRenames: Table[string, string]) =
-  ## Renames the identifiers of one statement list, nested bodies included.
   for s in mitems(ss):
     case s.kind
     of sVar, sConst:
@@ -216,12 +208,9 @@ proc renameStmts(ss: var seq[CirStmt], fieldRenames, symRenames: Table[string, s
       renameFieldAccesses(s.cond, fieldRenames, symRenames)
       renameStmts(s.thenBody, fieldRenames, symRenames)
       renameStmts(s.elseBody, fieldRenames, symRenames)
-    of sLoop:
-      renameStmts(s.loopBody, fieldRenames, symRenames)
-    of sScope:
-      renameStmts(s.scopeBody, fieldRenames, symRenames)
-    of sAssume:
-      renameFieldAccesses(s.assumeCond, fieldRenames, symRenames)
+    of sWhile:
+      renameFieldAccesses(s.whileCond, fieldRenames, symRenames)
+      renameStmts(s.whileBody, fieldRenames, symRenames)
     of sRet:
       renameFieldAccesses(s.retVal, fieldRenames, symRenames)
     of sDiscard:
@@ -235,46 +224,43 @@ proc renameStmts(ss: var seq[CirStmt], fieldRenames, symRenames: Table[string, s
 
 proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUnderscorePrefix: string = "") =
   ## Args:
-  ## - `m`: the module, renamed in place
-  ## - `reserved`: the target's reserved words
-  ## - `doubleUnderscorePrefix`: the prefix every `__`-prefixed name gains, "" when none
+  ## - `m`: the module, renamed in place (its types and procs are shared refs)
   ##
   ## The `_nim` suffix marks every renamed identifier, declarations and uses
-  ## rename through one map so the emitted source stays consistent.
+  ## rename through one map so the emitted source remains consistent.
   var fieldRenames: Table[string, string]
   for t in m.types:
     if t.kind == ctStruct:
-      # type name renames once here, its uses inherit the renamed name
-      let safeName = safeIdent(t.name, reserved, doubleUnderscorePrefix)
+      # types are shared refs so a renamed name reaches every use through the type object
+      let safeName = makeSafeIdent(t.name, reserved, doubleUnderscorePrefix)
       if safeName != t.name:
         fieldRenames[t.name] = safeName
         t.name = safeName
       for f in mitems(t.fields):
-        let safe = safeIdent(f.name, reserved, doubleUnderscorePrefix)
+        let safe = makeSafeIdent(f.name, reserved, doubleUnderscorePrefix)
         if safe != f.name:
           fieldRenames[f.name] = safe
           f.name = safe
-  # function names rename once at module level, one shared map
-  # feeds the per-proc symbol walks so every call site renames with its callee
+  # one shared fn map feeds every proc's symbol walk, so a call site renames with its callee
   var fnRenames: Table[string, string]
   for fn in m.procs:
-    let safeFn = safeIdent(fn.name, reserved, doubleUnderscorePrefix)
+    let safeFn = makeSafeIdent(fn.name, reserved, doubleUnderscorePrefix)
     if safeFn != fn.name:
       fnRenames[fn.name] = safeFn
       fn.name = safeFn
   for fn in m.procs:
     var symRenames = fnRenames
     for p in mitems(fn.params):
-      let safe = safeIdent(p.name, reserved, doubleUnderscorePrefix)
+      let safe = makeSafeIdent(p.name, reserved, doubleUnderscorePrefix)
       if safe != p.name:
         symRenames[p.name] = safe
         p.name = safe
-    # declare-then-rename: the walk reads the maps, the declarations feed them
+    # declarations rename first: the body walk reads the maps that they feed
     var decls: seq[tuple[name: string, safe: string]]
     for s in fn.body.mitems:
       case s.kind
       of sVar, sConst:
-        let safe = safeIdent(s.name, reserved, doubleUnderscorePrefix)
+        let safe = makeSafeIdent(s.name, reserved, doubleUnderscorePrefix)
         if safe != s.name:
           decls.add((s.name, safe))
           s.name = safe

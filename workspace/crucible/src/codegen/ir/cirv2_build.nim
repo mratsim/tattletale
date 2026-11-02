@@ -9,11 +9,11 @@
 ##
 ## Builders produce well-shaped nodes by construction:
 ##
-## - typed ops get their type from the caller
+## - typed ops and ternaries get their type from the caller
 ## - comparisons derive their operand type from the first operand
-## - calls exist only as statements (`callS`) or destination-bound expressions (`callE`)
+## - statement calls go through `callS`
 ##
-## Anything the builders cannot express correctly is a verifier violation, and `cirv2_verify` catches it.
+## A construct that the builders cannot express correctly has no node: build no such shape.
 
 import cirv2_lang
 import std/macros
@@ -35,13 +35,16 @@ proc tUint*(bits: int): CirType =
 proc tFloat*(bits: int): CirType =
   CirType(kind: ctFloat, bits: bits)
 
+proc tBf16*(): CirType =
+  CirType(kind: ctBf16, bits: 16)
+
 proc tVec*(n: int, elem: CirType): CirType =
   CirType(kind: ctVector, vN: n, vElem: elem)
 
-proc tPtr*(space: CirAddrSpace, elem: CirType): CirType =
+proc tPtr*(space: AddressSpace, elem: CirType): CirType =
   CirType(kind: ctPtr, space: space, pElem: elem)
 
-proc tAptr*(space: CirAddrSpace, elem: CirType): CirType =
+proc tAptr*(space: AddressSpace, elem: CirType): CirType =
   CirType(kind: ctAptr, space: space, pElem: elem)
 
 proc fld*(name: string, typ: CirType): CirField =
@@ -53,7 +56,7 @@ proc tStruct*(name: string, fields: varargs[CirField]): CirType =
 proc tArray*(n: int, elem: CirType): CirType =
   CirType(kind: ctArray, aN: n, aElem: elem)
 
-proc tSpan*(space: CirAddrSpace, elem: CirType): CirType =
+proc tSpan*(space: AddressSpace, elem: CirType): CirType =
   ## Runtime-length view over `elem` storage in `space`:
   ##
   ## - an `openArray[T]` parameter or the result of a `toOpenArray` call
@@ -64,32 +67,25 @@ proc tSpan*(space: CirAddrSpace, elem: CirType): CirType =
 proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
   CirType(kind: ctProc, params: @params, ret: ret)
 
-proc withOrigin*(t: CirType, n: NimNode): CirType =
-  ## Macro-time only: the origin survives `withSpace` copies but never participates in `sameType`.
-  t.origin = n
-  t
-
 # Expression constructors
 
-proc sym*(name: string, typ: CirType, builtin = false,
-          coordBuiltin = cbkNone, synchroBuiltin = sbkNone,
-          reductionBuiltin = rbkNone, atomicsBuiltin = abkNone,
-          shuffleBuiltin = shkNone): CirExpr =
+proc sym*(name: string, typ: CirType, builtin = false): CirExpr =
   ## One symbol reference. `builtin` marks a `{.builtin.}` read.
-  ##
-  ## Contract:
-  ## - the canonicalization pass fills the typed builtin kinds from the name tables
-  ## - the printers dispatch on the kinds
-  CirExpr(kind: eSym, name: name, typ: typ, builtin: builtin,
-    coordBuiltin: coordBuiltin, synchroBuiltin: synchroBuiltin,
-    reductionBuiltin: reductionBuiltin, atomicsBuiltin: atomicsBuiltin,
-    shuffleBuiltin: shuffleBuiltin)
+  ## Consumers recognize the builtin vocabulary from the canonical name alone.
+  CirExpr(kind: eSym, name: name, typ: typ, builtin: builtin)
 
 proc intLit*(value: int64, typ: CirType): CirExpr =
   CirExpr(kind: eIntLit, value: value, litType: typ)
 
 proc fltLit*(value: float64, typ: CirType): CirExpr =
   CirExpr(kind: eFloatLit, fValue: value, fLitType: typ)
+
+proc tString*(): CirType =
+  CirType(kind: ctString)
+
+proc strLit*(value: string): CirExpr =
+  ## One C string literal, its text as the target prints it between quotes.
+  CirExpr(kind: eStrLit, sValue: value)
 
 proc nilE*(typ: CirType): CirExpr =
   CirExpr(kind: eNil, nilType: typ)
@@ -109,8 +105,8 @@ proc atE*(base, index: CirExpr): CirExpr =
 proc patE*(base, index: CirExpr): CirExpr =
   CirExpr(kind: ePat, patBase: base, patIndex: index)
 
-proc dotE*(base: CirExpr, fieldName: string, inherit = 0): CirExpr =
-  CirExpr(kind: eDot, dotBase: base, fieldName: fieldName, inherit: inherit)
+proc dotE*(base: CirExpr, fieldName: string): CirExpr =
+  CirExpr(kind: eDot, dotBase: base, fieldName: fieldName)
 
 proc arithE*(opKind: CirExprKind, opType: CirType, left, right: CirExpr): CirExpr =
   ## One constructor for the typed binary arithmetic/bitwise family (eAdd/eSub/eMul/eDiv/eMod/eShl/eShr/eBitAnd/eBitOr/eBitXor).
@@ -130,9 +126,6 @@ proc shrE*(opType: CirType, left, right: CirExpr): CirExpr = arithE(eShr, opType
 proc bitAndE*(opType: CirType, left, right: CirExpr): CirExpr = arithE(eBitAnd, opType, left, right)
 proc bitOrE*(opType: CirType, left, right: CirExpr): CirExpr = arithE(eBitOr, opType, left, right)
 proc bitXorE*(opType: CirType, left, right: CirExpr): CirExpr = arithE(eBitXor, opType, left, right)
-
-proc bitNotE*(opType: CirType, operand: CirExpr): CirExpr =
-  CirExpr(kind: eBitNot, unType: opType, unOperand: operand)
 
 proc negE*(opType: CirType, operand: CirExpr): CirExpr =
   CirExpr(kind: eNeg, unType: opType, unOperand: operand)
@@ -160,6 +153,26 @@ proc andE*(left, right: CirExpr): CirExpr =
 proc orE*(left, right: CirExpr): CirExpr =
   CirExpr(kind: eOr, andLeft: left, andRight: right)
 
+proc ternaryE*(ternType: CirType, cond, thenE, elseE: CirExpr): CirExpr =
+  ## A conditional value, `cond` selects between `thenE` and `elseE`.
+  ##
+  ## Args:
+  ## - `ternType` types the node, both branches state it as their own type.
+  ##   Printers emit the target's conditional-value form:
+  ##   `?:` where one exists, `select(elseE, thenE, cond)` on WGSL, `OpSelect` on SPIR-V.
+  ##   Branch values must already carry `ternType`.
+  doAssert cond != nil and thenE != nil and elseE != nil,
+    "ternaryE: a conditional value takes a condition and two branches"
+  let thenT = getExprType(thenE)
+  doAssert thenT != nil and sameType(thenT, ternType),
+    "ternaryE: the then branch's type does not match the conditional type," &
+    " convert the branch at the construction site"
+  let elseT = getExprType(elseE)
+  doAssert elseT != nil and sameType(elseT, ternType),
+    "ternaryE: the else branch's type does not match the conditional type," &
+    " convert the branch at the construction site"
+  CirExpr(kind: eTernary, ternType: ternType, cond: cond, thenE: thenE, elseE: elseE)
+
 proc castE*(typ: CirType, operand: CirExpr): CirExpr =
   CirExpr(kind: eCast, castType: typ, castOperand: operand)
 
@@ -182,12 +195,13 @@ proc aconstrE*(typ: CirType, elems: varargs[CirExpr]): CirExpr =
   CirExpr(kind: eAconstr, acType: typ, elems: @elems)
 
 proc callE*(callee: CirExpr, args: varargs[CirExpr]): CirExpr =
-  ## A call bound to its destination: legal only as the RHS of `asgn`.
+  ## A call in value position: its result may sit in any operand slot
+  ## (see the `eCall` contract in cirv2_lang). Statement-position calls use `callS`.
   CirExpr(kind: eCall, callee: callee, args: @args)
 
 # Statement constructors
 
-proc varD*(name: string, typ: CirType, init: CirExpr = nil, space: CirAddrSpace = caThread): CirStmt =
+proc varD*(name: string, typ: CirType, init: CirExpr = nil, space: AddressSpace = caThread): CirStmt =
   ## Declares a local:
   ## - `space` names the memory class
   ## - `caThread` is the per-thread register default, `caThreadgroup` a `{.smem.}` local, `caConstant` a `{.const_mem.}` local
@@ -202,30 +216,13 @@ proc asgnS*(lhs, rhs: CirExpr): CirStmt =
 proc iteS*(cond: CirExpr, thenBody: seq[CirStmt], elseBody: seq[CirStmt] = @[]): CirStmt =
   CirStmt(kind: sIte, cond: cond, thenBody: thenBody, elseBody: elseBody)
 
-proc loopS*(loopBody: seq[CirStmt], unroll = false): CirStmt =
-  ## `unroll` marks a `{.unroll.}`-hinted loop: every printer emits a full-unroll directive in front of it.
-  CirStmt(kind: sLoop, loopBody: loopBody, unroll: unroll)
-
-proc rng*(lo, hi: int64): CirRange =
-  CirRange(lo: lo, hi: hi)
-
-proc branch*(ranges: seq[CirRange], body: seq[CirStmt]): CirCaseBranch =
-  CirCaseBranch(ranges: ranges, body: body)
-
-proc caseS*(selector: CirExpr, branches: seq[CirCaseBranch], caseElse: seq[CirStmt] = @[]): CirStmt =
-  CirStmt(kind: sCase, selector: selector, branches: branches, caseElse: caseElse)
-
-proc labS*(labName: string): CirStmt =
-  CirStmt(kind: sLab, labName: labName)
-
-proc jmpS*(jmpTarget: string): CirStmt =
-  CirStmt(kind: sJmp, jmpTarget: jmpTarget)
-
-proc scopeS*(scopeBody: seq[CirStmt]): CirStmt =
-  CirStmt(kind: sScope, scopeBody: scopeBody)
-
-proc assumeS*(assumeCond: CirExpr): CirStmt =
-  CirStmt(kind: sAssume, assumeCond: assumeCond)
+proc whileS*(cond: CirExpr, whileBody: seq[CirStmt], unroll = false): CirStmt =
+  ## A loop re-testing `cond` before every iteration.
+  ##
+  ## Args:
+  ## - `cond` is an ordinary expression, calls may appear in it
+  doAssert cond != nil, "whileS: a conditioned loop takes a condition"
+  CirStmt(kind: sWhile, whileCond: cond, whileBody: whileBody, whileUnroll: unroll)
 
 proc retS*(retVal: CirExpr = nil): CirStmt =
   CirStmt(kind: sRet, retVal: retVal)
@@ -260,3 +257,66 @@ proc procD*(name: string, params: seq[CirParam], ret: CirType, body: seq[CirStmt
 
 proc moduleD*(name: string, types: seq[CirType], procs: seq[CirProc]): CirModule =
   CirModule(name: name, types: types, procs: procs)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Proc pragmas
+# ═══════════════════════════════════════════════════════════════════════
+
+proc applyProcPragmas*(fn: NimNode, p: CirProc): string =
+  ## Args:
+  ## - `p` the CirProc annotated in place
+  ##
+  ## `global` marks the compute entry point, `exportc` renames the emitted entry point,
+  ## `workgroup(x, y, z)` sets the baked launch shape.
+  ## `{.inline.}` marks an inline device function.
+  ##
+  ## Other pragmas are legal and dropped.
+  ##
+  ## Returns "" when clean, else the first refusal.
+  ## A workgroup dimension of 0 or less is outside the supported set:
+  ## every target emits it verbatim as an invalid launch shape.
+  for prag in fn.pragma:
+    case prag.kind
+    of nnkIdent, nnkSym:
+      case prag.strVal
+      of "global":
+        p.isKernel = true
+      of "inline":
+        p.inline = true
+      else:
+        discard
+    of nnkExprColonExpr, nnkCall, nnkCommand:
+      if prag.len >= 2:
+        case prag[0].strVal
+        of "exportc":
+          # `exportc: "entry"` renames the emitted entry point.
+          # a proc keeps its own name under a bare `exportc`
+          p.exportName = prag[1].strVal
+        of "workgroup":
+          # both call and colon forms: `workgroup(x, y, z)`, `workgroup: (x, y, z)`
+          var dims: NimNode =
+            if prag.kind == nnkExprColonExpr:
+              prag[1]
+            else:
+              prag
+          if dims.kind in {nnkPar, nnkTupleConstr, nnkBracket}:
+            for d in 0 ..< 3:
+              # a missing trailing dimension defaults to 1: workgroup: (4, 2) is the (4, 2, 1) launch shape
+              let v = if d < dims.len: dims[d].intVal.int else: 1
+              if v <= 0:
+                return "workgroup dimension " & $(d + 1) & " is " & $v &
+                  ", only positive dimensions are supported"
+              p.workgroup[d] = v
+          elif dims.kind in nnkIntLit .. nnkUInt64Lit:
+            if dims.intVal.int <= 0:
+              return "workgroup dimension 1 is " & $dims.intVal.int &
+                ", only positive dimensions are supported"
+            p.workgroup[0] = dims.intVal.int
+            p.workgroup[1] = 1
+            p.workgroup[2] = 1
+        else:
+          discard
+    else:
+      discard
+  return ""
+

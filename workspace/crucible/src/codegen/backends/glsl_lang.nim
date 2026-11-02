@@ -15,20 +15,24 @@
 ## - `eSizeof` reports the packed byte size from the stored module layout records, GLSL has no `sizeof`
 ##
 ## Lowering-pass contract (`passes_lowering_glsl.nim` runs before printing):
-## - `ptr` locals dissolve into their pointees (GLSL has no function-storage addressing), a surviving pointer local refuses, naming the pass
+## - `ptr` locals rewrite to their pointees (GLSL has no function-storage addressing),
+##   the pass refuses a surviving pointer local, the refusal message
+##   identifies the pass
 ## - a `var T` device-function parameter binds as `inout`, the qualify pass retyped it to its pointee
 ## - `{.smem.}` and `{.const_mem.}` kernel locals relocate into `CirModule.globals`, emitted as program-scope `shared`/`const` declarations
+## - the ref-block pass registers every buffer-reference block into
+##   `CirModule.refBlocks`, the printer declares one per entry in order
 ##
 ## Remaining checks:
-## - a threadgroup/constant local surviving in a nested scope or device function refuses, a `caDevice`-space local refuses too
-## - jmp to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
+## - the printer refuses a threadgroup/constant local surviving in a nested scope or device function, and a `caDevice`-space local too
+## - a loop prints `while (cond)`, `{.unroll.}` adds `[[unroll]]`
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, tables]
 import ../ir/ast_datatypes
-import ./emit_common
-import ../passes/layout_std430
+import ./print_common
+import ./targets_registry
 
 type
   PrintCtx = object
@@ -36,12 +40,16 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
-    refBlocks: OrderedTable[string, string]
-    ## Buffer-reference block declarations to emit, block name -> member text.
-    layouts: Table[string, StructLayout]
-    ## Stored struct layouts of the module, the layout pass filled them.
+    policy: WalkPolicy
+    ## Walk policy of the target. The shared walk reads its fields.
+    lit: LitTokens
+    ## Literal token forms of the target. The shared literal head reads them.
+    scalarNames: ScalarNames
+    ## Scalar names of the target. The narrow integer cast names its type from them.
 
 const printerTarget = "glsl"
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
@@ -49,101 +57,41 @@ const printerTarget = "glsl"
 
 proc emitGlslScalar(t: CirType): string =
   ## GLSL name of a non-array leaf type, "" when the caller composes the name.
-  case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    result = "bool"
-  of ctInt:
-    case t.bits
-    of 8:
-      result = "int8_t"
-    of 16:
-      result = "int16_t"
-    of 32:
-      result = "int"
-    of 64:
-      result = "int64_t"
-    else:
-      result = ""
-  of ctUint:
-    case t.bits
-    of 8:
-      result = "uint8_t"
-    of 16:
-      result = "uint16_t"
-    of 32:
-      result = "uint"
-    of 64:
-      result = "uint64_t"
-    else:
-      result = ""
-  of ctFloat:
-    case t.bits
-    of 16:
-      result = "float16_t"
-    of 32:
-      result = "float"
-    of 64:
-      result = "double"
-    else:
-      result = ""
-  of ctVector:
-    let elem = emitGlslScalar(t.vElem)
-    let prefix = case elem
-      of "float": "vec"
-      of "double": "dvec"
-      of "float16_t": "f16vec"
-      of "int": "ivec"
-      of "uint": "uvec"
-      of "bool": "bvec"
-      else: ""
-    if prefix.len > 0:
-      result = prefix & $t.vN
-  of ctStruct:
-    result = t.name
-  of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
-    result = ""
+  getLeafName(glslScalarNames, glslVectorRule, t)
 
-proc emitGlslTypeBare(t: CirType): string =
+proc emitTypeBare(t: CirType): string =
   ## GLSL name of `t` with no identifier, array dimensions composed into
   ## the name (`float[4]`), the form of casts and constructors.
   case t.kind
   of ctArray:
-    result = emitGlslTypeBare(t.aElem) & "[" & $t.aN & "]"
+    result = emitTypeBare(t.aElem) & "[" & $t.aN & "]"
   else:
     result = emitGlslScalar(t)
 
-proc refTypeName(t: CirType): string =
-  ## GLSL name of the buffer-reference block binding `t`:
-  ## a pointer renders as its reference block type.
-  result = "Ref_" & emitGlslTypeBare(t).multiReplace(
+proc refTypeName*(t: CirType): string =
+  ## Returns the GLSL name of the buffer-reference block binding `t`.
+  ## A pointer renders as its reference block type. The GLSL ref-block
+  ## analysis pass dedups blocks by this name.
+  result = "Ref_" & emitTypeBare(t).multiReplace(
     (" ", "_"), ("[", ""), ("]", ""), (",", "_"), ("(", ""), (")", ""))
 
-proc requireRefBlock(ctx: var PrintCtx, pointee: CirType) =
-  ## Registers the buffer-reference block of one runtime-array pointee,
-  ## deduped by block name. The block's member is the runtime array `x[]`:
+proc emitGlslRefBlockMember(ctx: var PrintCtx, pointee: CirType): string =
+  ## Member declaration of one buffer-reference block, the runtime array `x[]`:
   ## a fixed-array element nests after the runtime dimension (`uint8_t x[][32]`),
   ## the unsized dimension is only legal in the outermost position.
-  let name = refTypeName(pointee)
-  if ctx.refBlocks.hasKey(name):
-    return
-  let member =
-    case pointee.kind
-    of ctArray:
-      var base = pointee
-      var dims = ""
-      while base.kind == ctArray:
-        dims &= "[" & $base.aN & "]"
-        base = base.aElem
-      emitGlslScalar(base) & " x[]" & dims & ";"
-    of ctVoid, ctProc:
-      ctx.fail("buffer reference to " & $pointee.kind)
-      ""
-    else:
-      emitGlslScalar(pointee) & " x[];"
-  if member.len > 0:
-    ctx.refBlocks[name] = member
+  case pointee.kind
+  of ctArray:
+    var base = pointee
+    var dims = ""
+    while base.kind == ctArray:
+      dims &= "[" & $base.aN & "]"
+      base = base.aElem
+    result = emitGlslScalar(base) & " x[]" & dims & ";"
+  of ctVoid, ctProc:
+    ctx.fail("buffer reference to " & $pointee.kind)
+    result = ""
+  else:
+    result = emitGlslScalar(pointee) & " x[];"
 
 proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
   ## GLSL declaration of a buffer pointer: the reference block handle,
@@ -151,7 +99,6 @@ proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
   if t.space != caDevice:
     ctx.fail("buffer pointer in " & $t.space & " space")
     return ""
-  ctx.requireRefBlock(t.pElem)
   result = refTypeName(t.pElem) & ' ' & ident
 
 proc emitGlslParam(t: CirType, name: string, varParam: bool): string =
@@ -161,493 +108,314 @@ proc emitGlslParam(t: CirType, name: string, varParam: bool): string =
   if t.kind == ctArray:
     result = binding & emitGlslScalar(t.aElem) & ' ' & name & "[" & $t.aN & "]"
   else:
-    result = binding & emitGlslTypeBare(t) & ' ' & name
+    result = binding & emitTypeBare(t) & ' ' & name
+
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## GLSL declaration text of one struct member: a buffer pointer member is
+  ## the reference block handle, an array stacks the dimension behind the name.
+  block:
+    let missing = getUnnamedScalarCell(glslScalarNames, f.typ)
+    if missing != nil:
+      ctx.fail(scalarRefusal(printerTarget, glslScalarNames, missing))
+      return ""
+  if f.typ.kind == ctArray:
+    return emitGlslScalar(f.typ.aElem) & ' ' & f.name & "[" & $f.typ.aN & "]"
+  if f.typ.kind in {ctAptr, ctPtr}:
+    return ctx.emitGlslPtrDecl(f.typ, f.name)
+  return emitTypeBare(f.typ) & ' ' & f.name
 
 # ═══════════════════════════════════════════════════════════════════════
 # Coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
-proc glslCoordName(kind: CoordBuiltinKind): string =
-  ## GLSL name of a canonical coordinate builtin kind: all six are native
+proc getGlslCoordName(name: string): string =
+  ## GLSL name of a canonical coordinate builtin: all six are native
   ## GLSL builtins, a plain rename.
-  case kind
-  of cbkThreadPositionInGrid: "gl_GlobalInvocationID"
-  of cbkThreadgroupPositionInGrid: "gl_WorkGroupID"
-  of cbkThreadPositionInThreadgroup: "gl_LocalInvocationID"
-  of cbkThreadsPerThreadgroup: "gl_WorkGroupSize"
-  of cbkThreadgroupsPerGrid: "gl_NumWorkGroups"
-  of cbkThreadIndexInThreadgroup: "gl_LocalInvocationIndex"
-  of cbkNone: ""
+  case name
+  of "thread_position_in_grid": "gl_GlobalInvocationID"
+  of "threadgroup_position_in_grid": "gl_WorkGroupID"
+  of "thread_position_in_threadgroup": "gl_LocalInvocationID"
+  of "threads_per_threadgroup": "gl_WorkGroupSize"
+  of "threadgroups_per_grid": "gl_NumWorkGroups"
+  of "thread_index_in_threadgroup": "gl_LocalInvocationIndex"
+  else: ""
 
-proc emitExtensions(features: ModuleFeatures): string =
-  ## GLSL extension block from the stored module feature scan
-  ## (`CirModule.features`, filled by the feature-scan pass), `#version 450` first.
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
+  ## GLSL extension block over the stored module feature scan `CirModule.features`.
+  ## `#version 450` prints first, then one line per feature in use.
   result = "#version 450\n"
   result.add "#extension GL_EXT_buffer_reference : enable\n"
   result.add "#extension GL_EXT_buffer_reference2 : enable\n"
-  if features.controlFlow:
-    result.add "#extension GL_EXT_control_flow_attributes : require\n"
-  if features.fp64:
-    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"
-  if features.fp16:
-    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n"
-    result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
-  if features.int64:
-    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"
-  if features.int16:
-    result.add "#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable\n"
-    result.add "#extension GL_EXT_shader_16bit_storage : enable\n"
-  if features.int8:
-    result.add "#extension GL_EXT_shader_explicit_int8 : enable\n"
-    result.add "#extension GL_EXT_shader_8bit_storage : enable\n"
-  if features.subgroup:
-    result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
-    result.add "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"
-  if features.subgroupShuffle:
-    result.add "#extension GL_KHR_shader_subgroup_basic : enable\n"
-    result.add "#extension GL_KHR_shader_subgroup_shuffle : enable\n"
-  if features.atomicFloat:
-    result.add "#extension GL_EXT_shader_atomic_float : enable\n"
-  result.add "\n"
+  result.add declareExtensions(m.features, [
+    (m.features.controlFlow, "#extension GL_EXT_control_flow_attributes : require\n"),
+    (m.features.fp64, "#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable\n"),
+    (m.features.fp16, "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable\n"),
+    (m.features.fp16, "#extension GL_EXT_shader_16bit_storage : enable\n"),
+    (m.features.int64, "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"),
+    (m.features.int16, "#extension GL_EXT_shader_explicit_arithmetic_types_int16 : enable\n"),
+    (m.features.int16, "#extension GL_EXT_shader_16bit_storage : enable\n"),
+    (m.features.int8, "#extension GL_EXT_shader_explicit_int8 : enable\n"),
+    (m.features.int8, "#extension GL_EXT_shader_8bit_storage : enable\n"),
+    (m.features.subgroup, "#extension GL_KHR_shader_subgroup_basic : enable\n"),
+    (m.features.subgroup, "#extension GL_KHR_shader_subgroup_arithmetic : enable\n"),
+    (m.features.subgroupShuffle, "#extension GL_KHR_shader_subgroup_basic : enable\n"),
+    (m.features.subgroupShuffle, "#extension GL_KHR_shader_subgroup_shuffle : enable\n"),
+    (m.features.atomicFloat, "#extension GL_EXT_shader_atomic_float : enable\n")])
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  ## A reference type constructs from its element type.
+  let t = e.castType
+  if t.kind in {ctAptr, ctPtr}:
+    return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
+  return emitTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
 
-# GLSL has no infinity or NaN literal: the IEEE-754 bit patterns go through
-# `uintBitsToFloat` (32 bit) and the width conversion at the use site.
-const glslFloatTokens = FloatLitTokens(
-  inf16: "float16_t(uintBitsToFloat(0x7f800000u))",
-  negInf16: "float16_t(uintBitsToFloat(0xff800000u))",
-  nan16: "float16_t(uintBitsToFloat(0x7fc00000u))",
-  inf32: "uintBitsToFloat(0x7f800000u)",
-  negInf32: "uintBitsToFloat(0xff800000u)",
-  nan32: "uintBitsToFloat(0x7fc00000u)",
-  inf64: "double(uintBitsToFloat(0x7f800000u))",
-  negInf64: "double(uintBitsToFloat(0xff800000u))",
-  nan64: "double(uintBitsToFloat(0x7fc00000u))")
 
-proc emitGlslLit(e: CirExpr): string =
-  ## GLSL token of a literal, typed by its literal type.
-  ## Wide integer literals print as constructor calls (`int64_t(5)`),
-  ## the `LL` suffix is rejected by glslang.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      case e.litType.bits
-      of 64: result = "uint64_t(" & $e.value & ")"
-      of 32: result = $e.value & "U"
-      else: result = "(" & emitGlslScalar(e.litType) & ")" & $e.value
-    of ctInt:
-      case e.litType.bits
-      of 64: result = "int64_t(" & $e.value & ")"
-      of 32: result = $e.value
-      else: result = "(" & emitGlslScalar(e.litType) & ")" & $e.value
+proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
+  ## GLSL vocabulary for the atomic fetch-and-add builtin, shared by the value and statement call paths:
+  ##
+  ## - int atomicAdd is core
+  ## - fp needs GL_EXT_shader_atomic_float, enabled at module scope
+  ##   for an fp atomicFetchAdd in the module
+  ## - atomicAdd increments through one indirection, the address operand
+  ##   is the reference's element 0
+  let addrTxt = if getExprType(args[0]) != nil and getExprType(
+      args[0]).kind in {ctAptr, ctPtr}:
+    ctx.printExpr(args[0]) & ".x[0]"
+  else:
+    ctx.printExpr(args[0])
+  return "atomicAdd(" & addrTxt & ", " & ctx.printExpr(args[1]) & ")"
+
+
+proc printBuiltinCall(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
+  ## Returns the GLSL text of an expression-position builtin call,
+  ## "" when `call.callee` is not a builtin.
+  if call.callee.kind == eSym and call.callee.builtin:
+    # builtin vocabulary dispatches on the canonical name through this table
+    case call.callee.name
+    of "atomicFetchAdd":
+      # atomicFetchAdd prints its own arguments, a pre-print into the shared arg list would print each argument twice
+      return ctx.printGlslAtomicFetchAdd(call.args)
+    of "reduceAdd":
+      return "subgroupAdd(" & args.join(", ") & ")"
+    of "reduceMax":
+      return "subgroupMax(" & args.join(", ") & ")"
+    of "simd_shuffle":
+      # subgroupShuffle's index parameter is `uint`, a plain cast
+      # compiles without GL_NV_explicit_typecast
+      return "subgroupShuffle(" & args[0] & ", uint(" & args[1] & "))"
+    of "simd_shuffle_xor":
+      return "subgroupShuffleXor(" & args[0] & ", uint(" & args[1] & "))"
+    of "threadgroup_barrier", "threadgroup_barrier_device":
+      ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
+      return ""
     else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, glslFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 16: result = "float16_t(" & $e.fValue & ")"
-      of 32: result = $e.fValue & "f"
-      of 64: result = "double(" & $e.fValue & ")"
-      else: result = $e.fValue
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<glsl: not a literal>"
+      if glslConvBuiltinNames.hasKey(call.callee.name):
+        return glslConvBuiltinNames.getOrDefault(call.callee.name) % args.join(", ")
+  return ""
 
-proc emitVectorComponent(name: string): string =
-  ## GLSL component letter of a CIRv2 vector component name (`F0`..`F3`).
-  case name
-  of "F0": "x"
-  of "F1": "y"
-  of "F2": "z"
-  of "F3": "w"
-  else: ""
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  if ctx.failing():
-    return ""
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## GLSL text of the kinds in `targetExprKinds`.
   case e.kind
-  of eNil:
-    ctx.fail("nil literal is outside the GLSL subset")
-    return ""
-  of eTrue, eFalse, eIntLit, eFloatLit:
-    return emitGlslLit(e)
   of eSym:
-    if e.coordBuiltin != cbkNone:
-      if e.coordBuiltin == cbkThreadIndexInThreadgroup:
+    if e.builtin and e.name in CoordBuiltinNames:
+      if e.name == "thread_index_in_threadgroup":
         return "int(gl_LocalInvocationIndex)"
-      let g = glslCoordName(e.coordBuiltin)
+      let g = getGlslCoordName(e.name)
       return "ivec3(int(" & g & ".x), int(" & g & ".y), int(" & g & ".z))"
     if e.typ != nil and e.typ.kind == ctPtr and e.typ.space != caDevice:
-      ctx.fail("pointer local " & e.name & " used as a value, GLSL has no" &
-        " pointer values, the GLSL lowering pass dissolves pointer locals")
+      ctx.fail("pointer local " & e.name & " used as a value, GLSL has no pointer values")
       return ""
     return e.name
   of eAt, ePat:
-    let base = (if e.kind == eAt: e.atBase else: e.patBase)
-    let idx = ctx.printExpr(if e.kind == eAt: e.atIndex else: e.patIndex)
+    let base = if e.kind == eAt: e.atBase else: e.patBase
+    let idx = if e.kind == eAt: e.atIndex else: e.patIndex
+    let idxTxt = ctx.printExpr(idx)
     let bt = getExprType(base)
     var baseTxt = ctx.printExpr(base)
     if base.kind in {eCast, eConv}:
       # a cast binds looser than the subscript: parenthesize the base
       baseTxt = "(" & baseTxt & ")"
     if bt != nil and bt.kind == ctAptr:
-      ctx.requireRefBlock(bt.pElem)
-      return baseTxt & ".x[" & idx & "]"
+      return baseTxt & ".x[" & idxTxt & "]"
     if bt != nil and bt.kind == ctArray:
-      return baseTxt & "[" & idx & "]"
+      return baseTxt & "[" & idxTxt & "]"
     if bt != nil and bt.kind == ctPtr:
-      ctx.fail("index through a pointer, the GLSL lowering pass dissolves" &
-        " pointer locals")
+      ctx.fail("index through a pointer is outside the GLSL subset")
       return ""
-    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) &
-      " base is outside the GLSL subset")
+    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the GLSL subset")
     return ""
+  of eDot:
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
+      # a component of an unsigned GLSL builtin, cast to the canonical int
+      return "int(" & getGlslCoordName(e.dotBase.name) & "." & e.fieldName & ")"
+    let bt = getExprType(e.dotBase)
+    if bt != nil and bt.kind == ctVector:
+      let comp = ctx.getVectorComponent(e.fieldName)
+      if ctx.failing():
+        return ""
+      return ctx.printExpr(e.dotBase) & "." & comp
+    return ctx.printExpr(e.dotBase) & "." & e.fieldName
   of eDeref:
     let op = e.derefOperand
     let ot = getExprType(op)
     if ot != nil and ot.kind == ctAptr:
-      ctx.requireRefBlock(ot.pElem)
       return ctx.printExpr(op) & ".x[0]"
     if ot != nil and ot.kind == ctPtr:
-      ctx.fail("deref of a pointer, GLSL has no function-storage addressing," &
-        " the GLSL lowering pass dissolves pointer locals")
+      ctx.fail("deref of a pointer is outside the GLSL subset")
       return ""
-    ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) &
-      " operand is outside the GLSL subset")
+    ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) & " operand is outside the GLSL subset")
     return ""
-  of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      # a component of an unsigned GLSL builtin, cast to the canonical int
-      return "int(" & glslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
-    let bt = getExprType(e.dotBase)
-    if bt != nil and bt.kind == ctVector:
-      let comp = emitVectorComponent(e.fieldName)
-      if comp.len == 0:
-        ctx.fail("no vector component " & e.fieldName)
-        return ""
-      return ctx.printExpr(e.dotBase) & "." & comp
-    return ctx.printExpr(e.dotBase) & "." & e.fieldName
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    let op = case e.kind
-      of eAdd: "+"
-      of eSub: "-"
-      of eMul: "*"
-      of eDiv: "/"
-      of eMod: "%"
-      of eShl: "<<"
-      of eShr: ">>"
-      of eBitAnd: "&"
-      of eBitOr: "|"
-      else: "^"
-    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-      of eEq: "=="
-      of eNeq: "!="
-      of eLt: "<"
-      else: "<="
-    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
-  of eNot:
-    return "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    let op = if e.kind == eAnd: "&&" else: "||"
-    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
-  of eNeg:
-    return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eConv:
-    let t = e.castType
-    if t.kind in {ctAptr, ctPtr}:
-      ctx.requireRefBlock(t.pElem)
-      return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
-    return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
-  of eCast:
-    # A bit reinterpret keeps the operand's bits: `uintBitsToFloat(u)` reads the pattern.
-    # A `T()` constructor call numerically converts.
-    # Core GLSL floatBits builtins cover the 32-bit float pairs only.
-    # A same-width integer pair keeps the constructor: the modular conversion preserves every bit.
-    # A wider float pair refuses over emitting a numeric conversion.
-    let t = e.castType
-    let src = getExprType(e.castOperand)
-    let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-      src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
-    if scalar and src.kind == ctFloat and t.kind != ctFloat:
-      if src.bits == 32:
-        return (if t.kind == ctUint: "floatBitsToUint" else: "floatBitsToInt") &
-          "(" & ctx.printExpr(e.castOperand) & ")"
-      ctx.fail("bit cast of a 64-bit float has no GLSL emission, only the" &
-        " 32-bit floatBits builtins")
-      return ""
-    if scalar and t.kind == ctFloat and src.kind != ctFloat:
-      if t.bits == 32:
-        return (if src.kind == ctUint: "uintBitsToFloat" else: "intBitsToFloat") &
-          "(" & ctx.printExpr(e.castOperand) & ")"
-      ctx.fail("bit cast to a 64-bit float has no GLSL emission, only the" &
-        " 32-bit floatBits builtins")
-      return ""
-    # pointers and same-width integer pairs keep the constructor call
-    if t.kind in {ctAptr, ctPtr}:
-      ctx.requireRefBlock(t.pElem)
-      return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
-    return emitGlslTypeBare(t) & "(" & ctx.printExpr(e.castOperand) & ")"
-  of eSizeof:
-    return $typeByteSize(ctx.layouts, e.ofType, std430BoolWidth)
   of eAddr:
-    # a buffer element's address is the indexed reference access
+    # a buffer element's address is its indexed reference access
     if e.addrOperand.kind == ePat:
       return ctx.printExpr(e.addrOperand)
-    ctx.fail("cannot take the address of a local, GLSL has no " &
-      "function-storage addressing; only the address of a buffer element")
+    ctx.fail("address of a local is outside the GLSL subset")
     return ""
+  of eCast:
+    return ctx.printCast(e, glslCastRules, emitTypeBare(e.castType))
+  of eConv:
+    return ctx.printConv(e)
   of eOconstr:
+    # a zero-field struct's padding member zero-initializes
     if e.kvFields.len == 0:
-      # a zero-field struct: the emitted padding member zero-initializes
-      return emitGlslTypeBare(e.ocType) & "(0)"
-    result = emitGlslTypeBare(e.ocType) & "("
+      return emitTypeBare(e.ocType) & "(0)"
+    result = emitTypeBare(e.ocType) & "("
     for i, kvv in e.kvFields:
       if i > 0:
         result.add ", "
       result.add ctx.printExpr(kvv.value)
     result.add ")"
   of eAconstr:
-    result = emitGlslTypeBare(e.acType) & "("
+    result = emitTypeBare(e.acType) & "("
     for i, el in e.elems:
       if i > 0:
         result.add ", "
       result.add ctx.printExpr(el)
     result.add ")"
   of eCall:
-    let calleeName =
-      if e.callee.kind == eSym: e.callee.name
-      else: ctx.printExpr(e.callee)
-    var args: seq[string]
-    for a in e.args:
-      args.add ctx.printExpr(a)
-    if e.callee.kind == eSym:
-      # builtin vocabulary dispatches on the typed kinds, never on names
-      case e.callee.reductionBuiltin
-      of rbkReduceAdd:
-        return "subgroupAdd(" & args.join(", ") & ")"
-      of rbkReduceMax:
-        return "subgroupMax(" & args.join(", ") & ")"
-      of rbkNone: discard
-    if e.callee.kind == eSym:
-      case e.callee.shuffleBuiltin
-      of shkSimdShuffle:
-        # subgroupShuffle takes the subgroup-relative index as `uint`. A plain cast
-        # compiles without GL_NV_explicit_typecast
-        return "subgroupShuffle(" & args[0] & ", uint(" & args[1] & "))"
-      of shkSimdShuffleXor:
-        return "subgroupShuffleXor(" & args[0] & ", uint(" & args[1] & "))"
-      of shkNone: discard
-      if e.callee.atomicsBuiltin == abkAtomicFetchAdd:
-        # int atomicAdd is core. fp needs GL_EXT_shader_atomic_float,
-        # emitted at module scope for an fp atomicFetchAdd in the module.
-        # atomicAdd increments through one indirection: the address operand
-        # is the reference's element 0
-        let addrTxt = if getExprType(e.args[0]) != nil and getExprType(
-            e.args[0]).kind in {ctAptr, ctPtr}:
-          args[0] & ".x[0]"
-        else:
-          args[0]
-        return "atomicAdd(" & addrTxt & ", " & args[1] & ")"
-      if e.callee.synchroBuiltin != sbkNone:
-        ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
-        return ""
-    return calleeName & "(" & args.join(", ") & ")"
+    let args = printCallArgs(ctx, e)
+    return printCallText(ctx, e, args, printBuiltinCall(ctx, e, args))
+  else:
+    ctx.fail(unhandledExprRejection(e.kind))
+
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
-
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
-  ## Forward declaration, the loop context (break/continue labels) is a parameter.
-
-proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
-  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
-  if ctx.failing():
-    return ""
+proc printVar(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local declaration.
   let pad = spaces(ctx.indent * 2)
-  case s.kind
-  of sVar:
-    if s.declType.kind == ctPtr:
-      ctx.fail("pointer local " & s.name & ", GLSL has no function-storage" &
-        " addressing, the GLSL lowering pass dissolves pointer locals")
+  if s.declType.kind == ctPtr:
+    ctx.fail("pointer local " & s.name & ", GLSL has no function-storage" &
+      " addressing, the GLSL lowering pass rewrites pointer locals to their pointees")
+    return ""
+  if s.space == caThreadgroup:
+    ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering" &
+      " pass hoists threadgroup locals to program scope")
+    return ""
+  if s.space == caConstant:
+    ctx.fail("local " & s.name & " in constant space, the GLSL lowering" &
+      " pass hoists const_mem locals to program scope")
+    return ""
+  if s.space == caDevice:
+    ctx.fail("local " & s.name & " in device space, GLSL locals are private")
+    return ""
+  block:
+    let missing = getUnnamedScalarCell(glslScalarNames, s.declType)
+    if missing != nil:
+      ctx.fail(scalarRefusal(printerTarget, glslScalarNames, missing))
       return ""
-    if s.space == caThreadgroup:
-      ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering" &
-        " pass hoists threadgroup locals to program scope")
+  var decl: string
+  if s.declType.kind == ctAptr:
+    # a buffer pointer local is the reference block handle
+    decl = ctx.emitGlslPtrDecl(s.declType, s.name)
+  elif s.declType.kind == ctArray:
+    decl = emitGlslScalar(s.declType.aElem) & ' ' & s.name &
+      "[" & $s.declType.aN & "]"
+  else:
+    decl = emitTypeBare(s.declType) & ' ' & s.name
+  result = pad & decl
+  if s.init != nil:
+    result &= " = " & ctx.printExpr(s.init)
+  result &= ";"
+
+proc printConst(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local constant declaration.
+  block:
+    let missing = getUnnamedScalarCell(glslScalarNames, s.declType)
+    if missing != nil:
+      ctx.fail(scalarRefusal(printerTarget, glslScalarNames, missing))
       return ""
-    if s.space == caConstant:
-      ctx.fail("local " & s.name & " in constant space, the GLSL lowering" &
-        " pass hoists const_mem locals to program scope")
-      return ""
-    if s.space == caDevice:
-      ctx.fail("local " & s.name & " in device space, GLSL locals are private")
-      return ""
-    var decl: string
-    if s.declType.kind == ctAptr:
-      # a buffer pointer local is the reference block handle
-      decl = ctx.emitGlslPtrDecl(s.declType, s.name)
-    elif s.declType.kind == ctArray:
-      decl = emitGlslScalar(s.declType.aElem) & ' ' & s.name &
-        "[" & $s.declType.aN & "]"
-    else:
-      decl = emitGlslTypeBare(s.declType) & ' ' & s.name
-    result = pad & decl
-    if s.init != nil:
-      result &= " = " & ctx.printExpr(s.init)
-    result &= ";"
-  of sConst:
-    result = pad & "const " & emitGlslTypeBare(s.declType) & ' ' &
-      s.name & " = " & ctx.printExpr(s.init) & ";"
-  of sAsgn:
-    if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
-      ctx.fail("pointer local " & s.lhs.name & " rebound, GLSL has no" &
-        " pointer values, the GLSL lowering pass dissolves pointer locals")
-      return ""
-    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-  of sIte:
-    let cond = ctx.printExpr(s.cond)
-    ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
-    ctx.indent.dec
-    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len > 0:
-      ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
-      ctx.indent.dec
-      result &= " else {\n" & elseTxt & '\n' & pad & '}'
-  of sLoop:
-    # loops print through printStmts, which derives the loop's own labels
-    result = ""
-  of sLab:
-    # an exit label after a loop is the break target marker, dropped
-    result = ""
-  of sJmp:
-    if s.jmpTarget == exitL and exitL.len > 0:
-      result = pad & "break;"
-    elif s.jmpTarget == contL and contL.len > 0:
-      result = pad & "continue;"
-    else:
-      ctx.fail("unstructured jump to " & s.jmpTarget)
-      result = ""
-  of sScope:
-    result = pad & "{\n"
-    ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody, exitL, contL)
-    ctx.indent.dec
-    result &= '\n' & pad & '}'
-  of sAssume:
-    # a loop-bound hint, GLSL has no assume construct
-    result = ""
-  of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
-    else:
-      result = pad & "return;"
-  of sDiscard:
-    result = ""
-  of sCall:
+  let pad = spaces(ctx.indent * 2)
+  result = pad & "const " & emitTypeBare(s.declType) & ' ' &
+    s.name & " = " & ctx.printExpr(s.init) & ";"
+
+proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
+  ## One assignment.
+  let pad = spaces(ctx.indent * 2)
+  if s.lhs.kind == eSym and s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
+    ctx.fail("pointer local " & s.lhs.name & " rebound, GLSL has no" &
+      " pointer values, the GLSL lowering pass rewrites pointer locals to their pointees")
+    return ""
+  result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
+
+proc printCall(ctx: var PrintCtx, s: CirStmt): string =
+  ## One call statement.
+  let pad = spaces(ctx.indent * 2)
+  if s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier":
+    result = pad & "barrier();"
+  elif s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "threadgroup_barrier_device":
+    # GLSL's barrier() orders shared memory only, buffer writes are
+    # ordered before it by a leading memoryBarrierBuffer() call
+    result = pad & "memoryBarrierBuffer();\n" & pad & "barrier();"
+  elif s.callCallee.kind == eSym and s.callCallee.builtin and
+      s.callCallee.name == "atomicFetchAdd":
+    # a GLSL call statement discards the fetched old value
+    result = pad & ctx.printGlslAtomicFetchAdd(s.callArgs) & ";"
+  else:
     var parts: seq[string]
     parts.add ctx.printExpr(s.callCallee)
     for a in s.callArgs:
       parts.add ctx.printExpr(a)
-    if s.callCallee.kind == eSym and
-        s.callCallee.synchroBuiltin == sbkThreadgroupBarrier:
-      result = pad & "barrier();"
-    elif s.callCallee.kind == eSym and
-        s.callCallee.synchroBuiltin == sbkThreadgroupBarrierDevice:
-      # GLSL's barrier() orders shared memory only, buffer writes are
-      # ordered before it by a leading memoryBarrierBuffer() call
-      result = pad & "memoryBarrierBuffer();\n" & pad & "barrier();"
-    else:
-      result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
-  of sAsm:
-    ctx.fail("inline assembly has no GLSL form")
-    result = ""
-  of sEmit:
-    # `{.emit.}` raw source: verbatim text spliced with the CIRv2 names,
-    # no terminator appended, the text supplies its own terminators
-    var text = ""
-    for i, part in s.emitParts:
-      text.add(part)
-      if i < s.emitOperands.len:
-        text.add(s.emitOperands[i].name)
-    result = pad & text
-  of sCase:
-    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
-    result = ""
+    result = pad & parts[0] & "(" & parts[1 ..^ 1].join(", ") & ");"
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
-  ## Prints one statement list. Plain statements take the caller's loop context,
-  ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
-  var lines: seq[string]
-  var i = 0
-  while i < stmts.len:
-    let s = stmts[i]
-    var txt: string
-    if s.kind == sLoop:
-      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
-        stmts[i + 1].labName
-      else:
-        ""
-      var lCont = ""
-      for t in s.loopBody:
-        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
-          lCont = t.labName
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        spaces(ctx.indent * 2) & "[[unroll]]\n"
-      else:
-        ""
-      txt = directive & spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
-        spaces(ctx.indent * 2) & '}'
-      if lExit.len > 0:
-        i.inc  # exit label, consumed
-    else:
-      txt = ctx.printStmt(s, exitL, contL)
-    if txt.len > 0:
-      lines.add txt
-    i.inc
-  return lines.join("\n")
+proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
+  ctx.fail("inline assembly has no GLSL form")
+  result = ""
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printFn(ctx: var PrintCtx, fn: CirProc): string =
-  ## One device function: signature, body, closing brace.
-  ctx.fnName = fn.name
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(fn.body, "", "")
-  if ctx.failing():
-    return ""
-  var params: seq[string]
+proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
+  ## GLSL parameter texts of one proc or kernel, in declaration order.
+  ##
+  ## - a kernel takes zero parameters: every kernel parameter packs into the module's shared push-constant block, deduped across kernels
+  ## - a device function's buffer pointer is the reference block handle,
+  ##   a `var` binding gains the `inout` qualifier
+  if fn.isKernel:
+    return
   for p in fn.params:
     case p.typ.kind
     of ctAptr:
-      params.add ctx.emitGlslPtrDecl(p.typ, p.name)
+      result.add ctx.emitGlslPtrDecl(p.typ, p.name)
     of ctPtr:
       ctx.fail("pointer parameter " & p.name &
         ", GLSL device functions take buffer references or values")
-      return ""
     else:
-      params.add emitGlslParam(p.typ, p.name, p.varParam)
-  let ret = emitGlslTypeBare(fn.ret)
-  let sig = ret & ' ' & fn.name & '(' & params.join(", ") & ")"
-  return sig & " {\n" & bodyTxt & '\n' & "}"
+      result.add emitGlslParam(p.typ, p.name, p.varParam)
+
+proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
+  ## GLSL linkage prefix: none, GLSL has no linkage qualifiers.
+  ""
 
 proc emitSmemDecl(t: CirType, name: string): string =
   ## Program-scope `shared` declaration of a threadgroup local.
@@ -655,12 +423,11 @@ proc emitSmemDecl(t: CirType, name: string): string =
     result = "shared " & emitGlslScalar(t.aElem) & ' ' & name &
       "[" & $t.aN & "];"
   else:
-    result = "shared " & emitGlslTypeBare(t) & ' ' & name & ";"
+    result = "shared " & emitTypeBare(t) & ' ' & name & ";"
 
 proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope `const` declaration of one hoisted const_mem local.
-  ## Shape guard: the lowering pass refuses an initializer-less const_mem
-  ## local before relocation, this check fails loudly on a malformed node.
+  ## The lowering pass refuses an initializer-less const_mem local before relocation, this check fails on a malformed node.
   if s.init == nil:
     ctx.fail("const_mem local " & s.name & " without an initializer")
     return ""
@@ -668,258 +435,174 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
     result = "const " & emitGlslScalar(s.declType.aElem) & ' ' & s.name &
       "[" & $s.declType.aN & "]"
   else:
-    result = "const " & emitGlslTypeBare(s.declType) & ' ' & s.name
+    result = "const " & emitTypeBare(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
 
-proc registerTypeRefBlocks(ctx: var PrintCtx, t: CirType) =
-  ## Registers the buffer-reference blocks of every device pointer
-  ## reachable from the type tree, through pointer targets and array
-  ## elements and object fields, dedup by reference-block name.
-  if t.isNil:
-    return
-  case t.kind
-  of ctAptr:
-    ctx.requireRefBlock(t.pElem)
-    ctx.registerTypeRefBlocks(t.pElem)
-  of ctPtr:
-    ctx.registerTypeRefBlocks(t.pElem)
-  of ctArray:
-    ctx.registerTypeRefBlocks(t.aElem)
-  of ctVector:
-    ctx.registerTypeRefBlocks(t.vElem)
-  of ctStruct:
-    for f in t.fields:
-      ctx.registerTypeRefBlocks(f.typ)
-  else:
-    discard
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope declaration text of one relocated storage local.
+  if s.space == caThreadgroup:
+    return emitSmemDecl(s.declType, s.name)
+  if s.init == nil:
+    ctx.fail("const_mem local " & s.name & " without an initializer")
+    return ""
+  ctx.emitConstDecl(s)
 
-proc registerExprRefBlocks(ctx: var PrintCtx, e: CirExpr) =
-  ## Registers the buffer-reference blocks reachable from one expression:
-  ## every buffer pointer subexpression's pointee needs its block declared
-  ## before the module body prints, a cast target included.
-  if e.isNil:
-    return
-  let t = getExprType(e)
-  if t != nil and t.kind == ctAptr:
-    ctx.requireRefBlock(t.pElem)
-  case e.kind
-  of eCall:
-    ctx.registerExprRefBlocks(e.callee)
-    for a in e.args:
-      ctx.registerExprRefBlocks(a)
-  of eAt:
-    ctx.registerExprRefBlocks(e.atBase)
-    ctx.registerExprRefBlocks(e.atIndex)
-  of ePat:
-    ctx.registerExprRefBlocks(e.patBase)
-    ctx.registerExprRefBlocks(e.patIndex)
-  of eDot:
-    ctx.registerExprRefBlocks(e.dotBase)
-  of eDeref:
-    ctx.registerExprRefBlocks(e.derefOperand)
-  of eAddr:
-    ctx.registerExprRefBlocks(e.addrOperand)
-  of eCast, eConv:
-    ctx.registerExprRefBlocks(e.castOperand)
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    ctx.registerExprRefBlocks(e.left)
-    ctx.registerExprRefBlocks(e.right)
-  of eAnd, eOr:
-    ctx.registerExprRefBlocks(e.andLeft)
-    ctx.registerExprRefBlocks(e.andRight)
-  of eEq, eNeq, eLt, eLe:
-    ctx.registerExprRefBlocks(e.a)
-    ctx.registerExprRefBlocks(e.b)
-  of eBitNot, eNeg:
-    ctx.registerExprRefBlocks(e.unOperand)
-  of eNot:
-    ctx.registerExprRefBlocks(e.notOperand)
-  of eOconstr:
-    for kvf in e.kvFields:
-      ctx.registerExprRefBlocks(kvf.value)
-  of eAconstr:
-    for el in e.elems:
-      ctx.registerExprRefBlocks(el)
-  of eNil, eIntLit, eFloatLit, eTrue, eFalse, eSizeof, eSym:
-    discard
+# ═══════════════════════════════════════════════════════════════════════
+# Shared push-constant block contract (emission site)
+# ═══════════════════════════════════════════════════════════════════════
 
-proc registerStmtRefBlocks(ctx: var PrintCtx, ss: seq[CirStmt]) =
-  ## Registers the buffer-reference blocks reachable from one statement list.
-  for s in ss:
-    case s.kind
-    of sVar, sConst:
-      if s.declType.kind == ctAptr:
-        ctx.requireRefBlock(s.declType.pElem)
-      ctx.registerExprRefBlocks(s.init)
-    of sAsgn:
-      ctx.registerExprRefBlocks(s.lhs)
-      ctx.registerExprRefBlocks(s.rhs)
-    of sIte:
-      ctx.registerExprRefBlocks(s.cond)
-      ctx.registerStmtRefBlocks(s.thenBody)
-      ctx.registerStmtRefBlocks(s.elseBody)
-    of sLoop:
-      ctx.registerStmtRefBlocks(s.loopBody)
-    of sCase:
-      ctx.registerExprRefBlocks(s.selector)
-      for br in s.branches:
-        ctx.registerStmtRefBlocks(br.body)
-      ctx.registerStmtRefBlocks(s.caseElse)
-    of sScope:
-      ctx.registerStmtRefBlocks(s.scopeBody)
-    of sAssume:
-      ctx.registerExprRefBlocks(s.assumeCond)
-    of sRet:
-      ctx.registerExprRefBlocks(s.retVal)
-    of sDiscard:
-      ctx.registerExprRefBlocks(s.discardVal)
-    of sCall:
-      ctx.registerExprRefBlocks(s.callCallee)
-      for a in s.callArgs:
-        ctx.registerExprRefBlocks(a)
-    of sLab, sJmp, sAsm, sEmit:
-      discard
+proc pushParamText(p: CirParam): string =
+  ## Compact text of one kernel parameter for the refusal message,
+  ## `(i +32)`-style Leng type vocabulary.
+  const spaceName: array[AddressSpace, string] =
+    ["thread", "threadgroup", "constant", "device"]
+  case p.typ.kind
+  of ctBool: result = "bool"
+  of ctInt: result = "i" & $p.typ.bits
+  of ctUint: result = "u" & $p.typ.bits
+  of ctFloat: result = "f" & $p.typ.bits
+  of ctVector: result = "vec" & $p.typ.vN
+  of ctPtr: result = "ptr " & spaceName[p.typ.space]
+  of ctAptr: result = "aptr " & spaceName[p.typ.space]
+  of ctStruct: result = p.typ.name
+  of ctArray: result = "array"
+  of ctSpan: result = "span " & spaceName[p.typ.sSpace]
+  else: result = $p.typ.kind
+  result = p.name & ": " & result
 
-proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full GLSL translation unit: version and extensions,
-  ## buffer-reference blocks, struct declarations, the push-constant block,
-  ## program-scope `shared` and `const` declarations, the device functions,
-  ## and the kernel with its `local_size` layout qualifier.
+proc paramsText(params: seq[CirParam]): string =
+  ## One kernel's ordered parameter list in the refusal-message vocabulary.
+  for i, p in params:
+    if i > 0:
+      result.add ", "
+    result.add pushParamText(p)
+
+proc pushConstLayoutRejection(kernels: seq[CirProc]): string =
+  ## Refusal when the kernels of one module declare different ordered params,
+  ## "" when every kernel's params agree elementwise.
   ##
-  ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>")
-  ctx.layouts = m.layouts
-  var kernels: seq[CirProc]
-  for fn in m.procs:
-    if fn.isKernel:
-      kernels.add fn
-  if kernels.len == 0:
-    ctx.fail("no kernel in the module")
-    return ("", ctx.err)
+  ## Layout mechanics:
+  ##
+  ## - the GLSL printer unions every kernel's parameters into one module-wide
+  ##   push-constant block, same-name dedup by declaration text
+  ## - the engine serializes each launched kernel's arguments from offset 0
+  ##   in that kernel's own param order
+  ## - a member reads the same offset for every kernel only under identical
+  ##   ordered layouts
+  ## - scalars and pointers alike pack through the block, a pointer packs
+  ##   as its buffer-reference address
+  if kernels.len < 2:
+    return ""
+  let reference = kernels[0]
+  let referenceParams = reference.params.paramsText
+  for k in kernels[1 ..^ 1]:
+    block mismatch:
+      if k.params.len != reference.params.len:
+        break mismatch
+      for i in 0 ..< k.params.len:
+        if k.params[i].name != reference.params[i].name or
+            not sameType(k.params[i].typ, reference.params[i].typ):
+          break mismatch
+      continue
+    return "multi-kernel GLSL sources share one push-constant block, all kernels " &
+      "must declare the same ordered params, got kernel `" & k.name & "` (" &
+      k.params.paramsText & ") vs kernel `" & reference.name & "` (" &
+      referenceParams & ")"
+  return ""
 
-  # ref-block pre-pass: registers the blocks the declarations below use
-  for t in m.types:
-    ctx.registerTypeRefBlocks(t)
-  for fn in m.procs:
-    for p in fn.params:
-      if p.typ.kind in {ctAptr, ctPtr}:
-        ctx.requireRefBlock(p.typ.pElem)
-    ctx.registerStmtRefBlocks(fn.body)
 
-  result.src = emitExtensions(m.features)
+proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
+  ## Head of one GLSL proc: the kernel's `local_size` layout qualifier precedes
+  ## the shared C signature. The engine launches each entry point by name.
+  if fn.isKernel:
+    let wg = getWorkgroup(fn)
+    result = "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
+      $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
+    result &= printSig(ctx, fn) & " {\n"
+  else:
+    result = printSig(ctx, fn)
 
-  for name, member in ctx.refBlocks:
-    result.src &= "layout(buffer_reference, std430) buffer " & name &
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ## GLSL keeps no per-proc walk state.
+  discard
+
+const glslModuleShape = ModuleShape(
+  spaces: {caThreadgroup, caConstant},
+  structTypedef: false,
+  structPadding: "uint _padding",
+  structFieldTerm: ';',
+  structClose: "};",
+  fwdDecls: true,
+  moduleOrderProcs: false,
+  kernelSep: "\n\n",
+  customProcHead: true,
+  printsRefBlocks: true,
+  printsParamBindings: true,
+  printsReduceTemplates: false)
+
+proc printRefBlocks(ctx: var PrintCtx, m: CirModule): string =
+  ## Buffer-reference block declarations, one per `CirModule.refBlocks` entry in registration order.
+  ##
+  ## Filled by the ref-block analysis pass after its last transform, never registered by the printer.
+  for name, pointee in m.refBlocks:
+    let member = ctx.emitGlslRefBlockMember(pointee)
+    result &= "layout(buffer_reference, std430) buffer " & name &
       " { " & member & " };\n"
-  if ctx.refBlocks.len > 0:
-    result.src &= "\n"
+    if ctx.failing():
+      return ""
+  if m.refBlocks.len > 0:
+    result &= "\n"
 
-  for t in m.types:
-    if t.kind != ctStruct:
-      ctx.fail("module type " & t.name & " is not a struct")
-      break
-    result.src &= "struct " & t.name & " {\n"
-    if t.fields.len == 0:
-      result.src &= "  uint _padding;\n"
-    for f in t.fields:
-      var field = emitGlslTypeBare(f.typ) & ' ' & f.name
-      if f.typ.kind == ctArray:
-        field = emitGlslScalar(f.typ.aElem) & ' ' & f.name &
-          "[" & $f.typ.aN & "]"
-      elif f.typ.kind in {ctAptr, ctPtr}:
-        field = ctx.emitGlslPtrDecl(f.typ, f.name)
-      result.src &= "  " & field & ";\n"
-    result.src &= "};\n\n"
-
-  # one push block for the whole module: the union of every kernel's parameters, same-name parameters dedup by their declaration text
+proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
+  ## Push-constant block: one module-wide block over the union of every
+  ## kernel's parameters, same-name dedup by declaration text.
+  ##
+  ## The engine serializes each launched kernel's arguments from offset 0 in that kernel's own param order,
+  ## so the block is sound only under identical ordered layouts, and the emission site refuses a divergence.
+  let pushRejection = pushConstLayoutRejection(kernels)
+  if pushRejection.len > 0:
+    ctx.fail(pushRejection)
+    return ""
   var pushDecls: seq[string]
   for kernel in kernels:
     for p in kernel.params:
+      block:
+        let missing = getUnnamedScalarCell(glslScalarNames, p.typ)
+        if missing != nil:
+          ctx.fail(scalarRefusal(printerTarget, glslScalarNames, missing))
+          return ""
       var decl: string
       case p.typ.kind
-      of ctAptr, ctPtr:
-        # a device pointer packs as the buffer-reference handle: the engine passes the device address, the block dereferences it
+      of ctAptr:
+        # a device pointer packs as the buffer-reference handle: the engine passes the device address and the block dereferences it
         decl = ctx.emitGlslPtrDecl(p.typ, p.name)
+      of ctPtr:
+        ctx.fail("kernel parameter " & p.name & " of pointer type has no push-constant form")
+        decl = ""
       of ctArray:
-        ctx.fail("kernel parameter " & p.name &
-          " of array type, arrays do not pack into the push block")
+        ctx.fail("kernel parameter " & p.name & " of array type, arrays do not pack into the push block")
         decl = ""
       else:
-        decl = emitGlslTypeBare(p.typ) & ' ' & p.name
+        decl = emitTypeBare(p.typ) & ' ' & p.name
       if decl notin pushDecls:
         pushDecls.add decl
   if ctx.failing():
-    return ("", ctx.err)
+    return ""
   if pushDecls.len > 0:
-    result.src &= "layout(push_constant, std430) uniform KernelParams {\n"
+    result &= "layout(push_constant, std430) uniform KernelParams {\n"
     for decl in pushDecls:
-      result.src &= "  " & decl & ";\n"
-    result.src &= "};\n\n"
+      result &= "  " & decl & ";\n"
+    result &= "};\n\n"
 
-  # program-scope `shared` and `const` declarations relocated into
-  # `m.globals` by the GLSL lowering pass, in encounter order
-  var hoisted: seq[string]
-  for s in m.globals:
-    if s.kind == sVar and s.space == caThreadgroup:
-      hoisted.add emitSmemDecl(s.declType, s.name)
-    elif s.kind == sVar and s.space == caConstant:
-      if s.init == nil:
-        ctx.fail("const_mem local " & s.name & " without an initializer")
-      else:
-        hoisted.add ctx.emitConstDecl(s)
-  for d in hoisted:
-    result.src &= d & "\n"
-  if hoisted.len > 0:
-    result.src &= "\n"
-  if ctx.failing():
+proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
+  ## Emits the full GLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>", policy: glslWalkPolicy,
+    lit: glslLitTokens, scalarNames: glslScalarNames)
+  let kernels = moduleKernels(m)
+  if kernels.len == 0:
+    ctx.fail("module declares no kernel")
     return ("", ctx.err)
-
-  # forward declarations, then device function definitions, then the kernel
-  var fns: seq[CirProc]
-  for fn in m.procs:
-    if not fn.isKernel:
-      fns.add fn
-  for fn in fns:
-    ctx.fnName = fn.name
-    var params: seq[string]
-    for p in fn.params:
-      case p.typ.kind
-      of ctAptr:
-        params.add ctx.emitGlslPtrDecl(p.typ, p.name)
-      of ctPtr:
-        ctx.fail("pointer parameter " & p.name &
-          ", GLSL device functions take buffer references or values")
-      else:
-        params.add emitGlslParam(p.typ, p.name, p.varParam)
-    if ctx.failing():
-      return ("", ctx.err)
-    result.src &= emitGlslTypeBare(fn.ret) & ' ' & fn.name & '(' &
-      params.join(", ") & ");\n"
-  if fns.len > 0:
-    result.src &= "\n"
-  for fn in fns:
-    result.src &= ctx.printFn(fn) & "\n\n"
-  if ctx.failing():
-    return ("", ctx.err)
-
-  # every kernel of the module, in encounter order, one local_size layout
-  # qualifier per kernel, the engine launches each entry point by name
-  for kernel in kernels:
-    let wg = (if kernel.workgroup == [0, 0, 0]: [256, 1, 1] else: kernel.workgroup)
-    result.src &= "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
-      $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
-    ctx.fnName = kernel.name
-    ctx.indent = 0
-    let bodyTxt = ctx.printStmts(kernel.body, "", "")
-    if ctx.failing():
-      return ("", ctx.err)
-    # exportc renames a kernel entry for the host runtime lookup.
-    # A device function keeps the name its call sites reference.
-    let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
-    result.src &= "void " & entryName & "() {\n" & bodyTxt & '\n' & "}\n\n"
-  return (result.src, "")
-
-
+  printModule(ctx, m, kernels, glslModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as GLSL source, the `backends_api` entry point.

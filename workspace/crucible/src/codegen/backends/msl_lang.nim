@@ -14,21 +14,22 @@
 ## - coordinate builtins: attributed `uint3`/`uint` params, no slot
 ##
 ## Other emission rules:
-## - `{.smem.}` locals: a kernel's top-level local stays in-body as kernel-scope
-##   `threadgroup` storage (Metal allocates it per threadgroup),
+## - `{.smem.}` locals: the pass keeps a kernel's top-level local in-body
+##   as kernel-scope `threadgroup` storage (Metal allocates it per threadgroup),
 ##   any initializer is discarded, a local outside a kernel body drops,
-##   a device function still owning a smem local refuses in the pass
+##   the pass refuses a device function still owning a smem local
 ## - `{.const_mem.}` locals relocate into `CirModule.globals` through the MSL lowering pass,
-##   program-scope `constant` output, a const_mem survivor refuses at the printer
-## - `jmp` to the loop exit label is `break`, to the continue label `continue`, any other lab/jmp refuses
-## - the typed builtin kinds dispatch to the MSL vocabulary, `{.builtin.}` names pass
+##   program-scope `constant` output, the printer refuses a const_mem survivor
+## - a loop prints `while (cond)`, `{.unroll.}` adds the Metal unroll pragma
+## - the builtin vocabulary dispatches on the canonical name, `{.builtin.}` names pass
 ##   through except the numeric conversions, which resolve to the MSL native call text
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
-import ./emit_common
+import ./print_common
+import ./targets_registry
 
 type
   PrintCtx = object
@@ -36,172 +37,62 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
-    ## Per-kernel state.
+    policy: WalkPolicy
+    ## Walk policy of the target. The shared walk reads its fields.
+    lit: LitTokens
+    ## Literal token forms of the target. The shared literal head reads them.
+    scalarNames: ScalarNames
+    ## Scalar names of the target. The narrow integer cast names its type from them.
     builtins: OrderedSet[string]
     ## Canonical builtin names that the kernel body references, first-use order.
 
 const printerTarget = "msl"
 
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
+
 # ═══════════════════════════════════════════════════════════════════════
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
-proc emitMslSpace(space: CirAddrSpace): string =
-  ## MSL address-space qualifier of a memory class.
+proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
+  ## Forward declaration, arrays recurse into themselves.
+
+proc emitMslScalar(t: CirType): string =
+  ## MSL bare name of a non-array leaf type, "" when the caller composes the name.
+  getBareName(mslScalarNames, mslVectorRule, t)
+
+proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
+  ## MSL declaration text of `t` with `ident` appended, the shared C declarator
+  ## over the MSL tables. Arrays put the identifier into the declarator
+  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
+  cDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
+
+proc getMslPtrQualifier(space: AddressSpace): string =
+  ## MSL qualifier before a pointer declaration or cast, one word per space.
   case space
   of caThread: "thread"
   of caThreadgroup: "threadgroup"
   of caConstant: "constant"
   of caDevice: "device"
 
-proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string
-  ## Forward declaration, arrays recurse into themselves.
-
-## `{.builtin.}` numeric conversions resolve to the MSL native call text:
-## each entry is a format string whose `$1` stands for the call's argument list.
-## CIRv2 has no fp16 or bf16 type kind: `float16` and `bfloat16` are `distinct uint16` types holding raw bits in `ushort` storage.
-## Value-producing conversions move the bit pattern, not the numeric value:
-## - `toFp16(x)` prints `as_type<ushort>(half(x))`
-## - `toBf16(x)` prints `as_type<ushort>((bfloat)(x))`
-## - `toFp32`/`toBf32` reinterpret the stored bits back through
-##   `as_type<half>`/`as_type<bfloat>` before the `float` widening
-## - `asFp16`/`asU16` are identities on that storage
-## fp8 conversions have no MSL native: the `{.builtin.}` name passes through and refuses at Metal compile time.
-const MslConversionBuiltinNames: Table[string, string] = {
-  "toFp16": "as_type<ushort>(half($1))",
-  "toFp32": "float(as_type<half>($1))",
-  "toBf16": "as_type<ushort>((bfloat)($1))",
-  "toBf32": "float(as_type<bfloat>($1))",
-  "asFp16": "$1",
-  "asU16": "$1",
-}.toTable()
-
-proc emitMslScalar(t: CirType): string =
-  ## MSL name of a non-array leaf type, "" when the caller composes the name.
-  case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    result = "bool"
-  of ctInt:
-    case t.bits
-    of 8:
-      result = "char"
-    of 16:
-      result = "short"
-    of 32:
-      result = "int"
-    of 64:
-      result = "long"
-    else:
-      result = ""
-  of ctUint:
-    case t.bits
-    of 8:
-      result = "uchar"
-    of 16:
-      result = "ushort"
-    of 32:
-      result = "uint"
-    of 64:
-      result = "ulong"
-    else:
-      result = ""
-  of ctFloat:
-    case t.bits
-    of 16:
-      result = "half"
-    of 32:
-      result = "float"
-    else:
-      result = ""
-  of ctPtr, ctAptr:
-    result = emitMslScalar(t.pElem) & "*"
-  of ctStruct:
-    result = t.name
-  of ctVector:
-    # coordinate builtins carry `ivec3`, so the builtin-threading
-    # parameters and whole-value reads print this MSL vector name
-    case t.vElem.kind
-    of ctInt, ctUint:
-      if t.vElem.bits == 32:
-        result = (if t.vElem.kind == ctInt: "int" else: "uint") & $t.vN
-      else:
-        result = ""
-    else:
-      result = ""
-  of ctArray, ctProc, ctSpan:
-    result = ""
-
-
-proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
-  ## MSL name of `t` with `ident` appended. Arrays take the identifier into
-  ## the declarator (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
-  ## `allowEmptyIdent` permits no identifier (return types, casts), an array without one otherwise refuses.
-  case t.kind
-  of ctArray:
-    if ident.len == 0 and not allowEmptyIdent:
-      return "<msl: array needs an identifier>"
-    if t.aElem.kind == ctArray:
-      result = emitMslType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
-        allowEmptyIdent)
-    else:
-      result = emitMslType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
-  else:
-    result = emitMslScalar(t)
-    if ident.len > 0:
-      result.add ' ' & ident
-
 proc emitMslPtr(t: CirType, ident: string): string =
-  ## MSL name of a pointer or array pointer with its address space:
+  ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  let inner = t.pElem
-  if inner.kind == ctArray:
-    result = emitMslSpace(t.space) & ' ' & emitMslType(inner, "(*" & ident & ")", true)
-  else:
-    result = emitMslSpace(t.space) & ' ' & emitMslScalar(inner) & "* " & ident
+  let qualifier = getMslPtrQualifier(t.space)
+  let sep = if qualifier.len > 0: " " else: ""
+  result = qualifier & sep &
+    cDecl(mslScalarNames, mslVectorRule, printerTarget, t, ident, true)
+
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## MSL declaration text of one struct member: a pointer member names
+  ## the address space of its pointee (`device float* p`).
+  if f.typ.kind in {ctPtr, ctAptr}:
+    return emitMslPtr(f.typ, f.name)
+  return emitMslType(f.typ, f.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
-
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
-
-# `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const mslFloatTokens = FloatLitTokens(
-  inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
-  inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
-  inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN")
-
-proc emitMslLit(e: CirExpr): string =
-  ## MSL token of a literal, typed by its literal type.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      case e.litType.bits
-      of 64: result = $e.value & "ULL"
-      of 32: result = $e.value & "U"
-      else: result = "(" & emitMslScalar(e.litType) & ")" & $e.value
-    of ctInt:
-      case e.litType.bits
-      of 64: result = $e.value & "LL"
-      of 32: result = $e.value
-      else: result = "(" & emitMslScalar(e.litType) & ")" & $e.value
-    else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, mslFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 16: result = $e.fValue & "h"
-      of 32: result = $e.fValue & "f"
-      else: result = $e.fValue
-  of eNil: result = "nullptr"
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<msl: not a literal>"
 
 
 proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
@@ -217,30 +108,27 @@ proc printBuiltinRef(ctx: var PrintCtx, name: string, whole: bool): string =
     return "int3((int)" & name & ".x, (int)" & name & ".y, (int)" & name & ".z)"
   return name
 
-proc emitMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
+proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## Returns the MSL text of a builtin call, "" when `callee` is not a builtin.
   ##
   ## Shared by expression- and statement-position calls: the statement path
   ## bypasses `printExpr`, so a barrier printed as a bare name would lose
-  ## its memory flags, text MSL refuses to compile.
+  ## its memory flags, the Metal compiler refuses the text.
   ##
   ## `args` contains the already-printed argument texts.
-  if callee.kind != eSym:
+  if callee.kind != eSym or not callee.builtin:
     return ""
-  # builtin vocabulary dispatches on the typed kinds, never on names
-  case callee.synchroBuiltin
-  of sbkThreadgroupBarrier:
+  # builtin vocabulary dispatches on the canonical name through this table
+  case callee.name
+  of "threadgroup_barrier":
     return "threadgroup_barrier(mem_flags::mem_threadgroup)"
-  of sbkThreadgroupBarrierDevice:
+  of "threadgroup_barrier_device":
     return "threadgroup_barrier(mem_flags::mem_device)"
-  of sbkNone: discard
-  case callee.reductionBuiltin
-  of rbkReduceAdd:
+  of "reduceAdd":
     return "simd_sum(" & args.join(", ") & ")"
-  of rbkReduceMax:
+  of "reduceMax":
     return "simd_max(" & args.join(", ") & ")"
-  of rbkNone: discard
-  if callee.atomicsBuiltin == abkAtomicFetchAdd:
+  of "atomicFetchAdd":
     # pointer casts to the atomic pointee type, relaxed order only,
     # fp32 needs Metal 3+, device address space implies the scope
     var atomicTy = ""
@@ -259,101 +147,41 @@ proc emitMslBuiltinCall(callee: CirExpr, args: seq[string]): string =
       error("atomic_fetch_add over a pointee without an MSL atomic type")
     return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
       "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
-  if callee.builtin and MslConversionBuiltinNames.hasKey(callee.name):
-    return MslConversionBuiltinNames.getOrDefault(callee.name) % args.join(", ")
+  else:
+    if mslConvBuiltinNames.hasKey(callee.name):
+      return mslConvBuiltinNames.getOrDefault(callee.name) % args.join(", ")
   return ""
 
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  if ctx.failing():
-    return ""
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  ## Pointer casts name their address space.
+  let t = e.castType
+  var castTyp = emitMslType(t, "", true)
+  if t.kind in {ctPtr, ctAptr}:
+    castTyp = getMslPtrQualifier(t.space) & ' ' & castTyp
+  return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
+
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## MSL text of the kinds in `targetExprKinds`.
   case e.kind
-  of eNil, eTrue, eFalse, eIntLit, eFloatLit:
-    return emitMslLit(e)
   of eSym:
-    if e.coordBuiltin != cbkNone:
+    if e.builtin and e.name in CoordBuiltinNames:
       return ctx.printBuiltinRef(e.name, true)
     return e.name
-  of eAt:
-    var base = ctx.printExpr(e.atBase)
-    if e.atBase.kind in {eCast, eConv}:
-      # a cast binds looser than the subscript: parenthesize the base
-      base = "(" & base & ")"
-    return base & '[' & ctx.printExpr(e.atIndex) & ']'
-  of ePat:
-    var base = ctx.printExpr(e.patBase)
-    if e.patBase.kind in {eCast, eConv}:
-      base = "(" & base & ")"
-    return base & '[' & ctx.printExpr(e.patIndex) & ']'
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      # a component of an unsigned MSL builtin, cast to the canonical int
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
       ctx.builtins.incl(e.dotBase.name)
       return "(int)(" & e.dotBase.name & '.' & e.fieldName & ")"
     let base = ctx.printExpr(e.dotBase)
     if e.dotBase.kind == eDeref:
       return "(" & base & ")." & e.fieldName
     return base & '.' & e.fieldName
-  of eDeref:
-    return "(*" & ctx.printExpr(e.derefOperand) & ")"
-  of eAddr:
-    return "(&" & ctx.printExpr(e.addrOperand) & ")"
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    let op = case e.kind
-      of eAdd: "+"
-      of eSub: "-"
-      of eMul: "*"
-      of eDiv: "/"
-      of eMod: "%"
-      of eShl: "<<"
-      of eShr: ">>"
-      of eBitAnd: "&"
-      of eBitOr: "|"
-      else: "^"
-    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-      of eEq: "=="
-      of eNeq: "!="
-      of eLt: "<"
-      else: "<="
-    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
-  of eNot:
-    return "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    # pure bool operators over side-effect-free operands: the frontend materializes
-    # value-position short-circuits into temps and the remainder prints directly
-    let op = if e.kind == eAnd: "&&" else: "||"
-    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
-  of eNeg:
-    return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eConv:
-    # a numeric conversion prints as the C-style cast
-    let t = e.castType
-    var castTyp = emitMslType(t, "", true)
-    if t.kind in {ctPtr, ctAptr}:
-      castTyp = emitMslSpace(t.space) & ' ' & castTyp
-    return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
   of eCast:
-    # A same-size scalar `cast` reinterprets the bits: the SPIR-V printer
-    # emits OpBitcast and the MSL text is `as_type<T>`. A C-style cast
-    # converts numerically instead: 0xFF7FFFFF read as float32 gives
-    # +4.29e9 and the same bits reinterpreted give -FLT_MAX.
-    #
-    # Pointer and machine-word casts keep the C-style text.
-    # as_type accepts neither pointers nor width changes.
-    let t = e.castType
-    let src = getExprType(e.castOperand)
-    if t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-        src.kind in {ctInt, ctUint, ctFloat} and
-        t.bits in {8, 16, 32, 64} and src.bits == t.bits:
-      return "as_type<" & emitMslType(t, "", true) & ">(" & ctx.printExpr(e.castOperand) & ")"
-    var castTyp = emitMslType(t, "", true)
-    if t.kind in {ctPtr, ctAptr}:
-      castTyp = emitMslSpace(t.space) & ' ' & castTyp
-    return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
+    return ctx.printCast(e, mslCastRules, emitMslType(e.castType, "", true))
+  of eConv:
+    return ctx.printConv(e)
   of eSizeof:
     return "sizeof(" & emitMslType(e.ofType, "", true) & ")"
   of eOconstr:
@@ -372,165 +200,53 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         ctx.printExpr(el)
     result.add "}"
   of eCall:
-    let calleeName =
-      if e.callee.kind == eSym: e.callee.name
-      else: ctx.printExpr(e.callee)
-    var args: seq[string]
-    for a in e.args:
-      args.add ctx.printExpr(a)
-    let builtinTxt = emitMslBuiltinCall(e.callee, args)
-    if builtinTxt.len > 0:
-      return builtinTxt
-    return calleeName & "(" & args.join(", ") & ")"
+    let args = printCallArgs(ctx, e)
+    return printCallText(ctx, e, args, emitBuiltinCall(e.callee, args))
+  else:
+    ctx.fail("expression kind " & $e.kind & " has no MSL emission")
+
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
-
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
-  ## Forward declaration, the loop context (break/continue labels) is a parameter.
-
-proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
-  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
-  if ctx.failing():
-    return ""
+proc printVar(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local declaration.
   let pad = spaces(ctx.indent * 2)
-  case s.kind
-  of sVar:
-    if s.space == caThreadgroup:
-      # kernel-scope threadgroup storage: the MSL lowering pass keeps only
-      # a kernel's top-level smem locals here, a device function's smem local
-      # refuses in the pass, any initializer is discarded
-      result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
-      return
-    if s.space == caConstant:
-      # MSL lowering pass relocates const_mem locals at every scope,
-      # a survivor here was never relocated
-      ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
-        " pass hoists const_mem locals to program scope")
-      return ""
-    var decl = emitMslType(s.declType, s.name, false)
-    if s.declType.kind in {ctPtr, ctAptr}:
-      decl = emitMslPtr(s.declType, s.name)
-    result = pad & decl
-    if s.init != nil:
-      result &= " = " & ctx.printExpr(s.init)
-    result &= ";"
-  of sConst:
-    if s.declType.kind == ctArray:
-      result = pad & "constexpr " &
-        emitMslType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
-    else:
-      result = pad & "constexpr " & emitMslScalar(s.declType) & ' ' & s.name &
-        " = " & ctx.printExpr(s.init) & ";"
-  of sAsgn:
-    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-  of sIte:
-    let cond = ctx.printExpr(s.cond)
-    ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
-    ctx.indent.dec
-    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len > 0:
-      ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
-      ctx.indent.dec
-      result &= " else {\n" & elseTxt & '\n' & pad & '}'
-  of sLoop:
-    # loops print through printStmts, which derives the loop's own labels
-    result = ""
-  of sLab:
-    # an exit label after a loop is the break target marker, dropped
-    result = ""
-  of sJmp:
-    if s.jmpTarget == exitL and exitL.len > 0:
-      result = pad & "break;"
-    elif s.jmpTarget == contL and contL.len > 0:
-      result = pad & "continue;"
-    else:
-      ctx.fail("unstructured jump to " & s.jmpTarget)
-      result = ""
-  of sScope:
-    result = pad & "{\n"
-    ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody, exitL, contL)
-    ctx.indent.dec
-    result &= '\n' & pad & '}'
-  of sAssume:
-    # a loop-bound hint, MSL has no assume construct
-    result = ""
-  of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
-    else:
-      result = pad & "return;"
-  of sDiscard:
-    result = ""
-  of sCall:
-    let calleeName =
-      if s.callCallee.kind == eSym: s.callCallee.name
-      else: ctx.printExpr(s.callCallee)
-    var args: seq[string]
-    for a in s.callArgs:
-      args.add ctx.printExpr(a)
-    let builtinTxt = emitMslBuiltinCall(s.callCallee, args)
-    if builtinTxt.len > 0:
-      result = pad & builtinTxt & ";"
-    else:
-      result = pad & calleeName & "(" & args.join(", ") & ");"
-  of sAsm:
-    var text = ""
-    for i, part in s.asmParts:
-      text.add(part)
-      if i < s.asmOperands.len:
-        text.add(s.asmOperands[i].name)
-    result = pad & text
-  of sEmit:
-    # `{.emit.}` raw source: the operand names splice into the verbatim text,
-    # no terminator appended, the text supplies its own terminators
-    var text = ""
-    for i, part in s.emitParts:
-      text.add(part)
-      if i < s.emitOperands.len:
-        text.add(s.emitOperands[i].name)
-    result = pad & text
-  of sCase:
-    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+  if s.space == caThreadgroup:
+    # Only a kernel's initializer-less smem locals reach here: the MSL lowering pass refuses a device function's smem local and any initializer
+    result = pad & "threadgroup " & emitMslType(s.declType, s.name, false) & ";"
+    return
+  if s.space == caConstant:
+    ctx.fail("local " & s.name & " in constant space, the MSL lowering" &
+      " pass hoists const_mem locals to program scope")
+    return ""
+  var decl = emitMslType(s.declType, s.name, false)
+  if s.declType.kind in {ctPtr, ctAptr}:
+    decl = emitMslPtr(s.declType, s.name)
+  result = pad & decl
+  if s.init != nil:
+    result &= " = " & ctx.printExpr(s.init)
+  result &= ";"
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
-  ## Prints one statement list. Plain statements take the caller's loop context,
-  ## a `loop` derives its own labels: the exit label right after it and the continue label inside.
-  var lines: seq[string]
-  var i = 0
-  while i < stmts.len:
-    let s = stmts[i]
-    var txt: string
-    if s.kind == sLoop:
-      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
-        stmts[i + 1].labName
-      else:
-        ""
-      var lCont = ""
-      for t in s.loopBody:
-        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
-          lCont = t.labName
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        spaces(ctx.indent * 2) & "#pragma clang loop unroll(full)\n"
-      else:
-        ""
-      txt = directive & spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
-        spaces(ctx.indent * 2) & '}'
-      if lExit.len > 0:
-        i.inc  # exit label, consumed
-    else:
-      txt = ctx.printStmt(s, exitL, contL)
-    if txt.len > 0:
-      lines.add txt
-    i.inc
-  return lines.join("\n")
+proc printConst(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local constant declaration.
+  let pad = spaces(ctx.indent * 2)
+  if s.declType.kind == ctArray:
+    result = pad & "constexpr " &
+      emitMslType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
+  else:
+    result = pad & "constexpr " & emitMslScalar(s.declType) & ' ' & s.name &
+      " = " & ctx.printExpr(s.init) & ";"
+
+proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
+  ## One inline assembly statement: the spliced text.
+  let pad = spaces(ctx.indent * 2)
+  var text = ""
+  for i, part in s.asmParts:
+    text.add(part)
+    if i < s.asmOperands.len:
+      text.add(s.asmOperands[i].name)
+  result = pad & text
 
 # ═══════════════════════════════════════════════════════════════════════
 # Procs and modules
@@ -556,111 +272,102 @@ proc emitBuiltinParam(name: string): string =
     return "uint " & name & " [[" & name & "]]"
   return "uint3 " & name & " [[" & name & "]]"
 
-proc printProc(ctx: var PrintCtx, fn: CirProc): string =
-  ## One proc or kernel: signature, body, closing brace. The body prints first,
-  ## the kernel signature consumes the builtin set the body references.
-  ctx.fnName = fn.name
-  ctx.builtins = initOrderedSet[string]()
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(fn.body, "", "")
-  if ctx.failing():
-    return ""
-  # exportc renames a kernel entry for the host runtime lookup.
-  # A device function keeps the name its call sites reference.
-  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
-  var params: seq[string]
+proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
+  ## MSL parameter texts of one proc or kernel, in declaration order.
+  ##
+  ## Kernel parameters:
+  ## - a relocated smem local binds as threadgroup storage, no buffer slot
+  ## - a device pointer takes the next `[[buffer(n)]]` slot
+  ## - a value parameter binds as `constant T&`, bool retypes to `int`
+  ##   (Metal has no bool constant storage)
+  ## - the coordinate builtins that the body references append as attributed parameters, no slot
+  ##
+  ## Device-function parameters:
+  ## - a threadgroup `ptr` parameter is a relocated smem arena, caller-owned
+  ##   storage (Metal rejects threadgroup allocation inside device functions)
   var slot = 0
   if fn.isKernel:
     for p in fn.params:
       if p.typ.kind == ctPtr and p.typ.space == caThreadgroup:
-        # a relocated smem local, no buffer slot
-        params.add emitMslSmemParam(p)
+        result.add emitMslSmemParam(p)
         continue
       case p.typ.kind
       of ctAptr, ctPtr:
-        let inner = p.typ.pElem
-        params.add "device " & emitMslType(inner, "", true) & "* " & p.name &
+        result.add "device " &
+          cDecl(mslScalarNames, mslVectorRule, printerTarget, p.typ, p.name, true) &
           " [[buffer(" & $slot & ")]]"
       else:
         var elem = emitMslScalar(p.typ)
         if p.typ.kind == ctBool:
           elem = "int"
-        params.add "constant " & elem & "& " & p.name
+        result.add "constant " & elem & "& " & p.name
       inc slot
     for b in ctx.builtins:
       # coordinate builtins are attributed params, no binding, no slot
-      params.add emitBuiltinParam(b)
+      result.add emitBuiltinParam(b)
   else:
     for p in fn.params:
       case p.typ.kind
       of ctAptr, ctPtr:
-        # a threadgroup-space pointer parameter is a relocated smem arena,
-        # caller-owned storage (Metal rejects threadgroup allocation inside device functions)
-        # - an `aptr` over the element type prints a pointer:
-        #   `threadgroup T* name`
-        # - a `ptr` over the object type prints a reference:
-        #   `threadgroup T& name`
         if p.typ.space == caThreadgroup and p.typ.kind == ctPtr:
-          params.add emitMslSmemParam(p)
+          result.add emitMslSmemParam(p)
         else:
-          params.add emitMslPtr(p.typ, p.name)
+          result.add emitMslPtr(p.typ, p.name)
       else:
-        params.add emitMslType(p.typ, p.name, true)
-  let ret = emitMslType(fn.ret, "", true)
-  let prefix = if fn.isKernel: "kernel "
-    elif fn.inline: "inline "
-    else: ""
-  let sig = prefix & ret & ' ' & name & '(' & params.join(", ") & ")"
-  return sig & " {\n" & bodyTxt & '\n' & "}"
+        result.add emitMslType(p.typ, p.name, true)
+
+proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
+  if fn.isKernel:
+    return "kernel "
+  if fn.inline:
+    return "inline "
+  return ""
+
+proc emitTypeBare(t: CirType): string =
+  ## MSL name of `t` with no identifier, as casts and sizeof print it.
+  emitMslType(t, "", true)
+
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ## Resets the builtin set before the body walk, the signature reads it
+  ## after the body prints.
+  ctx.builtins = initOrderedSet[string]()
+
+const mslModuleShape = ModuleShape(
+  spaces: {caConstant},
+  structTypedef: false,
+  structPadding: "char _",
+  structFieldTerm: ';',
+  structClose: "};",
+  fwdDecls: false,
+  moduleOrderProcs: true,
+  kernelSep: "\n\n",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: false)
+
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
+  ## Translation-unit head of every MSL module: the metal headers.
+  result = "#include <metal_stdlib>\n"
+  result &= "#include <metal_atomic>\n"
+  result &= "using namespace metal;\n\n"
+
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope `constant` declaration of one relocated const_mem local.
+  ## MSL forbids declaring constant storage without an initializer.
+  if s.init == nil:
+    ctx.fail("const_mem local " & s.name & " without an initializer")
+    return ""
+  var decl = emitMslType(s.declType, s.name, false)
+  if s.declType.kind in {ctPtr, ctAptr}:
+    decl = emitMslPtr(s.declType, s.name)
+  return "constant " & decl & " = " & ctx.printExpr(s.init) & ";"
 
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full MSL translation unit: metal headers, struct declarations, program-scope constants,
-  ## device-function forward declarations, then every function body.
-  ##
-  ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>")
-  var src = "#include <metal_stdlib>\n"
-  src &= "#include <metal_atomic>\n"
-  src &= "using namespace metal;\n\n"
-  for t in m.types:
-    if t.kind != ctStruct:
-      ctx.fail("module type " & t.name & " is not a struct")
-      break
-    src &= "struct " & t.name & " {\n"
-    if t.fields.len == 0:
-      src &= "  char _;\n"
-    for f in t.fields:
-      var field = emitMslType(f.typ, f.name, false)
-      if f.typ.kind in {ctPtr, ctAptr}:
-        field = emitMslPtr(f.typ, f.name)
-      src &= "  " & field & ";\n"
-    src &= "};\n\n"
-  # program-scope `constant` declarations relocated into `m.globals` by the MSL lowering pass,
-  # in encounter order
-  var hoisted: seq[string]
-  for s in m.globals:
-    if s.kind == sVar and s.space == caConstant:
-      if s.init == nil:
-        ctx.fail("const_mem local " & s.name & " without an initializer")
-      else:
-        var decl = emitMslType(s.declType, s.name, false)
-        if s.declType.kind in {ctPtr, ctAptr}:
-          decl = emitMslPtr(s.declType, s.name)
-        hoisted.add "constant " & decl & " = " & ctx.printExpr(s.init) & ";"
-  for d in hoisted:
-    src &= d & "\n"
-  if hoisted.len > 0:
-    src &= "\n"
-  if ctx.failing():
-    return ("", ctx.err)
-  for fn in m.procs:
-    let txt = ctx.printProc(fn)
-    if ctx.err.len > 0:
-      break
-    src &= txt & "\n\n"
-  result = (src, ctx.err)
-
-
+  ## Emits the full MSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>", policy: mslWalkPolicy,
+    lit: mslLitTokens, scalarNames: mslScalarNames)
+  printModule(ctx, m, moduleKernels(m), mslModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as Metal Shading Language (MSL) source, the `backends_api` entry point.

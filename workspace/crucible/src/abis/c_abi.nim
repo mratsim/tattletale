@@ -44,7 +44,7 @@ macro replacePragmasByInline(procAst: typed): untyped =
 
   result = newStmtList()
 
-  # The push noconv is applied multiple times :/, so fight push with push
+  # push noconv applies multiple times, fight push with push
   result.add nnkPragma.newTree(ident"push", ident"nimcall", ident"inline")
 
   result.add newProc(
@@ -58,7 +58,8 @@ macro replacePragmasByInline(procAst: typed): untyped =
   result.add nnkPragma.newTree(ident"pop")
 
 macro wrapOpenArrayLenType*(ty: typedesc, procAst: untyped): untyped =
-  ## Wraps pointer+len library calls in properly typed and converted openArray calls
+  ## Wraps pointer+len library calls in properly typed and converted openArray calls.
+  ## Returns: `procAst` rewritten, each `openArray` parameter becomes a pointer + len pair.
   ##
   ## ```
   ## {.push noconv.}

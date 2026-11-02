@@ -67,28 +67,28 @@ func oMany(kind: SpvKind): SpvOperand {.inline.} =
   SpvOperand(kind: kind, quant: qMany)
 
 macro genSpvOpcodeTable(defs: untyped) =
-  ## Declarative opcode table in the glyph style, one row per opcode:
+  ## Declarative opcode table in the glyph style, one entry per opcode:
   ##   op OpName: <opcode>: [o(kind1), oOpt(kind2), ...]
   ## - generates the `SpvOp` enum, member value = opcode number
-  ## - generates the `spvInstOperands` encoding lookup, rows sorted by opcode
+  ## - generates the `spvInstOperands` encoding lookup, entries sorted by opcode
   ## - a duplicate opcode or opcode name fails at macro expansion
   var
     seenOpcodes: Table[int, string]
     seenNames: Table[string, int]
-    rows: seq[tuple[opcode: int, name: string, operands: NimNode]]
-  for row in defs:
-    row.expectKind nnkCommand
-    doAssert row[0].eqIdent "op"
-    row[1].expectKind nnkIdent
-    row[2].expectKind nnkStmtList
-    doAssert row.len == 3
-    let name = $row[1]
+    ops: seq[tuple[opcode: int, name: string, operands: NimNode]]
+  for def in defs:
+    def.expectKind nnkCommand
+    doAssert def[0].eqIdent "op"
+    def[1].expectKind nnkIdent
+    def[2].expectKind nnkStmtList
+    doAssert def.len == 3
+    let name = $def[1]
     if name in seenNames:
-      error "opcode name " & name & " declared twice", row[1]
+      error "opcode name " & name & " declared twice", def[1]
     seenNames[name] = 0
-    let body = row[2]
+    let body = def[2]
     var opcode: int
-    var operands = newNimNode(nnkBracket, row)
+    var operands = newNimNode(nnkBracket, def)
     if body[0].kind == nnkIntLit:
       opcode = body[0].intVal.int
     else:
@@ -101,13 +101,13 @@ macro genSpvOpcodeTable(defs: untyped) =
       for k in br:
         operands.add k
     if opcode in seenOpcodes:
-      error "opcode " & $opcode & " already used by " & seenOpcodes[opcode], row[2][0]
+      error "opcode " & $opcode & " already used by " & seenOpcodes[opcode], def[2][0]
     seenOpcodes[opcode] = name
-    rows.add (opcode, name, operands)
-  rows.sort(proc(x, y: tuple[opcode: int, name: string, operands: NimNode]): int =
+    ops.add (opcode, name, operands)
+  ops.sort(proc(x, y: tuple[opcode: int, name: string, operands: NimNode]): int =
     cmp(x.opcode, y.opcode))
   var enumTy = nnkEnumTy.newTree(newEmptyNode())
-  for r in rows:
+  for r in ops:
     enumTy.add nnkEnumFieldDef.newTree(ident(r.name), newLit(r.opcode))
   let typeSection = nnkTypeSection.newTree(
     nnkTypeDef.newTree(
@@ -115,7 +115,7 @@ macro genSpvOpcodeTable(defs: untyped) =
       newEmptyNode(),
       enumTy))
   var table = nnkCaseStmt.newTree(ident"op")
-  for r in rows:
+  for r in ops:
     table.add nnkOfBranch.newTree(ident(r.name), nnkCall.newTree(ident"@", r.operands))
   let procSection = nnkProcDef.newTree(
     ident"spvInstOperands",
@@ -242,7 +242,7 @@ genSpvOpcodeTable:
   # (Shuffle) or the xor mask (ShuffleXor), both plain IdRef
   op OpGroupNonUniformShuffle: 345: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
   op OpGroupNonUniformShuffleXor: 346: [o(spvIdResultType), o(spvIdResult), o(spvIdScope), o(spvIdRef), o(spvIdRef)]
-  # SPV_EXT_shader_atomic_float_add: fp atomic add, the extension string pairs with the AtomicFloat32AddEXT capability
+  # SPV_EXT_shader_atomic_float_add: fp atomic add, the extension string corresponds to the AtomicFloat32AddEXT capability
   op OpAtomicFAddEXT: 6035: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdScope), o(spvIdMemorySemantics), o(spvIdRef)]
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -309,8 +309,8 @@ const
   scopeDevice = 1'u32
   scopeSubgroup = 3'u32
 
-  ## MemoryAccess bit values (core grammar BitEnum), Aligned takes a trailing
-  ## literal alignment word the grammar operand list does not model
+  ## MemoryAccess bit values (core grammar BitEnum), the `Aligned` bit carries
+  ## a trailing literal alignment word the operand list does not model
   maAligned = 2'u32
 
 const
@@ -365,9 +365,6 @@ const spvVersion13 = 0x00010300'u32
 const spvGeneratorNone = 0'u32
 const spvSchemaNone = 0'u32
 
-func initSpvModule(): SpvModule =
-  SpvModule(version: spvVersion13, nextId: 1)
-
 func addWord(m: var SpvModule, section: SpvSection, word: uint32) =
   m.sections[section].add word
 
@@ -415,40 +412,40 @@ func finalize(m: SpvModule): seq[uint32] =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SpvMemoKey = tuple[opcode: SpvOp, words: seq[uint32]]
+  SpvInstKey = tuple[opcode: SpvOp, words: seq[uint32]]
     ## Dedup key for a type or constant: opcode plus the operand words
 
   SpvBuilder = object
     module*: SpvModule
-    memo*: Table[SpvMemoKey, uint32]
+    instCache*: Table[SpvInstKey, uint32]
     scalarWidths*: Table[uint32, int]
       ## Bit width of every emitted OpTypeInt/OpTypeFloat, keyed by type id.
       ## OpConstant literal word counts derive from it
 
 func initSpvBuilder(): SpvBuilder =
-  SpvBuilder(module: initSpvModule())
+  SpvBuilder(module: SpvModule(version: spvVersion13, nextId: 1))
 
-func memoInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
-  let key: SpvMemoKey = (opcode, @operands)
-  if key in b.memo:
-    return b.memo[key]
+func cachedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
+  let key: SpvInstKey = (opcode, @operands)
+  if key in b.instCache:
+    return b.instCache[key]
   result = b.module.allocId()
   var words = @[result]
   for w in operands:
     words.add w
   b.module.emitInstSeq(ssTypesConstantsGlobals, opcode, words)
-  b.memo[key] = result
+  b.instCache[key] = result
 
-func memoTypedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
-  let key: SpvMemoKey = (opcode, @operands)
-  if key in b.memo:
-    return b.memo[key]
+func cachedTypedInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
+  let key: SpvInstKey = (opcode, @operands)
+  if key in b.instCache:
+    return b.instCache[key]
   result = b.module.allocId()
   var words = @[operands[0], result]
   for i in 1 ..< operands.len:
     words.add operands[i]
   b.module.emitInstSeq(ssTypesConstantsGlobals, opcode, words)
-  b.memo[key] = result
+  b.instCache[key] = result
 
 func freshInst(b: var SpvBuilder, opcode: SpvOp, operands: openArray[uint32]): uint32 =
   result = b.module.allocId()
@@ -498,10 +495,10 @@ func opVariable(b: var SpvBuilder, resultType, storageClass: uint32): uint32 =
   b.module.emitInstSeq(ssTypesConstantsGlobals, OpVariable, @[resultType, result, storageClass])
 
 func tyVoid(b: var SpvBuilder): uint32 =
-  b.memoInst(OpTypeVoid, @[])
+  b.cachedInst(OpTypeVoid, @[])
 
 func tyBool(b: var SpvBuilder): uint32 =
-  b.memoInst(OpTypeBool, @[])
+  b.cachedInst(OpTypeBool, @[])
 
 func recordScalarWidth(b: var SpvBuilder, ty: uint32, width: int) =
   b.scalarWidths[uint32(ty)] = width
@@ -511,24 +508,24 @@ func getScalarWidth(b: SpvBuilder, ty: uint32): int =
   b.scalarWidths[ty]
 
 func tyInt(b: var SpvBuilder, width: int, signedness: bool): uint32 =
-  result = b.memoInst(OpTypeInt, @[uint32(width), uint32(signedness)])
+  result = b.cachedInst(OpTypeInt, @[uint32(width), uint32(signedness)])
   b.recordScalarWidth(result, width)
 
 func tyFloat(b: var SpvBuilder, width: int): uint32 =
-  result = b.memoInst(OpTypeFloat, @[uint32(width)])
+  result = b.cachedInst(OpTypeFloat, @[uint32(width)])
   b.recordScalarWidth(result, width)
 
 func tyVector(b: var SpvBuilder, componentType: uint32, componentCount: int): uint32 =
-  b.memoInst(OpTypeVector, @[componentType, uint32(componentCount)])
+  b.cachedInst(OpTypeVector, @[componentType, uint32(componentCount)])
 
 func tyPointer(b: var SpvBuilder, storageClass, pointeeType: uint32): uint32 =
-  b.memoInst(OpTypePointer, @[storageClass, pointeeType])
+  b.cachedInst(OpTypePointer, @[storageClass, pointeeType])
 
 func tyFunction(b: var SpvBuilder, returnType: uint32, paramTypes: openArray[uint32]): uint32 =
   var ops = @[returnType]
   for p in paramTypes:
     ops.add p
-  b.memoInst(OpTypeFunction, ops)
+  b.cachedInst(OpTypeFunction, ops)
 
 func constUint(b: var SpvBuilder, ty: uint32, value: uint64): uint32 =
   ## Emits OpConstant holding the bit pattern of `value`:
@@ -536,16 +533,16 @@ func constUint(b: var SpvBuilder, ty: uint32, value: uint64): uint32 =
   ## - two words (low half first) for 64-bit types, even when the bit pattern
   ##   fits one word: the word count tracks the type width, never the value
   if b.getScalarWidth(ty) > 32:
-    b.memoTypedInst(OpConstant, @[ty, uint32(value), uint32(value shr 32)])
+    b.cachedTypedInst(OpConstant, @[ty, uint32(value), uint32(value shr 32)])
   else:
     let width = b.getScalarWidth(ty)
     let mask = (1'u64 shl uint64(width)) - 1
     doAssert value <= mask, "constant bit pattern overflows the " & $width & "-bit type " & $ty
-    b.memoTypedInst(OpConstant, @[ty, uint32(value)])
+    b.cachedTypedInst(OpConstant, @[ty, uint32(value)])
 
 func constBool(b: var SpvBuilder, ty: uint32, value: bool): uint32 =
   let op = if value: OpConstantTrue else: OpConstantFalse
-  b.memoTypedInst(op, @[ty])
+  b.cachedTypedInst(op, @[ty])
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Function body

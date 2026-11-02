@@ -16,9 +16,9 @@ import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   OpenCLKernelCache = object
@@ -29,15 +29,12 @@ type
     ctx: OpenCLContext
     kernelCache: OpenCLKernelCache
 
-template backendKind*(_: typedesc[OpenCLEngine]): BackendKind =
-  bkOpenCL
-
 proc newOpenCLEngine*(): OpenCLEngine {.inline.} =
   OpenCLEngine(ctx: newOpenCLContext())
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: OpenCLEngine, source: string) =
   if engine.source.len > 0:
@@ -50,7 +47,7 @@ proc getArtifact*(engine: OpenCLEngine): string {.inline.} =
   engine.source
 
 proc deviceName*(engine: OpenCLEngine): string {.inline.} =
-  engine.ctx.device.name()
+  engine.ctx.device.getName()
 
 proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[OpenCLBuffer, T] {.inline.} =
   ## Allocates len elements of T on the engine
@@ -64,9 +61,9 @@ proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: ptr T or ptr UncheckedA
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx = object
   kern: OpenCLKernel
@@ -78,15 +75,15 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     static:
       error "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T
-  const size = deviceLayout(T, bkOpenCL).size
+  const size = computeDeviceLayout(T, bkOpenCL).size
   var blob: array[size, byte]
   var off = 0
   blob.packFrom(off, v, bkOpenCL)
   ctx.kern.setArg(argIdx, size, blob[0].addr)
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's device, building the program on first use.

@@ -15,9 +15,9 @@ import workspace/crucible/src/runtime/backends/cuda_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   NVRTC = object
@@ -35,7 +35,6 @@ type
     ptx: string
     nvrtc: NVRTC
 
-template backendKind*(_: typedesc[CudaEngine]): BackendKind = bkCuda
 
 proc `=destroy`(nvrtc: NVRTC) =
   if nvrtc.module.pointer != nil:
@@ -49,9 +48,9 @@ proc newCudaEngine*(): CudaEngine =
   result = CudaEngine()
   result.nvrtc = initNvrtc()
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: CudaEngine, source: string) =
   engine.nvrtc.createProgram(source)
@@ -80,9 +79,9 @@ proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArr
   ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type SerializationCtx[n: static int] = object
   addrs: array[n, pointer]
@@ -92,7 +91,7 @@ proc store[n: static int, T](ctx: var SerializationCtx[n], v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   # CUdeviceptr values pack 8 bytes into heap-backed storage, addrs stay valid across the by-value return
-  const size = deviceLayout(T, bkCuda).size
+  const size = computeDeviceLayout(T, bkCuda).size
   ctx.bytes[argIdx] = newSeq[byte](size)
   if size > 0:
     var off = 0
@@ -142,9 +141,9 @@ proc copyToDeviceFromHostImpl(engine: CudaEngine, dst: CUdeviceptr, src: pointer
 proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) {.inline.} =
   check cuMemcpyDtoH(dst, src, csize_t(n))
 
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc initNvrtc(): NVRTC =
   var

@@ -1,4 +1,4 @@
-## Vulkan: var-parameter device functions bind as GLSL inout (v1 port).
+## Vulkan: var-parameter device functions bind as GLSL inout.
 ##
 ## Test that a device function taking `var T` parameters mutates the caller's
 ## storage through the inout bindings:

@@ -5,7 +5,6 @@
 ##
 ## The check compiles this file: the consts run the cuda macro.
 ## A template-emission regression fails compilation.
-## This host has no NVRTC and no NVIDIA GPU.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

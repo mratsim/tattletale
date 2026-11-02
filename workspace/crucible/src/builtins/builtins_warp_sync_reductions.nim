@@ -65,7 +65,7 @@ proc simd_shuffle_xor*[T](value: T, mask: int): T {.builtin.} = discard
   ##   pairs lanes inconsistently. Metal requires uniformity outright
   ##   (MSL 4.1 stdlib, `simd_shuffle_xor`), the other backends stay
   ##   well-defined only under it.
-  ## - `mask` must stay below the subgroup size so the paired lane exists.
+  ## - `mask` must remain below the subgroup size so the paired lane exists.
   ## - Butterfly passes over masks 16/8/4/2/1 are the reduction primitive:
   ##   CUDA lowers `reduceAdd` and `reduceMax` to `__shfl_xor_sync`
   ##   butterflies over exactly those masks.

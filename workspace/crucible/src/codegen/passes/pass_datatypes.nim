@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Pass machinery over CIRv2: the pass record, the registry, and the runner.
+## Pass machinery over CIRv2: pass record, registry, and runner.
 ##
 ## A pass run takes the module in place and returns its refusal:
 ## "" when clean, else the first refusal.
@@ -22,17 +22,10 @@ type
     pkTransform      ## Changes the IR
     pkAnalysis       ## Computes metadata, changes nothing
 
-  PassPhase* = enum
-    phaseEarly         ## Right after IR construction (legalization, normalization)
-    phasePreprocessing ## Between normalization and lowering
-    phaseMain          ## Before printing (optimization, lowering, validation)
-
   CirPass* = ref object
     name*: string
     kind*: PassKind
-    phase*: PassPhase
     description*: string
-    dependsOn*: seq[string]
     run*: proc(m: CirModule): string {.nimcall.}
       ## One pass over the module, "" when clean, else the first refusal
 
@@ -40,22 +33,24 @@ type
     passes*: seq[CirPass]
     donePasses*: HashSet[string]
 
-func register*(reg: var PassRegistry, name: string, kind: PassKind,
-               phase: PassPhase, description: string,
-               run: proc(m: CirModule): string {.nimcall.},
-               dependsOn: seq[string] = @[]) =
-  reg.passes.add CirPass(name: name, kind: kind, phase: phase,
-                         description: description,
-                         dependsOn: dependsOn, run: run)
+func register*(reg: var PassRegistry, name: string, kind: PassKind, description: string, run: proc(m: CirModule): string {.nimcall.}) =
+  reg.passes.add CirPass(name: name, kind: kind, description: description, run: run)
 
 proc runPasses*(m: CirModule, reg: var PassRegistry): string =
   ## Runs the registered passes in registration order.
-  ## Every dependency must already have run.
-  ## Returns "" when the whole pipeline is clean, else the first refusal.
+  ##
+  ## Contract:
+  ## - a transform registered after an analysis refuses, as the analysis records
+  ##   on the module (features, call graph, ref blocks) would go stale
+  ## - the printers read the analysis records, they never rescan
+  ## - returns "" when the whole pipeline is clean, else the first refusal
+  var sawAnalysis = false
   for p in reg.passes:
-    for dep in p.dependsOn:
-      if dep notin reg.donePasses:
-        return "pass \"" & p.name & "\" requires \"" & dep & "\" to run first"
+    if p.kind == pkAnalysis:
+      sawAnalysis = true
+    elif p.kind == pkTransform and sawAnalysis:
+      return "pass \"" & p.name & "\" transforms after an analysis pass," &
+        " the analysis records would go stale"
     let err = p.run(m)
     if err.len > 0:
       return "pass " & p.name & ": " & err

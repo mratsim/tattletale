@@ -1,7 +1,10 @@
 ## WebGPU: a pointer local rebound inside a branch refuses at compile time.
 ##
+## - v1's WGSL pointer rendering never proved bindable
+## - pointer locals as rebindable values did not exist in v1
+##
 ## Test that a pointer local rebound inside an `if` refuses to compile
-## with the pointer-local dissolve refusal.
+## with the pointer-local binding refusal.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

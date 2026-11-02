@@ -14,8 +14,9 @@
 
 import workspace/crucible
 
-# Pointer-only multi-kernel source (pointer-only multi-kernel is supported;
-# by-value scalars would trip the multi-kernel guard, see the poc test).
+# Pointer-only multi-kernel source, both kernels declare the same ordered
+# params as the multi-kernel contract requires. Refusal cases live under
+# manual_ multikernel fixtures.
 const code = glsl:
   proc addKernel(output: ptr UncheckedArray[uint32];
                  a: ptr UncheckedArray[uint32];

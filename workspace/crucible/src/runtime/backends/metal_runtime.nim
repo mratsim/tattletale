@@ -9,9 +9,9 @@ import std/os
 import ../errors
 import workspace/crucible/src/abis/objc_abi as objc
 
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # Constants
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 const
   ## Shared + untracked storage, Apple's MLX allocator mode: contents() needs no staging.
@@ -26,9 +26,9 @@ const
   MTLLanguageVersion3_2 = objc.NSUInteger(0x30002)
   MTLLanguageVersion4_0 = objc.NSUInteger(0x40000)
 
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # Error policy and records
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   MetalContext* = ref MetalContextObj
@@ -45,9 +45,9 @@ proc `=destroy`(ctx: var MetalContextObj) =
       objc.release(ctx.queue)
       objc.release(ctx.device)
 
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # macOS-only execution primitives
-# ═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 when defined(macosx):
   # ═════════════════════════════════════════════════
@@ -65,7 +65,7 @@ when defined(macosx):
 
   proc uname(uts: ptr UtSName): cint {.importc, header: "<sys/utsname.h>".}
 
-  proc mslLanguageVersion(): objc.NSUInteger =
+  proc getMslLanguageVersion(): objc.NSUInteger =
     ## MSL language version for this OS, from the `uname()` Darwin release:
     ## < 24 → 3.1, 24 → 3.2, ≥ 25 → 4.0 (NSProcessInfo is sret, UB via msgSend).
     var uts: UtSName
@@ -92,7 +92,7 @@ when defined(macosx):
   # ═════════════════════════════════════════════════
 
   proc compileOptions*(): objc.ID =
-    ## MTLCompileOptions: fast math disabled, the OS's MSL version, +1 returned.
+    ## MTLCompileOptions: fast math disabled, MSL version from the OS, +1 returned.
     let cls = objc.getClass("MTLCompileOptions")
     if objc.isNil(cls):
       failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
@@ -100,7 +100,7 @@ when defined(macosx):
     # `init` may return a different object than `alloc`, keep the init result.
     result = objc.msgSend(result, objc.`$$`("init"))
     discard objc.msgSend(result, objc.`$$`("setFastMathEnabled:"), objc.BOOL(0))
-    discard objc.msgSend(result, objc.`$$`("setLanguageVersion:"), mslLanguageVersion())
+    discard objc.msgSend(result, objc.`$$`("setLanguageVersion:"), getMslLanguageVersion())
 
   proc compileLibrary*(device: objc.ID, source: string, opts: objc.ID): objc.ID =
     ## Compiles `source` to a +1 MLLibrary, quits loudly on NSError.

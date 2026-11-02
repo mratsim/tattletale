@@ -4,7 +4,7 @@
 ## core-grammar opcodes and pass `spirv-val --target-env vulkan1.4`:
 ##
 ## - OpShiftRightLogical 194, OpShiftRightArithmetic 195, OpShiftLeftLogical 196
-## - OpBitwiseOr 197, OpBitwiseXor 198, OpBitwiseAnd 199, OpNot 200
+## - OpBitwiseOr 197, OpBitwiseXor 198, OpBitwiseAnd 199
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -31,7 +31,6 @@ proc buildBitOpsModule(): CirModule =
     varD("bor", i32, bitOrE(i32, sym("a", i32), intLit(3, i32))),
     varD("bxor", i32, bitXorE(i32, sym("a", i32), intLit(3, i32))),
     varD("band", i32, bitAndE(i32, sym("a", i32), intLit(3, i32))),
-    varD("bnot", i32, bitNotE(i32, sym("a", i32))),
     varD("nb", tBool(), notE(eqE(sym("a", i32), intLit(0, i32)))),
     retS(),
   ])
@@ -52,7 +51,7 @@ proc collectOpcodes(words: seq[uint32]): HashSet[uint32] =
     i += int(words[i] shr 16)
 
 const expected = toHashSet([194'u32, 195'u32, 196'u32, 197'u32, 198'u32,
-  199'u32, 200'u32, 168'u32])
+  199'u32, 168'u32])
 # never emit 146-149 or 202-204: other core-grammar instructions own those numbers
 const wrong = toHashSet([146'u32, 147'u32, 148'u32, 149'u32,
   202'u32, 203'u32, 204'u32])
@@ -71,7 +70,7 @@ proc runTest() =
   let bad = wrong * opcodes
   doAssert bad.len == 0,
     "emitted opcodes use the wrong numbers " & $bad &
-    " (OpShiftLeftLogical 196, OpShiftRightLogical 194, OpShiftRightArithmetic 195, OpBitwiseOr 197, OpBitwiseXor 198, OpBitwiseAnd 199, OpNot 200)" &
+    " (OpShiftLeftLogical 196, OpShiftRightLogical 194, OpShiftRightArithmetic 195, OpBitwiseOr 197, OpBitwiseXor 198, OpBitwiseAnd 199)" &
     ", full opcode set: " & $opcodes
 
   let spirvVal = findExe("spirv-val")

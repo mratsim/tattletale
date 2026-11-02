@@ -167,11 +167,11 @@ proc newWebgpuContext*(): WebgpuContext =
     userdata1: dd.addr,
     userdata2: nil
   )
-  # The uncaptured-error callback receives errors outside any pushed error scope,
+  # Uncaptured-error callbacks receive errors outside any pushed error scope,
   # e.g. dispatch validation reported at submit time.
   # - the WGSL `enable f16` extension requires the shader-f16 device feature
   # - the subgroup builtins are native-only in wgpu: no WGSL directive,
-  #   the feature must be requested on the device (gfx-rs/wgpu#8202)
+  #   wgpu requires the feature on the device (gfx-rs/wgpu#8202)
   var reqFeatures: array[2, uint32]
   var reqFeatureCount = 0
   if wgpuAdapterHasFeature(ad.adapter, WGPUFeatureName_ShaderF16) != 0:

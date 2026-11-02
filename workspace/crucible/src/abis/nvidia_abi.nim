@@ -934,8 +934,7 @@ proc nvrtcCreateProgram*(prog: var nvrtcProgram; src: cstring; name: cstring;
                         includeNames: cstringArray): nvrtcResult {.discardable, cdecl,
     importc: "nvrtcCreateProgram", dynlib: libNvrtc.}
 
-proc nvrtcVersion*(major, minor: var cint): nvrtcResult {.discardable, cdecl,
-    importc: "nvrtcVersion", dynlib: libNvrtc.}
+proc nvrtcVersion*(major, minor: var cint): nvrtcResult {.discardable, cdecl, importc: "nvrtcVersion", dynlib: libNvrtc.}
 
 proc nvrtcDestroyProgram*(prog: var nvrtcProgram): nvrtcResult {.discardable, cdecl,
     importc: "nvrtcDestroyProgram", dynlib: libNvrtc.}
@@ -1782,7 +1781,7 @@ type
     cooperativeMultiDeviceLaunch*: cint
     ## < Deprecated, cudaLaunchCooperativeKernelMultiDevice is deprecated.
     sharedMemPerBlockOptin*: csize_t
-    ## < Per device maximum shared memory per block usable by special opt in
+    ## < Per-device maximum shared memory per block for special opt-in
     pageableMemoryAccessUsesHostPageTables*: cint
     ## < Device accesses pageable memory via the host's page tables
     directManagedMemAccessFromHost*: cint
@@ -1836,8 +1835,7 @@ type
     cudaMemcpyDefault = 4     ## < Direction of the transfer is inferred from the pointer values. Requires unified virtual addressing
 
 
-proc cudaRuntimeGetVersion*(runtimeVersion: var cint): cudaError_t {.cdecl,
-    importc: "cudaRuntimeGetVersion", dynlib: libCudaRT.}
+proc cudaRuntimeGetVersion*(runtimeVersion: var cint): cudaError_t {.cdecl, importc: "cudaRuntimeGetVersion", dynlib: libCudaRT.}
 
 proc cudaGetDeviceProperties*(prop: var cudaDeviceProp; device: cint): cudaError_t {.
     cdecl, importc: "cudaGetDeviceProperties", dynlib: libCudaRT.}

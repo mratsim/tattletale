@@ -38,8 +38,6 @@ type
     isHlsl: bool
     caches: VulkanCaches
 
-template backendKind(_: typedesc[VulkanEngine]): BackendKind = bkGlsl
-
 proc newVulkanEngine*(): VulkanEngine =
   let vctx = newVulkanContext()
   VulkanEngine(
@@ -70,34 +68,19 @@ proc ingest*(engine: VulkanEngine, source: string) =
              source.splitLines()[0])
 
 proc ingestGlsl(engine: VulkanEngine, glsl: string) =
-  # multi-kernel sources cannot address per-kernel scalars in the shared
-  # deduped push block, ingest quits loudly
-  if countKernels(glsl) > 1:
-    var inPush = false
-    for line in glsl.splitLines():
-      if "layout(push_constant" in line:
-        inPush = true
-      elif inPush and line.strip().startsWith("}"):
-        inPush = false
-      elif inPush:
-        let t = line.strip()
-        if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
-          failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
-                   "use one kernel per source when passing by-value scalars")
-
-  engine.entryPoint = parseEntryPoint(glsl)
+  engine.entryPoint = findFirstFunctionName(glsl, "layout(local_size_x", "void ")
   engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(glsl)
   engine.isHlsl = false
 
 proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
-  engine.entryPoint = parseHlslEntryPoint(hlsl)
+  engine.entryPoint = findFirstFunctionName(hlsl, "[numthreads(", "void ")
   engine.spirv = compileHlslToSpirvViaDxc(hlsl, engine.entryPoint)
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
 
 proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
-  ## Ingests a ready-made SPIR-V module, the artifact of a `spirv:` block.
+  ## Ingests a ready-made SPIR-V module produced by a `spirv:` block.
   const spvMagic = 0x07230203'u32
   resetCaches(engine)
   if spirv.len < 5 or spirv[0] != spvMagic:
@@ -116,7 +99,7 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   engine.isHlsl = false
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
-  ## Ingested GLSL source, the ingest-if-differs identity
+  ## Ingested GLSL source for the ingest-if-differs identity
   engine.source
 
 func getSpirV*(engine: VulkanEngine): seq[uint32] {.inline.} =
@@ -159,7 +142,7 @@ proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
 proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-  const lay = deviceLayout(T, bkGlsl)
+  const lay = computeDeviceLayout(T, bkGlsl)
   if lay.align > 1:
     ctx.pn = round_multiple_up(ctx.pn, lay.align)
   if ctx.pn + lay.size > 128:
@@ -234,14 +217,7 @@ proc parseHlslSquadron(hlsl: string): Dim3 =
     inc k
   return Dim3(x: 0, y: 0, z: 0)
 
-proc countKernels(glsl: string): int =
-  const marker = "layout(local_size_x"
-  var i = glsl.find(marker)
-  while i >= 0:
-    inc result
-    i = glsl.find(marker, i + marker.len)
-
-proc firstFunctionName(src: string, preamble, marker: string): string =
+proc findFirstFunctionName(src: string, preamble, marker: string): string =
   ## Reads the function name at the first `marker` after `preamble`,
   ## "main" when the marker is missing or the scan finds no identifier.
   var startPos = 0
@@ -261,16 +237,6 @@ proc firstFunctionName(src: string, preamble, marker: string): string =
   if name.len == 0:
     name = "main"
   name
-
-proc parseEntryPoint(glsl: string): string =
-  ## Reads the first entry function after the local-size layout: the kernel entry name
-  ## in the emitted GLSL source and in the compiled OpEntryPoint.
-  firstFunctionName(glsl, "layout(local_size_x", "void ")
-
-proc parseHlslEntryPoint(hlsl: string): string =
-  ## Reads the entry function after the `[numthreads(...)]` attribute: the kernel entry
-  ## name in the emitted HLSL source and in the compiled OpEntryPoint.
-  firstFunctionName(hlsl, "[numthreads(", "void ")
 
 proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
@@ -378,7 +344,8 @@ proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: s
                  [uint32(squadron.x), uint32(squadron.y), uint32(squadron.z)],
                  nil, 0, descSet)
 
-  # Sets and pools are per-launch and die once runKernel's fence wait returns, the pipeline outlives them in the engine's pipeline cache
+  # Sets and pools are per-launch and die once runKernel's fence wait returns,
+  # and the pipeline outlives them in the engine's pipeline cache
   engine.ctx.destroyDescriptorPool(pool)
   engine.ctx.destroyDescriptorSetLayout(setLayout)
 

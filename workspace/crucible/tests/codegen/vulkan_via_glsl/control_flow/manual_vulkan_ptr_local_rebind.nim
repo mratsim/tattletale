@@ -1,7 +1,10 @@
 ## GLSL: a pointer local rebound inside a branch refuses at compile time.
 ##
+## - v1 refused the address-of outright: `x.addr` had no GLSL emission
+## - pointer locals as rebindable values did not exist in v1
+##
 ## Test that a pointer local rebound inside an `if` refuses to compile
-## with the pointer-local dissolve refusal.
+## with the pointer-local binding refusal.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

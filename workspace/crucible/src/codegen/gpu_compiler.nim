@@ -15,9 +15,8 @@
 ##
 ## Pipeline:
 ## - the `metal:`-family macros lower the typed body to CIRv2
-## - the pass registry runs in stage order: legalize -> normalize -> optimize -> lower -> validate
-## - optimization runs before lowering: the temp fold assumes sym stores are pure rebinds, and lowering hoists program-scope storage
-## - `backends_api` dispatches the final module to the `*_lang` printer
+## - `buildPipeline` materializes the target's pass pipeline from the table below
+## - `runPasses` executes it, `backends_api` dispatches the final module to the `*_lang` printer
 ##
 ## Modules: `src/codegen/frontend/nim_to_crucible`, the pass stages under
 ## `src/codegen/passes/`, the printers under `src/codegen/backends/*_lang`.
@@ -32,42 +31,52 @@ export builtins_compilermagic
 import ./ir/ast_datatypes
 import ./frontend/nim_to_crucible
 import ./passes/pass_registry
-import ./passes/passes_legalizations
 import ./passes/passes_normalizations
-import ./passes/passes_optimizations
 import ./passes/passes_lowering
 import ./passes/passes_lowering_hlsl
 import ./passes/passes_lowering_glsl
 import ./passes/passes_lowering_wgsl
 import ./passes/passes_lowering_msl
-import ./passes/passes_lowering_cuda
 import ./passes/passes_lowering_opencl
-import ./passes/layout_std430
-import ./passes/callgraph_analysis
-import ./passes/scan_features
+import ./passes/passes_lowering_cfamily
+import ./passes/analysis_hlsl
+import ./passes/analysis_module_requirements
 import ./passes/passes_validations
 import ./passes/passes_low_reserved
+import ./passes/passes_low_pointers
+import ./passes/passes_low_array_assign
+import ./passes/passes_low_address_spaces
 import ./backends/backends_api
 import ./ir/cirv2_pretty
-import ./passes/passes_lowering_spirv
 from ./backends/hlsl_lang import HlslFlavor, fvD3D12, fvVulkan
+
+# ═══════════════════════════════════════════════════════════════════════
+# Per-target pass pipelines, registration order is execution order
+# ═══════════════════════════════════════════════════════════════════════
 
 macro codegenMetal(body: typed): string =
   ## Compiles a `metal:` block body into Metal Shading Language (MSL) code:
-  ## CIRv2 lowering, the pass registry in stage order, then the MSL printer.
-  ## A refusal or a verifier violation anywhere in the chain is a compile-time
-  ## error naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  ## CIRv2 lowering, the pass pipeline, then the MSL printer.
+  ## A refusal in the chain is a compile-time error naming the construct.
+  var reg = PassRegistry.new()
+  registerNormalizationPasses(reg)
+  registerSharedLoweringPasses(reg)
+  # Rename position: before every hoist and explosion. The rename walks types,
+  # procs and proc bodies, never `m.globals`. A declaration hoisted earlier
+  # leaves the rename's reach unrenamed.
+  reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
+  registerDecomposeArrayAssign(reg)
+  registerExplodeStructWithPtrFields(reg)
+  registerSmemInitRewrite(reg)
+  registerMslHoistProgramScopeConstants(reg)
+  registerMslHoistDeviceFnSmem(reg)
+  registerMslRewriteSmemLocals(reg)
+  registerMslThreadCoordinateBuiltins(reg)
+  registerInstantiateAddressSpaceGenerics(reg)
+  registerValidationPostPasses(reg)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  var reg = PassRegistry.new()
-  reg.registerLegalizationPasses()
-  reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
-  reg.registerSharedLoweringPasses()
-  reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
-  reg.registerMslLoweringPasses()
-  reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
@@ -83,22 +92,24 @@ macro metal*(body: untyped): string =
 
 macro codegenCuda(body: typed): string =
   ## Compiles a `cuda:` block body into CUDA C++ source: CIRv2 lowering,
-  ## the pass registry in stage order, then the CUDA printer.
-  ## Refusals and verifier violations in the chain are compile-time
+  ## the pass pipeline, then the CUDA printer.
+  ## Refusals in the chain are compile-time
   ## errors naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  var reg = PassRegistry.new()
+  registerNormalizationPasses(reg)
+  registerSharedLoweringPasses(reg)
+  registerDecomposeArrayAssign(reg)
+  # Rename position: after decomposeArrayAssign, incidental placement.
+  # Decompose creates only `__builtin_memcpy` calls, no generated name
+  # collides with the execution-space qualifiers of CudaReserved.
+  reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
+  registerSmemInitRewrite(reg)
+  registerInstantiateAddressSpaceGenerics(reg)
+  registerCudaFeatureScan(reg)
+  registerValidationPostPasses(reg)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  var reg = PassRegistry.new()
-  reg.registerLegalizationPasses()
-  reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
-  reg.registerSharedLoweringPasses()
-  reg.registerCudaLoweringPasses()
-  # feature scan after the last transform: analysis results are valid only
-  # if no transform runs after them (the registry never invalidates)
-  reg.registerCudaFeatureScan()
-  reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
@@ -112,23 +123,24 @@ macro cuda*(body: untyped): string =
 
 macro codegenOpenCL(body: typed): string =
   ## Compiles an `opencl:` block body into OpenCL C code: CIRv2 lowering,
-  ## the pass registry in stage order, then the OpenCL printer.
-  ## Refusals and verifier violations in the chain are compile-time
+  ## the pass pipeline, then the OpenCL printer.
+  ## Refusals in the chain are compile-time
   ## errors naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  var reg = PassRegistry.new()
+  registerNormalizationPasses(reg)
+  registerSharedLoweringPasses(reg)
+  reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
+  registerDecomposeArrayAssign(reg)
+  registerExplodeStructWithPtrFields(reg)
+  registerSmemInitRewrite(reg)
+  registerOpenclHoistProgramScopeConstants(reg)
+  registerOpenclLowerByrefParams(reg)
+  registerInstantiateAddressSpaceGenerics(reg)
+  registerOpenclFeatureScan(reg)
+  registerValidationPostPasses(reg)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  var reg = PassRegistry.new()
-  reg.registerLegalizationPasses()
-  reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
-  reg.registerSharedLoweringPasses()
-  reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
-  reg.registerOpenclLoweringPasses()
-  # feature scan after the last transform: analysis results are valid only
-  # if no transform runs after them (the registry never invalidates)
-  reg.registerOpenclFeatureScan()
-  reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
@@ -142,27 +154,24 @@ macro opencl*(body: untyped): string =
 
 macro codegenGLSL(body: typed): string =
   ## Compiles a `glsl:` block body into GLSL compute shader code:
-  ## CIRv2 lowering, the pass registry in stage order, then the GLSL printer.
-  ## A refusal or a verifier violation anywhere in the chain is a compile-time
+  ## CIRv2 lowering, the pass pipeline, then the GLSL printer.
+  ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  var reg = PassRegistry.new()
+  registerNormalizationPasses(reg)
+  registerSharedLoweringPasses(reg)
+  reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
+  registerGlslQualifyVarParams(reg)
+  registerGlslExplodePointerLocals(reg)
+  registerSmemInitRewrite(reg)
+  registerGlslHoistProgramScopeLocals(reg)
+  registerInstantiateAddressSpaceGenerics(reg)
+  registerGlslRefBlockPass(reg)
+  registerGlslFeatureScan(reg)
+  registerValidationPostPasses(reg)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  var reg = PassRegistry.new()
-  reg.registerLegalizationPasses()
-  reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
-  reg.registerSharedLoweringPasses()
-  # registerRenameReservedIdentifiers runs first: the GLSL lowering passes
-  # register after the rename, so the relocated program-scope declarations
-  # reference the renamed names that their body text already uses
-  reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
-  reg.registerGlslLoweringPasses()
-  # analysis passes after the last transform: analysis results are valid
-  # only if no transform runs after them (the registry never invalidates)
-  reg.registerGlslFeatureScan()
-  reg.registerGlslLayoutPass()
-  reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
@@ -176,21 +185,19 @@ macro glsl*(body: untyped): string =
 
 macro codegenSpirvShader(body: typed): seq[uint32] =
   ## Compiles a `spirv:` block body into binary SPIR-V words for the Vulkan
-  ## environment through CIRv2 lowering, the pass registry in stage order,
+  ## environment through CIRv2 lowering, the pass pipeline,
   ## then the SPIR-V encoder.
   ##
-  ## Any refusal or verifier violation in the chain is a compile-time error
+  ## Any refusal in the chain is a compile-time error
   ## naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  var reg = PassRegistry.new()
+  registerNormalizationPasses(reg)
+  registerSharedLoweringPasses(reg)
+  # No rename and no address-space callee instantiation: the encoder consumes typed words.
+  registerValidationPostPasses(reg)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  var reg = PassRegistry.new()
-  reg.registerLegalizationPasses()
-  reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
-  reg.registerSharedLoweringPasses()
-  reg.registerSpirvLoweringPasses()
-  reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
@@ -204,25 +211,24 @@ macro spirv*(body: untyped): seq[uint32] =
 
 macro codegenWebGpu(body: typed): string =
   ## Compiles a `webgpu:` block body into WebGPU WGSL code: CIRv2 lowering,
-  ## the pass registry in stage order, then the WGSL printer.
-  ## A refusal or a verifier violation anywhere in the chain is a compile-time
+  ## the pass pipeline, then the WGSL printer.
+  ## A refusal anywhere in the chain is a compile-time
   ## error naming the construct.
-  let (m, lerr) = lowerCirv2Unverified(body)
+  var reg = PassRegistry.new()
+  registerNormalizationPasses(reg)
+  registerSharedLoweringPasses(reg)
+  reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
+  registerExplodeStructWithPtrFields(reg)
+  registerWgslExplodePointerLocals(reg)
+  registerSmemInitRewrite(reg)
+  registerWgslHoistProgramScopeLocals(reg)
+  registerInstantiateAddressSpaceGenerics(reg)
+  registerWgslInlinePointerParamCalls(reg)
+  registerWgslFeatureScan(reg)
+  registerValidationPostPasses(reg)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  var reg = PassRegistry.new()
-  reg.registerLegalizationPasses()
-  reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
-  reg.registerSharedLoweringPasses()
-  # WGSL reserves the double-underscore identifier head, every `__`-prefixed name gains a `wgsl_` prefix
-  reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
-  reg.registerWgslLoweringPasses()
-  # analysis passes after the last transform: analysis results are valid
-  # only if no transform runs after them (the registry never invalidates)
-  reg.registerWgslFeatureScan()
-  reg.registerWgslLayoutPass()
-  reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
@@ -237,24 +243,28 @@ macro webgpu*(body: untyped): string =
 macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   ## Compiles an `hlsl:` block body into HLSL compute shader code.
   ##
-  ## - CIRv2 lowering, the pass registry in stage order with the HLSL
+  ## - CIRv2 lowering, the pass pipeline with the HLSL
   ##   per-target lowering passes and the call-graph analysis, then the HLSL
   ##   printer for `flavor`
-  ## - a refusal or a verifier violation in the chain is a compile-time
+  ## - a refusal in the chain is a compile-time
   ##   error naming the construct
-  let (m, lerr) = lowerCirv2Unverified(body)
+  var reg = PassRegistry.new()
+  registerNormalizationPasses(reg)
+  registerSharedLoweringPasses(reg)
+  registerHlslMaterializeNumWorkgroups(reg)
+  registerHlslExplodePointerLocals(reg)
+  # Rename position: after the pointer-local explosion, one named deviation
+  # from the shared explode template's documented contract (explode after
+  # rename). The rename matches names over declarations and uses.
+  # Spliced alias symbols rename together and the emitted names stay consistent.
+  reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
+  registerHlslHoistProgramScopeConstants(reg)
+  registerInstantiateAddressSpaceGenerics(reg)
+  registerHlslCallGraphPass(reg)
+  registerValidationPostPasses(reg)
+  let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  var reg = PassRegistry.new()
-  reg.registerLegalizationPasses()
-  reg.registerNormalizationPasses()
-  reg.registerOptimizationPasses()
-  reg.registerSharedLoweringPasses()
-  reg.registerHlslLoweringPasses()
-  # analysis passes after the last transform: analysis results are valid
-  # only if no transform runs after them (the registry never invalidates)
-  reg.registerHlslCallGraphPass()
-  reg.registerValidationPostPasses()
   let perr = runPasses(m, reg)
   if perr.len > 0:
     error(perr)
@@ -271,7 +281,7 @@ macro hlsl*(flavor: untyped, body: untyped): string =
   ##
   ## - resource binding per `flavor`, D3D12-native by default,
   ##   fvVulkan emits the zero-descriptor flavor for the engine's address route
-  ## - `flavor` stays untyped so overload resolution never sees the body,
+  ## - `flavor` is untyped so overload resolution never sees the body,
   ##   a typed parameter would evaluate it outside any DSL block
   var name = ""
   if flavor.kind in {nnkIdent, nnkSym}:

@@ -15,21 +15,23 @@
 ## - device functions: `__device__` with no extern "C", each device function keeps its C++ mangled name.
 ## - parameters print plainly, CUDA has one generic address space,
 ##   `{.smem.}` locals print `__shared__` in the body, and program-scope variables in `CirModule.globals` print `__constant__`
+## - the translation unit opens with the fp16/bf16 includes, NVRTC's default
+##   include path provides cuda_fp16.h and cuda_bf16.h
 ##
 ## Statement and builtin contract:
 ##
 ## - coordinate builtins map to the CUDA vocabulary: blockIdx, blockDim,
 ##   gridDim, threadIdx. The canonical Nim type is int, the CUDA builtins are unsigned, reads cast to int
-## - `{.unroll.}` prints `#pragma unroll` in front of the loop, jmp to the exit
-##   label is `break`, jmp to the continue label is `continue`, any other lab/jmp pair refuses
-## - the typed builtin kinds dispatch to the CUDA vocabulary, `{.builtin.}` names pass through, the warp reductions are the exception
+## - `{.unroll.}` prints `#pragma unroll` in front of the loop, a loop prints `while (cond)` or `for (;;)`
+## - the builtin vocabulary dispatches on the canonical name, `{.builtin.}` names pass through, the warp reductions are the exception
 ## - a warp-reduction call makes its butterfly template emit at module scope on first use
 
 import ../ir/cirv2_lang
 import ../frontend/nim_to_crucible
-import std/[macros, strutils, sequtils, tables, math]
+import std/[macros, strutils, sequtils, sets, tables, math]
 import ../ir/ast_datatypes
-import ./emit_common
+import ./print_common
+import ./targets_registry
 
 type
   PrintCtx = object
@@ -37,120 +39,43 @@ type
     ## First refusal of the walk, "" while clean.
     err: string
     indent: int
+    policy: WalkPolicy
+    ## Walk policy of the target. The shared walk reads its fields.
+    lit: LitTokens
+    ## Literal token forms of the target. The shared literal head reads them.
+    scalarNames: ScalarNames
+    ## Scalar names of the target. The narrow integer cast names its type from them.
+    inKernel: bool
+    ## False inside a device function, the printer refuses a `__shared__` initializer there.
 
 const printerTarget = "cuda"
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string
 
 # ═══════════════════════════════════════════════════════════════════════
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
 proc emitCudaScalar(t: CirType): string =
-  ## CUDA name of a non-array leaf type, "" when the caller composes the name.
-  case t.kind
-  of ctVoid:
-    result = "void"
-  of ctBool:
-    result = "bool"
-  of ctInt:
-    case t.bits
-    of 8:
-      result = "signed char"
-    of 16:
-      result = "short"
-    of 32:
-      result = "int"
-    of 64:
-      result = "long long"
-    else:
-      result = ""
-  of ctUint:
-    case t.bits
-    of 8:
-      result = "unsigned char"
-    of 16:
-      result = "unsigned short"
-    of 32:
-      result = "unsigned int"
-    of 64:
-      result = "unsigned long long"
-    else:
-      result = ""
-  of ctFloat:
-    case t.bits
-    of 32:
-      result = "float"
-    of 64:
-      result = "double"
-    else:
-      result = ""
-  of ctPtr, ctAptr:
-    result = emitCudaScalar(t.pElem) & "*"
-  of ctStruct:
-    result = t.name
-  of ctVector, ctArray, ctProc, ctSpan:
-    result = ""
+  ## CUDA bare name of a non-array leaf type, "" when the caller composes the name.
+  getBareName(cudaScalarNames, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
-  ## CUDA name of `t` with `ident` appended. Arrays take the identifier into
-  ## the declarator (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
-  ## `allowEmptyIdent` permits no identifier, return types and casts use it.
-  ## An array without an identifier otherwise refuses.
-  case t.kind
-  of ctArray:
-    if ident.len == 0 and not allowEmptyIdent:
-      return "<cuda: array needs an identifier>"
-    if t.aElem.kind == ctArray:
-      result = emitCudaType(t.aElem, "(" & ident & ")" & "[" & $t.aN & "]",
-        allowEmptyIdent)
-    else:
-      result = emitCudaType(t.aElem, "", true) & ' ' & ident & '[' & $t.aN & ']'
-  else:
-    result = emitCudaScalar(t)
-    if ident.len > 0:
-      result.add ' ' & ident
+  ## CUDA declaration text of `t` with `ident` appended, the shared C declarator
+  ## over the CUDA tables. Arrays put the identifier into the declarator
+  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
+  cDecl(cudaScalarNames, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
+
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## CUDA declaration text of one struct member via the shared C declarator.
+  emitCudaType(f.typ, f.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
-  ## Forward declaration, expressions recurse into themselves.
 
-# `INFINITY`, `-INFINITY` and `NAN` convert at the use site, one form covers every width.
-const cudaFloatTokens = FloatLitTokens(
-  inf16: "INFINITY", negInf16: "-INFINITY", nan16: "NAN",
-  inf32: "INFINITY", negInf32: "-INFINITY", nan32: "NAN",
-  inf64: "INFINITY", negInf64: "-INFINITY", nan64: "NAN")
-
-proc emitCudaLit(e: CirExpr): string =
-  ## CUDA token of a literal, typed by its literal type.
-  case e.kind
-  of eIntLit:
-    case e.litType.kind
-    of ctUint:
-      case e.litType.bits
-      of 64: result = $e.value & "ULL"
-      of 32: result = $e.value & "U"
-      else: result = "(" & emitCudaScalar(e.litType) & ")" & $e.value
-    of ctInt:
-      case e.litType.bits
-      of 64: result = $e.value & "LL"
-      of 32: result = $e.value
-      else: result = "(" & emitCudaScalar(e.litType) & ")" & $e.value
-    else:
-      result = $e.value
-  of eFloatLit:
-    result = nonFiniteFloatLit(e, cudaFloatTokens)
-    if result.len == 0:
-      case e.fLitType.bits
-      of 32: result = $e.fValue & "f"
-      else: result = $e.fValue
-  of eNil: result = "nullptr"
-  of eTrue: result = "true"
-  of eFalse: result = "false"
-  else: result = "<cuda: not a literal>"
-
-proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: string, coordTy: CirType): string =
+proc getCudaCoordToken(name: string, whole: bool, field: string, coordTy: CirType): string =
   ## CUDA text of a canonical coordinate reference.
   ## - whole-value use of a vector builtin: a braced init of the coordinate
   ##   struct the module registered. The CUDA builtins are unsigned and
@@ -158,43 +83,42 @@ proc cudaCoordToken(kind: CoordBuiltinKind, name: string, whole: bool, field: st
   ## - component use: a cast to int, the flat thread index linearizes
   ##   x-major and parenthesizes so a trailing `* k` cannot mis-associate
   let vecTy = emitCudaScalar(coordTy)
-  case kind
-  of cbkThreadgroupPositionInGrid:
+  case name
+  of "threadgroup_position_in_grid":
     if whole:
       result = vecTy & "{(int)blockIdx.x, (int)blockIdx.y, (int)blockIdx.z}"
     else:
       result = "(int)(blockIdx." & field & ")"
-  of cbkThreadPositionInThreadgroup:
+  of "thread_position_in_threadgroup":
     if whole:
       result = vecTy & "{(int)threadIdx.x, (int)threadIdx.y, (int)threadIdx.z}"
     else:
       result = "(int)(threadIdx." & field & ")"
-  of cbkThreadsPerThreadgroup:
+  of "threads_per_threadgroup":
     if whole:
       result = vecTy & "{(int)blockDim.x, (int)blockDim.y, (int)blockDim.z}"
     else:
       result = "(int)(blockDim." & field & ")"
-  of cbkThreadgroupsPerGrid:
+  of "threadgroups_per_grid":
     if whole:
       result = vecTy & "{(int)gridDim.x, (int)gridDim.y, (int)gridDim.z}"
     else:
       result = "(int)(gridDim." & field & ")"
-  of cbkThreadIndexInThreadgroup:
+  of "thread_index_in_threadgroup":
     if whole:
       result = "(int)(threadIdx.z*blockDim.x*blockDim.y + threadIdx.y*blockDim.x + threadIdx.x)"
     else:
       result = "(int)(threadIdx." & field & ")"
-  of cbkThreadPositionInGrid:
-    # whole-value use has no CUDA text, the canonical name passes through
+  of "thread_position_in_grid":
     if whole:
       result = name
     else:
       result = "(int)(blockIdx." & field & "*blockDim." & field &
         "+threadIdx." & field & ")"
-  of cbkNone:
+  else:
     result = name
 
-proc emitCudaBuiltinCall(callee: CirExpr, args: seq[string]): string =
+proc emitBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## Returns the CUDA text of a builtin call, "" when `callee` is not a builtin.
   ##
   ## Shared by expression- and statement-position calls: the statement path
@@ -202,126 +126,64 @@ proc emitCudaBuiltinCall(callee: CirExpr, args: seq[string]): string =
   ## its memory ordering, the CUDA text is `__syncthreads()`.
   ##
   ## `args` contains the already-printed argument texts.
-  if callee.kind != eSym:
+  if callee.kind != eSym or not callee.builtin:
     return ""
-  case callee.synchroBuiltin
-  of sbkThreadgroupBarrier, sbkThreadgroupBarrierDevice:
-    # __syncthreads() already orders global memory, the device-scope barrier needs no separate instruction
+  # builtin vocabulary dispatches on the canonical name through this table
+  case callee.name
+  of "threadgroup_barrier", "threadgroup_barrier_device":
+    # __syncthreads() already orders global memory, the device-scope barrier emits no separate instruction
     return "__syncthreads()"
-  of sbkNone: discard
-  case callee.reductionBuiltin
-  of rbkReduceAdd:
+  of "reduceAdd":
     return "warpReduceAdd(" & args.join(", ") & ")"
-  of rbkReduceMax:
+  of "reduceMax":
     return "warpReduceMax(" & args.join(", ") & ")"
-  of rbkNone: discard
-  if callee.atomicsBuiltin == abkAtomicFetchAdd:
+  of "atomicFetchAdd":
     # atomicAdd overloads on the pointee type, no cast needed
     return "atomicAdd(" & args[0] & ", " & args[1] & ")"
-  case callee.shuffleBuiltin
-  of shkSimdShuffle, shkSimdShuffleXor:
+  of "simd_shuffle", "simd_shuffle_xor":
     # full mask: every warp lane participates and receives the result,
     # xor exchanges lane pairs bitwise
-    let shfl = if callee.shuffleBuiltin == shkSimdShuffle: "__shfl_sync"
+    let shfl = if callee.name == "simd_shuffle": "__shfl_sync"
                else: "__shfl_xor_sync"
     return shfl & "(0xffffffffu, " & args[0] & ", " & args[1] & ")"
-  of shkNone: discard
-  return ""
-
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  if ctx.failing():
+  else:
     return ""
+
+proc cudaConvCallText(call: CirExpr, args: seq[string]): string =
+  ## CUDA text of a `{.builtin.}` fp16 conversion call whose canonical name
+  ## maps to a cuda_fp16.h native (`cudaConvBuiltinNames`), "" otherwise.
+  if call.callee.kind != eSym or not call.callee.builtin:
+    return ""
+  let name = cudaConvBuiltinNames.getOrDefault(call.callee.name, "")
+  if name.len == 0:
+    return ""
+  return name % args.join(", ")
+
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  let t = e.castType
+  return "(" & emitCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
+
+
+proc printTargetExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## CUDA text of the kinds in `targetExprKinds`.
   case e.kind
-  of eNil, eTrue, eFalse, eIntLit, eFloatLit:
-    return emitCudaLit(e)
   of eSym:
-    if e.coordBuiltin != cbkNone:
-      return cudaCoordToken(e.coordBuiltin, e.name, true, "", e.typ)
+    if e.builtin and e.name in CoordBuiltinNames:
+      return getCudaCoordToken(e.name, true, "", e.typ)
     return e.name
-  of eAt:
-    var base = ctx.printExpr(e.atBase)
-    if e.atBase.kind in {eCast, eConv}:
-      # a cast binds looser than the subscript: parenthesize the base
-      base = "(" & base & ")"
-    return base & '[' & ctx.printExpr(e.atIndex) & ']'
-  of ePat:
-    var base = ctx.printExpr(e.patBase)
-    if e.patBase.kind in {eCast, eConv}:
-      base = "(" & base & ")"
-    return base & '[' & ctx.printExpr(e.patIndex) & ']'
   of eDot:
-    if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
-      return cudaCoordToken(e.dotBase.coordBuiltin, e.dotBase.name, false,
+    if e.dotBase.kind == eSym and e.dotBase.builtin and
+        e.dotBase.name in CoordBuiltinNames:
+      return getCudaCoordToken(e.dotBase.name, false,
         e.fieldName, e.dotBase.typ)
     let base = ctx.printExpr(e.dotBase)
     if e.dotBase.kind == eDeref:
       return "(" & base & ")." & e.fieldName
     return base & '.' & e.fieldName
-  of eDeref:
-    return "(*" & ctx.printExpr(e.derefOperand) & ")"
-  of eAddr:
-    return "(&" & ctx.printExpr(e.addrOperand) & ")"
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    let op = case e.kind
-      of eAdd: "+"
-      of eSub: "-"
-      of eMul: "*"
-      of eDiv: "/"
-      of eMod: "%"
-      of eShl: "<<"
-      of eShr: ">>"
-      of eBitAnd: "&"
-      of eBitOr: "|"
-      else: "^"
-    return "(" & ctx.printExpr(e.left) & ' ' & op & ' ' & ctx.printExpr(e.right) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-      of eEq: "=="
-      of eNeq: "!="
-      of eLt: "<"
-      else: "<="
-    return "(" & ctx.printExpr(e.a) & ' ' & op & ' ' & ctx.printExpr(e.b) & ")"
-  of eNot:
-    return "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    let op = if e.kind == eAnd: "&&" else: "||"
-    return "(" & ctx.printExpr(e.andLeft) & ' ' & op & ' ' & ctx.printExpr(e.andRight) & ")"
-  of eBitNot:
-    return "(~" & ctx.printExpr(e.unOperand) & ")"
-  of eNeg:
-    return "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eConv:
-    # a numeric conversion prints as the C-style cast
-    let t = e.castType
-    return "(" & emitCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
   of eCast:
-    # A bit reinterpret keeps the operand's bits: `__float_as_uint(1.5f)` reads 0x3FC00000.
-    # A C-style cast numerically converts: `(unsigned int) 1.5f` gives 1u.
-    # Float-as-integer intrinsics cover the 32- and 64-bit float pairs.
-    # A same-width integer pair keeps the C-style cast: the modular conversion preserves every bit.
-    # A same-width float pair without an intrinsic refuses over emitting a numeric conversion.
-    let t = e.castType
-    let src = getExprType(e.castOperand)
-    let scalar = t.kind in {ctInt, ctUint, ctFloat} and src != nil and
-      src.kind in {ctInt, ctUint, ctFloat} and src.bits == t.bits
-    if scalar and src.kind == ctFloat and t.kind != ctFloat:
-      if src.bits == 32:
-        return (if t.kind == ctUint: "__float_as_uint" else: "__float_as_int") &
-          "(" & ctx.printExpr(e.castOperand) & ")"
-      if src.bits == 64:
-        return "__double_as_longlong(" & ctx.printExpr(e.castOperand) & ")"
-      ctx.fail("bit cast of a 16-bit float has no CUDA emission")
-      return ""
-    if scalar and t.kind == ctFloat and src.kind != ctFloat:
-      if t.bits == 32:
-        return (if src.kind == ctUint: "__uint_as_float" else: "__int_as_float") &
-          "(" & ctx.printExpr(e.castOperand) & ")"
-      if t.bits == 64:
-        return "__longlong_as_double(" & ctx.printExpr(e.castOperand) & ")"
-      ctx.fail("bit cast to a 16-bit float has no CUDA emission")
-      return ""
-    # pointers, same-width integer pairs and float-to-float keep the C-style cast
-    return "(" & emitCudaType(t, "", true) & ")" & ctx.printExpr(e.castOperand)
+    return ctx.printCast(e, cudaCastRules, emitCudaType(e.castType, "", true))
+  of eConv:
+    return ctx.printConv(e)
   of eSizeof:
     return "sizeof(" & emitCudaType(e.ofType, "", true) & ")"
   of eOconstr:
@@ -343,178 +205,69 @@ proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
         ctx.printExpr(el)
     result.add "}"
   of eCall:
-    let calleeName =
-      if e.callee.kind == eSym: e.callee.name
-      else: ctx.printExpr(e.callee)
-    var args: seq[string]
-    for a in e.args:
-      args.add ctx.printExpr(a)
-    let builtinTxt = emitCudaBuiltinCall(e.callee, args)
-    if builtinTxt.len > 0:
-      return builtinTxt
-    return calleeName & "(" & args.join(", ") & ")"
+    let args = printCallArgs(ctx, e)
+    var builtinTxt = emitBuiltinCall(e.callee, args)
+    if builtinTxt.len == 0:
+      builtinTxt = mathBuiltinCallText(cudaMathBuiltinNames, e, args)
+    if builtinTxt.len == 0:
+      builtinTxt = cudaConvCallText(e, args)
+    return printCallText(ctx, e, args, builtinTxt)
   else:
-    ctx.fail("expression kind " & $e.kind & " has no CUDA emission")
-    return ""
+    ctx.fail(unhandledExprRejection(e.kind))
+
 
 # ═══════════════════════════════════════════════════════════════════════
-# Statements
+# Statements: per-target policy arms, the shared dispatch lives in print_common
 # ═══════════════════════════════════════════════════════════════════════
-
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string
-  ## Forward declaration, the loop context (break/continue labels) is a parameter.
-
-proc printStmt(ctx: var PrintCtx, s: CirStmt, exitL, contL: string): string =
-  ## One structured statement, `exitL`/`contL` the enclosing loop's labels.
-  if ctx.failing():
-    return ""
+proc printVar(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local declaration: kernel-scope shared storage and storage-class refusals, then the declaration text.
   let pad = spaces(ctx.indent * 2)
-  case s.kind
-  of sVar:
-    if s.space == caThreadgroup:
-      # kernel-scope shared storage in `__shared__` form,
-      # NVRTC allocates it per threadgroup, any initializer is discarded
-      result = pad & "__shared__ " & emitCudaType(s.declType, s.name, false) & ";"
-      return
-    if s.space == caConstant:
-      # program-scope storage belongs to CirModule.globals, a survivor here
-      # was never relocated
-      ctx.fail("local " & s.name & " in constant space, CUDA constant storage" &
-        " is program scope only")
+  if s.space == caThreadgroup:
+    # kernel-body initializers rewrote to stores before printing
+    if s.init != nil and not ctx.inKernel:
+      ctx.fail("smem local " & s.name &
+        " with an initializer, CUDA C++ forbids initializing __shared__ variables")
       return ""
-    var decl = emitCudaType(s.declType, s.name, false)
-    result = pad & decl
-    if s.init != nil:
-      result &= " = " & ctx.printExpr(s.init)
-    result &= ";"
-  of sConst:
-    if s.declType.kind == ctArray:
-      result = pad & "constexpr " &
-        emitCudaType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
-    else:
-      result = pad & "constexpr " & emitCudaScalar(s.declType) & ' ' & s.name &
-        " = " & ctx.printExpr(s.init) & ";"
-  of sAsgn:
-    result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
-  of sIte:
-    let cond = ctx.printExpr(s.cond)
-    ctx.indent.inc
-    let thenTxt = ctx.printStmts(s.thenBody, exitL, contL)
-    ctx.indent.dec
-    result = pad & "if (" & cond & ") {\n" & thenTxt & '\n' & pad & '}'
-    if s.elseBody.len > 0:
-      ctx.indent.inc
-      let elseTxt = ctx.printStmts(s.elseBody, exitL, contL)
-      ctx.indent.dec
-      result &= " else {\n" & elseTxt & '\n' & pad & '}'
-  of sLoop:
-    # loops print through printStmts, which derives the loop's own labels
-    result = ""
-  of sLab:
-    # an exit label after a loop is the break target marker, dropped
-    result = ""
-  of sJmp:
-    if s.jmpTarget == exitL and exitL.len > 0:
-      result = pad & "break;"
-    elif s.jmpTarget == contL and contL.len > 0:
-      result = pad & "continue;"
-    else:
-      ctx.fail("unstructured jump to " & s.jmpTarget)
-      result = ""
-  of sScope:
-    result = pad & "{\n"
-    ctx.indent.inc
-    result &= ctx.printStmts(s.scopeBody, exitL, contL)
-    ctx.indent.dec
-    result &= '\n' & pad & '}'
-  of sAssume:
-    # a loop-bound hint, CUDA has no assume construct
-    result = ""
-  of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
-    else:
-      result = pad & "return;"
-  of sDiscard:
-    result = ""
-  of sCall:
-    let calleeName =
-      if s.callCallee.kind == eSym: s.callCallee.name
-      else: ctx.printExpr(s.callCallee)
-    var args: seq[string]
-    for a in s.callArgs:
-      args.add ctx.printExpr(a)
-    let builtinTxt = emitCudaBuiltinCall(s.callCallee, args)
-    if builtinTxt.len > 0:
-      result = pad & builtinTxt & ";"
-    else:
-      result = pad & calleeName & "(" & args.join(", ") & ");"
-  of sAsm:
-    var text = ""
-    for i, part in s.asmParts:
-      text.add(part)
-      if i < s.asmOperands.len:
-        text.add(s.asmOperands[i].name)
-    result = pad & "asm(" & text.strip() & ");"
-  of sEmit:
-    # `{.emit.}` raw source: the operand names splice into the verbatim text,
-    # no terminator appended, the text supplies its own terminators
-    var text = ""
-    for i, part in s.emitParts:
-      text.add(part)
-      if i < s.emitOperands.len:
-        text.add(s.emitOperands[i].name)
-    result = pad & text
-  of sCase:
-    ctx.fail("case statements are outside the CIRv2 closure, the frontend refuses them")
+    result = pad & "__shared__" & ' ' &
+      emitCudaType(s.declType, s.name, false) & ";"
+    return
+  if s.space == caConstant:
+    ctx.fail("local " & s.name & " in constant space, CUDA constant storage" &
+      " is program scope only")
+    return ""
+  var decl = emitCudaType(s.declType, s.name, false)
+  result = pad & decl
+  if s.init != nil:
+    result &= " = " & ctx.printExpr(s.init)
+  result &= ";"
 
-proc printStmts(ctx: var PrintCtx, stmts: seq[CirStmt], exitL, contL: string): string =
-  ## Prints one statement list. Plain statements take the caller's loop context.
-  ## A `loop` derives its own labels. Its exit label sits after the loop,
-  ## its continue label inside.
-  var lines: seq[string]
-  var i = 0
-  while i < stmts.len:
-    let s = stmts[i]
-    var txt: string
-    if s.kind == sLoop:
-      let lExit = if i + 1 < stmts.len and stmts[i + 1].kind == sLab:
-        stmts[i + 1].labName
-      else:
-        ""
-      var lCont = ""
-      for t in s.loopBody:
-        if t.kind == sLab and t.labName.startsWith(ContinueLabelPrefix):
-          lCont = t.labName
-      ctx.indent.inc
-      let bodyTxt = ctx.printStmts(s.loopBody, lExit, lCont)
-      ctx.indent.dec
-      let directive = if s.unroll:
-        spaces(ctx.indent * 2) & "#pragma unroll\n"
-      else:
-        ""
-      txt = directive & spaces(ctx.indent * 2) & "for (;;) {\n" & bodyTxt & "\n" &
-        spaces(ctx.indent * 2) & '}'
-      if lExit.len > 0:
-        i.inc  # exit label, consumed
-    else:
-      txt = ctx.printStmt(s, exitL, contL)
-    if txt.len > 0:
-      lines.add txt
-    i.inc
-  return lines.join("\n")
+proc printConst(ctx: var PrintCtx, s: CirStmt): string =
+  ## One local constant declaration, the `constexpr` form.
+  let pad = spaces(ctx.indent * 2)
+  if s.declType.kind == ctArray:
+    result = pad & "constexpr " &
+      emitCudaType(s.declType, s.name, false) & " = " & ctx.printExpr(s.init) & ";"
+  else:
+    result = pad & "constexpr " & emitCudaScalar(s.declType) & ' ' & s.name &
+      " = " & ctx.printExpr(s.init) & ";"
 
-proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
-  ## Butterfly warp-reduction template for one reduction kind: CUDA has no
+proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
+  ## One inline assembly statement: the spliced text in an `asm(...)` wrapper.
+  let pad = spaces(ctx.indent * 2)
+  var text = ""
+  for i, part in s.asmParts:
+    text.add(part)
+    if i < s.asmOperands.len:
+      text.add(s.asmOperands[i].name)
+  result = pad & "asm(" & text.strip() & ");"
+
+proc emitWarpReduceTemplate(name: string): string =
+  ## Butterfly warp-reduction template for one reduction: CUDA has no
   ## float warp-reduce intrinsic, the tree walks the xor mask 16/8/4/2/1.
-  let op = case kind
-    of rbkReduceAdd: "v += "
-    else: "v = max(v, "
-  let close = case kind
-    of rbkReduceAdd: ""
-    else: ")"
+  let op = if name == "reduceAdd": "v += " else: "v = max(v, "
+  let close = if name == "reduceAdd": "" else: ")"
   result = "template <typename T> __forceinline__ __device__ T warpReduce" &
-    (if kind == rbkReduceAdd: "Add" else: "Max") & "(T v) {\n"
+    (if name == "reduceAdd": "Add" else: "Max") & "(T v) {\n"
   result &= "  #pragma unroll\n"
   result &= "  for (int delta = 16; delta > 0; delta >>= 1) {\n"
   result &= "    " & op & "__shfl_xor_sync(0xffffffff, v, delta, 32)" & close & ";\n"
@@ -526,90 +279,78 @@ proc emitWarpReduceTemplate(kind: ReductionBuiltinKind): string =
 # Procs and modules
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printProc(ctx: var PrintCtx, fn: CirProc): string =
-  ## One proc or kernel: signature, body, closing brace.
-  ctx.fnName = fn.name
-  ctx.indent = 0
-  let bodyTxt = ctx.printStmts(fn.body, "", "")
-  if ctx.failing():
-    return ""
-  # exportc renames a kernel entry for the host runtime lookup.
-  # A device function keeps the name its call sites reference.
-  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
-  var params: seq[string]
-  if fn.isKernel:
-    for p in fn.params:
-      case p.typ.kind
-      of ctAptr, ctPtr:
-        params.add emitCudaScalar(p.typ.pElem) & "* " & p.name
-      of ctArray:
-        # by-value array params decay to pointers, they are read-only,
-        # const-qualified so the read-only contract reaches the callee
-        params.add "const " & emitCudaType(p.typ, p.name, false)
+proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
+  ## CUDA parameter texts of one proc or kernel, in declaration order.
+  ##
+  ## A kernel's by-value array parameter is const-qualified: the array decays to a pointer and is read-only.
+  for p in fn.params:
+    case p.typ.kind
+    of ctAptr, ctPtr:
+      result.add emitCudaType(p.typ, p.name, true)
+    of ctArray:
+      if fn.isKernel:
+        result.add "const " & emitCudaType(p.typ, p.name, false)
       else:
-        params.add emitCudaType(p.typ, p.name, true)
-  else:
-    for p in fn.params:
-      case p.typ.kind
-      of ctAptr, ctPtr:
-        params.add emitCudaScalar(p.typ.pElem) & "* " & p.name
-      else:
-        params.add emitCudaType(p.typ, p.name, true)
-  let ret = emitCudaType(fn.ret, "", true)
-  var prefix = ""
+        result.add emitCudaType(p.typ, p.name, true)
+    else:
+      result.add emitCudaType(p.typ, p.name, true)
+
+proc emitComputePrefix(ctx: var PrintCtx, fn: CirProc): string =
+  ## CUDA linkage prefix of one proc or kernel.
   if fn.isKernel:
-    # extern "C" keeps the unmangled name that the host runtime looks up
-    prefix = "extern \"C\" __global__ "
-  else:
-    if fn.inline:
-      prefix = "__forceinline__ "
-    prefix &= "__device__ "
-  let sig = prefix & ret & ' ' & name & '(' & params.join(", ") & ")"
-  return sig & " {\n" & bodyTxt & '\n' & "}"
+    return "extern \"C\" __global__ "
+  if fn.inline:
+    return "__forceinline__ __device__ "
+  return "__device__ "
+
+proc emitTypeBare(t: CirType): string =
+  ## CUDA C++ name of `t` with no identifier, as casts and sizeof print it.
+  emitCudaType(t, "", true)
+
+proc prepProc(ctx: var PrintCtx, fn: CirProc) =
+  ctx.inKernel = fn.isKernel
+
+const cudaModuleShape = ModuleShape(
+  spaces: {caThread, caThreadgroup, caConstant, caDevice},
+  structTypedef: false,
+  structPadding: "char _",
+  structFieldTerm: ';',
+  structClose: "};",
+  fwdDecls: false,
+  moduleOrderProcs: true,
+  kernelSep: "\n\n",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: true)
+
+proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
+  ## Translation-unit head of every CUDA module: the fp16 and bf16 includes.
+  ## NVRTC's default include path provides both headers.
+  ## __half, __nv_bfloat16 and the conversion builtins compile with no host-side include setup.
+  "#include <cuda_fp16.h>\n#include <cuda_bf16.h>\n"
+
+proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
+  ## Program-scope `__constant__` declaration of one relocated global.
+  var decl = emitCudaType(s.declType, s.name, false)
+  if s.init != nil:
+    decl &= " = " & ctx.printExpr(s.init)
+  return "__constant__ " & decl & ";"
+
+proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
+  ## Warp-reduction template set from the stored module feature scan
+  ## (`CirModule.features`, filled by the feature-scan pass).
+  let reduceNames = m.features.reductions
+  if "reduceAdd" in reduceNames:
+    result &= emitWarpReduceTemplate("reduceAdd")
+  if "reduceMax" in reduceNames:
+    result &= emitWarpReduceTemplate("reduceMax")
 
 proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full CUDA translation unit: struct declarations, program-scope constants,
-  ## the warp-reduction templates in use, then every function body.
-  ##
-  ## Returns "" as the error when clean, else the first refusal.
-  var ctx = PrintCtx(fnName: "<module>")
-  var src = ""
-  for t in m.types:
-    if t.kind != ctStruct:
-      ctx.fail("module type " & t.name & " is not a struct")
-      break
-    src &= "struct " & t.name & " {\n"
-    if t.fields.len == 0:
-      # CUDA requires at least one field in a struct
-      src &= "  char _;\n"
-    for f in t.fields:
-      src &= "  " & emitCudaType(f.typ, f.name, false) & ";\n"
-    src &= "};\n\n"
-  for s in m.globals:
-    if s.kind != sVar:
-      ctx.fail("module global " & s.name & " is not a variable")
-      break
-    var decl = emitCudaType(s.declType, s.name, false)
-    if s.init != nil:
-      decl &= " = " & ctx.printExpr(s.init)
-    src &= "__constant__ " & decl & ";\n"
-  if m.globals.len > 0:
-    src &= "\n"
-  # warp-reduction template set from the stored module feature scan
-  # (`CirModule.features`, filled by the feature-scan pass)
-  let reduceKinds = m.features.reductions
-  if rbkReduceAdd in reduceKinds:
-    src &= emitWarpReduceTemplate(rbkReduceAdd)
-  if rbkReduceMax in reduceKinds:
-    src &= emitWarpReduceTemplate(rbkReduceMax)
-  if ctx.failing():
-    return ("", ctx.err)
-  for fn in m.procs:
-    let txt = ctx.printProc(fn)
-    if ctx.err.len > 0:
-      break
-    src &= txt & "\n\n"
-  result = (src, ctx.err)
+  ## Emits the full CUDA translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
+  var ctx = PrintCtx(fnName: "<module>", policy: cudaWalkPolicy,
+    lit: cudaLitTokens, scalarNames: cudaScalarNames)
+  printModule(ctx, m, moduleKernels(m), cudaModuleShape)
 
 proc codegen*(ctx: var GpuContext): string =
   ## Prints the module in `ctx` as CUDA C++ source, the `backends_api` entry point.

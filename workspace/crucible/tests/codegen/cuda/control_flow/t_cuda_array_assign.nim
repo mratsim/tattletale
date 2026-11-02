@@ -7,9 +7,8 @@
 ## Compile-time only: the const runs the cuda macro during `nim c`.
 ## A pipeline or printer regression fails compilation.
 ##
-## This machine has no CUDA driver.
-## t_metal_array_assign and t_opencl_array_assign carry the semantic check
-## on Metal and on OpenCL. A CUDA launch reuses the same kernel body.
+## The semantic check runs on Metal (t_metal_array_assign) and OpenCL
+## (t_opencl_array_assign), a CUDA launch reuses the same kernel body.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

@@ -59,7 +59,12 @@ Rule table (rule | trigger | severity):
 | dump-identifier       | an identifier carrying dump in crucible or ceramic Nim code, dump mechanisms are debug-only and never committed, debugEcho inline, write at the call site, a macro can debugEcho result.toStrLit() | counted  |
 | crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
-| emitted-text-assert | a string literal containment in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks | counted  |
+| emitted-text-assert | a string literal containment, scan, or equality in tests/codegen Nim code, an assert-context hit asserts on the emitted shader source (violation), a non-assert hit is an advisory naming the shape, behavioral tests launch kernels and check readbacks | counted  |
+| one-line-refusal    | a refusal message literal spanning more than one physical line or over 110 characters, keep the refusal on one line | counted  |
+| duplicate-refusal-coverage | a refusal message fingerprint refused at 2 or more sites (refusal calls plus genTargets refusal row literals), the human disposes the duplicate | counted  |
+| refusal-essay       | a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses | counted  |
+| refusal-density     | 6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory | counted  |
+| agent-verb          | a comment gives a type, a value, a text, or a name an agent verb (refuses, keeps, stays, pairs, travels, carries, takes, meets, names no), a file, a row, a module, or a doc never states its contents | counted  |
 
 Golden rules:
 - ## docs serve API users, # comments serve maintainers and auditors
@@ -247,21 +252,68 @@ SECTION_END_RE = re.compile(
     r"^\s*(?:proc|func|macro|iterator|template|converter|const|let|var|import|"
     r"export|include)\b")
 
-# The emitted-text-assert rule (tests/codegen scope). Behavioral kernel tests
-# launch kernels and check readbacks; a string literal containment asserts on
-# the emitted shader source instead, which the testing rules ban.
+# Emitted-text-assert rule (tests/codegen scope). Behavioral kernel tests
+# launch kernels and check readbacks. A string literal containment, scan,
+# or equality against the emitted shader source is what the testing rules ban.
 #
-# - `"text" in expr` and `"text" notin expr`: a string literal on the left of
-#   the containment operators, an `&` concatenation that ends in a literal
-#   matches too (`prefix & " = OpTypeStruct" in line`)
-# - `.contains("text")` and `.contains(prefix & "text")`: a method-call
-#   containment whose argument carries a string literal
-# - legal shapes the left anchor keeps out: membership of a plain identifier
-#   or a loop variable (`x in collected`, `for line in lines`), a call whose
-#   argument carries no literal (`parts.contains(pair.control)`)
+# Pin shapes:
+# - `"text" in expr` and `"text" notin expr`: a string literal
+#   next to the containment operators, an `&` concatenation ending in a literal
+#   matches too (`prefix & " = OpTypeStruct" in line`), and closing parens
+#   between the literal and the operator (`check (prefix & "x") in line`)
+# - `.contains("text")` and the bare proc form `contains(expr, "text")` match,
+#   the scan procs find, rfind, startsWith, endsWith, and count match too
+#   when the argument carries a string literal
+# - a string literal directly left of `==` or `!=`, or right of either operator
+#   (`check lines[3] == "iftmp = ((x + 1U) * 2U);"`)
+# - a membership test whose right side is a string literal list
+#   (`line in ["a;"]`)
+# - a literal inside a multi-line triple-quoted string: the logical-line join
+#   tracks the `"""` state across lines, the whole literal reaches the anchors
+# - a call wrapped across lines joins into one logical line first so that a literal on a continuation line still matches
+#
+# Tier: a hit on a line that also carries an assert keyword
+# (doAssert, check, assert, expect) is a violation, that line asserts on
+# the emitted source.
+# A hit without one is an advisory naming the shape, a runtime dispatch never
+# asserts anything (`if "metal" in backendName`, `if backend == "metal"`).
+#
+# Legal shapes the anchors keep out: a plain identifier or a loop variable
+# on the left of `in` (`x in collected`, `for line in lines`), a call
+# whose argument carries no literal (`parts.contains(pair.control)`,
+# `src.count(name)`), a numeric comparison (`res[0] == 1'u32`),
+# a numeric literal list (`res[0] in [1'u32, 2'u32]`), a char argument
+# (`rest.find(' ')`), a literal call argument left of the comparison
+# (`runScale("k16") == @[16.0'f32]`, the closing parens keep the anchor out).
+#
+# Known blind spots (such sites stay on the reviewer):
+# - a literal folded into an identifier before the test
+#   (`let expected = "a" & "b"` then `doAssert expected in src`,
+#   `doAssert msl == expectedMslText`) hides the literal from every anchor
+# - a literal folded into a parenthesized expression left of `==`
+#   (`check (head & "tail") == lines[0]`), the closing parens that keep the call-argument shape clean keep this shape out too
+# One string literal as the patterns see it: a triple-quoted literal first,
+# then a plain or raw single-quoted-run literal.
+_TEXT_PIN_LIT = (r'(?:\br)?"""(?:[^"]|"(?!""))*"""'
+                 r'|(?:\br)?"(?:\\.|[^"\\])*"')
+
 TEXT_PIN_IN_RE = re.compile(
-    r'(?<![\w"])(?:\br)?"(?:\\.|[^"\\])*"\s+(?:not\s*)?in\b')
-TEXT_PIN_CONTAINS_RE = re.compile(r'\.\s*contains\s*\([^)]*"')
+    # closing parens between the literal and `in`: `check (prefix & "x") in line`
+    # group 1: the literal, the message quotes it whole even when it holds spaces
+    r'(?<![\w"])((?:%s))\s*\)*\s+(?:not\s*)?in\b' % _TEXT_PIN_LIT)
+TEXT_PIN_IN_LIST_RE = re.compile(
+    r'\b(?:not\s*)?in\s*(?:@\s*)?\[\s*(?:%s)' % _TEXT_PIN_LIT)
+TEXT_PIN_CONTAINS_RE = re.compile(
+    r'(?:\.\s*|(?<![\w.]))contains\s*\([^)]*"')
+TEXT_PIN_SCAN_RE = re.compile(
+    r'(?:\.\s*|(?<![\w.]))(find|rfind|startsWith|endsWith|count)\s*\([^)]*"')
+# Literal-equality anchor: the literal must sit directly left of the operator,
+# closing parens keep a call argument out (`runScale("k16") == @[16.0'f32]`
+# stays clean). On the right the literal is the comparand, open parens
+# between operator and literal still match.
+TEXT_PIN_EQ_RE = re.compile(
+    r'(?:%s)\s*(?:==|!=)|(?:==|!=)\s*\(*\s*(?:%s)' % (_TEXT_PIN_LIT, _TEXT_PIN_LIT))
+TEXT_PIN_ASSERT_RE = re.compile(r'\b(?:doAssert|assert|check|expect)\b')
 
 # Temporal and history narration (the narration rule).
 # Each entry carries the pattern plus a one-line hint.
@@ -382,6 +434,8 @@ BANNED = [
      "use test, check, or assert (model-architecture names exempt)"),
     (r"\bcensus\b|\bcensuses\b|\bcensusing\b",
      None, "use counts or per-element counts"),
+    (r"\bfacts?\b", None,
+     "state the claim directly, the word fact adds nothing"),
     (r"\bdraw\b|\bdraws\b", None, "use read, take, or use"),
     (r"\bride\b|\brides\b|\briding\b|\bridden\b|\brode\b", None,
      "use sit on, carry, or restate the mechanism"),
@@ -410,7 +464,7 @@ BANNED = [
      "state the offset or position directly, or restate the layout"),
     (r"\blands?\b|\barrives?\b", None,
      "say what produces or holds the construct, arrival verbs hide the mechanism"),
-    (r"\bre?stamp(?:s|ed|ing)?\b", None,
+    (r"\b(?:re)?stamp(?:s|ed|ing)?\b", None,
      "name the mechanism (derives, carries, specializes, writes, re-types); stamp hides what changed, the type or the site"),
     (r"\bpostures?\b", None,
      "use build variant, configuration, or name the flags"),
@@ -469,11 +523,14 @@ BANNED = [
     (r"\bhooks?\b",
      lambda l: bool(re.search(r"webhook|git hook|pre-?commit", l)),
      "name the operator: =destroy, =sink, =copy (Nim-speak 'destructor hooks' out)"),
-    (r"\bcarries\b|\bholds\b",
+    (r"\bholds\b",
      None,
-     "state what the thing is or does, name the actor or the mechanism directly"),
+     "state what the thing is or does, name the actor or the mechanism directly "
+     "(carries stays legal as the content verb: an invocation carries the rows)"),
     (r"\blattice\b|\blattices\b",
      None, "use closed set of type kinds or name the kind"),
+    (r"\bneeds no\b",
+     None, "state the condition positively or name the mechanism"),
 ]
 
 LICENSE_SHAPE = re.compile(
@@ -595,7 +652,7 @@ RULES = {
     "license-driveby": Rule("license-driveby", True,
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "emitted-text-assert": Rule("emitted-text-assert", True,
-                                "a string literal containment in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
+                                "a string literal containment, scan, or equality in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
     "diag-downgrade": Rule("diag-downgrade", True,
@@ -604,6 +661,16 @@ RULES = {
                              "a register proc defined below the first implementation in a passes file, registration lives at the top"),
     "section-banner": Rule("section-banner", True,
                            "a malformed section banner: orphan bar, title without top bar, or bar width off 71"),
+    "one-line-refusal": Rule("one-line-refusal", True,
+                             "a refusal message literal spanning more than one physical line or over 110 characters, keep the refusal on one line"),
+    "duplicate-refusal-coverage": Rule("duplicate-refusal-coverage", True,
+                                       "a refusal message fingerprint refused at 2 or more sites (refusal calls plus genTargets refusal row literals), the human disposes the duplicate"),
+    "refusal-essay": Rule("refusal-essay", True,
+                          "a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses, state the fact"),
+    "refusal-density": Rule("refusal-density", True,
+                            "6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory"),
+    "agent-verb": Rule("agent-verb", True,
+                       "a comment gives a type, a value, a text, or a name an agent verb (refuses, keeps, stays, pairs, travels, names no), the code that acts or the specification names the actor"),
 }
 
 
@@ -2158,16 +2225,29 @@ def check_license_driveby(path, text, findings):
             "the header or split the change"))
 
 
-def _code_part(raw):
-    """Returns the code text of one raw line with the comment removed.
+def _line_scan(raw, in_tq):
+    """Scans one raw line under the incoming triple-quote state.
 
-    A `#` starts a comment only outside a string literal, so an emitted-text
-    literal that carries `#` (`"#pragma unroll"`) survives the cut.
+    Returns the code text with the comment removed, the net open-paren count
+    outside string literals, and the outgoing triple-quote state.
+    A triple-quoted literal spans lines: its interior is string data, so a `#`
+    inside it survives the cut and its parens stay uncounted.
+    The closing quote run hands the state back to the caller.
     """
     out = []
     i, n = 0, len(raw)
+    depth = 0
     in_str = False
     while i < n:
+        if in_tq:
+            if raw[i:i + 3] == '"""':
+                in_tq = False
+                out.append('"""')
+                i += 3
+                continue
+            out.append(raw[i])
+            i += 1
+            continue
         c = raw[i]
         if in_str:
             out.append(c)
@@ -2179,6 +2259,11 @@ def _code_part(raw):
                 in_str = False
             i += 1
             continue
+        if raw[i:i + 3] == '"""':
+            in_tq = True
+            out.append('"""')
+            i += 3
+            continue
         if c == '"':
             in_str = True
             out.append(c)
@@ -2186,45 +2271,897 @@ def _code_part(raw):
             continue
         if c == "#" and (i == 0 or raw[i - 1] in " \t#"):
             break
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
         out.append(c)
         i += 1
-    return "".join(out).rstrip()
+    return "".join(out).rstrip(), depth, in_tq
+
+
+# A malformed file never joins the rest of the file into one logical line.
+_LOGICAL_JOIN_CAP = 20
+
+
+def _logical_code_lines(text):
+    """Returns (first line number, code) pairs, a line joined into the next
+    while its parentheses and brackets stay unbalanced outside string
+    literals. A call wrapped across lines therefore matches the containment
+    patterns, the literal on a continuation line is not invisible.
+    """
+    out = []
+    buf = ""
+    start = 0
+    depth = 0
+    in_tq = False
+    for i, raw in enumerate(text.splitlines(), 1):
+        code, d, in_tq = _line_scan(raw, in_tq)
+        if buf:
+            buf += " " + code
+            depth += d
+        elif code.strip():
+            buf = code
+            start = i
+            depth = d
+        else:
+            continue
+        if (depth <= 0 and not in_tq) or i - start + 1 >= _LOGICAL_JOIN_CAP:
+            out.append((start, buf))
+            buf = ""
+            depth = 0
+    if buf:
+        out.append((start, buf))
+    return out
 
 
 def nim_emitted_text_assert_checks(path, text, findings):
-    """Flags string literal containments on emitted source in tests/codegen.
+    """Flags string literal containments, scans, and equalities over emitted
+    source in tests/codegen.
 
-    - `"text" in expr`, `"text" notin expr`, and the `.contains("text")`
-      method call assert on the emitted shader source; the testing rules
-      ban that surface, a behavioral test launches the kernel and checks
-      the readback
-    - the left anchor keeps the legal shapes out: a plain identifier or a
-      loop variable on the left of `in` (`x in collected`,
-      `for line in lines`) and a `.contains(x)` call with no literal in
-      its argument never match
+    - `"text" in expr`, `"text" notin expr`, `.contains("text")`, the bare
+      `contains(expr, "text")` form, a find/rfind/startsWith/endsWith/count
+      call with a string literal in its argument, a string literal on either
+      side of `==` or `!=`, a membership test whose right side is a string
+      literal list, and a triple-quoted literal (multi-line included) all
+      match
+    - the left anchor keeps the legal shapes out: a plain identifier
+      or a loop variable on the left of `in` (`x in collected`,
+      `for line in lines`) and a call with no literal in its argument
+      (`parts.contains(pair.control)`) never match
+    - a hit on a line carrying an assert keyword (doAssert, check, assert,
+      expect) is a violation, a hit without one is an advisory, a runtime
+      dispatch like `if "metal" in backendName` asserts nothing
     """
     if "tests" not in path.parts or "codegen" not in path.parts:
         return
     blocked = nim_block_comment_lines(text)
-    for i, raw in enumerate(text.splitlines()):
-        if (i + 1) in blocked:
+    raws = text.splitlines()
+    for start, code in _logical_code_lines(text):
+        if start in blocked:
             continue
-        code = _code_part(raw)
         if not code.strip():
             continue
         hit = None
+        shape = "containment"
         m = TEXT_PIN_IN_RE.search(code)
         if m:
             op = "notin" if "notin" in m.group(0) else "in"
-            hit = "%s %s" % (m.group(0).split()[0], op)
+            hit = "%s %s" % (m.group(1), op)
+        elif TEXT_PIN_IN_LIST_RE.search(code):
+            hit = "in [<literal>]"
         elif TEXT_PIN_CONTAINS_RE.search(code):
-            hit = ".contains(<literal>)"
-        if hit:
+            hit = "contains(<literal>)"
+        else:
+            m = TEXT_PIN_SCAN_RE.search(code)
+            if m:
+                hit = "%s(<literal>)" % m.group(1)
+        if not hit:
+            m = TEXT_PIN_EQ_RE.search(code)
+            if m:
+                hit = "literal ==/!= emitted source"
+                shape = "equality"
+        if not hit:
+            continue
+        if TEXT_PIN_ASSERT_RE.search(code):
             findings.append(Finding(
-                path, i + 1, "emitted-text-assert",
-                "string literal containment (%s) asserts on the emitted "
+                path, start, "emitted-text-assert",
+                "string literal %s (%s) asserts on the emitted "
                 "source, delete the assertion and keep the launch and the "
-                "readback" % hit))
+                "readback" % (shape, hit)))
+        else:
+            findings.append(Finding(
+                path, start, "emitted-text-assert",
+                "string literal %s (%s) in tests/codegen code, confirm it "
+                "does not assert on the emitted shader source, behavioral "
+                "tests launch kernels and check readbacks" % (shape, hit),
+                warning=True))
+
+
+# Refusal slop rules: one-line-refusal, duplicate-refusal-coverage, refusal-essay, refusal-density
+
+# A refusal call: fail, failing, error, or a proc whose name starts with refus.
+# An optional receiver such as ctx.fail may prefix the name.
+# Matching runs on string-blanked code.
+# A call name quoted inside a message literal never matches the rule.
+REFUSAL_CALL_RE = re.compile(r"(?:\w+\.)?\b(?:fail|failing|error|refus\w*)\s*\(")
+
+# A `refusal "text"` field in the genTargets row DSL: row data with a refusal
+# message the printer emits through ctx.fail. A duplicate-coverage site like
+# any call site.
+REFUSAL_FIELD_RE = re.compile(r'\brefusal\s+("(?:[^"\\]|\\.)*")')
+
+# Longest refusal message one physical line may carry, in characters.
+REFUSAL_MESSAGE_MAX = 110
+
+# Refusal calls one proc may carry before the density cap applies.
+REFUSAL_DENSITY_MAX = 6
+
+# Essay markers inside a refusal message: because, instead of, rather than, which means.
+ESSAY_MARKERS = (" because ", " instead of ", " rather than ", " which means ")
+
+# A leading "label: " address prefix ("genTargets: "), an address, not a clause.
+_ESSAY_LABEL_RE = re.compile(r"^[\w.-]+:\s+")
+
+# Clause boundaries in a refusal message: comma, explanation colon, conjunction join.
+_ESSAY_SPLIT_RE = re.compile(r",|:\s+|\band\b|\bor\b")
+
+# Target and filler words the duplicate fingerprint strips.
+# Two printers stating one case for two targets state one case twice.
+_REFUSAL_TARGET_WORDS = frozenset((
+    "wgsl", "hlsl", "glsl", "cuda", "opencl", "metal", "vulkan", "spirv",
+    "wgpu", "native"))
+_REFUSAL_STOP_WORDS = frozenset((
+    "the", "a", "an", "of", "in", "is", "are", "and", "or", "to", "for",
+    "has", "have", "no", "not", "only", "with", "as", "at", "on", "by",
+    "its", "it", "that", "this", "from", "into", "than", "then", "be",
+    "been", "was", "were", "does", "do", "can", "cannot", "may", "must",
+    "should", "would", "will"))
+
+# Density carve-out filename: the parse and ctor procs of the named file
+# are compile-time row validators.
+_REFUSAL_VALIDATOR_FILE = "targets_macros.nim"
+
+_NIM_STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+_TOP_LEVEL_DECL_RE = re.compile(
+    r"^(?:proc|func|macro|template|iterator|converter)\s+(\w+)")
+
+
+def _refusal_line_pairs(text):
+    """Per-line code views for the refusal scan.
+
+    Returns (code, masked) pairs, one per line:
+
+    - code: comments stripped, string contents kept (message extraction reads it)
+    - masked: string contents blanked at preserved offsets (depth walk reads it)
+    - triple-quote interior lines blank in both views
+    """
+    lines = text.splitlines()
+    mask = _nim_triple_quote_mask(lines)
+    out = []
+    for no, raw in enumerate(lines, 1):
+        code, _ = _strip_comment(raw)
+        masked = _blank_nim_strings(code)
+        if no in mask:
+            code = masked = ""
+        out.append((code, masked))
+    return out
+
+
+def _refusal_call_argument(pairs, no, start):
+    """Reads the argument text of the refusal call opening at line no,
+    column start. The opening paren is already consumed.
+
+    Returns the end line and the argument text.
+
+    Depth walks the masked lines, so a paren inside a message literal closes nothing there.
+
+    The literal text comes from the kept lines.
+
+    A call left open after 20 lines reads to the cap.
+
+    Malformed input joins no further argument text.
+    """
+    parts = []
+    depth = 1
+    pos = no
+    j = start
+    while pos <= len(pairs) and pos - no < 20:
+        code, masked = pairs[pos - 1]
+        close = None
+        for k in range(j, len(masked)):
+            ch = masked[k]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    close = k
+                    break
+        parts.append(code[j:close] if close is not None else code[j:])
+        if close is not None:
+            return pos, " ".join(parts)
+        pos += 1
+        j = 0
+    return pos - 1, " ".join(parts)
+
+
+def _refusal_proc_ranges(lines):
+    """Returns the (name, decl line, end line) spans of the top-level procs.
+    Funcs, macros, templates, iterators and converters get the same spans.
+
+    A span ends at the next top-level declaration or at end of file.
+    """
+    decls = []
+    for no, raw in enumerate(lines, 1):
+        m = _TOP_LEVEL_DECL_RE.match(raw)
+        if m:
+            decls.append((m.group(1), no))
+    out = []
+    for k, (name, no) in enumerate(decls):
+        end = decls[k + 1][1] - 1 if k + 1 < len(decls) else len(lines)
+        out.append((name, no, end))
+    return out
+
+
+def _refusal_fingerprint(message):
+    """Returns the duplicate-coverage key of one refusal message.
+
+    Key: the first 6 content words of the normalized text.
+
+    Normalization:
+
+    - lowercase, punctuation collapsed to spaces
+    - target names and filler words dropped
+    - interpolated identifiers dropped (the extraction already removed them)
+    - fingerprints collide across genuinely different refusals, a human
+      disposes each duplicate
+    """
+    low = re.sub(r"[^a-z0-9-]+", " ", message.lower())
+    words = [w for w in low.split()
+             if w not in _REFUSAL_TARGET_WORDS and w not in _REFUSAL_STOP_WORDS]
+    return " ".join(words[:6])
+
+
+def _refusal_essay_shape(message):
+    """Returns the essay shape of one refusal message, None for a plain
+    statement of the refusal.
+
+    A marker hit returns the marker. Otherwise a message chaining 3 or more
+    clauses returns the clause count.
+
+    Clause boundaries:
+
+    - the comma
+    - a colon opening an explanation
+    - a conjunction join between two claims
+    - a leading "label: " address prefix is stripped first ("genTargets: ")
+    """
+    for marker in ESSAY_MARKERS:
+        if marker in message:
+            return marker.strip()
+    body = _ESSAY_LABEL_RE.sub("", message, count=1)
+    clauses = [p for p in _ESSAY_SPLIT_RE.split(body) if p.strip()]
+    if len(clauses) >= 3:
+        return "%d clauses" % len(clauses)
+    return None
+
+
+def refusal_slop_files(entries, base=None, added_cache=None):
+    """Runs the refusal-slop rules over the .nim files of one lint run,
+    returns the sorted findings.
+
+    Args:
+
+    - entries: (path, text) pairs of the files lint() already read
+    - base: optional diff base commit, findings scope to its added lines
+    - added_cache: shared added-lines cache across one lint call
+
+    Returns the sorted findings, one finding per rule hit:
+
+    - one-line-refusal at each refusal call whose message literal spans
+      more than one physical line or exceeds 110 characters
+    - refusal-essay at each refusal call whose message shows an essay
+      marker or chains 3 or more clauses
+    - refusal-density at each proc with 6 or more refusal calls
+    - duplicate-refusal-coverage at each message site whose fingerprint
+      also fires at another site in the run. Message sites are refusal
+      calls and genTargets row literals. A human disposes each duplicate.
+
+    Density carve-outs report as advisories instead of violations:
+
+    - a compile-time row validator: the parse and ctor procs in targets_macros.nim
+    - all refusals sit on one line under a doc-stated contract
+
+    Tests, runtime and manual fixture files stay out of scope.
+    """
+    findings = []
+    corpus = []
+    scope = {}
+    for path, text in entries:
+        sp = str(path).replace("\\", "/")
+        if "/tests/" in sp or "/runtime/" in sp or "manual_" in sp:
+            continue
+        scope[path] = added_lines(path, base, added_cache) if base else None
+
+        def in_scope(added, no):
+            return added is None or no in added
+
+        added = scope[path]
+        pairs = _refusal_line_pairs(text)
+        lines = text.splitlines()
+        ranges = _refusal_proc_ranges(lines)
+        per_proc = {}
+        for no, (code, masked) in enumerate(pairs, 1):
+            for m in REFUSAL_CALL_RE.finditer(masked):
+                end, arg = _refusal_call_argument(pairs, no, m.end())
+                message = "".join(_NIM_STRING_RE.findall(arg))
+                proc = next((r for r in ranges if r[1] <= no <= r[2]), None)
+                if proc is not None:
+                    per_proc.setdefault(proc[1], []).append((no, end, message))
+                if not message or not in_scope(added, no):
+                    continue
+                span = end - no + 1
+                if span > 1 or len(message) > REFUSAL_MESSAGE_MAX:
+                    findings.append(Finding(
+                        path, no, "one-line-refusal",
+                        "refusal message of %d characters over %d physical "
+                        "lines, keep it on one line under %d"
+                        % (len(message), span, REFUSAL_MESSAGE_MAX)))
+                shape = _refusal_essay_shape(message)
+                if shape is not None:
+                    findings.append(Finding(
+                        path, no, "refusal-essay",
+                        "refusal message argues with %s, state the fact, "
+                        "the why lives in the row or the pass doc" % shape))
+                corpus.append((path, no, message))
+        # genTargets row literals join the duplicate corpus. Row data is
+        # never a call, so the line rules stay out of it.
+        for no, (code, _) in enumerate(pairs, 1):
+            for m in REFUSAL_FIELD_RE.finditer(code):
+                corpus.append((path, no, m.group(1)[1:-1]))
+        for name, decl, end in ranges:
+            sites = per_proc.get(decl, [])
+            if len(sites) < REFUSAL_DENSITY_MAX:
+                continue
+            if not (in_scope(added, decl)
+                    or any(in_scope(added, no) for no, _, _ in sites)):
+                continue
+            one_liners = all(e == s and len(msg) <= REFUSAL_MESSAGE_MAX
+                             for s, e, msg in sites)
+            doc = any(re.match(r"\s*##", lines[k]) for k in range(decl, end))
+            validator = (os.path.basename(sp) == _REFUSAL_VALIDATOR_FILE
+                         and (name.startswith(("parse", "gen"))
+                              or name.endswith("Ctor")))
+            if validator:
+                findings.append(Finding(
+                    path, decl, "refusal-density",
+                    "density: %d refusal sites — validator carve-out applied "
+                    "(compile-time row validator)" % len(sites), warning=True))
+            elif one_liners and doc:
+                findings.append(Finding(
+                    path, decl, "refusal-density",
+                    "density: %d refusal sites — validator carve-out applied "
+                    "(one-liners under a doc-stated contract)" % len(sites),
+                    warning=True))
+            else:
+                findings.append(Finding(
+                    path, decl, "refusal-density",
+                    "density: %d refusal sites in one proc, split the sites "
+                    "or move the facts to the shared validation" % len(sites)))
+    groups = {}
+    for path, no, message in corpus:
+        if message:
+            groups.setdefault(_refusal_fingerprint(message), []).append(
+                (path, no))
+    for sites in groups.values():
+        if len(sites) < 2:
+            continue
+        for i, (path, no) in enumerate(sites):
+            if not in_scope(scope.get(path), no):
+                continue
+            other = sites[0] if i else sites[1]
+            findings.append(Finding(
+                path, no, "duplicate-refusal-coverage",
+                "duplicate refusal coverage: the same fingerprint also fires "
+                "at %s:%d (%d sites), dispose the duplicate"
+                % (other[0], other[1], len(sites))))
+    findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
+    return findings
+
+
+# Refusal-slop fixtures: convicted specimens plus honest controls.
+#
+# Each case is (name, files, expected findings):
+#
+# - files: (relpath, text) pairs, analyzed in memory
+# - expected: (relpath, line, rule, warning) rows, sorted comparison
+# - convicted specimens must fire their rules
+# - honest one-liners must stay clean
+REFUSAL_SELFTEST_CASES = (
+    ("hlsl 64-bit essay (classifyParams specimen)", (
+        ("src/codegen/backends/hlsl_demo.nim", '''proc classifyDemo(ctx: var PrintCtx, fn: CirProc, p: CirParam) =
+  if p.typ.bits != 32:
+    ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
+      "` is rejected: int64_t is a parse error in the HLSL frontend and" &
+      " uint64_t pulls the SPIR-V Int64 capability")
+'''),
+    ), (
+        ("src/codegen/backends/hlsl_demo.nim", 3, "one-line-refusal", False),
+        ("src/codegen/backends/hlsl_demo.nim", 3, "refusal-essay", False),
+    )),
+    ("wgsl ptr-struct two-line message specimen", (
+        ("src/codegen/backends/wgsl_demo.nim", '''proc printDemo(ctx: var PrintCtx, e: CirExpr) =
+  if e.name notin ctx.paramNames:
+    ctx.fail("pointer local " & e.name & " used as a value, WGSL has no" &
+      " pointer values, the WGSL lowering pass rewrites pointer locals to their pointees")
+'''),
+    ), (
+        ("src/codegen/backends/wgsl_demo.nim", 3, "one-line-refusal", False),
+        ("src/codegen/backends/wgsl_demo.nim", 3, "refusal-essay", False),
+    )),
+    ("smem multi-line refusal specimen", (
+        ("src/codegen/backends/cuda_demo.nim", '''proc printVarDemo(ctx: var PrintCtx, s: CirVar) =
+  if s.init != nil:
+    ctx.fail("smem local " & s.name & " with an initializer, CUDA C++ forbids" &
+      " initializing __shared__ variables")
+'''),
+    ), (
+        ("src/codegen/backends/cuda_demo.nim", 3, "one-line-refusal", False),
+    )),
+    ("duplicate coverage across two printers", (
+        ("src/codegen/backends/glsl_barrier_demo.nim", '''proc printBuiltinDemo(ctx: var PrintCtx, e: CirExpr) =
+  ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
+'''),
+        ("src/codegen/backends/wgsl_barrier_demo.nim", '''proc printBuiltinDemo(ctx: var PrintCtx, e: CirExpr) =
+  ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
+'''),
+    ), (
+        ("src/codegen/backends/glsl_barrier_demo.nim", 2,
+         "duplicate-refusal-coverage", False),
+        ("src/codegen/backends/wgsl_barrier_demo.nim", 2,
+         "duplicate-refusal-coverage", False),
+    )),
+    ("genTargets row literal duplicate", (
+        ("src/codegen/backends/targets_rows_demo.nim", '''target demo:
+  bitcast:
+    rule srcKinds {ctFloat}, dstKinds {ctInt}, sameWidth, refusal "bit cast of a 64-bit float has no emission, only the 32-bit builtins"
+    rule srcKinds {ctInt}, dstKinds {ctFloat}, sameWidth, refusal "bit cast to a 64-bit float has no emission, only the 32-bit builtins"
+'''),
+    ), (
+        ("src/codegen/backends/targets_rows_demo.nim", 3,
+         "duplicate-refusal-coverage", False),
+        ("src/codegen/backends/targets_rows_demo.nim", 4,
+         "duplicate-refusal-coverage", False),
+    )),
+    ("density hard violation, six refusals, no doc", (
+        ("src/codegen/backends/dense_demo.nim", '''proc denseDemo(ctx: var PrintCtx, p: CirParam) =
+  case p.typ.kind
+  of ctInt:
+    ctx.fail("int parameter " & p.name & " has no form one")
+  of ctUint:
+    ctx.fail("uint parameter " & p.name & " has no form two")
+  of ctFloat:
+    ctx.fail("float parameter " & p.name & " has no form three")
+  of ctBool:
+    ctx.fail("bool parameter " & p.name & " has no form four")
+  of ctVector:
+    ctx.fail("vector parameter " & p.name & " has no form five")
+  else:
+    ctx.fail("parameter " & p.name & " has no form six")
+'''),
+    ), (
+        ("src/codegen/backends/dense_demo.nim", 1, "refusal-density", False),
+    )),
+    ("density validator carve-out (targets_macros parse proc)", (
+        ("src/codegen/backends/targets_macros.nim", '''proc parseDemoRows(node: NimNode, display: string) =
+  for entry in node:
+    if entry.kind != nnkBracket:
+      error("genTargets: expected a row in " & display)
+    if entry[0].kind != nnkStrLit:
+      error("genTargets: expected a name in " & display)
+    if entry[1].kind != nnkStrLit:
+      error("genTargets: expected a spelling in " & display)
+    if entry[2].kind != nnkIntLit:
+      error("genTargets: expected a width in " & display)
+    if entry.len < 4:
+      error("genTargets: expected a kind in " & display)
+    if entry.len > 5:
+      error("genTargets: unexpected trailing entries in " & display)
+'''),
+    ), (
+        ("src/codegen/backends/targets_macros.nim", 1, "refusal-density", True),
+    )),
+    ("density one-liner doc carve-out", (
+        ("src/codegen/backends/doc_demo.nim", '''proc checkDemoTypes(ctx: var PrintCtx, t: CirType) =
+  ## Validates the scalar kinds the target prints, one refusal per kind.
+  case t.kind
+  of ctInt:
+    ctx.fail("int has no form one")
+  of ctUint:
+    ctx.fail("uint has no form two")
+  of ctFloat:
+    ctx.fail("float has no form three")
+  of ctBool:
+    ctx.fail("bool has no form four")
+  of ctVector:
+    ctx.fail("vector has no form five")
+  else:
+    ctx.fail("kind has no form six")
+'''),
+    ), (
+        ("src/codegen/backends/doc_demo.nim", 1, "refusal-density", True),
+    )),
+    ("honest one-liners stay clean", (
+        ("src/codegen/backends/ok_demo.nim", '''proc okDemo(ctx: var PrintCtx, p: CirParam, fn: CirProc, t: CirType) =
+  if t.bits == 64:
+    ctx.fail("f64 unsupported")
+  if t.bits == 32:
+    ctx.fail("wgsl: no f64 — wgpu-native cannot request shader-f64")
+  ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
+  ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space & " space, buffers address device memory")
+'''),
+    ), (
+    )),
+    ("essay marker fires on a one-liner", (
+        ("src/codegen/backends/marker_demo.nim", '''proc markerDemo(ctx: var PrintCtx, lit: CirLit) =
+  ctx.fail("the u64 literal is not accepted here because the WGSL lexer has no form for it")
+'''),
+    ), (
+        ("src/codegen/backends/marker_demo.nim", 2, "refusal-essay", False),
+    )),
+)
+
+
+def refusal_selftest(quiet=False):
+    """Runs the refusal-slop fixtures through refusal_slop_files and prints
+    one PASS or FAIL line per case unless quiet.
+
+    Returns the failed case count, 0 means every convicted specimen fires
+    its rules and every honest one-liner stays clean.
+    """
+    failed = 0
+    for name, files, expected in REFUSAL_SELFTEST_CASES:
+        got = refusal_slop_files([(Path(p), t) for p, t in files])
+        rows = sorted((str(f.path), f.line, f.rule, f.warning) for f in got)
+        want = sorted(expected)
+        if rows == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in rows:
+                    print("  got      %s" % (row,))
+    return failed
+
+
+# Agent-verb slop rule: agent-verb
+# A comment may not give agency to a non-agent. A type, a value, a text, or a
+# name never refuses, keeps, stays, pairs, travels, carries, takes, meets, or names no X. The subject
+# of the verb is the code that acts (the pass, the printer, the compiler) or
+# the specification that rules (the spec, the row, the table). A file, a row,
+# a module, or a doc never states its contents: a file declares or contains,
+# a row lists, an invocation carries.
+AGENT_VERB_RE = re.compile(
+    r"\b(refuses?|kept|keeps?|stays?|pairs|travels?|carries|names no|states|takes?|meets)\b")
+
+# Nouns whose subject may carry the agent verbs: code agents, specification
+# nouns, and target languages ("the pass refuses the input", "the spec keeps
+# f16 out of the surface", "WGSL keeps pointer parameters untouched").
+AGENT_VERB_AGENTS = frozenset((
+    "compiler", "pass", "printer", "walker", "emitter", "checker", "macro",
+    "proc", "func", "template", "iterator", "frontend", "sem",
+    "spec", "row", "table", "schema", "grammar",
+    "wgsl", "hlsl", "glsl", "msl", "cuda", "opencl", "spirv", "metal"))
+
+# Type-like and value-like subjects: the banned class. A kind name, a value,
+# a literal, a pair, a builtin, or a callee never refuses, keeps, stays,
+# pairs, or travels.
+AGENT_VERB_TYPES = frozenset((
+    "float16", "bfloat16", "float32", "float64", "integer", "int8", "int16",
+    "int32", "int64", "uint8", "uint16", "uint32", "uint64", "int", "uint",
+    "float", "double", "bool", "half", "bf16", "f16", "f32", "f64", "u8",
+    "u16", "u32", "u64", "i8", "i16", "i32", "i64", "vec2", "vec3", "vec4",
+    "vector", "value", "values", "literal", "literals", "constant",
+    "constants", "pair", "pairs", "builtin", "builtins", "callee", "callees"))
+
+# The states verb convicts one subject class more: the content carriers.
+AGENT_VERB_CONTENT = frozenset((
+    "file", "row", "module", "doc", "invocation", "registry"))
+
+# Words the subject walk skips: articles, copulas, prepositions, conjunctions,
+# and pronouns carry no subject.
+AGENT_VERB_STOP = frozenset((
+    "the", "a", "an", "and", "or", "but", "so", "that", "this", "its", "it",
+    "is", "are", "was", "were", "be", "been", "being", "has", "have", "had",
+    "in", "on", "at", "to", "of", "as", "with", "for", "from", "by", "when",
+    "if", "while", "before", "after", "only", "no", "not", "never", "every",
+    "each", "one", "two", "any", "all", "then", "than", "there", "here",
+    "which", "whose", "what", "how", "why", "again", "also", "still", "would",
+    "could", "should", "may", "might", "must", "can", "cannot", "does", "do",
+    "did", "their", "they", "them", "we", "our", "your", "his", "her", "over",
+    "under", "into", "onto", "out", "up", "down", "both", "own", "same",
+    "other", "another", "such", "per", "via", "yet", "nor", "either",
+    "neither", "already", "upon", "about", "across", "against", "along",
+    "among", "around", "behind", "below", "beneath", "beside", "between",
+    "beyond", "during", "except", "inside", "outside", "since", "through",
+    "toward", "towards", "without", "within", "s"))
+
+_AGENT_VERB_TOKEN_RE = re.compile(r"`[^`]*`|[A-Za-z_][A-Za-z0-9_']*")
+_AGENT_VERB_CLAUSE_CUT = re.compile(r"[,;:()]|\.\s")
+
+
+def _agent_verb_singular(word):
+    """Returns the word's singular form, a trailing-s strip."""
+    return word[:-1] if word.endswith("s") and len(word) > 1 else word
+
+
+def _agent_verb_subject(prefix):
+    """Returns the nearest preceding noun-phrase token of one verb match,
+    None when the clause names no subject before the verb.
+
+    The clause is the text from the last boundary (comma, semicolon, colon,
+    paren, period) to the verb. Backticked camelCase reads as a proc name,
+    an agent, and yields None.
+    """
+    pos = -1
+    for m in _AGENT_VERB_CLAUSE_CUT.finditer(prefix):
+        pos = m.start()
+    clause = prefix[pos + 1:] if pos >= 0 else prefix
+    for tok in reversed(_AGENT_VERB_TOKEN_RE.findall(clause)):
+        if tok.startswith("`"):
+            inner = tok[1:-1]
+            if inner[:1].islower() and any(c.isupper() for c in inner):
+                return None
+            return tok
+        if tok.lower() in AGENT_VERB_STOP or tok.isdigit():
+            continue
+        return tok
+    return None
+
+
+def _agent_verb_comment(text):
+    """Yields (line no, comment text) pairs for one .nim file's comments:
+    whole-line ## and # comments plus trailing comments after code, string
+    literals blanked so a # inside a literal opens no comment, and
+    triple-quote interiors masked."""
+    lines = text.splitlines()
+    mask = _nim_triple_quote_mask(lines)
+    for no, raw in enumerate(lines, 1):
+        s = raw.strip()
+        comment = None
+        if s.startswith("##") or s.startswith("#"):
+            comment = s.lstrip("#").strip()
+        else:
+            blanked = _blank_nim_strings(raw)
+            m = re.search(r"\s##", blanked) or re.search(r"\s#(?!#)", blanked)
+            if m:
+                comment = raw[m.start():].strip().lstrip("#").strip()
+        if comment and no not in mask:
+            yield no, comment
+
+
+_AGENT_VERB_REASON = ("agent verb '%s' on a non-agent subject, a type, a value, "
+                      "a text, or a name never refuses, keeps, stays, pairs, "
+                      "travels, carries, takes, meets, the code that acts or the specification names the "
+                      "actor")
+_AGENT_VERB_STATES_REASON = ("a file, a row, a module, a doc, or an invocation "
+                             "never states its contents, a file declares or "
+                             "contains, a row lists, an invocation carries")
+
+
+def _agent_verb_hit(comment):
+    """Returns the finding reason of one comment's first agent-verb hit,
+    None when the comment names only agents and specifications.
+
+    A verb quoted inside backticks is code, never a hit. The subject walk
+    fires the check when the nearest preceding noun-phrase token is type-like
+    (backticked text, a capitalized identifier, a kind name) or value-like
+    (value, literal, pair, builtin, callee). For states the content carriers
+    (file, row, module, doc, invocation) convict too, the spec stays legal.
+    """
+    spans = [m.span() for m in re.finditer(r"`[^`]*`", comment)]
+    for m in AGENT_VERB_RE.finditer(comment):
+        if any(s <= m.start() < e for s, e in spans):
+            continue
+        subject = _agent_verb_subject(comment[:m.start()])
+        if subject is None:
+            continue
+        base = subject[1:-1] if subject.startswith("`") else subject
+        low = base.lower()
+        sing = _agent_verb_singular(low)
+        verb = m.group(0)
+        if verb == "states":
+            if (sing in AGENT_VERB_AGENTS or low in AGENT_VERB_AGENTS) \
+                    and sing != "row":
+                continue
+            if (sing in AGENT_VERB_TYPES or low in AGENT_VERB_TYPES
+                    or subject.startswith("`") or base[:1].isupper()
+                    or sing in AGENT_VERB_CONTENT or low in AGENT_VERB_CONTENT):
+                return _AGENT_VERB_STATES_REASON
+            continue
+        if sing in AGENT_VERB_AGENTS or low in AGENT_VERB_AGENTS:
+            continue
+        if (subject.startswith("`") or base[:1].isupper()
+                or sing in AGENT_VERB_TYPES or low in AGENT_VERB_TYPES):
+            return _AGENT_VERB_REASON % verb
+    return None
+
+
+AGENT_VERB_SELFTEST_CASES = (
+    ("agent-verb convicted specimens fire", (
+        ("src/codegen/backends/doc_demo.nim", '''## `bfloat16` names no MSL type here, values travel as raw bits.
+## `float16` keeps a first-class `half` identity: its conversions are plain native calls.
+## `flavor` stays untyped so overload resolution never sees the body.
+## an unprovenanced integer names no storage, only the default device.
+## Identity stays the registry's int key.
+## a 16-bit float pair refuses on the printer wiring state.
+## `float16` has no HLSL form, the value emits as its bits.
+## `ternary` states its own type.
+## a builtin takes the vocabulary name.
+## a literal meets the row's refusal.
+## the value carries the fallback bodies.
+'''),
+    ), (
+        ("src/codegen/backends/doc_demo.nim", 1, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 2, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 3, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 4, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 5, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 6, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 8, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 9, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 10, "agent-verb", False),
+        ("src/codegen/backends/doc_demo.nim", 11, "agent-verb", False),
+    )),
+    ("agent-verb honest agents and specifications stay clean", (
+        ("src/codegen/backends/ok_demo.nim", '''## the pass refuses the input.
+## the printer keeps the shape guard on the relocated declarations.
+## the spec keeps f16 out of the MSL surface.
+## the row refuses an omitted cell at the lookup.
+## the table stays at one row per kind.
+## the value is passed as raw bits.
+## retains a guard, a guard remains.
+## no MSL type exists for bfloat16, the value emits as raw bits.
+## `mslRewriteSmemLocals`, which keeps the kernel-owned arenas in-body.
+## the walk keeps going and the printer returns the recorded message.
+## the kept locals use the renamed names their body already references.
+## the compiler state stays consistent across runs.
+## the spec states the contract once.
+'''),
+    ), (
+    )),
+    ("agent-verb states class convicts the content carriers", (
+        ("src/codegen/backends/states_demo.nim", '''## a scalar row states any subset of the cells.
+## one invocation states every target's rows.
+## `targets_registry.nim` states every family of all six targets.
+## the doc states the field order.
+'''),
+    ), (
+        ("src/codegen/backends/states_demo.nim", 1, "agent-verb", False),
+        ("src/codegen/backends/states_demo.nim", 2, "agent-verb", False),
+        ("src/codegen/backends/states_demo.nim", 3, "agent-verb", False),
+        ("src/codegen/backends/states_demo.nim", 4, "agent-verb", False),
+    )),
+    ("agent-verb trailing comments join the scan", (
+        ("src/codegen/backends/trail_demo.nim", '''proc demo() =
+  discard # the value keeps its default
+
+proc demo2() =
+  discard # the pass keeps its default
+'''),
+    ), (
+        ("src/codegen/backends/trail_demo.nim", 2, "agent-verb", False),
+    )),
+)
+
+
+def agent_verb_selftest(quiet=False):
+    """Runs the agent-verb fixtures through agent_verb_slop_files and prints
+    one PASS or FAIL line per case unless quiet.
+
+    Returns the failed case count, 0 means every convicted specimen fires
+    and every honest agent or specification subject stays clean.
+    """
+    failed = 0
+    for name, files, expected in AGENT_VERB_SELFTEST_CASES:
+        got = agent_verb_slop_files([(Path(p), t) for p, t in files])
+        rows = sorted((str(f.path), f.line, f.rule, f.warning) for f in got)
+        want = sorted(expected)
+        if rows == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in rows:
+                    print("  got      %s" % (row,))
+    return failed
+
+
+BANNED_VOCAB_SELFTEST_CASES = (
+    ("banned-vocab fact convicts (operator ban)", (
+        ("src/codegen/backends/vocab_demo.nim",
+         '## the fact is the width is 32.\n'
+         '## non-derivable facts only.\n'
+         '## this needs no extension.\n'),
+    ), (
+        ("src/codegen/backends/vocab_demo.nim", 1, "banned-vocab", False),
+        ("src/codegen/backends/vocab_demo.nim", 2, "banned-vocab", False),
+        ("src/codegen/backends/vocab_demo.nim", 3, "banned-vocab", False),
+    )),
+)
+
+
+def banned_vocab_selftest(quiet=False):
+    """Runs the banned-vocab fixtures through check_line, one PASS or FAIL
+    line per case unless quiet. Returns the failed case count, 0 means
+    every blocklist word convicts.
+    """
+    failed = 0
+    for name, files, expected in BANNED_VOCAB_SELFTEST_CASES:
+        got = []
+        for path, text in files:
+            lines = text.splitlines()
+            findings = []
+            for no, line in enumerate(lines, 1):
+                check_line(Path(path), no, line, "doc", True,
+                           lines[no - 2] if no > 1 else None, "doc", findings)
+            got += sorted(set((str(f.path), f.line, f.rule, f.warning)
+                          for f in findings if f.rule == "banned-vocab"))
+        want = sorted(expected)
+        if got == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in got:
+                    print("  got      %s" % (row,))
+    return failed
+
+
+def agent_verb_slop_files(entries, base=None, added_cache=None):
+    """Runs the agent-verb rule over the .nim files of one lint run,
+    returns the sorted findings.
+
+    A comment may not give agency to a non-agent: a type, a value, a text,
+    or a name never refuses, keeps, stays, pairs, travels, or names no X,
+    and a file, a row, a module, a doc, or an invocation never states its
+    contents. The check fires when the banned verb's nearest preceding
+    noun-phrase token is type-like (backticked text, a capitalized
+    identifier, a kind name) or value-like (value, literal, pair, builtin,
+    callee), and for states a content carrier convicts too. A code agent
+    (pass, printer, compiler) and a specification noun (spec, row, table,
+    schema, grammar) name the actor and stay clean.
+
+    Tests, runtime and manual fixture files stay out of scope.
+    """
+    findings = []
+    for path, text in entries:
+        sp = str(path).replace("\\", "/")
+        if "/tests/" in sp or "/runtime/" in sp or "manual_" in sp:
+            continue
+        added = added_lines(path, base, added_cache) if base else None
+        for no, comment in _agent_verb_comment(text):
+            if added is not None and no not in added:
+                continue
+            hit = _agent_verb_hit(comment)
+            if hit is not None:
+                findings.append(Finding(path, no, "agent-verb", hit))
+    findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
+    return findings
 
 
 def scan(path, text, findings):
@@ -2592,6 +3529,13 @@ def changed_set_hygiene(base):
                 f, 1, "extensionless-file",
                 "a changed file with no extension, name the format or "
                 "add one"))
+        if status == "A" and ("/tests/ir/" in rel
+                              or name.startswith(("t_ir_", "manual_ir_"))):
+            out.append(Finding(
+                f, 1, "ir-test-ban",
+                "a new IR test file, IR tests are banned: hand-built test "
+                "inputs ossify against IR evolution, cover the behavior "
+                "with an end-to-end kernel test through the public API"))
     return out
 
 
@@ -2605,6 +3549,7 @@ def lint(paths, base=None):
     """
     findings = []
     added_lines_cache = {}
+    refusal_inputs = []
     if base:
         findings.extend(changed_set_hygiene(base))
     for f in collect_files(paths):
@@ -2639,6 +3584,12 @@ def lint(paths, base=None):
             diagnostic_channel(f, text, findings, added)
             registration_top(f, text, findings, added)
             section_banner(f, text, findings, added)
+            refusal_inputs.append((f, text))
+    if refusal_inputs:
+        findings.extend(refusal_slop_files(refusal_inputs, base,
+                                           added_lines_cache))
+        findings.extend(agent_verb_slop_files(refusal_inputs, base,
+                                              added_lines_cache))
     findings.sort(key=lambda x: (str(x.path), x.line, x.rule))
     return findings
 
@@ -3308,6 +4259,9 @@ def main(argv):
         base = args[i + 1]
         args = args[:i] + args[i + 2:]
     base = base or os.environ.get("DOC_LINT_BASE") or None
+    if "--selftest-refusal" in args:
+        failed = refusal_selftest() + agent_verb_selftest()
+        return 1 if failed else 0
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]
         if not paths:
@@ -4966,6 +5920,15 @@ def stmt_inline(path, text, findings, added):
             path, no, "stmt-inline",
             "a statement keyword carries its body on the same line, put the "
             "body on the next line"))
+    for no in sorted(added or range(1, len(text.splitlines()) + 1)):
+        code, comment_only = _strip_comment(text.splitlines()[no - 1])
+        if comment_only or "not compiles" not in _blank_nim_strings(code):
+            continue
+        findings.append(Finding(
+            path, no, "negative-compile",
+            "a doAssert not compiles assertion, banned: refusals surface as "
+            "loud compile-time errors, pin behavior with an end-to-end "
+            "kernel test instead"))
 
 
 BANNER_BAR_RE = re.compile(r"^# ═+$")

@@ -2,6 +2,65 @@
 
 AI coding tool guidelines for the Crucible codegen backend.
 
+## Benchmarks
+
+Two benchmark families check compiler changes: compile time of the bench kernels and size of the emitted kernels.
+Both compare same-session against the unmodified master checkout because machine drift dominates absolute numbers across sessions.
+A measurement without the master comparison measures nothing.
+
+### Compile time
+
+```bash
+# from the branch worktree AND from the main checkout at master, two trees
+/usr/bin/time -p nim cpp -d:release --hints:off --warnings:off \
+  --outdir:/tmp/bench_out/<tree> --nimcache:/tmp/bench_cache/<tree>-fresh \
+  workspace/ceramic/bench/gemm_gpu/bench_gemm_metal.nim
+
+/usr/bin/time -p nim cpp -d:release -d:sdpaDtype=bf16 --hints:off --warnings:off \
+  --outdir:/tmp/bench_out/<tree> --nimcache:/tmp/bench_cache/<tree>-fresh \
+  workspace/ceramic/bench/sdpa_gpu/bench_scaled_dot_product_attention_metal.nim
+```
+
+| Rule | Detail |
+| --- | --- |
+| Nimcache | fresh cache directory per run, the compiler reuses cached modules across runs and a warm cache hides the cost under test |
+| Runs | 3 runs per tree, alternate the trees (branch, master, branch, master), report each tree's median |
+| Master checkout | measure master in the same batch, always, comparing a branch only against its own earlier commit can miss a regression that both commits share |
+| Shell timeout | one command runs one round of both kernels on both trees, a full 3-round sweep needs several commands to stay inside the 300 s cap |
+| Reference | on the M4 Max workstation, master compiles the GEMM bench in about 4.2 s and the SDPA bench in about 8.3 s |
+
+### Emitted code size
+
+```bash
+# from the tattletale/ directory of each tree
+nim ceramic_cgs runner=cgs_layout_compose dump=true
+```
+
+| Fact | Detail |
+| --- | --- |
+| Runners | 11 programs under `workspace/ceramic/bench/codegen_size`: complement, make_layout_like, make_fragment_like, compose, coalesce, concat, divides, products, indexing, inverses, tensor_selectors |
+| Output | each run writes one `.msl` file per kernel into `workspace/ceramic/bench/codegen_size/dumps/cur_kernels`, the dumps are untracked files |
+| Comparison | run the runners in both trees and compare the dump sets, per kernel and in total, by line, word, and byte counts |
+| Known breakage | 5 of the 11 runners fail to compile identically on both sides: complement, make_layout_like, products, indexing, tensor_selectors (`crucibleCompileTarget` undeclared in `h_copy_dispatch.nim`), a pre-existing ceramic breakage unrelated to crucible changes, compare only the 26 kernels that compile |
+| Delta rule | a size delta names the mechanism that produced it, a silent delta is not accepted |
+
+## Emitted-output policy
+
+A compiler change answers four checks:
+
+- emitted output behaves the same, kernels launch and read back the expected results
+- compile time stays close to the master measurements from the Benchmarks section
+- runtime performance is unchanged
+- maintenance line count goes down
+
+Byte identity is a banned check.
+
+An inspected emitted-source diff shows three properties:
+
+- valid under the target's consumer: xcrun metal, dxc, glslang, naga
+- every delta names the mechanism that produced it
+- no md5 locking, no byte-diff proof tables, no byte-identical claims
+
 ## Passes layer publicity
 
 `src/codegen/passes/passes_*` files export only `register*` routines.
@@ -192,7 +251,7 @@ The args tuple order matches the kernel params minus the output, scalars are by-
 | Metal | buffers, output at index 0 then inputs in order, scalars in one shared constant buffer at 16-byte slots |
 | Metal | more than 31 bindings rejected at ingest via NSError, readback from `contents()` after `waitUntilCompleted`, no staging or map path |
 | Vulkan | by-value params are push constants (`layout(push_constant) uniform KernelParams`), 4-byte only, loud quit otherwise |
-| Vulkan | one kernel per `glsl:` source with scalars, a multi-kernel source unions params file-scope and misaligns them, pointer-only multi-kernel is fine |
+| Vulkan | multi-kernel `glsl:` sources must declare identical ordered params, scalars and pointers alike pack through the shared push-constant block, a conflict refuses at codegen |
 
 ### Run commands
 

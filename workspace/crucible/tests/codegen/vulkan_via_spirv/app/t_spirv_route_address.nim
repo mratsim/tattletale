@@ -14,12 +14,24 @@ const addSpv = spirv:
     output[0] = a[0] + b[0] + z
     output[1] = a[1] + b[1] + z
 
+type
+  Flags = object
+    count: uint32
+    on: bool
+
 const flagSpv = spirv:
   proc flagKernel(output: ptr UncheckedArray[uint32], flag: bool) {.global.} =
     if flag:
       output[0] = 7'u32
     else:
       output[0] = 3'u32
+
+const structBoolSpv = spirv:
+  proc structBoolKernel(output: ptr UncheckedArray[uint32], f: Flags) {.global.} =
+    if f.on:
+      output[0] = f.count
+    else:
+      output[0] = 0'u32
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   # spirv-val the module before it reaches the engine: a mis-encoded word
@@ -72,6 +84,22 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     engine.copyToHostFromDevice(addr outFlag[0], oDev, 1)
     doAssert outFlag[0] == 3, "flag=false got " & $outFlag[0] & ", want 3"
     echo "  bool kernel param: i32 push member, truthy [", outFlag[0], "] on MoltenVK"
+
+  block structBoolParam:
+    # Push block maps a struct bool field to a u32 word, body reads coerce back
+    var engine = newEngine(runVulkan)
+    engine.ingest(structBoolSpv)
+    let oDev = engine.allocDevice(uint32, 1)
+
+    engine.launchKernel("structBoolKernel", oDev, (Flags(count: 42'u32, on: true),))
+    var outS: array[1, uint32]
+    engine.copyToHostFromDevice(addr outS[0], oDev, 1)
+    doAssert outS[0] == 42, "on=true got " & $outS[0] & ", want f.count = 42"
+
+    engine.launchKernel("structBoolKernel", oDev, (Flags(count: 42'u32, on: false),))
+    engine.copyToHostFromDevice(addr outS[0], oDev, 1)
+    doAssert outS[0] == 0, "on=false got " & $outS[0] & ", want 0"
+    echo "  struct bool field: u32 push member, reads [", outS[0], "] on MoltenVK"
 
 when isMainModule:
   runTest()

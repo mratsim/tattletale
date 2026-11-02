@@ -1,4 +1,6 @@
-## HLSL: fp16 conversion builtins are rejected, float16 types are outside the subset.
+## HLSL: the fp16/bf16/fp8 conversion builtins refuse, half-width types are outside the subset.
+##
+## the printer refusal "toFp16 has no HLSL form, the fp16/bf16/fp8 conversion builtins are outside the HLSL subset".
 ##
 ## Run (must FAIL to compile):
 ##   nim c --hints:off --warnings:off \

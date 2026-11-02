@@ -63,7 +63,8 @@ template check*(res: TClResult) =
 proc listPlatforms(): seq[Pplatform_id] =
   var platformCount: cl_uint
   let res = getPlatformIDs(0, nil, platformCount.addr)
-  if res != SUCCESS: return
+  if res != SUCCESS:
+    return
   if platformCount > 0:
     result = newSeq[Pplatform_id](platformCount.int)
     check getPlatformIDs(platformCount, result[0].addr, nil)
@@ -93,7 +94,7 @@ proc queryString(device: OpenCLDevice, info: Tdevice_info): string =
     if result[^1] == '\0':   # clGetDeviceInfo strings are NUL-terminated
       result.setLen(result.len - 1)
 
-proc name*(device: OpenCLDevice): string = device.queryString(DEVICE_NAME)
+proc getName*(device: OpenCLDevice): string = device.queryString(DEVICE_NAME)
 
 proc isGpu(device: OpenCLDevice): bool =
   var deviceType: TDeviceType

@@ -30,7 +30,7 @@ proc close(b: var RenderBuf) =
 
 proc renderStmt(b: var RenderBuf, s: CirStmt)
 
-proc getSpaceName(s: CirAddrSpace): string =
+proc getSpaceName(s: AddressSpace): string =
   case s
   of caThread: "thread"
   of caThreadgroup: "threadgroup"
@@ -44,9 +44,11 @@ proc renderType(t: CirType): string =
   case t.kind
   of ctVoid: result = "(void)"
   of ctBool: result = "(bool)"
+  of ctString: result = "(string)"
   of ctInt: result = "(i " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
   of ctUint: result = "(u " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
   of ctFloat: result = "(f " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
+  of ctBf16: result = "(bf16)"
   of ctVector: result = "(vector " & $t.vN & " " & renderType(t.vElem) & ")"
   of ctPtr: result = "(ptr " & getSpaceName(t.space) & " " & renderType(t.pElem) & ")"
   of ctAptr: result = "(aptr " & getSpaceName(t.space) & " " & renderType(t.pElem) & ")"
@@ -70,15 +72,16 @@ proc renderExpr(e: CirExpr): string =
   of eSym: result = e.name
   of eIntLit: result = $e.value
   of eFloatLit: result = $e.fValue
+  of eStrLit: result = "(\"" & e.sValue & "\")"
   of eDeref: result = "(deref " & renderExpr(e.derefOperand) & ")"
   of eAt: result = "(at " & renderExpr(e.atBase) & " " & renderExpr(e.atIndex) & ")"
   of ePat: result = "(pat " & renderExpr(e.patBase) & " " & renderExpr(e.patIndex) & ")"
   of eDot:
-    result = "(dot " & renderExpr(e.dotBase) & " " & e.fieldName & " " & $e.inherit & ")"
+    result = "(dot " & renderExpr(e.dotBase) & " " & e.fieldName & ")"
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     result = "(" & toLowerAscii($e.kind)[1 ..^ 1] & " " & renderType(e.opType) &
       " " & renderExpr(e.left) & " " & renderExpr(e.right) & ")"
-  of eBitNot, eNeg:
+  of eNeg:
     result = "(" & toLowerAscii($e.kind)[1 ..^ 1] & " " & renderType(e.unType) &
       " " & renderExpr(e.unOperand) & ")"
   of eEq, eNeq, eLt, eLe:
@@ -87,6 +90,9 @@ proc renderExpr(e: CirExpr): string =
   of eNot: result = "(not " & renderExpr(e.notOperand) & ")"
   of eAnd: result = "(and " & renderExpr(e.andLeft) & " " & renderExpr(e.andRight) & ")"
   of eOr: result = "(or " & renderExpr(e.andLeft) & " " & renderExpr(e.andRight) & ")"
+  of eTernary:
+    result = "(tern " & renderType(e.ternType) & " " & renderExpr(e.cond) &
+      " " & renderExpr(e.thenE) & " " & renderExpr(e.elseE) & ")"
   of eCast: result = "(cast " & renderType(e.castType) & " " & renderExpr(e.castOperand) & ")"
   of eConv: result = "(conv " & renderType(e.castType) & " " & renderExpr(e.castOperand) & ")"
   of eAddr: result = "(addr " & renderExpr(e.addrOperand) & ")"
@@ -117,12 +123,6 @@ proc renderStmtList*(b: var RenderBuf, body: seq[CirStmt], header: string) =
       b.renderStmt(s)
     b.close
 
-proc renderRange(r: CirRange): string =
-  if r.lo == r.hi:
-    result = $r.lo
-  else:
-    result = "(range " & $r.lo & " " & $r.hi & ")"
-
 proc renderStmt(b: var RenderBuf, s: CirStmt) =
   ## Compound nodes indent their children, branch bodies print under their header.
   if s.isNil:
@@ -149,39 +149,11 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
     if s.elseBody.len > 0:
       b.renderStmtList(s.elseBody, "(else")
     b.close
-  of sLoop:
-    b.open("(loop")
-    for inner in s.loopBody:
+  of sWhile:
+    b.open("(while " & renderExpr(s.whileCond))
+    for inner in s.whileBody:
       b.renderStmt(inner)
     b.close
-  of sCase:
-    b.open("(case " & renderExpr(s.selector))
-    for br in s.branches:
-      var rangesText = "(ranges"
-      for r in br.ranges:
-        rangesText.add(" " & renderRange(r))
-      rangesText.add(")")
-      b.open("(of " & rangesText)
-      for inner in br.body:
-        b.renderStmt(inner)
-      b.close
-    if s.caseElse.len > 0:
-      b.open("(else")
-      for inner in s.caseElse:
-        b.renderStmt(inner)
-      b.close
-    b.close
-  of sLab:
-    b.add("(lab " & s.labName & ")")
-  of sJmp:
-    b.add("(jmp " & s.jmpTarget & ")")
-  of sScope:
-    b.open("(scope")
-    for inner in s.scopeBody:
-      b.renderStmt(inner)
-    b.close
-  of sAssume:
-    b.add("(assume " & renderExpr(s.assumeCond) & ")")
   of sRet:
     if s.retVal != nil:
       b.add("(ret " & renderExpr(s.retVal) & ")")

@@ -17,11 +17,9 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
 
-# ════════════════════════════════════════════════════════════════════════
-
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 type
   MetalCache = object
     ## Two per-engine caches:
@@ -35,13 +33,10 @@ type
     ctx: MetalContext
     cache: MetalCache   # after ctx: released before the context destroy
 
-template backendKind*(_: typedesc[MetalEngine]): BackendKind = bkMetal
 
-# ════════════════════════════════════════════════════════════════════════
-
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ macOS-only engine implementation
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 when defined(macosx):
 
   proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID
@@ -124,7 +119,7 @@ when defined(macosx):
   proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
     when T is ptr|pointer:
       {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
-    const size = deviceLayout(T, bkMetal).size
+    const size = computeDeviceLayout(T, bkMetal).size
     var blob: array[size, byte]
     var off = 0
     blob.packFrom(off, v, bkMetal)
@@ -213,11 +208,9 @@ when defined(macosx):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
         failLoud("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
-# ════════════════════════════════════════════════════════════════════════
-
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # ▸ Non-macOS entry point
-# ════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 else:
   proc newMetalEngine*(): MetalEngine =
     failLoud("bkMetal requires macOS")
