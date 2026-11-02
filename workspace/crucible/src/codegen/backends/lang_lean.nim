@@ -147,10 +147,13 @@ proc analyzeLoopKernel(decl, start, loop: CirStmt, scalarName: string, model: va
   ## Returns the value expression, input to the kernel-level read-set check,
   ## and fills the loop fields of the model
   let loopVar = decl.name
-  # frontend renaming gives a shadowing loop variable a fresh name, so only the emitted update binder 'j' can collide
+  # frontend renaming gives a shadowing loop variable a fresh name
   if loopVar == "j":
     raise leanRefusal("unsupported loop - loop variable 'j' collides with the" &
       " emitted update binder 'j'")
+  if scalarName == "j":
+    raise leanRefusal("unsupported kernel - scalar parameter 'j' collides with" &
+      " the emitted update binder 'j' of the loop shape")
   model.loopVar = loopVar
   if start.rhs.kind != eIntLit or start.rhs.value != 0:
     let got = if start.rhs.kind == eIntLit: $start.rhs.value else: $start.rhs.kind
@@ -195,11 +198,16 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
   var bufSeq: seq[string]
   var bufNames: HashSet[string]
   var scalarName = ""
+  var scalarCount = 0
   for p in kernel.params:
     if isUint32Buffer(p.typ):
       bufSeq.add p.name
       bufNames.incl p.name
     elif p.typ.kind == ctUint and p.typ.bits == 32:
+      inc scalarCount
+      if scalarCount > 1:
+        raise leanRefusal("unsupported kernel - more than one uint32 scalar" &
+          " parameter, the model covers exactly one uniform scalar (the axpy shape)")
       scalarName = p.name
     else:
       raise leanRefusal("unsupported kernel - parameter '" & p.name &
@@ -278,6 +286,7 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
 
   result.kernelName = kernel.name
   result.bodyName = leanBodyName(result.kernelName)
+  result.scalarName = scalarName
 
 # ── Lean emission ────────────────────────────────────────────────────────────
 
@@ -320,7 +329,7 @@ count `k`, threading the output buffer through functional updates, so the
 kernel stays a loop in Lean and nothing is unrolled. Buffers are total
 functions `Nat → UInt32`, and `UInt32.add` wraps modulo 2^32 like the GPU
 arithmetic the kernel emits.
-
+@SCALARDOC@
 Divergence note: the Lean loop counter is a `Nat`, unbounded, while the GPU
 counter is 32-bit and Nim wraps it at 2^32. The bound `@N@` is a compile-time
 literal, so the counter provably stays in `[0, @N@)` and the two encodings
@@ -332,10 +341,31 @@ Proof note: the loop-shape theorems may depend on the classical axioms
 constructive with `[propext]` alone.
 -/
 """
+  let scalarDoc = if model.scalarName == "":
+      ""
+    else:
+      "The scalar parameter `" & model.scalarName & "` is uniform across the\n" &
+      "iterations: it maps to a `UInt32` argument appended after the buffer\n" &
+      "binders of the emitted defs, and `UInt32.mul` wraps modulo 2^32 like\n" &
+      "`UInt32.add`.\n\n"
   let doc = case model.kind
     of kkGuardedThread: threadDoc
     of kkLoopRange: loopDoc
-  result = doc.replace("@KERNEL@", model.kernelName).replace("@N@", $model.nValue)
+  result = doc.replace("@KERNEL@", model.kernelName)
+    .replace("@N@", $model.nValue).replace("@SCALARDOC@", scalarDoc)
+
+proc scalarBinder(model: KernelModel): string =
+  ## Lean binder text of the scalar parameter, "" when the kernel has none:
+  ## a `UInt32` argument appended after the buffer binders of the emitted defs
+  if model.scalarName == "":
+    return ""
+  result = " (" & model.scalarName & " : UInt32)"
+
+proc scalarArg(model: KernelModel): string =
+  ## Lean argument text of the scalar parameter, "" when the kernel has none
+  if model.scalarName == "":
+    return ""
+  result = " " & model.scalarName
 
 proc emitBodyDef(model: KernelModel): string =
   ## Emits the body def(s) of the module for the kernel shape.
@@ -373,28 +403,37 @@ can evaluate the def. -/
     let loopName = leanLoopName(model.kernelName)
     let n = $model.nValue
     result = loopDoc.replace("@N@", n) &
-      "def " & loopName & " (k : Nat) (a b out : Nat → UInt32) : Nat → UInt32 :=\n" &
+      "def " & loopName & " (k : Nat) (a b out : Nat → UInt32)" & model.scalarBinder &
+      " : Nat → UInt32 :=\n" &
       "  match k with\n" &
       "  | 0 => out\n" &
       "  | k+1 =>\n" &
       "    " & loopName & " k a b " &
-        "(fun j => if j = " & n & " - (k + 1) then " & model.value & " else out j)\n" &
+        "(fun j => if j = " & n & " - (k + 1) then " & model.value & " else out j)" &
+        model.scalarArg & "\n" &
       "\n" & loopEntryDoc.replace("@N@", n) &
-      "def " & model.bodyName & " (a b out : Nat → UInt32) : Nat → UInt32 :=\n" &
-      "  " & loopName & " " & n & " a b out\n"
+      "def " & model.bodyName & " (a b out : Nat → UInt32)" & model.scalarBinder &
+      " : Nat → UInt32 :=\n" &
+      "  " & loopName & " " & n & " a b out" & model.scalarArg & "\n"
 
 proc emitLoopTheorems(model: KernelModel): string =
   ## Loop-shape spec theorems: the loop-state lemma, then the two postcondition
   ## halves derived from it at the entry count. Every proof depends on the def shape alone.
   let loopName = leanLoopName(model.kernelName)
   let n = $model.nValue
+  let scalarBinder = model.scalarBinder
+  let scalarArg = model.scalarArg
+  let scalarImplicit = if model.scalarName == "":
+      ""
+    else:
+      " {" & model.scalarName & " : UInt32}"
   result = "/-- Loop-state lemma: with the iterations at remaining count `k` still to\n" &
     "run, index `j` of the running buffer ends at the stored value iff it lies\n" &
     "in the not-yet-written range `[" & n & " - k, " & n & ")`, and keeps its old value\n" &
     "otherwise. The loop's induction hypothesis, every spec theorem below\n" &
     "derives from it at the entry count. -/\n" &
-    "theorem " & loopName & "_eq (k : Nat) (a b out : Nat → UInt32) (j : Nat) :\n" &
-    "    " & loopName & " k a b out j =\n" &
+    "theorem " & loopName & "_eq (k : Nat) (a b out : Nat → UInt32)" & model.scalarBinder & " (j : Nat) :\n" &
+    "    " & loopName & " k a b out" & model.scalarArg & " j =\n" &
     "      if " & n & " - k ≤ j ∧ j < " & n & " then " & model.value & " else out j := by\n" &
     "  induction k generalizing out j with\n" &
     "  | zero => rw [" & loopName & ", if_neg (by omega)]\n" &
@@ -412,14 +451,14 @@ proc emitLoopTheorems(model: KernelModel): string =
     "\n" &
     "/-- Postcondition, write half: every index of the `[0, " & n & ")` range\n" &
     "holds the stored value after the loop. -/\n" &
-    "theorem " & model.bodyName & "_writes_own_index {a b out : Nat → UInt32} {j : Nat} (h : j < " & n & ") :\n" &
-    "    " & model.bodyName & " a b out j = " & model.value & " := by\n" &
+    "theorem " & model.bodyName & "_writes_own_index {a b out : Nat → UInt32}" & scalarImplicit & " {j : Nat} (h : j < " & n & ") :\n" &
+    "    " & model.bodyName & " a b out" & scalarArg & " j = " & model.value & " := by\n" &
     "  rw [" & model.bodyName & ", " & loopName & "_eq, if_pos (by omega)]\n" &
     "\n" &
     "/-- Postcondition, no-collateral-damage half: every index outside the\n" &
     "range keeps its old value. -/\n" &
-    "theorem " & model.bodyName & "_preserves_others {a b out : Nat → UInt32} {j : Nat} (h : " & n & " ≤ j) :\n" &
-    "    " & model.bodyName & " a b out j = out j := by\n" &
+    "theorem " & model.bodyName & "_preserves_others {a b out : Nat → UInt32}" & scalarImplicit & " {j : Nat} (h : " & n & " ≤ j) :\n" &
+    "    " & model.bodyName & " a b out" & scalarArg & " j = out j := by\n" &
     "  rw [" & model.bodyName & ", " & loopName & "_eq, if_neg (by omega)]\n"
 
 proc emitTheorems(model: KernelModel): string =
