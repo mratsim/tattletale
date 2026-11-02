@@ -108,8 +108,6 @@ builtinKindLadder(CirAtomicsBuiltinKind, "atomicsBuiltinKindOf")
 # ═══════════════════════════════════════════════════════════
 # 0. Canonical thread coordinates (Metal Shading Language)
 # ═══════════════════════════════════════════════════════════
-#
-# {.builtin.} are repl
 
 let thread_position_in_grid* {.builtin: cbkThreadPositionInGrid, compileTime.}: ivec3 = default(ivec3)
   ## Global thread index: `threadgroup_position_in_grid × threads_per_threadgroup + thread_position_in_threadgroup` (per axis).
