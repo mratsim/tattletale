@@ -130,6 +130,9 @@ proc settleExprFormsPass(m: CirModule): string =
             e.value = op.value
             e.litType = typ
           else:
+            # Float-literal operand, the cast retypes it in place
+            e.kind = eFloatLit
+            e.fValue = op.fValue
             e.fLitType = typ
       of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
         if e.kind in {eBitAnd, eBitOr, eBitXor} and e.opType != nil and
