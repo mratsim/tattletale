@@ -31,11 +31,19 @@ proc leanRefusal(msg: string): ref ValueError =
 # ── Emission analysis ────────────────────────────────────────────────────────
 
 type
+  KernelKind = enum
+    kkGuardedThread ## let-bound thread id, one guarded write (the add shape)
+    kkLoopRange     ## one `for` over a compile-time constant `[0, n)` range (the loop shape)
+
   KernelModel = object
+    kind: KernelKind
     kernelName: string   ## crucible kernel proc name, e.g. `addKernel`
     bodyName: string     ## emitted Lean def name, e.g. `addBody`
     writeBuf: string     ## the buffer param written by the body
-    value: string        ## emitted Lean text of the stored value, in terms of `tid`
+    value: string        ## emitted Lean text of the stored value, in terms of `tid` or the update binder `j`
+    nValue: int          ## the guard literal (guarded thread) or loop bound (loop shape)
+    loopVar: string      ## loop shape: the Nim loop variable's name
+    scalarName: string   ## the uint32 scalar parameter (axpy shape), "" when the kernel has none
 
 proc isUint32Buffer(t: CirType): bool =
   ## A kernel buffer: an aptr to uint32 elements
@@ -90,14 +98,17 @@ proc checkGuard(cond: CirExpr, tidName: string) =
   raise leanRefusal("unsupported guard - not of the shape `tidVar < literal`")
 
 proc checkWriteTarget(lhs: CirExpr): string =
-  ## Validates an assignment target as a kernel buffer element write.
-  ## Returns the written buffer's name.
+  ## Validates an assignment target as a write of the model's output buffer
+  ## and returns the buffer's name.
   ##
   ## Shared by the loop path and the guarded-thread path, so both shapes
   ## refuse a malformed target with the same message.
   ## The index-variable check and the write-count policy stay at the call sites.
   if lhs.kind != ePat or lhs.patBase.kind != eSym:
     raise leanRefusal("unsupported assignment - target is not a buffer element")
+  if lhs.patBase.name != "output":
+    raise leanRefusal("unsupported assignment - the written buffer must be" &
+      " `output` - got '" & lhs.patBase.name & "'")
   result = lhs.patBase.name
 
 proc indexedReadBufs(e: CirExpr, bufNames: HashSet[string], found: var HashSet[string]) =
@@ -123,6 +134,54 @@ proc stripKernelSuffix(kernelName: string): string =
 proc leanBodyName(kernelName: string): string =
   ## `addKernel` -> `addBody`, the naming of the hand-written AddKernel.lean module
   stripKernelSuffix(kernelName) & "Body"
+
+proc leanLoopName(kernelName: string): string =
+  ## `loopAdd` -> `loopAddLoop`, the remaining-count recursion def of the loop shape
+  stripKernelSuffix(kernelName) & "Loop"
+
+proc analyzeLoopKernel(decl, start, loop: CirStmt, scalarName: string, model: var KernelModel): CirExpr =
+  ## Walks the frontend's `for`-loop lowering: the loop-variable declaration,
+  ## the `i = 0` start assignment, and the `sWhile` ending on the increment.
+  ## The range must be the compile-time constant `[0, n)` with step 1, one indexed write over the loop variable in the body.
+  ##
+  ## Returns the value expression, input to the kernel-level read-set check,
+  ## and fills the loop fields of the model
+  let loopVar = decl.name
+  # frontend renaming gives a shadowing loop variable a fresh name, so only the emitted update binder 'j' can collide
+  if loopVar == "j":
+    raise leanRefusal("unsupported loop - loop variable 'j' collides with the" &
+      " emitted update binder 'j'")
+  model.loopVar = loopVar
+  if start.rhs.kind != eIntLit or start.rhs.value != 0:
+    let got = if start.rhs.kind == eIntLit: $start.rhs.value else: $start.rhs.kind
+    raise leanRefusal("unsupported loop - start must be the literal 0 - got '" &
+      got & "'")
+  let cond = loop.whileCond
+  if cond.kind != eLt or cond.a.kind != eSym or cond.a.name != loopVar:
+    raise leanRefusal("unsupported loop - condition is not of the shape" &
+      " `i < literal` (an inclusive `..` range, a `countup` step, or a symbolic bound)")
+  if cond.b.kind != eIntLit:
+    raise leanRefusal("unsupported loop - bound is not a compile-time literal")
+  if cond.b.value <= 0:
+    raise leanRefusal("unsupported loop - bound must be positive (got " &
+      $cond.b.value & ")")
+  model.nValue = int(cond.b.value)
+  let body = loop.whileBody
+  if body.len != 2:
+    raise leanRefusal("unsupported loop - body is not a single write plus the" &
+      " counter increment")
+  let w = body[0]
+  if w.kind != sAsgn:
+    raise leanRefusal("unsupported statement " & $w.kind &
+      " - statement inside the loop body")
+  if w.lhs.patIndex.kind != eSym or w.lhs.patIndex.name != loopVar:
+    raise leanRefusal("unsupported assignment - write index is not the loop" &
+      " variable (write-set analysis covers the whole-range shape only)")
+  model.writeBuf = checkWriteTarget(w.lhs)
+  # no increment check: every supported range lowers with the literal-1 increment,
+  # every other condition shape already refuses at the condition check above
+  result = w.rhs
+  model.value = emitExpr(w.rhs, loopVar, "j", scalarName != "")
 
 proc analyzeKernel(kernel: CirProc): KernelModel =
   ## Walks one global kernel and derives the body model
@@ -155,48 +214,55 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
   if stmts.len > 0 and stmts[^1].kind == sRet:
     stmts = stmts[0 ..< stmts.len - 1]
 
-  var tidName = ""
   var valueAst: CirExpr = nil
-  for stmt in stmts:
-    case stmt.kind
-    of sVar:
-      if tidName != "":
-        raise leanRefusal("unsupported statement sVar - more than one local binding")
-      let init = stmt.init
-      if init != nil and init.kind == eDot and init.dotBase.kind == eSym and
-          init.dotBase.builtin and
-          init.dotBase.coordBuiltin == cbkThreadPositionInGrid and
-          init.fieldName == "x":
-        tidName = stmt.name
+  if stmts.len == 3 and stmts[0].kind == sVar and stmts[0].init.isNil and
+      stmts[1].kind == sAsgn and stmts[2].kind == sWhile:
+    # loop shape: the frontend lowers `for` to a declaration, a start assignment and a while loop ending on the increment
+    result.kind = kkLoopRange
+    valueAst = analyzeLoopKernel(stmts[0], stmts[1], stmts[2], scalarName, result)
+  else:
+    result.kind = kkGuardedThread
+    var tidName = ""
+    for stmt in stmts:
+      case stmt.kind
+      of sVar:
+        if tidName != "":
+          raise leanRefusal("unsupported statement sVar - more than one local binding")
+        let init = stmt.init
+        if init != nil and init.kind == eDot and init.dotBase.kind == eSym and
+            init.dotBase.builtin and
+            init.dotBase.coordBuiltin == cbkThreadPositionInGrid and
+            init.fieldName == "x":
+          tidName = stmt.name
+        else:
+          raise leanRefusal("unsupported statement sVar - local binding whose" &
+            " initializer is not `thread_position_in_grid.x`")
+      of sIte:
+        if tidName == "":
+          raise leanRefusal("unsupported statement sIte - if before the thread-id binding")
+        if stmt.elseBody.len > 0:
+          raise leanRefusal("unsupported statement sIte - elif/else branches" &
+            " (the model kernel is a bare if)")
+        checkGuard(stmt.cond, tidName)
+        for w in stmt.thenBody:
+          if w.kind != sAsgn:
+            raise leanRefusal("unsupported statement " & $w.kind &
+              " - statement inside the guarded branch")
+          if w.lhs.patIndex.kind != eSym or w.lhs.patIndex.name != tidName:
+            raise leanRefusal("unsupported assignment - write index is not the" &
+              " thread id (write-set analysis covers the own-index shape only)")
+          if result.writeBuf != "":
+            raise leanRefusal("unsupported assignment - more than one write per thread")
+          result.writeBuf = checkWriteTarget(w.lhs)
+          valueAst = w.rhs
+          result.value = emitExpr(w.rhs, tidName, "tid", false)
       else:
-        raise leanRefusal("unsupported statement sVar - local binding whose" &
-          " initializer is not `thread_position_in_grid.x`")
-    of sIte:
-      if tidName == "":
-        raise leanRefusal("unsupported statement sIte - if before the thread-id binding")
-      if stmt.elseBody.len > 0:
-        raise leanRefusal("unsupported statement sIte - elif/else branches" &
-          " (the model kernel is a bare if)")
-      checkGuard(stmt.cond, tidName)
-      for w in stmt.thenBody:
-        if w.kind != sAsgn:
-          raise leanRefusal("unsupported statement " & $w.kind &
-            " - statement inside the guarded branch")
-        let buf = checkWriteTarget(w.lhs)
-        if buf != "output":
-          raise leanRefusal("unsupported assignment - the written buffer must" &
-            " be `output` - got '" & buf & "'")
-        if w.lhs.patIndex.kind != eSym or w.lhs.patIndex.name != tidName:
-          raise leanRefusal("unsupported assignment - write index is not the" &
-            " thread id (write-set analysis covers the own-index shape only)")
-        if result.writeBuf != "":
-          raise leanRefusal("unsupported assignment - more than one write per thread")
-        result.writeBuf = buf
-        valueAst = w.rhs
-        result.value = emitExpr(w.rhs, tidName, "tid", false)
-    else:
-      raise leanRefusal("unsupported statement " & $stmt.kind &
-        " - statement at kernel-body top level")
+        raise leanRefusal("unsupported statement " & $stmt.kind &
+          " - statement at kernel-body top level")
+    if scalarName != "":
+      raise leanRefusal("unsupported kernel - scalar parameter '" & scalarName &
+        "' on the guarded-thread shape, the guarded-thread shape takes no scalar" &
+        " parameter (the scalar is the axpy loop shape)")
 
   if result.writeBuf == "":
     raise leanRefusal("unsupported assignment - no buffer write found in the kernel body")
@@ -212,10 +278,6 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
 
   result.kernelName = kernel.name
   result.bodyName = leanBodyName(result.kernelName)
-  if scalarName != "":
-    raise leanRefusal("unsupported kernel - scalar parameter '" & scalarName &
-      "' on the guarded-thread shape, the guarded-thread shape takes no scalar" &
-      " parameter (the scalar is the axpy loop shape)")
 
 # ── Lean emission ────────────────────────────────────────────────────────────
 
@@ -230,7 +292,7 @@ const leanHeader = """
 """
 
 proc emitModuleDoc(model: KernelModel): string =
-  ## Module docstring of the emitted Lean module
+  ## Module docstring of the emitted Lean module, one variant per kernel shape
   const threadDoc = """
 /-!
 # Emitted @KERNEL@ verification module
@@ -244,10 +306,41 @@ writes are functional updates, and `UInt32.add` wraps modulo 2^32 like the
 GPU arithmetic the kernel emits.
 -/
 """
-  result = threadDoc.replace("@KERNEL@", model.kernelName)
+  const loopDoc = """
+/-!
+# Emitted @KERNEL@ verification module
+
+Produced by `lang_lean.nim` from the post-pass CIRv2 of the crucible kernel
+`@KERNEL@`. `tests/codegen/lean/t_lean_loop.nim` regenerates this file; edit the emitter,
+not this file.
+
+The kernel is one loop over the compile-time constant range `[0, @N@)`. The
+emitted def runs the loop as a structural recursion on the remaining iteration
+count `k`, threading the output buffer through functional updates, so the
+kernel stays a loop in Lean and nothing is unrolled. Buffers are total
+functions `Nat → UInt32`, and `UInt32.add` wraps modulo 2^32 like the GPU
+arithmetic the kernel emits.
+
+Divergence note: the Lean loop counter is a `Nat`, unbounded, while the GPU
+counter is 32-bit and Nim wraps it at 2^32. The bound `@N@` is a compile-time
+literal, so the counter provably stays in `[0, @N@)` and the two encodings
+agree; a data-dependent bound would need an overflow side condition here.
+
+Proof note: the loop-shape theorems may depend on the classical axioms
+`[propext, Classical.choice, Quot.sound]` (the `by_cases` case splits and
+`omega` fallbacks in the proofs), unlike the add-shape theorems, which stay
+constructive with `[propext]` alone.
+-/
+"""
+  let doc = case model.kind
+    of kkGuardedThread: threadDoc
+    of kkLoopRange: loopDoc
+  result = doc.replace("@KERNEL@", model.kernelName).replace("@N@", $model.nValue)
 
 proc emitBodyDef(model: KernelModel): string =
-  ## Body def of the emitted module: the guarded-thread per-thread body
+  ## Emits the body def(s) of the module for the kernel shape.
+  ## Guarded-thread shape: the per-thread body def.
+  ## Loop shape: the remaining-count recursion plus its entry point.
   const doc = """
 /-- Per-thread body of the kernel: returns the output buffer after thread
 `tid` of `n` has run.
@@ -257,14 +350,83 @@ Precondition: `tid < n` (each thread is launched with its id inside the
 buffer bound). Threads with `tid ≥ n` leave the buffer untouched, mirroring
 the guard the crucible frontend must emit around every body. -/
 """
-  result = doc &
-    "def " & model.bodyName & " (tid n : Nat) (a b out : Nat → UInt32) : Nat → UInt32 :=\n" &
-    "  if tid < n then fun i => if i = tid then " & model.value & " else out i\n" &
-    "  else out\n"
+  const loopDoc = """
+/-- Remaining-count recursion of the loop: runs the iterations at remaining
+count `k = @N@ .. 1`, each writing index `@N@ - k` of the running output
+buffer, and returns the buffer after the last one.
+
+`a` and `b` are the input buffers, `out` the output buffer before the loop.
+The recursion is structural on the remaining count: it terminates by
+construction, so no `termination_by` is emitted and the Lean kernel-reducer
+can evaluate the def. -/
+"""
+  const loopEntryDoc = """
+/-- Entry point: the output buffer after the whole `[0, @N@)` loop has run. -/
+"""
+  case model.kind
+  of kkGuardedThread:
+    result = doc &
+      "def " & model.bodyName & " (tid n : Nat) (a b out : Nat → UInt32) : Nat → UInt32 :=\n" &
+      "  if tid < n then fun i => if i = tid then " & model.value & " else out i\n" &
+      "  else out\n"
+  of kkLoopRange:
+    let loopName = leanLoopName(model.kernelName)
+    let n = $model.nValue
+    result = loopDoc.replace("@N@", n) &
+      "def " & loopName & " (k : Nat) (a b out : Nat → UInt32) : Nat → UInt32 :=\n" &
+      "  match k with\n" &
+      "  | 0 => out\n" &
+      "  | k+1 =>\n" &
+      "    " & loopName & " k a b " &
+        "(fun j => if j = " & n & " - (k + 1) then " & model.value & " else out j)\n" &
+      "\n" & loopEntryDoc.replace("@N@", n) &
+      "def " & model.bodyName & " (a b out : Nat → UInt32) : Nat → UInt32 :=\n" &
+      "  " & loopName & " " & n & " a b out\n"
+
+proc emitLoopTheorems(model: KernelModel): string =
+  ## Loop-shape spec theorems: the loop-state lemma, then the two postcondition
+  ## halves derived from it at the entry count. Every proof depends on the def shape alone.
+  let loopName = leanLoopName(model.kernelName)
+  let n = $model.nValue
+  result = "/-- Loop-state lemma: with the iterations at remaining count `k` still to\n" &
+    "run, index `j` of the running buffer ends at the stored value iff it lies\n" &
+    "in the not-yet-written range `[" & n & " - k, " & n & ")`, and keeps its old value\n" &
+    "otherwise. The loop's induction hypothesis, every spec theorem below\n" &
+    "derives from it at the entry count. -/\n" &
+    "theorem " & loopName & "_eq (k : Nat) (a b out : Nat → UInt32) (j : Nat) :\n" &
+    "    " & loopName & " k a b out j =\n" &
+    "      if " & n & " - k ≤ j ∧ j < " & n & " then " & model.value & " else out j := by\n" &
+    "  induction k generalizing out j with\n" &
+    "  | zero => rw [" & loopName & ", if_neg (by omega)]\n" &
+    "  | succ k ih =>\n" &
+    "    rw [" & loopName & ", ih]\n" &
+    "    by_cases hc2 : " & n & " - k ≤ j ∧ j < " & n & "\n" &
+    "    · by_cases hc1 : " & n & " - (k + 1) ≤ j ∧ j < " & n & "\n" &
+    "      · rw [if_pos hc2, if_pos hc1]\n" &
+    "      · exact absurd hc1 (by omega)\n" &
+    "    · by_cases hc1 : " & n & " - (k + 1) ≤ j ∧ j < " & n & "\n" &
+    "      · have heq : j = " & n & " - (k + 1) := by omega\n" &
+    "        rw [if_neg hc2, if_pos hc1, if_pos heq]\n" &
+    "      · have hne : ¬ (j = " & n & " - (k + 1)) := by omega\n" &
+    "        rw [if_neg hc2, if_neg hc1, if_neg hne]\n" &
+    "\n" &
+    "/-- Postcondition, write half: every index of the `[0, " & n & ")` range\n" &
+    "holds the stored value after the loop. -/\n" &
+    "theorem " & model.bodyName & "_writes_own_index {a b out : Nat → UInt32} {j : Nat} (h : j < " & n & ") :\n" &
+    "    " & model.bodyName & " a b out j = " & model.value & " := by\n" &
+    "  rw [" & model.bodyName & ", " & loopName & "_eq, if_pos (by omega)]\n" &
+    "\n" &
+    "/-- Postcondition, no-collateral-damage half: every index outside the\n" &
+    "range keeps its old value. -/\n" &
+    "theorem " & model.bodyName & "_preserves_others {a b out : Nat → UInt32} {j : Nat} (h : " & n & " ≤ j) :\n" &
+    "    " & model.bodyName & " a b out j = out j := by\n" &
+    "  rw [" & model.bodyName & ", " & loopName & "_eq, if_neg (by omega)]\n"
 
 proc emitTheorems(model: KernelModel): string =
-  ## Emits the two postcondition theorems of the hand-written AddKernel.lean module.
+  ## Emits the spec theorems of the hand-written AddKernel.lean module.
   ## Every proof depends on the def shape alone, never on the stored value.
+  if model.kind == kkLoopRange:
+    return emitLoopTheorems(model)
   const tail = """
 /-- Postcondition, write half: thread `tid` wrote `@VALUE@` at its own index. -/
 theorem @BODY@_writes_own_index {tid n : Nat} {a b out : Nat → UInt32} (h : tid < n) :
