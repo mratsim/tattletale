@@ -23,3 +23,5 @@ type
     cgHlsl
     cgSpirv
     cgCpu      ## CPU backend, C or Nim text for the host compiler
+    cgLean
+    ## Lean 4 verification backend: emits a proof module, never executable shader code.

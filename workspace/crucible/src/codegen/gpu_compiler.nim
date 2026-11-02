@@ -220,3 +220,32 @@ macro hlsl*(flavor: untyped, body: untyped): string =
 macro hlsl*(body: untyped): string =
   crucibleCompileTarget = ctHlsl
   result = newCall(bindSym"hlslImpl", body)
+
+proc registerLeanPasses*(reg: var PassRegistry) {.compileTime.} =
+  ## Registers the Lean verification pipeline: the normalization-equivalent
+  ## passes only, no GPU lowering, no reserved-identifier rename.
+  ##
+  ## - the emitter reasons over semantic names, so the rename pass stays out
+  ## - settleExprForms split into resolveBoolDomain + typeLiterals +
+  ##   completeConstructors, the three together reproduce its contract
+  reg.registerResolveBoolDomain()
+  reg.registerValueNormalizations()
+  reg.registerReshapingPasses()
+
+macro leanImpl(body: typed): string =
+  ## Compiles a `lean:` block body into a Lean 4 verification module:
+  ## CIRv2 lowering, the Lean passes, then the Lean emitter.
+  ##
+  ## - a refusal in the chain is a compile-time error naming the construct
+  var reg = PassRegistry()
+  reg.registerLeanPasses()
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
+  result = newLit(codegenSource(m, cgLean))
+
+macro lean*(body: untyped): string =
+  ## Converts the body of this macro into a Lean 4 verification module.
+  # untyped -> typed macro delegation: the outer macro assigns crucibleCompileTarget
+  # before the typed macro runs, so the body resolves with the target already set
+  crucibleCompileTarget = ctLean
+  result = newCall(bindSym"leanImpl", body)
