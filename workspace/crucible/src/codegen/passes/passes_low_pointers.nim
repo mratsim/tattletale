@@ -20,6 +20,11 @@ import ./pass_helpers
 #
 # ############################################################
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+
 func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
   reg.register(
     name = "explodeGlobalStructWithPtrFields",
@@ -27,6 +32,11 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
     description = "Expands kernel parameters of struct type with pointer fields into flat leaves",
     run = explodeGlobalStructWithPtrFields
   )
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Kernel struct-parameter explosion
+# ═══════════════════════════════════════════════════════════════════════
+
 
 proc buildLeafConstr(t: CirType, name: string): CirExpr =
   ## For `AxpyView{p, n}` exploded under `y`:
@@ -83,6 +93,11 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
       fn.params = params
       fn.body = preamble & fn.body
   return ""
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Pointer-local explosion
+# ═══════════════════════════════════════════════════════════════════════
+
 
 proc defaultRewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, target: string): string
 

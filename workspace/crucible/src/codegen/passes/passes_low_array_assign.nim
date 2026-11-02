@@ -17,11 +17,21 @@ import ./pass_datatypes
 #
 # ############################################################
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+
 func registerDecomposeArrayAssign*(reg: var PassRegistry) =
   reg.register("decomposeArrayAssign", pkTransform,
     "Rewrites whole-array assignment, array-valued declaration init, and" &
     " constructor assignment into __builtin_memcpy calls",
     run = decomposeArrayAssignPass)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Decomposition
+# ═══════════════════════════════════════════════════════════════════════
+
 
 proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
   ## One whole-array copy, `__builtin_memcpy(&lhs, &rhs, sizeof(lhsType))`.

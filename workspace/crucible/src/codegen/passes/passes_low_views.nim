@@ -37,6 +37,11 @@ import ./pass_helpers
 #
 # ############################################################
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+
 func registerLowerSpans*(reg: var PassRegistry) =
   ## Placement contract: the shared lowering stage, before every per-target transform,
   ## so the per-address-space callee instantiation sees the split
@@ -45,6 +50,11 @@ func registerLowerSpans*(reg: var PassRegistry) =
     "Splits openArray spans into pointer + length pairs, rewrites" &
     " toOpenArray call arguments, folds len reads",
     run = lowerSpansPass)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Span signatures
+# ═══════════════════════════════════════════════════════════════════════
+
 
 type
   SpanSig = object
@@ -85,6 +95,11 @@ proc splitSpanParams(fn: CirProc, sigs: seq[SpanSig]) =
     else:
       newParams.add p
   fn.params = newParams
+
+# ═══════════════════════════════════════════════════════════════════════
+#  View splitting
+# ═══════════════════════════════════════════════════════════════════════
+
 
 proc spanPtrLenParts(base, first, last: CirExpr): tuple[ptrPlus, lenExpr: CirExpr] =
   ## toOpenArray(base, first, last) -> (base + first, last - first + 1).
@@ -231,6 +246,11 @@ proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
     if err.len > 0:
       return
 
+# ═══════════════════════════════════════════════════════════════════════
+#  View binding decomposition
+# ═══════════════════════════════════════════════════════════════════════
+
+
 proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
   ## A `toOpenArray(p, a, b)` assignment to a preceding `var v: span T`
   ## declaration retypes the binding to `p + a` and appends the matching
@@ -273,6 +293,11 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
     i.inc
   ss = lowered
   return ""
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Survivor guard
+# ═══════════════════════════════════════════════════════════════════════
+
 
 proc typeHoldsSpan(t: CirType): bool =
   if t.isNil:
@@ -323,6 +348,11 @@ proc survivingSpanRejection(fn: CirProc): string =
       err = "an expression resolves to an openArray span type"
   fn.body.walkStmts(checkStmt, checkExpr)
   return err
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Pass runner
+# ═══════════════════════════════════════════════════════════════════════
+
 
 proc lowerSpansPass(m: CirModule): string =
   ## Parameter splits run before the body rewrites, which rebuild call-site

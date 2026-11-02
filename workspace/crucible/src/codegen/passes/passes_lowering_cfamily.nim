@@ -19,12 +19,22 @@ import ./pass_helpers
 #
 # ############################################################
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+
 func registerSmemInitRewrite*(reg: var PassRegistry) =
   reg.register("smemInitRewrite", pkTransform,
     "Rewrites smem initializers into a bare declaration plus" &
     " element- or member-wise stores",
     run = rewriteSmemInits
   )
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Program-scope hoisting
+# ═══════════════════════════════════════════════════════════════════════
+
 
 proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ## Relocates the `{.smem.}` and `{.const_mem.}` locals of every proc into
@@ -82,6 +92,11 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
     run = proc(m: CirModule): string {.nimcall.} =
       hoistProgramScopeLocalsCore(m)
   )
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Smem initializer rewrite
+# ═══════════════════════════════════════════════════════════════════════
+
 
 proc buildSmemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt] =
   let base = sym(name, declType)

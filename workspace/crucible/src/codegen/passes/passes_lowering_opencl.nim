@@ -20,6 +20,11 @@ import ./pass_helpers
 #
 # ############################################################
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+
 func registerOpenclHoistProgramScopeConstants*(reg: var PassRegistry) =
   reg.register("openclHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
@@ -32,8 +37,18 @@ func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
     run = openclLowerByrefParams
   )
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Const_mem locals to program-scope constants
+# ═══════════════════════════════════════════════════════════════════════
+
+
 proc openclHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Large-struct params as hidden pointers
+# ═══════════════════════════════════════════════════════════════════════
 
 
 func computeCirSizeBytes(t: CirType): int =

@@ -12,6 +12,11 @@ import ./passes_low_views
 
 {.experimental: "codeReordering".}
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+
 func registerFoldMaxMinToBuiltins*(reg: var PassRegistry) =
   reg.register("foldMaxMinToBuiltins", pkTransform,
     "Folds ternary max/min idioms to the native max/min builtins",
