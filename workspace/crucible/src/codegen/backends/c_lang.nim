@@ -76,9 +76,7 @@ type
     ##
     ## The module surface:
     ##
-    ## - procName: names the kernel in refusal messages, procs: the module
-    ##   proc table, the source of callee names
-    ## - ret: the current proc's return type
+    ## - procName: names the kernel in refusal messages
     ## - suffix: uniquifies callee references per launch site
     ##
     ## The launch shape:
@@ -89,8 +87,6 @@ type
     ##   to the per-thread exit label, subst maps identifiers to C text
     ##   for baked static parameters
     procName: string
-    procs: seq[CirProc]
-    ret: CirType
     suffix: string
     coords: CpuCoordTableC
     inlineKernel: bool
@@ -98,7 +94,7 @@ type
 
 proc cRefuse(ctx: EmitCtxC, what: string) {.noreturn, compileTime.} =
   ## Compile-time refusal naming the construct and the kernel.
-  error("cpu backend, kernel " & ctx.procName & ": " & what)
+  error("cpu workgroup launch, kernel " & ctx.procName & ": " & what)
 
 var cpuCoordUseC {.global, compileTime.}: bool
   ## Coordinate-builtin use of the module under emission, reset per emission, read by the launch after the body prints.
@@ -222,7 +218,7 @@ proc isCoordReadC(e: CirExpr): bool =
   else:
     false
 
-proc printIntLit(e: CirExpr, ctx: EmitCtxC): string =
+proc printIntLit(e: CirExpr): string =
   ## Integer literal, C suffix when the width exceeds int.
   let bits = if e.litType != nil and e.litType.kind in {ctInt, ctUint}:
                e.litType.bits else: -1
@@ -235,7 +231,7 @@ proc printIntLit(e: CirExpr, ctx: EmitCtxC): string =
   else:
     result = $e.value
 
-proc printFloatLit(e: CirExpr, ctx: EmitCtxC): string =
+proc printFloatLit(e: CirExpr): string =
   ## Float literal, f suffix for 32-bit.
   let bits = if e.fLitType != nil and e.fLitType.kind == ctFloat:
                e.fLitType.bits else: 64
@@ -287,9 +283,9 @@ proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
     else:
       result = e.name
   of eIntLit:
-    result = printIntLit(e, ctx)
+    result = printIntLit(e)
   of eFloatLit:
-    result = printFloatLit(e, ctx)
+    result = printFloatLit(e)
   of eDeref:
     result = "*" & printExpr(e.derefOperand, ctx)
   of eAt:
@@ -564,7 +560,7 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   if m.globals.len > 0:
     cRefuse(EmitCtxC(procName: "module"),
       "hoisted threadgroup/constant globals are not supported in v0")
-  var kctx = EmitCtxC(procName: "module", procs: m.procs)
+  var kctx = EmitCtxC(procName: "module")
   var inlinedName = ""
   for p in m.procs:
     if p.isKernel:
@@ -574,7 +570,7 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   for p in m.procs:
     if p.isKernel or p.name == inlinedName:
       continue
-    var ctx = EmitCtxC(procName: p.name, procs: m.procs, ret: p.ret, suffix: suffix)
+    var ctx = EmitCtxC(procName: p.name, suffix: suffix)
     var params: seq[string]
     for param in p.params:
       if param.varParam:
@@ -597,12 +593,12 @@ proc emitCpuKernelBodyC*(m: CirModule, suffix: string, coords: CpuCoordTableC): 
   ## - emitCpuWorkgroupLaunchC reads the same machinery with parameters
   ##   bound to the data struct instead
   cpuCoordUseC = false
-  var kctx = EmitCtxC(procName: "kernel", procs: m.procs, suffix: suffix)
+  var kctx = EmitCtxC(procName: "kernel", suffix: suffix)
   let k = findKernelC(m, kctx)
   let (bodyProc, call) = inlineSourceC(k, m, kctx)
 
   var subst: seq[(string, string)] = @[]
-  var bctx = EmitCtxC(procName: bodyProc.name, procs: m.procs, ret: bodyProc.ret,
+  var bctx = EmitCtxC(procName: bodyProc.name,
                       suffix: suffix, coords: coords, inlineKernel: true)
   if not call.isNil:
     for i, param in bodyProc.params:
@@ -621,12 +617,12 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
   ## struct members: parameter i reads `dataPrefix & memberNames[i]`,
   ## baked statics substitute to their C literals.
   cpuCoordUseC = false
-  var kctx = EmitCtxC(procName: "kernel", procs: m.procs, suffix: suffix)
+  var kctx = EmitCtxC(procName: "kernel", suffix: suffix)
   let k = findKernelC(m, kctx)
   let (bodyProc, call) = inlineSourceC(k, m, kctx)
 
   var subst: seq[(string, string)] = @[]
-  var bctx = EmitCtxC(procName: bodyProc.name, procs: m.procs, ret: bodyProc.ret,
+  var bctx = EmitCtxC(procName: bodyProc.name,
                       suffix: suffix, coords: coords, inlineKernel: true)
   if call.isNil:
     # folded shape: the wrapper body is the kernel body, every parameter reads its data struct member

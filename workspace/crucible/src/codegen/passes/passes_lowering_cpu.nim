@@ -21,7 +21,8 @@
 ## - coordinate builtins map to launch-site expressions
 ## - vectors, barriers, shuffles, reductions, atomics refuse there in v0
 
-import ../ir/cirv2_lang
+import std/macros
+import std/sequtils
 import ./pass_datatypes
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -29,5 +30,5 @@ import ./pass_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerCpuLoweringPasses*(reg: var PassRegistry) =
-  ## Registers the CPU lowering passes. Empty in v0, see the module header.
+  ## Empty in v0, see the module header.
   discard

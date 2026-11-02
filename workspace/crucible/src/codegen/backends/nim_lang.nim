@@ -151,8 +151,7 @@ proc emitStructDefs(m: CirModule): NimNode =
   ##
   ## CIRv2 dropped the frontend's source type nodes: the emitter prints
   ## its own declarations and references them by the CIRv2 struct name.
-  ## Values crossing from the launch-site formals convert at the struct
-  ## flows through `emitConv`.
+  ## Values crossing from the launch-site formals convert through `emitConv`.
   if m.types.len == 0:
     return nnkStmtList.newTree()
   var defs = nnkStmtList.newTree()
@@ -191,7 +190,7 @@ proc isCoordRead(e: CirExpr): bool =
   else:
     false
 
-proc emitIntLit(e: CirExpr, ctx: EmitCtx): NimNode =
+proc emitIntLit(e: CirExpr): NimNode =
   ## Typed literal `int32(5)` or `float32(1.5)`, a conversion call that keeps
   ## the CIRv2 literal width visible in Nim's inferred expressions.
   let t = e.litType
@@ -247,7 +246,7 @@ proc emitExpr(e: CirExpr, ctx: EmitCtx): NimNode =
     else:
       result = ident(e.name)
   of eIntLit:
-    result = emitIntLit(e, ctx)
+    result = emitIntLit(e)
   of eFloatLit:
     let bits = if e.fLitType != nil and e.fLitType.bits in {32, 64}: e.fLitType.bits else: 64
     result = nnkCall.newTree(ident("float" & $bits), newLit(e.fValue))
@@ -517,8 +516,6 @@ proc inlineSource(k: CirProc, m: CirModule, ctx: EmitCtx): tuple[bodyProc: CirPr
       if call != nil:
         cpuRefuse(ctx, "the kernel wrapper body makes multiple calls")
       call = st
-    of sRet, sDiscard:
-      discard
     else:
       discard
   if call.isNil:
@@ -609,7 +606,7 @@ proc emitCpuKernelBody*(m: CirModule, suffix: string, coords: CpuCoordTable): tu
     for i, param in bodyProc.params:
       if i < call.callArgs.len:
         # runtime params substitute to their identical kernel formal names,
-        # statics to the baked literals, conversions travel with the arg
+        # statics to the baked literals, args convert at the substitution
         subst.add((param.name, emitExpr(call.callArgs[i], bctx)))
     bctx.subst = subst
   result.stmts = emitStmts(bodyProc.body, bctx)
