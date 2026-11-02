@@ -12,7 +12,7 @@
 ## metadata for the module, and a `bwd_diff:` refusal on a data-dependent loop
 ##
 ## Run:
-##   nim c --hints:off --warnings:off --outdir:build/tests workspace/crucible/tests/ir/autodiff/t_ir_ad_axpy_derive.nim
+##   nim c --hints:off --warnings:off --outdir:build/tests workspace/crucible/tests/autodiff/t_ad_derive_axpy.nim
 
 import std/[macros, sequtils, sets, strutils, tables]
 import workspace/crucible
