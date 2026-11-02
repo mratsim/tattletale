@@ -1,6 +1,6 @@
 ## CPU engine: an axpy kernel over a struct-with-pointer View runs in-process.
 ##
-## Test that the OpenCL View kernel proc (pointer + length in one object) runs on the CPU engine with host values.
+## Test that a View kernel proc, pointer + length in one object like the OpenCL sibling, runs on the CPU engine with host values.
 ##
 ## Run:
 ##   nim test_crucible_cpu
