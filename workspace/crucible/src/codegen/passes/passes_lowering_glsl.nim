@@ -13,6 +13,10 @@ import ../ir/cirv2_build
 import ../backends/lang_glsl
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_lowering
+import ./passes_low_reserved
+import ./passes_low_address_spaces
+import ./analysis_module_requirements
 import ./passes_lowering_cfamily
 import ./passes_low_pointers
 
@@ -48,6 +52,20 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope")
+
+func registerGlslLoweringPasses*(reg: var PassRegistry) =
+  ## Every pass a GLSL codegen run runs between its normalization stage and its validation passes.
+  ##
+  ## Contract:
+  ## - the `glsl:` macro and the `bwd_diff` artifact pipeline share this pass sequence in registration order
+  reg.registerSharedLoweringPasses()
+  reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
+  registerGlslQualifyVarParams(reg)
+  registerSmemInitRewrite(reg)
+  registerGlslHoistProgramScopeLocals(reg)
+  registerInstantiateAddressSpaceGenerics(reg)
+  registerGlslRefBlockPass(reg)
+  registerGlslFeatureScan(reg)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  var-parameter qualification

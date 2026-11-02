@@ -7,6 +7,7 @@
 
 import std/[macros, hashes, sequtils, sets, strutils, tables]
 import ../../builtins/builtins_catalog
+import ../autodiff_types
 export builtins_catalog
 
 # ############################################################
@@ -383,6 +384,12 @@ type
     ## - valid only if no transform runs after the pass, which runPasses enforces
     ## - the printer emits one `layout(buffer_reference, std430) buffer`
     ##   declaration per entry in order, it never registers a block itself
+    adMetas*: Table[string, AdKernelsMetas]
+    ## Backward-differentiation record: forward kernel name -> the kernel pair's signature metadata.
+    ## The `autodiffBwdDerive` transform writes it from the same walk that built the backward kernel,
+    ## the pair artifact pipeline reads it. A module no AD transform touched leaves it empty.
+    adBwdKernels*: HashSet[string]
+    ## Names of the backward and reduce kernels `autodiffBwdDerive` generated, a second AD pass never re-derives them.
 
 proc computeCirSizeBytes(t: CirType): int =
   ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
