@@ -5,8 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## GPU builtin vocabulary available inside kernel bodies, the stable
-## surface downstream users bind against.
+## GPU builtin vocabulary available inside kernel bodies.
+## The stable surface downstream users bind against.
 ##
 ## | Section      | Symbols                                                                              |
 ## | ------------ | ------------------------------------------------------------------------------------ |

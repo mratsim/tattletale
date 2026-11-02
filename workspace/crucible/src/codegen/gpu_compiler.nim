@@ -8,19 +8,13 @@
 
 ## GPU kernel code generator, emits native GPU code: CUDA, OpenCL, GLSL, WebGPU, Metal.
 ##
-## Public API, one import: `import workspace/crucible`.
-## The curated surface lives in `src/crucible_public_api.nim`, the GPU builtin vocabulary
-## in `src/crucible_gpu_builtins.nim`, both re-exported here in full.
-## Everything not exported there is internal, only compiler tests reach into the internals.
+## Public API, one import: `import workspace/crucible`. The curated surface lives
+## in `src/crucible_public_api.nim`, the GPU builtin vocabulary in `src/crucible_gpu_builtins.nim`,
+## both re-exported here in full, everything not exported there is internal.
 ##
-## Pipeline:
 ## - the `metal:`-family macros lower the typed body to CIRv2
 ## - `buildPipeline` materializes the target's pass pipeline from the table below
 ## - `runPasses` executes it, `backends_api` dispatches the final module to the `*_lang` printer
-##
-## Modules: `src/codegen/frontend/nim_to_crucible`, the pass stages under
-## `src/codegen/passes/`, the printers under `src/codegen/backends/*_lang`.
-
 import std/macros
 
 import ../builtins/builtins
@@ -217,6 +211,7 @@ macro codegenWebGpu(body: typed): string =
   var reg = PassRegistry.new()
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
+  registerFoldMaxMinToBuiltins(reg)
   reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
   registerExplodeStructWithPtrFields(reg)
   registerWgslExplodePointerLocals(reg)
@@ -251,6 +246,7 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   var reg = PassRegistry.new()
   registerNormalizationPasses(reg)
   registerSharedLoweringPasses(reg)
+  registerFoldMaxMinToBuiltins(reg)
   registerHlslMaterializeNumWorkgroups(reg)
   registerHlslExplodePointerLocals(reg)
   # Rename position: after the pointer-local explosion, one named deviation
