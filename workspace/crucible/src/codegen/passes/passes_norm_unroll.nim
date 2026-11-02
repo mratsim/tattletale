@@ -9,17 +9,12 @@
 
 ## Normalization: explicit unroll marking over CIRv2.
 ##
-## The frontend lowers a `{.unroll.}` statement pragma as the raw-text marker
-## statement `emitS(@["{.unroll.}"], @[])`. This pass consumes every marker:
+## The frontend lowers a `{.unroll.}` statement pragma into the raw-text marker statement `emitS(@["{.unroll.}"], @[])`.
+## This pass consumes every marker.
 ##
 ## - the loop whose body directly states one gets `unroll = true`
-## - a marker outside a loop body drops, no printer ever sees either
-## - a marker nested inside an inner loop's body marks that inner loop,
-##   never the enclosing one: a loop's body is scanned for its own marker
-##   before the walk descends into the remaining statements
-## - every target registers this pass in the normalization stage, before
-##   the feature scans read the unroll flags
-
+## - a marker outside a loop body drops
+## - a marker nested inside an inner loop's body marks that inner loop, never the enclosing one (the scan checks a body before descending)
 import ../ir/cirv2_lang
 import ./pass_datatypes
 

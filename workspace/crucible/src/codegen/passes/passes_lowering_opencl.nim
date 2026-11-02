@@ -8,28 +8,13 @@
 {.experimental: "codeReordering".}
 
 ## OpenCL lowering: per-target transforms for the OpenCL C storage model.
-## The pipeline table in `gpu_compiler.nim` declares the registration order:
 ##
-##   legalize → normalize → lowerSpans → openclReservedIdentifiers → decomposeArrayAssign
-##   → explodeGlobalStructWithPtrFields → smemInitRewrite → openclHoistProgramScopeConstants
-##   → lowerByrefParams → instantiateAddressSpaceGenerics → openclScanModuleFeatures → validation
+## - `{.const_mem.}` locals relocate into `CirModule.globals` in encounter order, every proc and scope depth covered
+## - the printer emits the relocated declarations as program-scope `__constant` between the typedefs and the forward declarations
+## - program-scope `__constant` storage is visible to all functions
+## - the pass leaves `{.smem.}` locals untouched, a mechanical `__local` kernel-body declaration the printer emits directly
 ##
-## - `openclHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into
-##   `CirModule.globals` in encounter order, every proc and scope depth covered,
-##   the printer emits the relocated declarations as program-scope
-##   `__constant` between the typedefs and the forward declarations
-## - program-scope `__constant` storage is visible to all functions, a device
-##   function reads the constants of the kernels it serves
-##
-## `{.smem.}` locals are untouched, a mechanical `__local` kernel-body
-## declaration the printer emits directly.
-##
-## Refusal homes:
-## - the pass refuses a const_mem local without an initializer and the printer
-##   keeps a nil-init shape guard on the relocated declarations
-## - the printer refuses a const_mem local surviving outside the relocation,
-##   the walk covers every proc and scope
-
+## The pass refuses a const_mem local without an initializer, the printer refuses a survivor outside the relocation.
 import std/tables
 import ../ir/cirv2_lang
 import ../ir/cirv2_build

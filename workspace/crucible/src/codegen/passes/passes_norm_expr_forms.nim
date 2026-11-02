@@ -7,17 +7,12 @@
 
 ## Normalization: expression forms settle over the typed IR.
 ##
-##   - a literal re-types to the operand type at its use site: operation, comparison, call formal, or assignment destination
-##   - a conversion over a literal folds to the literal at the conversion target, a bfloat16
-##     the pass keeps the node for a bfloat16 target: bfloat16 has no literal token form, the conversion prints
-##   - a bitwise `and`/`or`/`xor` over bool operands becomes the logical form, `xor` prints as the `!=` comparison
-##   - an object constructor normalizes to its type's declaration order, omitted fields fill with the type's zero value
+## - a literal re-types to the operand type at its use site
+## - a conversion over a literal folds to the conversion target, a bfloat16 target preserves the node (no bfloat16 literal token)
+## - a bitwise `and`/`or`/`xor` over bool operands becomes the logical form, `xor` prints as the `!=` comparison
+## - an object constructor normalizes to its type's declaration order, omitted fields fill with the type's zero value
 ##
-## The frontend lowers syntactic shape only: the source node's literal width,
-## the bitwise operator form, the constructor's given fields.
-## This pass decides the final forms from the typed IR.
-## The feature scans read the literal widths after this pass runs.
-
+## The frontend lowers syntactic shape only, the feature scans read the literal widths after this pass runs.
 {.experimental: "codeReordering".}
 
 import ../ir/cirv2_lang

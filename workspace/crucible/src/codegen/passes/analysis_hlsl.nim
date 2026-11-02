@@ -5,23 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Call-graph analysis: one `pkAnalysis` pass filling `CirModule.callGraph`
-## with the read-write classification of the module's buffer parameters,
-## plus the device-function recursion refusal.
+## Call-graph analysis: one `pkAnalysis` pass fills `CirModule.callGraph` with the read-write classification of the buffer parameters.
 ##
-##   last target transform → hlslCallGraphAnalysis → validation
-##
-## What the pass computes:
-## - the argument-flow edges: each call argument rooted at a parameter symbol flows into the callee's matching parameter
-## - the read-write classification: a buffer parameter is read-write when its proc stores through it or a transitive callee does
-## - the recursion refusal: a recursive device function would not terminate,
-##   as the HLSL frontend accepts recursive source while miscompiling it
-##
-## Contract:
-## - the target registers the pass after the last transform, before the check-only validation stage
-## - analysis results are valid only if no transform runs after them, which runPasses enforces
-## - the printer reads the stored record in `CirModule.callGraph`, it never rescans
-
+## - a buffer parameter is read-write when its proc or a transitive callee stores through it
+## - a recursive device function refuses (the HLSL frontend accepts recursive source while miscompiling it)
+## - the pass registers after the last transform and before check-only validation, the printer reads the stored record, never rescans
 import std/[sets, strutils, tables]
 import ../ir/cirv2_lang
 import ./pass_helpers

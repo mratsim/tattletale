@@ -9,33 +9,12 @@
 
 ## Lowering: whole-array assignment for the C-family targets.
 ##
-## C and C-family languages have no whole-array assignment. The pass rewrites
-## the shapes that copy one whole array into `__builtin_memcpy` calls:
+## C-family languages have no whole-array assignment: the pass rewrites whole-array copies into `__builtin_memcpy` calls.
+## A constructor right side binds to a fresh local first, a constructor is no lvalue.
 ##
-## - `a = b` over two `float[N]` locals
-## - a declaration initialized from another array, `float c[N] = b;`
-## - `a = [1.0f, 2.0f]`, a constructor right side: a constructor is no lvalue.
-##   The pass binds the value to a fresh local through its braced init list.
-##   The memcpy copies that local.
-##
-## A declaration initialized from a constructor takes the braced init list.
-## `float a[8] = {1.0f, 2.0f}` is the C initialization form.
-##
-## The pass refuses two shapes:
-##
-## - a call result, `a = makeArr()`: C-family targets cannot take the address
-##   of a call result, bind the call to a local first
-## - an assignment right side that is neither an lvalue nor a constructor:
-##   the memcpy form copies through storage, and nothing else names storage
-##
-## Per-target scoping:
-## - registered by the Metal, CUDA, and OpenCL bundles
-## - GLSL, HLSL, and WGSL assign arrays natively, nodes surface untouched
-## - the SPIR-V encoder emits composite load/store natively
-##
-## The pass leaves a struct holding an array under plain assignment:
-## struct assignment is a legal whole-value copy that covers every array member.
-
+## - the pass refuses a call result right side, the target cannot take a call result's address
+## - the pass refuses a right side that is neither an lvalue nor a constructor
+## - registered by the Metal, CUDA and OpenCL bundles, the other targets assign arrays natively
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes

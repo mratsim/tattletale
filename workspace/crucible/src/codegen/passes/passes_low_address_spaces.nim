@@ -18,6 +18,8 @@
 ##
 ## - the clone's pointer formals re-type to the argument's space
 ## - the clone's body reads of those formals retype with them
+## - the clone's pointer casts re-derive their target space from the operand
+##   and its pointer declarations adopt the initializer's space
 ## - one clone serves every call site with the same combination
 ##
 ## The clone name uses the instantiation-name convention: the callee name
@@ -26,7 +28,7 @@
 ## Two shapes never specialize:
 ##
 ## - a formal declaring threadgroup or constant storage: its space names
-##   the storage the callee declares, never a provenance the call site picks
+##   the storage the callee declares, never a space the call site picks
 ## - a callee outside the module: a builtin such as `__builtin_memcpy` has
 ##   a nominal formal space. The printers re-space it at the call site
 ##
@@ -80,24 +82,47 @@ proc buildInstKey(callee: CirProc, wanted: seq[CirType]): string =
     if not sameType(wanted[i], callee.params[i].typ):
       result.add "\x1f" & $i & "\x1f" & $wanted[i].space
 
-proc retypeSymsExpr(e: CirExpr, name: string, typ: CirType) =
-  ## Expressions are refs, so the retyping applies to every sharer of the symbol.
-  if e.kind == eSym and e.name == name:
-    e.typ = typ
+proc retypeCloneBody(e: CirExpr, retyped: Table[string, CirType]) =
+  ## Retypes one clone body against the symbols recorded in `retyped` --
+  ## re-spaced formals and locals whose declaration adopted a re-spaced
+  ## initializer -- post-order: expressions are refs, so the retyping applies
+  ## to every sharer of the symbol.
+  ##
+  ## - a read of a retyped symbol adopts its type
+  ## - a pointer cast re-derives its target space from its operand,
+  ##   children first: a cast over a cast reads the inner cast's re-derived
+  ##   target
+  for c in e.getExprChildren():
+    c.retypeCloneBody(retyped)
+  if e.kind == eSym and retyped.hasKey(e.name):
+    e.typ = retyped[e.name]
+  elif e.kind in {eCast, eConv}:
+    if e.castType != nil and e.castType.kind in {ctPtr, ctAptr}:
+      e.castType = e.castType.withAddressSpace(resolveAddressSpace(e.castOperand))
 
 proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
   result = CirProc(name: name, ret: callee.ret, isKernel: callee.isKernel,
                    inline: callee.inline, exportName: callee.exportName,
                    workgroup: callee.workgroup,
                    body: cloneStmts(callee.body))
+  var retyped: Table[string, CirType]
   for i in 0 ..< callee.params.len:
     let p = callee.params[i]
     if sameType(wanted[i], p.typ):
       result.params.add p
     else:
+      retyped[p.name] = wanted[i]
       result.params.add param(p.name, wanted[i])
-      result.body.walkStmts(nil, proc(e: CirExpr) =
-        e.retypeSymsExpr(p.name, wanted[i]))
+  if retyped.len > 0:
+    # A re-spaced formal invalidates the base callee's baked cast targets and declaration types: the walk re-derives both from their operands
+    result.body.walkStmts(proc(s: CirStmt) =
+      if s.kind in {sVar, sConst} and s.declType != nil and s.init != nil and
+          s.declType.kind in {ctPtr, ctAptr}:
+        let it = getExprType(s.init)
+        if it != nil and it.space != s.declType.space:
+          s.declType = it
+          retyped[s.name] = it
+    , proc(e: CirExpr) = e.retypeCloneBody(retyped))
 
 type
   InstantiateCtx = ref object

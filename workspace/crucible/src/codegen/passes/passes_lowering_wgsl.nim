@@ -7,45 +7,14 @@
 
 {.experimental: "codeReordering".}
 
-## WGSL lowering: per-target transforms for the WGSL storage model,
-## registered by the WebGPU pipeline and run before printing.
+## WGSL lowering: per-target transforms for the WGSL storage model.
 ##
-##   kernel body → explodeGlobalStructWithPtrFields → wgslExplodePointerLocals → wgslHoistProgramScopeLocals → wgslInlinePointerParamCalls
-##   → printed WGSL source
+## - kernel parameters of struct type with pointer fields expand into flat ptr/scalar leaf parameters, WebGPU is a flat resource target
+## - pointer locals rewrite to their pointee, pointer-holding struct locals into per-field leaf rewrites
+## - `{.smem.}`/`{.const_mem.}` kernel locals relocate into `CirModule.globals`, top-level kernel-body locals only
+## - a statement call to a device function taking a buffer-reference or out-of-space pointer parameter inlines the callee at the call site
 ##
-## - `explodeGlobalStructWithPtrFields`: kernel parameters of struct type
-##   carrying pointer fields expand into flat ptr/scalar leaf parameters
-##   (WebGPU is a flat resource target)
-## - `wgslExplodePointerLocals`: pointer locals rewrite to their pointee,
-##   pointer-holding struct locals into per-field leaf rewrites,
-##   reads through an alias rewrite to the pointee or leaf symbol
-## - `wgslHoistProgramScopeLocals`: `{.smem.}` and `{.const_mem.}` kernel
-##   locals relocate into `CirModule.globals` in kernel-body order,
-##   the printer emits them at module scope, top-level kernel-body locals only
-##
-## `wgslInlinePointerParamCalls` runs last:
-##
-## - a statement call to a device function inlines the callee at the call site
-## - the trigger is a callee parameter of buffer-reference type, or a pointer
-##   parameter outside the function address space
-## - the inlined callee drops from the module
-##
-## Kernel and device-function pointer parameters are untouched in the pass,
-## the printer emits `ptr<function, T>` parameters as-is.
-##
-## Refusal homes:
-## - the printer refuses a `caDevice`-space local, the pass does not touch
-##   device-space locals (WGSL locals are function or workgroup)
-## - the printer refuses a threadgroup/constant local surviving in a nested
-##   scope or device function, the relocation covers top-level
-##   kernel-body locals only
-## - the pass refuses a const_mem local without an initializer,
-##   the printer keeps the shape guard on the relocated declarations
-## - a pointer local read as a value or before its address-of binding,
-##   a pointer local rebound to a second pointee, an exploded struct local
-##   used whole or read through an unbound field path
-##   refuse in the pass
-
+## The pass leaves kernel and device-function pointer parameters untouched, the printer emits `ptr<function, T>` parameters as-is.
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build

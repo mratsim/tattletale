@@ -7,22 +7,12 @@
 
 {.experimental: "codeReordering".}
 
-## Lowering: reserved-keyword renaming, one common pass registered per target
-## with the target's reserved set as data.
+## Lowering: reserved-keyword renaming, one common pass registered per target with the target's reserved set as data.
 ##
-## The pass renames an identifier colliding with a target reserved word,
-## appending the `_nim` suffix at every emitted site, so the printers never rename.
-## - a target whose language reserves the double-underscore identifier head
-##   additionally prefixes every `__`-prefixed name (WGSL: `wgsl_`), suffix first
+## An identifier colliding with a target reserved word gains the `_nim` suffix at every emitted site, so the printers never rename.
+## A target whose language reserves the double-underscore identifier head additionally prefixes every `__`-prefixed name (WGSL: `wgsl_`).
 ##
-## - fn names, call sites, params and their body references
-## - locals (var/const) and their body references
-## - struct type names, struct fields and their field accesses
-## - object-construction field names
-##
-## The rename is name-based per site list. A local and a proc sharing a name
-## are one symbol after the frontend's flat lowering, they rename together.
-
+## The rename is name-based: a local and a proc sharing a name are one symbol after the frontend's flat lowering, they rename together.
 import std/[sets, strutils, tables]
 import ../ir/cirv2_lang
 import ./pass_datatypes

@@ -7,18 +7,12 @@
 
 ## Normalization: call-temp binding for compound assignments.
 ##
-##   - asgnS(target, arith(target, rhs)) with target bearing a call
-##     becomes temp declarations + asgnS(target, arith(temp, rhs))
-##
-## The frontend emits a scalar compound assignment whose target and arithmetic
-## read share one tree: Nim evaluates the desugared `op=` left-hand side once,
-## a call in the shared tree would print and evaluate twice.
-##
+## The frontend emits a scalar compound assignment whose target and arithmetic read share one tree.
+## Nim evaluates the desugared `op=` left-hand side once, a call in the shared tree would print and evaluate twice.
 ## This pass binds every call-bearing operand of the shared tree into a fresh temp.
-## Only the shared-tree shape binds: the pass keeps both evaluations of a target call the user wrote twice.
 ##
-## Runs first in the normalization stage: the shared-tree detection compares references, so reshaping passes run after it.
-
+## Only the shared-tree shape binds: the pass keeps both evaluations of a target call the user wrote twice.
+## The pass runs first in the normalization stage, its detection compares references.
 {.experimental: "codeReordering".}
 
 import std/sets

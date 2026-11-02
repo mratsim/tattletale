@@ -7,21 +7,13 @@
 
 {.experimental: "codeReordering".}
 
-## Pointer machinery shared across targets: struct kernel-parameter explosion
-## and pointer-local explosion.
+## Pointer machinery shared across targets: struct kernel-parameter explosion and pointer-local explosion.
 ##
-## - `explodeGlobalStructWithPtrFields`: kernel parameters of struct type
-##   carrying (nested) pointer fields expand into flat ptr/scalar leaves
-##   (Metal, OpenCL, WebGPU: flat resource targets)
-## - `registerExplodePointerLocals`: pointer locals rewrite to their pointee,
-##   pointer-holding struct locals to their field leaves, before the GLSL,
-##   WGSL and HLSL printers run
+## - kernel parameters of struct type carrying (nested) pointer fields expand into flat ptr/scalar leaves on the flat resource targets
+## - pointer locals rewrite to their pointee, pointer-holding struct locals to their field leaves, before the GLSL, WGSL and HLSL printers run
 ##
-## The explosion's emission contract:
-## - pointer leaves name the device buffers, value leaves cross as values
-## - one buffer slot per leaf in field order, matching the launch packing
-## - the kernel body opens with a local rebuilt from the leaves
-
+## Emission contract: one buffer slot per leaf in field order matching the launch packing.
+## Pointer leaves name the device buffers, the kernel body opens with a local rebuilt from the leaves.
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build

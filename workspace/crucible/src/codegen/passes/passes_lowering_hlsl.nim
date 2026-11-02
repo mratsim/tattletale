@@ -7,27 +7,12 @@
 
 {.experimental: "codeReordering".}
 
-## HLSL lowering: per-target transforms for the HLSL storage model,
-## registered by the HLSL pipeline and run before printing.
+## HLSL lowering: per-target transforms for the HLSL storage model.
+## HLSL has no pointer values, the pointer-local explosion pass loudly refuses every pointer use outside it, the printer never sees a pointer.
 ##
-## HLSL has no pointer values, the pointer-local explosion pass loudly refuses
-## every pointer use outside it, the printer never sees a pointer.
-##
-## - `hlslMaterializeNumWorkgroups`: reads of `threadgroups_per_grid`
-##   rewrite to a trailing kernel parameter named `crucible_numworkgroups`,
-##   the engine stages the launch's dispatch counts into the uniform block member
-##   (HLSL has no shader-model semantic for the grid size).
-## - `hlslExplodePointerLocals`: pointer locals rewrite to their pointee,
-##   pointer-holding struct locals into per-field symbol rewrites,
-##   `var T` parameters read and write through their `inout` binding.
-## - `hlslHoistProgramScopeConstants`: `{.const_mem.}` locals relocate into
-##   `CirModule.globals` in encounter order, every proc and scope depth covered,
-##   the printer emits the relocated declarations as file-scope `static const`
-##   variables
-##
-## - dxc folds the relocated declarations at compile time, they take no register
-##   in the `$Globals`/cbuffer layout and they are visible to all functions
-
+## - `threadgroups_per_grid` reads rewrite to a trailing `crucible_numworkgroups` parameter, the engine stages the counts there
+## - pointer locals rewrite to their pointee, pointer-holding struct locals into per-field symbol rewrites
+## - `{.const_mem.}` locals relocate into `CirModule.globals` at every proc and scope depth, printed as file-scope `static const`
 import std/[sets, strutils, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build

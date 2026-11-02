@@ -29,7 +29,8 @@
 ## `glslRegisterRefBlocks` fills `CirModule.refBlocks` with one entry per
 ## distinct buffer-reference block name, in registration order.
 ##
-## Kernel and device-function pointer parameters stay for the printer to refuse.
+## Kernel and device-function pointer parameters print as buffer-reference
+## handles carried through the push-constant block.
 ##
 ## Program-scope `const` storage is visible to all functions, a device function
 ## reads the constants of the kernels that it serves.

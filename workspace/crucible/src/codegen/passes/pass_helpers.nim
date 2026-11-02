@@ -168,9 +168,8 @@ proc cloneExpr*(e: CirExpr): CirExpr =
   result = CirExpr(kind: e.kind)
   case e.kind
   of eSym:
-    result.name = e.name
-    result.typ = e.typ
-    result.builtin = e.builtin
+    # whole-branch copy, builtin family kinds included
+    result[] = e[]
   of eIntLit:
     result.value = e.value
     result.litType = e.litType
@@ -345,7 +344,6 @@ type
       ## callee parameter types read them here.
 
 proc refuseAt*(fn: CirProc, detail: string): string =
-  ## Text the pass runner prefixes with the pass name.
   "at " & fn.name & ": " & detail
 
 proc getDottedPath*(e: CirExpr): string =
