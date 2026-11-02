@@ -7,7 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## Validation stage over CIRv2: semantic checks over the transformed module, right before printing.
 
 import std/[sequtils, sets, strutils]
 import ../ir/cirv2_lang

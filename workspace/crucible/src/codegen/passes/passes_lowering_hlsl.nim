@@ -7,12 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## HLSL lowering: per-target transforms for the HLSL storage model.
-## HLSL has no pointer values, the pointer-local explosion pass loudly refuses every pointer use outside it, the printer never sees a pointer.
-##
-## - `threadgroups_per_grid` reads rewrite to a trailing `crucible_numworkgroups` parameter, the engine stages the counts there
-## - pointer locals rewrite to their pointee, pointer-holding struct locals into per-field symbol rewrites
-## - `{.const_mem.}` locals relocate into `CirModule.globals` at every proc and scope depth, printed as file-scope `static const`
 import std/[sets, strutils, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -26,10 +20,6 @@ import ./passes_low_pointers
 #            HLSL lowering
 #
 # ############################################################
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 func registerHlslMaterializeNumWorkgroups*(reg: var PassRegistry) =
   reg.register("hlslMaterializeNumWorkgroups", pkTransform,
@@ -49,10 +39,6 @@ func registerHlslHoistProgramScopeConstants*(reg: var PassRegistry) =
     "Relocates const_mem locals into the module's program scope",
     run = hlslHoistProgramScopeConstants
   )
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The materialized dispatch-grid parameter
-# ═══════════════════════════════════════════════════════════════════════
 
 const NumWorkgroupsParam* = "crucible_numworkgroups"
   ## Trailing kernel parameter the dispatch grid size materializes into:
@@ -145,10 +131,6 @@ proc materializeNumWorkgroups(m: CirModule): string =
     fn.params.add CirParam(name: NumWorkgroupsParam, typ: coordTy)
     rewriteNumWorkgroupsStmts(fn.body, coordTy)
   return ""
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Pointer-local explosion
-# ═══════════════════════════════════════════════════════════════════════
 
 proc hlslHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)

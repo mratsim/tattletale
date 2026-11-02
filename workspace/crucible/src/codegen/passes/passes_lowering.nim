@@ -1,6 +1,3 @@
-## Lowering stage over CIRv2: shared target-independent lowering and optimization passes.
-## Per-target transforms register from the passes_lowering_<target> files,
-## the printers in backends/ are table-driven.
 
 import ../ir/cirv2_build
 import ./pass_datatypes
@@ -14,10 +11,6 @@ import ./passes_low_views
 # ############################################################
 
 {.experimental: "codeReordering".}
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 func registerFoldMaxMinToBuiltins*(reg: var PassRegistry) =
   reg.register("foldMaxMinToBuiltins", pkTransform,

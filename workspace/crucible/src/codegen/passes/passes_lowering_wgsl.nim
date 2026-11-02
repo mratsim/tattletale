@@ -7,14 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## WGSL lowering: per-target transforms for the WGSL storage model.
-##
-## - kernel parameters of struct type with pointer fields expand into flat ptr/scalar leaf parameters, WebGPU is a flat resource target
-## - pointer locals rewrite to their pointee, pointer-holding struct locals into per-field leaf rewrites
-## - `{.smem.}`/`{.const_mem.}` kernel locals relocate into `CirModule.globals`, top-level kernel-body locals only
-## - a statement call to a device function taking a buffer-reference or out-of-space pointer parameter inlines the callee at the call site
-##
-## The pass leaves kernel and device-function pointer parameters untouched, the printer emits `ptr<function, T>` parameters as-is.
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -28,10 +20,6 @@ import ./pass_helpers
 #            WGSL lowering
 #
 # ############################################################
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
   registerExplodePointerLocals(reg, "wgslExplodePointerLocals",
@@ -50,10 +38,6 @@ func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
     "Inlines calls whose pointer arguments cannot cross a WGSL function" &
     " signature",
     run = inlinePointerParamCalls)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Pointer-param call inlining
-# ═══════════════════════════════════════════════════════════════════════
 
 proc crossesWgslSignature(t: CirType): bool =
   ## WGSL function signatures accept values and `ptr<function>` pointers only,

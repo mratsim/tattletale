@@ -54,13 +54,6 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
 #  Settle expression forms
 # ═══════════════════════════════════════════════════════════════════════
 
-##
-## - a literal re-types to the operand type at its use site
-## - a conversion over a literal folds to the conversion target, a bfloat16 target preserves the node (no bfloat16 literal token)
-## - a bitwise `and`/`or`/`xor` over bool operands becomes the logical form, `xor` prints as the `!=` comparison
-## - an object constructor normalizes to its type's declaration order, omitted fields fill with the type's zero value
-##
-## The frontend lowers syntactic shape only, the feature scans read the literal widths after this pass runs.
 
 proc zeroValue(t: CirType): CirExpr =
   ## Zero value of a CIRv2 type, the fill for an omitted constructor field.
@@ -208,13 +201,6 @@ proc settleExprFormsPass(m: CirModule): string =
 #  Compound-assign temps
 # ═══════════════════════════════════════════════════════════════════════
 
-##
-## The frontend emits a scalar compound assignment whose target and arithmetic read share one tree.
-## Nim evaluates the desugared `op=` left-hand side once, a call in the shared tree would print and evaluate twice.
-## This pass binds every call-bearing operand of the shared tree into a fresh temp.
-##
-## Only the shared-tree shape binds: the pass keeps both evaluations of a target call the user wrote twice.
-## The pass runs first in the normalization stage, its detection compares references.
 
 type TempBinder = object
   used: HashSet[string]
@@ -314,13 +300,6 @@ proc bindCompoundAssignTempsPass(m: CirModule): string =
 #  Unroll marking
 # ═══════════════════════════════════════════════════════════════════════
 
-##
-## The frontend lowers a `{.unroll.}` statement pragma into the raw-text marker statement `emitS(@["{.unroll.}"], @[])`.
-## This pass consumes every marker.
-##
-## - the loop whose body directly states one gets `unroll = true`
-## - a marker outside a loop body drops
-## - a marker nested inside an inner loop's body marks that inner loop, never the enclosing one (the scan checks a body before descending)
 
 const unrollMarker = "{.unroll.}"
 

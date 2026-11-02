@@ -7,38 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## Lowering: per-address-space callee instantiation.
-##
-##   call sites → instantiateAddressSpaceGenerics → clones after their base callee → printed target source
-##
-## A pointer parameter of a module proc is generic over its address space.
-## The call site picks the space, and the printers emit both spaces.
-## Metal and OpenCL C reject a call whose argument names another space.
-## Every distinct combination of per-argument spaces gets its own callee instantiation:
-##
-## - the clone's pointer formals re-type to the argument's space
-## - the clone's body reads of those formals retype with them
-## - the clone's pointer casts re-derive their target space from the operand
-##   and its pointer declarations adopt the initializer's space
-## - one clone serves every call site with the same combination
-##
-## The clone name uses the instantiation-name convention: the callee name
-## plus a base58 discriminator of the combination.
-##
-## Two shapes never specialize:
-##
-## - a formal declaring threadgroup or constant storage: its space names
-##   the storage the callee declares, never a space the call site picks
-## - a callee outside the module: a builtin such as `__builtin_memcpy` has
-##   a nominal formal space. The printers re-space it at the call site
-##
-## Every C-family bundle registers the pass. The SPIR-V encoder derives
-## storage classes without pointer text and registers none.
-##
-## Clone bodies walk through the same driver: a call inside a clone
-## instantiates against the callee's declared formals, so a self-recursive
-## call resolves to the clone already keyed for its argument spaces.
-
 import std/tables
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -51,10 +19,6 @@ import ./pass_helpers
 #
 # ############################################################
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
-
 func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
   ## Registration position: after the target's other lowering transforms,
   ## whose rewrites append parameters and call-site arguments by callee name
@@ -63,10 +27,6 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
     "Instantiates module callees whose pointer arguments name another" &
     " address space than the formal",
     run = instantiateAddressSpaceGenericsPass)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Instantiation
-# ═══════════════════════════════════════════════════════════════════════
 
 proc resolveWantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirType]): bool =
   # Precondition: `args` covers every formal, `args.len == callee.params.len`.

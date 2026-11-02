@@ -7,14 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## Lowering: whole-array assignment for the C-family targets.
-##
-## C-family languages have no whole-array assignment: the pass rewrites whole-array copies into `__builtin_memcpy` calls.
-## A constructor right side binds to a fresh local first, a constructor is no lvalue.
-##
-## - the pass refuses a call result right side, the target cannot take a call result's address
-## - the pass refuses a right side that is neither an lvalue nor a constructor
-## - registered by the Metal, CUDA and OpenCL bundles, the other targets assign arrays natively
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
@@ -25,19 +17,11 @@ import ./pass_datatypes
 #
 # ############################################################
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
-
 func registerDecomposeArrayAssign*(reg: var PassRegistry) =
   reg.register("decomposeArrayAssign", pkTransform,
     "Rewrites whole-array assignment, array-valued declaration init, and" &
     " constructor assignment into __builtin_memcpy calls",
     run = decomposeArrayAssignPass)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Decomposition
-# ═══════════════════════════════════════════════════════════════════════
 
 proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
   ## One whole-array copy, `__builtin_memcpy(&lhs, &rhs, sizeof(lhsType))`.

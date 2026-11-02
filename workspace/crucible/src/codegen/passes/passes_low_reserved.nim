@@ -7,12 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## Lowering: reserved-keyword renaming, one common pass registered per target with the target's reserved set as data.
-##
-## An identifier colliding with a target reserved word gains the `_nim` suffix at every emitted site, so the printers never rename.
-## A target whose language reserves the double-underscore identifier head additionally prefixes every `__`-prefixed name (WGSL: `wgsl_`).
-##
-## The rename is name-based: a local and a proc sharing a name are one symbol after the frontend's flat lowering, they rename together.
 import std/[sets, strutils, tables]
 import ../ir/cirv2_lang
 import ./pass_datatypes
@@ -22,10 +16,6 @@ import ./pass_datatypes
 #            Reserved-keyword lowering
 #
 # ############################################################
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The target reserved sets
-# ═══════════════════════════════════════════════════════════════════════
 
 const MetalReserved* = [
   # C++/MSL keyword table (MSL is C++14-based)
@@ -138,10 +128,6 @@ const CudaReserved* = [
   "__global__", "__device__", "__shared__", "__constant__",
 ].toHashSet()
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
-
 template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: string, reserved: untyped, doubleUnderscorePrefix: string = "") =
   ## Run order: name-matching passes -> reserved renaming -> printing.
   ##
@@ -157,10 +143,6 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
     run = proc(m: CirModule): string {.nimcall.} =
       renameReservedIdentifiers(m, reserved, doubleUnderscorePrefix)
   )
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The pass
-# ═══════════════════════════════════════════════════════════════════════
 
 func makeSafeIdent(name: string, reserved: HashSet[string], doubleUnderscorePrefix: string): string =
   var safe = if name in reserved: name & "_nim" else: name

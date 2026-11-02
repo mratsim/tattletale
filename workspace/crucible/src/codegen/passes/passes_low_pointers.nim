@@ -7,13 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## Pointer machinery shared across targets: struct kernel-parameter explosion and pointer-local explosion.
-##
-## - kernel parameters of struct type carrying (nested) pointer fields expand into flat ptr/scalar leaves on the flat resource targets
-## - pointer locals rewrite to their pointee, pointer-holding struct locals to their field leaves, before the GLSL, WGSL and HLSL printers run
-##
-## Emission contract: one buffer slot per leaf in field order matching the launch packing.
-## Pointer leaves name the device buffers, the kernel body opens with a local rebuilt from the leaves.
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -27,10 +20,6 @@ import ./pass_helpers
 #
 # ############################################################
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
-
 func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
   reg.register(
     name = "explodeGlobalStructWithPtrFields",
@@ -38,10 +27,6 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
     description = "Expands kernel parameters of struct type with pointer fields into flat leaves",
     run = explodeGlobalStructWithPtrFields
   )
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Kernel struct-parameter explosion
-# ═══════════════════════════════════════════════════════════════════════
 
 proc buildLeafConstr(t: CirType, name: string): CirExpr =
   ## For `AxpyView{p, n}` exploded under `y`:
@@ -98,10 +83,6 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
       fn.params = params
       fn.body = preamble & fn.body
   return ""
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Pointer-local explosion
-# ═══════════════════════════════════════════════════════════════════════
 
 proc defaultRewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, target: string): string
 

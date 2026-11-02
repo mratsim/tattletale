@@ -7,12 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## MSL lowering: per-target transforms for the Metal storage model.
-##
-## - `{.const_mem.}` locals relocate into `CirModule.globals` in encounter order, printed as program-scope `constant`
-## - a device function's `{.smem.}` local hoists to a threadgroup reference parameter, Metal allocates threadgroup storage in kernels only
-## - a kernel's `{.smem.}` local remains in-body at any depth as `threadgroup` storage, an initializer is a refusal (the runtime drops them)
-## - coordinate builtins thread down to device functions as parameters, a name-colliding parameter declaration is a pass refusal
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -24,10 +18,6 @@ import ./pass_helpers
 #            MSL lowering
 #
 # ############################################################
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 func registerMslHoistProgramScopeConstants*(reg: var PassRegistry) =
   reg.register("mslHoistProgramScopeConstants", pkTransform,
@@ -57,16 +47,8 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
     run = mslThreadCoordinateBuiltins
   )
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Const_mem locals to program-scope constants
-# ═══════════════════════════════════════════════════════════════════════
-
 proc mslHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Device-function `{.smem.}` locals to threadgroup reference parameters
-# ═══════════════════════════════════════════════════════════════════════
 
 proc extendedProcType(t: CirType, extra: seq[CirType]): CirType =
   ## Callee types are interned, structurally identical signatures share one
@@ -216,10 +198,6 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
       return err
   return ""
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Coordinate builtins threaded down to device functions
-# ═══════════════════════════════════════════════════════════════════════
-
 proc collectCoordReads(e: CirExpr, kinds: var HashSet[CirCoordBuiltinKind]) =
   if e.kind == eSym and e.builtin and e.coordBuiltin != cbkNone:
     kinds.incl(e.coordBuiltin)
@@ -358,10 +336,6 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
     if err.len > 0:
       return err
   return ""
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Kernel smem locals to kernel-scope threadgroup storage
-# ═══════════════════════════════════════════════════════════════════════
 
 proc mslRewriteSmemLocals(m: CirModule): string =
   ## A kernel keeps its `{.smem.}` local in its body, top-level or nested:

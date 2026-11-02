@@ -7,14 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## OpenCL lowering: per-target transforms for the OpenCL C storage model.
-##
-## - `{.const_mem.}` locals relocate into `CirModule.globals` in encounter order, every proc and scope depth covered
-## - the printer emits the relocated declarations as program-scope `__constant` between the typedefs and the forward declarations
-## - program-scope `__constant` storage is visible to all functions
-## - the pass leaves `{.smem.}` locals untouched, a mechanical `__local` kernel-body declaration the printer emits directly
-##
-## The pass refuses a const_mem local without an initializer, the printer refuses a survivor outside the relocation.
 import std/tables
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -28,10 +20,6 @@ import ./pass_helpers
 #
 # ############################################################
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
-
 func registerOpenclHoistProgramScopeConstants*(reg: var PassRegistry) =
   reg.register("openclHoistProgramScopeConstants", pkTransform,
     "Relocates const_mem locals into the module's program scope",
@@ -44,17 +32,9 @@ func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
     run = openclLowerByrefParams
   )
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Const_mem locals to program-scope constants
-# ═══════════════════════════════════════════════════════════════════════
-
 proc openclHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)
 
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Large-struct params as hidden pointers
-# ═══════════════════════════════════════════════════════════════════════
 
 func computeCirSizeBytes(t: CirType): int =
   ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.

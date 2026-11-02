@@ -7,42 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## GLSL lowering: per-target transforms for the GLSL storage model.
-## The pipeline table in `gpu_compiler.nim` declares the registration order:
-##
-##   legalize → normalize → lowerSpans → glslReservedIdentifiers → glslQualifyVarParams
-##   → glslExplodePointerLocals → smemInitRewrite → glslHoistProgramScopeLocals
-##   → instantiateAddressSpaceGenerics → glslRegisterRefBlocks → glslScanModuleFeatures
-##   → validation
-##
-## GLSL has no function-storage addressing, a local cannot be addressed.
-## Threadgroup and constant-storage locals must live at program scope:
-##
-## - `glslQualifyVarParams`: `var T` device-function parameters bind as `inout`
-## - the qualify pass retypes each marked parameter to its pointee, unwraps
-##   the body derefs and rewrites the call sites to pass the direct lvalue
-## - `glslExplodePointerLocals`: pointer locals rewrite to their pointee,
-##   reads through the alias rewrite to the pointee symbol
-## - `glslHoistProgramScopeLocals`: `{.smem.}` kernel locals and `{.const_mem.}`
-##   locals relocate into `CirModule.globals` in encounter order
-##
-## `glslRegisterRefBlocks` fills `CirModule.refBlocks` with one entry per
-## distinct buffer-reference block name, in registration order.
-##
-## Kernel and device-function pointer parameters print as buffer-reference
-## handles carried through the push-constant block.
-##
-## Program-scope `const` storage is visible to all functions, a device function
-## reads the constants of the kernels that it serves.
-##
-## Refusal homes:
-## - the pointer-local explosion pass refuses a pointer read before
-##   its address-of binding, a value read of a pointer, or a rebinding
-## - the printer refuses a device-space local and a nested-scope
-##   or device-function threadgroup local, GLSL locals are private
-## - the hoist pass refuses a const_mem local without an initializer,
-##   the printer refuses it again as a shape guard
-
 import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -57,10 +21,6 @@ import ./passes_low_pointers
 #            GLSL lowering
 #
 # ############################################################
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 func registerGlslQualifyVarParams*(reg: var PassRegistry) =
   reg.register("glslQualifyVarParams", pkTransform,
@@ -84,10 +44,6 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope")
-
-# ═══════════════════════════════════════════════════════════════════════
-#  var-parameter qualification
-# ═══════════════════════════════════════════════════════════════════════
 
 proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
   ## Expressions are refs, so the splice applies to the node every sharer sees.
@@ -229,10 +185,6 @@ proc qualifyVarParams(m: CirModule): string =
     if err.len > 0:
       return err
   return ""
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Pointer-local explosion
-# ═══════════════════════════════════════════════════════════════════════
 
 proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirType) =
   ## Registers the buffer-reference block of one runtime-array pointee,

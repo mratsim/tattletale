@@ -7,14 +7,6 @@
 
 {.experimental: "codeReordering".}
 
-## Shared C-family lowering: program-scope hoisting.
-## One registration template per pass, one registration call per target.
-##
-## passes_low_pointers owns the pointer-local explosion walk.
-##
-## - `registerSmemInitRewrite`: an initializer on a `{.smem.}` local rewrites
-##   into an initializer-free declaration plus element- or member-wise store statements,
-##   legal in every target's storage model
 
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
@@ -27,20 +19,12 @@ import ./pass_helpers
 #
 # ############################################################
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
-
 func registerSmemInitRewrite*(reg: var PassRegistry) =
   reg.register("smemInitRewrite", pkTransform,
     "Rewrites smem initializers into a bare declaration plus" &
     " element- or member-wise stores",
     run = rewriteSmemInits
   )
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Program-scope hoisting
-# ═══════════════════════════════════════════════════════════════════════
 
 proc hoistProgramScopeLocalsCore(m: CirModule): string =
   ## Relocates the `{.smem.}` and `{.const_mem.}` locals of every proc into
@@ -98,10 +82,6 @@ template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName
     run = proc(m: CirModule): string {.nimcall.} =
       hoistProgramScopeLocalsCore(m)
   )
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Smem initializer rewrite
-# ═══════════════════════════════════════════════════════════════════════
 
 proc buildSmemInitStores(name: string, declType: CirType, init: CirExpr): seq[CirStmt] =
   let base = sym(name, declType)
