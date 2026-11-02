@@ -3529,7 +3529,9 @@ def changed_set_hygiene(base):
             continue
         # .githooks/pre-commit is a git hook, git requires that exact
         # extensionless path, the rule stays out of it
-        if rel == ".githooks/pre-commit":
+        # lean-toolchain is elan's toolchain pin, elan requires that exact
+        # extensionless path, the rule stays out of it
+        if rel in (".githooks/pre-commit",) or rel.endswith("/lean-toolchain"):
             continue
         f = Path(repo) / rel
         name = rel.rsplit("/", 1)[-1].lower()
