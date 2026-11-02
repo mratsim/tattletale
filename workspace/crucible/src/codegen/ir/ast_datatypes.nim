@@ -17,13 +17,13 @@ import ./cirv2_lang
 
 type
   BackendKind* = enum
-    bkCuda,   ## CUDA C++ backend, NVRTC compiled
-    bkWebGPU, ## WebGPU backend, WGSL emitted
-    bkOpenCL, ## OpenCL C backend
-    bkGlsl,   ## GLSL backend, executed on Vulkan
-    bkMetal,  ## Metal backend, MSL emitted
-    bkHlsl,   ## HLSL backend, DXC compiled
-    bkSpirv,  ## SPIR-V backend, direct emission
+    bkCuda
+    bkWebGPU
+    bkOpenCL
+    bkGlsl
+    bkMetal
+    bkHlsl
+    bkSpirv
 
   GpuTypeKind* = enum
     gtVoid,

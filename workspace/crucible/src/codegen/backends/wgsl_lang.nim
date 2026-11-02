@@ -494,6 +494,7 @@ proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full WGSL module through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(wgslWalkPolicy, wgslLitTokens, wgslScalarNames,
     wgslVectorRule, wgslCastRules, wgslEmit, bkWebGPU)
+  ctx.mathNames = wgslMathBuiltinNames
   let kernel = getEntryKernel(ctx, m)
   if ctx.failing():
     return ("", ctx.err)

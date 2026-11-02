@@ -16,7 +16,9 @@ import workspace/crucible/src/codegen/backends/spirv_shader_lang
 
 proc runTest() =
   let outTy = tAptr(caDevice, tUint(32))
-  let barrier = callE(sym("threadgroup_barrier", tVoid(), cbkThreadgroupBarrier))
+  let barrierSym = sym("threadgroup_barrier", tVoid(), true)
+  barrierSym.synchroBuiltin = cbkThreadgroupBarrier
+  let barrier = callE(barrierSym)
   let kernel = procD("barrierValueKernel", @[param("output", outTy)], tVoid(), @[
     asgnS(atE(sym("output", outTy), intLit(0, tInt(32))),
       andE(falseE(), barrier)),
