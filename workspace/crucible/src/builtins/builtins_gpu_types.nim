@@ -275,27 +275,6 @@ func asFp16*(x: uint16): float16 {.builtin.} =
 func asU16*(x: float16): uint16 {.builtin.} =
   ## Bit-pattern reinterpret fp16 → u16.
   raise newException(ValueError, "fp16 reinterpret is GPU-side only")
-let NimGpuFp16ConversionBuiltins* {.compileTime.}: Table[(BackendKind, string), string] =
-  {(bkMetal,  "toFp16"): "half",
-   (bkMetal,  "toFp32"): "float",
-   (bkMetal,  "asFp16"): "as_type<half>",
-   (bkMetal,  "asU16"):  "as_type<ushort>",
-   (bkMetal,  "toBf16"): "(bfloat)",
-   (bkMetal,  "toBf32"): "float",
-   (bkGlsl, "toFp16"): "float16_t",
-   (bkGlsl, "toFp32"): "float",
-   (bkGlsl, "asFp16"): "uint16BitsToFloat16",
-   (bkGlsl, "asU16"):  "float16BitsToUint16",
-   (bkCuda,   "toFp16"): "__float2half_rn",
-   (bkCuda,   "toFp32"): "__half2float",
-   (bkCuda,   "asFp16"): "__ushort_as_half",
-   (bkCuda,   "asU16"):  "__half_as_ushort",
-   (bkCuda,   "toBf16"): "__float2bfloat16",
-   (bkCuda,   "toBf32"): "__bfloat162float",
-   (bkWebGPU,   "toFp16"): "f16",
-   (bkWebGPU,   "toFp32"): "f32",
-   (bkWebGPU,   "asFp16"): "bitcast<f16>"}.toTable()
-
 proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
   if n.kind != nnkSym:
     return gtVoid
@@ -317,3 +296,74 @@ proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
   of "fp8e4m3":   gtF8E4M3
   of "fp8e5m2":   gtF8E5M2
   else:           gtVoid
+
+# ═══════════════════════════════════════════════════════════════════════
+#  The conversion mapping: builtins drive, the backends read
+# ═══════════════════════════════════════════════════════════════════════
+
+const ConvCellTokens* = ["f16", "bf16", "f32", "f64", "i16", "i32", "i64", "u16", "u32", "u64"]
+
+macro convBuiltin*(body: untyped) =
+  ## Declarative conversion mapping: one `bkX:` section per backend,
+  ## one arrow row per mapping, `f32->f16: "half"`.
+  ##
+  ## - the sections key on the BackendKind members
+  ## - the rows key on the (source, target) cell tokens shared with
+  ##   the codegen ScalarCellAxis vocabulary
+  ## - a row's value names the native call, the emission appends
+  ##   the argument list in parentheses
+  ## - an absent backend section or cell pair lets the canonical name
+  ##   pass through
+  var pairs: seq[NimNode]
+  for section in body:
+    if section.kind != nnkCall or section[0].kind != nnkIdent or
+        section[1].kind != nnkStmtList:
+      error("convBuiltin: expected a 'bkX:' section", section)
+    let backend = $section[0]
+    var known = false
+    for member in BackendKind:
+      if $member == backend:
+        known = true
+        break
+    if not known:
+      error("convBuiltin: unknown backend '" & backend & "'", section)
+    for row in section[1]:
+      if row.kind != nnkInfix or $row[0] != "->" or
+          row[1].kind != nnkIdent or row[2].kind != nnkIdent or
+          row[3].kind != nnkStmtList or row[3].len != 1 or row[3][0].kind != nnkStrLit:
+        error("convBuiltin: expected a 'fromCell->toCell: \"native\"' row in the " & backend & " section", row)
+      for cellTok in [row[1], row[2]]:
+        if $cellTok notin ConvCellTokens:
+          error("convBuiltin: unknown cell '" & $cellTok & "' in the " & backend & " section", row)
+      let key = nnkPar.newTree(ident backend, newLit $row[1], newLit $row[2])
+      pairs.add nnkExprColonExpr.newTree(key, row[3][0])
+  result = nnkConstSection.newTree(nnkConstDef.newTree(
+    nnkPostfix.newTree(ident"*", ident"ConvBuiltinNames"),
+    newEmptyNode(),
+    nnkCall.newTree(nnkDotExpr.newTree(
+      nnkTableConstr.newTree(pairs), ident"toTable"))))
+
+convBuiltin:
+  bkMetal:
+    f32->f16: "half"
+    f16->f32: "float"
+    f32->bf16: "(bfloat)"
+    bf16->f32: "float"
+    u16->f16: "as_type<half>"
+    f16->u16: "as_type<ushort>"
+  bkCuda:
+    f32->f16: "__float2half_rn"
+    f16->f32: "__half2float"
+    u16->f16: "__ushort_as_half"
+    f16->u16: "__half_as_ushort"
+    f32->bf16: "__float2bfloat16"
+    bf16->f32: "__bfloat162float"
+  bkGlsl:
+    f32->f16: "float16_t"
+    f16->f32: "float"
+    u16->f16: "uint16BitsToFloat16"
+    f16->u16: "float16BitsToUint16"
+  bkWebGPU:
+    f32->f16: "f16"
+    f16->f32: "f32"
+    u16->f16: "bitcast<f16>"
