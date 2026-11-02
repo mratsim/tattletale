@@ -194,10 +194,6 @@ proc qualifyVarParams(m: CirModule): string =
       return err
   return ""
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Pointer-local explosion
-# ═══════════════════════════════════════════════════════════════════════
-
 proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirType) =
   ## Registers the buffer-reference block of one runtime-array pointee,
   ## deduped by block name.

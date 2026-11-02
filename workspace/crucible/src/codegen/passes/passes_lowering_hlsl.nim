@@ -140,9 +140,5 @@ proc materializeNumWorkgroups(m: CirModule): string =
     rewriteNumWorkgroupsStmts(fn.body, coordTy)
   return ""
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Pointer-local explosion
-# ═══════════════════════════════════════════════════════════════════════
-
 proc hlslHoistProgramScopeConstants(m: CirModule): string =
   hoistConstMemLocals(m)
