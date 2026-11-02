@@ -52,10 +52,6 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
   )
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Const_mem locals to program-scope constants
-# ═══════════════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════════════
 #  Device-function `{.smem.}` locals to threadgroup reference parameters
 # ═══════════════════════════════════════════════════════════════════════
 
