@@ -275,7 +275,7 @@ proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
   e.name
 
 proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
-  ## HLSL has no conversion rows: the printer passes the canonical name through,
+  ## HLSL declares no conversion mappings: the printer passes the canonical name through,
   ## dxc rejects what it cannot parse.
   ""
 

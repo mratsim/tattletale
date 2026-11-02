@@ -33,7 +33,7 @@ template fail*(ctx: auto, detail: string) =
   if ctx.err.len == 0:
     ctx.err = "cirv2 printer " & printerTarget & ": at " & ctx.fnName & ": " & detail
 
-## Refusal text for a nil literal in a target whose kind row refuses nil.
+## Refusal text for a nil literal in a target whose kind section refuses nil.
 const nilLiteralRejection* = "nil literal is outside the target subset"
 
 proc getUnhandledExprRejection*(kind: CirExprKind): string =

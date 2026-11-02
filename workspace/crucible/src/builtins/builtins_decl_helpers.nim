@@ -80,12 +80,12 @@ const ConvCellTokens* = ["f16", "bf16", "f32", "f64", "i16", "i32", "i64", "u16"
 
 macro convBuiltin*(body: untyped) =
   ## Declarative conversion mapping: one `bkX:` section per backend,
-  ## one arrow row per mapping, `f32->f16: "half"`.
+  ## one arrow mapping per line, `f32->f16: "half"`.
   ##
   ## - the sections key on the BackendKind members
-  ## - the rows key on the (source, target) cell tokens shared with
+  ## - each mapping keys on the (source, target) cell tokens shared with
   ##   the codegen ScalarCellAxis vocabulary
-  ## - a row's value names the native call, the emission appends
+  ## - the mapping's value names the native call, the emission appends
   ##   the argument list in parentheses
   ## - an absent backend section or cell pair lets the canonical name
   ##   pass through
@@ -102,16 +102,16 @@ macro convBuiltin*(body: untyped) =
         break
     if not known:
       error("convBuiltin: unknown backend '" & backend & "'", section)
-    for row in section[1]:
-      if row.kind != nnkInfix or $row[0] != "->" or
-          row[1].kind != nnkIdent or row[2].kind != nnkIdent or
-          row[3].kind != nnkStmtList or row[3].len != 1 or row[3][0].kind != nnkStrLit:
-        error("convBuiltin: expected a 'fromCell->toCell: \"native\"' row in the " & backend & " section", row)
-      for cellTok in [row[1], row[2]]:
+    for mapping in section[1]:
+      if mapping.kind != nnkInfix or $mapping[0] != "->" or
+          mapping[1].kind != nnkIdent or mapping[2].kind != nnkIdent or
+          mapping[3].kind != nnkStmtList or mapping[3].len != 1 or mapping[3][0].kind != nnkStrLit:
+        error("convBuiltin: expected a 'fromCell->toCell: \"native\"' mapping in the " & backend & " section", mapping)
+      for cellTok in [mapping[1], mapping[2]]:
         if $cellTok notin ConvCellTokens:
-          error("convBuiltin: unknown cell '" & $cellTok & "' in the " & backend & " section", row)
-      let key = nnkPar.newTree(ident backend, newLit $row[1], newLit $row[2])
-      pairs.add nnkExprColonExpr.newTree(key, row[3][0])
+          error("convBuiltin: unknown cell '" & $cellTok & "' in the " & backend & " section", mapping)
+      let key = nnkPar.newTree(ident backend, newLit $mapping[1], newLit $mapping[2])
+      pairs.add nnkExprColonExpr.newTree(key, mapping[3][0])
   result = nnkConstSection.newTree(nnkConstDef.newTree(
     nnkPostfix.newTree(ident"*", ident"ConvBuiltinNames"),
     newEmptyNode(),
@@ -219,7 +219,7 @@ const genLitBoolFields = ["narrowCast"]
 const genLitUnknownField = "\x00"
   ## Marks a lit field outside the schema.
 
-## (field, constructor section, section type) rows for `litCtor`.
+## `litCtor` reads field, constructor section and section type entries.
 ## The "" section collects the table's own fields.
 const genLitFields = [
   ("u64Prefix", "int", "IntLitTokens"), ("u64Suffix", "int", "IntLitTokens"),
@@ -345,9 +345,9 @@ macro targetVocab*(body: untyped) =
   ##
   ## Section grammars:
   ##
-  ## - the scalar rows list `cell "type name"` entries
-  ## - the lit rows list `field value` entries
-  ## - the bitcast section lists one `src->dst:` rule per row
+  ## - the scalar section lists `cell "type name"` entries
+  ## - the lit section lists `field value` entries
+  ## - the bitcast section lists one `src->dst:` rule per line
   ##
   ## Bitcast rules:
   ##
@@ -543,14 +543,14 @@ type
 const genFamilies = [
   ("kind", "WalkPolicy", true), ("math", "MathBuiltinNames", false),
   ("vector", "VectorRule", true)]
-  ## (family, lookup name suffix, required per target) rows.
+  ## genFamilies entries: family, lookup name suffix, required per target.
 
 const genBoolFields = ["braceSameLine", "foldsIteElse", "emitOperandRendersExpr"]
 
 const unknownField = "\x00"
   ## Marks a kind field outside the schema.
 
-## (family, field, constructor section, section type) rows for `litKindCtor`,
+## `litKindCtor` reads family, field, constructor section and section type entries,
 ## the "" section collects the table's own fields.
 const genFieldSections = [
   ("kind", "unrollDirective", "loop", "LoopStyle"), ("kind", "braceSameLine", "loop", "LoopStyle"),
@@ -702,12 +702,12 @@ macro genTargets*(body: untyped) =
   ##       math sin 32 "sin($1)"
   ##       vector elems f32 "float", lanes 2, 3, 4, nameForm vnfPrefixed
   ##
-  ## - the kind rows list `field value` entries, string fields take
+  ## - the kind section lists `field value` entries, string fields take
   ##   a string literal, bool fields take true or false,
   ##   `targetExprKinds` takes a set of expression kinds
-  ## - the math rows list `builtin width "text"` entries keyed by name
+  ## - the math section lists `builtin width "text"` entries keyed by name
   ##   and bit width, `$1` stands for the argument list
-  ## - the vector rows list `elems`, `lanes` and an optional `nameForm`,
+  ## - the vector section lists `elems`, `lanes` and an optional `nameForm`,
   ##   the `elems` entries take `cell "prefix"`, a vectorless target
   ##   lists `vector ()`
   ##
