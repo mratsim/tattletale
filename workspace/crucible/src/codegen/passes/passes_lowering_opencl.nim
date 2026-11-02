@@ -126,7 +126,7 @@ proc openclLowerByrefParams(m: CirModule): string =
         continue
       let oldName = p.name
       p.name = "_p_" & oldName
-      let ptrSym = sym(p.name, p.typ)
+      let ptrSym = sym(p.name, tPtr(caThread, p.typ))
       fn.body.walkStmts(nil, proc(e: CirExpr) =
         if e.kind == eSym and e.name == oldName:
           e.kind = eDeref
