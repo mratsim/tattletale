@@ -5989,7 +5989,7 @@ def registration_top(path, text, findings, added):
     for no, raw in enumerate(text.splitlines(), 1):
         if re.match(r'^(?:proc|func|template|iterator)\b', raw) is None:
             continue
-        if re.match(r'^func register\w+\*', raw) is not None:
+        if re.match(r'^(?:proc|func) register\w+\*', raw) is not None:
             if first_impl is not None:
                 if added is not None and no not in added:
                     continue
