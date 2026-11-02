@@ -50,15 +50,12 @@ proc deviceName*(engine: OpenCLEngine): string {.inline.} =
   engine.ctx.device.getName()
 
 proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[OpenCLBuffer, T] {.inline.} =
-  ## Allocates len elements of T on the engine
   DeviceMem[OpenCLBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[OpenCLBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
 proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[OpenCLBuffer, T], n: int) {.inline.} =
-  ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════

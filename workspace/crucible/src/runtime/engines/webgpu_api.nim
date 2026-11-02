@@ -94,15 +94,12 @@ proc deviceName*(engine: WebgpuEngine): string {.inline.} =
   engine.ctx.deviceName()
 
 proc allocDevice*[T](engine: WebgpuEngine, _: typedesc[T], len: int): DeviceMem[WGPUBuffer, T] {.inline.} =
-  ## Allocates len elements of T on the engine
   DeviceMem[WGPUBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: WebgpuEngine, dst: DeviceMem[WGPUBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
 proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[WGPUBuffer, T], n: int) {.inline.} =
-  ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -68,15 +68,12 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
   $cast[cstring](addr name[0])
 
 proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[CUdeviceptr, T] {.inline.} =
-  ## Allocates len elements of T on the engine
   DeviceMem[CUdeviceptr, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[CUdeviceptr, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
 proc copyToHostFromDevice*[T](engine: CudaEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[CUdeviceptr, T], n: int) {.inline.} =
-  ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -179,7 +176,6 @@ proc compile(nvrtc: var NVRTC, compute_capability = cudaGetComputeCapability()) 
   var options = @[
     cstring arch,
     cstring "-default-device",           # namespace-scope vars default to __device__
-    # "--fmad=false", # and whatever other options for example
   ]
   let numberOfOptions = cint options.len
   let compileResult =  nvrtcCompileProgram(nvrtc.prog, numberOfOptions,

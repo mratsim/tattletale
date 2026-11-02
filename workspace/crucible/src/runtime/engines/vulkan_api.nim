@@ -130,15 +130,12 @@ proc deviceName*(engine: VulkanEngine): string {.inline.} =
   engine.ctx.deviceName(engine.ctx.physicalDevice)
 
 proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[VulkanBuffer, T] {.inline.} =
-  ## Allocates len elements of T on the engine
   DeviceMem[VulkanBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  ## Copies n elements from host to device
   engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
 proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[VulkanBuffer, T], n: int) {.inline.} =
-  ## Copies n elements from device to host
   engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -275,7 +272,6 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
          "x" & $engine.shaderSquadron.z &
          ": launch config mismatch, squadron is shader-baked on Vulkan)")
 
-  # Entrypoint caching
   var entry = engine.entryPoint
   var spirv: seq[uint32]
   if engine.isHlsl:

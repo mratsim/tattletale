@@ -43,9 +43,6 @@ when defined(macosx):
   proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int)
   proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int)
 
-  # ─────────────────────────────────────────────────────────────────────────
-
-  # ─────────────────────────────────────────────────────────────────────────
 
   proc newMetalContext(): MetalContext =
     result = MetalContext()
@@ -96,15 +93,12 @@ when defined(macosx):
       result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
 
   proc allocDevice*[T](engine: MetalEngine, _: typedesc[T], len: int): DeviceMem[objc.ID, T] {.inline.} =
-    ## Allocates len elements of T on the engine
     DeviceMem[objc.ID, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
   proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[objc.ID, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-    ## Copies n elements from host to device
     engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
 
   proc copyToHostFromDevice*[T](engine: MetalEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[objc.ID, T], n: int) {.inline.} =
-    ## Copies n elements from device to host
     engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
 
   # ════════════════════════════════════════════════════════════════════════
