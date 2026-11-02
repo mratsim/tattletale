@@ -7,13 +7,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Target vocabulary shared across the crucible boundary, plus the codegen
-## pipeline context that the readers below import.
-##
-## Readers:
-##
-## - the runtime launch tier imports `BackendKind` for the per-backend
-##   argument layout
-## - the backend printers receive the compilation state through `GpuContext`
+## pipeline's `GpuContext` passed to the backend printers.
 ##
 ## `GpuTypeKind` is the v1 type vocabulary, superseded by `CirTypeKind`
 ## with zero live readers, retained pending the bfloat16 identity decision

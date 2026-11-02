@@ -20,8 +20,10 @@
 ## check the semantics that the shape cannot encode.
 
 import std/[macros, hashes, sequtils, sets, strutils, tables]
+import ../../builtins/builtins_catalog
+export builtins_catalog
 
-const CoordBuiltinNames*: array[6, string] = [
+const CoordBuiltinNames*: array[cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup, string] = [
   "thread_position_in_grid",
   "threadgroup_position_in_grid",
   "thread_position_in_threadgroup",
@@ -29,12 +31,13 @@ const CoordBuiltinNames*: array[6, string] = [
   "threadgroups_per_grid",
   "thread_index_in_threadgroup",
 ]
-## Canonical coordinate builtin names, in the order that passes declare
-## parameters and entry heads list inputs.
-## - The IR names every coordinate builtin by its canonical name.
-## - Consumers dispatch on the name.
-## - A symbol sharing a name without a `{.builtin.}` read is
-##   unrecognized (`builtin` false).
+## Canonical coordinate builtin names indexed by kind.
+## - Array order matches the parameter declaration order of the passes
+##   and the input order of the entry heads.
+## - The IR names every coordinate builtin by its canonical name,
+##   the family enums hold the dispatch.
+## - A symbol sharing a name without a `{.builtin.}` read has
+##   `builtin` false and every family kind at none.
 
 type
   AddressSpace* = enum
@@ -161,8 +164,18 @@ type
       typ*: CirType
       builtin*: bool
       ## True for a symbol born from a `{.builtin.}` read or call, false for a local or parameter sharing a builtin's name.
-      ## - Consumers recognize the builtin vocabulary from the canonical name alone, guarded by this flag.
-      ## - The categories dispatch through the consumers' own emit tables.
+      ## - The conv and math vocabulary dispatches on the canonical name through the registry tables, guarded by this flag.
+      ## - The five family kinds resolve the enum dispatch for the rest.
+      coordBuiltin*: CirCoordBuiltinKind
+      ## Coordinate builtin kind, `cbkNone` when the symbol is not a coordinate builtin.
+      synchroBuiltin*: CirSynchroBuiltinKind
+      ## Synchronization builtin kind, `cbkNone` when the symbol is not a barrier.
+      reductionBuiltin*: CirReductionBuiltinKind
+      ## Reduction builtin kind, `cbkNone` when the symbol is not a subgroup reduction.
+      shuffleBuiltin*: CirShuffleBuiltinKind
+      ## Shuffle builtin kind, `cbkNone` when the symbol is not a cross-lane shuffle.
+      atomicsBuiltin*: CirAtomicsBuiltinKind
+      ## Atomics builtin kind, `cbkNone` when the symbol is not an atomic builtin.
     of eIntLit:
       value*: int64
       litType*: CirType
@@ -582,18 +595,18 @@ proc hasCallDeep*(e: CirExpr): bool =
       return true
 
 func resolveAddressSpace*(e: CirExpr): AddressSpace =
-  ## Address space of the storage an expression's pointer provenance names:
+  ## Address space of the storage an expression names:
   ## the innermost pointer type along the access chain.
   ##
-  ## - provenance survives element reads, field reads, value casts, and integer
+  ## - the space survives element reads, field reads, value casts, and integer
   ##   arithmetic over cast pointers
-  ## - `caDevice` reads as no provenance: a plain integer or an array value
-  ##   derives the unprovenanced default
+  ## - `caDevice` reads as no space: a plain integer or an array value
+  ##   keeps the device default
   ##
-  ## One walker serves both consumers:
+  ## Both consumers of the derivation share this walker:
   ##
-  ## - the frontend sets a pointer cast's target space from this derivation when it builds the cast
-  ## - the cast validation reads the same derivation over the module's expressions
+  ## - the frontend sets a pointer cast's target space from it when it builds the cast
+  ## - the clone instantiation re-derives a clone's cast targets from it
   result = caDevice
   case e.kind
   of eSym:
@@ -629,6 +642,18 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
       result = resolveAddressSpace(e.right)
   else:
     discard
+
+func withProvenance*(t: CirType, operand: CirExpr): CirType =
+  ## Returns pointer type `t` re-spaced to the operand's provenance space,
+  ## `t` unchanged for a non-pointer `t`.
+  ##
+  ## Birth rule of a pointer cast's target: the frontend applies it when it
+  ## builds a cast and the address-space instantiation re-applies it over
+  ## a clone's re-spaced formals.
+  if t != nil and t.kind in {ctPtr, ctAptr}:
+    result = t.withAddressSpace(resolveAddressSpace(operand))
+  else:
+    result = t
 
 func isLvalue*(e: CirExpr): bool =
   ## An expression that names storage: a symbol, a dereference, an index,

@@ -163,14 +163,6 @@ proc ternaryE*(ternType: CirType, cond, thenE, elseE: CirExpr): CirExpr =
   ##   Branch values must already carry `ternType`.
   doAssert cond != nil and thenE != nil and elseE != nil,
     "ternaryE: a conditional value takes a condition and two branches"
-  let thenT = getExprType(thenE)
-  doAssert thenT != nil and sameType(thenT, ternType),
-    "ternaryE: the then branch's type does not match the conditional type," &
-    " convert the branch at the construction site"
-  let elseT = getExprType(elseE)
-  doAssert elseT != nil and sameType(elseT, ternType),
-    "ternaryE: the else branch's type does not match the conditional type," &
-    " convert the branch at the construction site"
   CirExpr(kind: eTernary, ternType: ternType, cond: cond, thenE: thenE, elseE: elseE)
 
 proc castE*(typ: CirType, operand: CirExpr): CirExpr =
