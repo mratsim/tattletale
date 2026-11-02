@@ -2,7 +2,6 @@
 name: tables
 description: Nim's hash table module for key-value storage
 license: MIT
-compatibility: opencode
 metadata:
   audience: nim-developers
   use-case: data-structures

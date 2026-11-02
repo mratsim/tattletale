@@ -531,6 +531,8 @@ BANNED = [
      None, "use closed set of type kinds or name the kind"),
     (r"\bneeds no\b",
      None, "state the condition positively or name the mechanism"),
+    (r"\bbare\b|\bBare\b",
+     None, "bare names nothing (bare name, bare type): state what remains after what strips, or name the form directly"),
 ]
 
 LICENSE_SHAPE = re.compile(
@@ -3097,6 +3099,12 @@ BANNED_VOCAB_SELFTEST_CASES = (
         ("src/codegen/backends/vocab_demo.nim", 1, "banned-vocab", False),
         ("src/codegen/backends/vocab_demo.nim", 2, "banned-vocab", False),
         ("src/codegen/backends/vocab_demo.nim", 3, "banned-vocab", False),
+    )),
+    ("banned-vocab bare convicts (operator ban)", (
+        ("src/codegen/backends/vocab_demo2.nim",
+         '## the bare name is the identifier.\n'),
+    ), (
+        ("src/codegen/backends/vocab_demo2.nim", 1, "banned-vocab", False),
     )),
 )
 

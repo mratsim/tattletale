@@ -2,7 +2,6 @@
 name: nim-imports
 description: Common import patterns and pitfalls for the Tattletale Nim project
 license: MIT
-compatibility: opencode
 metadata:
   audience: developers
   workflow: nim-development

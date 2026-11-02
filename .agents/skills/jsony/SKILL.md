@@ -2,7 +2,6 @@
 name: jsony
 description: Fast JSON parsing and serialization for Nim with automatic derived hooks
 license: MIT
-compatibility: opencode
 metadata:
   audience: developers
   workflow: data-parsing

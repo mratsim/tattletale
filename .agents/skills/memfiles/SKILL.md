@@ -2,7 +2,6 @@
 name: memfiles
 description: Memory-mapped file access for zero-copy I/O in Nim
 license: MIT
-compatibility: opencode
 metadata:
   audience: systems-developers
   workflow: file-io

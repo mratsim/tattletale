@@ -2,7 +2,6 @@
 name: torch_tensors
 description: Nim bindings to libtorch for tensor operations with high-level sugar
 license: MIT
-compatibility: opencode
 metadata:
   audience: ml-developers
   workflow: tensor-computing
