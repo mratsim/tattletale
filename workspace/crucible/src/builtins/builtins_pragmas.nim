@@ -19,9 +19,16 @@ template workgroup*(size: untyped): untyped {.pragma.}
   ##   256×1×1 on Vulkan
   ##   64×1×1 on WebGPU
 template device*() {.pragma.}
-template builtin*() {.pragma.}
+template builtin*(kind: untyped = nil) {.pragma.}
   ## Marks a function, type, or variable as a builtin provided by the
   ## target backend. The compiler generates no code for it.
+  ##
+  ## Contract:
+  ## - `kind` is the family enum member from `builtins_catalog.nim`,
+  ##   example: `{.builtin: cbkThreadPositionInGrid.}`
+  ## - a `{.builtin.}` without a payload resolves every family kind at none
+  ## - the conv and math vocabulary dispatches on the canonical name
+  ##   through the registry tables
 template const_mem*(): untyped {.pragma.}
   ## Constant memory pragma for a var declaration inside a GPU block.
   ## Allocates the var in read-only constant memory:

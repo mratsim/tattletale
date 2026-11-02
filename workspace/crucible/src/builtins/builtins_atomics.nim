@@ -6,12 +6,13 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ./builtins_pragmas
+import ./builtins_catalog
 
 # ═══════════════════════════════════════════════════════════
 #   Atomics
 # ═══════════════════════════════════════════════════════════
 
-proc atomicFetchAdd*[T](p: ptr T, v: T): T {.builtin.} = discard
+proc atomicFetchAdd*[T](p: ptr T, v: T): T {.builtin: cbkAtomicFetchAdd.} = discard
   ## Atomically adds `v` to the value at `p` and returns the old value.
   ## `p` points to device memory. WGSL: none, no float atomics.
   ##
