@@ -89,16 +89,6 @@ proc containsReturn(ss: seq[CirStmt]): bool =
       discard
   return false
 
-proc containsCall(e: CirExpr): bool =
-  if e.isNil:
-    return false
-  if e.kind == eCall:
-    return true
-  for ch in getExprChildren(e):
-    if ch.containsCall:
-      return true
-  return false
-
 proc callsCrossingCalleeTransitively(fn: CirProc, procs: Table[string, CirProc], seen: var HashSet[string]): bool =
   ## Returns true when `fn` calls itself or reaches a proc whose parameters
   ## cannot cross a WGSL function signature. Splicing such a cycle would never terminate.
@@ -161,7 +151,7 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
     of sAsm, sEmit:
       discard
 
-proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string
+proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string
   ## Forward declaration, nested statement lists recurse into each other.
 
 proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]): string =
@@ -181,7 +171,7 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
       return err
   return ""
 
-proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[string, CirProc]): tuple[err: string, spliced: bool] =
+proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): tuple[err: string, spliced: bool] =
   let s = ss[i]
   let callee = procs.getOrDefault(s.callCallee.name)
   if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
@@ -194,17 +184,23 @@ proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[stri
       body.setLen(body.len - 1)
     if body.containsReturn:
       return (refuseAt(fn, "inlining " & callee.name & " needs a return-free body, its pointer parameter cannot cross a WGSL signature"), false)
-    for a in s.callArgs:
-      if a.containsCall:
-        return (refuseAt(fn, "call argument of " & callee.name & " contains a call, inlining would re-evaluate it"), false)
     var seen: HashSet[string]
     if callee.callsCrossingCalleeTransitively(procs, seen):
-      return (refuseAt(fn, "inlining " & callee.name & " reaches another crossing callee, its pointer parameter cannot cross a WGSL signature"), false)
+      return (refuseAt(fn, "inlining " & callee.name & " reaches a crossing call cycle, its pointer parameter cannot cross a WGSL signature"), false)
+    # every argument binds once to a fresh local and the body substitutes onto
+    # those aliases: an argument with a call evaluates once, like v1's expansion
+    var bindings: seq[CirStmt]
     var subst = initTable[string, CirExpr]()
     for j, p in callee.params:
-      subst[p.name] = s.callArgs[j]
+      var alias = "inl" & $fresh & "_" & p.name
+      fresh.inc
+      while alias in used:
+        alias.add "_"
+      used.incl(alias)
+      bindings.add CirStmt(kind: sVar, name: alias, declType: p.typ, init: s.callArgs[j])
+      subst[p.name] = sym(alias, p.typ)
     body.substituteArgsStmts(subst)
-    ss = ss[0 ..< i] & body & ss[i + 1 .. ^1]
+    ss = ss[0 ..< i] & bindings & body & ss[i + 1 .. ^1]
     return ("", true)
   for a in s.callArgs:
     let aerr = refuseValuePositionCalls(fn, a, procs)
@@ -212,7 +208,7 @@ proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[stri
       return (aerr, false)
   return ("", false)
 
-proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc]): string =
+proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string =
   ## One non-call statement: its subexpressions refuse value-position calls,
   ## nested statement lists recurse through `inlineInStmts`.
   case s.kind
@@ -231,17 +227,17 @@ proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc]):
     let cerr = refuseValuePositionCalls(fn, s.cond, procs)
     if cerr.len > 0:
       return cerr
-    let terr = inlineInStmts(fn, s.thenBody, procs)
+    let terr = inlineInStmts(fn, s.thenBody, procs, used, fresh)
     if terr.len > 0:
       return terr
-    let eerr = inlineInStmts(fn, s.elseBody, procs)
+    let eerr = inlineInStmts(fn, s.elseBody, procs, used, fresh)
     if eerr.len > 0:
       return eerr
   of sWhile:
     let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
     if cerr.len > 0:
       return cerr
-    let werr = inlineInStmts(fn, s.whileBody, procs)
+    let werr = inlineInStmts(fn, s.whileBody, procs, used, fresh)
     if werr.len > 0:
       return werr
   of sRet:
@@ -255,18 +251,18 @@ proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc]):
   of sCall, sAsm, sEmit:
     discard
 
-proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc]): string =
+proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string =
   var i = 0
   while i < ss.len:
     let s = ss[i]
     if s.kind == sCall and s.callCallee.kind == eSym:
-      let (r, spliced) = inlineCallSite(fn, ss, i, procs)
+      let (r, spliced) = inlineCallSite(fn, ss, i, procs, used, fresh)
       if r.len > 0:
         return r
       if not spliced:
         i.inc
       continue
-    let r = walkValuePositions(fn, s, procs)
+    let r = walkValuePositions(fn, s, procs, used, fresh)
     if r.len > 0:
       return r
     i.inc
@@ -283,8 +279,16 @@ proc inlinePointerParamCalls(m: CirModule): string =
   for fn in m.procs:
     procs[fn.name] = fn
   for fn in mitems(m.procs):
+    var used = initHashSet[string]()
+    var locals: seq[tuple[name: string, typ: CirType]]
+    fn.body.collectDeclaredLocals(locals)
+    for l in locals:
+      used.incl(l.name)
+    for p in fn.params:
+      used.incl(p.name)
+    var fresh = 0
     while true:
-      let err = inlineInStmts(fn, fn.body, procs)
+      let err = inlineInStmts(fn, fn.body, procs, used, fresh)
       if err.len > 0:
         return err
       var changed = false
