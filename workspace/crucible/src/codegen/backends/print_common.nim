@@ -42,7 +42,7 @@ proc getUnhandledExprRejection*(kind: CirExprKind): string =
   "expression kind " & $kind & " has no printer emission"
 
 # ═══════════════════════════════════════════════════════════════════════
-#  The shared print context: one walk state over the target's tables
+#  Print context
 # ═══════════════════════════════════════════════════════════════════════
 
 type BuiltinVocab* = object
@@ -175,7 +175,7 @@ proc printVectorDot*(ctx: var auto, e: CirExpr): string =
   return ctx.printExpr(e.dotBase) & "." & comp
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Declarator engine: type names and declaration forms over the registry tables
+#  Declarator engine
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getScalarName*(names: ScalarNames, t: CirType): string =
@@ -804,7 +804,7 @@ proc getModuleDeviceFns*(m: CirModule): seq[CirProc] =
       result.add fn
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Entry-input machinery of the shader entry heads
+#  Entry-input machinery
 # ═══════════════════════════════════════════════════════════════════════
 
 func getWorkgroup*(fn: CirProc, dflt: array[3, int] = [256, 1, 1]): array[3, int] =
@@ -834,7 +834,7 @@ template emitEntryInputs*(kinds: untyped, inputs: EntryInputs): string =
   texts.join(", ")
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Proc assembly: the one proc printer over both entry models
+#  Proc assembly
 # ═══════════════════════════════════════════════════════════════════════
 
 type ModuleShape* = object

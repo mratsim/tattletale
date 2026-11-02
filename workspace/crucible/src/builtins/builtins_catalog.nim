@@ -17,7 +17,7 @@ type
     ##   tuple `[idx]` to a field access
 
 # ═══════════════════════════════════════════════════════════════════════
-# Builtin kinds: the family enums that {.builtin.} payloads name
+# Builtin kinds
 # ═══════════════════════════════════════════════════════════════════════
 
 type
@@ -106,7 +106,7 @@ builtinKindLadder(CirShuffleBuiltinKind, "shuffleBuiltinKindOf")
 builtinKindLadder(CirAtomicsBuiltinKind, "atomicsBuiltinKindOf")
 
 # ═══════════════════════════════════════════════════════════
-# 0. Canonical thread coordinates (Metal Shading Language)
+# 0. Canonical thread coordinates
 # ═══════════════════════════════════════════════════════════
 
 let thread_position_in_grid* {.builtin: cbkThreadPositionInGrid, compileTime.}: ivec3 = default(ivec3)

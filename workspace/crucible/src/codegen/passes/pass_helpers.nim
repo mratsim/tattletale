@@ -456,7 +456,7 @@ proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
     return ownArm(fn, ctx, e)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Const_mem locals to program scope
+#  Const_mem hoisting
 # ═══════════════════════════════════════════════════════════════════════
 
 proc freshProcType*(params: seq[CirType], ret: CirType): CirType =

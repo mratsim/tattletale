@@ -52,7 +52,7 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
   )
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Device-function `{.smem.}` locals to threadgroup reference parameters
+#  Smem reference parameters
 # ═══════════════════════════════════════════════════════════════════════
 
 proc extendedProcType(t: CirType, extra: seq[CirType]): CirType =
@@ -204,7 +204,7 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Coordinate builtins threaded down to device functions
+#  Device-function coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
 proc collectCoordReads(e: CirExpr, kinds: var HashSet[CirCoordBuiltinKind]) =
@@ -347,7 +347,7 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
   return ""
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Kernel smem locals to kernel-scope threadgroup storage
+#  Kernel threadgroup storage
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mslRewriteSmemLocals(m: CirModule): string =

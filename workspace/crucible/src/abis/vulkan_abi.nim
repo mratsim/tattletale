@@ -162,7 +162,7 @@ const
   VK_PHYSICAL_DEVICE_TYPE_CPU* = 4
 
 # ═══════════════════════════════════════════════════════════════════════
-# Structure types (simplified — only fields we need)
+# Structure types
 # ═══════════════════════════════════════════════════════════════════════
 
 type

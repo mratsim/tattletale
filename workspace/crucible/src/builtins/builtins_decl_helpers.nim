@@ -119,7 +119,7 @@ macro convBuiltin*(body: untyped) =
       nnkTableConstr.newTree(pairs), ident"toTable"))))
 
 # ═══════════════════════════════════════════════════════════════════════
-#  The target vocabulary macro, cell axis and section parsers
+#  Cell axis
 # ═══════════════════════════════════════════════════════════════════════
 
 ## Cell axis: the shared (kind, width) vocabulary for the scalar names,
@@ -327,7 +327,7 @@ proc castRulesCtor(entries: seq[NimNode], display: string): NimNode {.compileTim
   nnkBracket.newTree(rules)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  The macro
+#  TargetVocab macro
 # ═══════════════════════════════════════════════════════════════════════
 
 macro targetVocab*(body: untyped) =
@@ -529,7 +529,7 @@ type
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Family table and field schemas
+#  Family schemas
 # ═══════════════════════════════════════════════════════════════════════
 
 const genFamilies = [
@@ -681,7 +681,7 @@ proc vectorCtor(entries: seq[NimNode], display: string): NimNode {.compileTime.}
   nnkObjConstr.newTree(args)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  The macro
+#  genTargets macro
 # ═══════════════════════════════════════════════════════════════════════
 
 macro genTargets*(body: untyped) =

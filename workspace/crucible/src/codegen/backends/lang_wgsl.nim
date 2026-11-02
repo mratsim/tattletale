@@ -332,7 +332,7 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
     ""
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Statements: the WGSL space policy and declaration forms
+#  Statement declarations
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =

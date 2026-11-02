@@ -248,7 +248,7 @@ proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
   return "sizeof(" & ctx.emitTypeName(e.ofType) & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Statements: the OpenCL space policy and declaration forms
+#  Statement declarations
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =

@@ -42,7 +42,7 @@ from ./backends/lang_hlsl import HlslFlavor, fvD3D12, fvVulkan
 # ############################################################
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Per-target pass pipelines, registration order is execution order
+#  Per-target pass pipelines
 # ═══════════════════════════════════════════════════════════════════════
 
 macro codegenMetal(body: typed): string =

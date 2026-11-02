@@ -8,7 +8,7 @@
 ## Minimal Objective-C runtime bridge for the Metal backend.
 
 # ═════════════════════════════════════════════════
-# Scalar and opaque types (platform-neutral)
+# Scalar and opaque types
 # ═════════════════════════════════════════════════
 
 when defined(cpu64):

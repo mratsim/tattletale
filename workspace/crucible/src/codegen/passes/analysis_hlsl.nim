@@ -107,7 +107,7 @@ proc scanCallStmts(procs: Table[string, CirProc],
   edges = es
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Read-write fixpoint and recursion refusal
+#  Read-write fixpoint
 # ═══════════════════════════════════════════════════════════════════════
 
 proc classifyRwBuffers(stored: HashSet[string], edges: seq[tuple[caller, arg, callee, param: string]], reached: var HashSet[string]) =

@@ -51,7 +51,7 @@ func registerNormalizationPasses*(reg: var PassRegistry) =
   reg.registerMarkExplicitUnrolls()
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Settle expression forms
+#  Expression settling
 # ═══════════════════════════════════════════════════════════════════════
 
 

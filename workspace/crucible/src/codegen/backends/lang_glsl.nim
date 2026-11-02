@@ -266,7 +266,7 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
     ""
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Statements: the GLSL space policy and declaration forms
+#  Statement declarations
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =

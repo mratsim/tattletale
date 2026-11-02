@@ -191,7 +191,7 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
   pad & txt & ";"
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Statements: the MSL space policy and declaration forms
+#  Statement declarations
 # ═══════════════════════════════════════════════════════════════════════
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: the spliced text.
