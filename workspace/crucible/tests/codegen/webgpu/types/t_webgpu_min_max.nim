@@ -1,7 +1,6 @@
 ## WebGPU: max/min over f32 compute through the native builtins.
 ##
 ## Test that the folded max/min compute the expected results over both operand orders.
-## the results match the operands' ordering, dynamic and literal, both orders.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

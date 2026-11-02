@@ -1,7 +1,6 @@
 ## Vulkan: multi-kernel pointer-only sources with differing param counts.
 ##
-## Two kernels with differing pointer counts share the module-wide
-## push-constant block and serializes its own addresses from offset 0.
+## Test that two kernels with differing pointer counts read their own buffer addresses through the shared push-constant block.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

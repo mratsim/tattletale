@@ -1,8 +1,6 @@
 ## Vulkan: one kernel mixing several scalars and two buffer pointers.
 ##
-## A multi-arg kernel packs every parameter through the shared
-## push-constant block. Pointers serialize as 8-byte device addresses,
-## scalars as 4-byte values, read back at the offsets the block declares.
+## Test that a kernel with three scalars and two buffer pointers reads every argument at its push-block offset.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
