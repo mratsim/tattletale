@@ -187,8 +187,7 @@ proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[stri
     var seen: HashSet[string]
     if callee.callsCrossingCalleeTransitively(procs, seen):
       return (refuseAt(fn, "inlining " & callee.name & " reaches a crossing call cycle, its pointer parameter cannot cross a WGSL signature"), false)
-    # every argument binds once to a fresh local and the body substitutes onto
-    # those aliases: an argument with a call evaluates once, like v1's expansion
+    # substitution onto fresh aliases evaluates a call argument once
     var bindings: seq[CirStmt]
     var subst = initTable[string, CirExpr]()
     for j, p in callee.params:
@@ -270,11 +269,10 @@ proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirPr
 
 proc inlinePointerParamCalls(m: CirModule): string =
   ## Placement contract:
-  ## - the pass runs after the pointer-local explosion pass, spliced bodies
-  ##   therefore carry no pointer locals
-  ## - the per-address-space callee instantiation runs first, the pass refuses
-  ##   a formal re-spaced by its call sites exactly when the re-spaced
-  ##   signature could not print
+  ## - the pass runs after the pointer-local explosion pass, so the spliced
+  ##   bodies carry no pointer locals
+  ## - the per-address-space callee instantiation runs first, a re-spaced formal
+  ##   refuses exactly when the new signature cannot print
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
     procs[fn.name] = fn
