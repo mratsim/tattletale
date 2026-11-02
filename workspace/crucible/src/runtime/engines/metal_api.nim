@@ -76,6 +76,7 @@ when defined(macosx):
   proc ingest*(engine: MetalEngine, source: string) =
     objc.withMemPool:
       let opts = compileOptions()
+
       let library = compileLibrary(engine.ctx.device, source, opts)
       objc.release(opts)
       when defined(debug):

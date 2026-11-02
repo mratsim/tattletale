@@ -67,8 +67,29 @@ proc ingest*(engine: VulkanEngine, source: string) =
              "(a `#version` first line) or HLSL (`[numthreads(`), got: " &
              source.splitLines()[0])
 
+proc countKernels(glsl: string): int =
+  const marker = "layout(local_size_x"
+  var i = glsl.find(marker)
+  while i >= 0:
+    inc result
+    i = glsl.find(marker, i + marker.len)
+
 proc ingestGlsl(engine: VulkanEngine, glsl: string) =
   engine.entryPoint = findFirstFunctionName(glsl, "layout(local_size_x", "void ")
+  # A member's offset in the deduped push block must be launch-invariant.
+  # Only scalar members can violate it, so multi-kernel sources refuse at ingest.
+  if countKernels(glsl) > 1:
+    var inPush = false
+    for line in glsl.splitLines():
+      if "layout(push_constant" in line:
+        inPush = true
+      elif inPush and line.strip().startsWith("}"):
+        inPush = false
+      elif inPush:
+        let t = line.strip()
+        if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
+          failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
+                   "use one kernel per source when passing by-value scalars")
   engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(glsl)
   engine.isHlsl = false
