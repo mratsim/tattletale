@@ -6,6 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/macros
+import std/tables
+import ../codegen/ir/ast_datatypes
 import ./builtins_pragmas
 
 type
@@ -39,11 +41,8 @@ func `-`*(a: bfloat16): bfloat16 {.inline.} =
   raise newException(ValueError, "bfloat16 arithmetic is GPU-side only")
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Low-precision float conversions: host fallback bodies and dispatch
+#  The fp16 ↔ fp32 conversion primitives
 # ═══════════════════════════════════════════════════════════════════════
-# Device calls lower to the conv tables' native conversions.
-# Host runs use the fallback bodies below.
-
 func toFp16*(x: float32): float16 {.builtin.} =
   ## - Returns: the fp16 value nearest to `x`, round-to-nearest-even
   ## - The {.builtin.} pragma lowers the device call to the backend
@@ -244,6 +243,7 @@ func toFp32*(x: fp8e5m2): float32 {.builtin.} =
     return cast[float32](sign or (uint32(111 + i) shl 23) or man)
   return cast[float32](sign or (uint32(exp8 + 112) shl 23) or (man8 shl 21))
 
+# High-level element conversion, thin dispatch over the primitives above.
 template to*(src: float32, T: typedesc[float16]): float16 = toFp16(src)
 template to*(src: float32, T: typedesc[bfloat16]): bfloat16 = toBf16(src)
 template to*(src: float32, T: typedesc[fp8e4m3]): fp8e4m3 = toFp8e4m3(src)
@@ -275,3 +275,45 @@ func asFp16*(x: uint16): float16 {.builtin.} =
 func asU16*(x: float16): uint16 {.builtin.} =
   ## Bit-pattern reinterpret fp16 → u16.
   raise newException(ValueError, "fp16 reinterpret is GPU-side only")
+let NimGpuFp16ConversionBuiltins* {.compileTime.}: Table[(BackendKind, string), string] =
+  {(bkMetal,  "toFp16"): "half",
+   (bkMetal,  "toFp32"): "float",
+   (bkMetal,  "asFp16"): "as_type<half>",
+   (bkMetal,  "asU16"):  "as_type<ushort>",
+   (bkMetal,  "toBf16"): "(bfloat)",
+   (bkMetal,  "toBf32"): "float",
+   (bkGlsl, "toFp16"): "float16_t",
+   (bkGlsl, "toFp32"): "float",
+   (bkGlsl, "asFp16"): "uint16BitsToFloat16",
+   (bkGlsl, "asU16"):  "float16BitsToUint16",
+   (bkCuda,   "toFp16"): "__float2half_rn",
+   (bkCuda,   "toFp32"): "__half2float",
+   (bkCuda,   "asFp16"): "__ushort_as_half",
+   (bkCuda,   "asU16"):  "__half_as_ushort",
+   (bkCuda,   "toBf16"): "__float2bfloat16",
+   (bkCuda,   "toBf32"): "__bfloat162float",
+   (bkWebGPU,   "toFp16"): "f16",
+   (bkWebGPU,   "toFp32"): "f32",
+   (bkWebGPU,   "asFp16"): "bitcast<f16>"}.toTable()
+
+proc builtinGpuTypeKind*(n: NimNode): GpuTypeKind =
+  if n.kind != nnkSym:
+    return gtVoid
+  let impl = n.getImpl()
+  if impl.kind != nnkTypeDef or impl[0].kind != nnkPragmaExpr:
+    return gtVoid
+  let pragmaNode = impl[0][1]
+  if pragmaNode.kind != nnkPragma:
+    return gtVoid
+  var hasTag = false
+  for p in pragmaNode:
+    if p.kind in {nnkSym, nnkIdent} and p.strVal == "builtin":
+      hasTag = true
+  if not hasTag:
+    return gtVoid
+  case n.strVal
+  of "float16":   gtFloat16
+  of "bfloat16":  gtBf16
+  of "fp8e4m3":   gtF8E4M3
+  of "fp8e5m2":   gtF8E5M2
+  else:           gtVoid
