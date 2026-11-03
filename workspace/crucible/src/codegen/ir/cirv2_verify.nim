@@ -118,7 +118,7 @@ proc renderProcRefusal(fn: CirProc, violation: string): string =
 
 proc verifyModule*(m: CirModule): string =
   ## Returns "" while the module upholds the pass-boundary contracts,
-  ## else the first violation, the refusal line then the offending proc rendered for context.
+  ## else the first violation rendered as a refusal line plus the offending proc for context.
   ## Read-only: the walk never rewrites or repairs the IR.
   ## runPasses calls it once, after the last transform pass.
   ##
@@ -143,7 +143,7 @@ proc verifyModule*(m: CirModule): string =
   var seenProcs: HashSet[string]
   for fn in m.procs:
     if fn.name in seenProcs:
-      # Duplicate proc names refuse on the second occurrence, the walk renders that proc.
+      # Duplicate proc names refuse on the second occurrence and the walk renders that proc.
       return renderProcRefusal(fn, "duplicate proc name '" & fn.name & "'")
     seenProcs.incl fn.name
     var paramNames: seq[string]
