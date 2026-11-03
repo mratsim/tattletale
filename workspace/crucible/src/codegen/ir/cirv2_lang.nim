@@ -664,18 +664,6 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   else:
     discard
 
-func withProvenance*(t: CirType, operand: CirExpr): CirType =
-  ## Returns pointer type `t` re-spaced to the operand's provenance space,
-  ## `t` unchanged for a non-pointer `t`.
-  ##
-  ## Birth rule of a pointer cast's target: the frontend applies it when it
-  ## builds a cast and the address-space instantiation re-applies it over
-  ## a clone's re-spaced formals.
-  if t != nil and t.kind in {ctPtr, ctAptr}:
-    result = t.withAddressSpace(resolveAddressSpace(operand))
-  else:
-    result = t
-
 func isLvalue*(e: CirExpr): bool =
   ## An expression that names storage: a symbol, a dereference, an index,
   ## a pointer index, or a field access. `addr` and assignment take lvalues.
