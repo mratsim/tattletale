@@ -138,15 +138,19 @@ proc entryArgCirType(prog: Program, arg: EntryArg): CirType =
   else:
     raise refuseBridge(prog.name, "kernel argument %" & arg.name, "unsupported kernel argument type " & $arg.typ.kind)
 
-proc lowerParams(prog: Program): seq[CirParam] =
+proc lowerParams(prog: Program, env: Table[string, CirExpr]): seq[CirParam] =
   ## Entry arguments to kernel parameters in launch order: the store target's
   ## pointer and shape args first (the launch binds the output to slot 0),
-  ## then the remaining entry arguments in entry order.
+  ## then the remaining entry arguments in entry order. Store targets bound
+  ## to 0-d constants resolve through the kernel bindings and take no parameter.
   ##
   ## Raises:
   ## - SubsetError via entryArgCirType for any other argument type
+  ## - SubsetError for a store target name bound nowhere in the kernel
   let first = prog.storeTargetOrder()
   for name in first:
+    if name notin env:
+      raise refuseBridge(prog.name, "store_view_tko", "the store target %" & name & " is not bound in the kernel")
     for arg in prog.args:
       if arg.name == name:
         result.add param(arg.name, prog.entryArgCirType(arg))
@@ -215,6 +219,11 @@ proc lowerBlockOffsets(prog: Program, env: Table[string, CirExpr], statements: v
   ## Block offset of every loaded or stored view, one offset local per view
   ## SSA name, emitted before the value loop.
   ## One term per view dimension: block index x tile size x view stride.
+  ## One offset local per view SSA name:
+  ## - several ops on one view with the same block indices share the local,
+  ##   an in-place load + store
+  ## - one view addressed with two different block index lists refuses:
+  ##   the shared local would bind the first list's offset
   ##
   ## Before, gemm (view pv_a, tile (16, 16), strides (16, 1)):
   ## - block indices: bid_x, bid_y
@@ -230,11 +239,17 @@ proc lowerBlockOffsets(prog: Program, env: Table[string, CirExpr], statements: v
   ##
   ## Raises:
   ## - SubsetError for an unbound view index or stride name
+  var addressed: Table[string, seq[string]]
   for op in prog.ops:
     case op.kind
     of pgLoadTile, pgStoreTile:
       let name = op.opViewName()
       let indices = op.opViewIndices()
+      if name in addressed:
+        if addressed[name] != indices:
+          raise refuseBridge(prog.name, $op.kind & " on %" & name, "view %" & name & " is addressed with two different block index lists")
+        continue
+      addressed[name] = indices
       let view = op.opViewInfo()
       var off: CirExpr
       for d in 0 ..< view.tileShape.len:
@@ -251,12 +266,13 @@ proc lowerBlockOffsets(prog: Program, env: Table[string, CirExpr], statements: v
       discard
 
 proc loopTripCount(prog: Program): TileValueInfo =
-  ## Thread-value partition shared by every tile value of the program.
-  ## All tiles fuse into one loop, so they must share one partition.
+  ## Thread-value partition and tile shape shared by every tile value.
+  ## All tiles fuse into one loop over one coordinate decomposition.
+  ## The tile values must agree on shape and partition.
   ##
   ## Raises:
   ## - SubsetError when the kernel has no tile value or the tile values
-  ##   disagree on the partition
+  ##   disagree on the tile shape or the partition
   for op in prog.ops:
     let info = case op.kind
       of pgLoadTile: op.loadInfo
@@ -269,8 +285,8 @@ proc loopTripCount(prog: Program): TileValueInfo =
       continue
     if result.tileShape.len == 0:
       result = info
-    elif result.tv != info.tv:
-      raise refuseBridge(prog.name, "thread-value partitions", "tile values disagree on the thread-value partition")
+    elif result.tv != info.tv or result.tileShape != info.tileShape:
+      raise refuseBridge(prog.name, "thread-value partitions", "tile values disagree on the tile shape or the thread-value partition")
   if result.tileShape.len == 0:
     raise refuseBridge(prog.name, "kernel body", "no tile value to partition")
 
@@ -392,6 +408,7 @@ proc lowerValueStatements(prog: Program, env: var Table[string, CirExpr],
                           loadMap: Table[string, LoadView]): seq[CirStmt] =
   ## Per-thread, per-slot statements of the program ops, in program order,
   ## inside the fused value loop. Tile values are SSA scalar locals named by their Tile IR names.
+  ## One tt_off local per view SSA name, shared by every op that addresses the view.
   ##
   ## Before (kernel axpy fragment):
   ## - mulf(lhs: "alpha", rhs: "tile_a"), addf(lhs: "scaled", rhs: "tile_b")
@@ -432,12 +449,16 @@ proc lowerValueStatements(prog: Program, env: var Table[string, CirExpr],
     result.add varD("tt_c" & $(n - 1), tInt(32), remExpr)
     for d in 0 ..< n:
       dimLocals.add "tt_c" & $d
+  var offLocals: seq[string]
+    ## views whose tt_off local is already declared in the loop body
   for op in prog.ops:
     case op.kind
     of pgLoadTile:
       let name = op.opViewName()
-      result.add varD("tt_off_" & name, tInt(32),
-        prog.cirTileOffset(name, op.opViewInfo(), dimLocals, env))
+      if name notin offLocals:
+        result.add varD("tt_off_" & name, tInt(32),
+          prog.cirTileOffset(name, op.opViewInfo(), dimLocals, env))
+        offLocals.add name
       if op.results[0] in env:
         refuseRedefinition(prog.name, "load_view_tko %" & op.results[0], op.results[0])
       result.add varD(op.results[0], cirElemType(op.loadInfo.elem),
@@ -473,8 +494,10 @@ proc lowerValueStatements(prog: Program, env: var Table[string, CirExpr],
       if op.storeValue notin env:
         raise refuseBridge(prog.name, "store_view_tko", "stored value %" & op.storeValue & " is not bound in the kernel")
       let name = op.opViewName()
-      result.add varD("tt_off_" & name, tInt(32),
-        prog.cirTileOffset(name, op.opViewInfo(), dimLocals, env))
+      if name notin offLocals:
+        result.add varD("tt_off_" & name, tInt(32),
+          prog.cirTileOffset(name, op.opViewInfo(), dimLocals, env))
+        offLocals.add name
       result.add asgnS(
         patE(env[op.storeViewInfo.base], sym("tt_off_" & name, tInt(32))),
         env[op.storeValue])
@@ -533,10 +556,11 @@ proc atomFragOffset(prog: Program, bl: BitLinear, map: FragmentMap, v: int, rm, 
 proc atomMmaAsm(dNames, aNames, bNames: seq[string]): CirStmt =
   ## One simdgroup_multiply_accumulate call: sd <- sa*sb + sd, the staged scalars sit in the operand slots the printer splices.
   ##
-  ## Scalar names are unique per fragment instance:
-  ## - crucible's rename pass uniquifies repeated declarations
-  ## - it does not rewrite inline-asm operand references
-  ## - a reused name therefore silently rebinds to the first instance
+  ## Operand names are literals unique per fragment instance:
+  ## - crucible's rename pass rewrites reserved words only, it never
+  ##   uniquifies repeated declarations
+  ## - the splice references operands by name, so a reused name would
+  ##   silently rebind to the first declaration
   # operand splice: the printer splices operands in text order, so the two
   # accumulator write-back slots repeat d0 and d1 after the staged operand names
   let names = dNames & aNames & bNames & dNames
@@ -565,7 +589,9 @@ proc atomMmaAsm(dNames, aNames, bNames: seq[string]): CirStmt =
 proc atomShapeCheck(prog: Program, mma, store: ProgramOp, loadMap: Table[string, LoadView]) =
   ## Subset check for the atom fragment program: the kernel tile dataflow must
   ## be exactly one mmaf, its two loaded operands, one splat accumulator
-  ## constant and one store of the mma result.
+  ## constant and one store of the mma result. The store view's partition tile
+  ## matches the mmaf tile, checked by the tile-passes checkTileMatchesView invariant.
+  ## The fragment addressing derives from the mmaf tile and reads the store view's strides.
   ##
   ## Raises:
   ## - SubsetError naming the construct and the kernel
@@ -696,7 +722,22 @@ proc lowerTileToCirv2*(prog: Program, atomMma = false): CirModule =
       raise refuseBridge(prog.name, "mma atom selection", "the atom fragment program lowers exactly one mmaf per kernel, got " & $prog.atomMmas.len & " selections")
     var mmaOp, storeOp, accOp: ProgramOp
     var sawAcc = false
+    var defined: seq[string]
+      ## SSA result names seen so far, enforcing the fused path's
+      ## redefinition refusal on the atom path: a repeated accumulator
+      ## constant would otherwise silently supply the last splat's value
     for op in prog.ops:
+      for name in op.results:
+        if name in defined:
+          let construct = case op.kind
+            of pgLoadTile: "load_view_tko %" & name
+            of pgStoreTile: "store_view_tko %" & name
+            of pgConstTile, pgConstScalar: "constant %" & name
+            of pgBinary: binSpelling(op.binKind) & " %" & name
+            of pgMma: "mmaf %" & name
+            of pgGetBlockId, pgYield: $op.kind
+          raise refuseBridge(prog.name, construct, "%" & name & " redefines a kernel-level name")
+        defined.add name
       case op.kind
       of pgMma: mmaOp = op
       of pgStoreTile: storeOp = op
@@ -715,7 +756,7 @@ proc lowerTileToCirv2*(prog: Program, atomMma = false): CirModule =
     body.add whileLoop("tt_v", info.tv.values, statements)
   body.add retS()
 
-  let p = procD(prog.name, prog.lowerParams(), tVoid(), body)
+  let p = procD(prog.name, prog.lowerParams(env), tVoid(), body)
   p.isKernel = true
   moduleD(prog.name, @[ivec3Type()], @[p])
 
@@ -746,7 +787,7 @@ proc runMetalPipeline(prog: Program, atomMma: bool): string =
   registerValidationPostPasses(reg)
   let perr = runPasses(m, reg)
   if perr.len > 0:
-    raise refuseBridge(prog.name, "MSL pass pipeline", perr)
+    raise refuseBridge(prog.name, "crucible MSL pass pipeline", perr)
   codegen(m, cgMetal)
 
 proc runSpirvPipeline(prog: Program, threads: int): seq[uint32] =
@@ -768,7 +809,7 @@ proc runSpirvPipeline(prog: Program, threads: int): seq[uint32] =
   registerValidationPostPasses(reg)
   let perr = runPasses(m, reg)
   if perr.len > 0:
-    raise refuseBridge(prog.name, "SPIR-V pass pipeline", perr)
+    raise refuseBridge(prog.name, "crucible SPIR-V pass pipeline", perr)
   codegenSpirvShader(m)
 
 proc compileTileIrToSpirv*(m: TileIrModule, entryName: string, threads: int): seq[uint32] {.compileTime.} =
