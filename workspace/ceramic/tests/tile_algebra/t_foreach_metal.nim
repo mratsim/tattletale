@@ -35,8 +35,8 @@ const forEachCollapsedIndexedMsl = metal:
     var t: tile(float32, (1, 1))
     forEach j, var d in t:
       d = 7.5'f32
-    forEach j, d in t:
-      dst[j] = d
+    forEach k, d in t:
+      dst[k] = d
 
 proc runTest() =
   # private: tests run in a proc so engines are destroyed at return

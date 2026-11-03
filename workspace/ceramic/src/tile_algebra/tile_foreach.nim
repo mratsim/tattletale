@@ -101,6 +101,9 @@ template forEachBody(broadcast: static bool): untyped {.dirty.} =
       let term = ident("_i" & $d) * newLit(strides[d])
       off = if off.isNil: term
             else: off + term
+    # Every mode has length 1: one element at flat offset 0, like elemAccess above.
+    if off.isNil:
+      off = newLit(0)
     indexedBody.add quote do:
       let `index`{.inject.} = `off`
   indexedBody.add newBody
