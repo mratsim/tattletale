@@ -31,7 +31,7 @@ import cirv2_pretty
 ## - a body-top-level declaration never shadows a parameter
 ## - a nil statement refuses
 ##
-## Scope:
+## Per scope:
 ## - every symbol resolves to a param, an earlier `sVar`, a global, or a module proc
 ## - a `sVar` joins scope after its initializer checks
 ## - branch and loop declarations scope to their body
