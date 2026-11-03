@@ -103,11 +103,15 @@ proc runTest() =   # private: engines are destroyed at return
     # reduce-kernel accumulation mirrors the buffer gradients
     ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
     engine.copyToHostFromDevice(addr dA[0], dADev, N)
+    engine.copyToHostFromDevice(addr dB[0], dBDev, N)
     engine.copyToHostFromDevice(addr dAlpha[0], dAlphaDev, 1)
     for i in 0 ..< N:
       doAssert dA[i] == 2.0'f32 * dOutHost[i] * alpha,
         "d_a accumulate: element " & $i & " got " & $dA[i] &
         " want " & $(2.0'f32 * dOutHost[i] * alpha)
+      doAssert dB[i] == 2.0'f32 * dOutHost[i],
+        "d_b accumulate: element " & $i & " got " & $dB[i] &
+        " want " & $(2.0'f32 * dOutHost[i])
     doAssert dAlpha[0] == 2.0'f32 * dAlphaWant,
       "d_alpha accumulate: got " & $dAlpha[0] & " want " & $(2.0'f32 * dAlphaWant)
     echo "[OK] primitive backward exact and accumulating"

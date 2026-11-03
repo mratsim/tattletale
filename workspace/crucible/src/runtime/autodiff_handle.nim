@@ -305,15 +305,6 @@ macro forward*(ad: typed, output: typed, primals: varargs[typed]): untyped =
     var argsVal = `argsN`
     `impl`(`ad`.engine, `ad`.kernels.kernelName, `outMemN`, argsVal, `cfgN`)
 
-func bindMapAt(bindMap: seq[tuple[name: string, node: NimNode, isBuffer: bool]], name: string): tuple[node: NimNode, isBuffer: bool] =
-  ## One printed-kernel parameter's bound argument.
-  ## The lookup key is the pair's backward-signature name.
-  for e in bindMap:
-    if e.name == name:
-      return (node: e.node, isBuffer: e.isBuffer)
-  doAssert false, "ad_handle: the backward kernel binds '" & name &
-    "', a name the backward signature does not carry"
-
 macro backward*(ad: typed, args: varargs[typed]): untyped =
   ## Backward pass of the pair in the pair's backward signature.
   ## The mirror rule governs the call site, every `d_` slot in forward order first, then the forward signature.
@@ -443,8 +434,9 @@ macro backward*(ad: typed, args: varargs[typed]): untyped =
   # Names resolve against the backward signature, workspace names against the scratch.
   doAssert kernels.bwdKernelParams.len > 0,
     "ad_handle backward: the pair has no printed backward signature"
-  # First printed slot: an allocated gradient of this expansion, held in a DeviceMem `let` with no type at macro time.
-  # Such nodes bind `.mem` directly, caller arguments unwrap through `bufferLeaf`.
+  # an owned gradient binds its DeviceMem `let` directly at the first printed slot.
+  # a caller argument unwraps through `bufferLeaf`. The primitive overload's first slot
+  # is a caller buffer.
   let bwdOutResolved = resolveName(kernels.bwdKernelParams[0])
   let bwdOutput = if bwdOutResolved.isOwned:
     let eN = bwdOutResolved.node

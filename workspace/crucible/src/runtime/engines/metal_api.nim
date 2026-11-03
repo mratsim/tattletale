@@ -99,9 +99,9 @@ when defined(macosx):
     ## - `source`: the kernel's standalone translation unit
     ##
     ## Bridge re-ingests keep the autodiff kernels alive.
-    ## Re-ingest under a held launch name drops the cached pipeline state:
-    ## a cached pipeline state would run the old binary. The main `ingest`
-    ## clears its pipeline states for the same reason.
+    ## Re-ingest under a held launch name releases the cached pipeline state
+    ## before its library: a cached pipeline state would run the old binary.
+    ## The main `ingest` clears its caches for the same reason.
     objc.withMemPool:
       let opts = compileOptions()
       let library = compileLibrary(engine.ctx.device, source, opts)
