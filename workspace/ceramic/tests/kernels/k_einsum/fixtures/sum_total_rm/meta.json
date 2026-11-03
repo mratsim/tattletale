@@ -1,0 +1,34 @@
+{
+ "name": "sum_total_rm",
+ "recipe": "sum_total",
+ "dtype": "float32",
+ "stmt": "S = A[i,j]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    3,
+    4
+   ],
+   "strides": [
+    4,
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   1,
+   1
+  ],
+  "strides": [
+   1,
+   1
+  ]
+ },
+ "checksum": 1083575222,
+ "xorhash_checksums": {
+  "a.bin": 2189630581,
+  "o.bin": 1083575222
+ }
+}

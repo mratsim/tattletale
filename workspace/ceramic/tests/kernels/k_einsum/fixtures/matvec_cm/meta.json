@@ -1,0 +1,42 @@
+{
+ "name": "matvec_cm",
+ "recipe": "matvec",
+ "dtype": "float32",
+ "stmt": "D[i] = A[i,j] * v[j]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    3,
+    4
+   ],
+   "strides": [
+    1,
+    3
+   ]
+  },
+  {
+   "file": "v.bin",
+   "shape": [
+    4
+   ],
+   "strides": [
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   3
+  ],
+  "strides": [
+   1
+  ]
+ },
+ "checksum": 3226242364,
+ "xorhash_checksums": {
+  "a.bin": 40619860,
+  "v.bin": 2155211062,
+  "o.bin": 3226242364
+ }
+}

@@ -1,0 +1,42 @@
+{
+ "name": "outer_rm",
+ "recipe": "outer",
+ "dtype": "float32",
+ "stmt": "D[i,j] = u[i] * v[j]",
+ "operands": [
+  {
+   "file": "u.bin",
+   "shape": [
+    5
+   ],
+   "strides": [
+    1
+   ]
+  },
+  {
+   "file": "v.bin",
+   "shape": [
+    7
+   ],
+   "strides": [
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   5,
+   7
+  ],
+  "strides": [
+   7,
+   1
+  ]
+ },
+ "checksum": 1054239642,
+ "xorhash_checksums": {
+  "u.bin": 3202606050,
+  "v.bin": 3204413894,
+  "o.bin": 1054239642
+ }
+}
