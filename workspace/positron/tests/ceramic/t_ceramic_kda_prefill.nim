@@ -9,7 +9,7 @@
 ## - nim c -r -d:release --warnings:off --outdir:build/tests workspace/positron/tests/ceramic/t_ceramic_kda_prefill.nim
 ##
 ## Ceramic KDA prefill suite, chunked-scan launch contract over seeded fixtures:
-## - `src/kernels/ceramic/attn_ssm/gated_delta_net_kda_prefill.nim` runs one launch over
+## - `src/kernels/ceramic_v1/attn_ssm/gated_delta_net_kda_prefill.nim` runs one launch over
 ##   the stacked head axis (B·Hv threadgroups, one per head), the launch walking all chunks
 ##
 ## Value check, the property suite's split invariance plus the decode
@@ -64,7 +64,7 @@
 import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_kda_prefill
+import ../../src/kernels/ceramic_v1/attn_ssm/gated_delta_net_kda_prefill
 import ceramic_pagebuf
 import ceramic_dtype
 

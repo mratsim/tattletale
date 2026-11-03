@@ -17,7 +17,7 @@ import workspace/libtorch as F
 import workspace/libtorch_testutils
 from workspace/libtorch/src/raw_libtorch import manual_seed
 import ../../ceramic/tests/tile_test_utils
-import ../src/kernels/ceramic/attn_ssm/grouped_query_attention_paged
+import ../src/kernels/ceramic_v1/attn_ssm/grouped_query_attention_paged
 
 const pagedMsl = metal:
   proc pagedD128(

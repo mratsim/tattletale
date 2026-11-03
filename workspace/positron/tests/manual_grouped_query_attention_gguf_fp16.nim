@@ -16,7 +16,7 @@ import workspace/libtorch
 import workspace/libtorch as F
 import workspace/libtorch_testutils
 import ../../ceramic/tests/tile_test_utils
-import ../src/kernels/ceramic/attn_ssm/grouped_query_attention_gguf
+import ../src/kernels/ceramic_v1/attn_ssm/grouped_query_attention_gguf
 import ./gguf_test_utils
 
 type

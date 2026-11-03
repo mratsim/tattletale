@@ -2,7 +2,7 @@
 ## - nim test_positron_properties
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests tests/ceramic/t_ceramic_gated_delta_net_o_norm.nim
 ##
-## Ceramic SiLU-gated RMSNorm suite, `src/kernels/ceramic/attn_ssm/gated_delta_net_o_norm.nim` judged per
+## Ceramic SiLU-gated RMSNorm suite, `src/kernels/ceramic_v1/attn_ssm/gated_delta_net_o_norm.nim` judged per
 ## element against the closed-form naive reference below.
 ##
 ## | subject        | contract                                                                               |
@@ -64,7 +64,7 @@
 import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_o_norm
+import ../../src/kernels/ceramic_v1/attn_ssm/gated_delta_net_o_norm
 import ceramic_pagebuf
 import ceramic_dtype
 

@@ -16,7 +16,7 @@ import workspace/libtorch
 import workspace/libtorch as F
 import workspace/libtorch_testutils
 from workspace/libtorch/src/raw_libtorch import manual_seed
-import ../src/kernels/ceramic/attn_ssm/grouped_query_attention_swa
+import ../src/kernels/ceramic_v1/attn_ssm/grouped_query_attention_swa
 import ./attn_test_utils
 
 const swaMsl = metal:

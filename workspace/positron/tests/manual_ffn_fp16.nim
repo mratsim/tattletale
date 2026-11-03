@@ -17,7 +17,7 @@ import workspace/libtorch as F
 import workspace/libtorch_testutils
 from workspace/libtorch/src/raw_libtorch import manual_seed
 import ../../ceramic/tests/tile_test_utils
-import ../src/kernels/ceramic/ffn_moe/ffn
+import ../src/kernels/ceramic_v1/ffn_moe/ffn
 
 const mlpMsl = metal:
   proc gatedMlpSiluKernel(

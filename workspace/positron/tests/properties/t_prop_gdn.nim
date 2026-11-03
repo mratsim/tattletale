@@ -9,7 +9,7 @@
 ## - nim test_positron_properties
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/t_prop_gdn.nim
 ##
-## Property suite over the gated delta rule prefill scan and decode step, the production kernels from `src/kernels/ceramic/attn_ssm/`.
+## Property suite over the gated delta rule prefill scan and decode step, the production kernels from `src/kernels/ceramic_v1/attn_ssm/`.
 ## - split invariance, one whole scan equals the segmented scan (y and state)
 ## - step-count identity, k decode steps equal the prefill through the k tokens
 ##
@@ -20,8 +20,8 @@
 import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_prefill
-import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
+import ../../src/kernels/ceramic_v1/attn_ssm/gated_delta_net_prefill
+import ../../src/kernels/ceramic_v1/attn_ssm/gated_delta_net_decode_single
 import properties
 import ../ceramic/ceramic_pagebuf
 

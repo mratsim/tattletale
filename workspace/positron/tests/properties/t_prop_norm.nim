@@ -10,7 +10,7 @@
 ## - nim c -r -d:release --warnings:off --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/properties/t_prop_norm.nim
 ##
 ## Property suite over the fused fp16 residual RMSNorm, the idempotence invariant,
-## `rms_norm_res_in_fwd` of `src/kernels/ceramic/norm.nim`:
+## `rms_norm_res_in_fwd` of `src/kernels/ceramic_v1/norm.nim`:
 ##
 ##   norm(norm(x)) ≈ norm(x)
 ##
@@ -54,7 +54,7 @@
 import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/norm
+import ../../src/kernels/ceramic_v1/norm
 import properties
 import ../ceramic/ceramic_pagebuf
 
