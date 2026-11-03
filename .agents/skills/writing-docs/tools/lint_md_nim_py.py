@@ -418,6 +418,8 @@ def _probe_exempt(line):
 
 
 BANNED = [
+    (r"\boff-contract\b",
+     None, "'off-contract' hides who checks what, state the precondition and the checker, the consequence follows from the code"),
     (r"maxloopiterationsvm",
      None, "the VM loop-cap flag is banned tree-wide, no VM iteration cap exists or is configurable"),
     (r"\bmint(s|ed)?\b",
@@ -667,6 +669,8 @@ RULES = {
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "emitted-text-assert": Rule("emitted-text-assert", True,
                                 "a string literal containment, scan, or equality in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
+    "method-call-syntax": Rule("method-call-syntax", True,
+                               "a tile_algebra view method written in dst-first free-call syntax, the receiver is the first argument, write receiver.method(...)"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
     "diag-downgrade": Rule("diag-downgrade", True,
@@ -2392,6 +2396,43 @@ def nim_emitted_text_assert_checks(path, text, findings):
                 warning=True))
 
 
+
+METHOD_CALL_NAMES = ("alongAxisAt", "simd_shuffle_xor")
+
+
+def nim_method_call_syntax_checks(path, text, findings):
+    """Flags the dst-first free-call spelling of tile_algebra and warp builtin
+    methods.
+
+    - the receiver is the first argument (`alongAxisAt(src, 1, row)`,
+      `simd_shuffle_xor(v, mask)`), the API's form is the method call
+      (`src.alongAxisAt(1, row)`, `v.simd_shuffle_xor(mask)`)
+    - declarations and comment lines stay out
+    """
+    blocked = nim_block_comment_lines(text)
+    names = "|".join(re.escape(n) for n in METHOD_CALL_NAMES)
+    decl_re = re.compile(r"\b(?:proc|func|template|macro|iterator)\s+(?:%s)\b" % names)
+    call_re = re.compile(r"\b(?:%s)\s*\(" % names)
+    for start, code in _logical_code_lines(text):
+        if start in blocked or not code.strip():
+            continue
+        if decl_re.search(code):
+            continue
+        m = call_re.search(code)
+        if not m:
+            continue
+        name = re.match(r"[A-Za-z_]\w*", code[m.start():]).group(0)
+        i = m.start() - 1
+        while i >= 0 and code[i] in " \t":
+            i -= 1
+        if i >= 0 and code[i] == ".":
+            continue
+        findings.append(Finding(
+            path, start, "method-call-syntax",
+            "%s is a method of its receiver, write "
+            "receiver.%s(...) instead of %s(receiver, ...)" % (name, name, name)))
+
+
 # Refusal slop rules: one-line-refusal, duplicate-refusal-coverage, refusal-essay, refusal-density
 
 # A refusal call: fail, failing, error, or a proc whose name starts with refus.
@@ -3233,6 +3274,7 @@ def scan(path, text, findings):
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
             nim_emitted_text_assert_checks(path, text, findings)
+            nim_method_call_syntax_checks(path, text, findings)
             nim_callable_semicolon_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
             check_license_driveby(path, text, findings)
