@@ -10,7 +10,7 @@
 # Effective bytes count only the K/V entries the kernel reads:
 #   sum over sequences of attended_seqlen * Hkv * (Dk + Dv) * sizeof(Elem)
 # attended_seqlen = seqlen - windowLo, windowLo = max(0, seqlen - windowSize).
-# Apply the same byte and flop model on the MLX side (bench_paged_sdpa_decode_mlx.py).
+# bench_paged_sdpa_decode_mlx.py (the MLX side) applies the same byte and flop model.
 #
 # Truth cases need an L2-busting K+V working set, so in-cache iteration
 # loops measure cache bandwidth above the 540 GB/s M4 Max DRAM peak.
@@ -38,8 +38,6 @@ else:
   type Elem = float32
 
 const
-  ## Bench geometry: one kv tile per page, pool layer 1 of 2.
-  ## SdpaPagedTile in tests/kernels/k_sdpa_paged matches this schedule.
   Hq = 32
   Hkv = 8
   Dk = 128
@@ -54,7 +52,7 @@ const
 proc sdpaBenchLoop(o, q, kPool, vPool, blockTable, cacheSeqlens: distinct TensorView,
                    scale: float32, Dk, Dv, PageSize: static int,
                    Windowed: static bool, windowSize: int, layer: int32, iters: int) =
-  ## `iters` attention passes in one launch, idempotent stores
+  ## Runs the identical attention pass `iters` times in one launch.
   for _ in 0 ..< iters:
     paged_sdpa_decode(
       tiledMma(float32, q.T, kPool.T, benchMT, benchNT, 32),
@@ -63,14 +61,10 @@ proc sdpaBenchLoop(o, q, kPool, vPool, blockTable, cacheSeqlens: distinct Tensor
       scale, Dk, Dv, PageSize, Windowed, windowSize, layer)
 
 proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
-  ## Non-uniform deterministic data, the base SDPA benches' pattern
   for i in 0 ..< tv.size():
     tv(i) = to(float32(i mod 7) * 0.25'f32 + 0.5'f32, T)
 
 proc makeFlatHostTensor(n: int): auto =
-  ## Rank-1 int32 host tensor over `n` freshly allocated elements.
-  ## `makeHostTensor` rejects rank-1 shapes, `originOffset` dies with a type
-  ## mismatch on the `(n,)` layout, like `loadFlatFixtureTensor` in tests/kernels/k_sdpa_paged.
   let layout = make_layout((n,))
   result = HostTensor[int32, typeof(layout.shape), typeof(layout.stride)](
     data: cast[ptr UncheckedArray[int32]](allocShared(n * sizeof(int32))),
@@ -78,14 +72,12 @@ proc makeFlatHostTensor(n: int): auto =
     layout: layout)
 
 proc attendedSeqlen(seqlen, windowSize: int, Windowed: static bool): int =
-  ## Keys one sequence attends: [windowLo, seqlen), windowLo = max(0, seqlen - windowSize)
   when Windowed:
     seqlen - max(0, seqlen - windowSize)
   else:
     seqlen
 
 proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed: static bool, windowSize: int, iters: int) =
-  ## One decode case: warmup, 3 timed launches, median GB/s and TFLOP/s
   let
     pagesPerSeq = seqlen.ceil_div(PageSize)
     maxPages = pagesPerSeq
@@ -113,7 +105,6 @@ proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed:
     fillPattern(kv)
     fillPattern(vv)
 
-  # block_table: sequential page ids across sequences, the bench tables fill every slot
   block:
     var btv = btHost.view()
     var nextPage = 0
@@ -129,7 +120,6 @@ proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed:
   let launchGrid = (1, Hq, numSeqs)
   let windowArg = when Windowed: windowSize else: low(int32)
 
-  # warmup
   block:
     let
       qDev = engine.bridge(qHost)
@@ -143,8 +133,8 @@ proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed:
       grid = launchGrid
       blk = (32, 1)
 
-  # timed, fresh bridges per rep. The launch overhead is measured.
-  # Drain: wait for the iterations before the next rep.
+  # Device-to-host copies drain the launch queue, so the measured time
+  # includes the launch overhead.
   var timings: array[3, int64]
   for rep in 0 ..< 3:
     block:
@@ -179,8 +169,7 @@ proc main =
   writeLine(stdout, "Paged SDPA decode Metal bench, B=1 Hq=32 Hkv=8 Dk=Dv=128 " &
     "page=32 tile=32x32 layer=1 of 2 " & sdpaDtype & " (M4 Max)")
   var engine = newEngine(runMetal)
-  # L2-resident contrast case: the 67 MB K+V working set fits L2 there.
-  # Iteration loops measure cache bandwidth, expect inflated bandwidth.
+  # Contrast case: the K+V working set fits the L2, so iteration measures cache bandwidth, not DRAM bandwidth.
   runCase(engine, "l2-resident", 8, 1024, Windowed = false, 0, iters = 50)
   # truth cases: the K+V working set busts L2 (>= 2 GB f32)
   runCase(engine, "truth", 32, 8192, Windowed = false, 0, iters = 2)
