@@ -216,6 +216,55 @@ The runtime layer turns it into an executing kernel:
 | Target static data is complete and consistent                   | The `checkScalarRow`/`checkScalarRowsTogether` static block in `targets_rows.nim`; a missing entry is a compile error at the printer's lookup site |
 | The passes layer exports only `register*` procs                 | The `passes-export` linter rule                                                                                   |
 
+## Backward differentiation
+
+`bwd_diff` derives a kernel's backward kernel at compile time:
+the vector-Jacobian product of the kernel's linearization.
+The expansion produces:
+
+- a const `BwdDiffKernels` artifact from `cgMetal.bwd_diff(kernel)`:
+  the printed forward, backward and reduce sources plus the pair's signature metadata
+- from the declared form `cgGlsl.bwd_diff(fwd, bwd, save = [...])`: the same artifact
+  built from a hand-written backward, validated against the mirror signature
+
+| Layer    | Files                                                 | Role                                                                                 |
+| ---      | ---                                                   | ---                                                                                  |
+| Pass     | `src/codegen/passes/passes_autodiff.nim`              | `autodiffBwdDerive`: the closure table, the validation walk, the derivation walk     |
+| Artifact | `src/codegen/autodiff.nim`                            | The pair pipelines, the thread-race analysis, the declared-backward mirror check     |
+| Metadata | `src/codegen/autodiff_types.nim`                      | The pair-ABI records the derivation walk writes into `CirModule.adMetas`             |
+| Runtime  | `src/runtime/autodiff_handle.nim`                     | `setupAutoDiff`, the `AdHandle` forward and backward macros, gradient allocation     |
+| Ingest   | `src/runtime/engines/metal_api.nim`, `vulkan_api.nim` | `ingestADKernel`: one library or SPIR-V module per launch name, main artifact intact |
+
+The derivation reuses the loop structure verbatim:
+
+- the frontend desugars every supported `for` into a `sVar` and assignment preamble
+  before a `sWhile` whose last body statement increments the loop variable
+- the pass pattern-matches that shape and refuses anything else
+
+The gradient mechanics:
+
+- buffer gradients gather and scatter through shadow adjoint buffers `d_<name>`
+- scalar gradients accumulate into per-index-and-thread partials, one generated
+  single-thread reduce kernel folds the partials into the scalar's 1-element buffer
+- constructs outside the differentiable subset refuse at expansion, every message
+  prefixed `bwd_diff: ` for grepping
+- the refusal suite `t_ad_expansion_refusals.nim` locks one red test per refusal entry
+
+A multi-thread workgroup annotation requires the affine thread-term analysis to prove
+every buffer-slot write thread-local, else the pair refuses: the threadgroup would race
+on the gradient.
+
+The pair targets Metal and Vulkan GLSL:
+
+- `setupAutoDiff` ingests each kernel of the pair standalone
+- the `AdHandle` forward and backward macros launch the pair's kernels at the baked workgroup
+- the reduce kernels always launch one thread
+
+The test tree:
+
+- gradient round trips live under `tests/autodiff/`, exact-equality against Nim closed forms
+- the Metal suites run end to end, one Vulkan GLSL spot runs via MoltenVK
+
 ## Refusals and testing
 
 Refusals flow end to end as strings, no exceptions cross the pipeline:
