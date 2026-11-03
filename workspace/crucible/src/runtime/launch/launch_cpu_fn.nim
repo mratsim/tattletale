@@ -93,6 +93,20 @@ func resolveKernelOverload(kernel: NimNode, argCount: int): NimNode =
     $argCount & " arguments"
   match
 
+proc assertDimsWithinInt32(grid, blk: Dim3) =
+  ## Runtime guard for the emitted-C launch's int32 indexing.
+  ##
+  ## - the data struct stores each grid and block dim as int32 and the iteration function computes the workgroup total in int32
+  ## - a dim or the grid product beyond int32 truncates and the launch would silently run fewer workgroups than the schedule requests
+  for (kind, dim) in [("grid", grid.x), ("grid", grid.y), ("grid", grid.z),
+                      ("blk", blk.x), ("blk", blk.y), ("blk", blk.z)]:
+    doAssert dim <= high(int32),
+      "launchCpuFn: " & kind & " dim " & $dim & " exceeds int32, the emitted C launch stores each dim as int32"
+  let workgroups = int64(grid.x) * int64(grid.y) * int64(grid.z)
+  doAssert workgroups <= high(int32),
+    "launchCpuFn: the grid workgroup total " & $workgroups &
+    " exceeds int32, the emitted C launch computes the workgroup total in int32"
+
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Kernel wrapper
 # ═══════════════════════════════════════════════════════════════════════
@@ -204,7 +218,12 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
       hoists.add(nnkVarSection.newTree(
         nnkIdentDefs.newTree(ident(name), newEmptyNode(), arg)))
 
-  var launchBody = nnkStmtList.newTree(gridDecl, blkDecl, hoists)
+  # int32 indexing: data struct dims, workgroup total and pooled task count
+  # are all int32 in the emitted C, a schedule beyond that index refuses
+  # before any runtime argument evaluates
+  var launchBody = nnkStmtList.newTree(gridDecl, blkDecl,
+    nnkCall.newTree(bindSym"assertDimsWithinInt32", gridVar, blkVar),
+    hoists)
   # launch shape: both thread modes emit C. The launch splits the text in two:
   # - file-scope unit: nominal struct definitions, per-launch data struct, callees, iteration function, task function except in serial mode
   # - launch tail: data struct fill, launch call, inline emit

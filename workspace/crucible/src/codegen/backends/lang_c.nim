@@ -713,6 +713,7 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   # iteration function: one call per pool task, tpc_i is the task index.
   # Each task covers crucibleWgsPerTask adjacent workgroups in x-fastest flat order.
   # Every workgroup runs the decomposition prologue, the thread loop nest and the kernel body. The last task clamps at the grid total.
+  # Grid dims and the workgroup total stay within int32, so the int32 arithmetic cannot overflow.
   var iter = "void crucibleIter" & suffix & "(int32_t tpc_i, void* tpc_env_) {\n"
   iter.add("    struct " & dataName & "* tpc_d_ = (struct " & dataName & "*)tpc_env_;\n")
   iter.add("    int32_t crucibleWgTotal = tpc_d_->crucibleGrid[0] * tpc_d_->crucibleGrid[1] * tpc_d_->crucibleGrid[2];\n")
@@ -782,10 +783,10 @@ proc emitCpuSerialTailC*(suffix: string, runtimeParams: seq[tuple[name: string, 
   ##
   ## - crucibleWgsPerTask is the grid workgroup total. One call covers every workgroup in x-fastest flat order
   ## - the iteration function clamps the range at the grid total
-  ## - the serial launch ignores the pooled-launch knob workgroupsPerTask
+  ## - the product computes in int64 and the launch's dim guard keeps the total within int32
   var tail = "    extern void crucibleIter" & suffix & "(int32_t tpc_i, void* tpc_env_);\n"
   tail.add("    struct crucibleData" & suffix & " crucibleData;\n")
   tail.add(emitCpuDataFillC(suffix, runtimeParams))
-  tail.add("    crucibleData.crucibleWgsPerTask = (int32_t)(`crucibleGrid`.x * `crucibleGrid`.y * `crucibleGrid`.z);\n")
+  tail.add("    crucibleData.crucibleWgsPerTask = (int32_t)((int64_t)`crucibleGrid`.x * `crucibleGrid`.y * `crucibleGrid`.z);\n")
   tail.add("    crucibleIter" & suffix & "(0, &crucibleData);\n")
   tail
