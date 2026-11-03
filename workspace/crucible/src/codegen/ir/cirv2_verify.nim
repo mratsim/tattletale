@@ -15,13 +15,35 @@ import cirv2_pretty
 #
 # ############################################################
 
+## Verifier for the two contracts every pass boundary relies on, run by `runPasses`
+## once after the last transform pass.
+##
+## Dev-only: `CirModule.verifyIR`, defaulted from `-d:CIR_verify`.
+## Read-only: returns the first violation, rendered with the offending proc, never rewrites.
+##
+## Checks, per module:
+## - proc names unique: printers emit names verbatim, the runtime caches binaries on kernel names
+##
+## Checks, per proc (kernels and device functions alike, lowering rewrites bodies in place):
+## - param names unique: duplicates emit ill-formed target source
+## - every symbol resolves to a param, a `sVar` declared earlier in the body,
+##   a module global, or another module proc
+##   - a `sVar` joins scope after its initializer checks
+##   - declarations inside a branch or loop body scope to that body, matching the braces every printer emits
+##
+## Exempt from the scope walk: `{.builtin.}`-marked symbols and `IntrinsicCallees` below, each backed by the pass that emits it.
+##
+## Not checked, deliberately:
+## - feature-flag consistency: the pass registry refuses transforms after analyses
+## - forward/backward pair ABI: the autodiff refusals own it
+## - enum dispatch coverage: the compiler guarantees it
+## - any canonical form: none is imposed
+
 const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
-  ## Callees that no declaration ever backs, exempt from the scope walk.
-  ## The printers emit each name verbatim and the target languages provide it:
+  ## Each entry is emitted by a named pass and provided by the target languages:
   ##
-  ## - `__builtin_memcpy`: the decomposeArrayAssign pass emits it, C targets provide the intrinsic
-  ## - `max`, `min`: the foldMaxMinToBuiltins pass emits ternary max/min idioms
-  ##   as calls to these names, WGSL and HLSL provide the native builtins
+  ## - `__builtin_memcpy`: the decomposeArrayAssign pass, C targets provide the intrinsic
+  ## - `max`, `min`: the foldMaxMinToBuiltins pass, WGSL and HLSL provide the native builtins
 
 proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string]): string =
   ## Returns "" while every symbol in `e` resolves, else the violation.
@@ -117,23 +139,8 @@ proc renderProcRefusal(fn: CirProc, violation: string): string =
   violation & "\n" & renderProc(fn)
 
 proc verifyModule*(m: CirModule): string =
-  ## Returns "" while the module upholds the pass-boundary contracts,
+  ## Returns "" while the module upholds the pass-boundary contracts (catalogue in the module header),
   ## else the first violation rendered as a refusal line plus the offending proc for context.
-  ## Read-only: the walk never rewrites or repairs the IR.
-  ## runPasses calls it once, after the last transform pass.
-  ##
-  ## Contract, per module:
-  ## - proc names are unique: the printers emit each name verbatim into the artifact,
-  ##   and the runtime caches compiled binaries on kernel names
-  ##
-  ## Contract, per proc:
-  ## - param names are unique: duplicate names emit ill-formed target source
-  ## - a symbol resolves to the proc's params, a `sVar` declared earlier in the body, a module global, or another module proc
-  ## - `{.builtin.}`-marked symbols are target intrinsics, exempt
-  ## - declaration precedes use inside the proc body, globals and procs carry no statement order
-  ##
-  ## Module procs and kernels are walked the same way: the lowering passes rewrite device function bodies in place,
-  ## so a transform can dangle a symbol in either.
   var moduleNames: HashSet[string]
   for g in m.globals:
     if g.kind == sVar:
