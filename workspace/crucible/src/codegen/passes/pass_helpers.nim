@@ -243,7 +243,7 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.name = s.name
       c.declType = s.declType
       c.init = cloneExpr(s.init)
-      c.space = s.space
+      c.addressSpace = s.addressSpace
     of sConst:
       c.name = s.name
       c.declType = s.declType
@@ -481,7 +481,7 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
   var i = 0
   while i < ss.len:
     let s = ss[i]
-    if s.kind == sVar and s.space == caConstant:
+    if s.kind == sVar and s.addressSpace == caConstant:
       if s.init == nil:
         return "at " & fn.name & ": const_mem local " & s.name &
           " without an initializer"

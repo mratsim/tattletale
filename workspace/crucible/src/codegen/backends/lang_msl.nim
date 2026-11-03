@@ -100,9 +100,9 @@ proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
   printCDecl(TargetVocabs[cgMetal].scalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
-proc getMslPtrQualifier(space: AddressSpace): string =
+proc getMslPtrQualifier(addressSpace: AddressSpace): string =
   ## MSL qualifier before a pointer declaration or cast, one word per space.
-  case space
+  case addressSpace
   of caThread: "thread"
   of caThreadgroup: "threadgroup"
   of caConstant: "constant"
@@ -111,7 +111,7 @@ proc getMslPtrQualifier(space: AddressSpace): string =
 proc emitMslPtr(t: CirType, ident: string): string =
   ## MSL declaration text of a pointer or array pointer with its address space:
   ## `device float* p`, pointer-to-array `device float (*p)[N]`.
-  let qualifier = getMslPtrQualifier(t.space)
+  let qualifier = getMslPtrQualifier(t.addressSpace)
   let sep = if qualifier.len > 0: " " else: ""
   result = qualifier & sep &
     printCDecl(TargetVocabs[cgMetal].scalarNames, mslVectorRule, printerTarget, t, ident, true)
@@ -159,7 +159,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   let t = e.castType
   var castTyp = emitMslType(t, "", true)
   if t.kind in {ctPtr, ctAptr}:
-    castTyp = getMslPtrQualifier(t.space) & ' ' & castTyp
+    castTyp = getMslPtrQualifier(t.addressSpace) & ' ' & castTyp
   return "(" & castTyp & ")" & ctx.printExpr(e.castOperand)
 
 proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string =
@@ -202,13 +202,13 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## Only a kernel's initializer-less smem local and ordinary locals reach here.
   ## The lowering pass refuses a device function's smem local and hoists const_mem locals to program scope.
-  if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, the MSL lowering pass hoists const_mem locals to program scope")
+  if s.addressSpace == caConstant:
+    ctx.fail("local " & s.name & " in constant addressSpace, the MSL lowering pass hoists const_mem locals to program scope")
     return false
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
-  if s.space == caThreadgroup:
+  if s.addressSpace == caThreadgroup:
     return "threadgroup " & emitMslType(s.declType, s.name, false)
   if s.declType.kind in {ctPtr, ctAptr}:
     return emitMslPtr(s.declType, s.name)
@@ -256,7 +256,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   var slot = 0
   if fn.isKernel:
     for p in fn.params:
-      if p.typ.kind == ctPtr and p.typ.space == caThreadgroup:
+      if p.typ.kind == ctPtr and p.typ.addressSpace == caThreadgroup:
         result.add emitMslSmemParam(p)
         continue
       case p.typ.kind
@@ -280,7 +280,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
     for p in fn.params:
       case p.typ.kind
       of ctAptr, ctPtr:
-        if p.typ.space == caThreadgroup and p.typ.kind == ctPtr:
+        if p.typ.addressSpace == caThreadgroup and p.typ.kind == ctPtr:
           result.add emitMslSmemParam(p)
         else:
           result.add emitMslPtr(p.typ, p.name)

@@ -91,7 +91,7 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]): string =
   var i = 0
   while i < fn.body.len:
     let s = fn.body[i]
-    if s.kind == sVar and s.space == caThreadgroup:
+    if s.kind == sVar and s.addressSpace == caThreadgroup:
       let err = fn.hoistSmemLocal(s, arenas)
       if err.len > 0:
         return err
@@ -119,10 +119,10 @@ proc rewriteArenaReadsStmts(ss: seq[CirStmt], arenaTypes: Table[string, CirType]
 
 proc ownedSmemNames(fn: CirProc): HashSet[string] =
   for p in fn.params:
-    if p.typ.kind == ctPtr and p.typ.space == caThreadgroup:
+    if p.typ.kind == ctPtr and p.typ.addressSpace == caThreadgroup:
       result.incl(p.name)
   for s in fn.body:
-    if s.kind == sVar and s.space == caThreadgroup:
+    if s.kind == sVar and s.addressSpace == caThreadgroup:
       result.incl(s.name)
 
 proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
@@ -366,7 +366,7 @@ proc mslRewriteSmemLocals(m: CirModule): string =
     let kernel = fn.isKernel
     let procName = fn.name
     let onStmt = proc(s: CirStmt) =
-      if s.kind != sVar or s.space != caThreadgroup:
+      if s.kind != sVar or s.addressSpace != caThreadgroup:
         return
       if not kernel:
         err = "at " & procName & ": smem local " & s.name &

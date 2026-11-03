@@ -76,7 +76,7 @@ type
       vN*: int
       vElem*: CirType
     of ctPtr, ctAptr:
-      space*: AddressSpace
+      addressSpace*: AddressSpace
       pElem*: CirType
     of ctStruct:
       name*: string
@@ -248,14 +248,14 @@ type
     ## Control flow is statement-based:
     ## - `ite` selects between two statement lists on a bool condition
     ## - `loop` runs unconditionally, `while` re-tests its condition before every iteration
-    ## - a `var` declares the memory class of its declaration in `space`, `const` ignores `space`
+    ## - a `var` declares the memory class of its declaration in `addressSpace`, `const` ignores `addressSpace`
     ##   (`caThread` is per-thread registers and the unannotated default)
     case kind*: CirStmtKind
     of sVar, sConst:
       name*: string
       declType*: CirType
       init*: CirExpr
-      space*: AddressSpace
+      addressSpace*: AddressSpace
     of sAsgn:
       lhs*, rhs*: CirExpr
     of sIte:
@@ -290,7 +290,7 @@ type
 
   CirParam* = object
     ## One kernel or proc parameter. Pointer parameters name their memory
-    ## class inside the `ptr`/`aptr` type (`space`).
+    ## class inside the `ptr`/`aptr` type (`addressSpace`).
     name*: string
     typ*: CirType
     varParam*: bool
@@ -411,12 +411,12 @@ func isLargeStruct*(t: CirType): bool =
   ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
   t != nil and t.kind == ctStruct and computeCirSizeBytes(t) > 24
 
-proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
-  ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.
+proc withAddressSpace*(t: CirType, addressSpace: AddressSpace): CirType =
+  ## Returns a copy of pointer type `t` re-spaced to `addressSpace`, with the pointee shared.
   ## CirType values are shared refs: a caller never re-spaces in place, so the copy is the per-site instance.
   doAssert t != nil and t.kind in {ctPtr, ctAptr}
   result = CirType(kind: t.kind)
-  result.space = space
+  result.addressSpace = addressSpace
   result.pElem = t.pElem
 
 proc structuralEqual*(a, b: CirType): bool =
@@ -437,7 +437,7 @@ proc structuralEqual*(a, b: CirType): bool =
   of ctVector:
     result = a.vN == b.vN and structuralEqual(a.vElem, b.vElem)
   of ctPtr, ctAptr:
-    result = a.space == b.space and structuralEqual(a.pElem, b.pElem)
+    result = a.addressSpace == b.addressSpace and structuralEqual(a.pElem, b.pElem)
   of ctStruct:
     if a.fields.len != b.fields.len:
       return false
@@ -478,7 +478,7 @@ proc sameType*(a, b: CirType): bool =
   of ctVector:
     result = a.vN == b.vN and sameType(a.vElem, b.vElem)
   of ctPtr, ctAptr:
-    result = a.space == b.space and sameType(a.pElem, b.pElem)
+    result = a.addressSpace == b.addressSpace and sameType(a.pElem, b.pElem)
   of ctStruct:
     result = a.name == b.name
   of ctArray:
@@ -633,7 +633,7 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   of eSym:
     let t = e.typ
     if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
+      result = t.addressSpace
   of eDeref, eAt, ePat:
     # element reads live where the base's storage lives
     let base = case e.kind
@@ -645,18 +645,18 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   of eDot:
     let t = getExprType(e)
     if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
+      result = t.addressSpace
     elif e.dotBase != nil:
       result = resolveAddressSpace(e.dotBase)
   of eCast, eConv:
     let t = e.castType
     if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
+      result = t.addressSpace
     elif e.castOperand != nil:
       result = resolveAddressSpace(e.castOperand)
   of eAddr:
     if e.addrType != nil and e.addrType.kind in {ctPtr, ctAptr}:
-      result = e.addrType.space
+      result = e.addrType.addressSpace
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     result = resolveAddressSpace(e.left)
     if result == caDevice:

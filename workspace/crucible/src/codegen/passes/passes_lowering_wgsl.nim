@@ -56,7 +56,7 @@ proc crossesWgslSignature(t: CirType): bool =
   of ctAptr:
     result = true
   of ctPtr:
-    result = t.space != caThread
+    result = t.addressSpace != caThread
   else:
     result = false
 

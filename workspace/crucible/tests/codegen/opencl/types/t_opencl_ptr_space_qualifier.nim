@@ -35,7 +35,7 @@ proc runTest() =
   engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("cloneKernel", cDev, ())
   engine.copyToHostFromDevice(addr cloneRes[0], cDev, 1)
   doAssert cloneRes[0] == 1,
-    "thread-space clone read got " & $cloneRes[0] & ", expected 1"
+    "thread-addressSpace clone read got " & $cloneRes[0] & ", expected 1"
 
   var smemRes: array[8, uint32]
   let sDev = engine.allocDevice(uint32, 8)
@@ -46,7 +46,7 @@ proc runTest() =
       "slot " & $i & ": got " & $smemRes[i] & ", expected " &
       $(uint32(i) * 3'u32 + 1) & " (write through __local pointer)"
 
-  echo "  OK - OpenCL pointer qualifiers follow the address space and compute"
+  echo "  OK - OpenCL pointer qualifiers follow the address addressSpace and compute"
 
 when isMainModule:
   runTest()

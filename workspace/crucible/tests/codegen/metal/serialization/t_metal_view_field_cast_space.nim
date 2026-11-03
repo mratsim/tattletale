@@ -33,8 +33,8 @@ const viewCastMsl = metal:
     Out[0] = uint32(readAt(glA.base +% baseOff, 0))
 
 proc runTest() =
-  suite "Metal - address-space propagation through pointer casts":
-    test "view base pointer arithmetic keeps the device address space":
+  suite "Metal - address-addressSpace propagation through pointer casts":
+    test "view base pointer arithmetic keeps the device address addressSpace":
       var engine = newEngine(runMetal)
       engine.ingest(viewCastMsl)
       var A = [uint16(10), 20, 30, 40, 50, 60, 70, 80]

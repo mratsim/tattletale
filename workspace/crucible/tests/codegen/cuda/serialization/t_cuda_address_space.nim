@@ -13,7 +13,7 @@ const addressSpaceCuda = cuda:
     output[0] = scratch[0]
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
-  suite "NVRTC - address-space emission for locals":
+  suite "NVRTC - address-addressSpace emission for locals":
     test "unannotated locals emit no qualifier, smem keeps __shared__, and run":
       var engine = newEngine(runCuda)
       engine.ingest(addressSpaceCuda)

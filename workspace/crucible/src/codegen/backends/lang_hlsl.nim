@@ -314,7 +314,7 @@ proc printCallArg(ctx: var PrintCtx, callee: CirExpr, i: int, a: CirExpr): strin
       callee.kind == eSym and ctx.procs.hasKey(callee.name):
     let fn = ctx.procs[callee.name]
     if i < fn.params.len and fn.params[i].typ.kind == ctPtr and
-        fn.params[i].typ.space == caThread:
+        fn.params[i].typ.addressSpace == caThread:
       return a.addrOperand.name
   return ctx.printExpr(a)
 
@@ -464,14 +464,14 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   if s.declType.kind == ctAptr:
     ctx.fail("buffer local " & s.name & " has no HLSL binding, buffers are kernel parameters")
     return false
-  if s.space == caThreadgroup:
-    ctx.fail("local " & s.name & " in threadgroup space, HLSL has no program-scope shared emission")
+  if s.addressSpace == caThreadgroup:
+    ctx.fail("local " & s.name & " in threadgroup addressSpace, HLSL has no program-scope shared emission")
     return false
-  if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, the HLSL lowering pass moves const_mem locals to program scope")
+  if s.addressSpace == caConstant:
+    ctx.fail("local " & s.name & " in constant addressSpace, the HLSL lowering pass moves const_mem locals to program scope")
     return false
-  if s.space == caDevice:
-    ctx.fail("local " & s.name & " in device space, HLSL locals are per-thread registers")
+  if s.addressSpace == caDevice:
+    ctx.fail("local " & s.name & " in device addressSpace, HLSL locals are per-thread registers")
     return false
   true
 
@@ -568,8 +568,8 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
   for p in fn.params:
     case p.typ.kind
     of ctAptr:
-      if p.typ.space != caDevice:
-        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space & " space, buffers address device memory")
+      if p.typ.addressSpace != caDevice:
+        ctx.fail("buffer parameter " & p.name & " in " & $p.typ.addressSpace & " addressSpace, buffers address device memory")
         return
       if ctx.flavor == fvVulkan:
         # element types are checked up front, the access emitter and the buffer-pointer typedef both read them
@@ -582,14 +582,14 @@ proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[stri
       # HLSL has no string type name, the scalar-name lookup refuses it
       discard
     of ctPtr:
-      if p.typ.space == caThread:
+      if p.typ.addressSpace == caThread:
         if fn.isKernel:
           ctx.fail("by-reference parameter " & p.name & " in kernel `" & fn.name & "` has no binding")
           return
         # device function: the `inout` binding, reads and writes are direct
         discard
       else:
-        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.space & " space has no binding")
+        ctx.fail("pointer parameter " & p.name & " in " & $p.typ.addressSpace & " addressSpace has no binding")
         return
     of ctArray:
       ctx.fail("array parameter " & p.name & " in `" & fn.name & "` has no binding, buffers pass as `ptr UncheckedArray[T]`")

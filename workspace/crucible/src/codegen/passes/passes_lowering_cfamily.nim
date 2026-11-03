@@ -48,7 +48,7 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
     var i = 0
     while i < fn.body.len:
       let s = fn.body[i]
-      if s.kind == sVar and s.space == caThreadgroup:
+      if s.kind == sVar and s.addressSpace == caThreadgroup:
         if not fn.isKernel:
           # a device-function smem local remains in place and the printer refuses it,
           # program-scope workgroup storage belongs to the kernel
@@ -56,7 +56,7 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
           continue
         m.globals.add s
         fn.body.delete i
-      elif s.kind == sVar and s.space == caConstant:
+      elif s.kind == sVar and s.addressSpace == caConstant:
         if s.init == nil:
           return "at " & fn.name & ": const_mem local " & s.name &
             " without an initializer"
@@ -109,7 +109,7 @@ proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
   var i = 0
   while i < ss.len:
     let s = ss[i]
-    if s.kind == sVar and s.space == caThreadgroup and s.init != nil:
+    if s.kind == sVar and s.addressSpace == caThreadgroup and s.init != nil:
       if s.declType.kind in {ctArray, ctStruct} and
           s.init.kind notin {eAconstr, eOconstr}:
         return "at " & fnName & ": smem local " & s.name &
@@ -160,7 +160,7 @@ proc rewriteSmemInits(m: CirModule): string =
         return err
   var entryStores: seq[CirStmt]
   for g in mitems(m.globals):
-    if g.kind == sVar and g.space == caThreadgroup and g.init != nil:
+    if g.kind == sVar and g.addressSpace == caThreadgroup and g.init != nil:
       entryStores.add buildSmemInitStores(g.name, g.declType, g.init)
       g.init = nil
   if entryStores.len > 0:

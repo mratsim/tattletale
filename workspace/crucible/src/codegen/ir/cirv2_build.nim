@@ -37,11 +37,11 @@ proc tBf16*(): CirType =
 proc tVec*(n: int, elem: CirType): CirType =
   CirType(kind: ctVector, vN: n, vElem: elem)
 
-proc tPtr*(space: AddressSpace, elem: CirType): CirType =
-  CirType(kind: ctPtr, space: space, pElem: elem)
+proc tPtr*(addressSpace: AddressSpace, elem: CirType): CirType =
+  CirType(kind: ctPtr, addressSpace: addressSpace, pElem: elem)
 
-proc tAptr*(space: AddressSpace, elem: CirType): CirType =
-  CirType(kind: ctAptr, space: space, pElem: elem)
+proc tAptr*(addressSpace: AddressSpace, elem: CirType): CirType =
+  CirType(kind: ctAptr, addressSpace: addressSpace, pElem: elem)
 
 proc fld*(name: string, typ: CirType): CirField =
   CirField(name: name, typ: typ)
@@ -52,13 +52,13 @@ proc tStruct*(name: string, fields: varargs[CirField]): CirType =
 proc tArray*(n: int, elem: CirType): CirType =
   CirType(kind: ctArray, aN: n, aElem: elem)
 
-proc tSpan*(space: AddressSpace, elem: CirType): CirType =
-  ## Runtime-length view over `elem` storage in `space`:
+proc tSpan*(addressSpace: AddressSpace, elem: CirType): CirType =
+  ## Runtime-length view over `elem` storage in `addressSpace`:
   ##
   ## - an `openArray[T]` parameter or the result of a `toOpenArray` call
   ## - the span split pass decomposes every span into an element pointer
   ##   plus an int32 length, no span survives to the printers
-  CirType(kind: ctSpan, sSpace: space, sElem: elem)
+  CirType(kind: ctSpan, sSpace: addressSpace, sElem: elem)
 
 proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
   CirType(kind: ctProc, params: @params, ret: ret)
@@ -189,11 +189,11 @@ proc callE*(callee: CirExpr, args: varargs[CirExpr]): CirExpr =
 
 # Statement constructors
 
-proc varD*(name: string, typ: CirType, init: CirExpr = nil, space: AddressSpace = caThread): CirStmt =
+proc varD*(name: string, typ: CirType, init: CirExpr = nil, addressSpace: AddressSpace = caThread): CirStmt =
   ## Declares a local:
-  ## - `space` names the memory class
+  ## - `addressSpace` names the memory class
   ## - `caThread` is the per-thread register default, `caThreadgroup` a `{.smem.}` local, `caConstant` a `{.const_mem.}` local
-  CirStmt(kind: sVar, name: name, declType: typ, init: init, space: space)
+  CirStmt(kind: sVar, name: name, declType: typ, init: init, addressSpace: addressSpace)
 
 proc constD*(name: string, typ: CirType, value: CirExpr): CirStmt =
   CirStmt(kind: sConst, name: name, declType: typ, init: value)

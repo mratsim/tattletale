@@ -268,7 +268,7 @@ proc bindsNimBool(ctx: var PrintCtx, name: string): bool =
     if p.name == name and p.typ.kind == ctBool:
       return true
   for g in ctx.m.globals:
-    if g.kind == sVar and g.space == caThreadgroup and
+    if g.kind == sVar and g.addressSpace == caThreadgroup and
         g.declType.kind == ctBool and g.name == name:
       return true
   false
@@ -310,7 +310,7 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
     var (baseTxt, idxTxt) = ctx.printSubscriptParts(e)
     let bt = getExprType(base)
     if bt != nil and bt.kind in {ctPtr, ctAptr} and
-        not (bt.kind == ctAptr and bt.space == caDevice):
+        not (bt.kind == ctAptr and bt.addressSpace == caDevice):
       baseTxt = "(*" & baseTxt & ")[" & idxTxt & "]"
     else:
       baseTxt = baseTxt & "[" & idxTxt & "]"
@@ -338,14 +338,14 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## WGSL locals are function or workgroup storage, the WGSL lowering pass
   ## hoists the storage spaces to program scope.
-  if s.space == caThreadgroup:
-    ctx.fail("local " & s.name & " in threadgroup space, the WGSL lowering pass gives it program scope")
+  if s.addressSpace == caThreadgroup:
+    ctx.fail("local " & s.name & " in threadgroup addressSpace, the WGSL lowering pass gives it program scope")
     return false
-  elif s.space == caConstant:
-    ctx.fail(s.name & " is a constant-space local the WGSL lowering pass relocates to program scope")
+  elif s.addressSpace == caConstant:
+    ctx.fail(s.name & " is a constant-addressSpace local the WGSL lowering pass relocates to program scope")
     return false
-  elif s.space == caDevice:
-    ctx.fail("local " & s.name & " in device space, WGSL locals are function/workgroup")
+  elif s.addressSpace == caDevice:
+    ctx.fail("local " & s.name & " in device addressSpace, WGSL locals are function/workgroup")
     return false
   true
 
@@ -402,7 +402,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated storage local.
   ## No initializer survives relocation, the rewrite ran before printing.
-  if s.space == caThreadgroup:
+  if s.addressSpace == caThreadgroup:
     let ty = if s.declType.kind == ctBool:
       TargetVocabs[cgWebGPU].storageBool
     else:
@@ -473,7 +473,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
         usesNimBool = true
         break scan
     for g in m.globals:
-      if g.kind == sVar and g.space == caThreadgroup and g.declType.kind == ctBool:
+      if g.kind == sVar and g.addressSpace == caThreadgroup and g.declType.kind == ctBool:
         usesNimBool = true
         break scan
     for t in m.types:

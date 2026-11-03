@@ -525,7 +525,7 @@ proc printTargetExpr*(ctx: var auto, e: CirExpr): string =
     if e.coordBuiltin != cbkNone:
       return ctx.coordRef(e)
     if e.typ != nil and e.typ.kind == ctPtr and
-        e.typ.space in ctx.emit.noPointerValues.spaces:
+        e.typ.addressSpace in ctx.emit.noPointerValues.spaces:
       ctx.fail(ctx.emit.noPointerValues.text % e.name)
       return ""
     return ctx.getSymbolText(e)
@@ -977,7 +977,7 @@ proc printProgramScopeDecls*(ctx: var auto, m: CirModule, spaces: set[AddressSpa
   ## one per `sVar` in `spaces`, then a blank line after a non-empty section.
   mixin emitComputeGlobal
   for s in m.globals:
-    if s.kind == sVar and s.space in spaces:
+    if s.kind == sVar and s.addressSpace in spaces:
       let decl = ctx.emitComputeGlobal(s)
       if decl.len > 0:
         result &= decl & '\n'
