@@ -7,14 +7,12 @@
 
 ## autodiffBwdDerive on CIRv2: the axpy backward kernel pair
 ##
-## Checks the derived axpy backward kernel pair: the d-block-first signature,
-## the exact gradient algebra, one single-thread reduce kernel, plus the pair
-## metadata for the module, and a `bwd_diff:` refusal on a data-dependent loop
+## Test that the derived axpy backward has the d-block-first signature and a data-dependent loop refuses with `bwd_diff:`
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off --outdir:build/tests workspace/crucible/tests/autodiff/t_ad_derive_axpy.nim
 
-import std/[macros, sequtils, sets, strutils, tables]
+import std/[macros, sets, strutils, tables]
 import workspace/crucible
 import workspace/crucible/src/codegen/frontend/nim_to_crucible
 import workspace/crucible/src/codegen/passes/pass_registry

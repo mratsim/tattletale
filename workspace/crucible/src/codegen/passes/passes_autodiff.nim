@@ -32,7 +32,7 @@
 #   │ <hoisted start/stop expressions>    # zero or more ordinary statements
 #   │ (var i <intT> .)                    # loop variable, no initializer
 #   │ (asgn i <start>)                    # start assignment before the while
-#   │ (while (lt|le <intT> i <bound>)     # bound: int literal or kernel param
+#   │ (while (lt <intT> i <bound>)        # exclusive bound: int literal or kernel param
 #   │   <body>                            # the loop variable never re-assigns
 #   │   (asgn i (add <intT> i <step>)))   # last body statement, positive int-literal step
 #
@@ -73,13 +73,13 @@ func registerAutodiffPasses*(reg: var PassRegistry) =
 #
 # A value whose type is not a 32- or 64-bit float has an identically zero gradient,
 # so its class is pass-through: int operands are primal and bool results
-# contribute no gradient. The refusal suite locks one test per refused kind.
+# contribute no gradient.
 #
 # kind           class         rule
 # -------------  ------------  ------------------------------------------
 # eNil           pass-through  constant, zero gradient
 # eTrue/eFalse   pass-through  constant, zero gradient
-# eSym           gradient      float scalar param reduces into partials, local to its definition, buffer values are refused
+# eSym           gradient      float scalar param reduces into partials, local to its definition, other symbols carry no gradient
 # eIntLit        pass-through  constant, zero gradient
 # eFloatLit      pass-through  constant, zero gradient
 # eStrLit        pass-through  constant, zero gradient
@@ -88,8 +88,8 @@ func registerAutodiffPasses*(reg: var PassRegistry) =
 # eDot           gradient      coordinate-builtin read is thread identity (zero gradient), other member access has no rule
 # eAdd/eSub      gradient      chain the gradient to both operands, `-` negates the right one
 # eMul           gradient      each operand's gradient is the incoming gradient times the other operand
-# eDiv           gradient      left: g / right; right: -(g * left) / (right * right)
-# eMod           refuse        no gradient rule over floats, int-typed mod zeroes out earlier
+# eDiv           gradient      left gets g / right, right gets -(g * left) / (right * right)
+# eMod           pass-through  int-typed mod, zero gradient
 # eShl..eBitXor  pass-through  int-typed bitwise and shift ops, zero gradient
 # eEq..eLe       pass-through  bool result, zero gradient
 # eNot/eAnd/eOr  pass-through  bool result, zero gradient
@@ -106,7 +106,7 @@ func registerAutodiffPasses*(reg: var PassRegistry) =
 # sAsgn          gradient      a buffer-slot write seeds the gradient from `d_<buffer>`, a local write defines the substituted value
 # sIte           gradient      branch-only gradients under the substituted condition
 # sWhile         refuse        a while without the desugared-for preamble is data-dependent
-# sRet           pass-through  the frontend's trailing fall-through `ret(nil)`, a valued return is refused
+# sRet           pass-through  the frontend's trailing fall-through `ret(nil)`, every other return refuses
 # sDiscard       pass-through  no value
 # sCall          gradient      barriers re-emit verbatim, atomics accumulate atomically into shadow adjoints, every other statement call is refused
 # sAsm/sEmit     refuse        raw target-source injection has no gradient
@@ -125,12 +125,6 @@ const NodeRefusalText: array[CirExprKind, string] = block:
   t[eAddr] = "address-of moves the gradient off the differentiated value"
   t[eOconstr] = "aggregate constructions have no member gradients"
   t[eAconstr] = "aggregate constructions have no member gradients"
-  t[eMod] = "operator has no gradient rule"
-  t[eShl] = "operator has no gradient rule"
-  t[eShr] = "operator has no gradient rule"
-  t[eBitAnd] = "operator has no gradient rule"
-  t[eBitOr] = "operator has no gradient rule"
-  t[eBitXor] = "operator has no gradient rule"
   t
 
 const StmtRefusalText: array[CirStmtKind, string] = block:
@@ -151,7 +145,6 @@ const MathWhitelist = ["exp", "ln", "sqrt", "rsqrt"]
   ## Every other callee is refused: inline it before autodiffBwdDerive.
 
 func isDiffFloat(t: CirType): bool =
-  ## Float widths that carry gradients: 32 and 64 bits.
   t != nil and t.kind == ctFloat and (t.bits == 32 or t.bits == 64)
 
 func isCoordRead(e: CirExpr): bool =
@@ -162,11 +155,10 @@ func isCoordRead(e: CirExpr): bool =
     e.dotBase.coordBuiltin != cbkNone
 
 func isMathBuiltinCall(e: CirExpr): bool =
-  ## True for a unary call to one of the whitelisted math builtins.
   e.callee.kind == eSym and e.callee.builtin and e.args.len == 1 and
     e.callee.name in MathWhitelist
 
-func bufferElemType(p: CirParam): CirType =
+func getBufferElemType(p: CirParam): CirType =
   ## Element type of a buffer parameter, nil when `p` is not one.
   ## Buffer parameters are `ptr UncheckedArray[T]` (an `aptr`) or `ptr array[N, T]`,
   ## a static-shape buffer under the pointer whose elements are read through
@@ -180,7 +172,7 @@ func bufferElemType(p: CirParam): CirType =
   else:
     discard
 
-func bufferRoot(e: CirExpr): CirExpr =
+func getBufferRoot(e: CirExpr): CirExpr =
   ## Buffer parameter symbol at the root of an element access, nil for any other
   ## root shape. Index and deref parents peel to their operands: a `ptr array` parameter
   ## reads elements through `at(deref p, i)`.
@@ -193,7 +185,6 @@ func bufferRoot(e: CirExpr): CirExpr =
     result = nil
 
 func isScopePrefix(defPath, usePath: seq[string]): bool =
-  ## True when a definition scope encloses a use scope.
   if defPath.len > usePath.len:
     return false
   for i in 0 ..< defPath.len:
@@ -258,7 +249,7 @@ proc refuseStmtKind(env: var AdEnv, s: CirStmt) =
 
 # Validation is mutually recursive through the loop bodies (validateLoop re-enters validateStmts),
 # a cycle that codeReordering's deferral does not lift, so the walk is forward-declared here.
-proc validateStmts(env: var AdEnv, ss: seq[CirStmt], path: seq[string], loopDepth: int)
+proc validateStmts(env: var AdEnv, ss: seq[CirStmt], path: seq[string], loopDepth: int, nested: bool = false)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Validation walk (one forward pass before any derivation)
@@ -267,7 +258,7 @@ proc validateStmts(env: var AdEnv, ss: seq[CirStmt], path: seq[string], loopDept
 proc recordBufferAccess(env: var AdEnv, access: CirExpr, isWrite: bool) =
   ## Records a buffer-slot access and validates the root of the access chain:
   ## the root must be a buffer parameter.
-  let root = bufferRoot(access)
+  let root = getBufferRoot(access)
   if root.isNil or root.name notin env.bufferParams:
     refuse(env, $access.kind, "index root is not a buffer parameter: " & renderExpr(access))
     return
@@ -371,7 +362,7 @@ proc validateAssign(env: var AdEnv, s: CirStmt, path: seq[string]) =
     if env.err.len > 0:
       return
     let idx = if s.lhs.kind == ePat: s.lhs.patIndex else: s.lhs.atIndex
-    let slotKey = bufferRoot(s.lhs).name & "@" & renderExpr(idx)
+    let slotKey = getBufferRoot(s.lhs).name & "@" & renderExpr(idx)
     if slotKey in env.slotSeen:
       refuse(env, "sAsgn", "buffer slot '" & slotKey & "' is written more than once")
       return
@@ -421,8 +412,8 @@ proc validateLoopPattern(env: var AdEnv, whl: CirStmt, varName: string) =
   ## the loop variable on the left with a literal-or-param bound, a non-empty body,
   ## and the increment is the trailing positive-literal `i = i + <step>`.
   let cond = whl.whileCond
-  if cond.kind notin {eLt, eLe}:
-    refuse(env, "sWhile", "the loop condition must be a < or <= comparison over the loop variable")
+  if cond.kind != eLt:
+    refuse(env, "sWhile", "the loop condition must be an exclusive < comparison over the loop variable")
     return
   if cond.a.kind != eSym or cond.a.name != varName:
     refuse(env, "sWhile", "the loop condition must compare the loop variable on the left")
@@ -463,12 +454,16 @@ proc validateLoop(env: var AdEnv, ss: seq[CirStmt], i: int, path: seq[string], l
   env.loopBound = whl.whileCond.b
   validateExpr(env, ss[i + 1].rhs, path)
   validateStmts(env, whl.whileBody[0 ..< whl.whileBody.len - 1],
-                path & ("loop_" & varName), loopDepth + 1)
+                path & ("loop_" & varName), loopDepth + 1, nested = true)
 
-proc validateStmts(env: var AdEnv, ss: seq[CirStmt], path: seq[string], loopDepth: int) =
+proc validateStmts(env: var AdEnv, ss: seq[CirStmt], path: seq[string], loopDepth: int, nested: bool = false) =
   ## One forward walk over a statement list: the walk refuses the kinds
   ## outside the differentiable subset, records local definitions in def-use order,
   ## and classifies buffer accesses as written or read.
+  ##
+  ## `nested` marks a statement list below the kernel's top level: a return there
+  ## leaves statement groups the forward never executed, the derivation refuses it.
+  ## The top level's last statement may be the frontend's fall-through `ret(nil)`.
   if env.err.len > 0:
     return
   var i = 0
@@ -487,12 +482,12 @@ proc validateStmts(env: var AdEnv, ss: seq[CirStmt], path: seq[string], loopDept
       validateAssign(env, s, path)
     of sIte:
       validateExpr(env, s.cond, path)
-      validateStmts(env, s.thenBody, path & "then", loopDepth)
-      validateStmts(env, s.elseBody, path & "else", loopDepth)
+      validateStmts(env, s.thenBody, path & "then", loopDepth, nested = true)
+      validateStmts(env, s.elseBody, path & "else", loopDepth, nested = true)
     of sWhile:
       refuseStmtKind(env, s)
     of sRet:
-      if s.retVal != nil:
+      if s.retVal != nil or nested or i != ss.len - 1:
         refuseStmtKind(env, s)
     of sDiscard:
       discard
@@ -550,7 +545,7 @@ func shadowAccess(access: CirExpr): CirExpr =
   ## Shadow-adjoint form of a buffer element access: a clone whose root symbol
   ## is the buffer's `d_<name>` shadow, same access shape.
   result = cloneExpr(access)
-  let root = bufferRoot(result)
+  let root = getBufferRoot(result)
   spliceSym(root, "d_" & root.name, root.typ)
 
 func mathCall(name: string, arg: CirExpr, ret: CirType): CirExpr =
@@ -717,10 +712,11 @@ proc deriveExpr(env: var AdEnv, e: CirExpr, g: CirExpr, elemTyp: CirType, path: 
     if not isCoordRead(e):
       refuse(env, "eDot", "the gradient of member access " & renderExpr(e) & " has no rule to transpose")
     # a coordinate read is thread identity, zero gradient
-  of eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor, eCast, eAddr, eDeref,
+  of eCast, eAddr, eDeref,
      eOconstr, eAconstr:
     refuseNodeKind(env, e)
   of eNil, eTrue, eFalse, eIntLit, eFloatLit, eStrLit, eSizeof,
+     eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor,
      eEq, eNeq, eLt, eLe, eNot, eAnd, eOr:
     discard
 
@@ -857,7 +853,7 @@ proc recordAdMetas(m: CirModule, fn: CirProc, env: AdEnv) =
   ## so the metadata and the launched kernels cannot desync.
   var metas: seq[BwdParamMeta]
   for p in fn.params:
-    if bufferElemType(p) != nil:
+    if getBufferElemType(p) != nil:
       var meta = BwdParamMeta(name: p.name)
       meta.kind = if p.name in env.written: pkResidual else: pkBuffer
       if p.name in env.dIdents:
@@ -909,7 +905,7 @@ proc deriveKernel(m: CirModule, fn: CirProc): string =
   var env = AdEnv(fn: fn)
   for p in fn.params:
     env.paramNames.incl p.name
-    if bufferElemType(p) != nil:
+    if getBufferElemType(p) != nil:
       env.bufferParams[p.name] = p
   env.threadCount = fn.workgroup[0].max(1) * fn.workgroup[1].max(1) *
                     fn.workgroup[2].max(1)
