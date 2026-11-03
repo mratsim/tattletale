@@ -132,7 +132,6 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
     return
   case s.kind
   of sVar:
-    # register default stays unannotated, a placed local shows its class
     let spc = if s.addressSpace == caThread: ""
               else: " " & toLowerAscii($s.addressSpace)[2 ..^ 1]
     if s.init != nil:
@@ -200,8 +199,6 @@ proc renderProc*(fn: CirProc): string =
   result = b.lines.join("\n") & "\n"
 
 proc renderModule*(m: CirModule): string =
-  ## Renders a whole module: nominal types, then the program-scope globals
-  ## when any were hoisted, then procs.
   result = "(module " & m.name & ")\n"
   for t in m.types:
     result.add("(type " & renderType(t) & ")\n")
