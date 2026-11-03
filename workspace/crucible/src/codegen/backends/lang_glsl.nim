@@ -98,8 +98,8 @@ proc printRefBlocks(ctx: var PrintCtx, m: CirModule): string
 proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
 
 proc emitGlslScalar(t: CirType): string =
-  ## GLSL name of a non-array leaf type, "" when the caller builds the type name.
-  getLeafTypeName(TargetVocabs[cgGlsl].scalarNames, glslVectorRule, t)
+  ## GLSL name of a non-array type, "" when the caller builds the type name.
+  getTypeName(TargetVocabs[cgGlsl].scalarNames, glslVectorRule, t)
 
 proc glslTypeName(t: CirType): string =
   ## GLSL name of a type with no identifier, the printer appends the array

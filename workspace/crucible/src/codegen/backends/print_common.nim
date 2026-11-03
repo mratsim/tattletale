@@ -211,7 +211,7 @@ proc getVectorName*(rule: VectorRule, names: ScalarNames, t: CirType): string =
         return e.prefix & $t.vN & "<" & getScalarName(names, t.vElem) & ">"
   return ""
 
-proc getLeafTypeName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
+proc getTypeName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
   case t.kind
   of ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16, ctString:
     result = getScalarName(names, t)
@@ -225,7 +225,7 @@ proc getLeafTypeName*(names: ScalarNames, rule: VectorRule, t: CirType): string 
 proc getFullTypeName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
   if t.kind in {ctPtr, ctAptr}:
     return getFullTypeName(names, rule, t.pElem) & "*"
-  return getLeafTypeName(names, rule, t)
+  return getTypeName(names, rule, t)
 
 proc printCDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirType, ident: string, allowEmptyIdent: bool): string =
   ## Declaration text of `t` with `ident` appended in the C declarator form:
@@ -234,7 +234,7 @@ proc printCDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirTyp
   ##
   ## - `allowEmptyIdent` permits no identifier, return types and casts use it
   ## - the printer refuses an array without an identifier with the `<target: array needs an identifier>` text
-  ## - a scalar leaf absent from the scalar names yields an empty type name,
+  ## - a scalar kind absent from the scalar names yields an empty type name,
   ##   the target compiler rejects the malformed declaration
   if t.kind == ctArray:
     if ident.len == 0 and not allowEmptyIdent:

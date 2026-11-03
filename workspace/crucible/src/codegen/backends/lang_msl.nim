@@ -90,7 +90,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 
 proc emitMslScalar(t: CirType): string =
-  ## MSL name of a non-array leaf type, "" when the caller builds the type name.
+  ## MSL name of a non-array type, "" when the caller builds the type name.
   getFullTypeName(TargetVocabs[cgMetal].scalarNames, mslVectorRule, t)
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =

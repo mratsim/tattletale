@@ -94,8 +94,8 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 
 proc emitOpenclScalar(t: CirType): string =
-  ## OpenCL C name of a non-array leaf type, "" when the caller builds the type name.
-  getLeafTypeName(TargetVocabs[cgOpenCL].scalarNames, openclVectorRule, t)
+  ## OpenCL C name of a non-array type, "" when the caller builds the type name.
+  getTypeName(TargetVocabs[cgOpenCL].scalarNames, openclVectorRule, t)
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
   ## OpenCL C name of `t` with no identifier, pointer stars trailing the element name, the form of casts and compound literals.

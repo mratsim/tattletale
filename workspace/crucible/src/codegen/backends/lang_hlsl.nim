@@ -115,7 +115,7 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 
 proc refuseHlslScalarName(ctx: var PrintCtx, t: CirType): void =
-  ## Refusal side of the leaf-name lookup, the width exists in Nim, HLSL names only the subset.
+  ## Refusal side of the type-name lookup, the width exists in Nim, HLSL names only the subset.
   case t.kind
   of ctInt:
     ctx.fail("int" & $t.bits & " has no HLSL type name")
@@ -129,7 +129,7 @@ proc refuseHlslScalarName(ctx: var PrintCtx, t: CirType): void =
     discard
 
 proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
-  ## HLSL name of a non-array leaf type, "" when the caller builds the type name.
+  ## HLSL name of a non-array type, "" when the caller builds the type name.
   case t.kind
   of ctVoid, ctBool:
     result = getScalarName(TargetVocabs[cgHlsl].scalarNames, t)
@@ -153,7 +153,7 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
 
 proc emitHlslTypeBare(ctx: var PrintCtx, t: CirType): string =
   ## HLSL name of `t` with no identifier, the form of casts and constructors.
-  ## Arrays have no leaf form, the printer writes `T name[N]` at the declaration.
+  ## Arrays have no direct name form, the printer writes `T name[N]` at the declaration.
   case t.kind
   of ctArray:
     ctx.fail("array type has no bare HLSL name, arrays compose at their declaration")

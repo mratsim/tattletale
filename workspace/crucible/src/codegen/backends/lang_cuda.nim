@@ -102,7 +102,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string
 
 proc emitCudaScalar(t: CirType): string =
-  ## CUDA name of a non-array leaf type, "" when the caller builds the type name.
+  ## CUDA name of a non-array type, "" when the caller builds the type name.
   getFullTypeName(TargetVocabs[cgCuda].scalarNames, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
