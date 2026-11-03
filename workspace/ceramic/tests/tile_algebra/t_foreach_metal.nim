@@ -5,9 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## forEach over a fully collapsed tile: every mode has length 1, under Metal.
-## The SDPA rowStats tile at the shipped MT=8 constants has this shape.
-## The reduced layout leaves no mode to iterate, so the flat index is 0.
+## forEach over a fully collapsed tile under Metal: every mode has length 1
+## and no mode is left to iterate, so the flat index is 0.
 ##
 ## Two kernels exercise the collapsed index:
 ## - `_` matches the SDPA rescale-skip loop shape. On the unfixed tree
