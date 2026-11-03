@@ -145,6 +145,7 @@ proc operandTvLayout*(cell: Layout, cellOuter, cellLast, tileOuter, repOuter, re
              it(atomFlat.stride, it(cellOuter, tileOuter * cellLast)))
 
 proc fragmentMap*(rowIsLow: bool, repRow, repCol: RepAxis, rowViewDim, colViewDim: int): FragmentMap =
+  ## Fragment map of one mma operand: fragment cell offsets to view coordinates.
   FragmentMap(rowIsLow: rowIsLow, repRowAxis: repRow, repColAxis: repCol,
               rowViewDim: rowViewDim, colViewDim: colViewDim)
 
