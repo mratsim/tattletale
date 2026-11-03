@@ -125,5 +125,57 @@ proc runTest() =
     let err = runPipeline(m)
     doAssert err.len == 0, "expected a clean pass over branch-scoped shadowing, got: " & err
 
+  block duplicateGlobals:
+    # Hoisting passes append one program-scope declaration per kernel verbatim.
+    # Two kernels with same-named threadgroup locals print two same-name file-scope declarations.
+    let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("g", tInt(32)))])
+    m.globals = @[
+      varD("g", tInt(32), intLit(0, tInt(32)), caThreadgroup),
+      varD("g", tInt(32), intLit(1, tInt(32)), caThreadgroup)]
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for duplicate globals, got: " & err
+    doAssert "'g'" in err, "expected the refusal to name the duplicated global, got: " & err
+
+  block globalInitUndeclared:
+    let m = kernelModule(@[])
+    m.globals = @[varD("g", tInt(32), sym("nowhere", tInt(32)), caThreadgroup)]
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for an unresolvable global initializer, got: " & err
+    doAssert "at global 'g':" in err and "nowhere" in err, "expected the refusal to name the global and the symbol, got: " & err
+
+  block globalInitDeclaresBeforeUse:
+    # Globals emit in declaration order at file scope: an initializer resolves only
+    # against earlier globals.
+    let m = kernelModule(@[])
+    m.globals = @[
+      varD("a", tInt(32), sym("b", tInt(32)), caThreadgroup),
+      varD("b", tInt(32), intLit(0, tInt(32)), caThreadgroup)]
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for a forward global reference, got: " & err
+    doAssert "at global 'a':" in err and "'b'" in err, "expected the refusal to name the global and the symbol, got: " & err
+
+  block globalReadResolves:
+    let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("g", tInt(32)))])
+    m.globals = @[
+      varD("g0", tInt(32), intLit(0, tInt(32)), caThreadgroup),
+      varD("g", tInt(32), sym("g0", tInt(32)), caThreadgroup)]
+    let err = runPipeline(m)
+    doAssert err.len == 0, "expected a clean pass over resolvable globals, got: " & err
+
+  block nonSVarGlobalRefuses:
+    # Lowering passes hoist `var` statements only, any other statement kind here is a transform bug.
+    let m = kernelModule(@[])
+    m.globals = @[asgnS(sym("x", tInt(32)), intLit(0, tInt(32)))]
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for a non-var global, got: " & err
+    doAssert "sAsgn" in err, "expected the refusal to name the statement kind, got: " & err
+
+  block globalNameCollidesWithProc:
+    let m = kernelModule(@[])
+    m.globals = @[varD("k", tInt(32), intLit(0, tInt(32)), caThreadgroup)]
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for a global named like a proc, got: " & err
+    doAssert "'k'" in err, "expected the refusal to name the colliding name, got: " & err
+
 when isMainModule:
   runTest()

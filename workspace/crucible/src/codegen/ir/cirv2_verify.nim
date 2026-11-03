@@ -23,6 +23,8 @@ import cirv2_pretty
 ##
 ## Checks, per module:
 ## - proc names unique: printers emit names verbatim, the runtime caches binaries on kernel names
+## - global names unique and disjoint from proc names: hoisted declarations emit at file scope
+## - every global is a `sVar` whose initializer resolves, in declaration order
 ##
 ## Checks, per proc (kernels and device functions alike, lowering rewrites bodies in place):
 ## - param names unique: duplicates emit ill-formed target source
@@ -155,11 +157,26 @@ proc verifyModule*(m: CirModule): string =
   ## Returns "" while the module upholds the pass-boundary contracts (catalogue in the module header),
   ## else the first violation rendered as a refusal line plus the offending proc for context.
   var moduleNames: HashSet[string]
-  for g in m.globals:
-    if g.kind == sVar:
-      moduleNames.incl g.name
   for fn in m.procs:
     moduleNames.incl fn.name
+  var seenGlobals: HashSet[string]
+  for g in m.globals:
+    # Globals come from lowering passes: only `sVar` statements enter resolution and the walk, any other kind refuses.
+    if g.isNil:
+      return "nil statement in module globals"
+    if g.kind != sVar:
+      return "unsupported global kind '" & $g.kind & "', only sVar globals are supported"
+    if g.name in seenGlobals:
+      return "duplicate global name '" & g.name & "'"
+    if g.name in moduleNames:
+      return "global name '" & g.name & "' collides with a proc name"
+    seenGlobals.incl g.name
+    moduleNames.incl g.name
+    # Globals emit in declaration order at file scope: an initializer resolves only
+    # against the names collected before it.
+    result = checkScopeExpr(g.init, moduleNames, moduleNames)
+    if result.len > 0:
+      return "at global '" & g.name & "': " & result
   var seenProcs: HashSet[string]
   for fn in m.procs:
     if fn.name in seenProcs:
