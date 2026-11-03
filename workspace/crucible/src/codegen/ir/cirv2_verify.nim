@@ -15,42 +15,30 @@ import cirv2_pretty
 #
 # ############################################################
 
-## Verifier for the two contracts every pass boundary relies on, run by `runPasses`
-## once at the final pass boundary, after the last transform pass or after the last
-## pass when the registry has none.
-##
+## CIRv2 pass-boundary verifier. Run by `runPasses` once at the final pass boundary.
 ## Dev-only: `CirModule.verifyIR`, defaulted from `-d:CIR_verify`.
-## Read-only: returns the first violation, rendered with the offending proc where one exists, never rewrites.
-## Checks, per module:
-## - emitted proc names unique, a kernel emits its `exportName` when set, else its name:
-##   the printers emit names verbatim and the runtime caches binaries on kernel names
-## - global names unique and disjoint from emitted proc names: hoisted declarations emit at file scope
-## - every global is a `sVar` whose initializer resolves against the declarations before it,
-##   a nil global refuses
+## Read-only: the first violation is reported, rendered with the offending proc where one exists.
 ##
-## Checks, per proc (kernels and device functions alike, lowering rewrites bodies in place):
-## - param names unique and non-empty: duplicates emit ill-formed target source, an empty name passes the uniqueness scan
-## - declarations of one name in one statement list refuse: the printers emit one list into one brace scope
-## - a body-top-level declaration shadowing a parameter refuses: parameters share the body's scope
-## - a nil statement refuses, malformed input fails fast before the walk dereferences it
+## Per module:
+## - emitted proc names unique (a kernel emits its `exportName` when set, else its name)
+## - global names unique, disjoint from emitted proc names
+## - globals are `sVar`s whose initializers resolve against prior declarations
+## - a nil global refuses
 ##
-## Scope contract:
-## - every symbol resolves to a param, a `sVar` declared earlier in the body, a module global, or another module proc
-## - a `sVar` joins scope after its initializer checks, so a declaration never resolves its own initializer
-## - declarations inside a branch or loop body scope to that body, matching the braces C-family printers emit
+## Per proc:
+## - param names unique and non-empty
+## - one declaration per name per statement list
+## - a body-top-level declaration never shadows a parameter
+## - a nil statement refuses
 ##
-## Exempt from the scope walk: `{.builtin.}`-marked symbols and `IntrinsicCallees` below, each backed by the pass that emits it.
+## Scope:
+## - every symbol resolves to a param, an earlier `sVar`, a global, or a module proc
+## - a `sVar` joins scope after its initializer checks
+## - branch and loop declarations scope to their body
+## - `{.builtin.}` symbols and `IntrinsicCallees` below are exempt, each pass-backed
 ##
-## Not checked, deliberately:
-## - feature-flag consistency: the pass registry refuses transforms after analyses
-## - forward/backward pair ABI: the autodiff refusals own it
-## - enum dispatch coverage: the compiler guarantees it
-## - any canonical form: none is imposed
-##
-## Out of scope by construction:
-## - pass-precise blame: the verifier sees only the final pass boundary, bisect the registry to name the introducing pass
-## - analysis-record checks (features, call graph, ref blocks): verifyModule sees IR shape only,
-##   such checks belong after the analyses
+## Not checked, owned elsewhere: registry ordering, autodiff pair ABI,
+## enum dispatch coverage, analysis records, pass-precise blame (bisect the registry).
 
 const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
   ## Each entry is emitted by a named pass and provided by the target languages:
