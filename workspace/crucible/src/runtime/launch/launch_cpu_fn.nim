@@ -289,7 +289,8 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
   createDir(genDir / genStem)
   let genPath = genDir / genStem / "crucibleLaunch.c"
   writeFile(genPath, unitC)
-  launchBody.add(parseStmt("{.compile: \"" & genPath & "\".}"))
+  # Per-file -std=c17 on the compile pragma keeps the unit compiling as C when a consumer passes -std=c++20 for libtorch headers.
+  launchBody.add(parseStmt("{.compile(\"" & genPath & "\", \"-std=c17\").}"))
 
   var ctext = typesAndData
   # inside emit text, a backtick-quoted Nim symbol emits as its C name

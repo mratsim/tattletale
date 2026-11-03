@@ -98,6 +98,11 @@ int32_t tpc_perm_next(tpc_perm* perm);
 
 typedef struct tpc_threadpool tpc_threadpool;
 
+/** Worker termination signal, declared at file scope: C++ scopes a struct tag declared inside a struct to that struct. */
+struct tpc_worker_signal {
+    TPC_ALIGNAS(64) TPC_ATOMIC(bool) terminate;
+};
+
 /** Per-worker, thread-local context.
  *  We assume that a threadpool has exclusive ownership.
  */
@@ -113,9 +118,7 @@ typedef struct tpc_worker_context {
     /* Synchronization */
     tpc_scoped_barrier* currentScope;   /* need to be exported for syncScope template */
 
-    struct tpc_worker_signal {
-        TPC_ALIGNAS(64) TPC_ATOMIC(bool) terminate;
-    } *signal;                     /* owned signal */
+    struct tpc_worker_signal* signal;   /* owned signal */
 
     /* Thefts */
     tpc_work_stealing_rng rng;     /* RNG state to select victims */

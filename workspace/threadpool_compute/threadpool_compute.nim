@@ -5,25 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# This file statically compiles the threadpool_compute C project
-# and exposes its API in Nim. Original sources stay untouched.
-#
-# C sources compile as one translation unit (src/threadpool_runtime.c):
-# it includes every source and picks the platform files by preprocessor.
-# This wrapper compiles that one file at the optimization level
-# chosen for the surrounding Nim program.
-#
-# Low-level binding over the C surface: opaque pool and task
-# worker-context pointers, flowvars as plain values, cdecl task functions.
-# Spawn helpers copy the environment block into the task, a task body
-# reads its payload after the flowvar header where the first env word
-# is the task self-pointer written by the constructors.
-
 import std/os
 
 const tpcRoot = currentSourcePath.parentDir
 
-{.compile: "src/threadpool_runtime.c".}
+{.emit: "/*TYPESECTION*/\n#include \"" & tpcRoot / "src" / "threadpool_runtime.c" & "\"".}
 
 {.passc: "-I\"" & tpcRoot & "\"".}
 {.passc: "-I\"" & tpcRoot / "src" / "threadpool" & "\"".}

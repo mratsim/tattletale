@@ -620,7 +620,7 @@ static int workerEntryFn(void* arg) {
 }
 
 tpc_threadpool* tpc_threadpool_new(int32_t numThreads) {
-    tpc_threadpool* tp = tpc_alignedAlloc(_Alignof(tpc_threadpool), sizeof(*tp));
+    tpc_threadpool* tp = (tpc_threadpool*)tpc_alignedAlloc(_Alignof(tpc_threadpool), sizeof(*tp));
     if (tp == NULL) {
         abort();
     }
@@ -628,10 +628,10 @@ tpc_threadpool* tpc_threadpool_new(int32_t numThreads) {
     tpc_barrier_init(&tp->barrier, (uint32_t)numThreads);
     tpc_eventcount_initialize(&tp->globalBackoff);
     tp->numThreads = numThreads;
-    tp->workerQueues = tpc_alignedAlloc(_Alignof(tpc_taskqueue), (size_t)numThreads * sizeof(tpc_taskqueue));
-    tp->workers = malloc((size_t)numThreads * sizeof(tpc_thread_t));
-    tp->workerSignals = tpc_alignedAlloc(_Alignof(struct tpc_worker_signal), (size_t)numThreads * sizeof(*tp->workerSignals));
-    tp->workerArgs = malloc((size_t)numThreads * sizeof(*tp->workerArgs));
+    tp->workerQueues = (tpc_taskqueue*)tpc_alignedAlloc(_Alignof(tpc_taskqueue), (size_t)numThreads * sizeof(tpc_taskqueue));
+    tp->workers = (tpc_thread_t*)malloc((size_t)numThreads * sizeof(tpc_thread_t));
+    tp->workerSignals = (struct tpc_worker_signal*)tpc_alignedAlloc(_Alignof(struct tpc_worker_signal), (size_t)numThreads * sizeof(*tp->workerSignals));
+    tp->workerArgs = (tpc_threadpool_args*)malloc((size_t)numThreads * sizeof(*tp->workerArgs));
     if (tp->workerQueues == NULL || tp->workers == NULL || tp->workerSignals == NULL || tp->workerArgs == NULL) {
         abort();
     }
