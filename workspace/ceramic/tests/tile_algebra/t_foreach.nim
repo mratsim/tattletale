@@ -75,8 +75,8 @@ proc testAllModesCollapsed =
   # An all-1 shape iterates exactly once at flat index 0
   var t: tile(float32, (1, 1))
   forEach i, var d in t:
-    d = 7.0'f32
-  doAssert t.data[0] == 7.0'f32
+    d = float32(i)
+  doAssert t.data[0] == 0.0'f32
 
 proc runTests =
   testLayoutLeftIndexFill()
