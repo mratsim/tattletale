@@ -209,6 +209,18 @@ proc checkRefusals() =
     refuses(proc() = discard parseTileIr(text).getEntry("axpy").runTilePipeline(threads = 4),
             "addf", "axpy")
 
+  block: # a partition tile that does not divide the view dims writes out of bounds
+    let text = "cuda_tile.module @k { entry @mykernel(%ptr: tile<ptr<f32>>) {" &
+      " %tok = make_token : token" &
+      " %tv = make_tensor_view %ptr, shape = [20, 20], strides = [20, 1] : tensor_view<20x20xf32, strides=[20,1]>" &
+      " %pv = make_partition_view %tv : partition_view<tile=(16x16), tensor_view<20x20xf32, strides=[20,1]>>" &
+      " %bid_x, %bid_y, %bid_z = get_tile_block_id : tile<i32>" &
+      " %t, %tok2 = load_view_tko weak %pv[%bid_x, %bid_y] token = %tok : partition_view<tile=(16x16), tensor_view<20x20xf32, strides=[20,1]>>, tile<i32> -> tile<16x16xf32>, token" &
+      " %tok_out = store_view_tko weak %t, %pv[%bid_x, %bid_y] token = %tok2 : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<20x20xf32, strides=[20,1]>>, tile<i32> -> token" &
+      " yield } }"
+    refuses(proc() = discard parseTileIr(text).getEntry("mykernel").runTilePipeline(threads = 4),
+            "make_partition_view", "mykernel")
+
   block: # token chain continues through a store
     let text = readFile(FixturesDir / "vec_add_axpy.tileir")
       .replace("%tok_out = store_view_tko weak %sum, %pv_c[%bid_x] token = %tok_b : tile<8xf32>, partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>, tile<i32> -> token",

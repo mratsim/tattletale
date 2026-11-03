@@ -174,8 +174,8 @@ proc resolveViews*(entry: Entry): Table[string, ViewInfo] =
   ## - the tensor view is looked up by its SSA name, so interleaved view
   ##   definitions resolve to their own operand lists
   ## - refusals: mismatched partition operands, a partition tile whose rank
-  ##   differs from its tensor_view's rank, load/store of views with no
-  ##   make_partition_view definition
+  ##   differs from its tensor_view's rank, a tile dim that does not divide its view dim,
+  ##   load/store of views with no make_partition_view definition
   ##
   ## Raises:
   ## - SubsetError naming the construct and the kernel
@@ -196,6 +196,13 @@ proc resolveViews*(entry: Entry): Table[string, ViewInfo] =
         raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " does not match its tensor_view operand %" & viewName)
       if inner.pvTile.len != tv.resultTypes[0].viewShape.len:
         raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " partitions a " & $tv.resultTypes[0].viewShape.len & "-d tensor_view with a " & $inner.pvTile.len & "-d tile")
+      # block k's tile covers the offsets k*tile .. k*tile + tile - 1, so a tile dim that does not divide the view dim writes out of bounds
+      for d in 0 ..< inner.pvTile.len:
+        if inner.pvTile[d] <= 0:
+          raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " has a non-positive partition tile dim " & $inner.pvTile[d])
+        let extent = tv.resultTypes[0].viewShape[d]
+        if not isDynamic(extent) and extent mod inner.pvTile[d] != 0:
+          raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " partitions a view of shape " & $tv.resultTypes[0].viewShape & " with a tile of " & $inner.pvTile)
       result[op.results[0]] = ViewInfo(
         base: tv.operands[0],
         shapeEntries: tv.dynShape,
