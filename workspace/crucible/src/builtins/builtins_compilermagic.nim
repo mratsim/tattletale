@@ -15,6 +15,7 @@ type CompileTarget* = enum
   ctWebGPU
   ctHlsl
   ctSpirvShader
+  ctLean
 
 var crucibleCompileTarget* {.compileTime.}: CompileTarget = ctNone
   # ctNone until a DSL wrapper records its target.

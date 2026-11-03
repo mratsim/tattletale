@@ -289,3 +289,26 @@ macro hlsl*(body: untyped): string =
   ## D3D12-native resource binding.
   crucibleCompileTarget = ctHlsl
   result = newCall(bindSym"codegenHlsl", body)
+
+macro codegenLean(body: typed): string =
+  ## Compiles a `lean:` block body into a Lean 4 verification module:
+  ## CIRv2 lowering, the normalization passes, then the Lean emitter.
+  ##
+  ## - a refusal in the chain is a compile-time error naming the construct
+  ## - no reserved-identifier rename runs: the module reasons over semantic names
+  var reg = PassRegistry.new()
+  registerNormalizationPasses(reg)
+  let (m, lerr) = lowerCirv2(body)
+  if lerr.len > 0:
+    error(lerr)
+  let perr = runPasses(m, reg)
+  if perr.len > 0:
+    error(perr)
+  result = newLit(codegen(m, cgLean))
+
+macro lean*(body: untyped): string =
+  ## Converts the body of this macro into a Lean 4 verification module.
+  # untyped -> typed macro delegation: the outer macro assigns crucibleCompileTarget
+  # before the typed macro runs, so the body resolves with the target already set
+  crucibleCompileTarget = ctLean
+  result = newCall(bindSym"codegenLean", body)

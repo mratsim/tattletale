@@ -22,3 +22,5 @@ type
     cgMetal
     cgHlsl
     cgSpirv
+    cgLean
+    ## Lean 4 verification backend: emits a proof module, never executable shader code.

@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ./lang_cuda, ./lang_wgsl, ./lang_opencl, ./lang_glsl, ./lang_msl, ./lang_hlsl,
-       ./lang_spirv_shader
+       ./lang_spirv_shader, ./lang_lean
 import ../ir/cirv2_lang
 import ../../crucible_codegen
 
@@ -39,6 +39,7 @@ proc codegen*(m: CirModule, B: static CodegenKind, flavor: static HlslFlavor = f
     of cgGlsl: lang_glsl.codegen(m)
     of cgMetal: lang_msl.codegen(m)
     of cgHlsl: lang_hlsl.codegen(m, flavor)
+    of cgLean: lang_lean.codegen(m)
     of cgSpirv: ""
 
 proc codegenSpirvShader*(m: CirModule): seq[uint32] =
