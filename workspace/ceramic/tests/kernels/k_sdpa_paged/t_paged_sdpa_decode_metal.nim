@@ -21,7 +21,7 @@ import workspace/ceramic/tests/kernels/k_sdpa_paged/kernel_sdpa_paged_template
 proc replayAllPagedFixtures() =
   var engine = newEngine(runMetal)
   engine.replayPagedFixture(float16, 64,
-    ["paged_decode_gqa_f16", "paged_decode_small_f16"])
-  echo "all paged SDPA fixture replays pass (2 fixtures)"
+    ["paged_decode_gqa_f16", "paged_decode_small_f16", "paged_window_decode_f16"])
+  echo "all paged SDPA fixture replays pass (3 fixtures)"
 
 replayAllPagedFixtures()

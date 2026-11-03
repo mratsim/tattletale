@@ -30,6 +30,7 @@ type SdpaPagedFixtureMetadata* = object
   numSeqs*, Hq*, Hkv*, Dk*, Dv*: int
   pageSize*, maxPages*, numLayers*, numPages*, layer*: int
   scale*: float32
+  windowSize*: int     # 0 = no window, else the sliding-window width
   cacheSeqlens*: seq[int]
   checksum*: uint32
   xorhashChecksums*: seq[(string, uint32)]  # per-file bit-pattern xors
@@ -49,6 +50,7 @@ proc parseSdpaPagedMetadata*(fixtureDir: string): SdpaPagedFixtureMetadata =
   result.numPages = j["num_pages"].getInt()
   result.layer = j["layer"].getInt()
   result.scale = j["scale"].getFloat().float32
+  result.windowSize = j["window_size"].getInt()
   for v in j["cache_seqlens"]:
     result.cacheSeqlens.add v.getInt()
   result.checksum = uint32(j["checksum"].getInt())

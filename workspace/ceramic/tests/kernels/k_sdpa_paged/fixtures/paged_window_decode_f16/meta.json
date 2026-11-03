@@ -1,0 +1,28 @@
+{
+ "name": "paged_window_decode_f16",
+ "dtype": "float16",
+ "num_seqs": 2,
+ "Hq": 4,
+ "Hkv": 2,
+ "Dk": 64,
+ "Dv": 64,
+ "page_size": 32,
+ "max_pages": 4,
+ "num_layers": 2,
+ "layer": 1,
+ "num_pages": 7,
+ "scale": 0.125,
+ "window_size": 40,
+ "cache_seqlens": [
+  70,
+  100
+ ],
+ "checksum": 41422856,
+ "xorhash_checksums": {
+  "q.bin": 4213,
+  "k.bin": 42496,
+  "v.bin": 50260,
+  "block_table.bin": 4294967288,
+  "cache_seqlens.bin": 34
+ }
+}

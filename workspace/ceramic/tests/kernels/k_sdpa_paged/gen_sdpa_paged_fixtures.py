@@ -20,6 +20,8 @@ while t < cache_seqlens[s].
 Attention then computes o = softmax(scale * q @ K^T) @ V over the gathered
 entries with no causal mask, kv head = h div (Hq div Nkv).
 
+A sliding window narrows the attended range to [cache_seqlens[s] - window_size, cache_seqlens[s]).
+
 Pool entries beyond a sequence's attended range stay finite random values, matching untouched slab memory in a production pool.
 
 Run:  uv run --with numpy python3 gen_sdpa_paged_fixtures.py [name ...]
@@ -50,7 +52,7 @@ def write_bin(path, arr):
     arr.tofile(path)
 
 
-def sdpa_paged_reference(q, kpool, vpool, block_table, cache_seqlens, layer, scale):
+def sdpa_paged_reference(q, kpool, vpool, block_table, cache_seqlens, layer, scale, window_size=None):
     """float64 reference: per sequence, a block-table gather feeding
     softmax(scale * q @ K^T) @ V, causal off, over the gathered entries."""
     num_seqs, Hq, _, Dk = q.shape
@@ -62,8 +64,9 @@ def sdpa_paged_reference(q, kpool, vpool, block_table, cache_seqlens, layer, sca
     o = np.zeros((num_seqs, Hq, 1, Dv), dtype=np.float64)
     for s in range(num_seqs):
         covered = int(cache_seqlens[s])
+        lo = 0 if window_size is None else max(0, covered - int(window_size))
         rows = [int(block_table[s, t // page_size]) * page_size + t % page_size
-                for t in range(covered)]
+                for t in range(lo, covered)]
         kg = kflat[rows]
         vg = vflat[rows]
         for h in range(Hq):
@@ -76,7 +79,7 @@ def sdpa_paged_reference(q, kpool, vpool, block_table, cache_seqlens, layer, sca
 
 
 def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
-                 num_layers, layer, num_pages, cache_seqlens, seed):
+                 num_layers, layer, num_pages, cache_seqlens, seed, window_size=None):
     """Generates one fixture directory, prints its shape line."""
     rng = np.random.default_rng(seed)
     scale = 1.0 / np.sqrt(Dk)
@@ -109,7 +112,8 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
     kpool = kpool.astype(np.float16).astype(np.float32)
     vpool = vpool.astype(np.float16).astype(np.float32)
 
-    o = sdpa_paged_reference(q, kpool, vpool, block_table, cache_seqlens, layer, scale)
+    o = sdpa_paged_reference(q, kpool, vpool, block_table, cache_seqlens, layer, scale,
+                             window_size)
 
     out = os.path.join(HERE, "fixtures", name)
     os.makedirs(out, exist_ok=True)
@@ -128,7 +132,8 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
         "num_seqs": num_seqs, "Hq": Hq, "Hkv": Hkv, "Dk": Dk, "Dv": Dv,
         "page_size": page_size, "max_pages": max_pages,
         "num_layers": num_layers, "layer": layer, "num_pages": num_pages,
-        "scale": scale, "cache_seqlens": [int(x) for x in cache_seqlens],
+        "scale": scale, "window_size": int(window_size or 0),
+        "cache_seqlens": [int(x) for x in cache_seqlens],
         "checksum": xorhash_checksum(oOut),
         "xorhash_checksums": {
             "q.bin": xorhash_checksum(qOut),
@@ -155,6 +160,11 @@ FIXTURES = [
     dict(name="paged_decode_small_f16", dtype="float16", num_seqs=2, Hq=2, Hkv=1,
          Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
          num_pages=6, cache_seqlens=[17, 64], seed=102),
+    # mid-page window left edge (70 - 40 = 30) and a window-start page skip
+    # (100 - 40 = 60, page 1), the skipped table columns and pages stay garbage
+    dict(name="paged_window_decode_f16", dtype="float16", num_seqs=2, Hq=4, Hkv=2,
+         Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
+         num_pages=7, cache_seqlens=[70, 100], seed=103, window_size=40),
 ]
 
 
