@@ -20,17 +20,17 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_indexing_slicedice
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Randomness
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc seed*(rng: var Rand, x: SomeInteger) =
   ## Re-seed a std/rand state, constantine-style method call
   rng = initRand(int64(x))
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Host and bridge tensors
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 type
   HostTensor*[T, Sh, St] = object
@@ -67,14 +67,19 @@ func originOffset[Sh, St](layout: Layout[Sh, St]): int =
   ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
   let sh = layout.shape.flatten()
   let st = layout.stride.flatten()
-  var strides: seq[int]
-  for f in fields(st):
-    strides.add(toInt(f))
-  var i = 0
-  for f in fields(sh):
-    if strides[i] < 0:
-      result += (toInt(f) - 1) * (-strides[i])
-    i.inc
+  when sh is tuple:
+    var strides: seq[int]
+    for f in fields(st):
+      strides.add(toInt(f))
+    var i = 0
+    for f in fields(sh):
+      if strides[i] < 0:
+        result += (toInt(f) - 1) * (-strides[i])
+      i.inc
+  else:
+    # rank-1 layout: flatten() turns the 1-tuple into a single leaf
+    if toInt(st) < 0:
+      result = (toInt(sh) - 1) * (-toInt(st))
 
 proc to*[T, Sh, St, U](src: HostTensor[T, Sh, St], _: typedesc[U]): HostTensor[U, Sh, St] =
   let layout = src.layout
@@ -128,9 +133,9 @@ proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto
   engine.copyToDeviceFromHost(dev, ht.data +% ht.offset, n)
   BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Tensor assertions
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 func flatSize[L](l: L): int =
   ## Size as a runtime int, static `Int[N]` layouts included
