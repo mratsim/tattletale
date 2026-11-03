@@ -35,7 +35,7 @@ Effective flops count only the key tiles a query tile visits, the model
 ## Causal alignment for L < S
 
 - the kernel contract is hi(q) = min(S, q + offset + 1) with offset = S - L
-  (bottom-right band), so a query row touches keys up to q + S - L
+  (bottom-right band), so each query touches keys up to q + S - L
 - both benches time full S keys with the bottom-right band, the same op
 - the "causal" mask string in MLX is lower-right aligned for L != S.
   check_math verifies the installed MLX against the explicit lower-right
@@ -67,21 +67,20 @@ Python side: `bench_paged_sdpa_decode_mlx.py`, a block-table gather plus `mx.fas
 MLX pays one block-table gather per timed call: the Nim kernel reads pool pages in place.
 The python script checks its gather+sdpa path against an explicit page-walk reference before timing.
 
-## GB/s convention
+## TFLOPS convention
 
-Decode attention is bandwidth-bound in principle: effective GB/s is the primary metric,
-effective TFLOP/s reported alongside for convention parity with the base bench.
-Both sides use the same byte and flop models:
+Decode attention is a compute kernel, effective TFLOP/s is the primary metric,
+the same flop model as the non-paged bench above:
 
-- effective bytes: sum over sequences of attended_seqlen * Hkv * (Dk + Dv) *
-  sizeof(elem), attended_seqlen = seqlen - windowLo, windowLo = max(0, seqlen - window)
 - effective flops: 2 * sum over sequences of attended_seqlen * Hq * (Dk + Dv)
+- attended_seqlen = seqlen - windowLo, windowLo = max(0, seqlen - window),
+  so the full-decode cases attend the whole cache and the windowed case
+  attends min(cache_seqlens, window)
 
-Truth cases need an L2-busting K+V working set of at least 2 GB K+V f32:
+The large cases keep the K+V working set above L2 (2 GB and up at f32),
+their timing measures steady-state DRAM streaming. The l2-resident contrast
+case fits the L2 and exposes cache-residency inflation of the timing.
 
-- once the working set fits cache, in-kernel iteration loops measure L2 bandwidth,
-  which exceeds the 540 GB/s M4 Max DRAM peak
-- a line whose computed bandwidth exceeds the peak prints INVALID (the measurement failed)
-
-Measured on M4 Max the (32, 32) schedule computes 32 query entries for one valid decode entry,
-reported GB/s runs far under the peak and the l2-resident case runs higher than the truth cases.
+Measured on M4 Max the (32, 32) schedule computes 32 query entries for one
+valid decode entry, so reported TFLOP/s sits far under the non-paged bench
+and the l2-resident case runs higher than the large cases.
