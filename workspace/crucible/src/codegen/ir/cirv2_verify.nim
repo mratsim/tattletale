@@ -16,19 +16,20 @@ import cirv2_pretty
 # ############################################################
 
 ## Verifier for the two contracts every pass boundary relies on, run by `runPasses`
-## once after the last transform pass.
+## once at the final pass boundary, after the last transform pass or after the last
+## pass when the registry has none.
 ##
 ## Dev-only: `CirModule.verifyIR`, defaulted from `-d:CIR_verify`.
-## Read-only: returns the first violation, rendered with the offending proc, never rewrites.
-## The refusal renders through `cirv2_pretty`, a deliberate import: one string, first violation wins.
+## Read-only: returns the first violation, rendered with the offending proc where one exists, never rewrites.
+## The refusal renders through `cirv2_pretty`: one string, first violation wins.
 ##
 ## Checks, per module:
 ## - proc names unique: printers emit names verbatim, the runtime caches binaries on kernel names
 ## - global names unique and disjoint from proc names: hoisted declarations emit at file scope
-## - every global is a `sVar` whose initializer resolves, in declaration order
+## - every global is a `sVar` whose initializer resolves, in declaration order, a nil global refuses
 ##
 ## Checks, per proc (kernels and device functions alike, lowering rewrites bodies in place):
-## - param names unique: duplicates emit ill-formed target source
+## - param names unique and non-empty: duplicates emit ill-formed target source, an empty name passes the uniqueness scan
 ## - declarations of one name in one statement list refuse: the printers emit one list into one brace scope
 ## - a body-top-level declaration shadowing a parameter refuses: parameters share the body's scope
 ## - a nil statement refuses, malformed input fails fast before the walk dereferences it
@@ -171,7 +172,7 @@ proc verifyModule*(m: CirModule): string =
     moduleNames.incl fn.name
   var seenGlobals: HashSet[string]
   for g in m.globals:
-    # Globals come from lowering passes: only `sVar` statements enter resolution and the walk, any other kind refuses.
+    # Globals come from the lowering passes, which hoist `var` statements only.
     if g.isNil:
       return "nil statement in module globals"
     if g.kind != sVar:

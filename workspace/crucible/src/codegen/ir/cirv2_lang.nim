@@ -323,8 +323,8 @@ type
     ## filled by the GLSL ref-block analysis pass, runPasses enforces the timing.
     ## The printer emits one `layout(buffer_reference, std430) buffer` per entry, it never registers a block itself.
     verifyIR*: bool
-    ## Pass-boundary verification switch: runPasses calls verifyModule once,
-    ## after the last transform pass, when set.
+    ## Pass-boundary verification switch: runPasses calls verifyModule once
+    ## at the final pass boundary, when set.
     ## `moduleD` defaults it from the `CIR_verify` define, tests may override per module.
 
 proc computeCirSizeBytes(t: CirType): int =

@@ -5,7 +5,7 @@
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/wip_c17d06fix --nimcache:nimcache/wip_c17d06fix \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/verify/t_cirv2_verify_scope.nim
 
 import std/strutils
@@ -86,7 +86,7 @@ proc runTest() =
   block duplicateLocals:
     # A verbatim callee-body inliner emits this shape when one callee is inlined at two
     # call sites: the callee's locals are cloned into the caller's statement list.
-    # Two same-name declarations in one list print into one brace pair.
+    # Printers emit both declarations into one brace pair.
     let m = kernelModule(@[
       varD("tmp", tInt(32), intLit(0, tInt(32))),
       varD("tmp", tInt(32), intLit(1, tInt(32)))])
@@ -117,17 +117,18 @@ proc runTest() =
     doAssert "'a'" in err, "expected the refusal to name the shadowed parameter, got: " & err
 
   block branchShadowStaysLegal:
-    # Branch-scoped shadowing stays legal: the frontend deliberately emits branch-local
-    # declarations reusing an outer name.
+    # A branch-local declaration may shadow an outer local and a parameter.
     let m = kernelModule(@[
-      iteS(trueE(), @[varD("a", tInt(32), intLit(0, tInt(32)))], @[]),
-      asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("out", tPtr(caDevice, tInt(32))))])
+      varD("a", tInt(32), intLit(0, tInt(32))),
+      iteS(trueE(), @[varD("a", tInt(32), intLit(1, tInt(32)))], @[]),
+      iteS(trueE(), @[varD("out", tInt(32), intLit(2, tInt(32)))], @[]),
+      asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("a", tInt(32)))])
     let err = runPipeline(m)
     doAssert err.len == 0, "expected a clean pass over branch-scoped shadowing, got: " & err
 
   block duplicateGlobals:
     # Hoisting passes append one program-scope declaration per kernel verbatim.
-    # Two kernels with same-named threadgroup locals print two same-name file-scope declarations.
+    # Hoist passes emit two same-name file-scope declarations.
     let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("g", tInt(32)))])
     m.globals = @[
       varD("g", tInt(32), intLit(0, tInt(32)), caThreadgroup),

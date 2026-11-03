@@ -71,7 +71,6 @@ proc runPasses*(m: CirModule, reg: var PassRegistry): string =
       if verr.len > 0:
         return "verify: " & verr
   if lastTransform == -1 and m.verifyIR:
-    # No transform ran, so builder-produced IR is final: verify it too.
     let verr = verifyModule(m)
     if verr.len > 0:
       return "verify: " & verr

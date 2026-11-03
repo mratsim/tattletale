@@ -115,7 +115,7 @@ Divergence starts at the reserved-word rename.
 | ---         | ---                                                                                                                              |
 | `PassKind`  | `pkValidation` refuses on invariant violation, `pkTransform` rewrites the IR, `pkAnalysis` computes metadata and changes nothing |
 | `CirPass`   | Name, kind, description, `run` over the module                                                                                   |
-| `runPasses` | Executes the registry in registration order, refuses a `pkTransform` registered after a `pkAnalysis`, returns the first refusal, runs `verifyModule` once after the last transform when the module sets `verifyIR` |
+| `runPasses` | Executes the registry in registration order, refuses a `pkTransform` registered after a `pkAnalysis`, returns the first refusal, runs `verifyModule` once at the final pass boundary (after the last transform, or after the last pass when the registry has none) when the module sets `verifyIR` |
 
 The table in `gpu_compiler.nim` is the single source of execution order:
 one ordered column per target, row position is execution position, no scheduler.
