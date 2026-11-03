@@ -114,6 +114,42 @@ proc assertDimsWithinInt32(grid, blk: Dim3) =
 proc isDeviceMemArg(t: NimNode): bool =
   t.kind == nnkBracketExpr and t[0].eqIdent("DeviceMem")
 
+proc deviceMemFieldNames(t: NimNode): seq[string] =
+  ## DeviceMem field names of the object or tuple type `t`, empty when `t` declares none.
+  ## Nested aggregates do not recurse, matching the GPU pipeline's field scan one level deep.
+  let impl = t.getTypeImpl()
+  case impl.kind
+  of nnkObjectTy:
+    let rec = impl[^1]
+    if rec.kind == nnkRecList:
+      for f in rec:
+        f.expectKind(nnkIdentDefs)
+        if isDeviceMemArg(f[^2]):
+          for j in 0 ..< f.len - 2:
+            result.add($f[j])
+  of nnkTupleTy:
+    for i, f in impl:
+      if isDeviceMemArg(f[^2]):
+        result.add("field" & $i)
+  else:
+    discard
+
+proc pointeeHoldsDeviceMem(v: NimNode): string =
+  ## Refusal text for a pointer argument whose pointee type declares a DeviceMem field, "" otherwise.
+  ## Only pointer arguments get this scan: copying a value aggregate into the kernel already
+  ## fails on DeviceMem's move-only `=copy` operator.
+  let t = v.getTypeInst()
+  if t.kind != nnkPtrTy:
+    return ""
+  var pointee = t[0]
+  if pointee.kind == nnkBracketExpr and pointee[0].eqIdent("UncheckedArray"):
+    pointee = pointee[1]
+  let fields = pointee.deviceMemFieldNames()
+  if fields.len == 0:
+    return ""
+  let names = if fields.len == 1: fields[0] else: fields.join(", ")
+  return "points at " & pointee.repr & " which holds DeviceMem field " & names
+
 proc buildCpuKernel(kernel: NimNode, statics, values: NimNode, siteSuffix: string): NimNode =
   ## Kernel wrapper shape for the CPU pipeline:
   ##
@@ -149,6 +185,10 @@ proc buildCpuKernel(kernel: NimNode, statics, values: NimNode, siteSuffix: strin
       if v.getTypeInst().isDeviceMemArg():
         error("launchCpuFn " & $kernel & ": parameter " & $formalNames[i].repr &
           " takes DeviceMem, a GPU runtime concept, the cpu engine takes host values")
+      let pointeeRefusal = v.pointeeHoldsDeviceMem()
+      if pointeeRefusal.len > 0:
+        error("launchCpuFn " & $kernel & ": parameter " & $formalNames[i].repr & " " &
+          pointeeRefusal & ", a GPU runtime concept, the cpu engine takes host values")
       let pname = ident($formalNames[i])
       params.add(nnkIdentDefs.newTree(pname, v.getTypeInst(), newEmptyNode()))
       kcall.add(pname)

@@ -29,6 +29,7 @@
 ## - Nim value objects are C-compatible structs, a struct argument
 ##   copies by pointer cast, `*(CIRv2 type*)&nimArg`
 ## - scalars and pointers assign directly
+## - whole arrays copy through `__builtin_memcpy`, C has no array assignment
 ## - CIRv2 materializes Nim `int` as the machine word, the widths match Nim's compilation targets
 ##
 ## v0 refusals, each a compile-time error naming the construct and the kernel:
@@ -399,6 +400,14 @@ proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
       args.add(printExpr(a, ctx))
     result = calleeRef & "(" & args.join(", ") & ")"
 
+const LaunchCounterNamesC = [
+  # counters the iteration function generates around the inlined kernel
+  # body (see emitCpuWorkgroupLaunchC), the body shares their scope
+  "crucibleWg", "crucibleWgTotal", "crucibleWgEnd",
+  "crucibleGx", "crucibleGy", "crucibleGz",
+  "crucibleBx", "crucibleBy", "crucibleBz",
+]
+
 # ═══════════════════════════════════════════════════════════════════════
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
@@ -425,6 +434,11 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
           if name == s.name:
             cRefuse(ctx, "kernel local '" & s.name &
               "' shadows a kernel parameter, rename one")
+        # kernel locals must avoid the launch's generated counter names:
+        # a shadowing local silently corrupts the coordinate reads
+        if s.name in LaunchCounterNamesC:
+          cRefuse(ctx, "kernel local '" & s.name &
+            "' shadows a counter the launch generates, rename it")
       let decl =
         emitTypeC(s.declType, ctx) & " " & s.name &
         (if s.init != nil: " = " & printExpr(s.init, ctx) else: "") & ";"
@@ -442,7 +456,9 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
       # empty-branch shapes collapse: negation keeps an else-only
       # branch without an empty then branch
       if s.thenBody.len == 0 and s.elseBody.len == 0:
-        discard # both branches empty, no code
+        # both branches lower to zero statements, the printed condition
+        # keeps its side effects
+        lines.add(pad & "(void)(" & cond & ");")
       elif s.thenBody.len == 0:
         lines.add(pad & "if (!" & cond & ") {")
         lines.add(elseLines)
@@ -739,11 +755,16 @@ proc emitCpuDataFillC*(suffix: string, runtimeParams: seq[tuple[name: string, ty
   for p in runtimeParams:
     let ctype = emitCpuTypeC(p.typ, suffix)
     let sym = "`" & p.name & "`"
-    let rhs = if p.typ.kind == ctStruct:
-                "*(" & ctype & "*)&" & sym
-              else:
-                "(" & ctype & ")(" & sym & ")"
-    fill.add("    crucibleData." & p.name & " = " & rhs & ";\n")
+    case p.typ.kind
+    of ctStruct:
+      fill.add("    crucibleData." & p.name & " = *(" & ctype & "*)&" & sym & ";\n")
+    of ctArray:
+      # C assigns arrays only element-wise, the compiler builtin copies
+      # without a string.h include
+      fill.add("    __builtin_memcpy(crucibleData." & p.name & ", " & sym &
+               ", sizeof(crucibleData." & p.name & "));\n")
+    else:
+      fill.add("    crucibleData." & p.name & " = (" & ctype & ")(" & sym & ");\n")
   fill
 
 proc emitCpuSerialTailC*(suffix: string, runtimeParams: seq[tuple[name: string, typ: CirType]]): string =
