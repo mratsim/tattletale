@@ -29,7 +29,7 @@ extern int __ulock_wake(uint32_t operation, void* addr, uint64_t wake_value);
  * ------------------------------------------------------------------------
  */
 
-static inline int tpc_futex_wait(_Atomic uint32_t* addr, uint32_t expected) {
+static inline int tpc_futex_wait(TPC_ATOMIC(uint32_t)* addr, uint32_t expected) {
     int rc = __ulock_wait(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO, addr, expected, 0);
     if (rc >= 0) {
         return 0;
@@ -37,7 +37,7 @@ static inline int tpc_futex_wait(_Atomic uint32_t* addr, uint32_t expected) {
     return -rc;   /* EAGAIN: the word moved, EINTR: retryable */
 }
 
-static inline int tpc_futex_wake(_Atomic uint32_t* addr, uint32_t nwakes) {
+static inline int tpc_futex_wake(TPC_ATOMIC(uint32_t)* addr, uint32_t nwakes) {
     /* one waiter per call */
     int woken = 0;
     while ((uint32_t)woken < nwakes) {
@@ -53,7 +53,7 @@ static inline int tpc_futex_wake(_Atomic uint32_t* addr, uint32_t nwakes) {
     return 0;
 }
 
-static inline int tpc_futex_wake_all(_Atomic uint32_t* addr) {
+static inline int tpc_futex_wake_all(TPC_ATOMIC(uint32_t)* addr) {
     int rc = __ulock_wake(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO | ULF_WAKE_ALL, addr, 0);
     return rc < 0 && rc != -ENOENT ? rc : 0;
 }

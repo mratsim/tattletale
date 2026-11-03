@@ -282,12 +282,12 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     unitC.add(calleesC & "\n")
   unitC.add(funcsC)
   let genDir = querySetting(SingleValueSetting.nimcacheDir) / "crucibleGenerated"
-  createDir(genDir)
   # NAME_MAX is 255 and the site suffix embeds the absolute module path:
   # long file names shrink to a bounded head plus an md5 hash
   let genStem = if siteSuffix.len <= 128: siteSuffix
                 else: siteSuffix[0 ..< 96] & "_" & $toMD5(siteSuffix)
-  let genPath = genDir / ("crucibleLaunch_" & genStem & ".c")
+  createDir(genDir / genStem)
+  let genPath = genDir / genStem / "crucibleLaunch.c"
   writeFile(genPath, unitC)
   launchBody.add(parseStmt("{.compile: \"" & genPath & "\".}"))
 
@@ -302,14 +302,14 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     launchBody.add(nnkCall.newTree(bindSym"doAssert",
       nnkInfix.newTree(ident">=", ident"crucibleWgsPerTask", newLit(1'i32)),
       newLit("launchCpuFn: workgroupsPerTask must be >= 1")))
-    ctext.add("    extern void crucibleTask" & siteSuffix & "(void*);\n")
+    ctext.add("    extern void (*crucibleTaskFn" & siteSuffix & ")(void*);\n")
     ctext.add("    tpc_worker_context* crucibleCtx = tpc_workerContext();\n")
     ctext.add("    struct crucibleData" & siteSuffix & " crucibleData;\n")
     ctext.add(emitCpuDataFillC(siteSuffix, runtimeParams))
     ctext.add("    crucibleData.crucibleWgsPerTask = (int32_t)`crucibleWgsPerTask`;\n")
     ctext.add("    tpc_task* crucibleTaskH = tpc_task_newLoopEnv(\n")
     ctext.add("        crucibleCtx->currentTask, crucibleCtx->currentScope,\n")
-    ctext.add("        crucibleTask" & siteSuffix & ", &crucibleData,\n")
+    ctext.add("        crucibleTaskFn" & siteSuffix & ", &crucibleData,\n")
     ctext.add("        (int32_t)sizeof(crucibleData), 0,\n")
     ctext.add("        (int32_t)(((`crucibleGrid`.x * `crucibleGrid`.y * `crucibleGrid`.z) + `crucibleWgsPerTask` - 1) / `crucibleWgsPerTask`), 1, true);\n")
     ctext.add("    tpc_schedule(crucibleCtx, crucibleTaskH, false);\n")

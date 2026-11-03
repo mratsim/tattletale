@@ -26,7 +26,7 @@ long syscall(long number, ...);
  */
 
 
-static inline int tpc_futex_wait(_Atomic uint32_t* addr, uint32_t expected) {
+static inline int tpc_futex_wait(TPC_ATOMIC(uint32_t)* addr, uint32_t expected) {
     /* Returns 0 in case of a successful suspend
      * If value are different, it returns EWOULDBLOCK
      * We discard as this is not needed and simplifies compat with Windows futex
@@ -35,7 +35,7 @@ static inline int tpc_futex_wait(_Atomic uint32_t* addr, uint32_t expected) {
     return rc == 0 ? 0 : -(int)errno;
 }
 
-static inline int tpc_futex_wake(_Atomic uint32_t* addr, uint32_t nwakes) {
+static inline int tpc_futex_wake(TPC_ATOMIC(uint32_t)* addr, uint32_t nwakes) {
     /* Returns the number of actually woken threads
      * or a Posix error code (if negative)
      * We discard as this is not needed and simplifies compat with Windows futex
@@ -44,7 +44,7 @@ static inline int tpc_futex_wake(_Atomic uint32_t* addr, uint32_t nwakes) {
     return rc == 0 ? 0 : -(int)errno;
 }
 
-static inline int tpc_futex_wake_all(_Atomic uint32_t* addr) {
+static inline int tpc_futex_wake_all(TPC_ATOMIC(uint32_t)* addr) {
     /* Returns the number of actually woken threads
      * or a Posix error code (if negative)
      */

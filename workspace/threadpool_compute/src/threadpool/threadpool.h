@@ -2,7 +2,7 @@
 #ifndef TPC_THREADPOOL_H
 #define TPC_THREADPOOL_H
 
-#include <stdatomic.h>
+#include "primitives/atomics_compat.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -21,11 +21,11 @@
  * tasksStolen counts every theft, idle or awaiting or leapfrog.
  */
 typedef struct tpc_counters {
-    int64_t tasksScheduled;             /* tasks scheduled */
-    int64_t tasksStolen;                /* tasks stolen */
-    int64_t tasksExecuted;              /* tasks executed */
-    int64_t unrelatedTasksExecuted;     /* unrelated tasks executed */
-    int64_t loopsSplit;                 /* loops split */
+    int64_t tasksScheduled;
+    int64_t tasksStolen;
+    int64_t tasksExecuted;
+    int64_t unrelatedTasksExecuted;
+    int64_t loopsSplit;
     int64_t itersScheduled;
     int64_t itersStolen;
     int64_t itersExecuted;
@@ -114,7 +114,7 @@ typedef struct tpc_worker_context {
     tpc_scoped_barrier* currentScope;   /* need to be exported for syncScope template */
 
     struct tpc_worker_signal {
-        _Alignas(64) _Atomic bool terminate;
+        TPC_ALIGNAS(64) TPC_ATOMIC(bool) terminate;
     } *signal;                     /* owned signal */
 
     /* Thefts */
@@ -148,9 +148,9 @@ struct tpc_threadpool {
      */
     tpc_sync_barrier barrier;                       /* Barrier for initialization and teardown */
     /* -- align: 64 */
-    _Alignas(64) tpc_eventcount globalBackoff;      /* Multi-Producer Multi-Consumer backoff */
+    TPC_ALIGNAS(64) tpc_eventcount globalBackoff;      /* Multi-Producer Multi-Consumer backoff */
     /* -- align: 64 */
-    _Alignas(64) int32_t numThreads;                /* N regular workers */
+    TPC_ALIGNAS(64) int32_t numThreads;                /* N regular workers */
     tpc_taskqueue* workerQueues;                    /* size N */
     tpc_thread_t* workers;                          /* size N */
     struct tpc_worker_signal* workerSignals;        /* size N */

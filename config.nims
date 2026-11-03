@@ -760,6 +760,12 @@ const ZstdSources = [
 for zstdSource in ZstdSources:
   put(zstdSource.rsplit("/", 1)[1] & ".always", "-x c++")
 
+# threadpool_compute's single C unit keeps compiling as C when a consumer
+# passes -std=c++20 for libtorch headers: the per-unit pin comes after the
+# global passC, so its C standard wins for this file only.
+put("threadpool_runtime.always", "-std=c17")
+put("crucibleLaunch.always", "-std=c17")
+
 task hooks_setup, "Activate the pre-commit linter hooks for this clone (core.hooksPath = .githooks)":
   exec "git config core.hooksPath .githooks"
   echo "hooks active: git config core.hooksPath .githooks"

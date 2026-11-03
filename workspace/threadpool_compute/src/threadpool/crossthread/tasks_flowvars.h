@@ -2,7 +2,7 @@
 #ifndef TPC_TASKS_FLOWVARS_H
 #define TPC_TASKS_FLOWVARS_H
 
-#include <stdatomic.h>
+#include "../primitives/atomics_compat.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -57,7 +57,7 @@ typedef void (*tpc_task_fn)(void* env);
 #define TPC_FLOWVAR_HEADER_SIZE (sizeof(tpc_task*))
 
 typedef struct tpc_task {
-    _Atomic uint32_t completed;   /* completion futex word */
+    TPC_ATOMIC(uint32_t) completed;   /* completion futex word */
     /** This state allows synchronization between:
      *  - a waiter that may sleep if no work and task is incomplete
      *  - a thief that completes the task
@@ -66,7 +66,7 @@ typedef struct tpc_task {
      *
      *  Supports up to 2¹⁵ = 32768 threads
      */
-    _Atomic uint32_t synchro;
+    TPC_ATOMIC(uint32_t) synchro;
     /* type synchro = object
      *   canBeFreed {.bitsize:  1.}: uint32 - Transfer ownership from thief to waiter
      *   pad        {.bitsize:  1.}: uint32
@@ -92,7 +92,7 @@ typedef struct tpc_task {
      * ------------------
      */
     tpc_task_fn fn;
-    _Alignas(8) unsigned char env[];
+    TPC_ALIGNAS(8) unsigned char env[];
 } tpc_task;
 
 /* Flowvar is a public object, but we don't want
@@ -217,7 +217,7 @@ static inline void task_payloadCopy(tpc_task* task, const void* env, int32_t env
 
 static inline tpc_task* task_alloc(size_t payloadSize) {
     /* env layout: [task self-pointer][payload] */
-    tpc_task* task = malloc(sizeof(tpc_task) + TPC_FLOWVAR_HEADER_SIZE + payloadSize);
+    tpc_task* task = (tpc_task*)malloc(sizeof(tpc_task) + TPC_FLOWVAR_HEADER_SIZE + payloadSize);
     if (task == NULL) {
         abort();
     }

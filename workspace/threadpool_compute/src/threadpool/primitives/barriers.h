@@ -2,13 +2,13 @@
 #ifndef TPC_BARRIERS_H
 #define TPC_BARRIERS_H
 
-#include <stdatomic.h>
+#include "atomics_compat.h"
 #include <stdint.h>
 
 
 typedef struct tpc_sync_barrier {
-    _Alignas(64) _Atomic uint32_t arrived;    /* arrivals this phase */
-    _Alignas(64) _Atomic uint32_t phase;      /* released generation */
+    TPC_ALIGNAS(64) TPC_ATOMIC(uint32_t) arrived;    /* arrivals this phase */
+    TPC_ALIGNAS(64) TPC_ATOMIC(uint32_t) phase;      /* released generation */
     uint32_t numThreads;
 } tpc_sync_barrier;
 
