@@ -1,8 +1,7 @@
 ## CIRv2 pass-boundary verification: scope and name uniqueness
 ##
-## Test that runPasses verifies a module at the final pass boundary.
-## A kernel body that uses an undeclared symbol refuses, runPasses names the proc and symbol.
-## Two procs that share a name refuse, and a proc with two same-named params refuses.
+## Test that runPasses verifies at the final pass boundary and renders the offending proc
+## into each refusal. Undeclared symbols, duplicate param names, and shared proc names refuse.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -34,6 +33,7 @@ proc runTest() =
     let err = runPipeline(m)
     doAssert "verify: " in err, "expected the verify refusal, got: " & err
     doAssert "at k:" in err and "ghost" in err, "expected the refusal to name the proc and the symbol, got: " & err
+    doAssert "(proc k (param out" in err, "expected the refusal to render the offending proc, got: " & err
 
   block declaredBeforeUse:
     let m = kernelModule(@[
@@ -49,6 +49,7 @@ proc runTest() =
     let err = runPipeline(m)
     doAssert "verify: " in err, "expected the verify refusal for a use before its declaration, got: " & err
     doAssert "ghost" in err, "expected the refusal to name the symbol, got: " & err
+    doAssert "(proc k (param out" in err, "expected the refusal to render the offending proc, got: " & err
 
   block branchScoped:
     let m = kernelModule(@[
@@ -57,6 +58,7 @@ proc runTest() =
     let err = runPipeline(m)
     doAssert "verify: " in err, "expected the verify refusal for a use outside its branch, got: " & err
     doAssert "local" in err, "expected the refusal to name the symbol, got: " & err
+    doAssert "(proc k (param out" in err, "expected the refusal to render the offending proc, got: " & err
 
   block duplicateProcs:
     let fn = procD("k", @[], tVoid(), @[])
@@ -66,6 +68,7 @@ proc runTest() =
     let err = runPipeline(m)
     doAssert "verify: " in err, "expected the verify refusal, got: " & err
     doAssert "'k'" in err, "expected the refusal to name the duplicated proc, got: " & err
+    doAssert "(proc k (void)" in err, "expected the refusal to render a duplicated proc, got: " & err
 
   block duplicateParams:
     let fn = procD("k",
@@ -78,6 +81,7 @@ proc runTest() =
     let err = runPipeline(m)
     doAssert "verify: " in err, "expected the verify refusal, got: " & err
     doAssert "at k:" in err and "'a'" in err, "expected the refusal to name the proc and the duplicated parameter, got: " & err
+    doAssert "(proc k (param out" in err, "expected the refusal to render the offending proc, got: " & err
 
   block verifyIRDisabled:
     let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("ghost", tInt(32)))])

@@ -7,6 +7,7 @@
 
 import std/sets
 import cirv2_lang
+import cirv2_pretty
 
 # ############################################################
 #
@@ -112,9 +113,13 @@ proc checkUniqueNames(names: seq[string]): string =
       return n
     seen.incl n
 
+proc renderProcRefusal(fn: CirProc, violation: string): string =
+  ## Refusal for the first violation in `fn`: the refusal line, then `fn` rendered for context.
+  violation & "\n" & renderProc(fn)
+
 proc verifyModule*(m: CirModule): string =
   ## Returns "" while the module upholds the pass-boundary contracts,
-  ## else the first violation naming the offending proc.
+  ## else the first violation: the refusal line, then the offending proc rendered for context.
   ## Read-only: the walk never rewrites or repairs the IR.
   ## Runs at the final pass boundary: runPasses calls it once, after the last transform pass.
   ##
@@ -134,14 +139,14 @@ proc verifyModule*(m: CirModule): string =
   for g in m.globals:
     if g.kind == sVar:
       moduleNames.incl g.name
-  var procNames: seq[string]
   for fn in m.procs:
     moduleNames.incl fn.name
-    procNames.add fn.name
-  result = checkUniqueNames(procNames)
-  if result.len > 0:
-    return "duplicate proc name '" & result & "'"
+  var seenProcs: HashSet[string]
   for fn in m.procs:
+    if fn.name in seenProcs:
+      # Duplicate proc names render the second colliding proc, reached when the duplicate appeared.
+      return renderProcRefusal(fn, "duplicate proc name '" & fn.name & "'")
+    seenProcs.incl fn.name
     var paramNames: seq[string]
     var visible: HashSet[string]
     for p in fn.params:
@@ -149,7 +154,7 @@ proc verifyModule*(m: CirModule): string =
       visible.incl p.name
     result = checkUniqueNames(paramNames)
     if result.len > 0:
-      return "at " & fn.name & ": duplicate parameter name '" & result & "'"
+      return renderProcRefusal(fn, "at " & fn.name & ": duplicate parameter name '" & result & "'")
     result = checkScopeStmts(fn.body, visible, moduleNames)
     if result.len > 0:
-      return "at " & fn.name & ": " & result
+      return renderProcRefusal(fn, "at " & fn.name & ": " & result)
