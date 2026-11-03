@@ -230,9 +230,17 @@ proc ssEq*(a, b: StrideScalar): bool =
       return false
   true
 
-proc ssZero*(d: StrideScalar): bool {.inline.} =
-  ## True when the stride scalar is the additive identity
-  d.kind == skInt and d.intVal == 0
+proc ssZero*(d: StrideScalar): bool =
+  ## True when the stride scalar is the additive identity:
+  ## the integer 0, or an ArithTuple whose every leaf is 0.
+  case d.kind
+  of skInt:
+    d.intVal == 0
+  of skAtup:
+    for c in d.data:
+      if not ssZero(c):
+        return false
+    true
 
 proc colexLt*(a, b: StrideScalar): bool =
   ## Strict colexicographic order on stride scalars: the highest position
@@ -510,10 +518,14 @@ proc idx2crdT*(idx, shape: IntTuple): IntTuple =
     raise layoutError("idx2crd: non-integer coordinate leaf")
   var i = idx.leaf.intVal
   let flat = flatScalars(shape)
+  if flat.len == 0:
+    raise layoutError("idx2crd: integer coordinate over an empty shape")
   var rem = newSeq[StrideScalar](flat.len)
   for j in 0 ..< flat.len - 1:
     if flat[j].kind != skInt:
       raise layoutError("idx2crd: non-integer shape leaf")
+    if flat[j].intVal <= 0:
+      raise layoutError("idx2crd: non-positive shape leaf " & $flat[j].intVal)
     rem[j] = ssInt(i mod flat[j].intVal)
     i = i div flat[j].intVal
   rem[flat.len - 1] = ssInt(i)

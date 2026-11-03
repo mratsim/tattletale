@@ -186,6 +186,15 @@ proc refuse(p: SubsetParser, construct: string, detail = ""): ref SubsetError =
 proc refuseArity(p: SubsetParser, construct: string, got: int, expected: string): ref SubsetError =
   p.refuse(construct, "expects " & expected & ", got " & $got)
 
+proc parseIntRefused(p: SubsetParser, tok: string): int =
+  ## Parses one integer token.
+  ## The subset's integers are i32: a token with more than 10 digits,
+  ## sign excluded from the count, refuses through the subset error.
+  let digits = if tok.startsWith("-"): tok.len - 1 else: tok.len
+  if digits > 10:
+    raise p.refuse("integer token '" & tok & "'", "outside the i32 range")
+  result = parseInt(tok)
+
 proc parseScalarElem(p: SubsetParser, tok: string): ScalarElem =
   ## Converts an element type token to a ScalarElem.
   ##
@@ -221,7 +230,7 @@ proc parseDimsAndElem(p: var SubsetParser): tuple[shape: seq[int], elem: ScalarE
       # keyword token like `xbf16` after a dim: the element type name
       return (shape, parseScalarElem(p, tok.substr(1)))
     elif isIntToken(tok):
-      shape.add(parseInt(tok))
+      shape.add(p.parseIntRefused(tok))
     else:
       raise p.refuse("dimension token '" & tok & "'", "expected an int or element type")
     let sep = next(p)
@@ -243,7 +252,7 @@ proc parseDimList(p: var SubsetParser): seq[int] =
     if tok == "?":
       result.add(DynamicDim)
     elif isIntToken(tok):
-      result.add(parseInt(tok))
+      result.add(p.parseIntRefused(tok))
     else:
       raise p.refuse("stride token '" & tok & "'", "expected an int or ?")
     if peek(p) == ",":
@@ -262,7 +271,7 @@ proc parseValueList(p: var SubsetParser): seq[ConstScalar] =
     if tok.contains('.'):
       result.add(floatScalar(parseFloat(tok)))
     elif isIntToken(tok):
-      result.add(intScalar(parseInt(tok)))
+      result.add(intScalar(p.parseIntRefused(tok)))
     else:
       raise p.refuse("constant list value token '" & tok & "'", "expected an int or float")
     if peek(p) == ",":
@@ -321,7 +330,7 @@ proc parseType(p: var SubsetParser): TileIrType =
       let dimTok = next(p)
       if not isIntToken(dimTok):
         raise p.refuse("partition_view with dynamic tile dims", "partition tile dims are statically shaped, got '" & dimTok & "'")
-      tileShape.add(parseInt(dimTok))
+      tileShape.add(p.parseIntRefused(dimTok))
       if peek(p) == "x":
         discard next(p)
       else:
@@ -366,7 +375,7 @@ proc parseDynEntries(p: var SubsetParser): seq[ShapeEntry] =
     if tok.startsWith("%"):
       result.add(ssaEntry(stripLeading(tok, '%')))
     elif isIntToken(tok):
-      result.add(staticEntry(parseInt(tok)))
+      result.add(staticEntry(p.parseIntRefused(tok)))
     else:
       raise p.refuse("shape/stride entry '" & tok & "'", "expected an int or an SSA name")
     if peek(p) == ",":
@@ -406,13 +415,15 @@ proc parseConstant(p: var SubsetParser, results: seq[string]): Op =
     let scalar = if tok.contains('.'):
       floatScalar(parseFloat(tok))
     else:
-      intScalar(parseInt(tok))
+      intScalar(p.parseIntRefused(tok))
     payload = ConstPayload(isList: false, scalar: scalar)
   discard p.expect(">")
   discard p.expect(":")
   let ty = parseType(p)
   if ty.kind != tkTile:
     raise p.refuse("constant", "constants produce tile values, got a " & $ty.kind & " type")
+  if ty.tileElem != TypeElem(kind: teScalar, scalar: elem):
+    raise p.refuse("constant", "payload element type " & $elem & " does not match the tile element type")
   if payload.isList:
     for d in ty.tileShape:
       if isDynamic(d):
@@ -444,15 +455,21 @@ proc parseMakeTensorView(p: var SubsetParser, results: seq[string]): Op =
   let strides = parseDynEntries(p)
   discard p.expect("]")
   discard p.expect(":")
+  var sawPrefix = false
   if peek(p) == "tile":
     discard p.expect("tile")
     discard p.expect("<")
     discard p.expect("i32")
     discard p.expect(">")
     discard p.expect("->")
+    sawPrefix = true
   let ty = parseType(p)
   if ty.kind != tkTensorView:
     raise p.refuse("make_tensor_view", "result must be a tensor_view")
+  for entries in @[shape, strides]:
+    for e in entries:
+      if e.isSsa and not sawPrefix:
+        raise p.refuse("make_tensor_view", "dynamic entries require the `tile<i32> -> ` operand-type prefix")
   Op(results: results, operands: @[base], resultTypes: @[ty],
      kind: okMakeTensorView, dynShape: shape, dynStrides: strides)
 
@@ -551,7 +568,7 @@ proc parseAssumeInt(p: var SubsetParser, what: string): int =
   let tok = next(p)
   if not isIntToken(tok):
     raise p.refuse(what & " '" & tok & "'", "expected an int")
-  parseInt(tok)
+  p.parseIntRefused(tok)
 
 proc parseAssume(p: var SubsetParser, results: seq[string]): Op =
   ## Parses `%r = assume bounded<lo, hi>, %v : ty` or
@@ -576,7 +593,7 @@ proc parseAssume(p: var SubsetParser, results: seq[string]): Op =
     if hiTok == "?":
       hi = DynamicDim
     elif isIntToken(hiTok):
-      hi = parseInt(hiTok)
+      hi = p.parseIntRefused(hiTok)
     else:
       raise p.refuse("bounded upper bound '" & hiTok & "'", "expected an int or ?")
     discard p.expect(">")

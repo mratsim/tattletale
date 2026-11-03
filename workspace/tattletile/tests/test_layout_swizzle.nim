@@ -47,6 +47,16 @@ proc checkSwizzleFunctor() =
     doAssert false, "a negative shift with abs(shift) < bits must refuse"
   except LayoutError:
     discard
+  try:
+    discard initSwizzle(1, 0, 0)
+    doAssert false, "a positive shift with abs(shift) < bits must refuse"
+  except LayoutError:
+    discard
+  try:
+    discard initSwizzle(2, 0, 1)
+    doAssert false, "overlapping fields must refuse"
+  except LayoutError:
+    discard
 
 proc checkF2Coshape() =
   ## F2 codomain bounds, the pycute test_layout.py coshape table

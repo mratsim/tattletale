@@ -99,11 +99,11 @@ proc initSwizzle*(bits, base, shift: int): Swizzle =
   ## Swizzle from its three parameters, preconditions checked loudly.
   ##
   ## Raises:
-  ## - LayoutError on negative bits or base, or a negative shift with abs(shift) < bits:
+  ## - LayoutError on negative bits or base, or a shift with abs(shift) < bits:
   ##   the fields would overlap, the map is no involution
-  if bits < 0 or base < 0 or (shift < 0 and abs(shift) < bits):
+  if bits < 0 or base < 0 or abs(shift) < bits:
     raise layoutError("Swizzle(" & $bits & ", " & $base & ", " & $shift & ")" &
-      ": bits and base must be non-negative, a negative shift needs " &
+      ": bits and base must be non-negative, a shift needs " &
       "abs(shift) >= bits")
   let mask = (1 shl bits) - 1
   result.bits = bits
@@ -146,7 +146,14 @@ proc swizzleLayout*(l: Layout, sw: Swizzle): SwizzledLayout =
 
 proc call*(s: SwizzledLayout, crd: IntTuple): int =
   ## Swizzled offset of one coordinate in any form (integral, flat, natural)
-  s.swizzle.apply(s.layout.call(crd).intVal)
+  ##
+  ## Raises:
+  ## - LayoutError for a codomain over coordinate axes, the swizzle applies
+  ##   to integer offsets only
+  let v = s.layout.call(crd)
+  if v.kind != skInt:
+    raise layoutError("SwizzledLayout.call: non-integer offset " & ssStr(v))
+  s.swizzle.apply(v.intVal)
 
 proc callInt*(s: SwizzledLayout, i: int): int =
   ## Swizzled offset of one flat coordinate

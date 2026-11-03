@@ -606,6 +606,11 @@ proc logicalDivide*(A: Layout, tiler: Layout): Layout =
 proc logicalDivide1(A: Layout, t: int): Layout =
   ## Rank-1 logical divide of a scalar-shape layout by an integer,
   ## the tile pair `(t, ceil(shape/t)):(stride, stride*t)`.
+  ##
+  ## Raises:
+  ## - LayoutError for a non-positive tile size
+  if t <= 0:
+    raise layoutError("logical_divide: non-positive tile size " & $t)
   if A.shape.kind == tkLeaf:
     if A.stride.kind != tkLeaf:
       raise layoutError("logical_divide: non-scalar stride of a scalar shape")

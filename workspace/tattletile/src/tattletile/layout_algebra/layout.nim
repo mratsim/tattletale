@@ -89,10 +89,16 @@ proc cosize*(L: Layout): IntTuple =
   ##
   ## Example: `cosize(makeLayout(it(4, 8), it(eUnit(@[0]), eUnit(@[1]))))` is
   ## `(4, 8)`.
+  ##
+  ## Raises:
+  ## - LayoutError for a negative integer stride, the largest-offset
+  ##   assumption below does not hold for it
   var acc = ssInt(0)
   for (s, d) in zipLeavesT(L.shape, L.stride):
     if s.leaf.kind != skInt:
       raise layoutError("cosize: non-integer shape leaf")
+    if d.leaf.kind == skInt and d.leaf.intVal < 0:
+      raise layoutError("cosize: negative stride " & ssStr(d.leaf))
     acc = ssAdd(acc, ssMul(d.leaf, s.leaf.intVal - 1))
   if acc.kind == skInt:
     return itv(acc.intVal + 1)

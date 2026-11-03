@@ -196,6 +196,9 @@ proc resolveViews*(entry: Entry): Table[string, ViewInfo] =
         raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " does not match its tensor_view operand %" & viewName)
       if inner.pvTile.len != tv.resultTypes[0].viewShape.len:
         raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " partitions a " & $tv.resultTypes[0].viewShape.len & "-d tensor_view with a " & $inner.pvTile.len & "-d tile")
+      if tv.dynShape.len != tv.resultTypes[0].viewShape.len or
+          tv.dynStrides.len != tv.resultTypes[0].viewShape.len:
+        raise refuse(entry.name, "make_tensor_view %" & tv.results[0], "lists " & $tv.dynShape.len & " shape and " & $tv.dynStrides.len & " stride entries for a " & $tv.resultTypes[0].viewShape.len & "-d tensor_view")
       result[op.results[0]] = ViewInfo(
         base: tv.operands[0],
         shapeEntries: tv.dynShape,
@@ -212,8 +215,10 @@ func coalescedTv*(entry: Entry, tileShape: seq[int], threads: int): TvLayout =
   ## Coalesced thread-value layout of a tile: tv(t, v) = t + v * threads.
   ##
   ## Raises:
-  ## - SubsetError when `threads` does not divide the tile size
+  ## - SubsetError when `threads` is not positive or does not divide the tile size
   let size = tileSize(tileShape)
+  if threads <= 0:
+    raise refuse(entry.name, "thread-value partition", "thread count must be positive, got " & $threads)
   if size mod threads != 0:
     raise refuse(entry.name, "thread-value partition", $threads & " threads do not divide a tile of " & $size & " elements")
   let values = size div threads
@@ -259,6 +264,9 @@ proc inferThreadValueLayouts*(entry: Entry, threads: int): Table[string, TileVal
     if tileTy.tileElem != TypeElem(kind: teScalar, scalar: eF32) and
         tileTy.tileElem != TypeElem(kind: teScalar, scalar: eI32):
       raise refuse(entry.name, opSpelling(op.kind), "unsupported tile element type")
+    if op.kind in {okAddf, okMulf, okMmaf} and
+        tileTy.tileElem != TypeElem(kind: teScalar, scalar: eF32):
+      raise refuse(entry.name, opSpelling(op.kind), "requires f32 tile elements")
     let valueName = if op.kind == okStoreViewTko:
       op.operands[0]
     else:
@@ -352,6 +360,7 @@ proc lowerToProgram*(entry: Entry, views: Table[string, ViewInfo], layouts: Tabl
         loadInfo: layouts[op.results[0]])
     of okStoreViewTko:
       entry.checkToken(op, lastToken)
+      lastToken = op.results[0]
       entry.checkViewIndices(op, views[op.operands[1]])
       entry.checkTileMatchesView(op, views[op.operands[1]], layouts[op.operands[0]].tileShape)
       result.ops.add ProgramOp(

@@ -71,6 +71,17 @@ refuses(head & " %z = constant <i32: 0> : tile<i32>" &
         " { %c = constant <i32: 1> : tile<i32> }" & " yield" & tail,
         "for region without continue", "mykernel")
 
+# integer overflow refuses through the subset refusal, not a raw overflow defect
+refuses(head & " %a = constant <f32: 1.0> : tile<99999999999999999999xf32>" & tail, "integer token", "mykernel")
+
+# dynamic shape entries require the `tile<i32> -> ` operand-type prefix
+refuses(head & " %tv = make_tensor_view %p, shape = [%n], strides = [1] : tensor_view<?xf32, strides=[?]>" & tail,
+        "make_tensor_view", "mykernel")
+
+# constant payload element type must match the tile element type
+refuses(head & " %a = constant <f32: 1.0> : tile<4xi32>" & tail, "constant", "mykernel")
+refuses(head & " %a = constant <i32: 1> : tile<4xf32>" & tail, "constant", "mykernel")
+
 # module-level refusals carry no kernel, the module placeholder stands in for it
 refuses("garbage", "garbage", "<module>")
 refuses(head & " %a = addf %p, %p : tile<4xf32>" & tail & " trailing", "trailing text", "<module>")

@@ -177,6 +177,36 @@ proc checkRefusals() =
     refuses(proc() = discard parseTileIr(text).getEntry("axpy").runTilePipeline(threads = 4),
             "addf")
 
+  block: # a non-positive thread count refuses before the modulo
+    let entry = axpyEntry()
+    refuses(proc() = discard entry.runTilePipeline(threads = 0), "thread-value partition")
+
+  block: # an integer addf, the binary ops lower through float math only
+    let text = readFile(FixturesDir / "vec_add_axpy.tileir")
+      .replace("%sum = addf %scaled, %tile_b : tile<8xf32>",
+               "%sum = addf %scaled, %tile_b : tile<8xi32>")
+    refuses(proc() = discard parseTileIr(text).getEntry("axpy").runTilePipeline(threads = 4),
+            "addf")
+
+  block: # a make_tensor_view whose shape list arity differs from its tensor_view rank
+    let text = readFile(FixturesDir / "vec_add_axpy.tileir")
+      .replace("%tv_a = make_tensor_view %ptr_a, shape = [%shape_a], strides = [%st] : tile<i32> -> tensor_view<?xf32, strides=[?]>",
+               "%tv_a = make_tensor_view %ptr_a, shape = [%shape_a, %shape_a], strides = [%st] : tile<i32> -> tensor_view<?xf32, strides=[?]>")
+    refuses(proc() = discard parseTileIr(text).getEntry("axpy").runTilePipeline(threads = 4),
+            "make_tensor_view %tv_a")
+
+  block: # token chain continues through a store
+    let text = readFile(FixturesDir / "vec_add_axpy.tileir")
+      .replace("%tok_out = store_view_tko weak %sum, %pv_c[%bid_x] token = %tok_b : tile<8xf32>, partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>, tile<i32> -> token",
+               "%tok_out = store_view_tko weak %sum, %pv_c[%bid_x] token = %tok_b : tile<8xf32>, partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>, tile<i32> -> token" &
+               "\n    %tile_a2, %tok_d = load_view_tko weak %pv_a[%bid_x] token = %tok_out : partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>, tile<i32> -> tile<8xf32>, token")
+    let prog = parseTileIr(text).getEntry("axpy").runTilePipeline(threads = 4)
+    var loads = 0
+    for op in prog.ops:
+      if op.kind == pgLoadTile:
+        inc loads
+    doAssert loads == 3, "two pv_a loads and one pv_b load, got " & $loads
+
 proc checkNewOpRefusals() =
   ## Compiler-emitted op kinds parse (test_tile_ir_captured), the tile-passes lowering subset ends at yield.
   ## Every refusal names construct and kernel.
