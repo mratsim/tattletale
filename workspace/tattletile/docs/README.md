@@ -131,9 +131,9 @@ The compiler captures add:
 The atom path covers one mmaf per kernel on Metal.
 
 - Selection reads the element type and the tile dims at the launch thread count.
-  A kernel with an eligible mmaf takes the atom path.
-- The fragment program then refuses every op beyond the operand loads, one splat constant, one mmaf and its store, such as an `addf`.
-- Shapes that no atom selects keep the abstract FMA fallback.
+  The selector routes a kernel with an eligible mmaf to the atom path.
+- The fragment program refuses every op beyond the operand loads, one splat constant, one mmaf and its store, such as an `addf`.
+- The abstract FMA fallback covers the shapes that no atom selects.
 
 Constructs outside the subset refuse loudly, naming the construct and the kernel:
 

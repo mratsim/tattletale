@@ -181,7 +181,7 @@ proc checkRefusals() =
     let entry = axpyEntry()
     refuses(proc() = discard entry.runTilePipeline(threads = 0), "thread-value partition")
 
-  block: # an integer addf, the binary ops lower through float math only
+  block: # an integer addf refuses
     let text = readFile(FixturesDir / "vec_add_axpy.tileir")
       .replace("%sum = addf %scaled, %tile_b : tile<8xf32>",
                "%sum = addf %scaled, %tile_b : tile<8xi32>")
@@ -274,8 +274,7 @@ proc checkGemmRefusals() =
             "store_view_tko %tile_a", "gemm")
 
 proc checkStoreOrderDedup() =
-  ## Two stores of the same view produce one kernel parameter per unique name.
-  ## The launch binds one buffer to one slot
+  ## Test that two stores of the same view produce one kernel parameter.
   let text = readFile(FixturesDir / "gemm.tileir")
     .replace("%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token",
              "%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token" &

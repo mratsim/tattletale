@@ -187,13 +187,14 @@ proc refuseArity(p: SubsetParser, construct: string, got: int, expected: string)
   p.refuse(construct, "expects " & expected & ", got " & $got)
 
 proc parseIntRefused(p: SubsetParser, tok: string): int =
-  ## Parses one integer token.
-  ## The subset's integers are i32: a token with more than 10 digits,
-  ## sign excluded from the count, refuses through the subset error.
+  ## Subset integers are i32: the parser refuses a token whose value
+  ## leaves the i32 range through the subset error.
   let digits = if tok.startsWith("-"): tok.len - 1 else: tok.len
   if digits > 10:
     raise p.refuse("integer token '" & tok & "'", "outside the i32 range")
   result = parseInt(tok)
+  if result < low(int32) or result > high(int32):
+    raise p.refuse("integer token '" & tok & "'", "outside the i32 range, " & $result & " does not fit")
 
 proc parseScalarElem(p: SubsetParser, tok: string): ScalarElem =
   ## Converts an element type token to a ScalarElem.

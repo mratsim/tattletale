@@ -49,7 +49,7 @@ proc checkSwizzleFunctor() =
     discard
   try:
     discard initSwizzle(1, 0, 0)
-    doAssert false, "a positive shift with abs(shift) < bits must refuse"
+    doAssert false, "a zero shift with abs(shift) < bits must refuse"
   except LayoutError:
     discard
   try:

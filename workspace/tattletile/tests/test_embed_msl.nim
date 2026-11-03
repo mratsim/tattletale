@@ -40,5 +40,17 @@ static:
   doAssert "device float* ptr_a [[buffer(1)]]" in Gemm.msl, "gemm input slot"
   doAssert "device float* ptr_b [[buffer(2)]]" in Gemm.msl, "gemm input slot"
 
+proc checkLaunchThreadsContract() =
+  ## Test that a launch block whose x size differs from the compiled
+  ## thread count refuses before dispatch, and a matching one passes.
+  doAssert Axpy.threadCount == 4, "the compiled thread count reaches the host"
+  Axpy.checkLaunchThreads(4)
+  try:
+    Axpy.checkLaunchThreads(5)
+    doAssert false, "a mismatched launch block must refuse"
+  except SubsetError as e:
+    doAssert "compiled thread count" in e.msg, e.msg
+
 when isMainModule:
+  checkLaunchThreadsContract()
   echo "[OK] embedKernel gbMetal: both fixtures const-evaluate to MSL with the launch ABI"

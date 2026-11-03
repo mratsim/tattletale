@@ -110,14 +110,13 @@ const Expected = static:
   e
 
 const GemmFixtureText = staticRead(currentSourcePath().parentDir / "../fixtures/gemm.tileir")
-  ## Gemm fixture text, re-read for the second-store and accumulator variants
+  ## Gemm fixture text
 
 const GemmAtomAccMsl = compileTileIrToMsl(GemmFixtureText
   .replace("%zero = constant <f32: 0.0> : tile<16x16xf32>",
            "%zero = constant <f32: 1.0> : tile<16x16xf32>").parseTileIr,
   "gemm", threads = 32)
-  ## Gemm with the accumulator splat at 1.0: accInit is live in the expected bits.
-  ## A lowering that replaced accInit with zero fails here.
+  ## Test that the accumulator splat at 1.0 reaches the expected bits.
 
 const ExpectedAcc = static:
   ## Reference bits with the 1.0 accumulator: C = f32(f64(A) @ f64(B) + 1.0)
@@ -131,9 +130,7 @@ const ExpectedAcc = static:
   e
 
 proc checkAtomSingleStore() =
-  ## A second store_view_tko of the mma result refuses on the atom path:
-  ## the fragment program lowers one store, a silent last-store-wins would
-  ## drop the earlier store's writes
+  ## Test that a second store_view_tko of the mma result refuses on the atom path.
   let text = GemmFixtureText
     .replace("%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token",
              "%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token" &
@@ -177,10 +174,9 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     M * M, " outputs"
 
 proc runAccInitTest() =
-  ## Nonzero accumulator: the fragment program seeds each accumulator cell
-  ## with the splat constant, the expected bits carry the accInit term
+  ## Test that a nonzero accumulator reaches the expected bits.
   doAssert "tt_d0 = 1.0f" in GemmAtomAccMsl,
-    "the accumulator init carries the 1.0 splat"
+    "the accumulator init uses the 1.0 splat"
   var engine = newEngine(runMetal)
   engine.ingest(GemmAtomAccMsl)
 
@@ -202,7 +198,7 @@ proc runAccInitTest() =
       "gemm atom acc element " & $i & ": got bits " & $f32Bits(got[i]) &
       " want bits " & $ExpectedAcc[i]
   echo "[OK] gemm atom nonzero accumulator on Metal: bitwise-exact over ",
-    M * M, " outputs"
+    M * M, " outputs (accInit in the expected bits)"
 
 proc runSpirvFallback() =
   ## Abstract FMA fallback check on the SPIR-V backend:

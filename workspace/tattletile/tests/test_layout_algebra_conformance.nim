@@ -23,6 +23,7 @@
 ##     --outdir:build/b4 workspace/tattletile/tests/test_layout_algebra_conformance.nim
 
 import std/algorithm
+import std/strutils
 
 import workspace/tattletile/src/tattletile/layout_algebra
 
@@ -51,6 +52,9 @@ proc testIdentityAxpyTile() =
   let tiler = makeLayout(itv(8), itv(1))
   let tv = makeLayout(it(4, 2), it(1, 4))
   checkIdentity(D, tiler.shape, tv, "axpy tile")
+  # exact partition form, not shape-and-stride equality alone
+  doAssert $zippedDivide(D, compose(tiler.shape, tv)) ==
+    "Layout(((4, 2), 1), ((1, 4), 8))", $zippedDivide(D, compose(tiler.shape, tv))
 
 proc testIdentityGemmAccumulator() =
   ## Coalesced tv layout the GEMM pass picks over the 16x16 accumulator
@@ -147,6 +151,32 @@ proc testAlgebraOpsMatchReference() =
   doAssert $concatLayout(@[makeLayout(it(3), itv(1)), makeLayout(it(2), itv(42))]) ==
     "Layout((3, 2), (1, 42))"
 
+proc refusesLayout(body: proc, detail: string) =
+  ## Runs `body` and requires a LayoutError naming `detail` in the message
+  try:
+    body()
+    doAssert false, "expected a LayoutError naming '" & detail & "'"
+  except LayoutError as e:
+    doAssert detail in e.msg, "unexpected LayoutError: " & e.msg
+
+proc testGeometryRefusals() =
+  ## Test that inputs outside the algebra's domain refuse loudly:
+  ## an integer coordinate over an empty shape, a non-positive shape leaf,
+  ## a non-positive tile size, a negative stride under cosize
+  refusesLayout(proc() = discard callInt(concatLayout(@[]), 0),
+                "integer coordinate over an empty shape")
+  refusesLayout(proc() = discard callInt(makeLayout(it(0, 2), it(1, 1)), 1),
+                "non-positive shape leaf")
+  refusesLayout(proc() = discard logicalDivide(makeLayout(itv(8), itv(1)), itv(0)),
+                "non-positive tile size")
+  refusesLayout(proc() = discard cosize(makeLayout(it(4), itv(-2))),
+                "negative stride")
+  doAssert ssZero(ssInt(0)), "the integer 0 is the additive identity"
+  doAssert ssZero(ssAtup(@[ssInt(0), ssInt(0)])),
+    "an all-zero tuple is the additive identity, leaf by leaf"
+  doAssert not ssZero(ssAtup(@[ssInt(0), ssInt(1)])),
+    "a nonzero leaf makes the tuple nonzero"
+
 when isMainModule:
   testSizeIsTheLeafProduct()
   testIdentitySm70MmaLayout()
@@ -155,4 +185,5 @@ when isMainModule:
   testAxpyOwnershipIsCoalesced()
   testReferenceLayoutDumps()
   testAlgebraOpsMatchReference()
+  testGeometryRefusals()
   echo "[OK] layout algebra conformance: 4 identity checks + ownership tables + reference dumps"

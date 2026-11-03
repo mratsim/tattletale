@@ -71,8 +71,9 @@ refuses(head & " %z = constant <i32: 0> : tile<i32>" &
         " { %c = constant <i32: 1> : tile<i32> }" & " yield" & tail,
         "for region without continue", "mykernel")
 
-# integer overflow refuses through the subset refusal, not a raw overflow defect
+# integers beyond the i32 range refuse through the subset refusal
 refuses(head & " %a = constant <f32: 1.0> : tile<99999999999999999999xf32>" & tail, "integer token", "mykernel")
+refuses(head & " %a = constant <f32: 1.0> : tile<3000000000xf32>" & tail, "integer token", "mykernel")
 
 # dynamic shape entries require the `tile<i32> -> ` operand-type prefix
 refuses(head & " %tv = make_tensor_view %p, shape = [%n], strides = [1] : tensor_view<?xf32, strides=[?]>" & tail,

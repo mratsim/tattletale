@@ -349,7 +349,7 @@ proc lowerMma(prog: Program, op: ProgramOp, loadMap: Table[string, LoadView], en
   let bView = loadMap[op.mmaB]
   for st in prog.ops:
     if st.kind == pgStoreTile and st.storeViewInfo.base in [aView.base, bView.base]:
-      raise refuseBridge(prog.name, "store_view_tko %" & st.storeValue, "writes %" & st.storeViewInfo.base & ", an mmaf operand of %" & op.results[0] & " read inside the k loop")
+      raise refuseBridge(prog.name, "store_view_tko %" & st.storeValue, "writes %" & st.storeViewInfo.base & ", an mmaf operand of %" & op.results[0] & " that the k loop reads")
   let elem = cirElemType(op.mmaInfo.elem)
   let zero = if op.mmaInfo.elem == eF32: fltLit(0.0, tFloat(32)) else: intLit(0, tInt(32))
   let sumName = "tt_mma_sum_" & op.results[0]

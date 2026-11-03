@@ -259,7 +259,7 @@ flowchart LR
 
 - both compile entries are `{.compileTime.}` procs, called in a `const`/`static` context with `parseTileIrFile`
 - the SPIR-V entry bakes the launch block size into the words and does not take the atom path,
-  no SPIR-V form exists for the simdgroup intrinsics, every shape lowers through the abstract FMA fallback
+  no SPIR-V form exists for the simdgroup intrinsics, the abstract FMA fallback lowers every shape
 - the Metal path ignores the baked workgroup size, its launch config sets the shape at dispatch
 - execution goes through crucible's engines unchanged, bitwise-exact against the float64-then-narrow references on both fixtures
 

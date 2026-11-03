@@ -64,7 +64,7 @@ proc checkLaunchThreads*(k: EmbeddedKernel, blkX: SomeInteger) =
   ## Refuses a launch block whose x size differs from the compiled thread count.
   ## `embedKernel` bakes `threads` into the coordinate formula and the SPIR-V words:
   ## a smaller block leaves the upper tile coordinates unwritten, a larger one
-  ## reads elements no thread owns.
+  ## reads elements that no thread owns.
   ##
   ## Raises:
   ## - SubsetError naming the kernel and both thread counts

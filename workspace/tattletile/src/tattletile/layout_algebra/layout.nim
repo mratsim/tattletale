@@ -91,8 +91,9 @@ proc cosize*(L: Layout): IntTuple =
   ## `(4, 8)`.
   ##
   ## Raises:
-  ## - LayoutError for a negative integer stride, the largest-offset
-  ##   assumption below does not hold for it
+  ## - LayoutError for a negative integer stride: cosize assumes each mode's
+  ##   largest offset is (s - 1) * d at the last coordinate.
+  ##   A negative stride puts the largest offset at coordinate 0.
   var acc = ssInt(0)
   for (s, d) in zipLeavesT(L.shape, L.stride):
     if s.leaf.kind != skInt:
