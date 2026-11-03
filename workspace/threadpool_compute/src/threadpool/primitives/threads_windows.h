@@ -43,7 +43,7 @@ static inline DWORD WINAPI tpc_thread_wrapper(void* param) {
  *  In:      arg:     the worker body argument.
  */
 static inline int tpc_thread_create(tpc_thread_t* thread, int (*start)(void*), void* arg) {
-    tpc_thread_start* packed = malloc(sizeof(*packed));
+    tpc_thread_start* packed = (tpc_thread_start*)malloc(sizeof(*packed));
     if (packed == NULL) {
         return 1;
     }

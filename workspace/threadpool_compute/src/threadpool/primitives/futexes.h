@@ -5,7 +5,7 @@
 #ifndef TPC_FUTEXES_H
 #define TPC_FUTEXES_H
 
-#include <stdatomic.h>
+#include "atomics_compat.h"
 #include <stdint.h>
 
 /* OS primitives

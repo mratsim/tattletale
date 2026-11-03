@@ -2,7 +2,7 @@
 #ifndef TPC_BACKOFF_H
 #define TPC_BACKOFF_H
 
-#include <stdatomic.h>
+#include "../primitives/atomics_compat.h"
 #include <stdint.h>
 #include "../primitives/futexes.h"
 
@@ -32,7 +32,7 @@ typedef struct tpc_eventcount {
      *  }
      *  ```
      */
-    _Atomic uint32_t waitset;
+    TPC_ATOMIC(uint32_t) waitset;
     /* type waitset = object
      *   preSleep {.bitsize: 16.}: uint32
      *   committedSleep {.bitsize: 16.}: uint32
@@ -40,7 +40,7 @@ typedef struct tpc_eventcount {
      * We need precise committed sleep count for the `syncAll` barrier because a `preSleep` waiter
      * may steal a task and create more work.
      */
-    _Atomic uint32_t events;   /* futex word */
+    TPC_ATOMIC(uint32_t) events;   /* futex word */
 } tpc_eventcount;
 
 /** A ticket from sleepy(). The sleep() call blocks until the event

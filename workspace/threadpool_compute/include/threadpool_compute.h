@@ -46,6 +46,14 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "../src/threadpool/primitives/atomics_compat.h"
+
+/* C linkage for the pool symbols: the .c sources compile as C even under
+ * `nim cpp`, while C++ translation units calling them must not mangle the names.
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include "../src/threadpool/crossthread/backoff.h"
 #include "../src/threadpool/crossthread/scoped_barriers.h"
@@ -350,5 +358,9 @@ void tpc_threadpool_shutdown(tpc_threadpool* tp);
         tpc_ctx_->currentScope = tpc_suspended_;                         \
         0;                                                               \
     })
+#ifdef __cplusplus
+}
+#endif
+
 
 #endif /* THREADPOOL_COMPUTE_H */

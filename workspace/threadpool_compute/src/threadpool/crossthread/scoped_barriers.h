@@ -37,7 +37,7 @@
 #ifndef TPC_SCOPED_BARRIERS_H
 #define TPC_SCOPED_BARRIERS_H
 
-#include <stdatomic.h>
+#include "../primitives/atomics_compat.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -54,7 +54,7 @@
  *  This means that in case of nested scopes, only the inner scope needs to track its descendants.
  */
 typedef struct tpc_scoped_barrier {
-    _Atomic int32_t descendants;
+    TPC_ATOMIC(int32_t) descendants;
 } tpc_scoped_barrier;
 
 /* Note: If one is defined, the other destructors proc are not implictly create inline

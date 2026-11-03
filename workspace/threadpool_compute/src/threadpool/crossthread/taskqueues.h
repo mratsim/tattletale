@@ -27,7 +27,7 @@
 #ifndef TPC_TASKQUEUES_H
 #define TPC_TASKQUEUES_H
 
-#include <stdatomic.h>
+#include "../primitives/atomics_compat.h"
 #include <stdint.h>
 
 typedef struct tpc_task tpc_task;
@@ -38,7 +38,7 @@ typedef struct tpc_task tpc_task;
 typedef struct tpc_queuebuf {
     struct tpc_queuebuf* prevRetired;   /* intrusive linked list. Used for garbage collection */
     uint32_t capacity;
-    _Atomic(tpc_task*) slots[];
+    TPC_ATOMIC(tpc_task*) slots[];
 } tpc_queuebuf;
 
 /* This implements a lock-free, growable, work-stealing task queue.
@@ -50,9 +50,9 @@ typedef struct tpc_queuebuf {
  * a 32-bit index where the atomics are 32-bit.
  */
 typedef struct tpc_taskqueue {
-    _Alignas(64) _Atomic intptr_t front;   /* Consumers - steal */
-    _Alignas(64) _Atomic intptr_t back;    /* Producer  - push/pop */
-    _Alignas(64) _Atomic(tpc_queuebuf*) buf;
+    TPC_ALIGNAS(64) TPC_ATOMIC(intptr_t) front;   /* Consumers - steal */
+    TPC_ALIGNAS(64) TPC_ATOMIC(intptr_t) back;    /* Producer  - push/pop */
+    TPC_ALIGNAS(64) TPC_ATOMIC(tpc_queuebuf*) buf;
     struct tpc_queuebuf* garbage;          /* retired buffers */
 } tpc_taskqueue;
 
