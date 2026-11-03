@@ -28,7 +28,6 @@ const PunctChars = {'{', '}', '(', ')', '<', '>', '=', ',', ':', '[', ']', '?', 
   ## the subset: the tokenizer recognizes them, the parser refuses by name.
 
 proc stripLeading(s: string, c: char): string =
-  ## Removes every leading occurrence of `c` (`%name` becomes `name`).
   var i = 0
   while i < s.len and s[i] == c:
     inc i
@@ -56,7 +55,6 @@ proc isDigit(c: char): bool =
   c in {'0' .. '9'}
 
 proc tokenizeError(text: string, i: int): ref SubsetError =
-  ## Builds the tokenizer refusal with a 40-character context excerpt.
   subsetError("cannot tokenize Tile IR at: '" &
     text.substr(i, min(i + 39, text.len - 1)) & "'")
 
@@ -178,7 +176,6 @@ proc expect(p: var SubsetParser, tok: string): string =
   got
 
 proc refuse(p: SubsetParser, construct: string, detail = ""): ref SubsetError =
-  ## Builds the loud refusal for a construct outside the supported subset.
   let suffix = if detail != "":
     ": " & detail
   else:
