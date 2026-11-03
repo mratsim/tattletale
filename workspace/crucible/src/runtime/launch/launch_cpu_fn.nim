@@ -100,6 +100,17 @@ func runtimeFormalsAccept(candImpl: NimNode, args: NimNode): bool =
       argIdx.inc
   result = true
 
+func candidateSignatures(cands: seq[NimNode]): string =
+  ## One line per candidate overload, `name(paramType, paramType)`,
+  ## refusal text for a launch the argument types cannot discriminate.
+  for cand in cands:
+    let formals = cand.getImpl()[3]
+    var types: seq[string]
+    for i in 1 ..< formals.len:
+      for j in 0 ..< formals[i].len - 2:
+        types.add(formals[i][^2].repr)
+    result.add("  " & $cand & "(" & types.join(", ") & ")\n")
+
 func resolveKernelOverload(kernel: NimNode, args: NimNode): NimNode =
   ## Overload selection for `kernel`:
   ##
@@ -125,7 +136,8 @@ func resolveKernelOverload(kernel: NimNode, args: NimNode): NimNode =
       return typeMatches[0]
   doAssert arityMatches.len == 1,
     "kernel launch " & $kernel & ": " & $arityMatches.len & " overloads take " &
-    $args.len & " arguments"
+    $args.len & " arguments, the runtime argument types must select exactly one," &
+    " candidates:\n" & candidateSignatures(arityMatches)
   arityMatches[0]
 
 proc assertDimsWithinInt32(grid, blk: Dim3) =

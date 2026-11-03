@@ -4,6 +4,7 @@
 ## that the argument types select:
 ##
 ## - parameter count filters first, the runtime argument types then discriminate same-arity candidates
+## - a launch that no candidate matches refuses, the message lists every candidate's signature
 ##
 ## Run:
 ##   nim test_crucible_cpu
