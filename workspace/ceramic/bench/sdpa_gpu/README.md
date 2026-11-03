@@ -50,8 +50,10 @@ Python side: `bench_paged_sdpa_decode_mlx.py`, a block-table gather plus `mx.fas
 ## Run
 
     nim c -r -d:release \
-      -d:sdpaDtype=f32|bf16 \
+      -d:sdpaDtype=f32 \
       --outdir:build/bench workspace/ceramic/bench/sdpa_gpu/bench_paged_sdpa_decode_metal.nim
+
+`sdpaDtype` also takes `bf16`, pass one value per run.
 
     uv run python workspace/ceramic/bench/sdpa_gpu/bench_paged_sdpa_decode_mlx.py [bf16]
 
