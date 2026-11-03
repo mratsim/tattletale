@@ -323,8 +323,7 @@ proc checkMmaf(entry: Entry, op: Op, layouts: Table[string, TileValueInfo]) =
       raise refuse(entry.name, "mmaf", "operand %" & operand & " requires f32 tile elements")
 
 proc checkF32Operands(entry: Entry, op: Op, layouts: Table[string, TileValueInfo]) =
-  ## Refuses a tile operand whose element type is not f32, scalars carry no
-  ## layout assignment and are skipped.
+  ## Skips scalar operands, they have no layout assignment.
   for operand in op.operands:
     if operand in layouts and layouts[operand].elem != eF32:
       raise refuse(entry.name, opSpelling(op.kind), "operand %" & operand & " requires f32 tile elements")

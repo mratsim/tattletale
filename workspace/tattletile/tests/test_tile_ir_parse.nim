@@ -98,4 +98,5 @@ checkRoundTrip("vec_add_axpy.tileir")
 checkRoundTrip("gemm.tileir")
 checkAxpyShape(parseTileIr(readFile(FixturesDir / "vec_add_axpy.tileir")))
 checkGemmShape(parseTileIr(readFile(FixturesDir / "gemm.tileir")))
+checkZeroPaddedIntegers()
 echo "test_tile_ir_parse: PASS"

@@ -66,7 +66,7 @@ proc checkLaunchThreads*(k: EmbeddedKernel, blkX: SomeInteger, blkY: SomeInteger
   ## `embedKernel` bakes `threads` into the coordinate formula and the SPIR-V words:
   ## - a smaller block leaves the upper tile coordinates unwritten
   ## - a larger block reads elements that no thread owns
-  ## - a y or z size above one re-runs the x-only coordinate formula without synchronization
+  ## - a launch with a y or z size above one re-runs the x-only coordinate formula without synchronization
   ##
   ## Raises:
   ## - SubsetError naming the kernel and the offending sizes
