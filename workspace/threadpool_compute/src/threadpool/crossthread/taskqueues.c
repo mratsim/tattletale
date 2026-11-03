@@ -9,7 +9,7 @@ static tpc_queuebuf* queuebuf_new(int32_t capacity) {
      * static:
      *   doAssert supportsCopyMem(T), $T & " must be a (POD) plain-old-data type: no seq, string, ref."
      */
-    tpc_queuebuf* buf = malloc(sizeof(tpc_queuebuf) + (size_t)capacity * sizeof(_Atomic(tpc_task*)));
+    tpc_queuebuf* buf = (tpc_queuebuf*)malloc(sizeof(tpc_queuebuf) + (size_t)capacity * sizeof(_Atomic(tpc_task*)));
     if (buf == NULL) {
         abort();
     }
