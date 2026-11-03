@@ -565,7 +565,7 @@ proc printTargetExpr*(ctx: var auto, e: CirExpr): string =
     if builtinTxt.len > 0:
       return builtinTxt
     let calleeName =
-      if e.callee.kind == eSym: e.callee.name
+      if e.callee.kind == eSym: ctx.getSymbolText(e.callee)
       else: ctx.printExpr(e.callee)
     return calleeName & "(" & args.join(", ") & ")"
   else:

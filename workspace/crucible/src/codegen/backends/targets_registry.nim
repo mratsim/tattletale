@@ -61,5 +61,5 @@ genTargets:
       lanes 2, 3, 4
 
   target cpu:
-    kind unrollDirective "", braceSameLine true
+    kind unrollDirective "", braceSameLine true, targetExprKinds {eStrLit}
     vector ()

@@ -142,214 +142,97 @@ proc structDeclName(ctx: var PrintCtx, t: CirType): string =
 # Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string
+# Shared-walk mixin targets, declared so the overlay procs are module-scope
+# symbols when the walk's generics resolve: the first `ctx.printExpr` call
+# instantiates the shared walk and binds every overlay from the headers above.
+proc coordRef(ctx: var PrintCtx, e: CirExpr): string
+proc coordDot(ctx: var PrintCtx, e: CirExpr): string
+proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string
+proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
+proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string
+proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string
+proc printConv(ctx: var PrintCtx, e: CirExpr): string
 
-proc isCoordReadC(e: CirExpr): bool =
-  ## Recognition of coordinate-builtin reads, possibly a component of one.
-  if e.isNil:
-    return false
-  case e.kind
-  of eSym:
-    e.builtin and e.coordBuiltin != CirCoordBuiltinKind.cbkNone
-  of eDot:
-    isCoordReadC(e.dotBase)
-  else:
-    false
+proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
+  ## C text of one whole coordinate-builtin read through the launch table.
+  if not ctx.inlineKernel:
+    ctx.fail("coordinate builtins in device callees are not supported in v0, pass them as parameters")
+  cpuCoordUseC = true
+  result = coordExprC(ctx.coords, e.coordBuiltin, -1)
+  if result.len == 0:
+    ctx.fail("no launch expression for coordinate builtin " & $e.coordBuiltin)
 
-proc printIntLit(e: CirExpr): string =
-  ## Integer literal, C suffix when the width exceeds int.
-  let bits = if e.litType != nil and e.litType.kind in {ctInt, ctUint}:
-               e.litType.bits else: -1
-  if e.litType != nil and e.litType.kind == ctUint:
-    result = $e.value & "u"
-    if bits == 64:
-      result &= "ll"
-  elif bits == 64:
-    result = $e.value & "ll"
-  else:
-    result = $e.value
+proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
+  ## C text of one coordinate-builtin component read through the launch table.
+  if not ctx.inlineKernel:
+    ctx.fail("coordinate builtin components in device callees are not supported in v0, pass them as parameters")
+  cpuCoordUseC = true
+  let comp = case e.fieldName
+             of "x": 0
+             of "y": 1
+             of "z": 2
+             else: -1
+  result = coordExprC(ctx.coords, e.dotBase.coordBuiltin, comp)
+  if result.len == 0:
+    ctx.fail("no launch expression for " & $e.dotBase.coordBuiltin & "." & e.fieldName)
 
-proc printFloatLit(e: CirExpr): string =
-  ## Float literal, f suffix for 32-bit.
-  let bits = if e.fLitType != nil and e.fLitType.kind == ctFloat:
-               e.fLitType.bits else: 64
-  if bits == 32:
-    # repr keeps the decimal form exact through the Nim float64 value
-    result = repr(e.fValue) & "f"
-  else:
-    result = repr(e.fValue)
-
-proc printBuiltinRefusalC(e: CirExpr, ctx: var PrintCtx): string =
-  let what =
-    if e.synchroBuiltin != CirSynchroBuiltinKind.cbkNone: "threadgroup barriers"
-    elif e.shuffleBuiltin != CirShuffleBuiltinKind.cbkNone: "simd_shuffle/simd_shuffle_xor"
-    elif e.reductionBuiltin != CirReductionBuiltinKind.cbkNone: "subgroup reductions"
-    elif e.atomicsBuiltin != CirAtomicsBuiltinKind.cbkNone: "atomic builtins"
-    else: "unknown builtins"
-  ctx.fail(what & " are not supported in v0")
+proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
+  ## C symbol text of one symbol reference.
+  ##
+  ## - a non-coordinate builtin records its family refusal
+  ## - a substituted parameter reads its launch text
+  ## - a proc-typed symbol is a callee, it appends the launch-site suffix
+  ## - `__builtin_` compiler builtins pass verbatim, the decomposeArrayAssign pass emits them
+  if e.builtin:
+    let what =
+      if e.synchroBuiltin != CirSynchroBuiltinKind.cbkNone: "threadgroup barriers"
+      elif e.shuffleBuiltin != CirShuffleBuiltinKind.cbkNone: "simd_shuffle/simd_shuffle_xor"
+      elif e.reductionBuiltin != CirReductionBuiltinKind.cbkNone: "subgroup reductions"
+      elif e.atomicsBuiltin != CirAtomicsBuiltinKind.cbkNone: "atomic builtins"
+      else: "unknown builtins"
+    ctx.fail(what & " are not supported in v0")
+    return e.name
+  for (name, txt) in ctx.subst:
+    if name == e.name:
+      return txt
+  if e.typ != nil and e.typ.kind == ctProc and not e.name.startsWith("__builtin_"):
+    return e.name & ctx.suffix
   e.name
 
-proc calleeSymbolC(name: string, ctx: PrintCtx): string =
-  ## C symbol for a callee: kernel-printed callees append the launch-site suffix,
-  ## `__builtin_` compiler builtins pass verbatim, the decomposeArrayAssign pass emits them.
-  if name.startsWith("__builtin_"):
-    name
-  else:
-    name & ctx.suffix
+proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
+  ## C sizeof text: the element type name with the stacked array dimensions.
+  var t = e.ofType
+  var dims = ""
+  while t.kind == ctArray:
+    dims &= "[" & $t.aN & "]"
+    t = t.aElem
+  "sizeof(" & ctx.emitTypeName(t) & dims & ")"
 
-proc printExpr(ctx: var PrintCtx, e: CirExpr): string =
-  ## C text of one structured expression over the cpu launch's rewrite state.
-  case e.kind
-  of eNil:
-    result = "NULL"
-  of eTrue:
-    result = "true"
-  of eFalse:
-    result = "false"
-  of eStrLit:
+proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
+  ## Refusals for expression kinds outside the shared walk's coverage.
+  if e.kind == eStrLit:
     ctx.fail("string values are not supported in v0")
-  of eSym:
-    if e.builtin:
-      if e.coordBuiltin != CirCoordBuiltinKind.cbkNone:
-        if not ctx.inlineKernel:
-          ctx.fail("coordinate builtins in device callees are not supported in v0, pass them as parameters")
-        cpuCoordUseC = true
-        result = coordExprC(ctx.coords, e.coordBuiltin, -1)
-        if result.len == 0:
-          ctx.fail("no launch expression for coordinate builtin " & $e.coordBuiltin)
-      else:
-        result = printBuiltinRefusalC(e, ctx)
-    elif ctx.subst.len > 0:
-      result = e.name
-      for (name, txt) in ctx.subst:
-        if name == e.name:
-          result = txt
-          break
-    else:
-      result = e.name
-  of eIntLit:
-    result = printIntLit(e)
-  of eFloatLit:
-    result = printFloatLit(e)
-  of eDeref:
-    result = "*" & ctx.printExpr(e.derefOperand)
-  of eAt:
-    let base = ctx.printExpr(e.atBase)
-    # C parses a prefix dereference tighter than the index,
-    # `*p[i]` reads `*(p[i])`
-    if e.atBase.kind == eDeref:
-      result = "(" & base & ")[" & ctx.printExpr(e.atIndex) & "]"
-    else:
-      result = base & "[" & ctx.printExpr(e.atIndex) & "]"
-  of ePat:
-    # pointer-AT: aptr indexing, vector swizzles are not supported in v0
-    let bt = getExprType(e.patBase)
-    if bt != nil and bt.kind == ctVector:
-      ctx.fail("vector swizzles are not supported in v0")
-    result = ctx.printExpr(e.patBase) & "[" & ctx.printExpr(e.patIndex) & "]"
-  of eDot:
-    let base = e.dotBase
-    if base.kind == eSym and base.builtin and base.coordBuiltin != CirCoordBuiltinKind.cbkNone:
-      if not ctx.inlineKernel:
-        ctx.fail("coordinate builtin components in device callees are not supported in v0, pass them as parameters")
-      cpuCoordUseC = true
-      let comp = case e.fieldName
-                 of "x": 0
-                 of "y": 1
-                 of "z": 2
-                 else: -1
-      result = coordExprC(ctx.coords, base.coordBuiltin, comp)
-      if result.len == 0:
-        ctx.fail("no launch expression for " & $base.coordBuiltin & "." & e.fieldName)
-    else:
-      let baseTxt = ctx.printExpr(e.dotBase)
-      # C parses a prefix dereference tighter than the field access,
-      # `*p.field` reads `*(p.field)`
-      if e.dotBase.kind == eDeref:
-        result = "(" & baseTxt & ")." & e.fieldName
-      else:
-        result = baseTxt & "." & e.fieldName
-  of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-    if e.kind == eMod and e.opType.kind == ctFloat:
-      ctx.fail("float mod has no C operator, CIRv2 lowers it for integer selectors only")
-    let op = case e.kind
-             of eAdd: "+"
-             of eSub: "-"
-             of eMul: "*"
-             of eDiv: "/"
-             of eMod: "%"
-             of eShl: "<<"
-             of eShr: ">>"
-             of eBitAnd: "&"
-             of eBitOr: "|"
-             of eBitXor: "^"
-             else: ""
-    result = "(" & ctx.printExpr(e.left) & " " & op & " " & ctx.printExpr(e.right) & ")"
-  of eNeg:
-    result = "(-" & ctx.printExpr(e.unOperand) & ")"
-  of eEq, eNeq, eLt, eLe:
-    let op = case e.kind
-             of eEq: "=="
-             of eNeq: "!="
-             of eLt: "<"
-             else: "<="
-    result = "(" & ctx.printExpr(e.a) & " " & op & " " & ctx.printExpr(e.b) & ")"
-  of eNot:
-    result = "(!" & ctx.printExpr(e.notOperand) & ")"
-  of eAnd, eOr:
-    let op = if e.kind == eAnd: "&&" else: "||"
-    result = "(" & ctx.printExpr(e.andLeft) & " " & op & " " & ctx.printExpr(e.andRight) & ")"
-  of eTernary:
-    result = "(" & ctx.printExpr(e.cond) & " ? " & ctx.printExpr(e.thenE) &
-             " : " & ctx.printExpr(e.elseE) & ")"
-  of eCast:
-    # bit-level reinterpret through a compound-literal union: header-free, aliasing-safe, the compiler folds it to a register move
+  else:
+    ctx.fail(getUnhandledExprRejection(e.kind))
+  ""
+
+proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string =
+  ## C object-constructor member text: `.field = value`.
+  "." & kvv.name & " = " & ctx.printExpr(kvv.value)
+
+proc printConv(ctx: var PrintCtx, e: CirExpr): string =
+  ## C conversion text: the union bit reinterpret for `eCast`, the cast form for `eConv`.
+  if e.kind == eCast:
     let srcT = getExprType(e.castOperand)
     if srcT == nil or e.castType.kind notin
         {ctBool, ctInt, ctUint, ctFloat, ctPtr, ctAptr} or
         srcT.kind notin {ctBool, ctInt, ctUint, ctFloat, ctPtr, ctAptr}:
       ctx.fail("cast between non-scalar types is not supported in v0")
-    result = "((union { " & ctx.emitTypeName(srcT) & " _from; " &
-             ctx.emitTypeName(e.castType) & " _to; }){ ._from = " &
-             ctx.printExpr(e.castOperand) & " })._to"
-  of eConv:
-    result = "(" & ctx.emitTypeName(e.castType) & ")" & ctx.printExpr(e.castOperand)
-  of eAddr:
-    result = "&" & ctx.printExpr(e.addrOperand)
-  of eSizeof:
-    # array dimensions move behind the type name, the C sizeof form
-    var t = e.ofType
-    var dims = ""
-    while t.kind == ctArray:
-      dims &= "[" & $t.aN & "]"
-      t = t.aElem
-    result = "sizeof(" & ctx.emitTypeName(t) & dims & ")"
-  of eOconstr:
-    let t = e.ocType
-    if t.kind != ctStruct:
-      ctx.fail("object constructor over a non-struct type")
-    var parts: seq[string]
-    for kv in e.kvFields:
-      parts.add("." & kv.name & " = " & ctx.printExpr(kv.value))
-    result = "(" & ctx.emitTypeName(t) & "){" & parts.join(", ") & "}"
-  of eAconstr:
-    var parts: seq[string]
-    for el in e.elems:
-      parts.add(ctx.printExpr(el))
-    result = "{" & parts.join(", ") & "}"
-  of eCall:
-    let callee = e.callee
-    if callee.kind == eSym and callee.builtin:
-      discard printBuiltinRefusalC(callee, ctx)
-    var calleeRef = ctx.printExpr(callee)
-    if callee.kind == eSym and not callee.builtin:
-      calleeRef = calleeSymbolC(callee.name, ctx)
-    var args: seq[string]
-    for a in e.args:
-      # C converts implicitly at call sites, CIRv2 conversions print
-      # explicitly as casts where they exist
-      args.add(ctx.printExpr(a))
-    result = calleeRef & "(" & args.join(", ") & ")"
+      return ""
+    return "((union { " & ctx.emitTypeName(srcT) & " _from; " &
+      ctx.emitTypeName(e.castType) & " _to; }){ ._from = " &
+      ctx.printExpr(e.castOperand) & " })._to"
+  "(" & ctx.emitTypeName(e.castType) & ")" & ctx.printExpr(e.castOperand)
 
 const LaunchCounterNamesC = [
   # counters the iteration function generates around the inlined kernel
