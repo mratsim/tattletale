@@ -250,7 +250,9 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
 
   var unitC = typesAndData
   if serial:
-    unitC = "#include <stdint.h>\n#include <stdbool.h>\n" & unitC
+    # stddef.h defines NULL for the nil literals the printer emits,
+    # pooled units reach it through the threadpool force-includes
+    unitC = "#include <stddef.h>\n#include <stdint.h>\n#include <stdbool.h>\n" & unitC
   if calleesC.len > 0:
     unitC.add(calleesC & "\n")
   unitC.add(funcsC)
