@@ -36,15 +36,35 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
 #  Kernel struct-parameter explosion
 # ═══════════════════════════════════════════════════════════════════════
 
-proc buildLeafConstr(t: CirType, name: string): CirExpr =
-  ## For `AxpyView{p, n}` exploded under `y`:
-  ##   oconstr AxpyView{p: sym y_p, n: sym y_n}
-  ## The leaf symbol of field `f` names `name_f`, nested structs recurse one level deeper.
+proc defaultConstr(t: CirType): CirExpr =
+  ## Construction of a static struct from nothing.
+  ##
+  ## - a static struct has no runtime bytes
+  ## - every field is itself static and constructs recursively
+  ## - fields naming a leaf symbol stay constructed by `buildLeafConstr`
   var fields: seq[CirKv]
   for f in t.fields:
     if f.typ.kind == ctVoid:
       continue
-    if f.typ.kind == ctStruct and f.typ.containsPtrDeep:
+    fields.add kv(f.name, defaultConstr(f.typ))
+  result = oconstrE(t, fields)
+
+proc buildLeafConstr(t: CirType, name: string): CirExpr =
+  ## For `AxpyView{p, n}` exploded under `y`:
+  ##   oconstr AxpyView{p: sym y_p, n: sym y_n}
+  ## For `AxpyView{p, n}` exploded under `y`:
+  ##   oconstr AxpyView{p: sym y_p, n: sym y_n}
+  ## - the leaf symbol of field `f` names `name_f`
+  ## - nested structs recurse one level deeper
+  ## - a static struct field has no leaf and constructs empty
+  ##   (no kernel parameter exists for it)
+  var fields: seq[CirKv]
+  for f in t.fields:
+    if f.typ.kind == ctVoid:
+      continue
+    if f.typ.isStaticStruct:
+      fields.add kv(f.name, defaultConstr(f.typ))
+    elif f.typ.kind == ctStruct and f.typ.containsPtrDeep:
       fields.add kv(f.name, buildLeafConstr(f.typ, name & "_" & f.name))
     else:
       fields.add kv(f.name, sym(name & "_" & f.name, f.typ))
@@ -85,6 +105,9 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
               leaf.typ
           params.add CirParam(name: leaf.name, typ: typ)
         preamble.add varD(p.name, p.typ, buildLeafConstr(p.typ, p.name))
+      elif p.typ.isStaticStruct:
+        # the pass drops the parameter from the signature and declares a same-named default local
+        preamble.add varD(p.name, p.typ, defaultConstr(p.typ))
       else:
         params.add p
     if preamble.len > 0:
