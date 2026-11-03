@@ -5,13 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## forEach over a fully collapsed tile under Metal: every mode has length 1
-## and no mode is left to iterate, so the flat index is 0.
+## Test that forEach over a fully collapsed tile under Metal compiles and runs:
+## every mode has length 1, no mode is left to iterate, so the flat index is 0.
 ##
-## Two kernels exercise the collapsed index:
-## - `_` matches the SDPA rescale-skip loop shape. On the unfixed tree
-##   codegenMetal refuses the compile: "type not supported: NimNode (ntyRef)"
-## - `j` reads the index. On the unfixed tree the sem check fails on `j: NimNode`
+## Regression: without the forEach fix, codegenMetal refuses the `_` kernel
+## on "type not supported: NimNode (ntyRef)" and sem refuses the `j` kernel on `j: NimNode`.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --outdir:build/tests \
