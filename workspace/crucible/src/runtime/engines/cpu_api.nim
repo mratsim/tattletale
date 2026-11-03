@@ -49,8 +49,6 @@ proc newCpuEngine*(numThreads: int = 0): CpuEngine =
     result.numThreads = 1
 
 proc destroyCpuEngine*(engine: var CpuEngine) =
-  ## Pool shutdown, joins the workers and frees the pool memory.
-  ## Call once per engine, from the thread that created it.
   when compileOption("threads"):
     doAssert engine.tp != nil,
       "destroyCpuEngine: the engine's pool is already shut down"
