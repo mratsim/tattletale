@@ -65,12 +65,12 @@ proc sdpaPagedLoadAndBridge[E](engine: E, Elem: typedesc, meta: SdpaPagedFixture
 proc sdpaPagedCombo*(o, q, kvPoolK, kvPoolV: distinct TensorView,
                      blockTable, cacheSeqlens: distinct TensorView,
                      scale: float32, Dk, Dv, PageSize: static int,
-                     isWindowed: static bool, windowSize: int, layer: int32) =
+                     windowed: static bool, windowSize: int, layer: int32) =
   paged_sdpa_decode(
     tiledMma(float32, q.T, kvPoolK.T, SdpaPagedTile, SdpaPagedTile, SdpaPagedTile),
     tiledMma(float32, o.T, kvPoolV.T, SdpaPagedTile, SdpaPagedTile, SdpaPagedTile),
     o, q, kvPoolK, kvPoolV, blockTable, cacheSeqlens,
-    scale, Dk, Dv, PageSize, isWindowed, windowSize, layer)
+    scale, Dk, Dv, PageSize, windowed, windowSize, layer)
 
 proc sdpaPagedReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static int, windowed: static bool, name: string) =
   let meta = parseSdpaPagedMetadata(SdpaPagedFixturesDir / name)

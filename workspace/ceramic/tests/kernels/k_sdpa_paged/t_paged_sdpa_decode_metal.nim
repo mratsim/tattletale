@@ -19,12 +19,15 @@
 import workspace/crucible
 import workspace/ceramic/tests/kernels/k_sdpa_paged/kernel_sdpa_paged_template
 
+const
+  pagedDecodeFixtures = ["paged_decode_gqa_f16", "paged_decode_small_f16"]
+  pagedWindowFixtures = ["paged_window_decode_f16"]
+
 proc replayAllPagedFixtures() =
   var engine = newEngine(runMetal)
-  engine.replayPagedFixture(float16, 64, false,
-    ["paged_decode_gqa_f16", "paged_decode_small_f16"])
-  engine.replayPagedFixture(float16, 64, true,
-    ["paged_window_decode_f16"])
-  echo "all paged SDPA fixture replays pass (3 fixtures)"
+  engine.replayPagedFixture(float16, 64, false, pagedDecodeFixtures)
+  engine.replayPagedFixture(float16, 64, true, pagedWindowFixtures)
+  echo "all paged SDPA fixture replays pass (",
+       pagedDecodeFixtures.len + pagedWindowFixtures.len, " fixtures)"
 
 replayAllPagedFixtures()

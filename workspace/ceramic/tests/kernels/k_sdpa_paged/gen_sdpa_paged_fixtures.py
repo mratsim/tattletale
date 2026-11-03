@@ -160,8 +160,8 @@ FIXTURES = [
     dict(name="paged_decode_small_f16", dtype="float16", num_seqs=2, Hq=2, Hkv=1,
          Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
          num_pages=6, cache_seqlens=[17, 64], seed=102),
-    # mid-page window left edge (70 - 40 = 30) and a window-start page skip
-    # (100 - 40 = 60, page 1), the skipped table columns and pages stay garbage
+    # a mid-page window left edge (70 - 40 = 30) and a window starting past
+    # page 0 (100 - 40 = 60, kv tile 1), the mask cuts the skipped entries
     dict(name="paged_window_decode_f16", dtype="float16", num_seqs=2, Hq=4, Hkv=2,
          Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
          num_pages=7, cache_seqlens=[70, 100], seed=103, window_size=40),

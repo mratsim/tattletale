@@ -24,7 +24,7 @@
 ##   - a kv tile spans `nt` consecutive kv entries of one page:
 ##     PageSize mod nt == 0, the same rule ceramic_v1's
 ##     grouped_query_attention_paged states as page_size multiple of 8 at nt = 8
-##   - the kv loop touches exactly ceil(cache_seqlen / PageSize) table entries
+##   - the kv loop touches at most ceil(cache_seqlen / PageSize) table entries
 ##     and never reads a -1 padding slot
 ##   - windowed decode starts the kv loop at the window's left-edge page
 ##   - the caller guarantees maxPages * PageSize >= cache_seqlen >= 1
@@ -53,20 +53,25 @@ proc paged_sdpa_decode*(
       O, Q, kvPoolK, kvPoolV: distinct TensorView,
       blockTable, cacheSeqlens: distinct TensorView,
       scale: float32, Dk, Dv, PageSize: static int,
-      isWindowed: static bool = false, windowSize: int = low(int32),
+      windowed: static bool = false, windowSize: int = low(int32),
       layer: int32) =
   ## Paged decode SDPA: `o[s, h] = softmax(scale·q[s,h]·Kᵀ)·V` over the entries [0, cache_seqlens[s]) gathered through `block_table`.
   ##
   ## Schedules:
   ##   - mmaQK: `static TiledMma` for Q·Kᵀ, reduces over Dk
   ##   - mmaPV: `static TiledMma` for attention·V, reduces over S
-  ##   - isWindowed + windowSize: the sliding-window left bound, entries below max(0, cache_seqlens[s] - windowSize) mask out
+  ##   - windowed + windowSize: the sliding-window left bound, the band masks
+  ##     entries below max(0, cache_seqlens[s] - windowSize)
   ##
   ## Launch: grid (1, Hq, numSeqs), one simdgroup per threadgroup.
   ## Grid y addresses the head, grid z the sequence, grid x stays 1 (one query tile in decode).
   ##
   ## `layer` selects the pool's layer slice: all sequences of one dispatch
   ## read one layer's keys and values.
+  ##
+  ## `windowSize`'s default is `low(int32)`: the lowest device int.
+  ## Launch arguments narrow to the device's 32-bit int, so no real window
+  ## width collides with the sentinel.
   static: doAssert mmaQK.atom.getThreadCount() == getLaneWidth(),
     "paged sdpa: one simdgroup per threadgroup, the atom must cover the lanes"
   static: doAssert PageSize mod mmaQK.NT == 0,
@@ -94,7 +99,7 @@ proc paged_sdpa_decode*(
     group = Q.shape[1] div kvPoolK.shape[3]
     kvHead = head div group                    # GQA, direct integer arithmetic
     seqlen = int(cacheSeqlens[seqId])
-    windowLo = when isWindowed: max(0, seqlen - windowSize) else: 0
+    windowLo = when windowed: max(0, seqlen - windowSize) else: 0
 
     vQ = Q(seqId, head, _, _)                  # (1, Dk), A operand of MMA 1
     vO = O(seqId, head, _, _)
