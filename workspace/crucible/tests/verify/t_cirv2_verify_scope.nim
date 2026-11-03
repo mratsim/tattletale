@@ -69,6 +69,22 @@ proc runTest() =
     doAssert "'k'" in err, "expected the refusal to name the duplicated proc, got: " & err
     doAssert "(proc k (void)" in err, "expected the refusal to render a duplicated proc, got: " & err
 
+  block duplicateKernelExportNames:
+    # Printers emit a kernel under its `exportName` when set: two kernels sharing one
+    # exportName emit two file-scope declarations of one name.
+    let fn1 = procD("k1", @[], tVoid(), @[])
+    fn1.isKernel = true
+    fn1.exportName = "emitted"
+    let fn2 = procD("k2", @[], tVoid(), @[])
+    fn2.isKernel = true
+    fn2.exportName = "emitted"
+    let m = moduleD("verify_scope", @[], @[fn1, fn2])
+    m.verifyIR = true
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for duplicate emitted kernel names, got: " & err
+    doAssert "duplicate emitted name 'emitted'" in err, "expected the refusal to name the colliding emitted name, got: " & err
+    doAssert "(proc k2 (void)" in err, "expected the refusal to render the second kernel, got: " & err
+
   block duplicateParams:
     let fn = procD("k",
       @[param("out", tPtr(caDevice, tInt(32))), param("a", tInt(32)), param("a", tInt(32))],
@@ -149,6 +165,13 @@ proc runTest() =
     doAssert "verify: " in err, "expected the verify refusal for a forward global reference, got: " & err
     doAssert "at global 'a':" in err and "'b'" in err, "expected the refusal to name the global and the symbol, got: " & err
 
+  block globalInitSelfReference:
+    let m = kernelModule(@[])
+    m.globals = @[varD("g", tInt(32), sym("g", tInt(32)), caThreadgroup)]
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for a self-referential global initializer, got: " & err
+    doAssert "at global 'g': symbol 'g' resolves to no declaration in scope" in err, "expected the refusal to name the global and its own unresolved symbol, got: " & err
+
   block globalReadResolves:
     let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("g", tInt(32)))])
     m.globals = @[
@@ -171,6 +194,17 @@ proc runTest() =
     let err = runPipeline(m)
     doAssert "verify: " in err, "expected the verify refusal for a global named like a proc, got: " & err
     doAssert "'k'" in err, "expected the refusal to name the colliding name, got: " & err
+
+  block globalNameCollidesWithKernelExportName:
+    let fn = procD("k", @[], tVoid(), @[])
+    fn.isKernel = true
+    fn.exportName = "g"
+    let m = moduleD("verify_scope", @[], @[fn])
+    m.globals = @[varD("g", tInt(32), intLit(0, tInt(32)), caThreadgroup)]
+    m.verifyIR = true
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for a global named like a kernel's emitted name, got: " & err
+    doAssert "global name 'g' collides with a proc name" in err, "expected the refusal to name the colliding name, got: " & err
 
   block zeroTransformRegistry:
     # An analysis-only registry has no transform boundary: builder-produced IR is

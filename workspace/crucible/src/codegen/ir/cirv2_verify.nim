@@ -22,9 +22,11 @@ import cirv2_pretty
 ## Dev-only: `CirModule.verifyIR`, defaulted from `-d:CIR_verify`.
 ## Read-only: returns the first violation, rendered with the offending proc where one exists, never rewrites.
 ## Checks, per module:
-## - proc names unique: printers emit names verbatim, the runtime caches binaries on kernel names
-## - global names unique and disjoint from proc names: hoisted declarations emit at file scope
-## - every global is a `sVar` whose initializer resolves, in declaration order, a nil global refuses
+## - emitted proc names unique, a kernel emits its `exportName` when set, else its name:
+##   the printers emit names verbatim and the runtime caches binaries on kernel names
+## - global names unique and disjoint from emitted proc names: hoisted declarations emit at file scope
+## - every global is a `sVar` whose initializer resolves against the declarations before it,
+##   a nil global refuses
 ##
 ## Checks, per proc (kernels and device functions alike, lowering rewrites bodies in place):
 ## - param names unique and non-empty: duplicates emit ill-formed target source, an empty name passes the uniqueness scan
@@ -56,6 +58,11 @@ const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
   ## - `__builtin_memcpy`: the decomposeArrayAssign pass, C targets provide the intrinsic
   ## - `max`, `min`: the foldMaxMinToBuiltins pass emits them as callees.
   ##   Consumers: WGSL/HLSL printers, SPIR-V encoder, and the CUDA math mapping.
+
+proc getEmittedName(fn: CirProc): string =
+  ## Returns the file-scope name the C-family printers emit for `fn`,
+  ## its `exportName` when the kernel sets one and its name otherwise.
+  result = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
 
 proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string]): string =
   ## Returns "" while every symbol in `e` resolves, else the violation.
@@ -165,8 +172,10 @@ proc verifyModule*(m: CirModule): string =
   ## Returns "" while the module upholds the pass-boundary contracts (catalogue in the module header),
   ## else the first violation rendered as a refusal line plus the offending proc for context.
   var moduleNames: HashSet[string]
+  var emittedNames: HashSet[string]
   for fn in m.procs:
     moduleNames.incl fn.name
+    emittedNames.incl fn.getEmittedName()
   var seenGlobals: HashSet[string]
   for g in m.globals:
     # Globals come from the lowering passes, which hoist `var` statements only.
@@ -176,20 +185,21 @@ proc verifyModule*(m: CirModule): string =
       return "unsupported global kind '" & $g.kind & "', only sVar globals are supported"
     if g.name in seenGlobals:
       return "duplicate global name '" & g.name & "'"
-    if g.name in moduleNames:
+    if g.name in moduleNames or g.name in emittedNames:
       return "global name '" & g.name & "' collides with a proc name"
     seenGlobals.incl g.name
-    moduleNames.incl g.name
     # Printers emit globals in declaration order at file scope: an initializer resolves only
-    # against the names collected before it.
+    # against the names collected before it, never the global's own name.
     result = checkScopeExpr(g.init, moduleNames, moduleNames)
     if result.len > 0:
       return "at global '" & g.name & "': " & result
+    moduleNames.incl g.name
   var seenProcs: HashSet[string]
   for fn in m.procs:
-    if fn.name in seenProcs:
-      return renderProcRefusal(fn, "duplicate proc name '" & fn.name & "'")
-    seenProcs.incl fn.name
+    let emitted = fn.getEmittedName()
+    if emitted in seenProcs:
+      return renderProcRefusal(fn, "duplicate emitted name '" & emitted & "'")
+    seenProcs.incl emitted
     var paramNames: seq[string]
     var visible: HashSet[string]
     for p in fn.params:
