@@ -80,10 +80,20 @@ proc assertDimsWithinInt32(grid, blk: Dim3) =
                       ("blk", blk.x), ("blk", blk.y), ("blk", blk.z)]:
     doAssert dim <= high(int32),
       "launchCpuFn: " & kind & " dim " & $dim & " exceeds int32, the emitted C launch stores each dim as int32"
-  let workgroups = int64(grid.x) * int64(grid.y) * int64(grid.z)
-  doAssert workgroups <= high(int32),
-    "launchCpuFn: the grid workgroup total " & $workgroups &
+  # every dim passed the int32 bound above, so each int64 product below
+  # cannot wrap and the guard stays correct with overflow checks off
+  let plane = int64(grid.x) * int64(grid.y)
+  doAssert grid.z == 0 or plane <= int64(high(int32)) div grid.z,
+    "launchCpuFn: the grid workgroup total " & $grid.x & "*" & $grid.y & "*" & $grid.z &
     " exceeds int32, the emitted C launch computes the workgroup total in int32"
+  for (axis, g, b) in [("x", grid.x, blk.x), ("y", grid.y, blk.y), ("z", grid.z, blk.z)]:
+    doAssert int64(g) * int64(b) <= high(int32),
+      "launchCpuFn: the " & axis & " axis schedule " & $g & "*" & $b &
+      " exceeds int32, the emitted C launch computes thread_position_in_grid in int32"
+  let blockThreads = int64(blk.x) * int64(blk.y) * int64(blk.z)
+  doAssert blockThreads <= high(int32),
+    "launchCpuFn: the workgroup thread total " & $blk.x & "*" & $blk.y & "*" & $blk.z &
+    " exceeds int32, the emitted C launch computes thread_index_in_threadgroup in int32"
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Kernel wrapper
