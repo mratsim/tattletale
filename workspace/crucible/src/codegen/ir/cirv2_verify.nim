@@ -26,10 +26,13 @@ import cirv2_pretty
 ##
 ## Checks, per proc (kernels and device functions alike, lowering rewrites bodies in place):
 ## - param names unique: duplicates emit ill-formed target source
-## - every symbol resolves to a param, a `sVar` declared earlier in the body,
-##   a module global, or another module proc
-##   - a `sVar` joins scope after its initializer checks
-##   - declarations inside a branch or loop body scope to that body, matching the braces every printer emits
+## - declarations of one name in one statement list refuse: the printers emit one list into one brace scope
+## - a body-top-level declaration shadowing a parameter refuses: parameters share the body's scope
+##
+## Scope contract:
+## - every symbol resolves to a param, a `sVar` declared earlier in the body, a module global, or another module proc
+## - a `sVar` joins scope after its initializer checks, so a declaration never resolves its own initializer
+## - declarations inside a branch or loop body scope to that body, matching the braces every printer emits
 ##
 ## Exempt from the scope walk: `{.builtin.}`-marked symbols and `IntrinsicCallees` below, each backed by the pass that emits it.
 ##
@@ -59,19 +62,29 @@ proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string]): string =
     if result.len > 0:
       return
 
-proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames: HashSet[string]): string =
+proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames: HashSet[string], outermost = false): string =
   ## Returns "" while every symbol in `ss` resolves in statement order, else the first violation.
   ##
   ## A `sVar` joins `visible` after its own initializer checks, so a declaration never resolves its own initializer.
   ##
+  ## Two declarations of one name in the same statement list refuse: the printers emit
+  ## one list into one brace scope. A body-top-level declaration that shadows a parameter
+  ## refuses too: parameters and the body share one scope in the emitted source.
+  ##
   ## Branch and loop bodies take a copy of `visible`, a declaration inside a body is scoped to that body,
-  ## matching the braces every printer emits, and a use after the body resolves to nothing.
+  ## matching the braces the C-family printers emit, and a use after the body resolves to nothing.
+  var declared: HashSet[string]
   for s in ss:
     case s.kind
     of sVar:
       result = checkScopeExpr(s.init, visible, moduleNames)
       if result.len > 0:
         return
+      if s.name in declared:
+        return "duplicate local name '" & s.name & "'"
+      if outermost and s.name in visible:
+        return "local '" & s.name & "' shadows a parameter"
+      declared.incl s.name
       visible.incl s.name
     of sAsgn:
       result = checkScopeExpr(s.lhs, visible, moduleNames)
@@ -161,6 +174,6 @@ proc verifyModule*(m: CirModule): string =
     result = checkUniqueNames(paramNames)
     if result.len > 0:
       return renderProcRefusal(fn, "at " & fn.name & ": duplicate parameter name '" & result & "'")
-    result = checkScopeStmts(fn.body, visible, moduleNames)
+    result = checkScopeStmts(fn.body, visible, moduleNames, outermost = true)
     if result.len > 0:
       return renderProcRefusal(fn, "at " & fn.name & ": " & result)

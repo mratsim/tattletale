@@ -5,7 +5,7 @@
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
-##     --outdir:/tmp/c17d06-m2-test-out --nimcache:/tmp/c17d06-m2-test-cache \
+##     --outdir:build/wip_c17d06fix --nimcache:nimcache/wip_c17d06fix \
 ##     workspace/crucible/tests/verify/t_cirv2_verify_scope.nim
 
 import std/strutils
@@ -82,6 +82,48 @@ proc runTest() =
     doAssert "verify: " in err, "expected the verify refusal, got: " & err
     doAssert "at k:" in err and "'a'" in err, "expected the refusal to name the proc and the duplicated parameter, got: " & err
     doAssert "(proc k (param out" in err, "expected the refusal to render the offending proc, got: " & err
+
+  block duplicateLocals:
+    # A verbatim callee-body inliner emits this shape when one callee is inlined at two
+    # call sites: the callee's locals are cloned into the caller's statement list.
+    # Two same-name declarations in one list print into one brace pair.
+    let m = kernelModule(@[
+      varD("tmp", tInt(32), intLit(0, tInt(32))),
+      varD("tmp", tInt(32), intLit(1, tInt(32)))])
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for duplicate locals, got: " & err
+    doAssert "'tmp'" in err, "expected the refusal to name the duplicated local, got: " & err
+    doAssert "(proc k (param out" in err, "expected the refusal to render the offending proc, got: " & err
+
+  block duplicateLocalsInBranch:
+    let m = kernelModule(@[
+      iteS(trueE(), @[
+        varD("tmp", tInt(32), intLit(0, tInt(32))),
+        varD("tmp", tInt(32), intLit(1, tInt(32)))], @[])])
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for duplicate locals in one branch, got: " & err
+    doAssert "'tmp'" in err, "expected the refusal to name the duplicated local, got: " & err
+
+  block localShadowsParam:
+    let fn = procD("k",
+      @[param("out", tPtr(caDevice, tInt(32))), param("a", tInt(32))],
+      tVoid(),
+      @[varD("a", tInt(32), intLit(0, tInt(32)))])
+    fn.isKernel = true
+    let m = moduleD("verify_scope", @[], @[fn])
+    m.verifyIR = true
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for a local shadowing a parameter, got: " & err
+    doAssert "'a'" in err, "expected the refusal to name the shadowed parameter, got: " & err
+
+  block branchShadowStaysLegal:
+    # Branch-scoped shadowing stays legal: the frontend deliberately emits branch-local
+    # declarations reusing an outer name.
+    let m = kernelModule(@[
+      iteS(trueE(), @[varD("a", tInt(32), intLit(0, tInt(32)))], @[]),
+      asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("out", tPtr(caDevice, tInt(32))))])
+    let err = runPipeline(m)
+    doAssert err.len == 0, "expected a clean pass over branch-scoped shadowing, got: " & err
 
 when isMainModule:
   runTest()
