@@ -634,10 +634,28 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   of eSym, eDot, eCast, eConv, eSizeof, eOconstr, eAconstr, eCall:
     return ctx.printTargetExpr(e)
 
+proc printRet*(ctx: var auto, s: CirStmt, pad: string): string =
+  ## Return statement in the shared form: `return <expr>;` or `return;` without a value.
+  mixin printExpr
+  if s.retVal != nil:
+    pad & "return " & ctx.printExpr(s.retVal) & ";"
+  else:
+    pad & "return;"
+
+proc printDiscard*(ctx: var auto, s: CirStmt, pad: string): string =
+  ## Discard statement in the shared form.
+  ##
+  ## Contract:
+  ##
+  ## - the value expression drops, a valued discard's side effects vanish
+  ## - a target whose discards keep their side effects overrides the default
+  ""
+
 proc printStmt(ctx: var auto, s: CirStmt): string =
   ## Prints one structured statement.
   ##
-  ## Shared variants emit here: `sIte`, `sRet`, `sDiscard`, `sEmit`.
+  ## Shared variants emit here: `sIte`, `sEmit`. `sRet` and `sDiscard`
+  ## print through `printRet` and `printDiscard`.
   ## A loop prints through `printWhileText` off `printStmtList`.
   ## Per-target policy resolves at instantiation through the printer's own procs:
   ##
@@ -646,7 +664,7 @@ proc printStmt(ctx: var auto, s: CirStmt): string =
   ## - `printCall`: barrier intrinsics and builtin call vocabulary
   ## - `printAsm`: inline assembly form, refusal text or raw splice
   mixin printStmts, printExpr, printVar, printAsgn, printCall, printAsm,
-        printIteElse, printEmitOperand
+        printIteElse, printEmitOperand, printRet, printDiscard
   if ctx.failing():
     return ""
   let pad = spaces(ctx.indent * 2)
@@ -669,12 +687,9 @@ proc printStmt(ctx: var auto, s: CirStmt): string =
   of sWhile:
     result = ""
   of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
-    else:
-      result = pad & "return;"
+    result = ctx.printRet(s, pad)
   of sDiscard:
-    result = ""
+    result = ctx.printDiscard(s, pad)
   of sEmit:
     # `{.emit.}` raw source: verbatim text spliced with the operand text,
     # no terminator appended as the text supplies its own terminators
@@ -726,6 +741,7 @@ proc printVar*(ctx: var auto, s: CirStmt): string =
 
 proc printAsgn*(ctx: var auto, s: CirStmt): string =
   ## One assignment in the direct form, refusing pointer rebinds per the target knobs.
+  mixin printExpr
   let pad = spaces(ctx.indent * 2)
   if ctx.emit.noPointerRebind.len > 0 and s.lhs.kind == eSym and
       s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
@@ -742,10 +758,11 @@ proc getStmtBuiltinText*(ctx: var auto, s: CirStmt, pad: string, args: seq[strin
 
 proc printCall*(ctx: var auto, s: CirStmt): string =
   ## One call statement in the target statement-position form.
-  mixin printExpr, getStmtBuiltinText, printCallArgTexts, getAtomicCallText
+  mixin printExpr, getStmtBuiltinText, printCallArgTexts, getAtomicCallText,
+        getSymbolText
   let pad = spaces(ctx.indent * 2)
   let calleeName =
-    if s.callCallee.kind == eSym: s.callCallee.name
+    if s.callCallee.kind == eSym: ctx.getSymbolText(s.callCallee)
     else: ctx.printExpr(s.callCallee)
   let args = ctx.printCallArgTexts(s.callCallee, s.callArgs)
   if s.callCallee.kind == eSym and s.callCallee.synchroBuiltin != cbkNone:
