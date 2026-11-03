@@ -232,6 +232,77 @@ proc checkGemmRefusals() =
     refuses(proc() = discard parseTileIr(text).getEntry("gemm").runTilePipeline(threads = 4),
             "store_view_tko", "gemm")
 
+
+proc checkShapeRefusals() =
+  ## Tile geometry refusals:
+  ## - a partition tile matches its tensor_view rank
+  ## - an mmaf tile is square
+  ## - a loaded or stored tile matches the partition tile of its view
+  template entryModule(body: string): string =
+    "cuda_tile.module @k { entry @mykernel(%p: tile<ptr<f32>>) {" & body & " } }"
+  block: # a rank-2 partition tile over a rank-1 tensor view
+    let m = parseTileIr(entryModule(
+      " %st = constant <i32: 1> : tile<i32>" &
+      " %tok = make_token : token" &
+      " %tv = make_tensor_view %p, shape = [%st], strides = [%st] : tile<i32> -> tensor_view<?xf32, strides=[?]>" &
+      " %pv = make_partition_view %tv : partition_view<tile=(8x16), tensor_view<?xf32, strides=[?]>>" &
+      " yield"))
+    refuses(proc() = discard m.getEntry("mykernel").resolveViews(),
+            "make_partition_view", "mykernel")
+  block: # a rank-1 partition tile over a rank-2 tensor view
+    let m = parseTileIr(entryModule(
+      " %st = constant <i32: 1> : tile<i32>" &
+      " %tok = make_token : token" &
+      " %tv = make_tensor_view %p, shape = [%st, %st], strides = [%st, %st] : tile<i32> -> tensor_view<?x?xf32, strides=[?,?]>" &
+      " %pv = make_partition_view %tv : partition_view<tile=(8), tensor_view<?x?xf32, strides=[?,?]>>" &
+      " yield"))
+    refuses(proc() = discard m.getEntry("mykernel").resolveViews(),
+            "make_partition_view", "mykernel")
+  block: # a rectangular mmaf, tile<8x16>
+    let m = parseTileIr(entryModule(
+      " %tv_a = make_tensor_view %p, shape = [8, 16], strides = [16, 1] : tensor_view<8x16xf32, strides=[16,1]>" &
+      " %tv_b = make_tensor_view %p, shape = [8, 16], strides = [16, 1] : tensor_view<8x16xf32, strides=[16,1]>" &
+      " %tv_c = make_tensor_view %p, shape = [8, 16], strides = [16, 1] : tensor_view<8x16xf32, strides=[16,1]>" &
+      " %pv_a = make_partition_view %tv_a : partition_view<tile=(8x16), tensor_view<8x16xf32, strides=[16,1]>>" &
+      " %pv_b = make_partition_view %tv_b : partition_view<tile=(8x16), tensor_view<8x16xf32, strides=[16,1]>>" &
+      " %pv_c = make_partition_view %tv_c : partition_view<tile=(8x16), tensor_view<8x16xf32, strides=[16,1]>>" &
+      " %tok = make_token : token" &
+      " %bid_x, %bid_y, %bid_z = get_tile_block_id : tile<i32>" &
+      " %tile_a, %tok_a = load_view_tko weak %pv_a[%bid_x, %bid_y] token = %tok : partition_view<tile=(8x16), tensor_view<8x16xf32, strides=[16,1]>>, tile<i32> -> tile<8x16xf32>, token" &
+      " %tile_b, %tok_b = load_view_tko weak %pv_b[%bid_x, %bid_y] token = %tok_a : partition_view<tile=(8x16), tensor_view<8x16xf32, strides=[16,1]>>, tile<i32> -> tile<8x16xf32>, token" &
+      " %zero = constant <f32: 0.0> : tile<8x16xf32>" &
+      " %acc = mmaf %tile_a, %tile_b, %zero : tile<8x16xf32>, tile<8x16xf32>, tile<8x16xf32>" &
+      " %tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<8x16xf32>, partition_view<tile=(8x16), tensor_view<8x16xf32, strides=[16,1]>>, tile<i32> -> token" &
+      " yield"))
+    refuses(proc() = discard m.getEntry("mykernel").runTilePipeline(threads = 4),
+            "square", "mykernel")
+  block: # a loaded tile whose shape differs from its view's partition tile
+    let m = parseTileIr(entryModule(
+      " %st = constant <i32: 1> : tile<i32>" &
+      " %tok = make_token : token" &
+      " %tv = make_tensor_view %p, shape = [%st, %st], strides = [%st, %st] : tile<i32> -> tensor_view<?x?xf32, strides=[?,?]>" &
+      " %pv = make_partition_view %tv : partition_view<tile=(2x4), tensor_view<?x?xf32, strides=[?,?]>>" &
+      " %bid_x, %bid_y, %bid_z = get_tile_block_id : tile<i32>" &
+      " %tile_x, %tok_a = load_view_tko weak %pv[%bid_x, %bid_y] token = %tok : partition_view<tile=(2x4), tensor_view<?x?xf32, strides=[?,?]>>, tile<i32> -> tile<4x2xf32>, token" &
+      " %tok_out = store_view_tko weak %tile_x, %pv[%bid_x, %bid_y] token = %tok_a : tile<4x2xf32>, partition_view<tile=(2x4), tensor_view<?x?xf32, strides=[?,?]>>, tile<i32> -> token" &
+      " yield"))
+    refuses(proc() = discard m.getEntry("mykernel").runTilePipeline(threads = 4),
+            "load_view_tko", "mykernel")
+  block: # a stored tile whose shape differs from its view's partition tile
+    let m = parseTileIr(entryModule(
+      " %st = constant <i32: 1> : tile<i32>" &
+      " %tok = make_token : token" &
+      " %tv_a = make_tensor_view %p, shape = [%st, %st], strides = [%st, %st] : tile<i32> -> tensor_view<?x?xf32, strides=[?,?]>" &
+      " %tv_b = make_tensor_view %p, shape = [%st, %st], strides = [%st, %st] : tile<i32> -> tensor_view<?x?xf32, strides=[?,?]>" &
+      " %pv_a = make_partition_view %tv_a : partition_view<tile=(2x4), tensor_view<?x?xf32, strides=[?,?]>>" &
+      " %pv_b = make_partition_view %tv_b : partition_view<tile=(4x2), tensor_view<?x?xf32, strides=[?,?]>>" &
+      " %bid_x, %bid_y, %bid_z = get_tile_block_id : tile<i32>" &
+      " %tile_x, %tok_a = load_view_tko weak %pv_a[%bid_x, %bid_y] token = %tok : partition_view<tile=(2x4), tensor_view<?x?xf32, strides=[?,?]>>, tile<i32> -> tile<2x4xf32>, token" &
+      " %tok_out = store_view_tko weak %tile_x, %pv_b[%bid_x, %bid_y] token = %tok_a : tile<2x4xf32>, partition_view<tile=(4x2), tensor_view<?x?xf32, strides=[?,?]>>, tile<i32> -> token" &
+      " yield"))
+    refuses(proc() = discard m.getEntry("mykernel").runTilePipeline(threads = 4),
+            "store_view_tko", "mykernel")
+
 when isMainModule:
   checkResolveViews()
   checkInferLayouts()
@@ -242,4 +313,5 @@ when isMainModule:
   checkNewOpRefusals()
   checkRefusals()
   checkGemmRefusals()
+  checkShapeRefusals()
   echo "[OK] tile passes: axpy and gemm resolve to the reference layouts, ownership and program ops"

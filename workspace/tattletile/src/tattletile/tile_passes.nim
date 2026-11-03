@@ -171,7 +171,8 @@ proc resolveViews*(entry: Entry): Table[string, ViewInfo] =
   ## recording shape/strides/tile shape per view SSA name.
   ## - the tensor view is looked up by its SSA name, so interleaved view
   ##   definitions resolve to their own operand lists
-  ## - refusals: mismatched partition operands, load/store of views with no
+  ## - refusals: mismatched partition operands, a partition tile whose rank
+  ##   differs from its tensor_view's rank, load/store of views with no
   ##   make_partition_view definition
   ##
   ## Raises:
@@ -191,6 +192,8 @@ proc resolveViews*(entry: Entry): Table[string, ViewInfo] =
                             viewElem: inner.pvElem, viewStrides: inner.pvStrides)
       if inner.kind != tkPartitionView or tv.resultTypes[0] != tvTy:
         raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " does not match its tensor_view operand %" & viewName)
+      if inner.pvTile.len != tv.resultTypes[0].viewShape.len:
+        raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " partitions a " & $tv.resultTypes[0].viewShape.len & "-d tensor_view with a " & $inner.pvTile.len & "-d tile")
       result[op.results[0]] = ViewInfo(
         base: tv.operands[0],
         shapeEntries: tv.dynShape,
@@ -279,16 +282,31 @@ proc checkViewIndices(entry: Entry, op: Op, view: ViewInfo) =
   if op.indices.len != view.tileShape.len:
     raise refuse(entry.name, opSpelling(op.kind), "on %" & (if op.kind == okLoadViewTko: op.operands[0] else: op.operands[1]) & " carries " & $op.indices.len & " view indices for a " & $view.tileShape.len & "-d view")
 
+proc checkTileMatchesView(entry: Entry, op: Op, view: ViewInfo, tileShape: seq[int]) =
+  ## A loaded or stored tile must match its view's partition tile:
+  ## per-thread addresses decompose the value's tile coordinates against
+  ## the view's per-dimension strides, so a shape mismatch mis-addresses
+  ## every element after the first.
+  ##
+  ## Raises:
+  ## - SubsetError naming the op and the kernel
+  if tileShape != view.tileShape:
+    let viewName = if op.kind == okLoadViewTko: op.operands[0] else: op.operands[1]
+    raise refuse(entry.name, opSpelling(op.kind), "on %" & viewName & " carries a tile of shape " & $tileShape & " for a " & $view.tileShape & " partition tile")
+
 proc checkMmaf(entry: Entry, op: Op, layouts: Table[string, TileValueInfo]) =
-  ## Subset form of `mmaf`: every operand and the result is one rank-2 tile
-  ## of equal shape, `tile<RowsxCols>`, the gemm fixture's form.
-  ## The result shape fixes the k loop bound, so unequal operand shapes refuse.
+  ## Subset form of `mmaf`: every operand and the result is one square rank-2
+  ## tile of equal shape, `tile<RxR>`, the gemm fixture's form.
+  ## The result shape fixes the k loop bound, so unequal operand shapes refuse,
+  ## and a rectangular tile has no coherent k convention for the B operand.
   ##
   ## Raises:
   ## - SubsetError naming `mmaf` and the kernel
   let shape = op.resultTypes[0].tileShape
   if shape.len != 2:
     raise refuse(entry.name, "mmaf", "lowers rank-2 tile<RowsxCols> values only, got a tile of shape " & $shape)
+  if shape[0] != shape[1]:
+    raise refuse(entry.name, "mmaf", "lowers square tile<RxR> values only, got tile<" & $shape[0] & "x" & $shape[1] & ">")
   for i, operand in op.operands:
     if operand notin layouts:
       raise refuse(entry.name, "mmaf", "operand %" & operand & " is not a tile value with a layout assignment")
@@ -311,7 +329,8 @@ proc lowerToProgram*(entry: Entry, views: Table[string, ViewInfo], layouts: Tabl
   ## - addf -> ProgramOp(kind: pgBinary, binKind: bkAddf, binLhs: "scaled", binRhs: "tile_b")
   ##
   ## Raises:
-  ## - SubsetError for a broken token chain or an op outside the subset
+  ## - SubsetError for a broken token chain, a tile shape that does not match
+  ##   its view's partition tile, or an op outside the subset
   var lastToken = ""
   for op in entry.ops:
     case op.kind
@@ -323,6 +342,7 @@ proc lowerToProgram*(entry: Entry, views: Table[string, ViewInfo], layouts: Tabl
       entry.checkToken(op, lastToken)
       lastToken = op.results[1]
       entry.checkViewIndices(op, views[op.operands[0]])
+      entry.checkTileMatchesView(op, views[op.operands[0]], layouts[op.results[0]].tileShape)
       result.ops.add ProgramOp(
         kind: pgLoadTile, results: op.results,
         loadView: op.operands[0], loadIndices: op.indices,
@@ -331,6 +351,7 @@ proc lowerToProgram*(entry: Entry, views: Table[string, ViewInfo], layouts: Tabl
     of okStoreViewTko:
       entry.checkToken(op, lastToken)
       entry.checkViewIndices(op, views[op.operands[1]])
+      entry.checkTileMatchesView(op, views[op.operands[1]], layouts[op.operands[0]].tileShape)
       result.ops.add ProgramOp(
         kind: pgStoreTile, results: op.results,
         storeValue: op.operands[0], storeView: op.operands[1],
