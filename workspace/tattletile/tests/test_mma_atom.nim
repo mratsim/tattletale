@@ -48,7 +48,7 @@ proc checkSelection() =
   doAssert atomFor(eI32, 16, 16, 16, 32).selected == false,
     "i32 values select no atom"
   doAssert atomFor(eF32, 12, 12, 12, 32).selected == false,
-    "tile extents off the atom cell select no atom"
+    "tile sizes off the atom cell select no atom"
   doAssert atomFor(eF32, 8, 8, 8, 32).selected == true,
     "a single atom cell selects"
   let one = atomFor(eF32, 8, 8, 8, 32)

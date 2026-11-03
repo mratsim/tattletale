@@ -48,7 +48,7 @@ proc f2Mul*(a, b: int): int =
     y = y shr 1
     inc bit
 
-proc f2SpanBits*(extents, strides: seq[int]): int =
+proc f2SpanBits*(lengths, strides: seq[int]): int =
   ## Bits the image of an F2-strided layout spans: the union of the bit positions every
   ## mode stride-by-coordinate product reaches.
   ##
@@ -59,8 +59,8 @@ proc f2SpanBits*(extents, strides: seq[int]): int =
   ## - dims (4, 4), strides (1, 1) span 2 bits -> bound 4
   ## - stride 0 reaches nothing -> bound 1
   var seen = 0
-  for i in 0 ..< extents.len:
-    for x in 0 ..< extents[i]:
+  for i in 0 ..< lengths.len:
+    for x in 0 ..< lengths[i]:
       var w = f2Mul(strides[i], x)
       var pos = 0
       while w != 0:

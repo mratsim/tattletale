@@ -61,22 +61,22 @@ proc checkF2Coshape() =
   doAssert f2SpanBits(@[4], @[3]) == 8, "the image reaches 6, the bound spans it"
   # defining property: the bound covers every offset the layout produces
   for caseIdx in 0 ..< 3:
-    let (extents, strides) = case caseIdx
+    let (lengths, strides) = case caseIdx
       of 0: (@[8, 8], @[1, 9])
       of 1: (@[4, 8], @[1, 4])
       else: (@[4], @[3])
-    let bound = f2SpanBits(extents, strides)
+    let bound = f2SpanBits(lengths, strides)
     var maxOff = 0
-    if extents.len == 2:
-      for a in 0 ..< extents[0]:
-        for b in 0 ..< extents[1]:
+    if lengths.len == 2:
+      for a in 0 ..< lengths[0]:
+        for b in 0 ..< lengths[1]:
           maxOff = max(maxOff, f2Add(f2Mul(strides[0], a), f2Mul(strides[1], b)))
     else:
-      for a in 0 ..< extents[0]:
+      for a in 0 ..< lengths[0]:
         maxOff = max(maxOff, f2Mul(strides[0], a))
     doAssert bound > maxOff, "the F2 bound must exceed every offset"
 
-proc f2LayoutCall(extents, strides: seq[int], a, b: int): int =
+proc f2LayoutCall(lengths, strides: seq[int], a, b: int): int =
   ## One evaluation of an F2-strided 2-d layout: XOR of the carry-less products
   f2Add(f2Mul(strides[0], a), f2Mul(strides[1], b))
 
