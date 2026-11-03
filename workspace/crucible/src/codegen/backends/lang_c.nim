@@ -300,15 +300,6 @@ proc printDiscard(ctx: var PrintCtx, s: CirStmt, pad: string): string =
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════
 
-proc findKernelC(m: CirModule, ctx: var PrintCtx): CirProc =
-  for p in m.procs:
-    if p.isKernel:
-      if result != nil:
-        ctx.fail("multiple kernels in one module")
-      result = p
-  if result.isNil:
-    ctx.fail("no {.global.} kernel in the lowered module")
-
 proc inlineSourceC(k: CirProc, m: CirModule, ctx: var PrintCtx): tuple[bodyProc: CirProc, call: CirStmt] =
   ## Inlined-body lookup: the proc whose body inlines into the launch
   ## thread loop nest, plus the wrapper call when the pipeline kept them separate.
@@ -357,7 +348,10 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   var inlinedName = ""
   for p in m.procs:
     if p.isKernel:
-      inlinedName = inlineSourceC(findKernelC(m, kctx), m, kctx).bodyProc.name
+      let k = kctx.getEntryKernel(m)
+      if kctx.failing():
+        error(kctx.err)
+      inlinedName = inlineSourceC(k, m, kctx).bodyProc.name
       break
   if kctx.failing():
     error(kctx.err)
@@ -400,7 +394,7 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
   var kctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
   kctx.fnName = "kernel"
   kctx.suffix = suffix
-  let k = findKernelC(m, kctx)
+  let k = kctx.getEntryKernel(m)
   if kctx.failing():
     error(kctx.err)
   let (bodyProc, call) = inlineSourceC(k, m, kctx)
