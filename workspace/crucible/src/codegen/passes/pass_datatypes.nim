@@ -44,10 +44,17 @@ proc runPasses*(m: CirModule, reg: var PassRegistry): string =
   ## - a transform registered after an analysis refuses, as the analysis records
   ##   on the module (features, call graph, ref blocks) would go stale
   ## - the printers read the analysis records, they never rescan
-  ## - on modules with verifyIR set, verifyModule runs after each clean pass
+  ## - on modules with verifyIR set, verifyModule runs once, after the last
+  ##   transform pass runs clean: intermediate transforms legitimately emit
+  ##   callees that later transforms resolve (span callees until the span split pass),
+  ##   and consumers read only the final boundary
   ## - returns "" when the whole pipeline is clean, else the first refusal
+  var lastTransform = -1
+  for i, p in reg.passes:
+    if p.kind == pkTransform:
+      lastTransform = i
   var sawAnalysis = false
-  for p in reg.passes:
+  for i, p in reg.passes:
     if p.kind == pkAnalysis:
       sawAnalysis = true
     elif p.kind == pkTransform and sawAnalysis:
@@ -57,7 +64,7 @@ proc runPasses*(m: CirModule, reg: var PassRegistry): string =
     if err.len > 0:
       return "pass " & p.name & ": " & err
     reg.donePasses.incl p.name
-    if m.verifyIR:
+    if i == lastTransform and m.verifyIR:
       let verr = verifyModule(m)
       if verr.len > 0:
         return "verify: " & verr
