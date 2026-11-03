@@ -211,7 +211,7 @@ The runtime layer turns it into an executing kernel:
 | ---                                                             | ---                                                                                                               |
 | Registration order is execution order                           | `runPasses` iterates the registry in registration order, there is no scheduler                                    |
 | A transform never runs after an analysis                        | `runPasses` refuses when a `pkTransform` follows a `pkAnalysis`                                                    |
-| Pass-boundary scope closure and emitted-name uniqueness         | `verifyModule` via `runPasses`, gated on `-d:CIR_verify`                                                           |
+| Pass-boundary scope closure and emitted-name uniqueness         | `verifyModule` via `runPasses`, gated on the module's `verifyIR` field, which `-d:CIR_verify` defaults            |
 | A refusal anywhere is a compile-time error naming the construct | The macros call `error()` on frontend and pipeline refusals, `codegenModule` calls `error()` on a printer refusal |
 | An analysis result survives only with no transform after it     | The registration sequence in `gpu_compiler.nim`, the registry has no invalidation                                 |
 | Target static data is complete and consistent                   | The `checkScalarRow`/`checkScalarRowsTogether` static block in `targets_rows.nim`; a missing entry is a compile error at the printer's lookup site |
