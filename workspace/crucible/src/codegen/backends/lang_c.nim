@@ -552,11 +552,10 @@ proc inlineSourceC(k: CirProc, m: CirModule, ctx: EmitCtxC): tuple[bodyProc: Cir
   cRefuse(ctx, "the kernel wrapper calls an unknown proc '" & callee.name & "'")
 
 proc emitCpuTypeC*(t: CirType, suffix: string): string =
-  ## CIRv2 type as C text with the launch-site suffix applied, the public form for the launch macro's bridge code.
   emitTypeC(t, EmitCtxC(procName: "module", suffix: suffix))
 
 proc kernelRuntimeParams*(m: CirModule): seq[tuple[name: string, typ: CirType]] =
-  ## Runtime parameters of the module kernel: the wrapper's formals verbatim, statics baked into the body.
+  ## Kernel parameters only: the launch macro bakes static parameters into the call before CIRv2 exists.
   for p in m.procs:
     if p.isKernel:
       for param in p.params:
