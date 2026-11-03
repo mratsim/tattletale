@@ -38,7 +38,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "WebGPU - pointer-param call inlining":
 
-    test "inlined buffer pointers write through, function-space params keep real calls":
+    test "inlined buffer pointers write through, function-addressSpace params keep real calls":
       var engine = newEngine(runWebGPU)
       engine.ingest(kernel)
       let oDev = engine.allocDevice(float32, 4)

@@ -91,7 +91,7 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]): string =
   var i = 0
   while i < fn.body.len:
     let s = fn.body[i]
-    if s.kind == sVar and s.space == caThreadgroup:
+    if s.kind == sVar and s.addressSpace == caThreadgroup:
       let err = fn.hoistSmemLocal(s, arenas)
       if err.len > 0:
         return err
@@ -119,10 +119,10 @@ proc rewriteArenaReadsStmts(ss: seq[CirStmt], arenaTypes: Table[string, CirType]
 
 proc ownedSmemNames(fn: CirProc): HashSet[string] =
   for p in fn.params:
-    if p.typ.kind == ctPtr and p.typ.space == caThreadgroup:
+    if p.typ.kind == ctPtr and p.typ.addressSpace == caThreadgroup:
       result.incl(p.name)
   for s in fn.body:
-    if s.kind == sVar and s.space == caThreadgroup:
+    if s.kind == sVar and s.addressSpace == caThreadgroup:
       result.incl(s.name)
 
 proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
@@ -239,7 +239,7 @@ proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[CirCoordBuiltin
   return true
 
 proc orderedCoordKinds(kinds: HashSet[CirCoordBuiltinKind]): seq[CirCoordBuiltinKind] =
-  ## Needed builtin kinds in `CoordBuiltinNames` order, which also fixes the parameter order.
+  ## Needed builtin kinds in `CirCoordBuiltinKind` declaration order, which also fixes the parameter order.
   for k in cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup:
     if k in kinds:
       result.add(k)
@@ -248,7 +248,7 @@ proc appendCoordParam(fn: CirProc, k: CirCoordBuiltinKind): string =
   ## A parameter uses the builtin's canonical identifier so the body's
   ## builtin-marked reads print it unchanged, in a kernel the identifier
   ## binds to the attributed parameter, in a device function to this parameter.
-  let name = CoordBuiltinNames[k]
+  let name = $k
   for p in fn.params:
     if p.name == name:
       return "at " & fn.name & ": parameter " & name &
@@ -275,7 +275,7 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
       extra.add(getBuiltinParamType(k))
     callee.typ = extendedProcType(callee.typ, extra)
   for k in calleeKinds:
-    let arg = sym(CoordBuiltinNames[k], getBuiltinParamType(k), builtin = true)
+    let arg = sym($k, getBuiltinParamType(k), builtin = true)
     arg.coordBuiltin = k
     args.add(arg)
   return ""
@@ -366,7 +366,7 @@ proc mslRewriteSmemLocals(m: CirModule): string =
     let kernel = fn.isKernel
     let procName = fn.name
     let onStmt = proc(s: CirStmt) =
-      if s.kind != sVar or s.space != caThreadgroup:
+      if s.kind != sVar or s.addressSpace != caThreadgroup:
         return
       if not kernel:
         err = "at " & procName & ": smem local " & s.name &

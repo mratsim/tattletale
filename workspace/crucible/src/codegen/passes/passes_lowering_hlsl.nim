@@ -67,7 +67,7 @@ proc findNumWorkgroupsExpr(e: CirExpr, coordTy: var CirType): bool =
 proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
   for s in ss:
     case s.kind
-    of sVar, sConst:
+    of sVar:
       if s.init != nil and findNumWorkgroupsExpr(s.init, coordTy):
         return true
     of sAsgn:

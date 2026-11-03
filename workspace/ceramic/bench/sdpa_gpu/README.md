@@ -5,7 +5,7 @@ Python side: `bench_scaled_dot_product_attention_mlx.py`, `mx.fast.scaled_dot_pr
 
 ## Run
 
-    nim c -r -d:release --maxLoopIterationsVM:100000000 \
+    nim c -r -d:release \
       --outdir:build/bench workspace/ceramic/bench/sdpa_gpu/bench_scaled_dot_product_attention_metal.nim
 
     uv run python workspace/ceramic/bench/sdpa_gpu/bench_scaled_dot_product_attention_mlx.py

@@ -525,7 +525,7 @@ proc printTargetExpr*(ctx: var auto, e: CirExpr): string =
     if e.coordBuiltin != cbkNone:
       return ctx.coordRef(e)
     if e.typ != nil and e.typ.kind == ctPtr and
-        e.typ.space in ctx.emit.noPointerValues.spaces:
+        e.typ.addressSpace in ctx.emit.noPointerValues.spaces:
       ctx.fail(ctx.emit.noPointerValues.text % e.name)
       return ""
     return ctx.getSymbolText(e)
@@ -638,18 +638,17 @@ proc printStmt(ctx: var auto, s: CirStmt): string =
   ## A loop prints through `printWhileText` off `printStmtList`.
   ## Per-target policy resolves at instantiation through the printer's own procs:
   ##
-  ## - `printVar`, `printConst`: storage-class refusals and declaration text
+  ## - `printVar`: storage-class refusals and declaration text
   ## - `printAsgn`: assignment policy, pointer rebinds and buffer writes
   ## - `printCall`: barrier intrinsics and builtin call vocabulary
   ## - `printAsm`: inline assembly form, refusal text or raw splice
-  mixin printStmts, printExpr, printVar, printConst, printAsgn, printCall, printAsm,
+  mixin printStmts, printExpr, printVar, printAsgn, printCall, printAsm,
         printIteElse, printEmitOperand
   if ctx.failing():
     return ""
   let pad = spaces(ctx.indent * 2)
   case s.kind
   of sVar: result = ctx.printVar(s)
-  of sConst: result = ctx.printConst(s)
   of sAsgn: result = ctx.printAsgn(s)
   of sCall: result = ctx.printCall(s)
   of sAsm: result = ctx.printAsm(s)
@@ -721,16 +720,6 @@ proc printVar*(ctx: var auto, s: CirStmt): string =
     return ""
   let init = if s.init != nil: ctx.getInitText(s) else: ""
   printDeclStmt(pad, decl, init)
-
-proc checkConstDecl*(ctx: var auto, s: CirStmt): bool =
-  true
-
-proc printConst*(ctx: var auto, s: CirStmt): string =
-  mixin checkConstDecl, constDecl, getInitText
-  if not ctx.checkConstDecl(s):
-    return ""
-  let pad = spaces(ctx.indent * 2)
-  printDeclStmt(pad, ctx.constDecl(s), ctx.getInitText(s))
 
 proc printAsgn*(ctx: var auto, s: CirStmt): string =
   ## One assignment in the direct form, refusing pointer rebinds per the target knobs.
@@ -977,7 +966,7 @@ proc printProgramScopeDecls*(ctx: var auto, m: CirModule, spaces: set[AddressSpa
   ## one per `sVar` in `spaces`, then a blank line after a non-empty section.
   mixin emitComputeGlobal
   for s in m.globals:
-    if s.kind == sVar and s.space in spaces:
+    if s.kind == sVar and s.addressSpace in spaces:
       let decl = ctx.emitComputeGlobal(s)
       if decl.len > 0:
         result &= decl & '\n'

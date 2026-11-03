@@ -91,8 +91,6 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc checkConstDecl(ctx: var PrintCtx, s: CirStmt): bool
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
@@ -142,8 +140,8 @@ proc emitGlslRefBlockMember(ctx: var PrintCtx, pointee: CirType): string =
 proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
   ## GLSL declaration of a buffer pointer: the reference block handle,
   ## `Ref_T ident`.
-  if t.space != caDevice:
-    ctx.fail("buffer pointer in " & $t.space & " space")
+  if t.addressSpace != caDevice:
+    ctx.fail("buffer pointer in " & $t.addressSpace & " addressSpace")
     return ""
   result = refTypeName(t.pElem) & ' ' & ident
 
@@ -274,14 +272,14 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   if s.declType.kind == ctPtr:
     ctx.fail("pointer local " & s.name & ", GLSL has no pointer values")
     return false
-  if s.space == caThreadgroup:
-    ctx.fail("local " & s.name & " in threadgroup space, the GLSL lowering pass hoists threadgroup locals to program scope")
+  if s.addressSpace == caThreadgroup:
+    ctx.fail("local " & s.name & " in threadgroup addressSpace, the GLSL lowering pass hoists threadgroup locals to program scope")
     return false
-  if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, the GLSL lowering pass hoists const_mem locals to program scope")
+  if s.addressSpace == caConstant:
+    ctx.fail("local " & s.name & " in constant addressSpace, the GLSL lowering pass hoists const_mem locals to program scope")
     return false
-  if s.space == caDevice:
-    ctx.fail("local " & s.name & " in device space, GLSL locals are private")
+  if s.addressSpace == caDevice:
+    ctx.fail("local " & s.name & " in device addressSpace, GLSL locals are private")
     return false
   true
 
@@ -292,12 +290,6 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
     return emitGlslScalar(s.declType.aElem) & ' ' & s.name &
       "[" & $s.declType.aN & "]"
   ctx.emitTypeName(s.declType) & ' ' & s.name
-
-proc checkConstDecl(ctx: var PrintCtx, s: CirStmt): bool =
-  true
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "const " & ctx.emitTypeName(s.declType) & ' ' & s.name
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Procs and modules
@@ -337,7 +329,7 @@ proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated storage local.
-  if s.space == caThreadgroup:
+  if s.addressSpace == caThreadgroup:
     if s.declType.kind == ctArray:
       return "shared " & emitGlslScalar(s.declType.aElem) & ' ' & s.name &
         "[" & $s.declType.aN & "];"

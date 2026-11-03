@@ -89,7 +89,6 @@ proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
@@ -115,7 +114,7 @@ proc emitOpenclArrayDecl(t: CirType, ident: string): string =
 proc emitOpenclPtrField(t: CirType, ident: string): string =
   ## OpenCL C declaration of a pointer field or local, the address space qualifier leads.
   ## `restrict` is a function-parameter qualifier, struct fields and locals drop it.
-  let qualifier = case t.space
+  let qualifier = case t.addressSpace
     of caThread: ""
     of caThreadgroup: "__local"
     of caConstant: "__constant"
@@ -133,8 +132,8 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   if f.typ.kind == ctArray:
     return emitOpenclArrayDecl(f.typ, f.name)
   if f.typ.kind in {ctAptr, ctPtr}:
-    if f.typ.kind == ctAptr and f.typ.space != caDevice:
-      ctx.fail("struct field " & t.name & "." & f.name & " in " & $f.typ.space & " space, only device pointers nest in structs")
+    if f.typ.kind == ctAptr and f.typ.addressSpace != caDevice:
+      ctx.fail("struct field " & t.name & "." & f.name & " in " & $f.typ.addressSpace & " addressSpace, only device pointers nest in structs")
       return ""
     return emitOpenclPtrField(f.typ, f.name)
   return ctx.emitTypeName(f.typ) & ' ' & f.name
@@ -172,7 +171,7 @@ const OpenclFlatThreadIndex =
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   if e.coordBuiltin == cbkThreadIndexInThreadgroup:
     return OpenclFlatThreadIndex
-  ctx.fail("whole-vector coordinate read " & CoordBuiltinNames[e.coordBuiltin] & " has no OpenCL C vector form, read the components")
+  ctx.fail("whole-vector coordinate read " & $e.coordBuiltin & " has no OpenCL C vector form, read the components")
   ""
 
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
@@ -217,7 +216,7 @@ proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr
   if pt == nil or pt.pElem == nil:
     ctx.fail("atomicFetchAdd on an operand with no pointee type")
     return ""
-  let qualifier = case pt.space
+  let qualifier = case pt.addressSpace
     of caDevice: "__global"
     of caThreadgroup: "__local"
     of caConstant: "__constant"
@@ -253,15 +252,15 @@ proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## Kernel-only storage classes: `__local` and `__constant`. Relocation moves const_mem locals out and rejects a device function's smem local.
-  if s.space == caThreadgroup:
+  if s.addressSpace == caThreadgroup:
     if not ctx.inKernel:
       ctx.fail("smem local " & s.name & " in a device function, __local is kernel storage")
       return false
     return true
-  if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, the OpenCL lowering pass already relocated it")
+  if s.addressSpace == caConstant:
+    ctx.fail("local " & s.name & " in constant addressSpace, the OpenCL lowering pass already relocated it")
     return false
-  if s.space == caDevice:
+  if s.addressSpace == caDevice:
     ctx.fail(s.name & " needs a function/workgroup home in OpenCL")
     return false
   true
@@ -272,16 +271,13 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ## a doubled one.
   if s.declType.kind in {ctPtr, ctAptr}:
     return emitOpenclPtrField(s.declType, s.name)
-  let prefix = case s.space
+  let prefix = case s.addressSpace
     of caThread: "__private "
     of caThreadgroup: "__local "
     else: ""
   if s.declType.kind == ctArray:
     return prefix & emitOpenclArrayDecl(s.declType, s.name)
   prefix & ctx.emitTypeName(s.declType) & ' ' & s.name
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "const " & ctx.emitTypeName(s.declType) & ' ' & s.name
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Procs and modules
@@ -308,7 +304,7 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
     return "const " & ctx.emitTypeName(p.typ) & "* " & p.name
   case p.typ.kind
   of ctAptr, ctPtr:
-    let (qualifier, ident) = case p.typ.space
+    let (qualifier, ident) = case p.typ.addressSpace
       of caDevice: ("__global ", "restrict " & p.name)
       of caThreadgroup: ("__local ", p.name)
       of caConstant: ("__constant ", p.name)

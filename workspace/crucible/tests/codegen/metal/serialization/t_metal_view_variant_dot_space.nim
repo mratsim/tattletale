@@ -41,7 +41,7 @@ const variantMsl = metal:
       output[t] = (v.data +% 1)[t]
 
 proc runTest() =
-  suite "Metal - view variant dot resolution keeps the instance address space":
+  suite "Metal - view variant dot resolution keeps the instance address addressSpace":
     test "device view: +% through the field reads input[i + 1]":
       var engine = newEngine(runMetal)
       engine.ingest(variantMsl)

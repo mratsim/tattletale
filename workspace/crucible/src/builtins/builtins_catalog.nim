@@ -22,13 +22,15 @@ type
 
 type
   CirCoordBuiltinKind* = enum
+    ## Coordinate builtin kinds. Each member's string value is
+    ## the canonical name that the backends emit verbatim.
     cbkNone
-    cbkThreadPositionInGrid
-    cbkThreadgroupPositionInGrid
-    cbkThreadPositionInThreadgroup
-    cbkThreadsPerThreadgroup
-    cbkThreadgroupsPerGrid
-    cbkThreadIndexInThreadgroup
+    cbkThreadPositionInGrid = "thread_position_in_grid"
+    cbkThreadgroupPositionInGrid = "threadgroup_position_in_grid"
+    cbkThreadPositionInThreadgroup = "thread_position_in_threadgroup"
+    cbkThreadsPerThreadgroup = "threads_per_threadgroup"
+    cbkThreadgroupsPerGrid = "threadgroups_per_grid"
+    cbkThreadIndexInThreadgroup = "thread_index_in_threadgroup"
 
   CirSynchroBuiltinKind* = enum
     cbkNone
@@ -49,61 +51,15 @@ type
     cbkNone
     cbkAtomicFetchAdd
 
-macro builtinKindLadder*(E: typedesc, fname: static string): untyped =
-  ## Generates `proc fname*(payload: NimNode): E {.compileTime.}`.
-  ##
-  ## Args:
-  ## - `E`: the family enum, its members enumerate the ladder
-  ## - `fname`: the exported name of the generated ladder proc
-  ##
-  ## Returns:
-  ## - an `eqIdent` ladder over the members of `E`
-  ## - the first member of `E` (the none value) when `payload` matches
-  ##   none of them
-  ##
-  ## `payload`:
-  ## - the argument of a `{.builtin: <member>.}` pragma, read back
-  ##   through `getImpl`
-  ## - the nil literal for a `{.builtin.}` without a payload
-  ##
-  ## The ladder enumerates the enum members, so the payload identifiers
-  ## and the enum members cannot drift apart.
-  let enumTy = E.getImpl[2]
-  if enumTy.kind != nnkEnumTy:
-    error("builtinKindLadder expects an enum type, found " & $enumTy.kind)
-  var members: seq[string]
-  for i in 1 ..< enumTy.len:
-    let m = enumTy[i]
-    case m.kind
-    of nnkIdent, nnkSym:
-      members.add m.strVal
-    of nnkEnumFieldDef:
-      members.add m[0].strVal
-    else:
-      error("unexpected enum member shape " & $m.kind)
-  var body = newTree(nnkIfStmt)
-  for name in members:
-    body.add newTree(nnkElifBranch,
-      newCall(bindSym"eqIdent", ident"payload", newLit(name)),
-      newTree(nnkStmtList, newAssignment(ident"result", ident(name))))
-  body.add newTree(nnkElse,
-    newTree(nnkStmtList, newAssignment(ident"result", ident(members[0]))))
-  result = newTree(nnkProcDef,
-    postfix(ident(fname), "*"),
-    newEmptyNode(),
-    newEmptyNode(),
-    newTree(nnkFormalParams,
-      ident(E.strVal),
-      newTree(nnkIdentDefs, ident"payload", ident"NimNode", newEmptyNode())),
-    newTree(nnkPragma, ident"compileTime"),
-    newEmptyNode(),
-    newTree(nnkStmtList, body))
-
-builtinKindLadder(CirCoordBuiltinKind, "coordBuiltinKindOf")
-builtinKindLadder(CirSynchroBuiltinKind, "synchroBuiltinKindOf")
-builtinKindLadder(CirReductionBuiltinKind, "reductionBuiltinKindOf")
-builtinKindLadder(CirShuffleBuiltinKind, "shuffleBuiltinKindOf")
-builtinKindLadder(CirAtomicsBuiltinKind, "atomicsBuiltinKindOf")
+proc getBuiltinKind*[E: enum](_: typedesc[E], payload: NimNode): E {.compileTime.} =
+  if payload.kind in {nnkIdent, nnkSym}:
+    let enumTy = E.getTypeInst().getImpl()[2]
+    for i in 1 ..< enumTy.len:
+      let m = enumTy[i]
+      let name = if m.kind == nnkEnumFieldDef: m[0] else: m
+      if payload.strVal == name.strVal:
+        return E(i - 1)
+  low(E)
 
 # ═══════════════════════════════════════════════════════════
 # 0. Canonical thread coordinates

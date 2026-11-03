@@ -95,7 +95,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
@@ -160,7 +159,7 @@ proc getCudaCoordToken(k: CirCoordBuiltinKind, whole: bool, field: string, coord
       result = "(int)(threadIdx." & field & ")"
   of cbkThreadPositionInGrid:
     if whole:
-      result = CoordBuiltinNames[k]
+      result = $k
     else:
       result = "(int)(blockIdx." & field & "*blockDim." & field &
         "+threadIdx." & field & ")"
@@ -194,23 +193,20 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## A device function's `__shared__` initializer refuses: CUDA C++ forbids
   ## initializing shared variables, and kernel-body initializers rewrote to stores before printing.
-  if s.space == caThreadgroup:
+  if s.addressSpace == caThreadgroup:
     if s.init != nil and not ctx.inKernel:
       ctx.fail("smem local " & s.name & " with an initializer, CUDA C++ forbids initializing __shared__ variables")
       return false
     return true
-  if s.space == caConstant:
-    ctx.fail("local " & s.name & " in constant space, CUDA constant storage is program scope only")
+  if s.addressSpace == caConstant:
+    ctx.fail("local " & s.name & " in constant addressSpace, CUDA constant storage is program scope only")
     return false
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
-  if s.space == caThreadgroup:
+  if s.addressSpace == caThreadgroup:
     return "__shared__ " & emitCudaType(s.declType, s.name, false)
   emitCudaType(s.declType, s.name, false)
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "constexpr " & emitCudaType(s.declType, s.name, false)
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: the spliced text in an `asm(...)` wrapper.

@@ -56,7 +56,7 @@ proc crossesWgslSignature(t: CirType): bool =
   of ctAptr:
     result = true
   of ctPtr:
-    result = t.space != caThread
+    result = t.addressSpace != caThread
   else:
     result = false
 
@@ -120,7 +120,7 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
   ## A shared walk would descend into the rewritten node and substitute a second parameter inside the argument.
   for s in mitems(ss):
     case s.kind
-    of sVar, sConst:
+    of sVar:
       s.init.substituteArgsExpr(subst)
     of sAsgn:
       s.lhs.substituteArgsExpr(subst)
@@ -207,7 +207,7 @@ proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc], 
   ## One non-call statement: its subexpressions refuse value-position calls,
   ## nested statement lists recurse through `inlineInStmts`.
   case s.kind
-  of sVar, sConst:
+  of sVar:
     let err = refuseValuePositionCalls(fn, s.init, procs)
     if err.len > 0:
       return err

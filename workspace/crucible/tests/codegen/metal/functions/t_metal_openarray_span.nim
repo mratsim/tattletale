@@ -61,7 +61,7 @@ proc runTest() =
       "kern readback: element " & $i & " got " & $got[i] &
       " want " & $expected[i]
   echo "[OK] Metal: openArray device fn spans split to pointer + length," &
-    " len folds, and the threadgroup view keeps its space"
+    " len folds, and the threadgroup view keeps its addressSpace"
 
 when isMainModule:
   runTest()

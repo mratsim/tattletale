@@ -246,8 +246,8 @@ proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
     # an explicit pointer, the Function-storage pointer of var params/locals
     spvPointer(scFunction, ctx.valueTy(t.pElem))
   of ctAptr:
-    if t.space != caDevice:
-      ctx.failSpv("array pointer in " & $t.space & " space")
+    if t.addressSpace != caDevice:
+      ctx.failSpv("array pointer in " & $t.addressSpace & " addressSpace")
       return nil
     if t.pElem == nil or not isSpvScalarKind(t.pElem):
       ctx.failSpv("array pointer to a non-scalar element")
@@ -349,7 +349,7 @@ proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
 proc resolveBdaPointerTy(ctx: var SpvLangCtx, elemTy: CirType): uint32 =
   ## Physical storage buffer pointer type of a buffer reference
   ## the `valueTy` shape of the matching `aptr` type.
-  ctx.resolveTyId(ctx.valueTy(CirType(kind: ctAptr, space: caDevice, pElem: elemTy)))
+  ctx.resolveTyId(ctx.valueTy(CirType(kind: ctAptr, addressSpace: caDevice, pElem: elemTy)))
 
 proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
   ## One OpTypeStruct push block in parameter order, offsets are the host
@@ -359,9 +359,9 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
   var members: seq[SpvTy]
   for p in params:
     if p.typ.kind == ctAptr:
-      if p.typ.space != caDevice:
-        ctx.failSpv("kernel parameter " & p.name & " in " & $p.typ.space &
-          " space, only device buffers carry a push address")
+      if p.typ.addressSpace != caDevice:
+        ctx.failSpv("kernel parameter " & p.name & " in " & $p.typ.addressSpace &
+          " addressSpace, only device buffers carry a push address")
       members.add spvScalar(cirUint64())
     elif p.typ.kind in {ctPtr, ctAptr}:
       ctx.failSpv("kernel parameter " & p.name & " of pointer type")
@@ -471,7 +471,6 @@ type
     locals*: Table[string, uint32]
       ## local name -> Function-storage variable id
     localTys*: Table[string, CirType]
-    consts*: Table[string, uint32]
       ## const name -> its constant id
     params*: Table[string, uint32]
       ## scalar/struct param name -> hoisted value id
@@ -508,9 +507,9 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
   for s in ss:
     case s.kind
     of sVar:
-      if s.space != caThread:
-        ctx.failSpv("local " & s.name & " in " & $s.space &
-          " space, shared/constant locals are outside the SPIR-V subset")
+      if s.addressSpace != caThread:
+        ctx.failSpv("local " & s.name & " in " & $s.addressSpace &
+          " addressSpace, shared/constant locals are outside the SPIR-V subset")
       if s.declType.kind == ctPtr:
         # a pointer-typed local resolves to its pointee variable, no storage
         discard
@@ -521,8 +520,6 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
           let varId = ctx.builder.opVariableFn(
             ctx.builder.tyPointer(scFunction, ctx.resolveTyId(vt)))
           fn.locals[s.name] = varId
-    of sConst:
-      discard
     of sIte:
       ctx.hoistLocals(fn, s.thenBody)
       ctx.hoistLocals(fn, s.elseBody)
@@ -554,11 +551,6 @@ proc resolveConstId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
   of eFalse:
     let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     ctx.builder.constBool(boolTy, false)
-  of eSym:
-    if fn.consts.hasKey(e.name):
-      return fn.consts[e.name]
-    ctx.failSpv("literal expected, got symbol " & e.name)
-    0
   else:
     ctx.failSpv("literal expected, got expression kind " & $e.kind)
     0
@@ -783,8 +775,6 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return ctx.loadScalarBuiltin(biLocalInvocationIndex, e.typ)
-    if fn.consts.hasKey(e.name):
-      return fn.consts[e.name]
     if fn.params.hasKey(e.name):
       return fn.params[e.name]
     if fn.bdaParams.hasKey(e.name):
@@ -1115,8 +1105,8 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
         @[idxInt])
       result = (ptrId, elemTy, false, false)
     elif baseTy.kind == ctAptr:
-      if baseTy.space != caDevice:
-        ctx.failSpv("array element access through a " & $baseTy.space & " pointer")
+      if baseTy.addressSpace != caDevice:
+        ctx.failSpv("array element access through a " & $baseTy.addressSpace & " pointer")
         return
       let devElemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
         ctx.resolveTyId(ctx.valueTy(elemTy)))
@@ -1182,7 +1172,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       return 0
     let pat = e.args[0].addrOperand
     let baseTy = ctx.resolveExprType(fn, pat.patBase)
-    if baseTy == nil or baseTy.kind != ctAptr or baseTy.space != caDevice:
+    if baseTy == nil or baseTy.kind != ctAptr or baseTy.addressSpace != caDevice:
       ctx.failSpv("atomicFetchAdd lowers through a device buffer element only")
       return 0
     let elemTy = baseTy.pElem
@@ -1269,12 +1259,6 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
         fn.fwd[s.name] = value
         if s.name notin fn.elided:
           ctx.builder.opStore(fn.locals[s.name], value)
-    of sConst:
-      # a compile-time literal binding, reads use the constant id
-      if s.init != nil and s.init.kind in {eIntLit, eFloatLit, eTrue, eFalse}:
-        fn.consts[s.name] = ctx.resolveConstId(fn, s.init)
-      else:
-        ctx.failSpv("const " & s.name & " initializer outside the literal set")
     of sAsgn:
       if s.lhs.kind == eSym:
         let lhsTy = fn.localTys.getOrDefault(s.lhs.name, s.lhs.typ)

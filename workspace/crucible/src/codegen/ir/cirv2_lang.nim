@@ -15,22 +15,6 @@ export builtins_catalog
 #
 # ############################################################
 
-const CoordBuiltinNames*: array[cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup, string] = [
-  "thread_position_in_grid",
-  "threadgroup_position_in_grid",
-  "thread_position_in_threadgroup",
-  "threads_per_threadgroup",
-  "threadgroups_per_grid",
-  "thread_index_in_threadgroup",
-]
-## Canonical coordinate builtin names indexed by kind.
-## - Array order matches the parameter declaration order of the passes
-##   and the input order of the entry heads.
-## - The IR names every coordinate builtin by its canonical name,
-##   the family enums hold the dispatch.
-## - A symbol sharing a name without a `{.builtin.}` read has
-##   `builtin` false and every family kind at none.
-
 type
   AddressSpace* = enum
     ## Memory class a pointer or aptr addresses.
@@ -76,7 +60,7 @@ type
       vN*: int
       vElem*: CirType
     of ctPtr, ctAptr:
-      space*: AddressSpace
+      addressSpace*: AddressSpace
       pElem*: CirType
     of ctStruct:
       name*: string
@@ -97,12 +81,7 @@ type
     ## Expression vocabulary, Leng names.
     ##
     ## `eCall` is an ordinary value node, statement-position calls stay `sCall`
-    ## and a call result may appear in any operand position:
-    ##
-    ## - a comparison operand
-    ## - an `and`/`or` operand
-    ## - a ternary branch
-    ## - a loop condition
+    ## and a call result may appear in any operand position.
     eNil
     eTrue
     eFalse
@@ -142,12 +121,7 @@ type
     eCall
 
   CirExpr* = ref object
-    ## A CIRv2 expression tree.
-    ##
-    ## Typed ops state their type in `opType` or the per-branch type field,
-    ## comparisons store their operand type and yield `bool`,
-    ## `ternary` stores its own type,
-    ## and `and`/`or` combine bool operands into a bool result value.
+    ## A CIRv2 expression tree. Comparisons and `and`/`or` yield `bool`.
     case kind*: CirExprKind
     of eNil:
       nilType*: CirType
@@ -156,18 +130,11 @@ type
       typ*: CirType
       builtin*: bool
       ## True for a symbol born from a `{.builtin.}` read or call, false for a local or parameter sharing a builtin's name.
-      ## - The conv and math vocabulary dispatches on the canonical name through the registry tables, guarded by this flag.
-      ## - The five family kinds resolve the enum dispatch for the rest.
       coordBuiltin*: CirCoordBuiltinKind
-      ## Coordinate builtin kind, `cbkNone` when the symbol is not a coordinate builtin.
       synchroBuiltin*: CirSynchroBuiltinKind
-      ## Synchronization builtin kind, `cbkNone` when the symbol is not a barrier.
       reductionBuiltin*: CirReductionBuiltinKind
-      ## Reduction builtin kind, `cbkNone` when the symbol is not a subgroup reduction.
       shuffleBuiltin*: CirShuffleBuiltinKind
-      ## Shuffle builtin kind, `cbkNone` when the symbol is not a cross-lane shuffle.
       atomicsBuiltin*: CirAtomicsBuiltinKind
-      ## Atomics builtin kind, `cbkNone` when the symbol is not an atomic builtin.
     of eIntLit:
       value*: int64
       litType*: CirType
@@ -227,12 +194,8 @@ type
     value*: CirExpr
 
   CirStmtKind* = enum
-    ## Statement vocabulary, Leng names. Inline assembly is first-class (`sAsm`):
-    ## a verbatim template spliced with named symbol operands.
-    ## `{.emit.}` lowers to the same shape. It injects raw target-source text
-    ## with operand symbols spliced by name.
+    ## Statement vocabulary, Leng names.
     sVar
-    sConst
     sAsgn
     sIte
     sWhile
@@ -244,18 +207,12 @@ type
 
   CirStmt* = ref object
     ## A CIRv2 statement.
-    ##
-    ## Control flow is statement-based:
-    ## - `ite` selects between two statement lists on a bool condition
-    ## - `loop` runs unconditionally, `while` re-tests its condition before every iteration
-    ## - a `var` declares the memory class of its declaration in `space`, `const` ignores `space`
-    ##   (`caThread` is per-thread registers and the unannotated default)
     case kind*: CirStmtKind
-    of sVar, sConst:
+    of sVar:
       name*: string
       declType*: CirType
       init*: CirExpr
-      space*: AddressSpace
+      addressSpace*: AddressSpace
     of sAsgn:
       lhs*, rhs*: CirExpr
     of sIte:
@@ -263,7 +220,6 @@ type
       thenBody*, elseBody*: seq[CirStmt]
     of sWhile:
       whileCond*: CirExpr
-      ## Re-tested before every iteration.
       whileBody*: seq[CirStmt]
       whileUnroll*: bool
       ## Every printer emits a full-unroll directive in front of the loop.
@@ -290,7 +246,7 @@ type
 
   CirParam* = object
     ## One kernel or proc parameter. Pointer parameters name their memory
-    ## class inside the `ptr`/`aptr` type (`space`).
+    ## class inside the `ptr`/`aptr` type (`addressSpace`).
     name*: string
     typ*: CirType
     varParam*: bool
@@ -304,7 +260,6 @@ type
     ## Pass by hidden const reference (large structs > 24 bytes), buffers and pointers never mark.
 
   CirProc* = ref object
-    ## One proc or kernel: name, typed params, return type, statement body.
     name*: string
     params*: seq[CirParam]
     ret*: CirType
@@ -324,11 +279,8 @@ type
     ## - the feature-scan pass fills the record after the target's last
     ##   transform
     ## - each printer maps the flags it reads to its own extension block
-    ## - flags a printer does not read stay unset
     fp64*, fp16*: bool
-    ## A 64-bit / 16-bit float value occurs in the module.
     int8*, int16*, int64*: bool
-    ## An 8-, 16-, or 64-bit integer value occurs in the module.
     subgroup*: bool
     ## A subgroup reduction (`reduceAdd`/`reduceMax`) occurs in the module.
     subgroupShuffle*: bool
@@ -339,9 +291,6 @@ type
     ## A `{.unroll.}`-marked loop occurs in the module.
     reductions*: HashSet[string]
     ## Canonical names of the subgroup reductions in use.
-    ##
-    ## - the warp-reduction template list of the targets that emit one
-    ##   template per reduction
 
   CallGraph* = object
     ## Call graph over the device functions of one module, filled by the target's call-graph analysis pass.
@@ -354,7 +303,6 @@ type
     ## `fn/param` keys reachable from `stored` over the argument-flow edges.
 
   CirModule* = ref object
-    ## One CIRv2 module: nominal type declarations plus the proc set.
     name*: string
     types*: seq[CirType]
     procs*: seq[CirProc]
@@ -365,24 +313,15 @@ type
     ## Empty on every module a lowering pass has not touched.
     features*: ModuleFeatures
     ## Feature scan result of the target's feature-scan analysis pass,
-    ## filled after that target's last transform.
-    ##
-    ## - valid only if no transform runs after the scan, which runPasses enforces
-    ## - the printer reads it, it never rescans
+    ## valid only if no transform runs after the scan, which runPasses enforces.
     callGraph*: CallGraph
-    ## Call-graph analysis record: the read-write classification of every buffer parameter.
-    ##
-    ## - filled by the target's call-graph analysis pass after the last transform
-    ## - valid only if no transform runs after the analysis, which runPasses enforces
-    ## - the printer reads the stored record, it never rescans
+    ## Call-graph analysis record, filled after the last transform,
+    ## runPasses enforces the timing (see `features` for the contract).
     refBlocks*: OrderedTable[string, CirType]
     ## GLSL buffer-reference blocks, block name -> pointee type.
-    ## One entry per distinct block, in registration order.
-    ## Filled by the GLSL ref-block analysis pass after its last transform.
-    ##
-    ## - valid only if no transform runs after the pass, which runPasses enforces
-    ## - the printer emits one `layout(buffer_reference, std430) buffer`
-    ##   declaration per entry in order, it never registers a block itself
+    ## One entry per distinct block in registration order,
+    ## filled by the GLSL ref-block analysis pass, runPasses enforces the timing.
+    ## The printer emits one `layout(buffer_reference, std430) buffer` per entry, it never registers a block itself.
 
 proc computeCirSizeBytes(t: CirType): int =
   ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
@@ -411,12 +350,12 @@ func isLargeStruct*(t: CirType): bool =
   ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
   t != nil and t.kind == ctStruct and computeCirSizeBytes(t) > 24
 
-proc withAddressSpace*(t: CirType, space: AddressSpace): CirType =
-  ## Returns a copy of pointer type `t` re-spaced to `space`, with the pointee shared.
+proc withAddressSpace*(t: CirType, addressSpace: AddressSpace): CirType =
+  ## Returns a copy of pointer type `t` re-spaced to `addressSpace`, with the pointee shared.
   ## CirType values are shared refs: a caller never re-spaces in place, so the copy is the per-site instance.
   doAssert t != nil and t.kind in {ctPtr, ctAptr}
   result = CirType(kind: t.kind)
-  result.space = space
+  result.addressSpace = addressSpace
   result.pElem = t.pElem
 
 proc structuralEqual*(a, b: CirType): bool =
@@ -437,7 +376,7 @@ proc structuralEqual*(a, b: CirType): bool =
   of ctVector:
     result = a.vN == b.vN and structuralEqual(a.vElem, b.vElem)
   of ctPtr, ctAptr:
-    result = a.space == b.space and structuralEqual(a.pElem, b.pElem)
+    result = a.addressSpace == b.addressSpace and structuralEqual(a.pElem, b.pElem)
   of ctStruct:
     if a.fields.len != b.fields.len:
       return false
@@ -478,7 +417,7 @@ proc sameType*(a, b: CirType): bool =
   of ctVector:
     result = a.vN == b.vN and sameType(a.vElem, b.vElem)
   of ctPtr, ctAptr:
-    result = a.space == b.space and sameType(a.pElem, b.pElem)
+    result = a.addressSpace == b.addressSpace and sameType(a.pElem, b.pElem)
   of ctStruct:
     result = a.name == b.name
   of ctArray:
@@ -495,15 +434,11 @@ proc sameType*(a, b: CirType): bool =
 
 func isScalarType*(t: CirType): bool =
   ## True for the primitive scalar kinds a primitive operator takes: bool, int, uint, float, bfloat16.
-  ## Every other kind (vector, pointer, array, struct, span, proc) is false.
   t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat, ctBf16}
 
 proc getExprType*(e: CirExpr): CirType =
   ## Returns the expression's type, or nil when the node's shape does not determine one.
   ## Nil arises for a `deref` of a non-pointer, an `at` of a non-array, a `dot` naming no field of its struct.
-  ##
-  ## The shape-enforced kinds always produce a type: `eTrue`/`eFalse` yield `bool`,
-  ## comparisons yield `bool`, `eSizeof` yields the machine word.
   case e.kind
   of eSym:
     result = e.typ
@@ -623,19 +558,13 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   ##   arithmetic over cast pointers
   ## - `caDevice` reads as no space: a scalar integer or an array value
   ##   keeps the device default
-  ##
-  ## Both consumers of the derivation share this walker:
-  ##
-  ## - the frontend sets a pointer cast's target space from it when it builds the cast
-  ## - the clone instantiation re-derives a clone's cast targets from it
   result = caDevice
   case e.kind
   of eSym:
     let t = e.typ
     if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
+      result = t.addressSpace
   of eDeref, eAt, ePat:
-    # element reads live where the base's storage lives
     let base = case e.kind
       of eDeref: e.derefOperand
       of eAt: e.atBase
@@ -645,18 +574,18 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   of eDot:
     let t = getExprType(e)
     if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
+      result = t.addressSpace
     elif e.dotBase != nil:
       result = resolveAddressSpace(e.dotBase)
   of eCast, eConv:
     let t = e.castType
     if t != nil and t.kind in {ctPtr, ctAptr}:
-      result = t.space
+      result = t.addressSpace
     elif e.castOperand != nil:
       result = resolveAddressSpace(e.castOperand)
   of eAddr:
     if e.addrType != nil and e.addrType.kind in {ctPtr, ctAptr}:
-      result = e.addrType.space
+      result = e.addrType.addressSpace
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     result = resolveAddressSpace(e.left)
     if result == caDevice:
@@ -664,21 +593,8 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
   else:
     discard
 
-func withProvenance*(t: CirType, operand: CirExpr): CirType =
-  ## Returns pointer type `t` re-spaced to the operand's provenance space,
-  ## `t` unchanged for a non-pointer `t`.
-  ##
-  ## Birth rule of a pointer cast's target: the frontend applies it when it
-  ## builds a cast and the address-space instantiation re-applies it over
-  ## a clone's re-spaced formals.
-  if t != nil and t.kind in {ctPtr, ctAptr}:
-    result = t.withAddressSpace(resolveAddressSpace(operand))
-  else:
-    result = t
-
 func isLvalue*(e: CirExpr): bool =
-  ## An expression that names storage: a symbol, a dereference, an index,
-  ## a pointer index, or a field access. `addr` and assignment take lvalues.
+  ## An expression that names storage, `addr` and assignment take lvalues.
   e.kind in {eSym, eDeref, eAt, ePat, eDot}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -700,7 +616,6 @@ func mangleOperatorName*(s: string): string =
   ## Returns `s` with operator punctuation replaced by words:
   ## `*=` becomes `star_eq`, `+` becomes `plus`.
   ## Any other non-identifier character becomes `X` plus its two-digit hex code.
-  ## An operator is not a legal identifier in the target languages.
   result = newStringOfCap(s.len + 1)
   if s.len > 0 and s[0] in Digits:
     result.add "X"

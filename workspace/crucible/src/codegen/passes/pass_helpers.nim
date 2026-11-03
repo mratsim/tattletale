@@ -53,7 +53,7 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
     walked.add s
   for s in walked:
     case s.kind
-    of sVar, sConst:
+    of sVar:
       visitExprs(s.init)
     of sAsgn:
       visitExprs(s.lhs)
@@ -96,7 +96,7 @@ proc collectCallTargets*(stmts: seq[CirStmt], targets: var HashSet[string]) =
 proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: string, typ: CirType]]) =
   var collected = locals
   let collect = proc(s: CirStmt) =
-    if s.kind in {sVar, sConst}:
+    if s.kind == sVar:
       collected.add((name: s.name, typ: s.declType))
   stmts.walkStmts(collect, nil)
   locals = collected
@@ -133,12 +133,12 @@ proc getSingleKernel*(m: CirModule): CirProc =
       result = fn
 
 proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: proc(e: CirExpr)) =
-  ## `onDecl` takes each `var`/`const` declaration and returns `false` to skip
+  ## `onDecl` takes each `var` declaration and returns `false` to skip
   ## that declaration's initializer walk, for a declaration that never prints
   ## on the refusing target.
   for s in ss:
     case s.kind
-    of sVar, sConst:
+    of sVar:
       if onDecl(s):
         s.init.walkExprs(onExpr)
     of sAsgn:
@@ -243,11 +243,7 @@ proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
       c.name = s.name
       c.declType = s.declType
       c.init = cloneExpr(s.init)
-      c.space = s.space
-    of sConst:
-      c.name = s.name
-      c.declType = s.declType
-      c.init = cloneExpr(s.init)
+      c.addressSpace = s.addressSpace
     of sAsgn:
       c.lhs = cloneExpr(s.lhs)
       c.rhs = cloneExpr(s.rhs)
@@ -481,7 +477,7 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
   var i = 0
   while i < ss.len:
     let s = ss[i]
-    if s.kind == sVar and s.space == caConstant:
+    if s.kind == sVar and s.addressSpace == caConstant:
       if s.init == nil:
         return "at " & fn.name & ": const_mem local " & s.name &
           " without an initializer"

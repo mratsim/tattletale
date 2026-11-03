@@ -52,8 +52,8 @@ proc renderType(t: CirType): string =
   of ctFloat: result = "(f " & (if t.bits < 0: "-" else: "+") & $abs(t.bits) & ")"
   of ctBf16: result = "(bf16)"
   of ctVector: result = "(vector " & $t.vN & " " & renderType(t.vElem) & ")"
-  of ctPtr: result = "(ptr " & getSpaceName(t.space) & " " & renderType(t.pElem) & ")"
-  of ctAptr: result = "(aptr " & getSpaceName(t.space) & " " & renderType(t.pElem) & ")"
+  of ctPtr: result = "(ptr " & getSpaceName(t.addressSpace) & " " & renderType(t.pElem) & ")"
+  of ctAptr: result = "(aptr " & getSpaceName(t.addressSpace) & " " & renderType(t.pElem) & ")"
   of ctStruct: result = ":" & t.name
   of ctArray: result = "(array " & renderType(t.aElem) & " " & $t.aN & ")"
   of ctSpan: result = "(span " & getSpaceName(t.sSpace) & " " & renderType(t.sElem) & ")"
@@ -132,17 +132,13 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
     return
   case s.kind
   of sVar:
-    # register default stays unannotated, a placed local shows its class
-    let spc = if s.space == caThread: ""
-              else: " " & toLowerAscii($s.space)[2 ..^ 1]
+    let spc = if s.addressSpace == caThread: ""
+              else: " " & toLowerAscii($s.addressSpace)[2 ..^ 1]
     if s.init != nil:
       b.add("(var" & spc & " " & s.name & " " & renderType(s.declType) & " " &
         renderExpr(s.init) & ")")
     else:
       b.add("(var" & spc & " " & s.name & " " & renderType(s.declType) & " .)")
-  of sConst:
-    b.add("(const " & s.name & " " & renderType(s.declType) & " " &
-      renderExpr(s.init) & ")")
   of sAsgn:
     b.add("(asgn " & renderExpr(s.lhs) & " " & renderExpr(s.rhs) & ")")
   of sIte:
@@ -200,8 +196,6 @@ proc renderProc*(fn: CirProc): string =
   result = b.lines.join("\n") & "\n"
 
 proc renderModule*(m: CirModule): string =
-  ## Renders a whole module: nominal types, then the program-scope globals
-  ## when any were hoisted, then procs.
   result = "(module " & m.name & ")\n"
   for t in m.types:
     result.add("(type " & renderType(t) & ")\n")

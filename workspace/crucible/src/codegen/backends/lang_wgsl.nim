@@ -37,7 +37,11 @@ type PrintCtx = object of WalkCtx
 const wgslVocab = BuiltinVocab(
   reductionText: makeTexts([
     (cbkReduceAdd, "subgroupAdd($1)"),
-    (cbkReduceMax, "subgroupMax($1)")]))
+    (cbkReduceMax, "subgroupMax($1)")]),
+  shuffleText: makeTexts([
+    # shuffle index parameter is `u32`
+    (cbkSimdShuffle, "subgroupShuffle($1, u32($2))"),
+    (cbkSimdShuffleXor, "subgroupShuffleXor($1, u32($2))")]))
 
 const wgslEmit = TargetEmit(
   vocab: wgslVocab,
@@ -91,7 +95,6 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string
@@ -217,7 +220,7 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   ## One coordinate builtin read in the kernel body. WGSL builtins are
   ## entry-point parameters, a device function read refuses.
   if not ctx.inKernel:
-    ctx.fail("coordinate builtin " & CoordBuiltinNames[e.coordBuiltin] & " in a device function, WGSL builtins are entry-point parameters")
+    ctx.fail("coordinate builtin " & $e.coordBuiltin & " in a device function, WGSL builtins are entry-point parameters")
     return ""
   if e.coordBuiltin == cbkThreadsPerThreadgroup:
     ctx.fail("threads_per_threadgroup has no WGSL builtin, WGSL has only the @workgroup_size attribute")
@@ -230,7 +233,7 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   ## One coordinate builtin component read in the kernel body.
   if not ctx.inKernel:
-    ctx.fail("a device function reads " & CoordBuiltinNames[e.dotBase.coordBuiltin] & ", WGSL coordinate builtins are entry-point parameters")
+    ctx.fail("a device function reads " & $e.dotBase.coordBuiltin & ", WGSL coordinate builtins are entry-point parameters")
     return ""
   let mapped = getWgslCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
   if mapped.len == 0:
@@ -268,7 +271,7 @@ proc bindsNimBool(ctx: var PrintCtx, name: string): bool =
     if p.name == name and p.typ.kind == ctBool:
       return true
   for g in ctx.m.globals:
-    if g.kind == sVar and g.space == caThreadgroup and
+    if g.kind == sVar and g.addressSpace == caThreadgroup and
         g.declType.kind == ctBool and g.name == name:
       return true
   false
@@ -310,7 +313,7 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
     var (baseTxt, idxTxt) = ctx.printSubscriptParts(e)
     let bt = getExprType(base)
     if bt != nil and bt.kind in {ctPtr, ctAptr} and
-        not (bt.kind == ctAptr and bt.space == caDevice):
+        not (bt.kind == ctAptr and bt.addressSpace == caDevice):
       baseTxt = "(*" & baseTxt & ")[" & idxTxt & "]"
     else:
       baseTxt = baseTxt & "[" & idxTxt & "]"
@@ -338,22 +341,19 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## WGSL locals are function or workgroup storage, the WGSL lowering pass
   ## hoists the storage spaces to program scope.
-  if s.space == caThreadgroup:
-    ctx.fail("local " & s.name & " in threadgroup space, the WGSL lowering pass gives it program scope")
+  if s.addressSpace == caThreadgroup:
+    ctx.fail("local " & s.name & " in threadgroup addressSpace, the WGSL lowering pass gives it program scope")
     return false
-  elif s.space == caConstant:
-    ctx.fail(s.name & " is a constant-space local the WGSL lowering pass relocates to program scope")
+  elif s.addressSpace == caConstant:
+    ctx.fail(s.name & " is a constant-addressSpace local the WGSL lowering pass relocates to program scope")
     return false
-  elif s.space == caDevice:
-    ctx.fail("local " & s.name & " in device space, WGSL locals are function/workgroup")
+  elif s.addressSpace == caDevice:
+    ctx.fail("local " & s.name & " in device addressSpace, WGSL locals are function/workgroup")
     return false
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   "var " & s.name & ": " & ctx.emitTypeName(s.declType)
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "let " & s.name & ": " & ctx.emitTypeName(s.declType)
 
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   ## One assignment. A NIM_BOOL storage target coerces the stored value:
@@ -402,7 +402,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated storage local.
   ## No initializer survives relocation, the rewrite ran before printing.
-  if s.space == caThreadgroup:
+  if s.addressSpace == caThreadgroup:
     let ty = if s.declType.kind == ctBool:
       TargetVocabs[cgWebGPU].storageBool
     else:
@@ -473,7 +473,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
         usesNimBool = true
         break scan
     for g in m.globals:
-      if g.kind == sVar and g.space == caThreadgroup and g.declType.kind == ctBool:
+      if g.kind == sVar and g.addressSpace == caThreadgroup and g.declType.kind == ctBool:
         usesNimBool = true
         break scan
     for t in m.types:

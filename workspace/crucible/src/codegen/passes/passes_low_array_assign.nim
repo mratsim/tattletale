@@ -79,7 +79,7 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt], tmpCount: var int): strin
         if s.init.kind == eCall:
           return "array declaration binds a call result, C-family targets" &
             " cannot take the address of a call result; bind the call to a local first"
-        lowered.add varD(s.name, s.declType, nil, s.space)
+        lowered.add varD(s.name, s.declType, nil, s.addressSpace)
         lowered.add memcpyAssign(sym(s.name, s.declType), s.init, s.declType)
       else:
         lowered.add s

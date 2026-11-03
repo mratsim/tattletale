@@ -29,7 +29,7 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
   ## over the declared call graph.
   reg.register("instantiateAddressSpaceGenerics", pkTransform,
     "Instantiates module callees whose pointer arguments name another" &
-    " address space than the formal",
+    " address addressSpace than the formal",
     run = instantiateAddressSpaceGenericsPass)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -44,17 +44,17 @@ proc resolveWantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var se
     let formal = callee.params[i].typ
     let argT = getExprType(args[i])
     if formal != nil and formal.kind in {ctPtr, ctAptr} and
-        formal.space in {caDevice, caThread} and
+        formal.addressSpace in {caDevice, caThread} and
         argT != nil and argT.kind == formal.kind and
-        sameType(argT.pElem, formal.pElem) and argT.space != formal.space:
-      wanted[i] = withAddressSpace(formal, argT.space)
+        sameType(argT.pElem, formal.pElem) and argT.addressSpace != formal.addressSpace:
+      wanted[i] = withAddressSpace(formal, argT.addressSpace)
       result = true
 
 proc buildInstKey(callee: CirProc, wanted: seq[CirType]): string =
   result = callee.name
   for i in 0 ..< callee.params.len:
     if not sameType(wanted[i], callee.params[i].typ):
-      result.add "\x1f" & $i & "\x1f" & $wanted[i].space
+      result.add "\x1f" & $i & "\x1f" & $wanted[i].addressSpace
 
 proc retypeCloneBody(e: CirExpr, retyped: Table[string, CirType]) =
   ## Retypes one clone body against the symbols recorded in `retyped` --
@@ -90,10 +90,10 @@ proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
   if retyped.len > 0:
     # A re-spaced formal invalidates the base callee's baked cast targets and declaration types: the walk re-derives both from their operands
     result.body.walkStmts(proc(s: CirStmt) =
-      if s.kind in {sVar, sConst} and s.declType != nil and s.init != nil and
+      if s.kind == sVar and s.declType != nil and s.init != nil and
           s.declType.kind in {ctPtr, ctAptr}:
         let it = getExprType(s.init)
-        if it != nil and it.space != s.declType.space:
+        if it != nil and it.addressSpace != s.declType.addressSpace:
           s.declType = it
           retyped[s.name] = it
     , proc(e: CirExpr) = e.retypeCloneBody(retyped))

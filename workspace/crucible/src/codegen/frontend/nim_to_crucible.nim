@@ -5,6 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+{.experimental: "codeReordering".}
+
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import nim_type_resolvers
@@ -12,6 +14,7 @@ import ../../builtins/builtins_catalog
 import ../../builtins/builtins_magic_catalog
 import ../ir/cirv2_pretty
 import std/[macros, tables, strutils, sets]
+
 
 # ############################################################
 #
@@ -21,7 +24,6 @@ import std/[macros, tables, strutils, sets]
 
 type
   ProcEntry = object
-    ## Registry entry of one proc identity.
     name: string
     fnType: CirType
     hasBody: bool
@@ -29,7 +31,6 @@ type
   FrontendCtx = object
     resolver: CirTypeResolver
     fnName: string
-    ## Name of the proc under translation, prefixed onto every refusal message.
     retType: CirType
     procs: seq[CirProc]
     procRegistry: Table[uint64, ProcEntry]
@@ -52,8 +53,6 @@ type
     ## Statements hoisted in front of the statement being lowered.
 
 proc fail(ctx: var FrontendCtx, detail: string) =
-  ## First refusal wins through the resolver's channel. The detail is prefixed
-  ## with the proc under translation.
   ctx.resolver.fail("at " & ctx.fnName & ": " & detail)
 
 proc drainHoisted(ctx: var FrontendCtx): seq[CirStmt] =
@@ -65,9 +64,8 @@ proc drainHoisted(ctx: var FrontendCtx): seq[CirStmt] =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc mintUniqueName(ctx: var FrontendCtx, base: string): string =
-  ## Per-proc unique CIRv2 name: the sanitized base, suffixed past every name
-  ## already issued in the proc, user-declared or synthetic alike, so an issued
-  ## name never doubles as a later declaration's emitted name.
+  ## Suffixes past every name already issued in the proc, user-declared or synthetic alike,
+  ## so an issued name never doubles as a later declaration's name.
   let clean = sanitizeIdent(base)
   var candidate = clean
   var suffix = 0
@@ -85,15 +83,9 @@ proc popScope(ctx: var FrontendCtx) =
   ctx.scopes.del(ctx.scopes.high)
   ctx.localSpaces.del(ctx.localSpaces.high)
 
-proc declareLocal(ctx: var FrontendCtx, key: string, sym: CirExpr, spc = caThread) =
-  ## Registers a local under the caller's Nim lookup key in the innermost scope.
-  ## Used for frontend-internal temporaries and for `result`.
-  ##
-  ## The key is the symbol's `repr`, pragma wrapper included:
-  ## macro-generated locals share one `strVal` across expansion scopes,
-  ## a gensym id inside `repr` tells them apart.
-  ctx.scopes[^1][key] = sym
-  ctx.localSpaces[^1][key] = spc
+proc declareLocal(ctx: var FrontendCtx, reprKey: string, sym: CirExpr, spc = caThread) =
+  ctx.scopes[^1][reprKey] = sym
+  ctx.localSpaces[^1][reprKey] = spc
 
 proc getPragmaItem(n: NimNode, name: string): NimNode =
   ## Pragma item of `name` in the node's pragma list or in the pragma list
@@ -128,11 +120,6 @@ proc getPragmaItem(n: NimNode, name: string): NimNode =
     discard
   return nil
 
-proc hasPragmaNim(n: NimNode, name: string): bool =
-  ## True when `name` appears in the node's pragma list or in the pragma list
-  ## of the definition behind a symbol, bare or colon form.
-  getPragmaItem(n, name) != nil
-
 proc builtinKindPayload(n: NimNode): NimNode =
   ## Kind payload of a symbol's `{.builtin.}` pragma: the family enum
   ## member from `builtins_catalog.nim`. A payload-less `{.builtin.}`
@@ -143,7 +130,6 @@ proc builtinKindPayload(n: NimNode): NimNode =
   return nil
 
 proc containsCall(n: NimNode): bool =
-  ## True when a call occurs anywhere in the node, `StmtListExpr`-wrapped operands included.
   if n.isNil:
     return false
   case n.kind
@@ -157,7 +143,6 @@ proc containsCall(n: NimNode): bool =
   return false
 
 func unwrapConv(n: NimNode): NimNode =
-  ## Wrappers: `HiddenStdConv` and the `StmtListExpr(Empty, x)` short-circuit operand form.
   result = n
   while true:
     case result.kind
@@ -181,7 +166,6 @@ func unwrapConv(n: NimNode): NimNode =
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr
 
 proc resolveTypeSection(ctx: var FrontendCtx, n: NimNode) =
-  ## Registers the section's concrete type definitions with the resolver.
   ## A generic definition registers nothing at declaration time,
   ## resolution of its instantiations happens at the use sites.
   for typeDef in n:
@@ -193,8 +177,6 @@ proc resolveTypeSection(ctx: var FrontendCtx, n: NimNode) =
     let typeNode = if head.kind == nnkPragmaExpr: head[0] else: head
     discard ctx.resolver.resolveCirType(typeNode)
 
-proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
-
 proc builtinSymExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## A `{.builtin.}` value reference: the canonical coordinate vectors and the flat thread index,
   ## emitted as the symbol itself. The printers map the kind onto the target vocabulary.
@@ -203,7 +185,7 @@ proc builtinSymExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   if ctx.resolver.err.len > 0:
     return nil
   result = sym(name, typ, builtin = true)
-  result.coordBuiltin = coordBuiltinKindOf(builtinKindPayload(n))
+  result.coordBuiltin = getBuiltinKind(CirCoordBuiltinKind, builtinKindPayload(n))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Call translation
@@ -246,9 +228,7 @@ proc isGenericDef(fn: NimNode): bool =
   return false
 
 func getProcIdentity(callee: NimNode): uint64 =
-  ## Identity hash of a callee: the full 64-bit hash of the signature key,
-  ## the repr and the signature hash. A generic adds the body hash,
-  ## its instantiations share one signature.
+  ## A generic's body hash joins the signature key, so its instantiations share one identity.
   let impl = callee.getImpl()
   let generic = impl.kind in [nnkProcDef, nnkFuncDef] and
     (impl[2].kind == nnkGenericParams or
@@ -259,10 +239,6 @@ func getProcIdentity(callee: NimNode): uint64 =
   typeIdentityHash(key)
 
 proc claimProcName(ctx: var FrontendCtx, identity: uint64, base: string): string =
-  ## Emitted name of a proc identity: `base` on the first claim.
-  ## A second claimant of the same base takes a base58 suffix of the identity hash.
-  ## A second claimant rechecks the suffix by appending underscores until the identifier is unclaimed.
-  ##
   ## A claim by the owning identity returns the base: the module reservation
   ## pass reserves kernel names, so a kernel's own def re-claims its name.
   if ctx.claimedNames.getOrDefault(base, identity) == identity:
@@ -274,11 +250,6 @@ proc claimProcName(ctx: var FrontendCtx, identity: uint64, base: string): string
   ctx.claimedNames[result] = identity
 
 proc registerOrGet(ctx: var FrontendCtx, calleeSym: NimNode): ProcEntry =
-  ## Registry entry of a call's callee.
-  ## First registration derives the proc type once and claims the emitted name.
-  ## Later calls read the entry.
-  ##
-  ## A `{.builtin.}` callee maps to its canonical native name at the call site. The entry stores its type only.
   let id = getProcIdentity(calleeSym)
   if ctx.procRegistry.hasKey(id):
     result = ctx.procRegistry[id]
@@ -335,27 +306,17 @@ proc getNimMagicName(n: NimNode): string =
   return ""
 
 func isTriviaBody(body: NimNode): bool =
-  ## True when the body renders as trivia only, a body with no runtime content.
-  ## Trivia renders as `CommentStmt` and `Empty` children.
   for c in body:
     if c.kind notin {nnkCommentStmt, nnkEmpty}:
       return false
   return true
 
 proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
-  ## Callee symbol of a call to a harvested or builtin proc:
-  ## - the registry entry registers or reads
-  ## - a body-less callee harvests
-  ## - a builtin maps to its canonical native name
-  ##
   ## An instantiation hash would name a proc the backend never defines.
-  ## A builtin callee reads its family kinds off the `{.builtin.}` pragma
-  ## payload of its symbol at the ingest boundary:
-  ## - every printer and pass dispatches on those kinds
-  ## - an untagged builtin resolves every family at none
-  ## - the conv and math vocabulary dispatches on the canonical name
-  ##   through the registry tables
-  let calleeBuiltin = hasPragmaNim(calleeSym, "builtin")
+  ## A builtin callee reads its family kinds off the `{.builtin.}` pragma payload:
+  ## every printer and pass dispatches on those kinds, an untagged builtin resolves
+  ## every family at none, and the conv and math vocabulary dispatches on the canonical name.
+  let calleeBuiltin = getPragmaItem(calleeSym, "builtin") != nil
   let entry = ctx.registerOrGet(calleeSym)
   if ctx.resolver.err.len > 0:
     return nil
@@ -375,10 +336,10 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   result = sym(calleeName, entry.fnType, calleeBuiltin)
   if calleeBuiltin:
     let payload = builtinKindPayload(calleeSym)
-    result.synchroBuiltin = synchroBuiltinKindOf(payload)
-    result.reductionBuiltin = reductionBuiltinKindOf(payload)
-    result.shuffleBuiltin = shuffleBuiltinKindOf(payload)
-    result.atomicsBuiltin = atomicsBuiltinKindOf(payload)
+    result.synchroBuiltin = getBuiltinKind(CirSynchroBuiltinKind, payload)
+    result.reductionBuiltin = getBuiltinKind(CirReductionBuiltinKind, payload)
+    result.shuffleBuiltin = getBuiltinKind(CirShuffleBuiltinKind, payload)
+    result.atomicsBuiltin = getBuiltinKind(CirAtomicsBuiltinKind, payload)
   return result
 
 func arithExpr(op: string, t: CirType, x, y: CirExpr): CirExpr =
@@ -392,8 +353,6 @@ func arithExpr(op: string, t: CirType, x, y: CirExpr): CirExpr =
   else: shrE(t, x, y)
 
 proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirExpr =
-  ## A value-producing call as a call expression: the use site nests the call
-  ## into its operator tree.
   let magic = getNimMagicName(callee)
   # toOpenArray builds a span and len reads a span's length: the span split
   # pass consumes both forms, no proc harvests, no call emits
@@ -419,7 +378,7 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
       return nil
     let firstTyp = getExprType(first)
     let lastTyp = getExprType(last)
-    let spanTyp = tSpan(baseTyp.space, baseTyp.pElem)
+    let spanTyp = tSpan(baseTyp.addressSpace, baseTyp.pElem)
     let callTyp = tProcT(baseTyp, firstTyp, lastTyp, spanTyp)
     return callE(sym("toOpenArray", callTyp), base, first, last)
   if magic == "LengthOpenArray":
@@ -431,7 +390,6 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
     let argTyp = getExprType(arg)
     let readTyp = tProcT(argTyp, tInt(32))
     return callE(sym("len", readTyp), arg)
-  # a catalog magic lowers to the primitive operation, nothing harvests
   if magic in NimGpuNumericBuiltinsOps:
     let args = ctx.lowerCallArgs(callee, call)
     if ctx.resolver.err.len > 0:
@@ -457,7 +415,6 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
       if ctx.resolver.err.len > 0:
         return nil
       return callE(sym(calleeSym.strVal, fnType, true), args)
-  # a bodiless magic took the primitive path above
   # every other callee harvests, a magic with a Nim body (like `max`) lowers through it
   let calleeExpr = ctx.harvestedCallee(calleeSym)
   if ctx.resolver.err.len > 0:
@@ -511,9 +468,11 @@ proc lowerNestedTernary(ctx: var FrontendCtx,
     return nil
   return ternaryE(resType, cond, thenV, elseV)
 
+# lowerStmt's forward declaration stays, Nim 2.2.12's codeReordering does
+# not defer this call and the metal array-assign suite goes red without it
+proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
+
 proc buildBranchBody(ctx: var FrontendCtx, bodyNode: NimNode, dest: CirExpr): seq[CirStmt] =
-  ## One branch body: simple statements, or the expression form assigning
-  ## `dest` from the branch's value.
   ## A branch body nests one scope: a branch-local shadows an outer local only
   ## inside the branch.
   ctx.pushScope()
@@ -577,13 +536,10 @@ proc lowerSplicedStmt(ctx: var FrontendCtx, c: NimNode): seq[CirStmt] =
   return ctx.lowerStmt(c)
 
 proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
-  ## Translates one expression node: the statements spliced by the expression
-  ## sit in front of the enclosing statement.
   if ctx.resolver.err.len > 0:
     return nil
   if n.kind == nnkNilLit:
-    # a nil literal: the literal node reports isNil too, this case runs
-    # before the missing-node check
+    # a nil literal node also tests as isNil, so it is handled before the kind dispatch
     let typ = ctx.resolver.resolveCirType(n.getTypeInst())
     if ctx.resolver.err.len > 0:
       return nil
@@ -600,9 +556,8 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       discard
     case n.symKind
     of nskParam, nskVar, nskLet, nskForVar, nskResult, nskTemp:
-      if hasPragmaNim(n, "builtin"):
+      if getPragmaItem(n, "builtin") != nil:
         return ctx.builtinSymExpr(n)
-      # a local resolves from the innermost scope outward
       var found: CirExpr = nil
       for i in countdown(ctx.scopes.high, 0):
         if ctx.scopes[i].hasKey(n.repr):
@@ -612,7 +567,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         ctx.fail("unknown local symbol " & n.repr)
       return found
     of nskConst:
-      if hasPragmaNim(n, "builtin"):
+      if getPragmaItem(n, "builtin") != nil:
         return ctx.builtinSymExpr(n)
       let impl = n.getImpl()
       if impl.kind == nnkConstDef:
@@ -671,8 +626,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     if ctx.resolver.err.len > 0:
       return nil
     if typ.kind in {ctPtr, ctAptr}:
-      # a pointer cast preserves the operand's storage space: the cast target
-      # supplies the pointee type and the space resolves from the operand
       typ = typ.withAddressSpace(resolveAddressSpace(operand))
     return castE(typ, operand)
   of nnkHiddenDeref, nnkDerefExpr:
@@ -691,7 +644,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     let bt = getExprType(base)
     # address space: the memory where the base value lives
     # device storage yields a device pointer, a local a thread pointer
-    var space = caThread
+    var addressSpace = caThread
     var walk = base
     while true:
       case walk.kind
@@ -699,14 +652,14 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         let next = if walk.kind == ePat: walk.patBase else: walk.atBase
         let ct = getExprType(next)
         if ct != nil and ct.kind in {ctPtr, ctAptr}:
-          space = ct.space
+          addressSpace = ct.addressSpace
           break
         # an array or struct base: the storage is the base's
         walk = next
       of eDeref:
         let ct = getExprType(walk.derefOperand)
         if ct != nil and ct.kind in {ctPtr, ctAptr}:
-          space = ct.space
+          addressSpace = ct.addressSpace
         break
       of eDot:
         walk = walk.dotBase
@@ -715,12 +668,12 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
         # is threadgroup storage, an unannotated local is a register
         for i in countdown(ctx.localSpaces.high, 0):
           if ctx.localSpaces[i].hasKey(walk.name):
-            space = ctx.localSpaces[i][walk.name]
+            addressSpace = ctx.localSpaces[i][walk.name]
             break
         break
       else:
         break
-    return addrE(tPtr(space, bt), base)
+    return addrE(tPtr(addressSpace, bt), base)
   of nnkBracketExpr:
     let baseNode = n[0]
     var loweredBase: CirExpr = nil
@@ -758,7 +711,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return dotE(base, sanitizeIdent(n[1].strVal))
   of nnkInfix:
-    # operators: arithmetic and bitwise lower directly. Comparisons normalize into four kinds, `>` and `>=` swap operands
     let op = n[0].strVal
     case op
     of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
@@ -890,8 +842,6 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
           return nil
     return value
   of nnkBlockExpr, nnkBlockStmt:
-    # a block expression splices its statements in front of the enclosing statement,
-    # its value being the last expression.
     let inner = n[^1]
     if inner.kind != nnkStmtList:
       # a single-statement body lowers unwrapped and the block value is the expression itself,
@@ -918,16 +868,12 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     for c in n:
       case c.kind
       of nnkElifBranch, nnkElifExpr:
-        # statement-shaped elif branches reach the expression form
-        # when the branch values sit in value position
         branches.add((cond: c[0], body: c[1]))
       of nnkElse, nnkElseExpr:
         elseBody = c[0]
       else:
         ctx.fail("if expression: unexpected branch " & $c.kind)
         return nil
-    # a branch nests into a ternary value when it is a single expression,
-    # statement-bearing branches take the statement form
     var simple = true
     for br in branches:
       if isStmtBody(getBranchValueExpr(br.body)):
@@ -979,15 +925,13 @@ proc lowerVoidCall(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
   return ctx.drainHoisted() & @[callS(calleeExpr, args)]
 
 proc collectAddressSpace(ctx: var FrontendCtx, nameNode: NimNode): AddressSpace =
-  ## Memory class of a local declaration, decided by the pragma list:
-  ## `smem` means threadgroup, `const_mem` constant, `rmem` or unannotated registers.
   result = caThread
   if nameNode.kind != nnkPragmaExpr:
     return
   var seen = false
   template setSpace(spc: AddressSpace) =
     if seen:
-      ctx.fail("multiple address-space pragmas on one local")
+      ctx.fail("multiple address-addressSpace pragmas on one local")
     seen = true
     result = spc
   for p in nameNode[1]:
@@ -1001,8 +945,6 @@ proc collectAddressSpace(ctx: var FrontendCtx, nameNode: NimNode): AddressSpace 
       ctx.fail("unexpected pragma " & p.repr & " on a local declaration")
 
 proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
-  ## Lowers one Nim statement body to CIRv2 statements in source order.
-  ## Hoisted statements drained from the context prepend to the body's own statements.
   if ctx.resolver.err.len > 0:
     return @[]
   if n.isNil:
@@ -1017,8 +959,6 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
       if ctx.resolver.err.len > 0:
         return @[]
   of nnkLetSection, nnkVarSection:
-    # a `let`/`var` section: one typed declaration per name, a call-valued initializer lowers into an `asgn` after the declaration.
-    # memory class comes from the declaration's pragma list.
     for defs in n:
       let typeNode = defs[^2]
       let initNode = defs[^1]
@@ -1049,14 +989,13 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
             typ = value.ocType
           elif typ != nil and typ.kind in {ctPtr, ctAptr} and
               getExprType(value) != nil and getExprType(value).kind == typ.kind and
-              getExprType(value).space != typ.space:
+              getExprType(value).addressSpace != typ.addressSpace:
             # a pointer cast preserves the operand's address space:
             # - the declaration takes the value's space
             # - `let q = cast[ptr T](addr scratch[0])` is a threadgroup pointer
             typ = getExprType(value)
         let hoists = ctx.drainHoisted()
         let cirName = ctx.mintUniqueName(nimName)
-        # lookup key: `repr` of the declaration, pragma wrapper included
         let lookupKey = if nameNode.kind == nnkPragmaExpr: nameNode[0].repr
                         else: nameNode.repr
         ctx.declareLocal(lookupKey, sym(cirName, typ), spc)
@@ -1310,7 +1249,7 @@ proc lowerStmtBody(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
     return ctx.drainHoisted() & @[asmS(parts, operands)]
   of nnkBlockStmt:
     # a `break label` inside the body is refused at the break statement.
-    # A label no break targets is dead and lowers as its body
+    # A label that no break targets is dead and lowers as its body
     ctx.pushScope()
     result = ctx.lowerStmt(n[1])
     ctx.popScope()
@@ -1413,11 +1352,7 @@ proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
 #  Proc translation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: NimNode, params: var seq[CirParam]): seq[CirStmt] =
-  ## Shared proc body lowering:
-  ## - the formal parameters are declared into the proc's root scope
-  ## - the `result` variable exists for a non-void proc
-  ## - an implicit `ret` closes a fall-through body
+proc lowerProcBody(ctx: var FrontendCtx, formals: NimNode, body: NimNode, params: var seq[CirParam]): seq[CirStmt] =
   ctx.pushScope()
   for i in 1 ..< formals.len:
     let formal = formals[i]
@@ -1457,8 +1392,6 @@ proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: Ni
     result.add(retS(nil))
 
 type ProcCtxSave = object
-  ## Snapshot of the enclosing proc context that a body lowering replaces
-  ## and restores on exit.
   name: string
   ret: CirType
   counts: HashSet[string]
@@ -1466,9 +1399,6 @@ type ProcCtxSave = object
   spaces: seq[Table[string, AddressSpace]]
 
 proc enterProcBody(ctx: var FrontendCtx, cirName: string, formals: NimNode): ProcCtxSave =
-  ## Seeds a body's state: a fresh issued-name set covering program-scope
-  ## names and claimed proc names, a root scope over the module scope,
-  ## and the return type resolved from the formals.
   result = ProcCtxSave(name: ctx.fnName, ret: ctx.retType,
     counts: ctx.nameCounts, scopes: ctx.scopes, spaces: ctx.localSpaces)
   ctx.fnName = cirName
@@ -1491,13 +1421,7 @@ proc exitProcBody(ctx: var FrontendCtx, save: ProcCtxSave) =
   ctx.localSpaces = save.spaces
 
 proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
-  ## One proc definition: parameters typed off Nim once and the body lowered
-  ## node for node.
-  ##
   ## Generic definitions return nil here, their instantiations harvest at the calls that use them.
-  ## A def emits under its own name: kernels keep their own name,
-  ## other defs mangle the operator name, a claim conflict suffixes.
-  ## A call-site harvest never claims an undecorated name.
   if ctx.resolver.err.len > 0:
     return nil
   if isGenericDef(fn):
@@ -1505,7 +1429,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   let formals = getFormalParams(fn)
   let id = getProcIdentity(fn[0])
   # a kernel keeps its own name, launchKernel is ABI on it
-  let base = if hasPragmaNim(fn, "global"): sanitizeIdent(fn[0].strVal)
+  let base = if getPragmaItem(fn, "global") != nil: sanitizeIdent(fn[0].strVal)
              else: mangleOperatorName(fn[0].strVal)
   let cirName = ctx.claimProcName(id, base)
   if id notin ctx.procRegistry:
@@ -1517,7 +1441,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   var params: seq[CirParam] = @[]
   let fnRet = ctx.retType
   let fnName = ctx.fnName
-  let body = ctx.lowerProcBody(fn, formals, getProcBody(fn), params)
+  let body = ctx.lowerProcBody(formals, getProcBody(fn), params)
   result = procD(fnName, params, fnRet, body)
   var paramTypes: seq[CirType]
   for p in params:
@@ -1532,9 +1456,8 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   ctx.procs.add(result)
 
 proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
-  ## Lowers the body of a callee a call registered.
-  ## The registry entry gives the emitted name and the proc type, compile-time parameters erased.
-  ## `hasBody` set before the body lowers guards the recursion, callers harvest only body-less entries.
+  ## `hasBody` is set before the body lowers, so a recursive call inside it
+  ## finds the entry marked and never re-harvests.
   let id = getProcIdentity(callee)
   ctx.procRegistry[id].hasBody = true
   let impl = callee.getImpl()
@@ -1548,7 +1471,7 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
     return
   var params: seq[CirParam] = @[]
   let fnRet = ctx.retType
-  let body = ctx.lowerProcBody(impl, formals, getProcBody(impl), params)
+  let body = ctx.lowerProcBody(formals, getProcBody(impl), params)
   ctx.exitProcBody(save)
   # pending hoists of the callee append to its body first and the caller's own queue resumes after
   let calleeHoists = ctx.drainHoisted()
@@ -1601,7 +1524,7 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
     # a same-named device proc takes the suffix
     for c in body:
       if c.kind in {nnkProcDef, nnkFuncDef} and not isGenericDef(c) and
-          hasPragmaNim(c, "global"):
+          getPragmaItem(c, "global") != nil:
         discard ctx.claimProcName(getProcIdentity(c[0]), sanitizeIdent(c[0].strVal))
     for c in body:
       case c.kind
@@ -1617,16 +1540,15 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
             let nameN = def[0]
             let bareName = if nameN.kind == nnkPragmaExpr: nameN[0] else: nameN
             let name = bareName.repr
-            let space =
+            let addressSpace =
               block:
                 var spc = ctx.collectAddressSpace(nameN)
                 if spc == caThread:
-                  # program scope has no per-thread storage, unannotated is constant
                   spc = caConstant
                 spc
             let valN = def[2]
             let typN = if def[1].kind == nnkEmpty: valN.getTypeInst() else: def[1]
-            let t = ctx.resolver.resolveCirType(typN, space)
+            let t = ctx.resolver.resolveCirType(typN, addressSpace)
             if ctx.resolver.err.len > 0:
               break topLevelSection
             var init: CirExpr = nil
@@ -1634,15 +1556,14 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
               init = ctx.lowerExpr(valN)
               if ctx.resolver.err.len > 0:
                 break topLevelSection
-            let g = varD(name, t, init, space)
+            let g = varD(name, t, init, addressSpace)
             ctx.moduleGlobals.add(g)
             let symE = sym(name, t)
             ctx.moduleScope[name] = symE
-            ctx.moduleSpaces[name] = space
+            ctx.moduleSpaces[name] = addressSpace
       of nnkCommentStmt:
         discard
       of nnkBindStmt, nnkMixinStmt:
-        # symbol-binding directives, Nim resolves them at sem time
         discard
       else:
         ctx.fail("top-level construct not supported: " & $c.kind & " " & c.repr)

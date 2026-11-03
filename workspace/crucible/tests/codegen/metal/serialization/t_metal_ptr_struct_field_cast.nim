@@ -90,7 +90,7 @@ proc runTest() =
       # lane L reads the slot written by lane 3-L (reverse through smem)
       for i in 0 ..< 4:
         check output[i] == uint32((3 - i) * 3)
-    test "one view type over device and threadgroup memory specializes per space":
+    test "one view type over device and threadgroup memory specializes per addressSpace":
       var engine = newEngine(runMetal)
       engine.ingest(msl)
       var input = [10'u32, 20'u32, 30'u32, 40'u32]

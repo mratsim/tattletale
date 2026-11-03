@@ -40,7 +40,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
 
   suite "Metal - attribute-param semantics":
 
-    test "all five attribute params bind to real thread-space values":
+    test "all five attribute params bind to real thread-addressSpace values":
       var engine = newEngine(runMetal)
       engine.ingest(attrSemMsl)
       let oDev = engine.allocDevice(uint32, 64 * 6)

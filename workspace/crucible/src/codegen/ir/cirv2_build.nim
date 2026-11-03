@@ -37,11 +37,11 @@ proc tBf16*(): CirType =
 proc tVec*(n: int, elem: CirType): CirType =
   CirType(kind: ctVector, vN: n, vElem: elem)
 
-proc tPtr*(space: AddressSpace, elem: CirType): CirType =
-  CirType(kind: ctPtr, space: space, pElem: elem)
+proc tPtr*(addressSpace: AddressSpace, elem: CirType): CirType =
+  CirType(kind: ctPtr, addressSpace: addressSpace, pElem: elem)
 
-proc tAptr*(space: AddressSpace, elem: CirType): CirType =
-  CirType(kind: ctAptr, space: space, pElem: elem)
+proc tAptr*(addressSpace: AddressSpace, elem: CirType): CirType =
+  CirType(kind: ctAptr, addressSpace: addressSpace, pElem: elem)
 
 proc fld*(name: string, typ: CirType): CirField =
   CirField(name: name, typ: typ)
@@ -52,13 +52,13 @@ proc tStruct*(name: string, fields: varargs[CirField]): CirType =
 proc tArray*(n: int, elem: CirType): CirType =
   CirType(kind: ctArray, aN: n, aElem: elem)
 
-proc tSpan*(space: AddressSpace, elem: CirType): CirType =
-  ## Runtime-length view over `elem` storage in `space`:
+proc tSpan*(addressSpace: AddressSpace, elem: CirType): CirType =
+  ## Runtime-length view over `elem` storage in `addressSpace`:
   ##
   ## - an `openArray[T]` parameter or the result of a `toOpenArray` call
   ## - the span split pass decomposes every span into an element pointer
   ##   plus an int32 length, no span survives to the printers
-  CirType(kind: ctSpan, sSpace: space, sElem: elem)
+  CirType(kind: ctSpan, sSpace: addressSpace, sElem: elem)
 
 proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
   CirType(kind: ctProc, params: @params, ret: ret)
@@ -66,8 +66,6 @@ proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
 # Expression constructors
 
 proc sym*(name: string, typ: CirType, builtin = false): CirExpr =
-  ## One symbol reference. `builtin` marks a `{.builtin.}` read.
-  ## Consumers recognize the builtin vocabulary from the canonical name alone.
   CirExpr(kind: eSym, name: name, typ: typ, builtin: builtin)
 
 proc intLit*(value: int64, typ: CirType): CirExpr =
@@ -80,7 +78,6 @@ proc tString*(): CirType =
   CirType(kind: ctString)
 
 proc strLit*(value: string): CirExpr =
-  ## One C string literal, its text as the target prints it between quotes.
   CirExpr(kind: eStrLit, sValue: value)
 
 proc nilE*(typ: CirType): CirExpr =
@@ -105,7 +102,6 @@ proc dotE*(base: CirExpr, fieldName: string): CirExpr =
   CirExpr(kind: eDot, dotBase: base, fieldName: fieldName)
 
 proc arithE*(opKind: CirExprKind, opType: CirType, left, right: CirExpr): CirExpr =
-  ## One constructor for the typed binary arithmetic/bitwise family (eAdd/eSub/eMul/eDiv/eMod/eShl/eShr/eBitAnd/eBitOr/eBitXor).
   doAssert opKind in {eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor}
   result = CirExpr(kind: opKind)
   result.opType = opType
@@ -127,8 +123,6 @@ proc negE*(opType: CirType, operand: CirExpr): CirExpr =
   CirExpr(kind: eNeg, unType: opType, unOperand: operand)
 
 proc cmpE*(opKind: CirExprKind, a, b: CirExpr): CirExpr =
-  ## One constructor for the comparison family (eEq/eNeq/eLt/eLe).
-  ## The operand type comes from `a`.
   doAssert opKind in {eEq, eNeq, eLt, eLe}
   result = CirExpr(kind: opKind)
   result.cmpType = getExprType(a)
@@ -151,12 +145,7 @@ proc orE*(left, right: CirExpr): CirExpr =
 
 proc ternaryE*(ternType: CirType, cond, thenE, elseE: CirExpr): CirExpr =
   ## A conditional value, `cond` selects between `thenE` and `elseE`.
-  ##
-  ## Args:
-  ## - `ternType` types the node, both branches state it as their own type.
-  ##   Printers emit the target's conditional-value form:
-  ##   `?:` where one exists, `select(elseE, thenE, cond)` on WGSL, `OpSelect` on SPIR-V.
-  ##   Branch values must already carry `ternType`.
+  ## Branch values must already carry `ternType`.
   doAssert cond != nil and thenE != nil and elseE != nil,
     "ternaryE: a conditional value takes a condition and two branches"
   CirExpr(kind: eTernary, ternType: ternType, cond: cond, thenE: thenE, elseE: elseE)
@@ -183,20 +172,13 @@ proc aconstrE*(typ: CirType, elems: varargs[CirExpr]): CirExpr =
   CirExpr(kind: eAconstr, acType: typ, elems: @elems)
 
 proc callE*(callee: CirExpr, args: varargs[CirExpr]): CirExpr =
-  ## A call in value position: its result may sit in any operand slot
-  ## (see the `eCall` contract in cirv2_lang). Statement-position calls use `callS`.
   CirExpr(kind: eCall, callee: callee, args: @args)
 
 # Statement constructors
 
-proc varD*(name: string, typ: CirType, init: CirExpr = nil, space: AddressSpace = caThread): CirStmt =
-  ## Declares a local:
-  ## - `space` names the memory class
-  ## - `caThread` is the per-thread register default, `caThreadgroup` a `{.smem.}` local, `caConstant` a `{.const_mem.}` local
-  CirStmt(kind: sVar, name: name, declType: typ, init: init, space: space)
-
-proc constD*(name: string, typ: CirType, value: CirExpr): CirStmt =
-  CirStmt(kind: sConst, name: name, declType: typ, init: value)
+proc varD*(name: string, typ: CirType, init: CirExpr = nil, addressSpace: AddressSpace = caThread): CirStmt =
+  ## `caThreadgroup` is a `{.smem.}` local, `caConstant` a `{.const_mem.}` local.
+  CirStmt(kind: sVar, name: name, declType: typ, init: init, addressSpace: addressSpace)
 
 proc asgnS*(lhs, rhs: CirExpr): CirStmt =
   CirStmt(kind: sAsgn, lhs: lhs, rhs: rhs)
@@ -206,9 +188,6 @@ proc iteS*(cond: CirExpr, thenBody: seq[CirStmt], elseBody: seq[CirStmt] = @[]):
 
 proc whileS*(cond: CirExpr, whileBody: seq[CirStmt], unroll = false): CirStmt =
   ## A loop re-testing `cond` before every iteration.
-  ##
-  ## Args:
-  ## - `cond` is an ordinary expression, calls may appear in it
   doAssert cond != nil, "whileS: a conditioned loop takes a condition"
   CirStmt(kind: sWhile, whileCond: cond, whileBody: whileBody, whileUnroll: unroll)
 
@@ -219,20 +198,12 @@ proc discardS*(discardVal: CirExpr = nil): CirStmt =
   CirStmt(kind: sDiscard, discardVal: discardVal)
 
 proc callS*(callCallee: CirExpr, callArgs: varargs[CirExpr]): CirStmt =
-  ## A void call in statement position.
   CirStmt(kind: sCall, callCallee: callCallee, callArgs: @callArgs)
 
 proc asmS*(asmParts: seq[string], asmOperands: seq[CirExpr]): CirStmt =
-  ## One inline-assembly statement: verbatim template text alternating with symbol operands.
-  ## The target printer splices the operands' names.
   CirStmt(kind: sAsm, asmParts: asmParts, asmOperands: asmOperands)
 
 proc emitS*(emitParts: seq[string], emitOperands: seq[CirExpr]): CirStmt =
-  ## One `{.emit.}` statement: verbatim target-source text alternating with symbol operands.
-  ##
-  ## Contract:
-  ## - the target printer splices the operands' names and appends no terminator
-  ## - the emitted text supplies its terminators
   CirStmt(kind: sEmit, emitParts: emitParts, emitOperands: emitOperands)
 
 # Proc / module constructors
@@ -254,15 +225,8 @@ proc applyProcPragmas*(fn: NimNode, p: CirProc): string =
   ## Args:
   ## - `p` the CirProc annotated in place
   ##
-  ## `global` marks the compute entry point, `exportc` renames the emitted entry point,
-  ## `workgroup(x, y, z)` sets the baked launch shape.
-  ## `{.inline.}` marks an inline device function.
-  ##
   ## Other pragmas are legal and dropped.
-  ##
   ## Returns "" when clean, else the first refusal.
-  ## A workgroup dimension of 0 or less is outside the supported set:
-  ## every target emits it verbatim as an invalid launch shape.
   for prag in fn.pragma:
     case prag.kind
     of nnkIdent, nnkSym:
@@ -277,11 +241,9 @@ proc applyProcPragmas*(fn: NimNode, p: CirProc): string =
       if prag.len >= 2:
         case prag[0].strVal
         of "exportc":
-          # `exportc: "entry"` renames the emitted entry point.
           # a proc keeps its own name under an argumentless `exportc`
           p.exportName = prag[1].strVal
         of "workgroup":
-          # both call and colon forms: `workgroup(x, y, z)`, `workgroup: (x, y, z)`
           var dims: NimNode =
             if prag.kind == nnkExprColonExpr:
               prag[1]

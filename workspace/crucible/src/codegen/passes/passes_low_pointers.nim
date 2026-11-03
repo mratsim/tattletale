@@ -206,10 +206,6 @@ template registerExplodePointerLocalsImpl(reg: var PassRegistry, passName,
         if err.len > 0:
           return err
         drops = explodeDropsAsgn(s, ctx)
-      of sConst:
-        let err = rewritePointerExpr(fn, ctx, s.init)
-        if err.len > 0:
-          return err
       of sIte:
         let cerr = rewritePointerExpr(fn, ctx, s.cond)
         if cerr.len > 0:

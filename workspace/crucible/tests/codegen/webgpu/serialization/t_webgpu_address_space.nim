@@ -30,8 +30,8 @@ const addressSpaceWgsl = webgpu:
     output[tid] = p[]
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
-  suite "WebGPU - address-space tagging":
-    test "unannotated locals emit no address-space template and run":
+  suite "WebGPU - address-addressSpace tagging":
+    test "unannotated locals emit no address-addressSpace template and run":
       var engine = newEngine(runWebGPU)
       engine.ingest(addressSpaceWgsl)
       var res: array[1, uint32]

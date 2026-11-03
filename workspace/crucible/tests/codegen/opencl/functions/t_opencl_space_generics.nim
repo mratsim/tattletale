@@ -56,7 +56,7 @@ proc runTest() =
     doAssert got[i] == expected[i],
       "kern readback: element " & $i & " got " & $got[i] &
       " want " & $expected[i]
-  echo "[OK] OpenCL: device fn instantiates per argument address space," &
+  echo "[OK] OpenCL: device fn instantiates per argument address addressSpace," &
     " all three call sites read their own storage"
 
 when isMainModule:
