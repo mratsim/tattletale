@@ -43,7 +43,7 @@ proc sumLoop*(dst, src: distinct TensorView, iters: int) =
 proc reportSum*(policy: string, G, np, iters: int, startTime, stopTime: MonoTime) =
   let ns = inNanoseconds(stopTime - startTime) div iters
   let gbps = np.float * 4.0 / (ns.float / 1e9) / 1e9
-  echo &"{np:>9}  {iters:>6}  {policy:>8}    {G:>5}   {gbps:.1f}"
+  echo &"{np:>9}  {iters:>6}  {policy:>8}    {G:>5}   {gbps:>9.1f}"
 
 template benchSum*(policy: string, G, np, iters: int, body: untyped) =
   let benchStart = getMonoTime()
