@@ -1,8 +1,8 @@
-## CIRv2 pass-boundary scope verification
+## CIRv2 pass-boundary verification: scope and name uniqueness
 ##
-## Test that runPasses refuses a kernel body that uses an undeclared symbol.
-## runPasses names the proc and the symbol in the refusal.
-## A kernel body that declares the symbol before use passes clean.
+## Test that runPasses verifies a module at the final pass boundary.
+## A kernel body that uses an undeclared symbol refuses with the proc and symbol.
+## Colliding proc names or colliding parameter names refuse with the offending name.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -57,6 +57,27 @@ proc runTest() =
     let err = runPipeline(m)
     doAssert "verify: " in err, "expected the verify refusal for a use outside its branch, got: " & err
     doAssert "local" in err, "expected the refusal to name the symbol, got: " & err
+
+  block duplicateProcs:
+    let fn = procD("k", @[], tVoid(), @[])
+    fn.isKernel = true
+    let m = moduleD("verify_scope", @[], @[fn, procD("k", @[], tVoid(), @[])])
+    m.verifyIR = true
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal, got: " & err
+    doAssert "'k'" in err, "expected the refusal to name the duplicated proc, got: " & err
+
+  block duplicateParams:
+    let fn = procD("k",
+      @[param("out", tPtr(caDevice, tInt(32))), param("a", tInt(32)), param("a", tInt(32))],
+      tVoid(),
+      @[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("a", tInt(32)))])
+    fn.isKernel = true
+    let m = moduleD("verify_scope", @[], @[fn])
+    m.verifyIR = true
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal, got: " & err
+    doAssert "at k:" in err and "'a'" in err, "expected the refusal to name the proc and the duplicated parameter, got: " & err
 
   block verifyIRDisabled:
     let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("ghost", tInt(32)))])

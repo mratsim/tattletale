@@ -104,12 +104,25 @@ proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames
         if result.len > 0:
           return
 
+proc checkUniqueNames(names: seq[string]): string =
+  ## Returns "" while every name in `names` is unique, else the first repeated name.
+  var seen: HashSet[string]
+  for n in names:
+    if n in seen:
+      return n
+    seen.incl n
+
 proc verifyModule*(m: CirModule): string =
   ## Returns "" while every symbol in every proc resolves, else the first violation naming the proc and the symbol.
   ## Read-only: the walk never rewrites or repairs the IR.
   ## Runs at the final pass boundary: runPasses calls it once, after the last transform pass.
   ##
+  ## Contract, per module:
+  ## - proc names are unique: the printers emit each name verbatim into the artifact,
+  ##   and the runtime caches compiled binaries on kernel names
+  ##
   ## Contract, per proc:
+  ## - param names are unique: duplicate names emit ill-formed target source
   ## - a symbol resolves to the proc's params, a `sVar` declared earlier in the body, a module global, or another module proc
   ## - `{.builtin.}`-marked symbols are target intrinsics, exempt
   ## - declaration precedes use inside the proc body, globals and procs carry no statement order
@@ -120,9 +133,20 @@ proc verifyModule*(m: CirModule): string =
   for g in m.globals:
     if g.kind == sVar:
       moduleNames.incl g.name
+  var procNames: seq[string]
   for fn in m.procs:
     moduleNames.incl fn.name
+    procNames.add fn.name
+  result = checkUniqueNames(procNames)
+  if result.len > 0:
+    return "duplicate proc name '" & result & "'"
   for fn in m.procs:
+    var paramNames: seq[string]
+    for p in fn.params:
+      paramNames.add p.name
+    result = checkUniqueNames(paramNames)
+    if result.len > 0:
+      return "at " & fn.name & ": duplicate parameter name '" & result & "'"
     var visible: HashSet[string]
     for p in fn.params:
       visible.incl p.name
