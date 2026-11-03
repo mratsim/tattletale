@@ -58,6 +58,35 @@ proc checkSwizzleFunctor() =
   except LayoutError:
     discard
 
+proc checkSwizzleReferenceTables() =
+  ## Swizzle offset tables lifted from the pycute test suite, exact values
+  let sw202 = initSwizzle(2, 0, 2)
+  var got202: seq[int] = @[]
+  for i in 0 ..< 16:
+    got202.add sw202.apply(i)
+  doAssert got202 == @[0, 1, 2, 3, 5, 4, 7, 6, 10, 11, 8, 9, 15, 14, 13, 12],
+    "SW2_0_2 offsets " & $got202
+  let sw101 = initSwizzle(1, 0, 1)
+  var got101: seq[int] = @[]
+  for i in 0 ..< 8:
+    got101.add sw101.apply(i)
+  doAssert got101 == @[0, 1, 3, 2, 4, 5, 7, 6], "SW1_0_1 offsets " & $got101
+  # SW2_3_3 XORs bit fields above bit 6 into bits 4..3, offsets below 64 keep the YYY mask zero
+  let sw233 = initSwizzle(2, 3, 3)
+  for i in 0 ..< 64:
+    doAssert sw233.apply(i) == i, "SW2_3_3 passes " & $i & " through"
+
+proc checkSwizzledAxisCodomain() =
+  ## A swizzle applies to integer offsets only: a layout whose codomain runs over
+  ## coordinate axes refuses the call
+  let axes = makeLayout(it(4, 8), itNode(@[itLeaf(eUnit(@[0])), itLeaf(eUnit(@[1]))]))
+  let swizzled = swizzleLayout(axes, initSwizzle(2, 0, 2))
+  try:
+    discard swizzled.call(it(1, 1))
+    doAssert false, "a swizzle over a coordinate-axis codomain must refuse"
+  except LayoutError:
+    discard
+
 proc checkF2Coshape() =
   ## F2 codomain bounds, the pycute test_layout.py coshape table
   doAssert f2SpanBits(@[8, 8], @[1, 9]) == 64, "(8, 8):(F2(1), F2(9))"
@@ -145,6 +174,8 @@ proc checkSwizzledAlgebraLayouts() =
 when isMainModule:
   checkF2Arithmetic()
   checkSwizzleFunctor()
+  checkSwizzleReferenceTables()
+  checkSwizzledAxisCodomain()
   checkF2Coshape()
   checkFunctorF2Equivalence()
   checkBankConflictFree()

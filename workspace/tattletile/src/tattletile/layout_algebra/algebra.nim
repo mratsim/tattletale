@@ -263,6 +263,8 @@ proc complement*(L: Layout, extend: IntTuple): Layout =
     if ssZero(de) or s == 1:
       continue
     let rep = basisRepr(de)
+    if rep.len != 1:
+      raise layoutError("complement(" & $L & "): stride " & ssStr(de) & " is not a basis element")
     let path = rep[0].path
     let d = rep[0].val
     var a = acc[path]
@@ -277,6 +279,10 @@ proc complement*(L: Layout, extend: IntTuple): Layout =
 
 proc complement*(L: Layout): Layout =
   ## Minimal complement of `L`, no extension bound
+  ##
+  ## Raises:
+  ## - LayoutError when the strides overlap (a non-injective layout)
+  ## - LayoutError for a multi-term stride leaf: no single basis element backs it
   let coprof = coprofile(L)
   var acc = initTable[seq[int], AxisAcc]()
   for p in leafPaths(coprof):
@@ -299,6 +305,8 @@ proc complement*(L: Layout): Layout =
     if ssZero(de) or s == 1:
       continue
     let rep = basisRepr(de)
+    if rep.len != 1:
+      raise layoutError("complement(" & $L & "): stride " & ssStr(de) & " is not a basis element")
     let path = rep[0].path
     let d = rep[0].val
     var a = acc[path]
@@ -365,8 +373,15 @@ proc rightInverse*(L: Layout): Layout =
   ## when its stride is exactly the running size. A smaller stride overlaps
   ## covered ground and a larger one leaves holes.
   ##
+  ## The reference implementation computes a per-axis inverse over coordinate-axis codomains.
+  ## No tattletile caller needs the per-axis inverse yet, so the subset excludes a coordinate-axis codomain.
+  ##
   ## Raises:
   ## - LayoutError when the layout's shape has non-integer leaves
+  ## - LayoutError for a nonzero ArithTuple stride, a coordinate-axis codomain
+  for d in flatScalars(L.stride):
+    if d.kind == skAtup and not ssZero(d):
+      raise layoutError("right_inverse(" & $L & "): a coordinate-axis codomain is outside the supported subset")
   let (flatS, flatD) = coalesceZCore(L.shape, L.stride)
   let pps = prefixProductT(flatS, ssInt(1))
   var chain: seq[ChainEntry] = @[]

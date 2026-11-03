@@ -150,6 +150,36 @@ proc testAlgebraOpsMatchReference() =
     $logicalProduct(makeLayout(it(2, 2), it(4, 1)), itv(6))
   doAssert $concatLayout(@[makeLayout(it(3), itv(1)), makeLayout(it(2), itv(42))]) ==
     "Layout((3, 2), (1, 42))"
+  # logical_divide reference values from the python port table: (t, ceil(s/t)):(d, d*t)
+  doAssert $logicalDivide(makeLayout(itv(10), itv(2)), itv(4)) == "Layout((4, 3), (2, 8))",
+    $logicalDivide(makeLayout(itv(10), itv(2)), itv(4))
+  doAssert $logicalDivide(makeLayout(itv(10), itv(0)), itv(4)) == "Layout((4, 3), (0, 0))",
+    $logicalDivide(makeLayout(itv(10), itv(0)), itv(4))
+  doAssert $logicalDivide(makeLayout(itv(16), itv(1)), itv(4)) == "Layout((4, 4), (1, 4))",
+    $logicalDivide(makeLayout(itv(16), itv(1)), itv(4))
+  # idx2crd reference values: colex decomposition with the last mode keeping the quotient
+  doAssert strT(idx2crdT(itv(7), it(3, 2, 4))) == "(1, 0, 1)",
+    strT(idx2crdT(itv(7), it(3, 2, 4)))
+  doAssert strT(idx2crdT(itv(42), it(3, 7, 2))) == "(0, 0, 2)",
+    strT(idx2crdT(itv(42), it(3, 7, 2)))
+  # a last shape leaf is never a divisor, so a zero or negative last leaf
+  # decomposes like any other and both implementations return the same coordinates
+  doAssert strT(idx2crdT(itv(7), it(3, 0))) == "(1, 2)", strT(idx2crdT(itv(7), it(3, 0)))
+  doAssert strT(idx2crdT(itv(7), it(3, -2))) == "(1, 2)", strT(idx2crdT(itv(7), it(3, -2)))
+  # cosize reference values: the sum of the maximal mode offsets, plus one
+  doAssert strT(cosize(makeLayout(itv(10), itv(2)))) == "19",
+    strT(cosize(makeLayout(itv(10), itv(2))))
+  doAssert strT(cosize(makeLayout(it(4, 8), it(1, 4)))) == "32",
+    strT(cosize(makeLayout(it(4, 8), it(1, 4))))
+  # an ArithTuple codomain bounds per axis: (4, 8):(1@0, 1@1) reaches Z^2 box (4, 8)
+  doAssert strT(cosize(makeLayout(it(4, 8), itNode(@[itLeaf(eUnit(@[0])), itLeaf(eUnit(@[1]))])))) == "(4, 8)",
+    strT(cosize(makeLayout(it(4, 8), itNode(@[itLeaf(eUnit(@[0])), itLeaf(eUnit(@[1]))]))))
+  # complement reference values over integer and coordinate-axis codomains
+  doAssert $complement(makeLayout(it(2, 2), it(1, 6))) == "Layout((3, 1), (2, 12))",
+    $complement(makeLayout(it(2, 2), it(1, 6)))
+  doAssert $complement(makeLayout(it(4, 8), itNode(@[itLeaf(eUnit(@[0])), itLeaf(eUnit(@[1]))]))) ==
+    "Layout((1, 1), (4@0, 8@1))",
+    $complement(makeLayout(it(4, 8), itNode(@[itLeaf(eUnit(@[0])), itLeaf(eUnit(@[1]))])))
 
 proc refusesLayout(body: proc, detail: string) =
   ## Runs `body` and requires a LayoutError naming `detail` in the message
@@ -162,7 +192,8 @@ proc refusesLayout(body: proc, detail: string) =
 proc testGeometryRefusals() =
   ## Test that inputs outside the algebra's domain refuse loudly:
   ## an integer coordinate over an empty shape, a non-positive shape leaf,
-  ## a non-positive tile size, a negative stride under cosize
+  ## a non-positive tile size, a negative stride under cosize,
+  ## a multi-term stride leaf under complement, a coordinate-axis codomain under right_inverse
   refusesLayout(proc() = discard callInt(concatLayout(@[]), 0),
                 "integer coordinate over an empty shape")
   refusesLayout(proc() = discard callInt(makeLayout(it(0, 2), it(1, 1)), 1),
@@ -176,6 +207,15 @@ proc testGeometryRefusals() =
     "an all-zero tuple is the additive identity, leaf by leaf"
   doAssert not ssZero(ssAtup(@[ssInt(0), ssInt(1)])),
     "a nonzero leaf makes the tuple nonzero"
+  block: # a multi-term stride leaf has no single basis element
+    let multi = layoutSet(it(2, 2), itNode(@[itLeaf(eUnit(@[0])), itLeaf(ssAtup(@[ssInt(3), ssInt(5)]))]))
+    refusesLayout(proc() = discard complement(multi), "is not a basis element")
+  block: # a coordinate-axis codomain inverts per axis, outside the supported subset
+    let axes = makeLayout(it(4, 8), itNode(@[itLeaf(eUnit(@[0])), itLeaf(eUnit(@[1]))]))
+    refusesLayout(proc() = discard rightInverse(axes), "right_inverse")
+  block: # mixed integer and coordinate-axis strides cannot be ordered
+    let mixed = makeLayout(it(4, 8), itNode(@[itLeaf(ssInt(1)), itLeaf(eUnit(@[1]))]))
+    refusesLayout(proc() = discard rightInverse(mixed), "right_inverse")
 
 when isMainModule:
   testSizeIsTheLeafProduct()
