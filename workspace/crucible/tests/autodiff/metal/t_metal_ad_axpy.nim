@@ -19,7 +19,7 @@
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/autodiff/metal/t_metal_ad_axpy.nim
 
-import std/[strutils, tables]
+import std/strutils
 import workspace/crucible
 import workspace/crucible/src/codegen/autodiff_types
 
@@ -148,10 +148,6 @@ static:
       "the declared backward's mirror signature in printed order, got: " &
       $axpyDeclaredKernels.bwdKernelParams
 
-proc runTest() =
-  # Every check above ran at expansion, since the artifact is a compile-time value
-  doAssert axpyKernels.kernelName == "axpy"
-  echo "[OK] bwd_diff axpy pair artifact expanded on Metal and GLSL"
-
 when isMainModule:
-  runTest()
+  # Every check above ran at expansion, since the artifact is a compile-time value
+  discard axpyKernels

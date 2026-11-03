@@ -144,9 +144,6 @@ const MathWhitelist = ["exp", "ln", "sqrt", "rsqrt"]
   ## exp: g*e, ln: g/arg, sqrt: g/(2*sqrt(arg)), rsqrt: -g/(2*arg*sqrt(arg)).
   ## Every other callee is refused: inline it before autodiffBwdDerive.
 
-func isDiffFloat(t: CirType): bool =
-  t != nil and t.kind == ctFloat and (t.bits == 32 or t.bits == 64)
-
 func isCoordRead(e: CirExpr): bool =
   ## True for a coordinate-builtin read: `thread_position_in_threadgroup.x` or the flat
   ## `thread_index_in_threadgroup`. Thread identity is not a differentiable value:
@@ -157,32 +154,6 @@ func isCoordRead(e: CirExpr): bool =
 func isMathBuiltinCall(e: CirExpr): bool =
   e.callee.kind == eSym and e.callee.builtin and e.args.len == 1 and
     e.callee.name in MathWhitelist
-
-func getBufferElemType(p: CirParam): CirType =
-  ## Element type of a buffer parameter, nil when `p` is not one.
-  ## Buffer parameters are `ptr UncheckedArray[T]` (an `aptr`) or `ptr array[N, T]`,
-  ## a static-shape buffer under the pointer whose elements are read through
-  ## `at(deref p, i)`.
-  case p.typ.kind
-  of ctAptr:
-    result = p.typ.pElem
-  of ctPtr:
-    if p.typ.pElem != nil and p.typ.pElem.kind == ctArray:
-      result = p.typ.pElem.aElem
-  else:
-    discard
-
-func getBufferRoot(e: CirExpr): CirExpr =
-  ## Buffer parameter symbol at the root of an element access, nil for any other
-  ## root shape. Index and deref parents peel to their operands: a `ptr array` parameter
-  ## reads elements through `at(deref p, i)`.
-  result = e
-  while result != nil and result.kind in {eAt, ePat}:
-    result = if result.kind == eAt: result.atBase else: result.patBase
-  while result != nil and result.kind == eDeref:
-    result = result.derefOperand
-  if result != nil and result.kind != eSym:
-    result = nil
 
 func isScopePrefix(defPath, usePath: seq[string]): bool =
   if defPath.len > usePath.len:

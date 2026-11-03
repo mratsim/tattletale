@@ -50,6 +50,8 @@ import ./passes/passes_normalizations
 import ./passes/passes_validations
 
 export crucible_codegen.CodegenKind
+export autodiff_types.BwdParamKind, autodiff_types.BwdGradKind, autodiff_types.BwdExtentSource
+export autodiff_types.BwdParamMeta, autodiff_types.ScalarWorkspace, autodiff_types.AdKernelsMetas
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Types
@@ -88,37 +90,6 @@ type BwdDiffKernels* = object
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ IR helpers
 # ═══════════════════════════════════════════════════════════════════════
-
-func isAdFloat(t: CirType): bool =
-  ## Float widths that carry gradients in the pair ABI, matching the differentiable
-  ## float widths of the derivation. Grow both lists together when the subset grows.
-  t != nil and t.kind == ctFloat and (t.bits == 32 or t.bits == 64)
-
-func getBufferElemType(p: CirParam): CirType =
-  ## Element type of a buffer parameter, nil when `p` is not one.
-  ## Buffer parameters are `ptr UncheckedArray[T]` (an `aptr`) or `ptr array[N, T]`,
-  ## a static-shape buffer under the pointer whose elements are read through
-  ## `at(deref p, i)`.
-  case p.typ.kind
-  of ctAptr:
-    result = p.typ.pElem
-  of ctPtr:
-    if p.typ.pElem != nil and p.typ.pElem.kind == ctArray:
-      result = p.typ.pElem.aElem
-  else:
-    discard
-
-func getBufferRoot(e: CirExpr): CirExpr =
-  ## Buffer symbol at the root of an element access, nil for any other root shape.
-  ## Index and deref parents peel to their operands: a `ptr array` parameter
-  ## reads elements through `at(deref p, i)`.
-  result = e
-  while result != nil and result.kind in {eAt, ePat}:
-    result = if result.kind == eAt: result.atBase else: result.patBase
-  while result != nil and result.kind == eDeref:
-    result = result.derefOperand
-  if result != nil and result.kind != eSym:
-    result = nil
 
 proc firstLoopBound(ss: seq[CirStmt]): CirExpr =
   ## Trip-count expression of the first desugared-for loop in statement order,
@@ -284,7 +255,7 @@ proc checkThreadLocalWrites(fn: CirProc, role: string, wg: array[3, int]) =
         let idx = if s.lhs.kind == ePat: s.lhs.patIndex else: s.lhs.atIndex
         let term = affineThreadTerm(idx, termEnv, 0, ok)
         if not ok or term.coeffOpaque or term.coeff <= 0:
-          error "bwd_diff: kernel '" & fn.name & "': " & role & " writes '" & renderExpr(s.lhs) & "', the write index does not separate the threads, the threadgroup races on it"
+          error "bwd_diff: kernel '" & fn.name & "' at workgroup (" & $wg[0] & ", " & $wg[1] & ", " & $wg[2] & "): " & role & " writes '" & renderExpr(s.lhs) & "', the write index does not separate the threads, the threadgroup races on it"
   fn.body.walkStmts(onStmt, nil)
 
 proc enforceBwdWorkgroup(fwd, bwd: CirProc, reduces: seq[CirProc]) =
@@ -388,7 +359,7 @@ proc deriveBwdParams(fwd, bwd: CirProc): seq[BwdParamMeta] =
         meta.gradKind = gkBuffer
         meta.gradName = "d_" & name
       result.add meta
-    elif isAdFloat(p.typ):
+    elif isDiffFloat(p.typ):
       var meta = BwdParamMeta(name: name, kind: pkScalar)
       if ("d_" & name) in bwdParamNames:
         meta.gradKind = gkBuffer1
@@ -421,7 +392,7 @@ proc mirrorGradientNames(fwd: CirProc): seq[string] =
       referenced.incl e.name
   fwd.body.walkStmts(nil, onExpr)
   for p in fwd.params:
-    if (getBufferElemType(p) != nil or isAdFloat(p.typ)) and p.name in referenced:
+    if (getBufferElemType(p) != nil or isDiffFloat(p.typ)) and p.name in referenced:
       result.add "d_" & p.name
 
 proc declaredMirrorSignature(fwd: CirProc): seq[string] =

@@ -688,6 +688,39 @@ func isLvalue*(e: CirExpr): bool =
   ## a pointer index, or a field access. `addr` and assignment take lvalues.
   e.kind in {eSym, eDeref, eAt, ePat, eDot}
 
+func isDiffFloat*(t: CirType): bool =
+  ## True for the 32- and 64-bit float widths, the widths that carry gradients
+  ## in the backward-diff subset.
+  t != nil and t.kind == ctFloat and (t.bits == 32 or t.bits == 64)
+
+func getBufferElemType*(p: CirParam): CirType =
+  ## Element type of a buffer parameter, nil when `p` is not one.
+  ## Buffer parameters are `ptr UncheckedArray[T]` (an `aptr`) or `ptr array[N, T]`,
+  ## a static-shape buffer under the pointer whose elements are read through
+  ## `at(deref p, i)`.
+  case p.typ.kind
+  of ctAptr:
+    result = p.typ.pElem
+  of ctPtr:
+    if p.typ.pElem != nil and p.typ.pElem.kind == ctArray:
+      result = p.typ.pElem.aElem
+  else:
+    discard
+
+func getBufferRoot*(e: CirExpr): CirExpr =
+  ## Buffer symbol at the root of an element access, nil for any other root shape.
+  ##
+  ## Contract:
+  ## - index and deref parents peel to their operands: a `ptr array` parameter
+  ##   reads elements through `at(deref p, i)`.
+  result = e
+  while result != nil and result.kind in {eAt, ePat}:
+    result = if result.kind == eAt: result.atBase else: result.patBase
+  while result != nil and result.kind == eDeref:
+    result = result.derefOperand
+  if result != nil and result.kind != eSym:
+    result = nil
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Emitted-name vocabulary
 # ═══════════════════════════════════════════════════════════════════════
