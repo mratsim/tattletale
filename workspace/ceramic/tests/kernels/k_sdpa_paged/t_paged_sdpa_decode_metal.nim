@@ -8,7 +8,8 @@
 ## Paged decode SDPA fixture suite: every fixture replays in one binary.
 ## Each fixture's kernel output must match its recorded reference:
 ## - attention over the block-table-gathered KV entries [0, cache_seqlens[s])
-## - causal off, GQA head mapping, layer 1 of the pool
+## - windowed fixtures narrow the range to [cache_seqlens[s] - window_size,
+##   cache_seqlens[s]), causal off, GQA head mapping, layer 1 of the pool
 ##
 ## Run from the repository root:
 ##   nim c -r --hints:off --warnings:off \
@@ -20,8 +21,10 @@ import workspace/ceramic/tests/kernels/k_sdpa_paged/kernel_sdpa_paged_template
 
 proc replayAllPagedFixtures() =
   var engine = newEngine(runMetal)
-  engine.replayPagedFixture(float16, 64,
-    ["paged_decode_gqa_f16", "paged_decode_small_f16", "paged_window_decode_f16"])
+  engine.replayPagedFixture(float16, 64, false,
+    ["paged_decode_gqa_f16", "paged_decode_small_f16"])
+  engine.replayPagedFixture(float16, 64, true,
+    ["paged_window_decode_f16"])
   echo "all paged SDPA fixture replays pass (3 fixtures)"
 
 replayAllPagedFixtures()

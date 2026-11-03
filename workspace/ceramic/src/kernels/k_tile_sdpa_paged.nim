@@ -12,8 +12,8 @@
 ## `block_table` with -1 padding and bounded by `cache_seqlens`.
 ##
 ## - decode regime: one query entry per sequence, causal off, attention
-##   range [0, cache_seqlens[seq]) with cache_seqlens[seq] >= 1 (an empty
-##   sequence has no softmax normalization, 0/0)
+##   range [0, cache_seqlens[seq]), windowed variants attend
+##   [max(0, cache_seqlens[seq] - windowSize), cache_seqlens[seq])
 ## - buffers: query/output (numSeqs, Hq, 1, D)
 ## - kv pools (numPages, numLayers, PageSize, Nkv, D), head dim contiguous,
 ##   layer `layer` served per dispatch
@@ -26,7 +26,8 @@
 ##     grouped_query_attention_paged states as page_size multiple of 8 at nt = 8
 ##   - the kv loop touches exactly ceil(cache_seqlen / PageSize) table entries
 ##     and never reads a -1 padding slot
-##   - the caller guarantees cache_seqlen <= maxPages * PageSize
+##   - windowed decode starts the kv loop at the window's left-edge page
+##   - the caller guarantees maxPages * PageSize >= cache_seqlen >= 1
 ##
 ## Masking: entries at or beyond cache_seqlens[seq] read -inf on the scores,
 ## never on the inputs. Page tails beyond the covered length hold garbage
@@ -52,12 +53,14 @@ proc paged_sdpa_decode*(
       O, Q, kvPoolK, kvPoolV: distinct TensorView,
       blockTable, cacheSeqlens: distinct TensorView,
       scale: float32, Dk, Dv, PageSize: static int,
+      isWindowed: static bool = false, windowSize: int = low(int32),
       layer: int32) =
   ## Paged decode SDPA: `o[s, h] = softmax(scale·q[s,h]·Kᵀ)·V` over the entries [0, cache_seqlens[s]) gathered through `block_table`.
   ##
   ## Schedules:
   ##   - mmaQK: `static TiledMma` for Q·Kᵀ, reduces over Dk
   ##   - mmaPV: `static TiledMma` for attention·V, reduces over S
+  ##   - isWindowed + windowSize: the sliding-window left bound, entries below max(0, cache_seqlens[s] - windowSize) mask out
   ##
   ## Launch: grid (1, Hq, numSeqs), one simdgroup per threadgroup.
   ## Grid y addresses the head, grid z the sequence, grid x stays 1 (one query tile in decode).
@@ -91,6 +94,7 @@ proc paged_sdpa_decode*(
     group = Q.shape[1] div kvPoolK.shape[3]
     kvHead = head div group                    # GQA, direct integer arithmetic
     seqlen = int(cacheSeqlens[seqId])
+    windowLo = when isWindowed: max(0, seqlen - windowSize) else: 0
 
     vQ = Q(seqId, head, _, _)                  # (1, Dk), A operand of MMA 1
     vO = O(seqId, head, _, _)
@@ -110,7 +114,7 @@ proc paged_sdpa_decode*(
   var l_i = zeros(tile(float32, rowStatsL))       # running sum per query entry
   var acc = zeros(tile(float32, pvCLayout))       # (MT × Dv) accumulator
 
-  for kv in 0 ..< seqlen.ceil_div(nt):
+  for kv in windowLo div nt ..< seqlen.ceil_div(nt):
     let
       kvPos = kv * nt
       pageIdx = kvPos div PageSize
@@ -140,7 +144,7 @@ proc paged_sdpa_decode*(
     forEach idx, var c in band:
       let (_, kCol) = crdBase + regCrd.crd2idx(idx)
       let kPos = kvPos + kCol                  # kv tile's column base
-      c = kPos >= seqlen
+      c = kPos < windowLo or kPos >= seqlen
     qk.where(band, negInf(float32), qk)        # masked keys read -inf
 
     var m_ij: tile(float32, rowStatsL)

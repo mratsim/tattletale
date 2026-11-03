@@ -25,9 +25,10 @@ export tile_algebra, layout_algebra, tensors, int_tuples
 const SdpaPagedTile = 32
   ## 32x32x32 mma schedule tile, one kv tile per page at the fixture page size
 
-proc sdpaPagedCheckMeta(meta: SdpaPagedFixtureMetadata, dtype: string, headDim: int) =
+proc sdpaPagedCheckMeta(meta: SdpaPagedFixtureMetadata, dtype: string, headDim: int, windowed: bool) =
   doAssert meta.dtype == dtype, meta.name & ": dtype " & meta.dtype
   doAssert meta.Dk == headDim and meta.Dv == headDim, meta.name & ": head dim mismatch"
+  doAssert (meta.windowSize > 0) == windowed, meta.name & ": window flag mismatch"
   doAssert meta.Hq mod meta.Hkv == 0,
     "fixture " & meta.name & ": Hq " & $meta.Hq & " is not a multiple of Hkv " & $meta.Hkv
   doAssert meta.pageSize == SdpaPagedTile,
@@ -63,16 +64,17 @@ proc sdpaPagedLoadAndBridge[E](engine: E, Elem: typedesc, meta: SdpaPagedFixture
 
 proc sdpaPagedCombo*(o, q, kvPoolK, kvPoolV: distinct TensorView,
                      blockTable, cacheSeqlens: distinct TensorView,
-                     scale: float32, Dk, Dv, PageSize: static int, layer: int32) =
+                     scale: float32, Dk, Dv, PageSize: static int,
+                     isWindowed: static bool, windowSize: int, layer: int32) =
   paged_sdpa_decode(
     tiledMma(float32, q.T, kvPoolK.T, SdpaPagedTile, SdpaPagedTile, SdpaPagedTile),
     tiledMma(float32, o.T, kvPoolV.T, SdpaPagedTile, SdpaPagedTile, SdpaPagedTile),
     o, q, kvPoolK, kvPoolV, blockTable, cacheSeqlens,
-    scale, Dk, Dv, PageSize, layer)
+    scale, Dk, Dv, PageSize, isWindowed, windowSize, layer)
 
-proc sdpaPagedReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static int, name: string) =
+proc sdpaPagedReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static int, windowed: static bool, name: string) =
   let meta = parseSdpaPagedMetadata(SdpaPagedFixturesDir / name)
-  sdpaPagedCheckMeta(meta, $Elem, HeadDim)
+  sdpaPagedCheckMeta(meta, $Elem, HeadDim, windowed)
   let (qDev, kDev, vDev, btDev, csDev, oDev, oh, expected) =
     sdpaPagedLoadAndBridge(engine, Elem, meta)
   let
@@ -81,7 +83,8 @@ proc sdpaPagedReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static in
 
   engine.launchDeviceFn sdpaPagedCombo(
       oDev, qDev, kDev, vDev, btDev, csDev, scaleVal, HeadDim, HeadDim,
-      SdpaPagedTile, layerVal) do:
+      SdpaPagedTile, windowed,
+      when windowed: meta.windowSize else: low(int32), layerVal) do:
     grid = (1, meta.Hq, meta.numSeqs)
     blk = (32, 1)
 
@@ -91,6 +94,6 @@ proc sdpaPagedReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static in
                    not (Elem is float32))
   echo "replay ok: ", meta.name, " (", $Elem, ")"
 
-proc replayPagedFixture*(engine: MetalEngine, Elem: typedesc, HeadDim: static int, names: openArray[string]) =
+proc replayPagedFixture*(engine: MetalEngine, Elem: typedesc, HeadDim: static int, windowed: static bool, names: openArray[string]) =
   for name in names:
-    sdpaPagedReplayCase(engine, Elem, HeadDim, name)
+    sdpaPagedReplayCase(engine, Elem, HeadDim, windowed, name)
