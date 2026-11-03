@@ -19,6 +19,7 @@ import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/hardware/h_mma_registry
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/tests/kernels/k_sdpa_paged/sdpa_paged_fixtures
+import workspace/ceramic/src/kernels/k_tile_sdpa_paged
 
 export tile_algebra, layout_algebra, tensors, int_tuples
 
@@ -64,9 +65,11 @@ proc sdpaPagedLoadAndBridge[E](engine: E, Elem: typedesc, meta: SdpaPagedFixture
 proc sdpaPagedCombo*(o, q, kvPoolK, kvPoolV: distinct TensorView,
                      blockTable, cacheSeqlens: distinct TensorView,
                      scale: float32, Dk, Dv, PageSize: static int, layer: int32) =
-  # Zero-fill stub: the replay test fails against it until the kernel replaces it
-  for i in 0 ..< o.size():
-    o[i] = zero(o.T)
+  paged_sdpa_decode(
+    tiledMma(float32, q.T, kvPoolK.T, SdpaPagedTile, SdpaPagedTile, SdpaPagedTile),
+    tiledMma(float32, o.T, kvPoolV.T, SdpaPagedTile, SdpaPagedTile, SdpaPagedTile),
+    o, q, kvPoolK, kvPoolV, blockTable, cacheSeqlens,
+    scale, Dk, Dv, PageSize, layer)
 
 proc sdpaPagedReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static int, name: string) =
   let meta = parseSdpaPagedMetadata(SdpaPagedFixturesDir / name)

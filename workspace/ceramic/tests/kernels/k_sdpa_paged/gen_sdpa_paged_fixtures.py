@@ -3,24 +3,24 @@
 
 One directory per fixture under fixtures/ next to this script:
 
-- meta.json with name, dtype, geometry fields, layer, scale, cache_seqlens,
-  and the checksums of the recorded files
-- q.bin, the (num_seqs, Hq, 1, Dk) queries, raw little-endian, the meta dtype
-- k.bin / v.bin, the (num_pages, num_layers, page_size, Nkv, D) KV pools,
-  raw little-endian, the meta dtype
-- block_table.bin, the (num_seqs, max_pages) int32 page ids, -1 padding
-- cache_seqlens.bin, the (num_seqs,) int32 lengths
-- o.bin, the expected output, raw float32
+| file              | contents                                                         |
+| ----------------- | ---------------------------------------------------------------- |
+| q.bin             | (num_seqs, Hq, 1, Dk) queries, raw little-endian, the meta dtype |
+| k.bin / v.bin     | (num_pages, num_layers, page_size, Nkv, D) KV pools, same layout |
+| block_table.bin   | (num_seqs, max_pages) int32 page ids, -1 padding                 |
+| cache_seqlens.bin | (num_seqs,) int32 lengths                                        |
+| o.bin             | expected output, raw float32                                     |
+| meta.json         | name, dtype, geometry, layer, scale, cache_seqlens, checksums    |
 
-The reference runs in float64 end to end for a tight truth:
-per sequence, the attended layer's pool rows are gathered through the block
-table, `block_table[s, t div page_size] * page_size + t mod page_size` for
-t < cache_seqlens[s], then o = softmax(scale * q @ K^T) @ V with no causal
-mask over the gathered rows, kv head = h div (Hq div Nkv).
+The reference runs in float64 end to end for a tight truth.
+Per sequence, the attended layer's pool entries are gathered through the block table,
+entry t mapping to `block_table[s, t div page_size] * page_size + t mod page_size`
+while t < cache_seqlens[s].
 
-Pool rows a sequence's cache_seqlen does not cover hold finite random values,
-the same slab memory a real pool carries; the attention range
-[0, cache_seqlens[s]) excludes them.
+Attention then computes o = softmax(scale * q @ K^T) @ V over the gathered
+entries with no causal mask, kv head = h div (Hq div Nkv).
+
+Pool entries beyond a sequence's attended range stay finite random values, matching untouched slab memory in a production pool.
 
 Run:  uv run --with numpy python3 gen_sdpa_paged_fixtures.py [name ...]
       (default: all fixtures)
@@ -51,8 +51,8 @@ def write_bin(path, arr):
 
 
 def sdpa_paged_reference(q, kpool, vpool, block_table, cache_seqlens, layer, scale):
-    """float64 reference: per sequence, block-table gather then
-    softmax(scale * q @ K^T) @ V, causal off, over the gathered rows."""
+    """float64 reference: per sequence, a block-table gather feeding
+    softmax(scale * q @ K^T) @ V, causal off, over the gathered entries."""
     num_seqs, Hq, _, Dk = q.shape
     num_pages, _, page_size, Nkv, _ = kpool.shape
     Dv = vpool.shape[-1]
@@ -82,8 +82,8 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
     scale = 1.0 / np.sqrt(Dk)
 
     q = rng.standard_normal((num_seqs, Hq, 1, Dk))
-    # the pool carries random slab values everywhere; the attended layer's
-    # rows a sequence covers are overwritten below
+    # random slab values fill the pool everywhere, the attended layer's
+    # entries a sequence covers are overwritten below
     kpool = rng.standard_normal((num_pages, num_layers, page_size, Hkv, Dk))
     vpool = rng.standard_normal((num_pages, num_layers, page_size, Hkv, Dv))
 
@@ -105,8 +105,7 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
         assert int(seqlen) <= max_pages * page_size, \
             f"{name}: seq {s} length {int(seqlen)} exceeds the table capacity"
 
-    # the reference must see the values the kernel replays, so round the
-    # inputs to the storage dtype first
+    # round inputs to the storage dtype so the reference replays the kernel's values
     q = q.astype(np.float16).astype(np.float32)
     kpool = kpool.astype(np.float16).astype(np.float32)
     vpool = vpool.astype(np.float16).astype(np.float32)
@@ -124,8 +123,7 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
     write_bin(os.path.join(out, "cache_seqlens.bin"), cache_seqlens)
     write_bin(os.path.join(out, "o.bin"), oOut)
 
-    # per-file xorhash checksums let the Nim roundtrip verify every file,
-    # the tables included, not just the expected output
+    # per-file xorhash checksums let the Nim roundtrip verify every file, tables included
     meta = {
         "name": name, "dtype": dtype,
         "num_seqs": num_seqs, "Hq": Hq, "Hkv": Hkv, "Dk": Dk, "Dv": Dv,
@@ -151,11 +149,11 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
 
 
 FIXTURES = [
-    # multi-page, one-page + partial, single-row sequences; Hq=4 over Hkv=2
+    # multi-page, one-page + partial, length-1 sequences, Hq=4 over Hkv=2
     dict(name="paged_decode_gqa_f16", dtype="float16", num_seqs=3, Hq=4, Hkv=2,
          Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
          num_pages=6, cache_seqlens=[70, 33, 1], seed=101),
-    # a sub-tile length and an exact tile multiple; pages 3..5 stay garbage
+    # a sub-tile length and an exact tile multiple, pages 3..5 stay garbage
     dict(name="paged_decode_small_f16", dtype="float16", num_seqs=2, Hq=2, Hkv=1,
          Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
          num_pages=6, cache_seqlens=[17, 64], seed=102),
