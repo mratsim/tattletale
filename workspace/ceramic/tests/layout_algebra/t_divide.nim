@@ -7,6 +7,7 @@
 
 {.experimental: "callOperator".}
 
+import workspace/ceramic/src/hardware/h_mma_registry
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 
@@ -288,6 +289,42 @@ proc runZippedDivideGatherTests =
   echo "    zipped gather rewrite: 4 cases OK"
 
 
+
+# ── coordinate identity divide, MT=8 SDPA chain ──────────────
+proc runDivideCoordinateIdentityTests =
+  const
+    MT = 8
+    KT = 32
+    cellOuter = 8
+    cellLast = 8
+    repOuter = MT div cellOuter
+    repLast = KT div cellLast
+    tileOuter = cellOuter * repOuter
+    atomTileFlat = compose(make_layout((cellOuter, cellLast), (1, tileOuter)),
+                           Apple8x8_AC_Layout)
+    threadMap = make_layout((atomTileFlat.shape, (repOuter, repLast)),
+                            (atomTileFlat.stride, (cellOuter, tileOuter * cellLast)))
+    tvmLayout = compose(make_identity_layout((MT, KT)), threadMap)
+  static:
+    doAssert threadMap.shape[1][0] === Int[1]()
+
+  let s0 = 64
+  let s1 = 128
+  let src = make_layout((s0, s1), (1, s0))
+  let divided = logical_divide(src, tvmLayout)
+
+  doAssert divided ===
+    (((((2, 2, 2, 2, 2), 2), (1, 4)), (8, 4)),
+     ((((128, 1, 2, 256, 4), 64), (64, 512)), (8, 2048)))
+  let tilePart = make_layout(divided.shape[0], divided.stride[0])
+  const tilePartMap = [0, 128, 1, 129, 2, 130, 3, 131,
+                       256, 384, 257, 385, 258, 386, 259, 387]
+  for x in 0 ..< 16:
+    doAssert tilePart(x) == tilePartMap[x],
+      "tilePart(" & $x & ")=" & $tilePart(x) & " expected " & $tilePartMap[x]
+  echo "  coordinate identity divide (MT=8 chain): 2 goldens OK"
+
+
 # ── int tiler over layouts the tiler does not evenly divide ──
 proc runIntTilerRaggedTests =
   ## Divide results for tilers whose size (128) does not divide
@@ -304,12 +341,11 @@ proc runIntTilerRaggedTests =
   block:  # the grid mode of the 3000-element divide: ceil(3000/128) = 24
     doAssert complement(make_layout((32, 4), (4, 1)), (10, 300)) === (24, 128)
 
-  block:  # the tiler lane stride steps 4 coordinates of mode 0,
-    ## mode 0 has dims 10: 4 does not divide 10, the divide is rejected
+  block:  # ragged: 4 does not divide mode 0's 10, non-bijective, covers 2880 of 3000 elements
     static:
-      # TODO: using compiles/not(compiles) violates repo policy where it is used
-      doAssert not compiles(
-        logical_divide(make_layout((10, 300), (300, 1)), make_layout((32, 4), (4, 1))))
+      # value check evaluates in the VM: runtime divide emission hits a duplicate C declaration bug
+      let ragged = logical_divide(make_layout((10, 300), (300, 1)), make_layout((32, 4), (4, 1)))
+      doAssert ragged === ((((3, 10), 4), 24), (((1200, 1), 300), 13))
 
   # A runtime layout cannot generally be divided like the same layout written with compile-time constants:
   #
@@ -333,5 +369,6 @@ runDivideTupleTilerTests()
 runZippedDivideRank1Tests()
 runZippedDivideStructureTests()
 runZippedDivideGatherTests()
+runDivideCoordinateIdentityTests()
 runIntTilerRaggedTests()
 

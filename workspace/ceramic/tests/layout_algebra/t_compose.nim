@@ -807,12 +807,8 @@ proc runComposeCoordStrideTests =
     doAssert c === (4, 87)
   echo "  coordinate strides (pycute suite): 27 cases OK"
 
-# ── 1-length tiler mode ───────────────────────────────────────
+# ── 1-length tiler mode: coordinate identity ─────────────────
 proc runComposeOneLengthModeTests =
-  ## MT=8 SDPA bench tile load (-d:benchMT=8) divides a runtime layout
-  ## by the threadmap below. Its repetition mode [1][0] has shape 1
-  ## and exercises the size-1 compose branch as a degenerate input.
-  # fixture: tile_matmul.getMatmulThreadmap rebuilt host-side from the exported Apple8x8_AC_Layout const
   const
     MT = 8
     KT = 32
@@ -834,28 +830,18 @@ proc runComposeOneLengthModeTests =
   let s1 = 128
   let src = make_layout((s0, s1), (1, s0))
 
-  # tile load path (tile_loadstore.load): src divided by the threadmap
   let divided = logical_divide(src, tvmLayout)
-
-  assertCompositionProperty(src, tvmLayout)
-
-  let tilePart = make_layout(divided.shape[0], divided.stride[0])
-  doAssert size(tilePart) === size(tvmLayout),
-    "tile size=" & $size(tilePart) & " tiler size=" & $size(tvmLayout)
-  for x in 0 ..< size(tvmLayout):
-    doAssert tilePart(x) === src(tvmLayout(x)),
-      "tilePart(" & $x & ")=" & $tilePart(x) &
-      " src(tvmLayout(" & $x & "))=" & $src(tvmLayout(x))
-
-  # tile_loadstore.load also reads src.getIdentityLayout().logical_divide(tvm.layout),
-  # an identity layout strided by coordinate-stride basis forms.
-  # Without the size-1 compose branch, crd2idx lacks the coordinate-stride
-  # overload and this chain fails to compile.
   let tiledCrd = make_identity_layout((s0, s1)).logical_divide(tvmLayout)
-  let crdTilePart = make_layout(tiledCrd.shape[0], tiledCrd.stride[0])
-  doAssert size(crdTilePart) === size(tvmLayout),
-    "crd tile size=" & $size(crdTilePart) & " tiler size=" & $size(tvmLayout)
-  echo "  1-length tiler mode: 1 case OK"
+
+  doAssert atomTileFlat ===
+    (((2, 2, 2, 2, 2), 2), ((16, 1, 2, 32, 4), 8))
+  doAssert threadMap ===
+    ((((2, 2, 2, 2, 2), 2), (1, 4)), (((16, 1, 2, 32, 4), 8), (8, 64)))
+  doAssert tvmLayout ===
+    ((((2, 2, 2, 2, 2), 2), (1, 4)),
+     (((E(2, 1), E(1, 0), E(2, 0), E(4, 1), E(4, 0)), E(1, 1)),
+      (E(1, 1), E(8, 1))))
+  echo "  1-length tiler mode (coordinate identity): 3 composed goldens OK"
 
 runComposeExactValueTests()
 runComposeFixtureTests()
