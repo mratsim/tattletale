@@ -17,8 +17,8 @@ import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/hardware/h_mma_registry
 import workspace/ceramic/tests/ceramic_testutils
-import workspace/ceramic/tests/kernels/k_sdpa_paged/sdpa_paged_fixtures
-import workspace/ceramic/src/kernels/k_tile_sdpa_paged
+import workspace/positron/tests/ceramic/k_sdpa_paged/sdpa_paged_fixtures
+import workspace/positron/src/kernels/k_tile_sdpa_paged
 
 export tile_algebra, layout_algebra, tensors, int_tuples
 

@@ -14,10 +14,10 @@
 ## Run from the repository root:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/t_paged_sdpa_decode_metal --nimcache:nimcache/t_paged_sdpa_decode_metal \
-##     workspace/ceramic/tests/kernels/k_sdpa_paged/t_paged_sdpa_decode_metal.nim
+##     workspace/positron/tests/ceramic/k_sdpa_paged/t_paged_sdpa_decode_metal.nim
 
 import workspace/crucible
-import workspace/ceramic/tests/kernels/k_sdpa_paged/kernel_sdpa_paged_template
+import workspace/positron/tests/ceramic/k_sdpa_paged/kernel_sdpa_paged_template
 
 const
   pagedDecodeFixtures = ["paged_decode_gqa_f16", "paged_decode_small_f16",

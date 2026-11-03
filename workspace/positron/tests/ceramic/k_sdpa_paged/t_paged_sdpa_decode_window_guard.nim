@@ -15,7 +15,7 @@
 ## Run from the repository root:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests/t_paged_sdpa_decode_window_guard --nimcache:nimcache/t_paged_sdpa_decode_window_guard \
-##     workspace/ceramic/tests/kernels/k_sdpa_paged/t_paged_sdpa_decode_window_guard.nim
+##     workspace/positron/tests/ceramic/k_sdpa_paged/t_paged_sdpa_decode_window_guard.nim
 
 import std/[math, random]
 import workspace/crucible
@@ -23,8 +23,8 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/tests/ceramic_testutils
-import workspace/ceramic/src/kernels/k_tile_sdpa_paged
-import workspace/ceramic/tests/kernels/k_sdpa_paged/kernel_sdpa_paged_template
+import workspace/positron/src/kernels/k_tile_sdpa_paged
+import workspace/positron/tests/ceramic/k_sdpa_paged/kernel_sdpa_paged_template
 
 const
   D = 16             # head dim, f32 path like the base suite's tiny_f32

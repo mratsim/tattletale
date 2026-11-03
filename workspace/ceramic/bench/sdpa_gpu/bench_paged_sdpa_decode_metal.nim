@@ -25,7 +25,7 @@ import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tile_algebra
-import workspace/ceramic/src/kernels/k_tile_sdpa_paged
+import workspace/positron/src/kernels/k_tile_sdpa_paged
 import workspace/ceramic/tests/ceramic_testutils
 
 const sdpaDtype {.strdefine.} = "f32"
