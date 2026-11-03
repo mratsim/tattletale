@@ -282,12 +282,12 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     unitC.add(calleesC & "\n")
   unitC.add(funcsC)
   let genDir = querySetting(SingleValueSetting.nimcacheDir) / "crucibleGenerated"
-  createDir(genDir)
   # NAME_MAX is 255 and the site suffix embeds the absolute module path:
   # long file names shrink to a bounded head plus an md5 hash
   let genStem = if siteSuffix.len <= 128: siteSuffix
                 else: siteSuffix[0 ..< 96] & "_" & $toMD5(siteSuffix)
-  let genPath = genDir / ("crucibleLaunch_" & genStem & ".c")
+  createDir(genDir / genStem)
+  let genPath = genDir / genStem / "crucibleLaunch.c"
   writeFile(genPath, unitC)
   launchBody.add(parseStmt("{.compile: \"" & genPath & "\".}"))
 
