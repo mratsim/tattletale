@@ -629,7 +629,7 @@ tpc_threadpool* tpc_threadpool_new(int32_t numThreads) {
     tpc_eventcount_initialize(&tp->globalBackoff);
     tp->numThreads = numThreads;
     tp->workerQueues = tpc_alignedAlloc(_Alignof(tpc_taskqueue), (size_t)numThreads * sizeof(tpc_taskqueue));
-    tp->workers = malloc((size_t)numThreads * sizeof(thrd_t));
+    tp->workers = malloc((size_t)numThreads * sizeof(tpc_thread_t));
     tp->workerSignals = tpc_alignedAlloc(_Alignof(struct tpc_worker_signal), (size_t)numThreads * sizeof(*tp->workerSignals));
     tp->workerArgs = malloc((size_t)numThreads * sizeof(*tp->workerArgs));
     if (tp->workerQueues == NULL || tp->workers == NULL || tp->workerSignals == NULL || tp->workerArgs == NULL) {
@@ -644,7 +644,7 @@ tpc_threadpool* tpc_threadpool_new(int32_t numThreads) {
     for (int32_t i = 1; i < numThreads; i++) {
         tp->workerArgs[i].tp = tp;
         tp->workerArgs[i].id = i;
-        if (thrd_create(&tp->workers[i], workerEntryFn, &tp->workerArgs[i]) != thrd_success) {
+        if (tpc_thread_create(&tp->workers[i], workerEntryFn, &tp->workerArgs[i]) != 0) {
             /* The barrier counts numThreads participants, a missing worker
              * would hang the pool at startup */
             abort();
@@ -678,7 +678,7 @@ void tpc_threadpool_shutdown(tpc_threadpool* tp) {
     teardownWorker(ctx);
 
     for (int32_t i = 1; i < tp->numThreads; i++) {
-        thrd_join(tp->workers[i], NULL);
+        tpc_thread_join(tp->workers[i]);
     }
 
     tpc_alignedFree(tp->workerSignals);

@@ -12,14 +12,10 @@
 ## The engine is exempt from the HwEngine concept:
 ## arguments are host values, there is no ingest, no artifact and no DeviceMem.
 
-import std/os
 import std/cpuinfo
 import ./engines_common
 when compileOption("threads"):
   import workspace/threadpool_compute
-  when defined(macosx):
-    # Apple's SDK ships no C11 threads.h, threadpool.h includes it for thrd_create and thrd_join, the shim maps those onto pthreads
-    {.passc: "-I\"" & currentSourcePath.parentDir / "c11threads_darwin" & "\"".}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Engine
