@@ -1,7 +1,7 @@
 # tattletile — Tile IR compiler on crucible internals
 
 tattletile compiles official NVIDIA Tile IR, resolving layouts through its own transformation-oriented algebra.
-The lowering bridges into crucible's CIRv2 (`workspace/crucible/src/codegen/ir/`).
+The lowering bridges into crucible's CIRv2 (`workspace/crucible/src/codegen/ir/`), built directly through `cirv2_build`.
 The result runs on every crucible backend unchanged.
 
 ## Ingestion
@@ -15,7 +15,9 @@ The result runs on every crucible backend unchanged.
 | Path | Contents |
 |---|---|
 | `src/tattletile/` | Tile IR datatypes, subset parser, tile passes, lowering to crucible's CIRv2 |
+| `fixtures/` | Tile IR text fixtures: cutile-rs captures plus hand-encoded minimal snippets |
 | `tests/` | Suite driving the public compile entry, Tile IR text fixtures, the manual demo host |
+| `docs/` | Capabilities docs, ADRs namespaced per layer under `docs/adr/` |
 
 ## Rules
 
@@ -26,7 +28,7 @@ The result runs on every crucible backend unchanged.
 
 ## References
 
-- Fixtures are captured cutile-python emissions plus hand-encoded minimal snippets.
+- Fixtures are cutile-rs captures plus hand-encoded minimal snippets.
 - Reference trees are read-only, no git operations inside.
 - Trees live in `_references_layout_tile_algebra/` plus tileiras in `_references_research/nvopen-tools/`.
-- Op records live in `.scratchspace/20261025-0922-C15D01-tattletile-compiler/`.
+- Op records live in `.scratchspace/20261103-2310-C17D04-tattletile-port/`.
