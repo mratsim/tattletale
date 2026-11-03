@@ -48,5 +48,7 @@ The SPIR-V entry refuses atom selections, the simdgroup intrinsics have no SPIR-
 Density baseline in `tests/test_gemm_atom_metal.nim`: 25 CIRv2 nodes (22 statements + 3 loops)
 and 60 scheduled ops per thread per public mmaf (16x16x16 tile).
 That is about 2x what tileiras hides per public op, with fragment-reload hoisting recorded as future work.
-- No runtime fragment predication: the selector gives out-of-cell tile dims no atom
-  selection and the abstract FMA path lowers them, every fragment predicate is statically true.
+- No runtime fragment predication: the selector gives out-of-cell tile dims no atom selection,
+  the abstract FMA path lowers a shape only when the thread count divides its element count,
+  and layout inference refuses the other shapes first.
+  Every fragment predicate is statically true.

@@ -7,8 +7,9 @@
 
 ## Tile IR parser: fixture acceptance and print round-trip fixed point
 ##
-## Test that every fixture parses and that printing reproduces the parsed
-## module exactly (parse o print o parse equals the first parse).
+## Test that every fixture parses, that printing reproduces the parsed module
+## exactly (parse o print o parse equals the first parse), and that zero-padded
+## integer tokens parse by value.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --nimcache:nimcache/tattletile \
@@ -81,6 +82,17 @@ proc checkGemmShape(m: TileIrModule) =
   doAssert e.ops[11].resultTypes.len == 3, "op 11 three result types"
   doAssert e.ops[12].kind == okStoreViewTko, "op 12 kind"
   doAssert e.ops[13].kind == okYield, "op 13 kind"
+
+proc checkZeroPaddedIntegers() =
+  ## Zero-padded integer tokens parse by value: the digit prescreen counts
+  ## significant digits only and the i32 value check decides.
+  let m = parseTileIr(
+    "cuda_tile.module @k { entry @mykernel(%p: tile<ptr<f32>>) {" &
+    " %a = constant <f32: 1.0> : tile<00000008xf32>" &
+    " %b = constant <f32: 1.0> : tile<00000000000000000001xf32> } }")
+  let e = m.entries[0]
+  doAssert e.ops[0].resultTypes[0].tileShape == @[8], "00000008 parses as 8"
+  doAssert e.ops[1].resultTypes[0].tileShape == @[1], "a 20-digit zero-padded 1 parses as 1"
 
 checkRoundTrip("vec_add_axpy.tileir")
 checkRoundTrip("gemm.tileir")

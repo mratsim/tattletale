@@ -141,6 +141,18 @@ proc checkAtomSingleStore() =
   except SubsetError as e:
     doAssert "one store" in e.msg, e.msg
 
+proc checkAtomAliasedStore() =
+  ## Test that a store whose view base aliases an mmaf operand base refuses
+  ## on the atom path: a fragment store would overwrite elements the k loop reads.
+  let text = GemmFixtureText
+    .replace("%tv_c = make_tensor_view %ptr_c, shape = [16, 16], strides = [16, 1] : tensor_view<16x16xf32, strides=[16,1]>",
+             "%tv_c = make_tensor_view %ptr_a, shape = [16, 16], strides = [16, 1] : tensor_view<16x16xf32, strides=[16,1]>")
+  try:
+    discard parseTileIr(text).getEntry("gemm").runTilePipeline(threads = 32).lowerTileToCirv2(atomMma = true)
+    doAssert false, "expected an aliased-store refusal"
+  except SubsetError as e:
+    doAssert "an mmaf operand" in e.msg, e.msg
+
 proc f32Bits(v: float32): uint32 =
   cast[uint32](v)
 
@@ -232,3 +244,4 @@ when isMainModule:
   runAccInitTest()
   runSpirvFallback()
   checkAtomSingleStore()
+  checkAtomAliasedStore()

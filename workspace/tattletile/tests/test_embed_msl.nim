@@ -45,11 +45,17 @@ proc checkLaunchThreadsContract() =
   ## thread count refuses before dispatch, and a matching one passes.
   doAssert Axpy.threadCount == 4, "the compiled thread count reaches the host"
   Axpy.checkLaunchThreads(4)
+  Axpy.checkLaunchThreads(4, 1, 1)
   try:
     Axpy.checkLaunchThreads(5)
     doAssert false, "a mismatched launch block must refuse"
   except SubsetError as e:
     doAssert "compiled thread count" in e.msg, e.msg
+  try:
+    Axpy.checkLaunchThreads(4, 2)
+    doAssert false, "a y size above one must refuse"
+  except SubsetError as e:
+    doAssert "must each be 1" in e.msg, e.msg
 
 when isMainModule:
   checkLaunchThreadsContract()

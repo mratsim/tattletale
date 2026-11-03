@@ -74,6 +74,8 @@ refuses(head & " %z = constant <i32: 0> : tile<i32>" &
 # integers beyond the i32 range refuse through the subset refusal
 refuses(head & " %a = constant <f32: 1.0> : tile<99999999999999999999xf32>" & tail, "integer token", "mykernel")
 refuses(head & " %a = constant <f32: 1.0> : tile<3000000000xf32>" & tail, "integer token", "mykernel")
+# a zero-padded token is judged by value, so zero-padded overflow still refuses
+refuses(head & " %a = constant <f32: 1.0> : tile<0000000000003000000000xf32>" & tail, "integer token", "mykernel")
 
 # dynamic shape entries require the `tile<i32> -> ` operand-type prefix
 refuses(head & " %tv = make_tensor_view %p, shape = [%n], strides = [1] : tensor_view<?xf32, strides=[?]>" & tail,

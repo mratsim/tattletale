@@ -60,16 +60,20 @@ type EmbeddedKernel* = object
     words*: seq[uint32]
       ## Binary SPIR-V words, passed to `engine.ingest`
 
-proc checkLaunchThreads*(k: EmbeddedKernel, blkX: SomeInteger) =
-  ## Refuses a launch block whose x size differs from the compiled thread count.
+proc checkLaunchThreads*(k: EmbeddedKernel, blkX: SomeInteger, blkY: SomeInteger = 1, blkZ: SomeInteger = 1) =
+  ## Refuses a launch block that does not match the compiled kernel geometry:
+  ## the x size equals the compiled thread count, y and z are 1.
   ## `embedKernel` bakes `threads` into the coordinate formula and the SPIR-V words:
-  ## a smaller block leaves the upper tile coordinates unwritten, a larger one
-  ## reads elements that no thread owns.
+  ## - a smaller block leaves the upper tile coordinates unwritten
+  ## - a larger block reads elements that no thread owns
+  ## - a y or z size above one re-runs the x-only coordinate formula without synchronization
   ##
   ## Raises:
-  ## - SubsetError naming the kernel and both thread counts
+  ## - SubsetError naming the kernel and the offending sizes
   if int(blkX) != k.threadCount:
     raise refuseBridge(k.name, "launch block", "x size " & $blkX & " does not match the compiled thread count " & $k.threadCount)
+  if int(blkY) != 1 or int(blkZ) != 1:
+    raise refuseBridge(k.name, "launch block", "y size " & $blkY & " z size " & $blkZ & " must each be 1")
 
 template embedKernel*(path: static string, entry: static string, threads: static int,
                       backendKind: static GpuBackend = gbMetal): EmbeddedKernel =

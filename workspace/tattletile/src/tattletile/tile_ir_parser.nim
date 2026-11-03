@@ -189,7 +189,8 @@ proc refuseArity(p: SubsetParser, construct: string, got: int, expected: string)
 proc parseIntRefused(p: SubsetParser, tok: string): int =
   ## Subset integers are i32: the parser refuses a token whose value
   ## leaves the i32 range through the subset error.
-  let digits = if tok.startsWith("-"): tok.len - 1 else: tok.len
+  let unsigned = if tok.startsWith("-"): tok.substr(1) else: tok
+  let digits = unsigned.strip(leading = true, trailing = false, chars = {'0'}).len
   if digits > 10:
     raise p.refuse("integer token '" & tok & "'", "outside the i32 range")
   result = parseInt(tok)
@@ -467,6 +468,8 @@ proc parseMakeTensorView(p: var SubsetParser, results: seq[string]): Op =
   let ty = parseType(p)
   if ty.kind != tkTensorView:
     raise p.refuse("make_tensor_view", "result must be a tensor_view")
+  if shape.len != ty.viewShape.len or strides.len != ty.viewShape.len:
+    raise p.refuse("make_tensor_view %" & results[0], "list lengths do not match the tensor_view rank")
   for entries in @[shape, strides]:
     for e in entries:
       if e.isSsa and not sawPrefix:

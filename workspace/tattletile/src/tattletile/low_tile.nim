@@ -310,6 +310,9 @@ proc cirMmaOffsets(prog: Program, view: LoadView, dim0, dim1: string, env: Table
 proc refuseMmaOperand(kernel, result, operand: string) =
   raise refuseBridge(kernel, "mmaf %" & result, "%" & operand & " is not a loaded tile, read the operands through their load views")
 
+proc refuseAliasedStore(kernel, storeResult, base, mmaResult: string) =
+  raise refuseBridge(kernel, "store_view_tko %" & storeResult, "writes %" & base & ", an mmaf operand of %" & mmaResult & " that the k loop reads")
+
 proc refuseRedefinition(kernel, construct, name: string) =
   raise refuseBridge(kernel, construct, "%" & name & " redefines a kernel-level name")
 
@@ -349,7 +352,7 @@ proc lowerMma(prog: Program, op: ProgramOp, loadMap: Table[string, LoadView], en
   let bView = loadMap[op.mmaB]
   for st in prog.ops:
     if st.kind == pgStoreTile and st.storeViewInfo.base in [aView.base, bView.base]:
-      raise refuseBridge(prog.name, "store_view_tko %" & st.storeValue, "writes %" & st.storeViewInfo.base & ", an mmaf operand of %" & op.results[0] & " that the k loop reads")
+      refuseAliasedStore(prog.name, st.storeValue, st.storeViewInfo.base, op.results[0])
   let elem = cirElemType(op.mmaInfo.elem)
   let zero = if op.mmaInfo.elem == eF32: fltLit(0.0, tFloat(32)) else: intLit(0, tInt(32))
   let sumName = "tt_mma_sum_" & op.results[0]
@@ -588,6 +591,8 @@ proc atomShapeCheck(prog: Program, mma, store: ProgramOp, loadMap: Table[string,
     of pgStoreTile:
       if op.storeValue != mma.results[0]:
         raise refuseBridge(prog.name, "store_view_tko", "the atom fragment program stores the mma result only")
+      if op.storeViewInfo.base in [loadMap[mma.mmaA].base, loadMap[mma.mmaB].base]:
+        refuseAliasedStore(prog.name, op.storeValue, op.storeViewInfo.base, mma.results[0])
     else:
       raise refuseBridge(prog.name, $op.kind, "the atom fragment program covers one mmaf with its operands and store only")
   if store.kind != pgStoreTile:

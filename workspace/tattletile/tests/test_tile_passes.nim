@@ -195,6 +195,20 @@ proc checkRefusals() =
     refuses(proc() = discard parseTileIr(text).getEntry("axpy").runTilePipeline(threads = 4),
             "make_tensor_view %tv_a")
 
+  block: # an unused make_tensor_view with mismatched list lengths refuses at the parse boundary
+    let text = "cuda_tile.module @k { entry @mykernel(%ptr: tile<ptr<f32>>) {" &
+      " %tv_x = make_tensor_view %ptr, shape = [%s, %s], strides = [%st] : tile<i32> -> tensor_view<?xf32, strides=[?]>" &
+      " yield } }"
+    refuses(proc() = discard parseTileIr(text).getEntry("mykernel").runTilePipeline(threads = 4),
+            "make_tensor_view %tv_x", "mykernel")
+
+  block: # an i32 tile operand of an f32 addf refuses
+    let text = readFile(FixturesDir / "vec_add_axpy.tileir")
+      .replace("%sum = addf %scaled, %tile_b : tile<8xf32>",
+               "%ki = constant <i32: 1> : tile<8xi32>\n    %sum = addf %scaled, %ki : tile<8xf32>")
+    refuses(proc() = discard parseTileIr(text).getEntry("axpy").runTilePipeline(threads = 4),
+            "addf", "axpy")
+
   block: # token chain continues through a store
     let text = readFile(FixturesDir / "vec_add_axpy.tileir")
       .replace("%tok_out = store_view_tko weak %sum, %pv_c[%bid_x] token = %tok_b : tile<8xf32>, partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>, tile<i32> -> token",
@@ -258,6 +272,12 @@ proc checkGemmRefusals() =
     let text = readFile(FixturesDir / "gemm.tileir")
       .replace("%acc = mmaf %tile_a, %tile_b, %zero",
                "%acc = mmaf %tok, %tile_b, %zero")
+    refuses(proc() = discard parseTileIr(text).getEntry("gemm").runTilePipeline(threads = 4),
+            "mmaf", "gemm")
+  block: # an mmaf operand whose tile element is not f32
+    let text = readFile(FixturesDir / "gemm.tileir")
+      .replace("%acc = mmaf %tile_a, %tile_b, %zero : tile<16x16xf32>, tile<16x16xf32>, tile<16x16xf32>",
+               "%bi = constant <i32: 0> : tile<16x16xi32>\n    %acc = mmaf %tile_a, %bi, %zero : tile<16x16xf32>, tile<16x16xi32>, tile<16x16xf32>")
     refuses(proc() = discard parseTileIr(text).getEntry("gemm").runTilePipeline(threads = 4),
             "mmaf", "gemm")
   block: # a 2-d view indexed with one block coordinate

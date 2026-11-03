@@ -196,9 +196,6 @@ proc resolveViews*(entry: Entry): Table[string, ViewInfo] =
         raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " does not match its tensor_view operand %" & viewName)
       if inner.pvTile.len != tv.resultTypes[0].viewShape.len:
         raise refuse(entry.name, "make_partition_view", "%" & op.results[0] & " partitions a " & $tv.resultTypes[0].viewShape.len & "-d tensor_view with a " & $inner.pvTile.len & "-d tile")
-      if tv.dynShape.len != tv.resultTypes[0].viewShape.len or
-          tv.dynStrides.len != tv.resultTypes[0].viewShape.len:
-        raise refuse(entry.name, "make_tensor_view %" & tv.results[0], "lists " & $tv.dynShape.len & " shape and " & $tv.dynStrides.len & " stride entries for a " & $tv.resultTypes[0].viewShape.len & "-d tensor_view")
       result[op.results[0]] = ViewInfo(
         base: tv.operands[0],
         shapeEntries: tv.dynShape,
@@ -322,6 +319,15 @@ proc checkMmaf(entry: Entry, op: Op, layouts: Table[string, TileValueInfo]) =
       raise refuse(entry.name, "mmaf", "operand %" & operand & " is not a tile value with a layout assignment")
     if layouts[operand].tileShape != shape:
       raise refuse(entry.name, "mmaf", "operand %" & operand & " has shape " & $layouts[operand].tileShape & ", the gemm subset requires tile<" & $shape[0] & "x" & $shape[1] & ">")
+    if layouts[operand].elem != eF32:
+      raise refuse(entry.name, "mmaf", "operand %" & operand & " requires f32 tile elements")
+
+proc checkF32Operands(entry: Entry, op: Op, layouts: Table[string, TileValueInfo]) =
+  ## Refuses a tile operand whose element type is not f32, scalars carry no
+  ## layout assignment and are skipped.
+  for operand in op.operands:
+    if operand in layouts and layouts[operand].elem != eF32:
+      raise refuse(entry.name, opSpelling(op.kind), "operand %" & operand & " requires f32 tile elements")
 
 proc lowerToProgram*(entry: Entry, views: Table[string, ViewInfo], layouts: Table[string, TileValueInfo]): Program =
   ## Pass 3 (lowering): Tile IR ops to executable ProgramOps.
@@ -379,10 +385,12 @@ proc lowerToProgram*(entry: Entry, views: Table[string, ViewInfo], layouts: Tabl
                                  constValue: op.constValue, constElem: op.constElem,
                                  constInfo: layouts[op.results[0]])
     of okAddf:
+      entry.checkF32Operands(op, layouts)
       result.ops.add ProgramOp(kind: pgBinary, results: op.results,
                                binKind: bkAddf, binLhs: op.operands[0],
                                binRhs: op.operands[1], binInfo: layouts[op.results[0]])
     of okMulf:
+      entry.checkF32Operands(op, layouts)
       result.ops.add ProgramOp(kind: pgBinary, results: op.results,
                                binKind: bkMulf, binLhs: op.operands[0],
                                binRhs: op.operands[1], binInfo: layouts[op.results[0]])
