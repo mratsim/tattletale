@@ -132,6 +132,20 @@ const CudaReserved* = [
   "__global__", "__device__", "__shared__", "__constant__",
 ].toHashSet()
 
+const CReserved* = [
+  # C11 keywords
+  "alignas", "alignof", "auto", "bool", "break", "case", "char", "complex",
+  "const", "continue", "default", "do", "double", "else", "enum", "extern",
+  "float", "for", "goto", "if", "imaginary", "inline", "int", "long",
+  "register", "restrict", "return", "short", "signed", "sizeof", "static",
+  "struct", "switch", "typedef", "union", "unsigned", "void", "volatile",
+  "while",
+  # type names and literals the C printer emits, stdint/stdbool vocabulary
+  "int8_t", "int16_t", "int32_t", "int64_t",
+  "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+  "true", "false", "NULL",
+].toHashSet()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
@@ -143,7 +157,7 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
   ## - `passName`: the registry key, one registration per target
   ## - `reserved`: the target's reserved words, one of `MetalReserved`,
   ##   `GlslReserved`, `OpenclReserved`, `WgslReserved`, `HlslReserved`,
-  ##   `CudaReserved`
+  ##   `CudaReserved`, `CReserved`
   ## - `doubleUnderscorePrefix`: the prefix every `__`-prefixed name gains,
   ##   "" for targets without a reserved double-underscore head (WGSL: `wgsl_`)
   reg.register(passName, pkTransform,
@@ -161,6 +175,35 @@ func makeSafeIdent(name: string, reserved: HashSet[string], doubleUnderscorePref
   if doubleUnderscorePrefix.len > 0 and safe.startsWith("__"):
     safe = doubleUnderscorePrefix & safe
   result = safe
+
+func uniqueSafeName(safe: string, used: var HashSet[string]): string =
+  ## Appends `_1`, `_2`, ... to `safe` until no declaration of the proc uses the candidate, then records it in `used`.
+  ##
+  ## The rename pass applies this to every renamed identifier of one proc:
+  ##
+  ## - no two declarations of that proc share an identifier in the emitted C
+  ## - a shared identifier redefines the first declaration at C compile time or silently shadows it
+  var candidate = safe
+  var suffix = 0
+  while candidate in used:
+    inc suffix
+    candidate = safe & "_" & $suffix
+  used.incl(candidate)
+  result = candidate
+
+proc collectLocalNames(ss: seq[CirStmt], used: var HashSet[string]) =
+  ## Every local name declared in the statement tree, nested branches included.
+  for s in ss:
+    case s.kind
+    of sVar:
+      used.incl(s.name)
+    of sIte:
+      collectLocalNames(s.thenBody, used)
+      collectLocalNames(s.elseBody, used)
+    of sWhile:
+      collectLocalNames(s.whileBody, used)
+    else:
+      discard
 
 proc renameFieldAccesses(e: CirExpr, fieldRenames, symRenames: Table[string, string]) =
   ## Expressions are refs, so the rename applies to the shared node.
@@ -240,11 +283,18 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
       fn.name = safeFn
   for fn in m.procs:
     var symRenames = fnRenames
+    # every safe name avoids the names the proc already declares,
+    # params and locals share one scope in the emitted C
+    var usedNames: HashSet[string]
+    for p in fn.params:
+      usedNames.incl(p.name)
+    collectLocalNames(fn.body, usedNames)
     for p in mitems(fn.params):
       let safe = makeSafeIdent(p.name, reserved, doubleUnderscorePrefix)
       if safe != p.name:
-        symRenames[p.name] = safe
-        p.name = safe
+        let unique = uniqueSafeName(safe, usedNames)
+        symRenames[p.name] = unique
+        p.name = unique
     # declarations rename first: the body walk reads the maps that they feed
     var decls: seq[tuple[name: string, safe: string]]
     for s in fn.body.mitems:
@@ -252,8 +302,9 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
       of sVar:
         let safe = makeSafeIdent(s.name, reserved, doubleUnderscorePrefix)
         if safe != s.name:
-          decls.add((s.name, safe))
-          s.name = safe
+          let unique = uniqueSafeName(safe, usedNames)
+          decls.add((s.name, unique))
+          s.name = unique
       else:
         discard
     for d in decls:

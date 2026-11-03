@@ -27,6 +27,8 @@ proc codegen*(m: CirModule, B: static CodegenKind, flavor: static HlslFlavor = f
   ##   any other backend refuses a non-default flavor
   when B == cgSpirv:
     {.error: "codegen: cgSpirv prints through codegenSpirvShader".}
+  when B == cgCpu:
+    {.error: "codegen: cgCpu prints through the cpu launch emitters".}
   when B == cgHlsl:
     lang_hlsl.codegen(m, flavor)
   else:
@@ -40,6 +42,7 @@ proc codegen*(m: CirModule, B: static CodegenKind, flavor: static HlslFlavor = f
     of cgMetal: lang_msl.codegen(m)
     of cgHlsl: lang_hlsl.codegen(m, flavor)
     of cgSpirv: ""
+    of cgCpu: ""
 
 proc codegenSpirvShader*(m: CirModule): seq[uint32] =
   lang_spirv_shader.codegen(m)

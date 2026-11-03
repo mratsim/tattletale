@@ -7,19 +7,20 @@
 
 ## Curated public surface of crucible.
 ##
-## | Section       | Symbols                                                                                                               |
-## | ------------- | --------------------------------------------------------------------------------------------------------------------- |
-## | Engines       | `newEngine`, `CodegenKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                         |
-## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                            |
-## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
-## | Geometry      | `Dim3`, `dim3`                                                                                                        |
-## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                         |
+## | Section       | Symbols                                                                                                                              |
+## | ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+## | Engines       | `newEngine`, `CodegenKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                                        |
+## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                                           |
+## | Launch sugar  | `launchKernel`, `launchDeviceFn`, `launchCpuFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
+## | Geometry      | `Dim3`, `dim3`                                                                                                                       |
+## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                                        |
 
 import
   ./codegen/gpu_compiler,
   ./runtime/engines/engines_api,
   ./runtime/launch/launch_kernel,
-  ./runtime/launch/launch_device_fn
+  ./runtime/launch/launch_device_fn,
+  ./runtime/launch/launch_cpu_fn
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Engines
@@ -29,6 +30,7 @@ export engines_api
 
 export launch_kernel.launchKernel
 export launch_device_fn.launchDeviceFn
+export launch_cpu_fn.launchCpuFn
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Launch sugar

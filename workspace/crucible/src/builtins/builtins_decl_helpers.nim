@@ -128,16 +128,20 @@ macro convBuiltin*(body: untyped) =
 ## - the same bit width has different C type names on different hosts:
 ##   64-bit `long` on LP64 hosts, 32-bit on LLP64 hosts
 ## - each backend declares its own names
-const ScalarCellAxis*: array[15, tuple[tok: string, kind: CirTypeKind, width: int]] = [
+const ScalarCellAxis*: array[17, tuple[tok: string, kind: CirTypeKind, width: int]] = [
   ("void", ctVoid, 0), ("bool", ctBool, 0), ("string", ctString, 0),
   ("i8", ctInt, 8), ("i16", ctInt, 16), ("i32", ctInt, 32), ("i64", ctInt, 64),
+  ("iword", ctInt, -1),
   ("u8", ctUint, 8), ("u16", ctUint, 16), ("u32", ctUint, 32), ("u64", ctUint, 64),
+  ("uword", ctUint, -1),
   ("f16", ctFloat, 16), ("bf16", ctBf16, 16), ("f32", ctFloat, 32), ("f64", ctFloat, 64)]
   ## (kind, width) cells with the DSL token naming each cell.
   ## Every scalar-name table and vector element list keys its entries to this axis.
   ##
   ## - widths name different C types on different hosts, 64-bit `long`
   ##   on LP64 hosts against 32-bit on LLP64 hosts
+  ## - width -1 is the machine word: Nim's `int`/`uint` carry no bit width
+  ##   before the host ABI fixes one
   ## - each target declares its own names, one cell never inherits another
   ##   target's name
 

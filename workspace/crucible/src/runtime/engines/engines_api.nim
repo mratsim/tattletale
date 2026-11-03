@@ -13,6 +13,7 @@ import workspace/crucible/src/runtime/engines/opencl_api
 import workspace/crucible/src/runtime/engines/vulkan_api
 import workspace/crucible/src/runtime/engines/webgpu_api
 import workspace/crucible/src/runtime/engines/metal_api
+import workspace/crucible/src/runtime/engines/cpu_api
 
 type
   HwEngine* = concept engine, type E
@@ -30,6 +31,7 @@ type
     runOpenCL
     runVulkan
     runMetal
+    runCpu
 
 proc newEngine*(runtime: static Runtime): auto {.inline.} =
   when runtime == runCuda:
@@ -42,6 +44,8 @@ proc newEngine*(runtime: static Runtime): auto {.inline.} =
     newWebgpuEngine()
   elif runtime == runMetal:
     newMetalEngine()
+  elif runtime == runCpu:
+    newCpuEngine()
   else:
     {.error: "newEngine: unknown Runtime".}
 
@@ -57,5 +61,9 @@ export vulkan_api.newVulkanEngine,   vulkan_api.ingest,     vulkan_api.getArtifa
        vulkan_api.allocDevice, vulkan_api.copyToDeviceFromHost, vulkan_api.copyToHostFromDevice
 export webgpu_api.newWebgpuEngine,   webgpu_api.ingest,   webgpu_api.getArtifact,  webgpu_api.deviceName,
        webgpu_api.allocDevice, webgpu_api.copyToDeviceFromHost, webgpu_api.copyToHostFromDevice
-export metal_api.newMetalEngine, metal_api.ingest,  metal_api.getArtifact, metal_api.deviceName,
-       metal_api.allocDevice, metal_api.copyToDeviceFromHost, metal_api.copyToHostFromDevice
+when defined(macosx):
+  export metal_api.newMetalEngine, metal_api.ingest,  metal_api.getArtifact, metal_api.deviceName,
+         metal_api.allocDevice, metal_api.copyToDeviceFromHost, metal_api.copyToHostFromDevice
+
+# CPU engine exemption from the HwEngine concept, contract in cpu_api.nim
+export cpu_api.CpuEngine, cpu_api.newCpuEngine, cpu_api.destroyCpuEngine

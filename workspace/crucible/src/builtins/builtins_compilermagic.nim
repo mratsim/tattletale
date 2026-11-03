@@ -15,6 +15,7 @@ type CompileTarget* = enum
   ctWebGPU
   ctHlsl
   ctSpirvShader
+  ctCpu       # launchCpuFn's target, there is no `cpu:` standalone block
 
 var crucibleCompileTarget* {.compileTime.}: CompileTarget = ctNone
   # ctNone until a DSL wrapper records its target.

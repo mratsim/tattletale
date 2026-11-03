@@ -211,30 +211,33 @@ proc getVectorName*(rule: VectorRule, names: ScalarNames, t: CirType): string =
         return e.prefix & $t.vN & "<" & getScalarName(names, t.vElem) & ">"
   return ""
 
-proc getLeafTypeName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
+proc getTypeName*(names: ScalarNames, rule: VectorRule, t: CirType, structTag = "", structSuffix = ""): string =
   case t.kind
   of ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16, ctString:
     result = getScalarName(names, t)
   of ctVector:
     result = getVectorName(rule, names, t)
   of ctStruct:
-    result = t.name
+    result = structTag & t.name & structSuffix
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
-proc getFullTypeName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
+proc getFullTypeName*(names: ScalarNames, rule: VectorRule, t: CirType, structTag = "", structSuffix = ""): string =
   if t.kind in {ctPtr, ctAptr}:
-    return getFullTypeName(names, rule, t.pElem) & "*"
-  return getLeafTypeName(names, rule, t)
+    return getFullTypeName(names, rule, t.pElem, structTag, structSuffix) & "*"
+  return getTypeName(names, rule, t, structTag, structSuffix)
 
-proc printCDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirType, ident: string, allowEmptyIdent: bool): string =
+proc printCDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirType, ident: string,
+    allowEmptyIdent: bool, structTag = "", structSuffix = ""): string =
   ## Declaration text of `t` with `ident` appended in the C declarator form:
   ## the array dimensions move behind the identifier and nest into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
   ##
   ## - `allowEmptyIdent` permits no identifier, return types and casts use it
+  ## - `structTag`/`structSuffix` prefix and suffix the `ctStruct` leaf name,
+  ##   through the pointer recursion (`struct S suffix*`)
   ## - the printer refuses an array without an identifier with the `<target: array needs an identifier>` text
-  ## - a scalar leaf absent from the scalar names yields an empty type name,
+  ## - a scalar kind absent from the scalar names yields an empty type name,
   ##   the target compiler rejects the malformed declaration
   if t.kind == ctArray:
     if ident.len == 0 and not allowEmptyIdent:
@@ -242,15 +245,15 @@ proc printCDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirTyp
   if t.kind in {ctPtr, ctAptr} and t.pElem.kind == ctArray:
     # array dimensions bind behind the identifier, one pointer star inside the parenthesized declarator
     return printCDecl(names, rule, target, t.pElem, "(" & '*' & ident & ")",
-      allowEmptyIdent)
+      allowEmptyIdent, structTag, structSuffix)
   if t.kind == ctArray:
     if t.aElem.kind == ctArray:
       # a pointer declarator is already parenthesized (`(*ident)`), one more parenthesized layer would print `((*ident))`
       let declarator = if ident.startsWith('('): ident else: "(" & ident & ")"
       return printCDecl(names, rule, target, t.aElem, declarator & "[" & $t.aN & "]",
-        allowEmptyIdent)
-    return getFullTypeName(names, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
-  result = getFullTypeName(names, rule, t)
+        allowEmptyIdent, structTag, structSuffix)
+    return getFullTypeName(names, rule, t.aElem, structTag, structSuffix) & ' ' & ident & '[' & $t.aN & ']'
+  result = getFullTypeName(names, rule, t, structTag, structSuffix)
   if ident.len > 0:
     result.add ' ' & ident
 
@@ -562,7 +565,7 @@ proc printTargetExpr*(ctx: var auto, e: CirExpr): string =
     if builtinTxt.len > 0:
       return builtinTxt
     let calleeName =
-      if e.callee.kind == eSym: e.callee.name
+      if e.callee.kind == eSym: ctx.getSymbolText(e.callee)
       else: ctx.printExpr(e.callee)
     return calleeName & "(" & args.join(", ") & ")"
   else:
@@ -631,10 +634,28 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   of eSym, eDot, eCast, eConv, eSizeof, eOconstr, eAconstr, eCall:
     return ctx.printTargetExpr(e)
 
+proc printRet*(ctx: var auto, s: CirStmt, pad: string): string =
+  ## Return statement in the shared form: `return <expr>;` or `return;` without a value.
+  mixin printExpr
+  if s.retVal != nil:
+    pad & "return " & ctx.printExpr(s.retVal) & ";"
+  else:
+    pad & "return;"
+
+proc printDiscard*(ctx: var auto, s: CirStmt, pad: string): string =
+  ## Discard statement in the shared form.
+  ##
+  ## Contract:
+  ##
+  ## - the value expression drops, a valued discard's side effects vanish
+  ## - a target whose discards keep their side effects overrides the default
+  ""
+
 proc printStmt(ctx: var auto, s: CirStmt): string =
   ## Prints one structured statement.
   ##
-  ## Shared variants emit here: `sIte`, `sRet`, `sDiscard`, `sEmit`.
+  ## Shared variants emit here: `sIte`, `sEmit`. `sRet` and `sDiscard`
+  ## print through `printRet` and `printDiscard`.
   ## A loop prints through `printWhileText` off `printStmtList`.
   ## Per-target policy resolves at instantiation through the printer's own procs:
   ##
@@ -643,7 +664,7 @@ proc printStmt(ctx: var auto, s: CirStmt): string =
   ## - `printCall`: barrier intrinsics and builtin call vocabulary
   ## - `printAsm`: inline assembly form, refusal text or raw splice
   mixin printStmts, printExpr, printVar, printAsgn, printCall, printAsm,
-        printIteElse, printEmitOperand
+        printIteElse, printEmitOperand, printRet, printDiscard
   if ctx.failing():
     return ""
   let pad = spaces(ctx.indent * 2)
@@ -666,12 +687,9 @@ proc printStmt(ctx: var auto, s: CirStmt): string =
   of sWhile:
     result = ""
   of sRet:
-    if s.retVal != nil:
-      result = pad & "return " & ctx.printExpr(s.retVal) & ";"
-    else:
-      result = pad & "return;"
+    result = ctx.printRet(s, pad)
   of sDiscard:
-    result = ""
+    result = ctx.printDiscard(s, pad)
   of sEmit:
     # `{.emit.}` raw source: verbatim text spliced with the operand text,
     # no terminator appended as the text supplies its own terminators
@@ -723,6 +741,7 @@ proc printVar*(ctx: var auto, s: CirStmt): string =
 
 proc printAsgn*(ctx: var auto, s: CirStmt): string =
   ## One assignment in the direct form, refusing pointer rebinds per the target knobs.
+  mixin printExpr
   let pad = spaces(ctx.indent * 2)
   if ctx.emit.noPointerRebind.len > 0 and s.lhs.kind == eSym and
       s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
@@ -739,10 +758,11 @@ proc getStmtBuiltinText*(ctx: var auto, s: CirStmt, pad: string, args: seq[strin
 
 proc printCall*(ctx: var auto, s: CirStmt): string =
   ## One call statement in the target statement-position form.
-  mixin printExpr, getStmtBuiltinText, printCallArgTexts, getAtomicCallText
+  mixin printExpr, getStmtBuiltinText, printCallArgTexts, getAtomicCallText,
+        getSymbolText
   let pad = spaces(ctx.indent * 2)
   let calleeName =
-    if s.callCallee.kind == eSym: s.callCallee.name
+    if s.callCallee.kind == eSym: ctx.getSymbolText(s.callCallee)
     else: ctx.printExpr(s.callCallee)
   let args = ctx.printCallArgTexts(s.callCallee, s.callArgs)
   if s.callCallee.kind == eSym and s.callCallee.synchroBuiltin != cbkNone:
@@ -886,11 +906,17 @@ proc printSig*(ctx: var auto, fn: CirProc): string =
   result = ctx.emitComputePrefix(fn) & ctx.emitTypeName(fn.ret) & ' ' & name &
     '(' & params.join(", ") & ")"
 
+proc structDeclName*(ctx: var auto, t: CirType): string =
+  ## Header name of one struct declaration. A target that renames structs
+  ## per launch site overrides the default.
+  t.name
+
 proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
     emitted: var HashSet[string], name: string, outp: var string,
     shape: static ModuleShape) =
   ## One struct declaration into `outp`, member structs first, deduplicated by name.
-  mixin emitStructField
+  ## Member structs collect through pointer, array and scalar-named fields.
+  mixin emitStructField, structDeclName
   if name in emitted:
     return
   let t = byName.getOrDefault(name, nil)
@@ -898,16 +924,17 @@ proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
     return
   emitted.incl name
   for f in t.fields:
-    if f.typ.kind == ctStruct:
-      ctx.printStructDecl(byName, emitted, f.typ.name, outp, shape)
-    elif f.typ.kind == ctArray and f.typ.aElem.kind == ctStruct:
-      ctx.printStructDecl(byName, emitted, f.typ.aElem.name, outp, shape)
+    var ft = f.typ
+    while ft != nil and ft.kind in {ctPtr, ctAptr, ctArray}:
+      ft = if ft.kind == ctArray: ft.aElem else: ft.pElem
+    if ft != nil and ft.kind == ctStruct:
+      ctx.printStructDecl(byName, emitted, ft.name, outp, shape)
   if ctx.failing():
     return
   if shape.structTypedef:
     outp.add "typedef struct {\n"
   else:
-    outp.add "struct " & name & " {\n"
+    outp.add "struct " & ctx.structDeclName(t) & " {\n"
   var members = 0
   for f in t.fields:
     let fieldTxt = ctx.emitStructField(t, f)
@@ -922,17 +949,32 @@ proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
   else:
     outp.add shape.structClose & "\n\n"
 
+proc seedStructType(t: CirType, byName: var Table[string, CirType]) =
+  ## Adds the struct behind a proc parameter or return type to `byName`, through pointers and arrays.
+  var t = t
+  while t != nil and t.kind in {ctPtr, ctAptr, ctArray}:
+    t = if t.kind == ctArray: t.aElem else: t.pElem
+  if t != nil and t.kind == ctStruct:
+    byName[t.name] = t
+
 proc printStructs*(ctx: var auto, m: CirModule, shape: static ModuleShape): string =
   ## Struct declarations of the module, "" once the walk refused.
+  ##
+  ## Collection covers:
+  ##
+  ## - the declared types of `m.types`
+  ## - struct types that appear only as proc parameter or return types
   var byName: Table[string, CirType]
   for t in m.types:
     if t.kind == ctStruct:
       byName[t.name] = t
+  for fn in m.procs:
+    for param in fn.params:
+      seedStructType(param.typ, byName)
+    seedStructType(fn.ret, byName)
   var emitted: HashSet[string]
-  for t in m.types:
-    if t.kind != ctStruct:
-      continue
-    ctx.printStructDecl(byName, emitted, t.name, result, shape)
+  for name, t in byName.pairs:
+    ctx.printStructDecl(byName, emitted, name, result, shape)
 
 proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   ## One device function or kernel, "" once the walk refused.

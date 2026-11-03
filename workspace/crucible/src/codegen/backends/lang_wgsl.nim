@@ -103,7 +103,7 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 
 proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
-  ## Returns the WGSL name of a non-array leaf type, "" when the caller
+  ## Returns the WGSL name of a non-array type, "" when the caller
   ## builds the type name.
   ##
   ## 64-bit leaves refuse: their device features exist but the vendored

@@ -94,6 +94,9 @@ macro bridge(engine: HwEngine, lang: static string, node: untyped): untyped =
     if lang != "spirv":
       error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
     result = webgpuCg.newCall(node)
+  elif sameType(t, bindSym"CpuEngine"):
+    error("launchDeviceFn: the CpuEngine launches through launchCpuFn," &
+      " launchDeviceFn has no cpu backend")
   else:
     error("launchDeviceFn: engine type " & t.repr & " has no backend codegen")
 

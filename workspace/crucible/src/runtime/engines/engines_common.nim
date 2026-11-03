@@ -54,9 +54,12 @@ proc freeDeviceImpl(h: WGPUBuffer) {.inline.} =
   if not h.isNil:
     wgpuBufferRelease(h)
 
-proc freeDeviceImpl(h: objc.ID) {.inline.} =
-  if not objc.isNil(h):
-    objc.release(h)
+when defined(macosx):
+  # objc.ID device handles only exist on Metal and objc_abi's release is macOS-only,
+  # Linux builds of the engines layer fail to compile this overload without the guard
+  proc freeDeviceImpl(h: objc.ID) {.inline.} =
+    if not objc.isNil(h):
+      objc.release(h)
 
 type
   DeviceMem*[H, T] = object

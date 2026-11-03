@@ -5,7 +5,6 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <threads.h>
 
 #include "crossthread/backoff.h"
 #include "crossthread/scoped_barriers.h"
@@ -13,6 +12,7 @@
 #include "crossthread/tasks_flowvars.h"
 #include "instrumentation.h"
 #include "primitives/barriers.h"
+#include "primitives/threads.h"
 
 /* Sentinel values */
 #define TPC_ROOT_TASK ((tpc_task*)0xEFFACED0ull)
@@ -152,7 +152,7 @@ struct tpc_threadpool {
     /* -- align: 64 */
     _Alignas(64) int32_t numThreads;                /* N regular workers */
     tpc_taskqueue* workerQueues;                    /* size N */
-    thrd_t* workers;                                /* size N */
+    tpc_thread_t* workers;                          /* size N */
     struct tpc_worker_signal* workerSignals;        /* size N */
     tpc_threadpool_args* workerArgs;
 };
