@@ -7,7 +7,7 @@
 
 ## Embedded fixtures executed on MoltenVK: the second backend runs the Metal fixtures
 ##
-## Claim under test: the Metal path's bridge GpuAst compiles unchanged on a second backend, zero tattletile lowering added.
+## Claim under test: the Metal path's bridge CIRv2 module compiles unchanged on a second backend, zero tattletile lowering added.
 ##
 ## The Vulkan engine ingests the raw `embedKernel(backendKind = gbSpirv)` words.
 ## The launches match the Metal tests: same grids, same inputs, bitwise (int32 view) checks:
@@ -18,7 +18,7 @@
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
-##     --nimcache:nimcache/b7 --outdir:build/b7 workspace/tattletile/tests/test_embed_spirv_vulkan.nim
+##     --nimcache:nimcache/tattletile --outdir:build/tattletile workspace/tattletile/tests/test_embed_spirv_vulkan.nim
 
 import workspace/crucible
 import workspace/tattletile/tattletile

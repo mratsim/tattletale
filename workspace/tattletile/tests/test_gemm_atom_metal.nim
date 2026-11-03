@@ -27,6 +27,9 @@ import workspace/tattletile/tattletile
 const GemmAtomMsl = compileTileIrToMsl("../fixtures/gemm.tileir".parseTileIrFile,
                                        "gemm", threads = 32)
 
+const GemmSpirvFallback = embedKernel("../fixtures/gemm.tileir", "gemm",
+                                      threads = 32, backendKind = gbSpirv)
+
 static:
   doAssert "simdgroup_multiply_accumulate(sd, sa, sb, sd);" in GemmAtomMsl,
     "the 32-thread compile lowers the mmaf to the simdgroup atom"
@@ -138,5 +141,33 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   echo "[OK] gemm hardware mma on Metal: bitwise-exact (int32 view) over ",
     M * M, " outputs"
 
+proc runSpirvFallback() =
+  ## Abstract FMA fallback check on the SPIR-V backend:
+  ## no simdgroup intrinsics exist there, the same fixture at 32 threads lowers
+  ## to the per-thread FMA loop and stays bitwise-exact
+  var engine = newEngine(runVulkan)
+  engine.ingest(GemmSpirvFallback.words)
+
+  let aDev = engine.allocDevice(float32, M * K)
+  let bDev = engine.allocDevice(float32, M * K)
+  let cDev = engine.allocDevice(float32, M * M)
+  engine.copyToDeviceFromHost(aDev, addr AHost[0], M * K)
+  engine.copyToDeviceFromHost(bDev, addr BHost[0], M * K)
+
+  var args = (aDev, bDev)
+  engine.launchKernel(GemmSpirvFallback.name, cDev, args) do:
+    grid = (1, 1)
+    blk = (32, 1)
+
+  var got: array[M * M, float32]
+  engine.copyToHostFromDevice(addr got[0], cDev, M * M)
+  for i in 0 ..< M * M:
+    doAssert f32Bits(got[i]) == Expected[i],
+      "gemm spirv fallback element " & $i & ": got bits " & $f32Bits(got[i]) &
+      " want bits " & $Expected[i]
+  echo "[OK] gemm abstract mma fallback on MoltenVK: bitwise-exact over ",
+    M * M, " outputs"
+
 when isMainModule:
   runTest()
+  runSpirvFallback()

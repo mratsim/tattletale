@@ -10,7 +10,7 @@
 ## Lowering contract:
 ## - register tiles become per-thread scalar statements, fused into one loop over the thread-value slots
 ## - views become pointer-index arithmetic through the frozen view layout, the thread id enters through the canonical MSL coordinate builtins
-## - the abstract `mmaf` lowers to a per-thread FMA loop over the accumulator coordinates each thread owns
+## - the abstract `mmaf` lowers to a per-thread FMA loop over the accumulator coordinates that each thread owns
 ## - an atom-selected mmaf lowers to the per-thread fragment program with one simdgroup mma per cell triple
 ##
 ## Bridge mechanics:
@@ -26,7 +26,6 @@ import std/tables
 
 import workspace/crucible/src/codegen/backends/backends_api
 import workspace/crucible/src/codegen/ir/cirv2_build
-import workspace/crucible/src/codegen/frontend/nim_to_crucible
 import workspace/crucible/src/codegen/passes/pass_registry
 import workspace/crucible/src/codegen/passes/passes_normalizations
 import workspace/crucible/src/codegen/passes/passes_lowering
@@ -691,8 +690,9 @@ proc lowerTileToCirv2*(prog: Program, atomMma = false): CirModule =
 
   var body = prelude
   if atomMma and prog.atomMmas.len > 0:
-    # atom-selected mmafs lower through the fragment program here, every other shape keeps the abstract FMA fallback below
     if prog.atomMmas.len != 1:
+      # atom-selected mmafs lower through the fragment program here, every other
+      # shape keeps the abstract FMA fallback below
       raise refuseBridge(prog.name, "mma atom selection", "the atom fragment program lowers exactly one mmaf per kernel, got " & $prog.atomMmas.len & " selections")
     var mmaOp, storeOp, accOp: ProgramOp
     var sawAcc = false
@@ -778,8 +778,8 @@ proc compileTileIrToSpirv*(m: TileIrModule, entryName: string, threads: int): se
   ## - parse (caller), tile passes, CIRv2 bridge: the shared bridge output
   ## - crucible's SPIR-V pipeline: the Metal-path CIRv2 module compiles unchanged
   ##
-  ## No tattletile lowering beyond the shared bridge, the layering dividend:
-  ## the same CIRv2 module the Metal path produces feeds crucible's SPIR-V backend.
+  ## No tattletile lowering beyond the shared bridge: the same CIRv2 module
+  ## the Metal path produces feeds crucible's SPIR-V backend.
   ## The abstract mma fallback lowers every shape, the atom fragment program is
   ## Metal-only (the simdgroup intrinsics have no SPIR-V form).
   ##

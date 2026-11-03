@@ -7,7 +7,7 @@
 
 ## Embedded fixtures to SPIR-V words: the layering dividend, structure-checked
 ##
-## Claim under test: the same bridge GpuAst the Metal path produces feeds
+## Claim under test: the same bridge CIRv2 module the Metal path produces feeds
 ## crucible's SPIR-V backend unchanged, zero tattletile lowering added.
 ##
 ## Both fixtures embed through `embedKernel(backendKind = gbSpirv)`, the words pass `spirv-val --target-env vulkan1.4`:
@@ -19,7 +19,7 @@
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
-##     --nimcache:nimcache/b7 --outdir:build/tattletile workspace/tattletile/tests/test_embed_spirv_words.nim
+##     --nimcache:nimcache/tattletile --outdir:build/tattletile workspace/tattletile/tests/test_embed_spirv_words.nim
 
 import std/[os, osproc, strutils]
 
