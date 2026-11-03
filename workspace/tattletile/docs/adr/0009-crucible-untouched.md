@@ -41,8 +41,8 @@ Every tattletile need was satisfiable from the outside:
 
 The source tree recorded two re-export gaps against the then-umbrella
 `crucible_internal_compiler.nim` (`backends_api` and `passes_lowering_spirv` absent from it).
-Both are moot post-#170: the umbrella is gone, the compile entries are macro bodies over
-the pass modules, and no re-export contract remains to bypass.
+Both are moot post-#170: the compile entries are macro bodies that import the pass modules
+and the SPIR-V lowering bundle lives inside the shared lowering module.
 
 Further crucible-side observations, recorded and not acted on:
 

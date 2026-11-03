@@ -43,5 +43,5 @@ Ceramic and crucible stay untouched.
 - Nim constraints shaped the helpers: declaration before use, no capture of mutable locals in nested procs
 - subtle ports are banked in the module docs: complement sorts stride leaves in colex order with stable ties
 
-composition's shape-1 branch evaluates at the stride itself, `coalesceZ` checks linearity at two points.
+The composition's shape-1 branch evaluates at the stride itself, `coalesceZ` checks linearity at two points.
 Out-of-scope ops refuse loudly or are absent, a missing op is a loud error, never a wrong number.

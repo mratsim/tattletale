@@ -57,6 +57,6 @@ Real kernels additionally use six constructs the hand fixtures never show, all n
   libclang
 - build with `CARGO_TARGET_DIR` outside the reference tree
 
-Full record: `.scratchspace/20261025-1258-C15D04-cutile-fixture-capture`,
+Full record: the C15D04 fixture-capture scratchspace operation (outside the repository tree),
 where `CAPTURE.md` has commands and kernel sources and `DIVERGENCE.md` compares
 hand-encoded fixtures against compiler-emitted text.

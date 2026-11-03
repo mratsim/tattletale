@@ -22,7 +22,7 @@ The result runs on every crucible backend unchanged.
 ## Rules
 
 - No nimble. Modules import crucible and ceramic directly by relative path.
-- The supported Tile IR subset grows per tracing bullet.
+- The supported Tile IR subset grows per fixture family, each family checked by a captured fixture.
 - Constructs outside the subset refuse loudly, naming the construct and the kernel.
 - Crucible and ceramic stay untouched. Any change there requires an ADR stating why and what else was considered.
 
@@ -31,4 +31,4 @@ The result runs on every crucible backend unchanged.
 - Fixtures are cutile-rs captures plus hand-encoded minimal snippets.
 - Reference trees are read-only, no git operations inside.
 - Trees live in `_references_layout_tile_algebra/` plus tileiras in `_references_research/nvopen-tools/`.
-- Op records live in `.scratchspace/20261103-2310-C17D04-tattletile-port/`.
+- Op records live in the operation's scratchspace directory outside the repository tree.

@@ -61,7 +61,7 @@ compile inside the binary that ships it.
 | Tile IR datatypes, subset parser, printer | parse round-trip fixed point on the hand-encoded and compiler-captured fixtures, 25 refusal cases | `tests/test_tile_ir_parse.nim`, `tests/test_tile_ir_refusals.nim`, `tests/test_tile_ir_captured.nim` |
 | Tile passes | reference layouts, ownership `{t, t+4}`, program op order, token chain, refusals including the unlowered capture-only ops | `tests/test_tile_passes.nim` |
 | Layout algebra | byte-exact structural dumps and ownership tables vs the python oracle, 4 checks | `tests/test_layout_algebra_conformance.nim` |
-| Swizzle concretization | F2 arithmetic, `SW_3_3_3` bank-conflict-free property, functor equivalence | `tests/test_layout_swizzle.nim` |
+| Swizzle concretization | F2 arithmetic, the `SW3_3_3` bank-conflict-free property, functor equivalence | `tests/test_layout_swizzle.nim` |
 | Mma atom layer | Apple 8x8x8 fragment layouts bit-linear over all 32 lanes, selection fallback | `tests/test_mma_atom.nim` |
 | axpy end to end on Metal | bitwise-exact (int32 view) over 16 elements, 2 blocks x 4 threads | `tests/test_axpy_metal.nim` (+ `tests/test_axpy_msl.nim` golden) |
 | GEMM end to end on Metal | bitwise-exact over 256 outputs, abstract FMA at 4 threads | `tests/test_gemm_metal.nim` (+ `tests/test_gemm_msl.nim` golden) |
@@ -107,9 +107,10 @@ The full demo host embedding both fixtures and running them on Metal is
 | Layout algebra | byte-exact vs the python oracle: ownership tables, tiler promotion, composition strides, cosize | `tests/test_layout_algebra_conformance.nim` |
 | Atom density | 60 scheduled ops per thread per public mmaf (32 fragment loads + 8 simdgroup mma + 8 stores + 8 accumulator inits + 4 prelude), 25 CIRv2 nodes (22 statements + 3 loops), 16x16x16 tile | `tests/test_gemm_atom_metal.nim` |
 
-The density number is the tattletile baseline against tileiras. The closed assembler hides
-about 30 scheduled ops per public op on comparable shapes, so this unoptimized first cut
-costs 2x that. The hoisting pass (fragment reload elimination) is recorded as future work.
+The density number is the tattletile baseline against NVIDIA's closed tileiras assembler:
+on comparable shapes it schedules about half these ops per public mmaf by hoisting fragment
+loads out of the repetition loops, so this unoptimized first cut costs about 2x.
+The hoisting pass (fragment reload elimination) is recorded as future work.
 
 ## Scope and limits
 
