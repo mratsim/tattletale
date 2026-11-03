@@ -20,6 +20,7 @@ import cirv2_pretty
 ##
 ## Dev-only: `CirModule.verifyIR`, defaulted from `-d:CIR_verify`.
 ## Read-only: returns the first violation, rendered with the offending proc, never rewrites.
+## The refusal renders through `cirv2_pretty`, a deliberate import: one string, first violation wins.
 ##
 ## Checks, per module:
 ## - proc names unique: printers emit names verbatim, the runtime caches binaries on kernel names
@@ -35,7 +36,7 @@ import cirv2_pretty
 ## Scope contract:
 ## - every symbol resolves to a param, a `sVar` declared earlier in the body, a module global, or another module proc
 ## - a `sVar` joins scope after its initializer checks, so a declaration never resolves its own initializer
-## - declarations inside a branch or loop body scope to that body, matching the braces every printer emits
+## - declarations inside a branch or loop body scope to that body, matching the braces C-family printers emit
 ##
 ## Exempt from the scope walk: `{.builtin.}`-marked symbols and `IntrinsicCallees` below, each backed by the pass that emits it.
 ##
@@ -44,12 +45,18 @@ import cirv2_pretty
 ## - forward/backward pair ABI: the autodiff refusals own it
 ## - enum dispatch coverage: the compiler guarantees it
 ## - any canonical form: none is imposed
+##
+## Out of scope by construction:
+## - pass-precise blame: the verifier sees only the final pass boundary, bisect the registry to name the introducing pass
+## - analysis-record checks (features, call graph, ref blocks): verifyModule sees IR shape only,
+##   such checks belong after the analyses
 
 const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
   ## Each entry is emitted by a named pass and provided by the target languages:
   ##
   ## - `__builtin_memcpy`: the decomposeArrayAssign pass, C targets provide the intrinsic
-  ## - `max`, `min`: the foldMaxMinToBuiltins pass, WGSL and HLSL provide the native builtins
+  ## - `max`, `min`: the foldMaxMinToBuiltins pass emits them as callees.
+  ##   Consumers: WGSL/HLSL printers, SPIR-V encoder, and the CUDA math mapping.
 
 proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string]): string =
   ## Returns "" while every symbol in `e` resolves, else the violation.
