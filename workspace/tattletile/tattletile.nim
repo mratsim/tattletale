@@ -12,6 +12,8 @@
 ## - `parseTileIrFile`, Nim VM ingestion through staticRead
 ## - `compileTileIrToMsl` and `compileTileIrToSpirv`, compile-time compilation,
 ##   one shared CIRv2 bridge, the backend is crucible's pass composition
+## - `embedKernel`, the product entry, Tile IR file to a const kernel object
+##   in the Nim VM, the backend parameter picks the artifact
 
 import
   src/tattletile/layout_algebra,
@@ -20,6 +22,7 @@ import
   src/tattletile/tile_ir_parser,
   src/tattletile/tile_ir_printer,
   src/tattletile/tile_passes,
-  src/tattletile/low_tile
+  src/tattletile/low_tile,
+  src/tattletile/embed
 
-export layout_algebra, mma_atom, tile_ir, tile_ir_parser, tile_ir_printer, tile_passes, low_tile
+export layout_algebra, mma_atom, tile_ir, tile_ir_parser, tile_ir_printer, tile_passes, low_tile, embed
