@@ -74,6 +74,7 @@ proc testGenericProcContext =
 proc testAllModesCollapsed =
   # An all-1 shape iterates exactly once at flat index 0
   var t: tile(float32, (1, 1))
+  t.data[0] = -1.0'f32
   forEach i, var d in t:
     d = float32(i)
   doAssert t.data[0] == 0.0'f32
