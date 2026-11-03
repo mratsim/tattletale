@@ -5,8 +5,11 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## C printer for the CPU backend's emitted-C launch, both launch modes.
-## The serial launch reproduces the pooled launch output bitwise.
+# ############################################################
+#
+#            C printer
+#
+# ############################################################
 
 import std/macros
 import std/strutils
@@ -237,8 +240,9 @@ proc printBuiltinRefusalC(e: CirExpr, ctx: EmitCtxC): string =
     else: "unknown builtins"
   cRefuse(ctx, what & " are not supported in v0")
 
-proc calleeRefC(name: string, ctx: EmitCtxC): string =
-  ## A `__builtin_` name is a compiler builtin the array-assign pass emits, verbatim.
+proc calleeSymbolC(name: string, ctx: EmitCtxC): string =
+  ## C symbol for a callee: kernel-printed callees append the launch-site suffix,
+  ## `__builtin_` compiler builtins pass verbatim, the decomposeArrayAssign pass emits them.
   if name.startsWith("__builtin_"):
     name
   else:
@@ -383,7 +387,7 @@ proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
       discard printBuiltinRefusalC(callee, ctx)
     var calleeRef = printExpr(callee, ctx)
     if callee.kind == eSym and not callee.builtin:
-      calleeRef = calleeRefC(callee.name, ctx)
+      calleeRef = calleeSymbolC(callee.name, ctx)
     var args: seq[string]
     for a in e.args:
       # C converts implicitly at call sites, CIRv2 conversions print
@@ -490,7 +494,7 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
     of sCall:
       var calleeRef = printExpr(s.callCallee, ctx)
       if s.callCallee.kind == eSym and not s.callCallee.builtin:
-        calleeRef = calleeRefC(s.callCallee.name, ctx)
+        calleeRef = calleeSymbolC(s.callCallee.name, ctx)
       var args: seq[string]
       for a in s.callArgs:
         args.add(printExpr(a, ctx))
