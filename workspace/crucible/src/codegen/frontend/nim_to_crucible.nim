@@ -203,7 +203,7 @@ proc builtinSymExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   if ctx.resolver.err.len > 0:
     return nil
   result = sym(name, typ, builtin = true)
-  result.coordBuiltin = coordBuiltinKindOf(builtinKindPayload(n))
+  result.coordBuiltin = getBuiltinKind(CirCoordBuiltinKind, builtinKindPayload(n))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Call translation
@@ -375,10 +375,10 @@ proc harvestedCallee(ctx: var FrontendCtx, calleeSym: NimNode): CirExpr =
   result = sym(calleeName, entry.fnType, calleeBuiltin)
   if calleeBuiltin:
     let payload = builtinKindPayload(calleeSym)
-    result.synchroBuiltin = synchroBuiltinKindOf(payload)
-    result.reductionBuiltin = reductionBuiltinKindOf(payload)
-    result.shuffleBuiltin = shuffleBuiltinKindOf(payload)
-    result.atomicsBuiltin = atomicsBuiltinKindOf(payload)
+    result.synchroBuiltin = getBuiltinKind(CirSynchroBuiltinKind, payload)
+    result.reductionBuiltin = getBuiltinKind(CirReductionBuiltinKind, payload)
+    result.shuffleBuiltin = getBuiltinKind(CirShuffleBuiltinKind, payload)
+    result.atomicsBuiltin = getBuiltinKind(CirAtomicsBuiltinKind, payload)
   return result
 
 func arithExpr(op: string, t: CirType, x, y: CirExpr): CirExpr =

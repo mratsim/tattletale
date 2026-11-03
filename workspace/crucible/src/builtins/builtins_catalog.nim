@@ -49,61 +49,24 @@ type
     cbkNone
     cbkAtomicFetchAdd
 
-macro builtinKindLadder*(E: typedesc, fname: static string): untyped =
-  ## Generates `proc fname*(payload: NimNode): E {.compileTime.}`.
+proc getBuiltinKind*[E: enum](_: typedesc[E], payload: NimNode): E {.compileTime.} =
+  ## Enum member for a `{.builtin: <member>.}` payload.
   ##
   ## Args:
-  ## - `E`: the family enum, its members enumerate the ladder
-  ## - `fname`: the exported name of the generated ladder proc
+  ## - `payload`: the pragma argument read back through `getImpl`, or the nil
+  ##   literal for a `{.builtin.}` pragma without payload
   ##
   ## Returns:
-  ## - an `eqIdent` ladder over the members of `E`
-  ## - the first member of `E` (the none value) when `payload` matches
-  ##   none of them
+  ## - the member whose name matches the payload
+  ## - `low(E)`, the none value, on a nil payload or an unknown name
   ##
-  ## `payload`:
-  ## - the argument of a `{.builtin: <member>.}` pragma, read back
-  ##   through `getImpl`
-  ## - the nil literal for a `{.builtin.}` without a payload
-  ##
-  ## The ladder enumerates the enum members, so the payload identifiers
+  ## Member names come from the enum itself (`$v`), so the payload identifiers
   ## and the enum members cannot drift apart.
-  let enumTy = E.getImpl[2]
-  if enumTy.kind != nnkEnumTy:
-    error("builtinKindLadder expects an enum type, found " & $enumTy.kind)
-  var members: seq[string]
-  for i in 1 ..< enumTy.len:
-    let m = enumTy[i]
-    case m.kind
-    of nnkIdent, nnkSym:
-      members.add m.strVal
-    of nnkEnumFieldDef:
-      members.add m[0].strVal
-    else:
-      error("unexpected enum member shape " & $m.kind)
-  var body = newTree(nnkIfStmt)
-  for name in members:
-    body.add newTree(nnkElifBranch,
-      newCall(bindSym"eqIdent", ident"payload", newLit(name)),
-      newTree(nnkStmtList, newAssignment(ident"result", ident(name))))
-  body.add newTree(nnkElse,
-    newTree(nnkStmtList, newAssignment(ident"result", ident(members[0]))))
-  result = newTree(nnkProcDef,
-    postfix(ident(fname), "*"),
-    newEmptyNode(),
-    newEmptyNode(),
-    newTree(nnkFormalParams,
-      ident(E.strVal),
-      newTree(nnkIdentDefs, ident"payload", ident"NimNode", newEmptyNode())),
-    newTree(nnkPragma, ident"compileTime"),
-    newEmptyNode(),
-    newTree(nnkStmtList, body))
-
-builtinKindLadder(CirCoordBuiltinKind, "coordBuiltinKindOf")
-builtinKindLadder(CirSynchroBuiltinKind, "synchroBuiltinKindOf")
-builtinKindLadder(CirReductionBuiltinKind, "reductionBuiltinKindOf")
-builtinKindLadder(CirShuffleBuiltinKind, "shuffleBuiltinKindOf")
-builtinKindLadder(CirAtomicsBuiltinKind, "atomicsBuiltinKindOf")
+  if payload.kind in {nnkIdent, nnkSym}:
+    for v in low(E) .. high(E):
+      if payload.strVal == $v:
+        return v
+  low(E)
 
 # ═══════════════════════════════════════════════════════════
 # 0. Canonical thread coordinates
