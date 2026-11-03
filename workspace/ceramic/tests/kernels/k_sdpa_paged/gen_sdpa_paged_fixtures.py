@@ -22,7 +22,9 @@ entries with no causal mask, kv head = h div (Hq div Nkv).
 
 A sliding window narrows the attended range to [cache_seqlens[s] - window_size, cache_seqlens[s]).
 
-Pool entries beyond an attended range default to finite random values, the nan_tail option writes NaN there, checked against the output.
+Pool entries beyond an attended range default to finite random values.
+The nan_tail option overwrites them with NaN to prove the kernel reads
+only attended entries.
 
 Run:  uv run --with numpy python3 gen_sdpa_paged_fixtures.py [name ...]
       (default: all fixtures)
@@ -172,7 +174,7 @@ FIXTURES = [
     dict(name="paged_decode_small_f16", dtype="float16", num_seqs=2, Hq=2, Hkv=1,
          Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
          num_pages=6, cache_seqlens=[17, 64], seed=102),
-    # NaN covers every pool entry no sequence attends: unassigned pages 3..5 and seq 0's tail entries 17..31, the bounded loads must zero-pad them
+    # NaN fills every uncovered slot of the served layer: unassigned pages 3..5, seq 0's tail entries 17..31, bounded loads zero-pad them
     dict(name="paged_nan_tail_decode_f16", dtype="float16", num_seqs=2, Hq=2, Hkv=1,
          Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
          num_pages=6, cache_seqlens=[17, 64], seed=104, nan_tail=True),

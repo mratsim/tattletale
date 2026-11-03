@@ -30,8 +30,8 @@
 ##   - the caller guarantees maxPages * PageSize >= cache_seqlen >= 1
 ##
 ## Masking: entries at or beyond cache_seqlens[seq] read -inf on the scores,
-## never on the inputs. Page tails beyond the covered length hold garbage
-## that the mask excludes.
+## never on the inputs. Loads bound by cache_seqlens[seq] per kv tile zero-pad
+## every uncovered entry through tile.load, so page tails never enter the math.
 
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
@@ -131,8 +131,8 @@ proc paged_sdpa_decode*(
               inPage * kvPoolV.stride[2] + kvHead * kvPoolV.stride[3]
       nkvK = kvPoolK.shape[3] * Dk
       nkvV = kvPoolV.shape[3] * Dv
-      covered = min(nt, seqlen - kvPos)  # view stops at the covered length, tile.load zero-pads past it
-      kvCols = Dk
+      covered = min(nt, seqlen - kvPos)  # bounds the K/V views so tile.load zero-pads every uncovered entry
+      kvCols = Dk                        # runtime ints only: mixed static/runtime shape tuples break make_layout (crd2idx)
       kvDv = Dv
       vK = make_view(kvPoolK.data +% kBase,
                      make_layout((covered, kvCols), (nkvK, 1)))
