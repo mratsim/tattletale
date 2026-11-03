@@ -77,7 +77,7 @@ proc binSpelling(k: BinaryKind): string =
   of bkAddf: "addf"
   of bkMulf: "mulf"
 
-proc refuseBridge(kernel, construct, detail: string): ref SubsetError =
+proc refuseBridge*(kernel, construct, detail: string): ref SubsetError =
   subsetError("kernel '" & kernel & "': construct '" & construct &
     "' is outside the supported tattletile subset: " & detail)
 
@@ -103,11 +103,13 @@ proc storeTargetOrder(prog: Program): seq[string] =
   ## Entry argument names in launch order: the store target's pointer and shape
   ## argument names first, the remaining entry arguments in entry order.
   ## The launch binds the output buffer to slot 0, hence the store target first.
+  ## One entry per unique name, a second store of the same view adds no slot.
   for op in prog.ops:
     if op.kind == pgStoreTile:
-      result.add op.storeViewInfo.base
+      if op.storeViewInfo.base notin result:
+        result.add op.storeViewInfo.base
       for e in op.storeViewInfo.shapeEntries:
-        if e.isSsa:
+        if e.isSsa and e.name notin result:
           result.add e.name
 
 proc entryArgCirType(prog: Program, arg: EntryArg): CirType =
@@ -139,6 +141,8 @@ proc lowerParams(prog: Program, env: Table[string, CirExpr]): seq[CirParam] =
   ## - SubsetError via entryArgCirType for any other argument type
   ## - SubsetError for a store target name bound nowhere in the kernel
   let first = prog.storeTargetOrder()
+  if first.len == 0:
+    raise refuseBridge(prog.name, "store_view_tko", "the kernel has no store, the launch order contract starts at the store target")
   for name in first:
     if name notin env:
       raise refuseBridge(prog.name, "store_view_tko", "the store target %" & name & " is not bound in the kernel")
@@ -343,6 +347,9 @@ proc lowerMma(prog: Program, op: ProgramOp, loadMap: Table[string, LoadView], en
     raise refuseBridge(prog.name, "mmaf %" & op.results[0], "accumulator %" & op.mmaAcc & " is not bound in the kernel")
   let aView = loadMap[op.mmaA]
   let bView = loadMap[op.mmaB]
+  for st in prog.ops:
+    if st.kind == pgStoreTile and st.storeViewInfo.base in [aView.base, bView.base]:
+      raise refuseBridge(prog.name, "store_view_tko %" & st.storeValue, "writes %" & st.storeViewInfo.base & ", an mmaf operand of %" & op.results[0] & " read inside the k loop")
   let elem = cirElemType(op.mmaInfo.elem)
   let zero = if op.mmaInfo.elem == eF32: fltLit(0.0, tFloat(32)) else: intLit(0, tInt(32))
   let sumName = "tt_mma_sum_" & op.results[0]
@@ -687,6 +694,7 @@ proc lowerTileToCirv2*(prog: Program, atomMma = false): CirModule =
       raise refuseBridge(prog.name, "mma atom selection", "the atom fragment program lowers exactly one mmaf per kernel, got " & $prog.atomMmas.len & " selections")
     var mmaOp, storeOp, accOp: ProgramOp
     var sawAcc = false
+    var sawStore = false
     var defined: seq[string]
       ## SSA result names seen so far, enforcing the fused path's
       ## redefinition refusal on the atom path: a repeated accumulator
@@ -705,7 +713,11 @@ proc lowerTileToCirv2*(prog: Program, atomMma = false): CirModule =
         defined.add name
       case op.kind
       of pgMma: mmaOp = op
-      of pgStoreTile: storeOp = op
+      of pgStoreTile:
+        if sawStore:
+          raise refuseBridge(prog.name, "store_view_tko %" & op.storeValue, "the atom fragment program lowers one store, %" & storeOp.storeView & " is already the store target")
+        storeOp = op
+        sawStore = true
       of pgConstTile:
         accOp = op
         sawAcc = true

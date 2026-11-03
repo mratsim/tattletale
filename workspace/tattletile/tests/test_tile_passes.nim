@@ -242,6 +242,10 @@ proc checkNewOpRefusals() =
     let m = parseTileIr(entryModule(" %c = constant <f32: 1.0> : tile<8xf32> return"))
     refuses(proc() = discard m.getEntry("mykernel").runTilePipeline(threads = 4),
             "return", "mykernel")
+  block: # a kernel with no store, the launch order contract starts at the store target
+    let m = parseTileIr(entryModule(" %c = constant <f32: 1.0> : tile<8xf32> yield"))
+    refuses(proc() = discard m.getEntry("mykernel").runTilePipeline(threads = 4).lowerTileToCirv2(),
+            "store_view_tko", "mykernel")
 
 proc checkGemmRefusals() =
   block: # an mmaf whose accumulator operand has a different tile shape
@@ -261,6 +265,27 @@ proc checkGemmRefusals() =
       .replace("%pv_c[%bid_x, %bid_y]", "%pv_c[%bid_x]")
     refuses(proc() = discard parseTileIr(text).getEntry("gemm").runTilePipeline(threads = 4),
             "store_view_tko", "gemm")
+  block: # a store that writes an mmaf operand's memory base
+    let text = readFile(FixturesDir / "gemm.tileir")
+      .replace("%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token",
+               "%tok_a = store_view_tko weak %tile_a, %pv_a[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token" &
+               "\n    %tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_a : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token")
+    refuses(proc() = discard parseTileIr(text).getEntry("gemm").runTilePipeline(threads = 4).lowerTileToCirv2(),
+            "store_view_tko %tile_a", "gemm")
+
+proc checkStoreOrderDedup() =
+  ## Two stores of the same view produce one kernel parameter per unique name.
+  ## The launch binds one buffer to one slot
+  let text = readFile(FixturesDir / "gemm.tileir")
+    .replace("%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token",
+             "%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token" &
+             "\n    %tok_out2 = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_out : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token")
+  let m = parseTileIr(text).getEntry("gemm").runTilePipeline(threads = 4).lowerTileToCirv2()
+  var cParams = 0
+  for p in m.procs[0].params:
+    if p.name == "ptr_c":
+      inc cParams
+  doAssert cParams == 1, "one ptr_c parameter, got " & $cParams
 
 
 proc checkShapeRefusals() =
@@ -343,5 +368,6 @@ when isMainModule:
   checkNewOpRefusals()
   checkRefusals()
   checkGemmRefusals()
+  checkStoreOrderDedup()
   checkShapeRefusals()
   echo "[OK] tile passes: axpy and gemm resolve to the reference layouts, ownership and program ops"

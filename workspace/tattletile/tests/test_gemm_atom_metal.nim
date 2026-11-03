@@ -17,6 +17,8 @@
 ##     workspace/tattletile/tests/test_gemm_atom_metal.nim
 
 import std/strutils
+import std/os
+
 import workspace/crucible/src/codegen/ir/cirv2_lang
 import workspace/crucible
 import workspace/tattletile/tattletile
@@ -40,6 +42,7 @@ static:
 
 proc gemmEntry(): Entry =
   parseTileIrFile("../fixtures/gemm.tileir").getEntry("gemm")
+
 
 proc countNodes(s: CirStmt, statements, loops: var int) =
   ## Recursive node count over the CIRv2 the atom lowering emits:
@@ -106,6 +109,41 @@ const Expected = static:
       e[i * M + j] = cast[uint32](float32(s))
   e
 
+const GemmFixtureText = staticRead(currentSourcePath().parentDir / "../fixtures/gemm.tileir")
+  ## Gemm fixture text, re-read for the second-store and accumulator variants
+
+const GemmAtomAccMsl = compileTileIrToMsl(GemmFixtureText
+  .replace("%zero = constant <f32: 0.0> : tile<16x16xf32>",
+           "%zero = constant <f32: 1.0> : tile<16x16xf32>").parseTileIr,
+  "gemm", threads = 32)
+  ## Gemm with the accumulator splat at 1.0: accInit is live in the expected bits.
+  ## A lowering that replaced accInit with zero fails here.
+
+const ExpectedAcc = static:
+  ## Reference bits with the 1.0 accumulator: C = f32(f64(A) @ f64(B) + 1.0)
+  var e: array[M * M, uint32]
+  for i in 0 ..< M:
+    for j in 0 ..< M:
+      var s = 1.0
+      for kk in 0 ..< K:
+        s += float64(AHost[i * K + kk]) * float64(BHost[kk * M + j])
+      e[i * M + j] = cast[uint32](float32(s))
+  e
+
+proc checkAtomSingleStore() =
+  ## A second store_view_tko of the mma result refuses on the atom path:
+  ## the fragment program lowers one store, a silent last-store-wins would
+  ## drop the earlier store's writes
+  let text = GemmFixtureText
+    .replace("%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token",
+             "%tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token" &
+             "\n    %tok_out2 = store_view_tko weak %acc, %pv_a[%bid_x, %bid_y] token = %tok_out : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token")
+  try:
+    discard parseTileIr(text).getEntry("gemm").runTilePipeline(threads = 32).lowerTileToCirv2(atomMma = true)
+    doAssert false, "expected a second-store refusal"
+  except SubsetError as e:
+    doAssert "one store" in e.msg, e.msg
+
 proc f32Bits(v: float32): uint32 =
   cast[uint32](v)
 
@@ -138,6 +176,34 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   echo "[OK] gemm hardware mma on Metal: bitwise-exact (int32 view) over ",
     M * M, " outputs"
 
+proc runAccInitTest() =
+  ## Nonzero accumulator: the fragment program seeds each accumulator cell
+  ## with the splat constant, the expected bits carry the accInit term
+  doAssert "tt_d0 = 1.0f" in GemmAtomAccMsl,
+    "the accumulator init carries the 1.0 splat"
+  var engine = newEngine(runMetal)
+  engine.ingest(GemmAtomAccMsl)
+
+  let aDev = engine.allocDevice(float32, M * K)
+  let bDev = engine.allocDevice(float32, M * K)
+  let cDev = engine.allocDevice(float32, M * M)
+  engine.copyToDeviceFromHost(aDev, addr AHost[0], M * K)
+  engine.copyToDeviceFromHost(bDev, addr BHost[0], M * K)
+
+  var args = (aDev, bDev)
+  engine.launchKernel("gemm", cDev, args) do:
+    grid = (1, 1)
+    blk = (32, 1)
+
+  var got: array[M * M, float32]
+  engine.copyToHostFromDevice(addr got[0], cDev, M * M)
+  for i in 0 ..< M * M:
+    doAssert f32Bits(got[i]) == ExpectedAcc[i],
+      "gemm atom acc element " & $i & ": got bits " & $f32Bits(got[i]) &
+      " want bits " & $ExpectedAcc[i]
+  echo "[OK] gemm atom nonzero accumulator on Metal: bitwise-exact over ",
+    M * M, " outputs"
+
 proc runSpirvFallback() =
   ## Abstract FMA fallback check on the SPIR-V backend:
   ## no simdgroup intrinsics exist there, the same fixture at 32 threads lowers
@@ -167,4 +233,6 @@ proc runSpirvFallback() =
 
 when isMainModule:
   runTest()
+  runAccInitTest()
   runSpirvFallback()
+  checkAtomSingleStore()

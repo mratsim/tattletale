@@ -46,9 +46,12 @@ type GpuBackend* = enum
 type EmbeddedKernel* = object
   ## A kernel embedded at compile time, ready for a crucible engine.
   ## - `name`: the entry name, passed to `engine.launchKernel`
+  ## - `threadCount`: the compiled thread count, `checkLaunchThreads`
+  ##   compares the launch block against it before dispatch
   ## - `msl`: the Metal artifact, populated for gbMetal
   ## - `words`: the SPIR-V artifact, populated for gbSpirv
   name*: string
+  threadCount*: int
   case backend*: GpuBackend
   of gbMetal:
     msl*: string
@@ -56,6 +59,17 @@ type EmbeddedKernel* = object
   of gbSpirv:
     words*: seq[uint32]
       ## Binary SPIR-V words, passed to `engine.ingest`
+
+proc checkLaunchThreads*(k: EmbeddedKernel, blkX: SomeInteger) =
+  ## Refuses a launch block whose x size differs from the compiled thread count.
+  ## `embedKernel` bakes `threads` into the coordinate formula and the SPIR-V words:
+  ## a smaller block leaves the upper tile coordinates unwritten, a larger one
+  ## reads elements no thread owns.
+  ##
+  ## Raises:
+  ## - SubsetError naming the kernel and both thread counts
+  if int(blkX) != k.threadCount:
+    raise refuseBridge(k.name, "launch block", "x size " & $blkX & " does not match the compiled thread count " & $k.threadCount)
 
 template embedKernel*(path: static string, entry: static string, threads: static int,
                       backendKind: static GpuBackend = gbMetal): EmbeddedKernel =
@@ -77,6 +91,7 @@ template embedKernel*(path: static string, entry: static string, threads: static
   when backendKind == gbMetal:
     EmbeddedKernel(
       name: entry,
+      threadCount: threads,
       backend: gbMetal,
       msl: compileTileIrToMsl(parseTileIrFile(
         if path.isAbsolute: path
@@ -84,6 +99,7 @@ template embedKernel*(path: static string, entry: static string, threads: static
   else:
     EmbeddedKernel(
       name: entry,
+      threadCount: threads,
       backend: gbSpirv,
       words: compileTileIrToSpirv(parseTileIrFile(
         if path.isAbsolute: path
