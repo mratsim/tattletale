@@ -12,9 +12,9 @@
 # attended_seqlen = seqlen - windowLo, windowLo = max(0, seqlen - windowSize).
 # Apply the same byte and flop model on the MLX side (bench_paged_sdpa_decode_mlx.py).
 #
-# Truth cases need an L2-busting K+V working set: once the K+V bytes fit L2,
-# iteration loops measure cache bandwidth, which exceeds the 540 GB/s M4 Max
-# DRAM peak. A line whose computed bandwidth exceeds the peak prints INVALID.
+# Truth cases need an L2-busting K+V working set, so in-cache iteration
+# loops measure cache bandwidth above the 540 GB/s M4 Max DRAM peak.
+# A computed bandwidth over the peak prints INVALID.
 #
 # Run:
 #   nim c -r -d:release \
