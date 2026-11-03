@@ -148,7 +148,7 @@ proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
   of ctStruct:
     result = "struct " & t.name & ctx.suffix
   of ctArray:
-    # element type only, the declaration sites append the dimensions
+    # element type only, the declaration sites append every dimension
     # (typeDeclC, struct fields, data-struct members)
     result = emitTypeC(t.aElem, ctx)
   of ctString:
@@ -158,13 +158,21 @@ proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
   of ctProc:
     cRefuse(ctx, "function pointers are not supported in v0")
 
+proc splitArrayDimsC(t: CirType): tuple[elem: CirType, dims: string] =
+  ## Array type split for a declaration site: element type plus stacked
+  ## C declarator dimensions.
+  ##
+  ##   array[3, array[4, float32]]  ->  elem `float32`, dims `[3][4]`
+  ##
+  ## A non-array type returns itself with empty dims.
+  result.elem = t
+  while result.elem.kind == ctArray:
+    result.dims &= "[" & $result.elem.aN & "]"
+    result.elem = result.elem.aElem
+
 proc typeDeclC(t: CirType, name: string, ctx: EmitCtxC): string =
-  ## Type text of one declaration: arrays print their dimensions at the declaration site
-  ## as `T name[N]`, mirroring the struct-field and data-struct member sites.
-  if t.kind == ctArray:
-    emitTypeC(t.aElem, ctx) & " " & name & "[" & $t.aN & "]"
-  else:
-    emitTypeC(t, ctx) & " " & name
+  let (elem, dims) = splitArrayDimsC(t)
+  emitTypeC(elem, ctx) & " " & name & dims
 
 proc collectStructs(t: CirType, seen: var seq[CirType]) =
   ## Post-order collection of every nominal struct type reachable
@@ -205,12 +213,8 @@ proc emitStructDefsC(m: CirModule, ctx: EmitCtxC): string =
   for t in moduleStructs(m):
     var def = "struct " & t.name & ctx.suffix & " {\n"
     for f in t.fields:
-      case f.typ.kind
-      of ctArray:
-        def.add("    " & emitTypeC(f.typ.aElem, ctx) & " " & f.name &
-                "[" & $f.typ.aN & "];\n")
-      else:
-        def.add("    " & emitTypeC(f.typ, ctx) & " " & f.name & ";\n")
+      let (elem, dims) = splitArrayDimsC(f.typ)
+      def.add("    " & emitTypeC(elem, ctx) & " " & f.name & dims & ";\n")
     def.add("};")
     lines.add(def)
   if lines.len > 0:
@@ -395,10 +399,8 @@ proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
   of eAddr:
     result = "&" & printExpr(e.addrOperand, ctx)
   of eSizeof:
-    if e.ofType.kind == ctArray:
-      result = "sizeof(" & emitTypeC(e.ofType.aElem, ctx) & "[" & $e.ofType.aN & "])"
-    else:
-      result = "sizeof(" & emitTypeC(e.ofType, ctx) & ")"
+    let (elem, dims) = splitArrayDimsC(e.ofType)
+    result = "sizeof(" & emitTypeC(elem, ctx) & dims & ")"
   of eOconstr:
     let t = e.ocType
     if t.kind != ctStruct:
@@ -716,13 +718,9 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   members.add("int32_t crucibleWgsPerTask;")
   var memberNames: seq[string]
   for p in runtimeParams:
-    case p.typ.kind
-    of ctArray:
-      members.add(emitTypeC(p.typ.aElem, EmitCtxC(procName: "module", suffix: suffix)) &
-                  " " & p.name & "[" & $p.typ.aN & "];")
-    else:
-      members.add(emitTypeC(p.typ, EmitCtxC(procName: "module", suffix: suffix)) &
-                  " " & p.name & ";")
+    let (elem, dims) = splitArrayDimsC(p.typ)
+    members.add(emitTypeC(elem, EmitCtxC(procName: "module", suffix: suffix)) &
+                " " & p.name & dims & ";")
     memberNames.add(p.name)
   let dataName = "crucibleData" & suffix
   var defs = structDefs
