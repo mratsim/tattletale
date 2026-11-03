@@ -22,6 +22,7 @@ genTargets:
     vector:
       elems i32, u32
       lanes 2, 3, 4
+    math ln 32 "log", ln 64 "log"
 
   target cuda:
     kind unrollDirective "#pragma unroll", braceSameLine true

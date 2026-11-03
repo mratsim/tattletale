@@ -1,0 +1,194 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## setupAutoDiff on Metal: the axpy gradient round trip end to end
+##
+## Test that `engine.setupAutoDiff` launches the axpy pair's kernels and the results match the Nim closed forms exactly:
+##
+## - forward: `dst = alpha * a + b`
+## - primitive backward: caller-owned pre-zeroed buffers, accumulating across launches
+## - convenience backward: gradients allocated and zeroed from the primals' sizes, returned as a named tuple
+## - re-setup smoke: a second `setupAutoDiff` under the same launch names runs the new binary, not a stale pipeline state
+##
+## Run:
+##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
+##     --outdir:build/tests --nimcache:nimcache/tests \
+##     workspace/crucible/tests/autodiff/metal/t_metal_ad_axpy_grad.nim
+
+import workspace/crucible
+
+proc axpy(dst, a, b: ptr UncheckedArray[float32], alpha: float32) {.global, workgroup: (1, 1).} =
+  for i in 0 ..< 8:
+    dst[i] = alpha * a[i] + b[i]
+
+const axpyKernels = cgMetal.bwd_diff(axpy)
+
+type AxpyBuf[DevMem] = object
+  ## Host wrapper of one device buffer plus its length.
+  ## The convenience overload reads that length for its grad allocation.
+  p: DevMem
+  n: int
+
+proc fillSeq[T](n: int, value: T): seq[T] =
+  result = newSeq[T](n)
+  for i in 0 ..< n:
+    result[i] = value
+
+proc runTest() =   # private: engines are destroyed at return
+  var engine = newEngine(runMetal)
+  let ad = engine.setupAutoDiff(axpyKernels)
+
+  const N = 8
+  let aDev = engine.allocDevice(float32, N)
+  let bDev = engine.allocDevice(float32, N)
+  let outDev = engine.allocDevice(float32, N)
+  var aHost: array[N, float32]
+  var bHost: array[N, float32]
+  for i in 0 ..< N:
+    aHost[i] = float32(i + 1)
+    bHost[i] = float32(100 + i)
+  engine.copyToDeviceFromHost(aDev, addr aHost[0], N)
+  engine.copyToDeviceFromHost(bDev, addr bHost[0], N)
+
+  let alpha = 2.5'f32
+
+  block:   # forward: exact against the closed form
+    ad.forward(outDev, aDev, bDev, alpha)
+    var got: array[N, float32]
+    engine.copyToHostFromDevice(addr got[0], outDev, N)
+    for i in 0 ..< N:
+      let expected = alpha * aHost[i] + bHost[i]
+      doAssert got[i] == expected,
+        "forward: element " & $i & " got " & $got[i] & " want " & $expected
+    echo "[OK] forward exact"
+
+  # backward input: the incoming gradient d_dst
+  let dOutDev = engine.allocDevice(float32, N)
+  var dOutHost: array[N, float32]
+  for i in 0 ..< N:
+    dOutHost[i] = float32(2 + i)
+  engine.copyToDeviceFromHost(dOutDev, addr dOutHost[0], N)
+
+  block:   # primitive backward: caller-owned pre-zeroed buffers, accumulates
+    let dADev = engine.allocDevice(float32, N)
+    let dBDev = engine.allocDevice(float32, N)
+    let dAlphaDev = engine.allocDevice(float32, 1)
+    let zeros = fillSeq(N, 0.0'f32)
+    engine.copyToDeviceFromHost(dADev, addr zeros[0], N)
+    engine.copyToDeviceFromHost(dBDev, addr zeros[0], N)
+    engine.copyToDeviceFromHost(dAlphaDev, addr zeros[0], 1)
+
+    ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
+    var dA: array[N, float32]
+    var dB: array[N, float32]
+    var dAlpha: array[1, float32]
+    engine.copyToHostFromDevice(addr dA[0], dADev, N)
+    engine.copyToHostFromDevice(addr dB[0], dBDev, N)
+    engine.copyToHostFromDevice(addr dAlpha[0], dAlphaDev, 1)
+    var dAlphaWant = 0.0'f32
+    for i in 0 ..< N:
+      doAssert dA[i] == dOutHost[i] * alpha,
+        "d_a: element " & $i & " got " & $dA[i] & " want " & $(dOutHost[i] * alpha)
+      doAssert dB[i] == dOutHost[i],
+        "d_b: element " & $i & " got " & $dB[i] & " want " & $dOutHost[i]
+      dAlphaWant += dOutHost[i] * aHost[i]
+    doAssert dAlpha[0] == dAlphaWant,
+      "d_alpha: got " & $dAlpha[0] & " want " & $dAlphaWant
+
+    # a second launch accumulates into the caller's buffers, scalar gradients included:
+    # reduce-kernel accumulation mirrors the buffer gradients
+    ad.backward(dOutDev, dADev, dBDev, dAlphaDev, outDev, aDev, bDev, alpha)
+    engine.copyToHostFromDevice(addr dA[0], dADev, N)
+    engine.copyToHostFromDevice(addr dB[0], dBDev, N)
+    engine.copyToHostFromDevice(addr dAlpha[0], dAlphaDev, 1)
+    for i in 0 ..< N:
+      doAssert dA[i] == 2.0'f32 * dOutHost[i] * alpha,
+        "d_a accumulate: element " & $i & " got " & $dA[i] &
+        " want " & $(2.0'f32 * dOutHost[i] * alpha)
+      doAssert dB[i] == 2.0'f32 * dOutHost[i],
+        "d_b accumulate: element " & $i & " got " & $dB[i] &
+        " want " & $(2.0'f32 * dOutHost[i])
+    doAssert dAlpha[0] == 2.0'f32 * dAlphaWant,
+      "d_alpha accumulate: got " & $dAlpha[0] & " want " & $(2.0'f32 * dAlphaWant)
+    echo "[OK] primitive backward exact and accumulating"
+
+  block:   # convenience backward: grads allocated from the primals' sizes
+    let (d_a, d_b, d_alpha) = ad.backward(dOutDev, outDev,
+      AxpyBuf[typeof(aDev)](p: aDev, n: N), AxpyBuf[typeof(bDev)](p: bDev, n: N),
+      alpha)
+    var gotA: array[N, float32]
+    var gotB: array[N, float32]
+    var gotAlpha: array[1, float32]
+    engine.copyToHostFromDevice(addr gotA[0], d_a, N)
+    engine.copyToHostFromDevice(addr gotB[0], d_b, N)
+    engine.copyToHostFromDevice(addr gotAlpha[0], d_alpha, 1)
+    var dAlphaWant = 0.0'f32
+    for i in 0 ..< N:
+      doAssert gotA[i] == dOutHost[i] * alpha,
+        "convenience d_a: element " & $i & " got " & $gotA[i] &
+        " want " & $(dOutHost[i] * alpha)
+      doAssert gotB[i] == dOutHost[i],
+        "convenience d_b: element " & $i & " got " & $gotB[i] & " want " & $dOutHost[i]
+      dAlphaWant += dOutHost[i] * aHost[i]
+    doAssert gotAlpha[0] == dAlphaWant,
+      "convenience d_alpha: got " & $gotAlpha[0] & " want " & $dAlphaWant
+    echo "[OK] convenience backward exact, d_alpha a 1-element device buffer"
+
+  block:   # re-setup smoke: same launch names, different math, new values
+    proc scale(dst, a: ptr UncheckedArray[float32], k: float32) {.global, workgroup: (1, 1).} =
+      for i in 0 ..< 4:
+        dst[i] = a[i] * k
+    const p1 = cgMetal.bwd_diff(scale)
+    let ad1 = engine.setupAutoDiff(p1)
+    let aDev = engine.allocDevice(float32, 4)
+    let dstDev = engine.allocDevice(float32, 4)
+    var aHost: array[4, float32] = [1.0'f32, 2.0'f32, 3.0'f32, 4.0'f32]
+    engine.copyToDeviceFromHost(aDev, addr aHost[0], 4)
+    ad1.forward(dstDev, aDev, 2.0'f32)
+    var got: array[4, float32]
+    engine.copyToHostFromDevice(addr got[0], dstDev, 4)
+    for i in 0 ..< 4:
+      doAssert got[i] == aHost[i] * 2.0'f32, "p1 forward wrong at " & $i
+    let dOutDev = engine.allocDevice(float32, 4)
+    var dOutHost: array[4, float32] = [1.0'f32, 1.0'f32, 1.0'f32, 1.0'f32]
+    engine.copyToDeviceFromHost(dOutDev, addr dOutHost[0], 4)
+    let grads1 = ad1.backward(dOutDev, dstDev, AxpyBuf[typeof(aDev)](p: aDev, n: 4), 2.0'f32)
+    var gotA: array[4, float32]
+    engine.copyToHostFromDevice(addr gotA[0], grads1.d_a, 4)
+    for i in 0 ..< 4:
+      doAssert gotA[i] == 2.0'f32, "p1 d_a wrong at " & $i
+    echo "[OK] first setup exact (forward, d_a = 2)"
+
+  block:   # second setup under the same launch names, changed inputs
+    proc scale(dst, a: ptr UncheckedArray[float32], k: float32) {.global, workgroup: (1, 1).} =
+      for i in 0 ..< 4:
+        dst[i] = a[i] + k
+    const p2 = cgMetal.bwd_diff(scale)
+    let ad2 = engine.setupAutoDiff(p2)
+    let aDev = engine.allocDevice(float32, 4)
+    let dstDev = engine.allocDevice(float32, 4)
+    var aHost: array[4, float32] = [1.0'f32, 2.0'f32, 3.0'f32, 4.0'f32]
+    engine.copyToDeviceFromHost(aDev, addr aHost[0], 4)
+    ad2.forward(dstDev, aDev, 10.0'f32)
+    var got: array[4, float32]
+    engine.copyToHostFromDevice(addr got[0], dstDev, 4)
+    for i in 0 ..< 4:
+      doAssert got[i] == aHost[i] + 10.0'f32,
+        "p2 forward wrong at " & $i & " got " & $got[i] &
+        " want " & $(aHost[i] + 10.0'f32) & " (a stale cached pipeline ran)"
+    let dOutDev = engine.allocDevice(float32, 4)
+    var dOutHost: array[4, float32] = [1.0'f32, 1.0'f32, 1.0'f32, 1.0'f32]
+    engine.copyToDeviceFromHost(dOutDev, addr dOutHost[0], 4)
+    let grads2 = ad2.backward(dOutDev, dstDev, AxpyBuf[typeof(aDev)](p: aDev, n: 4), 10.0'f32)
+    var gotA: array[4, float32]
+    engine.copyToHostFromDevice(addr gotA[0], grads2.d_a, 4)
+    for i in 0 ..< 4:
+      doAssert gotA[i] == 1.0'f32, "p2 d_a wrong at " & $i
+    echo "[OK] second setup exact under the same launch names"
+
+when isMainModule:
+  runTest()

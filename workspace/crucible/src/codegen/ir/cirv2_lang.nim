@@ -7,6 +7,7 @@
 
 import std/[macros, hashes, sequtils, sets, strutils, tables]
 import ../../builtins/builtins_catalog
+import ../autodiff_types
 export builtins_catalog
 
 # ############################################################
@@ -383,6 +384,12 @@ type
     ## - valid only if no transform runs after the pass, which runPasses enforces
     ## - the printer emits one `layout(buffer_reference, std430) buffer`
     ##   declaration per entry in order, it never registers a block itself
+    adMetas*: Table[string, AdKernelsMetas]
+    ## Backward-differentiation record: forward kernel name -> the kernel pair's signature metadata.
+    ## The `autodiffBwdDerive` transform writes it from the same walk that built the backward kernel,
+    ## the pair artifact pipeline reads it. A module that no AD transform touched is empty.
+    adBwdKernels*: HashSet[string]
+    ## Names of the backward and reduce kernels `autodiffBwdDerive` generated, a second AD pass never re-derives them.
 
 proc computeCirSizeBytes(t: CirType): int =
   ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
@@ -680,6 +687,39 @@ func isLvalue*(e: CirExpr): bool =
   ## An expression that names storage: a symbol, a dereference, an index,
   ## a pointer index, or a field access. `addr` and assignment take lvalues.
   e.kind in {eSym, eDeref, eAt, ePat, eDot}
+
+func isDiffFloat*(t: CirType): bool =
+  ## True for the 32- and 64-bit float widths, the widths that carry gradients
+  ## in the backward-diff subset.
+  t != nil and t.kind == ctFloat and (t.bits == 32 or t.bits == 64)
+
+func getBufferElemType*(p: CirParam): CirType =
+  ## Element type of a buffer parameter, nil when `p` is not one.
+  ## Buffer parameters are `ptr UncheckedArray[T]` (an `aptr`) or `ptr array[N, T]`,
+  ## a static-shape buffer under the pointer whose elements are read through
+  ## `at(deref p, i)`.
+  case p.typ.kind
+  of ctAptr:
+    result = p.typ.pElem
+  of ctPtr:
+    if p.typ.pElem != nil and p.typ.pElem.kind == ctArray:
+      result = p.typ.pElem.aElem
+  else:
+    discard
+
+func getBufferRoot*(e: CirExpr): CirExpr =
+  ## Buffer symbol at the root of an element access, nil for any other root shape.
+  ##
+  ## Contract:
+  ## - index and deref parents peel to their operands: a `ptr array` parameter
+  ##   reads elements through `at(deref p, i)`.
+  result = e
+  while result != nil and result.kind in {eAt, ePat}:
+    result = if result.kind == eAt: result.atBase else: result.patBase
+  while result != nil and result.kind == eDeref:
+    result = result.derefOperand
+  if result != nil and result.kind != eSym:
+    result = nil
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Emitted-name vocabulary

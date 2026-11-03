@@ -39,7 +39,7 @@ proc getSpaceName(s: AddressSpace): string =
   of caConstant: "constant"
   of caDevice: "device"
 
-proc renderType(t: CirType): string =
+proc renderType*(t: CirType): string =
   ## Leng rendering of one type: `(i +32)`, `(aptr device (f +32))`, `:Name`.
   if t.isNil:
     return "<no-type>"
@@ -63,7 +63,7 @@ proc renderType(t: CirType): string =
       result.add(" " & renderType(p))
     result.add(") " & renderType(t.ret) & ")")
 
-proc renderExpr(e: CirExpr): string =
+proc renderExpr*(e: CirExpr): string =
   ## Leng rendering of one expression.
   if e.isNil:
     return "<no-expr>"

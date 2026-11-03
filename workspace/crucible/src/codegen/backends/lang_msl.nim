@@ -307,6 +307,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
   ## Emits the full MSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(mslWalkPolicy, mslVectorRule, mslEmit, cgMetal)
+  ctx.mathNames = mslMathBuiltinNames
   printModule(ctx, m, getModuleKernels(m), mslModuleShape)
 
 proc codegen*(m: CirModule): string =

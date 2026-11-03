@@ -51,19 +51,7 @@ macro codegenMetal(body: typed): string =
   ## A refusal in the chain is a compile-time error naming the construct.
   var reg = PassRegistry.new()
   registerNormalizationPasses(reg)
-  registerSharedLoweringPasses(reg)
-  # Rename position: before every hoist and explosion. The rename walks types,
-  # procs and proc bodies, never `m.globals`. A declaration hoisted earlier
-  # leaves the rename's reach unrenamed.
-  reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
-  registerDecomposeArrayAssign(reg)
-  registerExplodeStructWithPtrFields(reg)
-  registerSmemInitRewrite(reg)
-  registerMslHoistProgramScopeConstants(reg)
-  registerMslHoistDeviceFnSmem(reg)
-  registerMslRewriteSmemLocals(reg)
-  registerMslThreadCoordinateBuiltins(reg)
-  registerInstantiateAddressSpaceGenerics(reg)
+  registerMetalLoweringPasses(reg)
   registerValidationPostPasses(reg)
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
@@ -147,14 +135,7 @@ macro codegenGLSL(body: typed): string =
   ## error naming the construct.
   var reg = PassRegistry.new()
   registerNormalizationPasses(reg)
-  registerSharedLoweringPasses(reg)
-  reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
-  registerGlslQualifyVarParams(reg)
-  registerSmemInitRewrite(reg)
-  registerGlslHoistProgramScopeLocals(reg)
-  registerInstantiateAddressSpaceGenerics(reg)
-  registerGlslRefBlockPass(reg)
-  registerGlslFeatureScan(reg)
+  registerGlslLoweringPasses(reg)
   registerValidationPostPasses(reg)
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:

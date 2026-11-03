@@ -12,6 +12,12 @@ import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
 import ./pass_helpers
+import ./passes_lowering
+import ./passes_low_reserved
+import ./passes_low_array_assign
+import ./passes_low_pointers
+import ./passes_lowering_cfamily
+import ./passes_low_address_spaces
 
 # ############################################################
 #
@@ -50,6 +56,23 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
     " call sites forward the caller's values",
     run = mslThreadCoordinateBuiltins
   )
+
+func registerMetalLoweringPasses*(reg: var PassRegistry) =
+  ## Pass sequence of a Metal codegen run between the normalization stage and the validation passes.
+  ##
+  ## Contract:
+  ## - the `metal:` macro and the `bwd_diff` artifact pipeline share this pass sequence in registration order
+  ## - the reserved-identifier rename precedes every hoist and explosion so that it walks every declaration the later passes add
+  reg.registerSharedLoweringPasses()
+  reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
+  registerDecomposeArrayAssign(reg)
+  registerExplodeStructWithPtrFields(reg)
+  registerSmemInitRewrite(reg)
+  registerMslHoistProgramScopeConstants(reg)
+  registerMslHoistDeviceFnSmem(reg)
+  registerMslRewriteSmemLocals(reg)
+  registerMslThreadCoordinateBuiltins(reg)
+  registerInstantiateAddressSpaceGenerics(reg)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Smem reference parameters
