@@ -5,40 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## CIRv2 → C printer for the CPU backend's emitted-C launch.
-##
-## Both launch modes print C. The launch macro picks the mode:
-##
-## - pooled, `--threads:on`: text against the threadpool_compute C runtime
-##   (TPC vocabulary), the task plumbing in TPC_DEFINE_PARFOR shape
-## - serial, `--threads:off`: the same file-scope unit minus the task function.
-##   The launch tail calls the iteration function directly over the whole grid, no pool, no spawn, no sync
-##
-## Emission contract:
-##
-## - the kernel body and the iteration function print identically
-##   in both modes. The serial launch reproduces the pooled launch
-##   output bitwise
-## - the launch macro writes the printed text to a generated C translation unit
-##   registered `{.compile.}`. The launch tail emits inline through
-##   `{.emit.}` with `extern` declarations for the functions it calls
-## - the serial unit compiles without the threadpool_compute force-include
-##   that only `--threads:on` activates. The launch assembly prepends the unit's stdint/stdbool includes
-##
-## Layout bridge, the launch copies Nim arguments into the C data struct:
-## - Nim value objects are C-compatible structs, a struct argument
-##   copies by pointer cast, `*(CIRv2 type*)&nimArg`
-## - scalars and pointers assign directly
-## - whole arrays copy through `__builtin_memcpy`, C has no array assignment
-## - CIRv2 materializes Nim `int` as the machine word, the widths match Nim's compilation targets
-##
-## v0 refusals, each a compile-time error naming the construct and the kernel:
-## - vector types and swizzles
-## - threadgroup barriers, simd shuffles, subgroup reductions, atomics
-## - inline asm, `{.emit.}` raw target text, string values, bfloat16 cells
-##
-## OpenArray spans and `var` parameters also refuse: the span split pass
-## decomposes the spans and the CPU surface takes whole values.
+## C printer for the CPU backend's emitted-C launch, both launch modes.
+## The serial launch reproduces the pooled launch output bitwise.
 
 import std/macros
 import std/strutils
