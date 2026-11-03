@@ -36,10 +36,10 @@ else:
 
 const
   ## Tile shape of the bench kernel, measured per dtype on M4 Max:
-  ## f32 peaks at (32, 16), bf16 at (16, 32). The flops formula reads
+  ## f32 peaks at (8, 8), bf16 at (8, 16). The flops formula reads
   ## these consts too, so the kernel and the formula cannot drift apart
-  benchMT = when Elem is float32: 32 else: 16
-  benchNT = when Elem is float32: 16 else: 32
+  benchMT = 8
+  benchNT = when Elem is float32: 8 else: 16
 
 proc sdpaBenchLoop(o, q, k, v: distinct TensorView, scale: float32, Dk, Dv: static int, Causal: static bool, iters: int) =
   ## `iters` attention passes in one launch, idempotent stores

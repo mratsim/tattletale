@@ -1,6 +1,7 @@
 # Run: nim c -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip workspace/ceramic/tests/layout_algebra/t_compose.nim
 
 import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/hardware/h_mma_registry
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_constructors
 
@@ -806,6 +807,42 @@ proc runComposeCoordStrideTests =
     doAssert c === (4, 87)
   echo "  coordinate strides (pycute suite): 27 cases OK"
 
+# ── 1-length tiler mode: coordinate identity ─────────────────
+proc runComposeOneLengthModeTests =
+  const
+    MT = 8
+    KT = 32
+    cellOuter = 8
+    cellLast = 8
+    repOuter = MT div cellOuter
+    repLast = KT div cellLast
+    tileOuter = cellOuter * repOuter
+    atomTileFlat = compose(make_layout((cellOuter, cellLast), (1, tileOuter)),
+                           Apple8x8_AC_Layout)
+    threadMap = make_layout((atomTileFlat.shape, (repOuter, repLast)),
+                            (atomTileFlat.stride, (cellOuter, tileOuter * cellLast)))
+    tileShape = (MT, KT)
+    tvmLayout = compose(make_identity_layout(tileShape), threadMap)
+  static:
+    doAssert threadMap.shape[1][0] === Int[1]()
+
+  let s0 = 64
+  let s1 = 128
+  let src = make_layout((s0, s1), (1, s0))
+
+  let divided = logical_divide(src, tvmLayout)
+  let tiledCrd = make_identity_layout((s0, s1)).logical_divide(tvmLayout)
+
+  doAssert atomTileFlat ===
+    (((2, 2, 2, 2, 2), 2), ((16, 1, 2, 32, 4), 8))
+  doAssert threadMap ===
+    ((((2, 2, 2, 2, 2), 2), (1, 4)), (((16, 1, 2, 32, 4), 8), (8, 64)))
+  doAssert tvmLayout ===
+    ((((2, 2, 2, 2, 2), 2), (1, 4)),
+     (((E(2, 1), E(1, 0), E(2, 0), E(4, 1), E(4, 0)), E(1, 1)),
+      (E(1, 1), E(8, 1))))
+  echo "  1-length tiler mode (coordinate identity): 3 composed goldens OK"
+
 runComposeExactValueTests()
 runComposeFixtureTests()
 runComposeSimpleTests()
@@ -820,5 +857,6 @@ runComposeSymbolZeroTests()
 runComposeSlackTests()
 runComposeSymbolTilerTests()
 runComposeCoordStrideTests()
+runComposeOneLengthModeTests()
 
 echo "ALL TESTS PASSED"

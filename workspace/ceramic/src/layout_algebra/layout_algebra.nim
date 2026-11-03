@@ -403,8 +403,16 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   var nVal = bShape.getTypeOf().getStaticInt()
   if nVal == 1:
     # A' evaluated at one point, evaluation is coalesce-invariant
+    let bStrideTy = bStride.getTypeOf()
+    var coord: NimNode
+    if bStrideTy.isCoordStride():
+      # a coordinate-stride stride's coefficient tuple is its coordinate
+      coord = bStrideTy.getCoordStrideDescriptor().coeffs
+    else:
+      let v = bStrideTy.getStaticInt()
+      coord = if v != DynamicSentinel: newLit(v) else: bStride
     result.add make_layout(IntCT(1),
-      bindSym"crd2idx".newCall(make_layout(aShape, aStride), bStride))
+      bindSym"crd2idx".newCall(make_layout(aShape, aStride), coord))
     return
   let stmts = newStmtList()
   var shapeAst, strideAst: NimNode = nil
