@@ -177,5 +177,35 @@ proc runTest() =
     doAssert "verify: " in err, "expected the verify refusal for a global named like a proc, got: " & err
     doAssert "'k'" in err, "expected the refusal to name the colliding name, got: " & err
 
+  block zeroTransformRegistry:
+    # An analysis-only registry has no transform boundary: builder-produced IR is
+    # final by definition and still verifies.
+    let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("ghost", tInt(32)))])
+    var reg = PassRegistry.new()
+    reg.register("scan", pkAnalysis, "Computes metadata",
+      run = proc(m: CirModule): string = "")
+    let err = runPasses(m, reg)
+    doAssert "verify: " in err, "expected the verify refusal on an analysis-only registry, got: " & err
+    doAssert "ghost" in err and "(proc k (param out" in err, "expected the refusal to name the symbol and render the proc, got: " & err
+
+  block nilStatementRefuses:
+    let m = kernelModule(@[
+      asgnS(sym("out", tPtr(caDevice, tInt(32))), intLit(0, tInt(32))),
+      CirStmt(nil)])
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for a nil statement, got: " & err
+    doAssert "nil statement" in err and "(proc k (param out" in err, "expected the refusal to name the defect and render the proc, got: " & err
+
+  block emptyParamNameRefuses:
+    # checkUniqueNames reports "" for a clean scan, two empty names would otherwise
+    # pass as the clean sentinel.
+    let fn = procD("k", @[param("", tInt(32)), param("", tInt(32))], tVoid(), @[])
+    fn.isKernel = true
+    let m = moduleD("verify_scope", @[], @[fn])
+    m.verifyIR = true
+    let err = runPipeline(m)
+    doAssert "verify: " in err, "expected the verify refusal for an empty parameter name, got: " & err
+    doAssert "empty parameter name" in err and "(proc k" in err, "expected the refusal to name the defect and render the proc, got: " & err
+
 when isMainModule:
   runTest()

@@ -30,6 +30,7 @@ import cirv2_pretty
 ## - param names unique: duplicates emit ill-formed target source
 ## - declarations of one name in one statement list refuse: the printers emit one list into one brace scope
 ## - a body-top-level declaration shadowing a parameter refuses: parameters share the body's scope
+## - a nil statement refuses, malformed input fails fast before the walk dereferences it
 ##
 ## Scope contract:
 ## - every symbol resolves to a param, a `sVar` declared earlier in the body, a module global, or another module proc
@@ -77,6 +78,8 @@ proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames
   ## matching the braces the C-family printers emit, and a use after the body resolves to nothing.
   var declared: HashSet[string]
   for s in ss:
+    if s.isNil:
+      return "nil statement in body"
     case s.kind
     of sVar:
       result = checkScopeExpr(s.init, visible, moduleNames)
@@ -186,6 +189,9 @@ proc verifyModule*(m: CirModule): string =
     var paramNames: seq[string]
     var visible: HashSet[string]
     for p in fn.params:
+      if p.name.len == 0:
+        # checkUniqueNames reports "" for a clean scan, an empty name would pass it
+        return renderProcRefusal(fn, "at " & fn.name & ": empty parameter name")
       paramNames.add p.name
       visible.incl p.name
     result = checkUniqueNames(paramNames)
