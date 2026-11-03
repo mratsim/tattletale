@@ -37,7 +37,11 @@ type PrintCtx = object of WalkCtx
 const wgslVocab = BuiltinVocab(
   reductionText: makeTexts([
     (cbkReduceAdd, "subgroupAdd($1)"),
-    (cbkReduceMax, "subgroupMax($1)")]))
+    (cbkReduceMax, "subgroupMax($1)")]),
+  shuffleText: makeTexts([
+    # shuffle index parameter is `u32`
+    (cbkSimdShuffle, "subgroupShuffle($1, u32($2))"),
+    (cbkSimdShuffleXor, "subgroupShuffleXor($1, u32($2))")]))
 
 const wgslEmit = TargetEmit(
   vocab: wgslVocab,
