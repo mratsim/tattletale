@@ -13,7 +13,6 @@ Recurring engineering rulings for this repo.
 
 - Reading `.agents/skills/writing-docs/SKILL.md` is mandatory alongside this skill.
 - Reading this skill is mandatory before any edit in any directory.
-  The workspace AGENTS.md repeats the instruction.
 
 Golden rules first, then naming and comment budget.
 
@@ -102,7 +101,7 @@ An internal proc with a self-explanatory name and a short body (1-7 lines)
 gets **no comment**. Name plus body explains everything. A comment there is
 pure noise and will rot.
 
-A comment earns its place by giving exactly one of these three things:
+A comment earns its place by giving exactly one of these four things:
 
 | kind | example |
 |---|---|
@@ -111,7 +110,7 @@ A comment earns its place by giving exactly one of these three things:
 | the mathematics | the equation or identity the code implements, notation conventions |
 | non-trivial control flow | state machines, lifecycles |
 
-For the third kind prefer a lifecycle or dataflow diagram over prose once
+For the non-trivial control flow kind prefer a lifecycle or dataflow diagram over prose once
 the flow exceeds a handful of states.
 
 ## Big comments that earn their size
@@ -135,7 +134,8 @@ Flattening an essential diagram or derivation to hit a line count is a regressio
 
 Explaining the how of ordinary code is banned.
 Narration, temporal prose and artifact references are banned.
-The writing-docs linter enforces the blocklist.
+The writing-docs linter checks part of the blocklist. Read the banned-vocabulary
+table in EXAMPLES.md for the rest.
 
 Litmus test: delete the comment. If code plus name still tells the whole
 story to a competent reader, the comment stays deleted.
