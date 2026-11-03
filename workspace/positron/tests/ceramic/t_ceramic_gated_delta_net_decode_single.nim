@@ -10,7 +10,7 @@
 ##   --outdir:build/tests --nimcache:nimcache/cer workspace/positron/tests/ceramic/t_ceramic_gated_delta_net_decode_single.nim
 ##
 ## Ceramic GDN decode step suite, launch contract over seeded fixtures:
-## - `src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single.nim` runs one launch
+## - `src/kernels/ceramic_v1/attn_ssm/gated_delta_net_decode_single.nim` runs one launch
 ##   over the stacked head axis (B·Hv threadgroups, one per head)
 ##
 ## One step writes state → kernel launch → snap of the kernel-written buffers,
@@ -44,7 +44,7 @@
 import std/[strformat, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
+import ../../src/kernels/ceramic_v1/attn_ssm/gated_delta_net_decode_single
 import ceramic_pagebuf
 import ceramic_dtype
 

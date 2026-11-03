@@ -14,7 +14,7 @@ import std/strformat
 import workspace/[crucible, libtorch, libtorch_testutils]
 import workspace/libtorch as F
 from workspace/libtorch/src/raw_libtorch import manual_seed
-import ../src/kernels/ceramic/attn_ssm/multi_head_latent_attention_prefill
+import ../src/kernels/ceramic_v1/attn_ssm/multi_head_latent_attention_prefill
 import ./attn_test_utils
 
 const mlaMsl = metal:

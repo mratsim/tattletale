@@ -10,7 +10,7 @@
 ##   --outdir:build/tests --nimcache:nimcache/tests workspace/positron/tests/ceramic/t_ceramic_kda_decode.nim
 ##
 ## Ceramic KDA decode step suite, launch contract over seeded fixtures:
-## - `src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single.nim` runs one
+## - `src/kernels/ceramic_v1/attn_ssm/gated_delta_net_kda_decode_single.nim` runs one
 ##   launch over the stacked head axis (B·Hv threadgroups, one per head)
 ## - the kernel runs one launch over the stacked head axis (B·Hv threadgroups, one per head)
 ##
@@ -63,8 +63,8 @@
 import std/[strformat, math, times]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_kda_decode_single
-import ../../src/kernels/ceramic/attn_ssm/gated_delta_net_decode_single
+import ../../src/kernels/ceramic_v1/attn_ssm/gated_delta_net_kda_decode_single
+import ../../src/kernels/ceramic_v1/attn_ssm/gated_delta_net_decode_single
 import ceramic_pagebuf
 import ceramic_dtype
 

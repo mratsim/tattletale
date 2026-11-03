@@ -15,7 +15,7 @@ import workspace/[crucible, ceramic, libtorch]
 import workspace/libtorch as F
 import workspace/libtorch_testutils
 import ../../ceramic/tests/tile_test_utils
-import ../src/kernels/ceramic/attn_ssm/grouped_query_attention_qk_norm_rope, ./exl3_test_utils
+import ../src/kernels/ceramic_v1/attn_ssm/grouped_query_attention_qk_norm_rope, ./exl3_test_utils
 
 const qkNormRopeMsl = metal:
   proc qkNormRope(Out: ptr UncheckedArray[float16], X: ptr UncheckedArray[float16],

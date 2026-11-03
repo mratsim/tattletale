@@ -68,11 +68,11 @@
 import std/[strformat, math]
 import workspace/crucible
 import workspace/ceramic
-import ../../src/kernels/ceramic/ffn_moe/moe_router
-import ../../src/kernels/ceramic/ffn_moe/ffn_moe_decode_single
+import ../../src/kernels/ceramic_v1/ffn_moe/moe_router
+import ../../src/kernels/ceramic_v1/ffn_moe/ffn_moe_decode_single
 import ceramic_pagebuf
 import ceramic_dtype
-from ../../src/kernels/ceramic/math_consts import Log2e
+from ../../src/kernels/ceramic_v1/math_consts import Log2e
 
 # ─── Device entries, one per (element dtype, shape) binding ────────────
 
