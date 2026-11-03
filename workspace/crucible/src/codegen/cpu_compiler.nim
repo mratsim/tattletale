@@ -29,14 +29,14 @@ import ./passes/passes_normalizations
 import ./passes/passes_lowering
 import ./passes/passes_validations
 import ./passes/passes_lowering_cpu
-import ./backends/nim_lang
-import ./backends/c_lang
+import ./backends/lang_nim
+import ./backends/lang_c
 
-export nim_lang.CpuCoordTable, nim_lang.cpuCoordTable
-export nim_lang.emitCpuCallees, nim_lang.emitCpuKernelBody
-export c_lang.CpuCoordTableC, c_lang.cpuCoordTableC
-export c_lang.emitCpuCalleesC, c_lang.emitCpuWorkgroupLaunchC
-export c_lang.emitCpuTypeC, c_lang.kernelRuntimeParams
+export lang_nim.CpuCoordTable, lang_nim.cpuCoordTable
+export lang_nim.emitCpuCallees, lang_nim.emitCpuKernelBody
+export lang_c.CpuCoordTableC, lang_c.cpuCoordTableC
+export lang_c.emitCpuCalleesC, lang_c.emitCpuWorkgroupLaunchC
+export lang_c.emitCpuTypeC, lang_c.kernelRuntimeParams
 
 proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   ## Lowers a `{.global.}` kernel wrapper to CIRv2 and runs the pass

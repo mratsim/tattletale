@@ -18,7 +18,7 @@
 ##     for bz/by/bx:                             # threads run serially inside the task
 ##       <kernel body, coordinates read as loop-variable expressions>
 ##
-## - `--threads:on`: the kernel machinery (c_lang C printer) emits to a generated
+## - `--threads:on`: the kernel machinery (lang_c C printer) emits to a generated
 ##   .c file registered {.compile.}, the inline launch tail packs the data struct, spawns the loop task, syncAll waits
 ##   the tail translation unit duplicates the struct definitions, identical defs per unit are legal C
 ## - without threads: serial spliced Nim loops on the caller thread, the parallel variant must match that output bitwise
@@ -220,7 +220,7 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
       nnkInfix.newTree(ident">=", ident"crucibleWgsPerTask", newLit(1'i32)),
       newLit("launchCpuFn: workgroupsPerTask must be >= 1")))
     # whole workgroup launch, C text against the threadpool_compute runtime.
-    # c_lang prints every piece, the launch splits the text in two:
+    # lang_c prints every piece, the launch splits the text in two:
     # - file-scope unit: nominal struct definitions, the per-launch data struct, the callees, the iteration function, the task function
     # - launch tail: data struct fill, task spawn, syncAll, inline emit
     #   function definitions stay out of the enclosing function body:
