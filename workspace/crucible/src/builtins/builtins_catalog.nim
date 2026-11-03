@@ -22,13 +22,15 @@ type
 
 type
   CirCoordBuiltinKind* = enum
+    ## Coordinate builtin kinds. Each member's string value is
+    ## the canonical name that the backends emit verbatim.
     cbkNone
-    cbkThreadPositionInGrid
-    cbkThreadgroupPositionInGrid
-    cbkThreadPositionInThreadgroup
-    cbkThreadsPerThreadgroup
-    cbkThreadgroupsPerGrid
-    cbkThreadIndexInThreadgroup
+    cbkThreadPositionInGrid = "thread_position_in_grid"
+    cbkThreadgroupPositionInGrid = "threadgroup_position_in_grid"
+    cbkThreadPositionInThreadgroup = "thread_position_in_threadgroup"
+    cbkThreadsPerThreadgroup = "threads_per_threadgroup"
+    cbkThreadgroupsPerGrid = "threadgroups_per_grid"
+    cbkThreadIndexInThreadgroup = "thread_index_in_threadgroup"
 
   CirSynchroBuiltinKind* = enum
     cbkNone
@@ -51,9 +53,12 @@ type
 
 proc getBuiltinKind*[E: enum](_: typedesc[E], payload: NimNode): E {.compileTime.} =
   if payload.kind in {nnkIdent, nnkSym}:
-    for v in low(E) .. high(E):
-      if payload.strVal == $v:
-        return v
+    let enumTy = E.getTypeInst().getImpl()[2]
+    for i in 1 ..< enumTy.len:
+      let m = enumTy[i]
+      let name = if m.kind == nnkEnumFieldDef: m[0] else: m
+      if payload.strVal == name.strVal:
+        return E(i - 1)
   low(E)
 
 # ═══════════════════════════════════════════════════════════
