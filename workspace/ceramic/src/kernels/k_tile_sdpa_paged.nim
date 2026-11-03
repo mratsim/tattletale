@@ -129,8 +129,8 @@ proc paged_sdpa_decode*(
               inPage * kvPoolK.stride[2] + kvHead * kvPoolK.stride[3]
       vBase = pageId * kvPoolV.stride[0] + int(layer) * kvPoolV.stride[1] +
               inPage * kvPoolV.stride[2] + kvHead * kvPoolV.stride[3]
-      nkvK = kvPoolK.shape[3] * Dk
-      nkvV = kvPoolV.shape[3] * Dv
+      nkvK = kvPoolK.stride[2]           # kv entry stride, above shape[3] * Dk on a padded pool
+      nkvV = kvPoolV.stride[2]
       covered = min(nt, seqlen - kvPos)  # bounds the K/V views so tile.load zero-pads every uncovered entry
       kvCols = Dk                        # runtime ints only: mixed static/runtime shape tuples break make_layout (crd2idx)
       kvDv = Dv
