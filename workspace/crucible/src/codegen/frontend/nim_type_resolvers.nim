@@ -46,6 +46,10 @@ func getBuiltinDistinctScalar(n: NimNode): CirType =
   for p in impl[0][1]:
     if p.kind in {nnkSym, nnkIdent} and p.strVal == "builtin":
       marked = true
+    # a payload-less `{.builtin.}` sems as `builtin(nil)` over the pragma template's default argument
+    if p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 1 and
+        p[0].kind in {nnkIdent, nnkSym} and p[0].strVal == "builtin":
+      marked = true
   if not marked:
     return nil
   case n.strVal
