@@ -17,11 +17,11 @@
 import std/math except exp, ln, sqrt
 import workspace/crucible
 
-# Port surface: exp and sqrt print canonical MSL names from a test-declared
+# Port surface: exp, ln and sqrt print canonical MSL names from a test-declared
 # {.builtin.} proc. The port ships only exp2 and rsqrt as {.builtin.} procs.
-# ln has no native-name mapping in the MSL target registry, so ln's gradient
-# rule is not end-to-end testable here.
+# MSL prints ln through the target's log at both float widths.
 proc exp(x: float32): float32 {.builtin.} = discard
+proc ln(x: float32): float32 {.builtin.} = discard
 proc sqrt(x: float32): float32 {.builtin.} = discard
 
 proc `=~`[T: SomeFloat, U: SomeFloat](x: T, y: U): bool =
@@ -29,6 +29,8 @@ proc `=~`[T: SomeFloat, U: SomeFloat](x: T, y: U): bool =
   abs(float64(x) - float64(y)) <= max(1.0e-5 * max(abs(float64(x)), abs(float64(y))), 1.0e-6)
 
 proc fExp(x: float64): float64 = math.exp(x)
+proc fLn(x: float64): float64 = math.ln(x)
+proc dfLn(x: float64): float64 = 1.0 / x
 proc dfExp(x: float64): float64 = math.exp(x)
 proc fSqrt(x: float64): float64 = math.sqrt(x)
 proc dfSqrt(x: float64): float64 = 0.5 / math.sqrt(x)
@@ -44,6 +46,10 @@ proc expKernel(dst, a: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1).
   for i in 0 ..< 8:
     dst[i] = exp(a[i])
 
+proc lnKernel(dst, a: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1).} =
+  for i in 0 ..< 8:
+    dst[i] = ln(a[i])
+
 proc sqrtKernel(dst, a: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1).} =
   for i in 0 ..< 8:
     dst[i] = sqrt(a[i])
@@ -53,6 +59,7 @@ proc rsqrtKernel(dst, a: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1
     dst[i] = rsqrt(a[i])
 
 const expPair = cgMetal.bwd_diff(expKernel)
+const lnPair = cgMetal.bwd_diff(lnKernel)
 const sqrtPair = cgMetal.bwd_diff(sqrtKernel)
 const rsqrtPair = cgMetal.bwd_diff(rsqrtKernel)
 
@@ -102,6 +109,10 @@ proc runTest() =
   block:  # exp: d_a = d_dst * exp(a)
     let ad = engine.setupAutoDiff(expPair)
     checkBuiltin("exp", ad, fExp, dfExp)
+
+  block:  # ln: d_a = d_dst / a[i]
+    let ad = engine.setupAutoDiff(lnPair)
+    checkBuiltin("ln", ad, fLn, dfLn)
 
   block:  # sqrt: d_a = d_dst / (2*sqrt(a))
     let ad = engine.setupAutoDiff(sqrtPair)

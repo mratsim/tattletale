@@ -7,6 +7,8 @@
 
 ## setupAutoDiff on Metal: softmax cross-entropy forward and backward end to end
 ##
+## Test that the softmax cross-entropy backward is exact against the analytic closed form and the finite difference
+##
 ## `engine.setupAutoDiff` turns the loop-free softmax-CE pair into an AD handle whose
 ## launches are exact against the analytic closed forms and the CPU central
 ## finite differences (h = 1e-3, float64):

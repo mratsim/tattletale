@@ -7,6 +7,8 @@
 
 ## setupAutoDiff on Metal: elif conditions in the backward
 ##
+## Test that each elif branch derives its body under the substituted condition, the backward is exact
+##
 ## A branch chain whose elif condition reads a local re-derives that local
 ## in the backward kernel, so the backward compiles and the elif-gated
 ## gradient matches the closed form:

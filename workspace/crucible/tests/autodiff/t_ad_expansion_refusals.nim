@@ -172,6 +172,22 @@ expectRefusal("scalar_gradient_outside_loop", entryBody(
 
 # ── Derivation refusals: calls, conversions, injection ───────────────────
 
+expectRefusal("atomic_scalar_target", entryBody(
+  "dst, a: ptr UncheckedArray[float32], alpha: float32",
+  "  for i in 0 ..< 8:\n    dst[i] = a[i]\n    discard atomicFetchAdd(addr alpha, a[i])"),
+  "differentiates over a buffer-slot target")
+
+expectRefusal("statement_call", entryBody(
+  "dst, a: ptr UncheckedArray[float32]",
+  "  log2(a[0])\n  for i in 0 ..< 8:\n    dst[i] = a[i]",
+  prelude = "proc log2(x: float32) = discard"),
+  "as a statement is outside the differentiable subset")
+
+expectRefusal("array_literal", entryBody(
+  "dst, a: ptr UncheckedArray[float32]",
+  "  for i in 0 ..< 8:\n    dst[i] = [a[i], 1.0'f32][0]"),
+  "aggregate constructions have no member gradients")
+
 expectRefusal("atomic_value_used", entryBody(
   "dst, a: ptr UncheckedArray[float32]",
   """  for i in 0 ..< 8:
@@ -250,6 +266,23 @@ proc kernel_bwd(d_x, d_a, dst, a: ptr UncheckedArray[float32]) {.global.} =
 
 expectRefusal("declared_name", declaredBody("  for i in 0 ..< 8:\n    dst[i] = a[i] * 2.0'f32", MyBwd, bwdArg = "myBwd"), BwdNameRow)
 expectRefusal("declared_positional", declaredBody("  for i in 0 ..< 8:\n    dst[i] = a[i] * 2.0'f32", MisnamedBwd), MirrorRow)
+const ShortBwd = """
+proc kernel_bwd(d_dst, d_a: ptr UncheckedArray[float32]) {.global.} =
+  for i in 0 ..< 8:
+    d_a[i] += d_dst[i] * 2.0'f32
+"""
+
+const LongBwd = """
+proc kernel_bwd(d_dst, d_a, dst, a, d_extra: ptr UncheckedArray[float32]) {.global.} =
+  for i in 0 ..< 8:
+    d_a[i] += d_dst[i] * 2.0'f32
+"""
+
+expectRefusal("declared_mirror_short", declaredBody("  for i in 0 ..< 8:\n    dst[i] = a[i] * 2.0'f32", ShortBwd),
+  "stops at parameter")
+expectRefusal("declared_mirror_long", declaredBody("  for i in 0 ..< 8:\n    dst[i] = a[i] * 2.0'f32", LongBwd),
+  "beyond the mirror")
+
 
 # Save and unexpected-argument cases patch the bwd_diff call line of an otherwise valid declared pair
 

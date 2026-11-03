@@ -7,10 +7,12 @@
 
 ## setupAutoDiff on Metal: the loop index converts through a differentiated value
 ##
+## Test that an int-to-float conversion of a primal operand keeps the gradient of the float side
+##
 ## `dst[i] = a[i] * float32(i)` keeps everything: the loop index is primal
 ## and the conversion has a zero gradient.
 ##
-## - the kernel derives (it refused before the primal-conv rule)
+## - the kernel derives the gradient through the conversion
 ## - d_a[i] = float32(i) * d_dst[i], value-checked on Metal
 ##
 ## Run:

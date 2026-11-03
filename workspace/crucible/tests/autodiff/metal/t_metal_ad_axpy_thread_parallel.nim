@@ -14,8 +14,8 @@
 ##   bitwise across launches, the primitive backward accumulates into caller-owned buffers
 ## - the runtime trip count and both coordinate-index variants stay exact under
 ##   multi-thread workgroups
-## - a write index that does not separate the threads refuses at pair expansion,
-##   the refusal message names the workgroup geometry
+## - a write index that does not separate the threads refuses at pair expansion.
+##   the workgroup geometry appears in the message (locked in t_ad_expansion_refusals)
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \

@@ -11,7 +11,7 @@
 ##
 ## - atomicFetchAdd into a shared slot: the value's gradient is the target
 ##   slot's incoming gradient, accumulated atomically into the shadow adjoint
-## - threadgroup_barrier: the backward keeps the barrier at the same position
+## - threadgroup_barrier: the backward keeps the barrier before the gradient write
 ## - the fixtures are integers, every atomic ordering is exact in float32
 ##
 ## Run:
@@ -80,6 +80,9 @@ proc runTest() =   # private: engines are destroyed at return
       "the forward source must keep the barrier"
     doAssert "threadgroup_barrier" in barrierMapPair.bwdSource,
       "the backward source must mirror the barrier"
+    doAssert barrierMapPair.bwdSource.find("threadgroup_barrier") <
+      barrierMapPair.bwdSource.find("d_a["),
+      "the backward keeps the barrier before the gradient write"
     let ad = engine.setupAutoDiff(barrierMapPair)
     let aDev = engine.allocDevice(float32, T)
     let dstDev = engine.allocDevice(float32, T)
