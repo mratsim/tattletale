@@ -12,7 +12,11 @@
 ## Gemm extension: rank-2 tiles, multi-dimensional views and the mmaf op.
 ## The abstract mmaf lowers to a per-thread FMA loop with no mma atom,
 ## hardware simdgroup mma is a later bullet.
-## Everything beyond the fixture subset refuses loudly.
+## Constructs outside the subset refuse loudly, naming the construct and the kernel:
+## - unsupported ops, element types and dynamic tile dims
+## - thread counts that do not divide a tile, broken token chains
+## - view disagreements: a partition tile rank unlike its tensor_view's, or a loaded or stored tile unlike its view's partition tile
+## - unequal-shaped or non-square mmaf operands
 ##
 ## Passes in TileLang-cutedsl order:
 ## - resolveViews (legalization): records, per view SSA name, the shape,
@@ -147,6 +151,8 @@ func tileSize*(shape: seq[int]): int =
 func `==`*(a, b: TvLayout): bool =
   ## Two tv layouts are equal when their thread-value partition matches.
   ## The algebra layout is a pure function of the two partition fields.
+  ## Equality says nothing about the tile shape: the fused loop additionally
+  ## requires shape agreement, checked in `loopTripCount`.
   a.threads == b.threads and a.values == b.values
 
 func tvCall*(tv: TvLayout, t, v: int): int =

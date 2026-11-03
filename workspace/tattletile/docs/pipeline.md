@@ -66,6 +66,7 @@ const-evaluates the full pipeline.
 File: `src/tattletile/tile_passes.nim`. Entry proc `runTilePipeline(entry, threads)` runs
 three named passes in TileLang-cutedsl order, then the atom selection pass.
 Every pass refuses loudly on anything it cannot resolve, see each pass doc for the refusals.
+The enforced subset boundary is enumerated in the README's verified-coverage list.
 
 ```mermaid
 flowchart TD

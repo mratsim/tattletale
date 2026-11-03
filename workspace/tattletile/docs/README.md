@@ -131,6 +131,18 @@ The compiler captures add:
 The atom path covers one mmaf per kernel on Metal. Every other shape keeps
 the abstract FMA fallback.
 
-Constructs outside the subset refuse loudly, naming the construct and the kernel.
+Constructs outside the subset refuse loudly, naming the construct and the kernel:
+
+- unsupported ops, element types and dynamic tile dims
+- thread counts that do not divide a tile, broken token chains
+- view disagreements: a partition tile rank unlike its tensor_view's, or a loaded or stored tile unlike its view's partition tile
+- unequal-shaped or non-square mmaf operands
+
+Verified coverage, bitwise against the python float64-then-narrow reference on Metal and Vulkan:
+
+- axpy `tile<8>`, 4 threads
+- gemm `tile<16x16>`, 4 threads and 32 threads (the atom path)
+
+Kernels beyond the two fixtures compile under the refusals above, with numeric correctness beyond the fixtures unverified.
 ADR `docs/adr/0009-crucible-untouched.md` records the boundary: zero crucible or ceramic
 changes across the whole port.
