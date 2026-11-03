@@ -21,8 +21,6 @@ import cirv2_pretty
 ##
 ## Dev-only: `CirModule.verifyIR`, defaulted from `-d:CIR_verify`.
 ## Read-only: returns the first violation, rendered with the offending proc where one exists, never rewrites.
-## The refusal renders through `cirv2_pretty`: one string, first violation wins.
-##
 ## Checks, per module:
 ## - proc names unique: printers emit names verbatim, the runtime caches binaries on kernel names
 ## - global names unique and disjoint from proc names: hoisted declarations emit at file scope
@@ -83,7 +81,7 @@ proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames
   ## refuses too: parameters and the body share one scope in the emitted source.
   ##
   ## Branch and loop bodies take a copy of `visible`, a declaration inside a body is scoped to that body,
-  ## matching the braces the C-family printers emit, and a use after the body resolves to nothing.
+  ## matching the braces the C-family printers emit.
   var declared: HashSet[string]
   for s in ss:
     if s.isNil:
@@ -154,7 +152,6 @@ proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames
           return
 
 proc checkUniqueNames(names: seq[string]): string =
-  ## Returns "" while every name in `names` is unique, else the first repeated name.
   var seen: HashSet[string]
   for n in names:
     if n in seen:
@@ -183,7 +180,7 @@ proc verifyModule*(m: CirModule): string =
       return "global name '" & g.name & "' collides with a proc name"
     seenGlobals.incl g.name
     moduleNames.incl g.name
-    # Globals emit in declaration order at file scope: an initializer resolves only
+    # Printers emit globals in declaration order at file scope: an initializer resolves only
     # against the names collected before it.
     result = checkScopeExpr(g.init, moduleNames, moduleNames)
     if result.len > 0:
@@ -191,7 +188,6 @@ proc verifyModule*(m: CirModule): string =
   var seenProcs: HashSet[string]
   for fn in m.procs:
     if fn.name in seenProcs:
-      # Duplicate proc names refuse on the second occurrence and the walk renders that proc.
       return renderProcRefusal(fn, "duplicate proc name '" & fn.name & "'")
     seenProcs.incl fn.name
     var paramNames: seq[string]

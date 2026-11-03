@@ -14,7 +14,6 @@ import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_datatypes
 
 proc runPipeline(m: CirModule): string =
-  ## One identity transform leaves the module untouched. Verification runs after it.
   var reg = PassRegistry.new()
   reg.register("identity", pkTransform, "Leaves the module untouched",
     run = proc(m: CirModule): string = "")
@@ -86,7 +85,6 @@ proc runTest() =
   block duplicateLocals:
     # A verbatim callee-body inliner emits this shape when one callee is inlined at two
     # call sites: the callee's locals are cloned into the caller's statement list.
-    # Printers emit both declarations into one brace pair.
     let m = kernelModule(@[
       varD("tmp", tInt(32), intLit(0, tInt(32))),
       varD("tmp", tInt(32), intLit(1, tInt(32)))])
@@ -117,7 +115,6 @@ proc runTest() =
     doAssert "'a'" in err, "expected the refusal to name the shadowed parameter, got: " & err
 
   block branchShadowStaysLegal:
-    # A branch-local declaration may shadow an outer local and a parameter.
     let m = kernelModule(@[
       varD("a", tInt(32), intLit(0, tInt(32))),
       iteS(trueE(), @[varD("a", tInt(32), intLit(1, tInt(32)))], @[]),
@@ -128,7 +125,6 @@ proc runTest() =
 
   block duplicateGlobals:
     # Hoisting passes append one program-scope declaration per kernel verbatim.
-    # Hoist passes emit two same-name file-scope declarations.
     let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("g", tInt(32)))])
     m.globals = @[
       varD("g", tInt(32), intLit(0, tInt(32)), caThreadgroup),
@@ -145,8 +141,6 @@ proc runTest() =
     doAssert "at global 'g':" in err and "nowhere" in err, "expected the refusal to name the global and the symbol, got: " & err
 
   block globalInitDeclaresBeforeUse:
-    # Globals emit in declaration order at file scope: an initializer resolves only
-    # against earlier globals.
     let m = kernelModule(@[])
     m.globals = @[
       varD("a", tInt(32), sym("b", tInt(32)), caThreadgroup),
