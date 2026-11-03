@@ -1,12 +1,13 @@
 ## CIRv2 verifier flag default
 ##
-## Test that pass-boundary verification defaults off without -d:CIR_verify and on with it: the metal: kernel runs clean in both compilations.
-## moduleD, which the frontend path uses as its module constructor, defaults verifyIR accordingly. Both run commands must exit 0.
+## Test that pass-boundary verification defaults off without -d:CIR_verify and on with it.
+## The metal: kernel runs clean in both compilations.
+## moduleD, the frontend path's module constructor, defaults verifyIR accordingly. Both run commands must exit 0.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --outdir:/tmp/m4f-out --nimcache:/tmp/m4f-cache \
+##   nim c -r --hints:off --warnings:off --outdir:/tmp/cirv2_verify_flag_out --nimcache:/tmp/cirv2_verify_flag_cache \
 ##     workspace/crucible/tests/verify/t_cirv2_verify_flag.nim
-##   nim c -r --hints:off --warnings:off -d:CIR_verify --outdir:/tmp/m4f-out-v --nimcache:/tmp/m4f-cache-v \
+##   nim c -r --hints:off --warnings:off -d:CIR_verify --outdir:/tmp/cirv2_verify_flag_out_v --nimcache:/tmp/cirv2_verify_flag_cache_v \
 ##     workspace/crucible/tests/verify/t_cirv2_verify_flag.nim
 
 import workspace/crucible

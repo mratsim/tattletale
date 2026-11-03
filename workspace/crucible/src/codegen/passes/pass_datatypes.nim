@@ -46,7 +46,7 @@ proc runPasses*(m: CirModule, reg: var PassRegistry): string =
   ## - the printers read the analysis records, they never rescan
   ## - on modules with verifyIR set, verifyModule runs once, after the last
   ##   transform pass runs clean: intermediate transforms legitimately emit
-  ##   callees that later transforms resolve (span callees until lowerSpans runs),
+  ##   callees that later transforms resolve (span-type callees until lowerSpans rewrites them),
   ##   and consumers read only the final boundary
   ## - returns "" when the whole pipeline is clean, else the first refusal
   var lastTransform = -1

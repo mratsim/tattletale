@@ -15,7 +15,7 @@ import cirv2_pretty
 #
 # ############################################################
 
-const IntrinsicCallees* = ["__builtin_memcpy", "max", "min"]
+const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
   ## Callees that no declaration ever backs, exempt from the scope walk.
   ## The printers emit each name verbatim and the target languages provide it:
   ##
@@ -114,14 +114,13 @@ proc checkUniqueNames(names: seq[string]): string =
     seen.incl n
 
 proc renderProcRefusal(fn: CirProc, violation: string): string =
-  ## Refusal for the first violation in `fn`: the refusal line, then `fn` rendered for context.
   violation & "\n" & renderProc(fn)
 
 proc verifyModule*(m: CirModule): string =
   ## Returns "" while the module upholds the pass-boundary contracts,
-  ## else the first violation: the refusal line, then the offending proc rendered for context.
+  ## else the first violation, the refusal line then the offending proc rendered for context.
   ## Read-only: the walk never rewrites or repairs the IR.
-  ## Runs at the final pass boundary: runPasses calls it once, after the last transform pass.
+  ## runPasses calls it once, after the last transform pass.
   ##
   ## Contract, per module:
   ## - proc names are unique: the printers emit each name verbatim into the artifact,
@@ -144,7 +143,7 @@ proc verifyModule*(m: CirModule): string =
   var seenProcs: HashSet[string]
   for fn in m.procs:
     if fn.name in seenProcs:
-      # Duplicate proc names render the second colliding proc, reached when the duplicate appeared.
+      # Duplicate proc names refuse on the second occurrence, the walk renders that proc.
       return renderProcRefusal(fn, "duplicate proc name '" & fn.name & "'")
     seenProcs.incl fn.name
     var paramNames: seq[string]
