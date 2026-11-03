@@ -128,7 +128,7 @@ proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
     scanExprNode(e, features, profile)
   let onStmt = proc(s: CirStmt) =
     case s.kind
-    of sVar, sConst:
+    of sVar:
       scanType(s.declType, features, profile)
     of sWhile:
       if profile.unrollAttr and s.whileUnroll:

@@ -85,7 +85,6 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
@@ -213,9 +212,6 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   if s.declType.kind in {ctPtr, ctAptr}:
     return emitMslPtr(s.declType, s.name)
   emitMslType(s.declType, s.name, false)
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "constexpr " & emitMslType(s.declType, s.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Procs and modules

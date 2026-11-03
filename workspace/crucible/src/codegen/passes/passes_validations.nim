@@ -58,9 +58,7 @@ proc collectConstStorage(fn: CirProc, constGlobals: HashSet[string]): ConstStora
   for p in fn.params:
     found.otherLocals.incl p.name
   let collect = proc(s: CirStmt) =
-    if s.kind == sConst:
-      found.constLocals.incl s.name
-    elif s.kind == sVar:
+    if s.kind == sVar:
       if s.addressSpace == caConstant:
         found.constLocals.incl s.name
       else:
@@ -135,12 +133,12 @@ proc validateConstantWritesPass(m: CirModule): string =
   ## Rejects writes into constant storage across every module proc and every
   ## program-scope statement. Returns "" when clean, else the first refusal.
   ##
-  ## Reachability: the frontend emits an sConst declaration for every Nim `const` section.
-  ## Nim sem refuses any assignment to a `const`, so the frontend never emits a write to an sConst target.
+  ## Reachability: Nim sem refuses any assignment to a `const`, so no producer
+  ## emits a write to a `const`-space target.
   ## The refusal has teeth over hand-built IR and any future producer.
   var constGlobals: HashSet[string]
   for g in m.globals:
-    if g.kind == sConst or (g.kind == sVar and g.addressSpace == caConstant):
+    if g.kind == sVar and g.addressSpace == caConstant:
       constGlobals.incl g.name
   for fn in m.procs:
     let err = fn.body.checkConstWritesStmts(fn.name,

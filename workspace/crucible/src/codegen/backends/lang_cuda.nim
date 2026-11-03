@@ -95,7 +95,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
@@ -208,9 +207,6 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   if s.addressSpace == caThreadgroup:
     return "__shared__ " & emitCudaType(s.declType, s.name, false)
   emitCudaType(s.declType, s.name, false)
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "constexpr " & emitCudaType(s.declType, s.name, false)
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
   ## One inline assembly statement: the spliced text in an `asm(...)` wrapper.

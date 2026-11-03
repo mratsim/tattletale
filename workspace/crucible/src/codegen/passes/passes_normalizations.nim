@@ -223,7 +223,7 @@ proc tempBinderFor(fn: CirProc): TempBinder =
     if e.kind == eSym:
       collected.incl e.name
   let onStmt = proc(s: CirStmt) =
-    if s.kind in {sVar, sConst}:
+    if s.kind == sVar:
       collected.incl s.name
   fn.body.walkStmts(onStmt, onExpr)
   result.used = collected

@@ -95,7 +95,6 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string
@@ -355,9 +354,6 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   "var " & s.name & ": " & ctx.emitTypeName(s.declType)
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "let " & s.name & ": " & ctx.emitTypeName(s.declType)
 
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   ## One assignment. A NIM_BOOL storage target coerces the stored value:

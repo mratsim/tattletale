@@ -189,7 +189,7 @@ proc renameFieldAccesses(e: CirExpr, fieldRenames, symRenames: Table[string, str
 proc renameStmts(ss: var seq[CirStmt], fieldRenames, symRenames: Table[string, string]) =
   for s in mitems(ss):
     case s.kind
-    of sVar, sConst:
+    of sVar:
       renameFieldAccesses(s.init, fieldRenames, symRenames)
     of sAsgn:
       renameFieldAccesses(s.lhs, fieldRenames, symRenames)
@@ -249,7 +249,7 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
     var decls: seq[tuple[name: string, safe: string]]
     for s in fn.body.mitems:
       case s.kind
-      of sVar, sConst:
+      of sVar:
         let safe = makeSafeIdent(s.name, reserved, doubleUnderscorePrefix)
         if safe != s.name:
           decls.add((s.name, safe))

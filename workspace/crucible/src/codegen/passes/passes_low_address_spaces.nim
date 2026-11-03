@@ -90,7 +90,7 @@ proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
   if retyped.len > 0:
     # A re-spaced formal invalidates the base callee's baked cast targets and declaration types: the walk re-derives both from their operands
     result.body.walkStmts(proc(s: CirStmt) =
-      if s.kind in {sVar, sConst} and s.declType != nil and s.init != nil and
+      if s.kind == sVar and s.declType != nil and s.init != nil and
           s.declType.kind in {ctPtr, ctAptr}:
         let it = getExprType(s.init)
         if it != nil and it.addressSpace != s.declType.addressSpace:

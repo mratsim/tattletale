@@ -216,7 +216,7 @@ proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string) =
 proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
   for s in ss:
     case s.kind
-    of sVar, sConst:
+    of sVar:
       s.init.rewriteSpanUsesExpr(ctx, err)
     of sAsgn:
       s.lhs.rewriteSpanUsesExpr(ctx, err)
@@ -334,7 +334,7 @@ proc survivingSpanRejection(fn: CirProc): string =
   let checkStmt = proc(s: CirStmt) =
     if err.len > 0:
       return
-    if s.kind in {sVar, sConst} and typeHoldsSpan(s.declType):
+    if s.kind == sVar and typeHoldsSpan(s.declType):
       err = "declaration " & s.name & " keeps an openArray span"
   let checkExpr = proc(e: CirExpr) =
     if err.len > 0:
@@ -372,6 +372,6 @@ proc lowerSpansPass(m: CirModule): string =
     if spanErr.len > 0:
       return "in proc " & fn.name & ": " & spanErr
   for g in m.globals:
-    if g.kind in {sVar, sConst} and typeHoldsSpan(g.declType):
+    if g.kind == sVar and typeHoldsSpan(g.declType):
       return "in global scope: declaration " & g.name & " keeps an openArray span"
   return ""

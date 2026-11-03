@@ -93,7 +93,7 @@ proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int, byr
     addrWrapByrefArgs(callE, pre, tmpCount, byref)
     s.callCallee = callE.callee
     s.callArgs = callE.args
-  of sVar, sConst:
+  of sVar:
     addrWrapByrefArgs(s.init, pre, tmpCount, byref)
   of sAsm, sEmit:
     discard

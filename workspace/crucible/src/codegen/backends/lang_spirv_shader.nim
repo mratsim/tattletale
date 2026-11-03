@@ -471,7 +471,6 @@ type
     locals*: Table[string, uint32]
       ## local name -> Function-storage variable id
     localTys*: Table[string, CirType]
-    consts*: Table[string, uint32]
       ## const name -> its constant id
     params*: Table[string, uint32]
       ## scalar/struct param name -> hoisted value id
@@ -521,8 +520,6 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
           let varId = ctx.builder.opVariableFn(
             ctx.builder.tyPointer(scFunction, ctx.resolveTyId(vt)))
           fn.locals[s.name] = varId
-    of sConst:
-      discard
     of sIte:
       ctx.hoistLocals(fn, s.thenBody)
       ctx.hoistLocals(fn, s.elseBody)
@@ -554,11 +551,6 @@ proc resolveConstId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
   of eFalse:
     let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     ctx.builder.constBool(boolTy, false)
-  of eSym:
-    if fn.consts.hasKey(e.name):
-      return fn.consts[e.name]
-    ctx.failSpv("literal expected, got symbol " & e.name)
-    0
   else:
     ctx.failSpv("literal expected, got expression kind " & $e.kind)
     0
@@ -783,8 +775,6 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     if e.coordBuiltin != cbkNone:
       if e.coordBuiltin == cbkThreadIndexInThreadgroup:
         return ctx.loadScalarBuiltin(biLocalInvocationIndex, e.typ)
-    if fn.consts.hasKey(e.name):
-      return fn.consts[e.name]
     if fn.params.hasKey(e.name):
       return fn.params[e.name]
     if fn.bdaParams.hasKey(e.name):
@@ -1269,12 +1259,6 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
         fn.fwd[s.name] = value
         if s.name notin fn.elided:
           ctx.builder.opStore(fn.locals[s.name], value)
-    of sConst:
-      # a compile-time literal binding, reads use the constant id
-      if s.init != nil and s.init.kind in {eIntLit, eFloatLit, eTrue, eFalse}:
-        fn.consts[s.name] = ctx.resolveConstId(fn, s.init)
-      else:
-        ctx.failSpv("const " & s.name & " initializer outside the literal set")
     of sAsgn:
       if s.lhs.kind == eSym:
         let lhsTy = fn.localTys.getOrDefault(s.lhs.name, s.lhs.typ)

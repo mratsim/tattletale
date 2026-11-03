@@ -91,8 +91,6 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc checkConstDecl(ctx: var PrintCtx, s: CirStmt): bool
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
@@ -292,12 +290,6 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
     return emitGlslScalar(s.declType.aElem) & ' ' & s.name &
       "[" & $s.declType.aN & "]"
   ctx.emitTypeName(s.declType) & ' ' & s.name
-
-proc checkConstDecl(ctx: var PrintCtx, s: CirStmt): bool =
-  true
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "const " & ctx.emitTypeName(s.declType) & ' ' & s.name
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Procs and modules

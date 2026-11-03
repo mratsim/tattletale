@@ -180,9 +180,6 @@ proc varD*(name: string, typ: CirType, init: CirExpr = nil, addressSpace: Addres
   ## `caThreadgroup` is a `{.smem.}` local, `caConstant` a `{.const_mem.}` local.
   CirStmt(kind: sVar, name: name, declType: typ, init: init, addressSpace: addressSpace)
 
-proc constD*(name: string, typ: CirType, value: CirExpr): CirStmt =
-  CirStmt(kind: sConst, name: name, declType: typ, init: value)
-
 proc asgnS*(lhs, rhs: CirExpr): CirStmt =
   CirStmt(kind: sAsgn, lhs: lhs, rhs: rhs)
 

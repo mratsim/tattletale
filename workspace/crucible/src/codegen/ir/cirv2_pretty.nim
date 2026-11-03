@@ -139,9 +139,6 @@ proc renderStmt(b: var RenderBuf, s: CirStmt) =
         renderExpr(s.init) & ")")
     else:
       b.add("(var" & spc & " " & s.name & " " & renderType(s.declType) & " .)")
-  of sConst:
-    b.add("(const " & s.name & " " & renderType(s.declType) & " " &
-      renderExpr(s.init) & ")")
   of sAsgn:
     b.add("(asgn " & renderExpr(s.lhs) & " " & renderExpr(s.rhs) & ")")
   of sIte:

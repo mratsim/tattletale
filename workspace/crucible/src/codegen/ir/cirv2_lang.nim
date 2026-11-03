@@ -196,7 +196,6 @@ type
   CirStmtKind* = enum
     ## Statement vocabulary, Leng names.
     sVar
-    sConst
     sAsgn
     sIte
     sWhile
@@ -209,7 +208,7 @@ type
   CirStmt* = ref object
     ## A CIRv2 statement.
     case kind*: CirStmtKind
-    of sVar, sConst:
+    of sVar:
       name*: string
       declType*: CirType
       init*: CirExpr

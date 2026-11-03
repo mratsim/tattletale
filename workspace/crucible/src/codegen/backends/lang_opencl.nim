@@ -89,7 +89,6 @@ proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
@@ -279,9 +278,6 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   if s.declType.kind == ctArray:
     return prefix & emitOpenclArrayDecl(s.declType, s.name)
   prefix & ctx.emitTypeName(s.declType) & ' ' & s.name
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "const " & ctx.emitTypeName(s.declType) & ' ' & s.name
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Procs and modules

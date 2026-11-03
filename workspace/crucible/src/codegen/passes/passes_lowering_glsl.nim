@@ -122,7 +122,7 @@ proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string],
 proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashSet[string], procs: Table[string, CirProc]): string =
   for s in mitems(ss):
     case s.kind
-    of sVar, sConst:
+    of sVar:
       let err = rewriteVarCallArgsExpr(fn, s.init, varParams, procs)
       if err.len > 0:
         return err

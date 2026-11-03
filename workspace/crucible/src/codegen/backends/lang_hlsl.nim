@@ -105,7 +105,6 @@ proc printOconstr(ctx: var PrintCtx, e: CirExpr): string
 proc printAconstr(ctx: var PrintCtx, e: CirExpr): string
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string
 proc getInitText(ctx: var PrintCtx, s: CirStmt): string
 proc printCallArgTexts(ctx: var PrintCtx, callee: CirExpr, args: seq[CirExpr]): seq[string]
 proc printAsgn(ctx: var PrintCtx, s: CirStmt): string
@@ -479,9 +478,6 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   ctx.emitHlslDecl(s.declType, s.name)
-
-proc constDecl(ctx: var PrintCtx, s: CirStmt): string =
-  "const " & ctx.emitHlslDecl(s.declType, s.name)
 
 proc getInitText(ctx: var PrintCtx, s: CirStmt): string =
   ctx.emitHlslInit(s.declType, s.init)
