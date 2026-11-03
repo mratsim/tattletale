@@ -131,12 +131,13 @@ proc paged_sdpa_decode*(
               inPage * kvPoolV.stride[2] + kvHead * kvPoolV.stride[3]
       nkvK = kvPoolK.shape[3] * Dk
       nkvV = kvPoolV.shape[3] * Dv
-      tileRows = nt
-      tileCols = Dk
+      covered = min(nt, seqlen - kvPos)  # view stops at the covered length, tile.load zero-pads past it
+      kvCols = Dk
+      kvDv = Dv
       vK = make_view(kvPoolK.data +% kBase,
-                     make_layout((tileRows, tileCols), (nkvK, 1)))
+                     make_layout((covered, kvCols), (nkvK, 1)))
       vV = make_view(kvPoolV.data +% vBase,
-                     make_layout((tileCols, tileRows), (1, nkvV)))
+                     make_layout((kvDv, covered), (1, nkvV)))
 
     var k: tile(kvPoolK.T, qkMma.getMmaLayout(opB))  # (NT, Dk)
     k.load(vK, kMap, thrID, (0, 0))
