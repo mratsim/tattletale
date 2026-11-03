@@ -13,6 +13,7 @@
 
 import std/[macros, strutils]
 import ../ir/cirv2_lang
+import ../../crucible_codegen
 import ../../builtins/builtins_gpu_types
 import ../../builtins/builtins_decl_helpers
 import ./targets_registry
@@ -117,6 +118,28 @@ var cpuCoordUseC {.global, compileTime.}: bool
 # Types
 # ═══════════════════════════════════════════════════════════════════════
 
+proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
+  ## C type name of `t` with no identifier, as casts and sizeof print it.
+  ## Refused kinds name the v0 restriction, the shared walk reads the recorded refusal.
+  case t.kind
+  of ctVector:
+    ctx.fail("vector types (" & $t.vN & " x " & $t.vElem.kind & ") are not supported in v0, the vector mapping is the optimization pass (P2)")
+    ""
+  of ctSpan:
+    ctx.fail("openArray spans must split to a pointer and a length before printing (the span split pass)")
+    ""
+  of ctString:
+    ctx.fail("string values are not supported in v0")
+    ""
+  of ctBf16:
+    ctx.fail("bfloat16 values are not supported in v0")
+    ""
+  of ctProc:
+    ctx.fail("function pointers are not supported in v0")
+    ""
+  else:
+    getFullTypeName(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, t, "struct ", ctx.suffix)
+
 proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
   ## CIRv2 type as C type text, used for locals, params, data members.
   case t.kind
@@ -154,7 +177,7 @@ proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
     result = "struct " & t.name & ctx.suffix
   of ctArray:
     # element type only, the declaration sites append every dimension
-    # (declaratorC, struct fields, data-struct members)
+    # (printCDecl, struct fields, data-struct members)
     result = emitTypeC(t.aElem, ctx)
   of ctString:
     cRefuse(ctx, "string values are not supported in v0")
@@ -162,44 +185,6 @@ proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
     cRefuse(ctx, "bfloat16 values are not supported in v0")
   of ctProc:
     cRefuse(ctx, "function pointers are not supported in v0")
-
-proc splitArrayDimsC(t: CirType): tuple[elem: CirType, dims: string] =
-  ## Array type split for a declaration site: element type plus stacked
-  ## C declarator dimensions.
-  ##
-  ##   array[3, array[4, float32]]  ->  elem `float32`, dims `[3][4]`
-  ##
-  ## A non-array type returns itself with empty dims.
-  result.elem = t
-  while result.elem.kind == ctArray:
-    result.dims &= "[" & $result.elem.aN & "]"
-    result.elem = result.elem.aElem
-
-proc declaratorC(t: CirType, name: string, ctx: EmitCtxC): string =
-  ## Declaration text binding `t` to `name`.
-  ## Array dimensions move behind the identifier and a pointer to an array
-  ## prints the parenthesized declarator:
-  ##
-  ##   ptr array[4, int32] p  ->  int32_t (*p)[4]
-  ##
-  ## With `T* p` the kernel's `(*p)[i]` element reads reject at C compile time.
-  ## An empty name prints the abstract form casts use, `int32_t (*)[4]`.
-  let (elem, dims) = splitArrayDimsC(t)
-  if elem.kind == ctPtr and elem.pElem.kind == ctArray:
-    var inner = elem
-    var ptrs = ""
-    var innerDims = ""
-    while inner.kind == ctPtr:
-      ptrs &= "*"
-      inner = inner.pElem
-    while inner.kind == ctArray:
-      innerDims &= "[" & $inner.aN & "]"
-      inner = inner.aElem
-    result = emitTypeC(inner, ctx) & " (" & ptrs & name & dims & ")" & innerDims
-  elif name.len == 0:
-    result = emitTypeC(elem, ctx) & dims
-  else:
-    result = emitTypeC(elem, ctx) & " " & name & dims
 
 proc collectStructs(t: CirType, seen: var seq[CirType]) =
   ## Post-order collection of every nominal struct type reachable
@@ -240,8 +225,8 @@ proc emitStructDefsC(m: CirModule, ctx: EmitCtxC): string =
   for t in moduleStructs(m):
     var def = "struct " & t.name & ctx.suffix & " {\n"
     for f in t.fields:
-      let (elem, dims) = splitArrayDimsC(f.typ)
-      def.add("    " & emitTypeC(elem, ctx) & " " & f.name & dims & ";\n")
+      def.add("    " & printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
+        f.typ, f.name, false, "struct ", ctx.suffix) & ";\n")
     def.add("};")
     lines.add(def)
   if lines.len > 0:
@@ -431,8 +416,13 @@ proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
   of eAddr:
     result = "&" & printExpr(e.addrOperand, ctx)
   of eSizeof:
-    let (elem, dims) = splitArrayDimsC(e.ofType)
-    result = "sizeof(" & emitTypeC(elem, ctx) & dims & ")"
+    # array dimensions move behind the type name, the C sizeof form
+    var t = e.ofType
+    var dims = ""
+    while t.kind == ctArray:
+      dims &= "[" & $t.aN & "]"
+      t = t.aElem
+    result = "sizeof(" & emitTypeC(t, ctx) & dims & ")"
   of eOconstr:
     let t = e.ocType
     if t.kind != ctStruct:
@@ -499,7 +489,8 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
           cRefuse(ctx, "kernel local '" & s.name &
             "' shadows a counter the launch generates, rename it")
       let decl =
-        declaratorC(s.declType, s.name, ctx) &
+        printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
+          s.declType, s.name, false, "struct ", ctx.suffix) &
         (if s.init != nil: " = " & printExpr(s.init, ctx) else: "") & ";"
       lines.add(pad & decl)
       i += 1
@@ -654,7 +645,8 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
       if param.varParam:
         cRefuse(ctx,
           "`var` parameters are not supported in v0, the cpu backend takes whole values")
-      params.add(declaratorC(param.typ, param.name, ctx))
+      params.add(printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
+        param.typ, param.name, false, "struct ", ctx.suffix))
     let retT = if p.ret.kind == ctVoid: "void" else: emitTypeC(p.ret, ctx)
     # C99 `inline` alone emits no external definition, a call that the optimizer does not inline fails to link,
     # `static` gives an inline definition file-local linkage
@@ -739,9 +731,9 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   members.add("int32_t crucibleBlk[3];")
   members.add("int32_t crucibleWgsPerTask;")
   var memberNames: seq[string]
-  let mctx = EmitCtxC(procName: "module", suffix: suffix)
   for p in runtimeParams:
-    members.add(declaratorC(p.typ, p.name, mctx) & ";")
+    members.add(printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
+      p.typ, p.name, false, "struct ", suffix) & ";")
     memberNames.add(p.name)
   let dataName = "crucibleData" & suffix
   var defs = structDefs
@@ -806,7 +798,6 @@ proc emitCpuDataFillC*(suffix: string, runtimeParams: seq[tuple[name: string, ty
   ## dim3 locals, runtime parameters copy from their Nim formals.
   ##
   ## The caller appends the mode's workgroup-range and launch-call lines.
-  let mctx = EmitCtxC(procName: "module", suffix: suffix)
   var fill = ""
   for (field, axis) in [("x", 0), ("y", 1), ("z", 2)]:
     fill.add("    crucibleData.crucibleGrid[" & $axis & "] = (int32_t)`crucibleGrid`." & field & ";\n")
@@ -815,14 +806,18 @@ proc emitCpuDataFillC*(suffix: string, runtimeParams: seq[tuple[name: string, ty
     let sym = "`" & p.name & "`"
     case p.typ.kind
     of ctStruct:
-      fill.add("    crucibleData." & p.name & " = *(" & declaratorC(p.typ, "", mctx) & "*)&" & sym & ";\n")
+      fill.add("    crucibleData." & p.name & " = *(" & printCDecl(
+        TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget, p.typ, "", true,
+        "struct ", suffix) & "*)&" & sym & ";\n")
     of ctArray:
       # C assigns arrays only element-wise, the compiler builtin copies
       # without a string.h include
       fill.add("    __builtin_memcpy(crucibleData." & p.name & ", " & sym &
                ", sizeof(crucibleData." & p.name & "));\n")
     else:
-      fill.add("    crucibleData." & p.name & " = (" & declaratorC(p.typ, "", mctx) & ")(" & sym & ");\n")
+      fill.add("    crucibleData." & p.name & " = (" & printCDecl(
+        TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget, p.typ, "", true,
+        "struct ", suffix) & ")(" & sym & ");\n")
   fill
 
 proc emitCpuSerialTailC*(suffix: string, runtimeParams: seq[tuple[name: string, typ: CirType]]): string =

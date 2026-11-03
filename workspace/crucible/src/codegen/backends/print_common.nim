@@ -211,28 +211,31 @@ proc getVectorName*(rule: VectorRule, names: ScalarNames, t: CirType): string =
         return e.prefix & $t.vN & "<" & getScalarName(names, t.vElem) & ">"
   return ""
 
-proc getTypeName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
+proc getTypeName*(names: ScalarNames, rule: VectorRule, t: CirType, structTag = "", structSuffix = ""): string =
   case t.kind
   of ctVoid, ctBool, ctInt, ctUint, ctFloat, ctBf16, ctString:
     result = getScalarName(names, t)
   of ctVector:
     result = getVectorName(rule, names, t)
   of ctStruct:
-    result = t.name
+    result = structTag & t.name & structSuffix
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
-proc getFullTypeName*(names: ScalarNames, rule: VectorRule, t: CirType): string =
+proc getFullTypeName*(names: ScalarNames, rule: VectorRule, t: CirType, structTag = "", structSuffix = ""): string =
   if t.kind in {ctPtr, ctAptr}:
-    return getFullTypeName(names, rule, t.pElem) & "*"
-  return getTypeName(names, rule, t)
+    return getFullTypeName(names, rule, t.pElem, structTag, structSuffix) & "*"
+  return getTypeName(names, rule, t, structTag, structSuffix)
 
-proc printCDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirType, ident: string, allowEmptyIdent: bool): string =
+proc printCDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirType, ident: string,
+    allowEmptyIdent: bool, structTag = "", structSuffix = ""): string =
   ## Declaration text of `t` with `ident` appended in the C declarator form:
   ## the array dimensions move behind the identifier and nest into the declarator
   ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`).
   ##
   ## - `allowEmptyIdent` permits no identifier, return types and casts use it
+  ## - `structTag`/`structSuffix` prefix and suffix the `ctStruct` leaf name,
+  ##   through the pointer recursion (`struct S suffix*`)
   ## - the printer refuses an array without an identifier with the `<target: array needs an identifier>` text
   ## - a scalar kind absent from the scalar names yields an empty type name,
   ##   the target compiler rejects the malformed declaration
@@ -242,15 +245,15 @@ proc printCDecl*(names: ScalarNames, rule: VectorRule, target: string, t: CirTyp
   if t.kind in {ctPtr, ctAptr} and t.pElem.kind == ctArray:
     # array dimensions bind behind the identifier, one pointer star inside the parenthesized declarator
     return printCDecl(names, rule, target, t.pElem, "(" & '*' & ident & ")",
-      allowEmptyIdent)
+      allowEmptyIdent, structTag, structSuffix)
   if t.kind == ctArray:
     if t.aElem.kind == ctArray:
       # a pointer declarator is already parenthesized (`(*ident)`), one more parenthesized layer would print `((*ident))`
       let declarator = if ident.startsWith('('): ident else: "(" & ident & ")"
       return printCDecl(names, rule, target, t.aElem, declarator & "[" & $t.aN & "]",
-        allowEmptyIdent)
-    return getFullTypeName(names, rule, t.aElem) & ' ' & ident & '[' & $t.aN & ']'
-  result = getFullTypeName(names, rule, t)
+        allowEmptyIdent, structTag, structSuffix)
+    return getFullTypeName(names, rule, t.aElem, structTag, structSuffix) & ' ' & ident & '[' & $t.aN & ']'
+  result = getFullTypeName(names, rule, t, structTag, structSuffix)
   if ident.len > 0:
     result.add ' ' & ident
 
