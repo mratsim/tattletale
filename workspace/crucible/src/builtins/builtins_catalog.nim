@@ -50,18 +50,6 @@ type
     cbkAtomicFetchAdd
 
 proc getBuiltinKind*[E: enum](_: typedesc[E], payload: NimNode): E {.compileTime.} =
-  ## Enum member for a `{.builtin: <member>.}` payload.
-  ##
-  ## Args:
-  ## - `payload`: the pragma argument read back through `getImpl`, or the nil
-  ##   literal for a `{.builtin.}` pragma without payload
-  ##
-  ## Returns:
-  ## - the member whose name matches the payload
-  ## - `low(E)`, the none value, on a nil payload or an unknown name
-  ##
-  ## Member names come from the enum itself (`$v`), so the payload identifiers
-  ## and the enum members cannot drift apart.
   if payload.kind in {nnkIdent, nnkSym}:
     for v in low(E) .. high(E):
       if payload.strVal == $v:
