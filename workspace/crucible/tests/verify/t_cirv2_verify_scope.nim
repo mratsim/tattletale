@@ -7,7 +7,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:/tmp/c17d06-m2-test-out --nimcache:/tmp/c17d06-m2-test-cache \
-##     workspace/crucible/tests/ir/t_ir_verify_scope.nim
+##     workspace/crucible/tests/verify/t_cirv2_verify_scope.nim
 
 import std/strutils
 import workspace/crucible/src/codegen/ir/cirv2_lang
