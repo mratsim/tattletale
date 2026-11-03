@@ -7,6 +7,7 @@
 
 import std/[macros, hashes]
 import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/codegen/autodiff
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/engines/cuda_api
 import workspace/crucible/src/runtime/engines/opencl_api
@@ -31,7 +32,7 @@ type
     sharedMem: int
 
 func parseLangName(n: NimNode): string =
-  ## `lang =` launch extra value: a bare language ident matched before sem,
+  ## `lang =` launch extra value: an unquoted language ident matched before sem,
   ## `spirv` (words route, default), `glsl` (glslangValidator), `hlsl` (dxc)
   var name = $n
   if n.kind == nnkStrLit:
@@ -363,6 +364,125 @@ macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN
       statics.add(a)
     else:
       result.add(a)
+
+# ═══════════════════════════════════════════════════════════════════════
+# ▸ Autodiff
+# ═══════════════════════════════════════════════════════════════════════
+
+func kernelImplArg(node: NimNode, what: string): NimNode =
+  ## Typed kernel argument as a proc definition.
+  ##
+  ## Call forms:
+  ## - `bwd_diff(kernel)` passes the kernel's symbol
+  ## - `bwd_diff: proc kernel(...) {.global.} = ...` passes the typed definition
+  ## The symbol form pulls the impl at expansion, which VM-compiles the body.
+  ## The inline form hands the typed body over untouched, the only form
+  ## carrying statement pragmas like `{.emit: ... .}`.
+  var impl: NimNode
+  case node.kind
+  of nnkProcDef:
+    impl = node
+  of nnkStmtList:
+    if node.len == 1 and node[0].kind == nnkProcDef:
+      impl = node[0]
+    else:
+      error "bwd_diff: expected exactly one kernel definition, got " & node.repr
+  else:
+    if node.kind in {nnkSym, nnkOpenSymChoice, nnkClosedSymChoice}:
+      impl = node.getImpl()
+    else:
+      error "bwd_diff: " & what & " is not a proc, only {.global.} kernels differentiate"
+  if impl.kind != nnkProcDef:
+    error "bwd_diff: " & what & " must be a {.global.} kernel proc to differentiate"
+  result = impl
+
+macro bwd_diff*(bk: CodegenKind, sym: typed): untyped =
+  ## Compile-time autodiff entry: `cgGlsl.bwd_diff(axpy)` expands to a const
+  ## `BwdDiffKernels` for the Vulkan GLSL backend and `cgMetal.bwd_diff(axpy)`
+  ## for Metal. The kernel takes the launch bridge's ingestion:
+  ##
+  ##   kernel symbol → frontend → normalization → backward derivation → lowering
+  ##
+  ## and each kernel of the pair prints standalone.
+  ##
+  ## The pair contains:
+  ##
+  ## - both printed sources
+  ## - the scalar-gradient reduce kernels
+  ## - the backward signature, nothing else
+  ##
+  ## `bk` is the compile-time backend-kind token (`cgGlsl`, `cgMetal`),
+  ## other kinds refuse at expansion.
+  ##
+  ## The kernel:
+  ##
+  ## - is a `{.global.}` proc in the differentiable subset
+  ## - passes as its symbol or inline as the last argument
+  ##
+  ## Every refusal surfaces at this expansion with a `bwd_diff:` prefix.
+  let impl = sym.kernelImplArg("the kernel argument")
+  # `bk` is the typed enum token, and its name selects the pipeline.
+  # It must not be a `static` macro parameter:
+  # - a static parameter makes the macro generic
+  # - instantiation re-sem-checks the typed kernel body
+  # - statement pragmas like `{.emit: ... .}` refuse there
+  # - the differentiable subset must diagnose those pragmas itself
+  case bk.strVal
+  of "cgMetal":
+    crucibleCompileTarget = ctMetal
+    result = newLit(codegenBwdDiffKernels(cgMetal, impl))
+  of "cgGlsl":
+    crucibleCompileTarget = ctGlsl
+    result = newLit(codegenBwdDiffKernels(cgGlsl, impl))
+  else:
+    error "bwd_diff: backend kind " & bk.strVal & " has no autodiff pipeline, this op gates Metal and Vulkan GLSL only"
+
+macro bwd_diff*(bk: CodegenKind, fwd: typed, bwd: typed, rest: varargs[untyped]): untyped =
+  ## Declared-backward escape hatch, contract:
+  ##
+  ## - builds the kernel pair from the hand-written backward `bwd` without running the backward derivation,
+  ##   the pair's metadata derives from the forward symbol
+  ## - `save = [<forward outputs>]` names auxiliary forward outputs kept alive between forward and backward
+  ## - the declared backward must reproduce the mirror signature exactly, else the expansion refuses with the `bwd_diff:` prefix:
+  ##   gradient slots in forward-parameter order, block 2 the forward signature verbatim, the kernel named `<fwd>_bwd`
+  ## - other arguments than `save = [...]` refuse at expansion
+  ##
+  ## Saved outputs are block-2 primals: the declared backward takes them explicitly,
+  ## `.backward` binds them by name.
+  ##
+  ## Example:
+  ##
+  ##   cgMetal.bwd_diff(sdpa, sdpa_bwd, save =  [dst, lse])
+  var saveNames: seq[string] = @[]
+  for a in rest:
+    if a.kind == nnkExprEqExpr and $a[0] == "save":
+      let list = a[1]
+      if list.kind != nnkBracket:
+        error "bwd_diff: save takes a list of forward-output names, got " &
+          list.repr
+      for e in list:
+        # Nim keywords like dst reach the untyped varargs as an empty nnkOutTy node,
+        # without strVal, their text only in repr.
+        if e.kind == nnkOutTy:
+          saveNames.add e.repr
+        elif e.kind in {nnkIdent, nnkSym}:
+          saveNames.add e.strVal
+        else:
+          error "bwd_diff: save takes forward-output names, got " & e.repr
+    else:
+      error "bwd_diff: unexpected argument " & a.repr &
+        ", only save = [<forward outputs>] is supported"
+  let fwdImpl = fwd.kernelImplArg("the forward kernel")
+  let bwdImpl = bwd.kernelImplArg("the declared backward kernel")
+  case bk.strVal
+  of "cgMetal":
+    crucibleCompileTarget = ctMetal
+    result = newLit(codegenBwdDiffKernelsDeclared(cgMetal, fwdImpl, bwdImpl, saveNames))
+  of "cgGlsl":
+    crucibleCompileTarget = ctGlsl
+    result = newLit(codegenBwdDiffKernelsDeclared(cgGlsl, fwdImpl, bwdImpl, saveNames))
+  else:
+    error "bwd_diff: backend kind " & bk.strVal & " has no declared-backward pipeline, this form gates Metal and Vulkan GLSL only"
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ PUBLIC API

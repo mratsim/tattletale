@@ -14,9 +14,11 @@
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
 ## | Geometry      | `Dim3`, `dim3`                                                                                                        |
 ## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                         |
+## | Autodiff      | `bwd_diff`, `BwdDiffKernels`                                                                                          |
 
 import
   ./codegen/gpu_compiler,
+  ./codegen/autodiff,
   ./runtime/engines/engines_api,
   ./runtime/launch/launch_kernel,
   ./runtime/launch/launch_device_fn
@@ -48,7 +50,14 @@ export launch_device_fn.DeviceFnSugar,
 export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.glsl,
        gpu_compiler.webgpu, gpu_compiler.metal, gpu_compiler.hlsl,
        gpu_compiler.spirv
-# exporting the type also exports the non-pure enum's members by bare name,
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Autodiff
+# ═══════════════════════════════════════════════════════════════════════
+
+export autodiff.BwdDiffKernels
+export launch_device_fn.bwd_diff
+# exporting the type also exports the non-pure enum's members by unqualified name,
 # individual enum fields cannot be exported ("enum field cannot be exported individually")
 from ./codegen/backends/lang_hlsl import HlslFlavor
 export HlslFlavor
