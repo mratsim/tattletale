@@ -402,8 +402,8 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
     let s = body[i]
     let pad = spaces(indent * 2)
     case s.kind
-    of sVar, sConst:
-      case s.space
+    of sVar:
+      case s.addressSpace
       of caThreadgroup:
         cRefuse(ctx, "threadgroup (shared) memory is not supported in v0")
       of caConstant, caDevice:
@@ -417,7 +417,7 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
           if name == s.name:
             cRefuse(ctx, "kernel local '" & s.name &
               "' shadows a kernel parameter, rename one")
-      let decl = (if s.kind == sConst: "const " else: "") &
+      let decl =
         emitTypeC(s.declType, ctx) & " " & s.name &
         (if s.init != nil: " = " & printExpr(s.init, ctx) else: "") & ";"
       lines.add(pad & decl)

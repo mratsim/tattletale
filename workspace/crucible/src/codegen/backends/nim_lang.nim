@@ -403,8 +403,8 @@ proc emitStmts(body: seq[CirStmt], ctx: EmitCtx): NimNode =
   result = nnkStmtList.newTree()
   for s in body:
     case s.kind
-    of sVar, sConst:
-      case s.space
+    of sVar:
+      case s.addressSpace
       of caThreadgroup:
         cpuRefuse(ctx, "threadgroup (shared) memory is not supported in v0")
       of caConstant, caDevice:
