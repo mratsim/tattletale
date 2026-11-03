@@ -103,8 +103,7 @@ proc coalesceZCore*(shape, stride: IntTuple): tuple[s, d: IntTuple] =
   result = (itNode(rs), itNode(rd))
 
 proc coalesceZLayout(shape, stride: IntTuple): Layout =
-  ## coalesceZCore folded into a layout. An empty shape gives `1:0`.
-  ## Enclosing 1-tuples strip off.
+  ## An empty shape gives `1:0`, enclosing 1-tuples strip off.
   let (ns, nd) = coalesceZCore(shape, stride)
   if ns.kind == tkNode and ns.children.len == 0:
     return layoutSet(itv(1), itv(0))
@@ -174,7 +173,6 @@ type
     d: seq[int]
 
 proc complementBuildAxis(coprof: IntTuple, path: seq[int], acc: Table[seq[int], AxisAcc]): Layout =
-  ## Assembly of the complement's per-axis gap layouts back into the codomain profile tree.
   if coprof.kind == tkNode:
     var ls = newSeq[Layout](coprof.children.len)
     for i in 0 ..< coprof.children.len:
@@ -191,7 +189,6 @@ proc complementBuildAxis(coprof: IntTuple, path: seq[int], acc: Table[seq[int], 
   coalesceZLayout(itNode(sh), itNode(st))
 
 proc complementScaleAxis(L: Layout, coprof: IntTuple, path: seq[int]): Layout =
-  ## Multiplication of the axis layouts' strides by their axis unit basis element, turning per-axis integers into Z^S strides.
   ## A scalar codomain keeps its integer strides, its unit basis element being 1.
   if coprof.kind == tkNode:
     let ms = L.modes()
@@ -209,7 +206,7 @@ proc complementScaleAxis(L: Layout, coprof: IntTuple, path: seq[int]): Layout =
   layoutSet(L.shape, scaleStride(L.stride))
 
 proc complementExtendAxis(L: Layout, coprof, extend: IntTuple, path: seq[int]): Layout =
-  ## Growth of the last mode of each axis to `ceil(extend / last stride)`, the extension bound of the complement.
+  ## Last mode of each axis grows to `ceil(extend / last stride)`, the extension bound.
   if coprof.kind == tkNode:
     let ms = L.modes()
     var ls = newSeq[Layout](coprof.children.len)
@@ -329,8 +326,8 @@ type
     pps: int
 
 proc rightInverseInvertAxis(e: StrideScalar, flatD: IntTuple, chain: seq[ChainEntry]): Layout =
-  ## One codomain axis of the layout inverted along its chain of strides,
-  ## visited in increasing order.
+  ## Inverts one codomain axis along its stride chain, the chain visited in
+  ## increasing stride order.
   var currD = e
   for c in flatD.children:
     let de = c.leaf
@@ -607,8 +604,8 @@ proc logicalDivide*(A: Layout, tiler: Layout): Layout =
   compose(A, concatLayout(@[tiler, complement(tiler, A.shape)]))
 
 proc logicalDivide1(A: Layout, t: int): Layout =
-  ## Rank-1 logical divide of a scalar-shape layout by an integer.
-  ## The tile pair `(t, ceil(shape/t)):(stride, stride*t)` folds out directly.
+  ## Rank-1 logical divide of a scalar-shape layout by an integer,
+  ## the tile pair `(t, ceil(shape/t)):(stride, stride*t)`.
   if A.shape.kind == tkLeaf:
     if A.stride.kind != tkLeaf:
       raise layoutError("logical_divide: non-scalar stride of a scalar shape")
@@ -660,7 +657,6 @@ proc logicalProduct*(A: Layout, tiler: Layout): Layout =
   concatLayout(@[A, compose(complement(A), tiler)])
 
 proc logicalProduct1(A: Layout, t: int): Layout =
-  ## Rank-1 logical product of a mode by an integer tiler.
   logicalProduct(A, layoutSet(itv(t), itv(1)))
 
 proc logicalProduct*(A: Layout, tiler: IntTuple): Layout =

@@ -292,7 +292,7 @@ proc ssStr*(d: StrideScalar): string =
   ## Compact stride-scalar form.
   ##
   ## - a single nonzero leaf prints in basis form `2@1@0`: value, path reversed
-  ## - a multi-term sum prints as its children `(1,2)` and the zero prints `0
+  ## - a multi-term sum prints as its children `(1,2)`, the zero prints `0`
   let rep = basisRepr(d)
   if rep.len == 1:
     var parts = @[$rep[0].val]
