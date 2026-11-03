@@ -520,7 +520,6 @@ proc findKernelC(m: CirModule, ctx: EmitCtxC): CirProc =
 proc inlineSourceC(k: CirProc, m: CirModule, ctx: EmitCtxC): tuple[bodyProc: CirProc, call: CirStmt] =
   ## Inlined-body lookup: the proc whose body inlines into the launch
   ## thread loop nest, plus the wrapper call when the pipeline kept them separate.
-  ## Same shapes as the Nim emitter:
   ## - the wrapper body is one call to the user kernel proc, that body
   ##   inlines with the call arguments substituting the parameters
   ## - a pipeline transform already folded the user kernel into the wrapper,
@@ -591,33 +590,6 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
                printProcBodyC(p, ctx) & "\n}")
   blocks.join("\n\n")
 
-proc emitCpuKernelBodyC*(m: CirModule, suffix: string, coords: CpuCoordTableC): tuple[body: string, coordUse: bool] =
-  ## Kernel body emission, inlined form, free-parameter shape.
-  ##
-  ## Returns the kernel body statements as C text plus the coordinate-builtin use flag.
-  ##
-  ## - the body references the kernel's runtime formals as free identifiers
-  ##   and the launch binds them to locals
-  ## - emitCpuWorkgroupLaunchC reads the same machinery with parameters
-  ##   bound to the data struct instead
-  cpuCoordUseC = false
-  var kctx = EmitCtxC(procName: "kernel", suffix: suffix)
-  let k = findKernelC(m, kctx)
-  let (bodyProc, call) = inlineSourceC(k, m, kctx)
-
-  var subst: seq[(string, string)] = @[]
-  var bctx = EmitCtxC(procName: bodyProc.name,
-                      suffix: suffix, coords: coords, inlineKernel: true)
-  if not call.isNil:
-    for i, param in bodyProc.params:
-      if i < call.callArgs.len:
-        subst.add((param.name, printExpr(call.callArgs[i], bctx)))
-    bctx.subst = subst
-  var lines: seq[string]
-  printStmts(bodyProc.body, bctx, 0, lines)
-  result.body = lines.join("\n")
-  result.coordUse = cpuCoordUseC
-
 proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
                       dataPrefix: string,
                       memberNames: seq[string]): tuple[body: string, coordUse: bool] =
@@ -659,7 +631,7 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   ## - typesAndData: the nominal struct definitions and the per-launch
   ##   data struct
   ## - funcs: the iteration function with decomposition prologue, thread
-  ##   loop nest and kernel body, plus the task function
+  ##   loop nest and kernel body, plus the task function except in serial mode
   ##
   ## Launch assembly: typesAndData, then the callee definitions, then funcs.
   ## Callees reference the structs, the kernel body references callees.
@@ -669,10 +641,8 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   ##   contiguous workgroup range, crucibleWgsPerTask workgroups at a time
   ## - the task function reads the env self-pointer and hands the task
   ##   to the parallelForRunner, TPC_DEFINE_PARFOR shape
-  ## - serial mode omits the task function. The serial launch compiles
-  ##   without the threadpool_compute force-include, the launch assembly
-  ##   prepends the unit's stdint/stdbool includes, and the tail calls
-  ##   the iteration function directly (emitCpuSerialTailC)
+  ## - serial mode omits the task function, the launch tail
+  ##   (emitCpuSerialTailC) calls the iteration function directly
   ##
   ## Parameter names must avoid `tpc_` prefixes and the launch-internal crucibleWg/crucibleWgsPerTask/crucibleGrid/crucibleBlk names.
   if m.globals.len > 0:
@@ -725,8 +695,7 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   iter.add("        int32_t crucibleGy = (crucibleWg / tpc_d_->crucibleGrid[0]) % tpc_d_->crucibleGrid[1];\n")
   iter.add("        int32_t crucibleGz = crucibleWg / (tpc_d_->crucibleGrid[0] * tpc_d_->crucibleGrid[1]);\n")
   # per-thread-iteration do-block: a kernel return jumps to the label
-  # inside the loops and the remaining thread iterations still run,
-  # one per-iteration block shape as in the Nim emitter
+  # inside the loops and the remaining thread iterations still run
   iter.add("        for (int32_t crucibleBz = 0; crucibleBz < tpc_d_->crucibleBlk[2]; ++crucibleBz)\n")
   iter.add("            for (int32_t crucibleBy = 0; crucibleBy < tpc_d_->crucibleBlk[1]; ++crucibleBy)\n")
   iter.add("                for (int32_t crucibleBx = 0; crucibleBx < tpc_d_->crucibleBlk[0]; ++crucibleBx) {\n")
@@ -761,7 +730,6 @@ proc emitCpuDataFillC*(suffix: string, runtimeParams: seq[tuple[name: string, ty
   ##
   ## Grid and block dims copy from the launch's `crucibleGrid`/`crucibleBlk`
   ## dim3 locals, runtime parameters copy from their Nim formals.
-  ## A struct parameter copies by pointer cast.
   ##
   ## The caller appends the mode's workgroup-range and launch-call lines.
   var fill = ""

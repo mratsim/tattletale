@@ -1,7 +1,8 @@
 ## CPU engine: parallel determinism checks over the threadpool_compute pool.
 ##
 ## Test that the pooled launch reproduces the serial launch output bitwise.
-## Test that axpy and workgroup-tag outputs stay identical at pool sizes 1, 4, 20 and K = 1, 4, grid size, in both thread modes.
+## Test that axpy and workgroup-tag outputs stay identical at pool sizes 1, 4, 20 in both thread modes.
+## Test that K = 1, 4, grid size coarsening stays bitwise identical across pools in pooled mode (the serial launch ignores the knob).
 ##
 ## Run:
 ##   nim test_crucible_cpu
@@ -77,36 +78,61 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     let wgCount = (N + BLK - 1) div BLK
     let (xh, yh0, expected) = hostArrays()
     var refOut: array[N, float32]
-    for k in [1, 4, wgCount]:
-      for pool in [1, 4, 20]:
-        var xh = xh
-        var yh = yh0
-        var buf: array[N, uint32]
-        var engine = newCpuEngine(pool)
-        engine.launchCpuFn axpyPar(cast[ptr UncheckedArray[float32]](addr yh[0]),
-            2.5'f32,
-            cast[ptr UncheckedArray[float32]](addr xh[0]), int32(N)) do:
-          grid = (wgCount, 1)
-          blk = (BLK, 1)
-          workgroupsPerTask = k
-        engine.launchCpuFn tagWorkgroups(cast[ptr UncheckedArray[uint32]](addr buf[0]),
-            int32(N)) do:
-          grid = (wgCount, 1)
-          blk = (BLK, 1)
-          workgroupsPerTask = k
-        engine.destroyCpuEngine()
-        for i in 0 ..< N:
-          doAssert yh[i] == expected[i],
-            &"coarse axpy K={k} pool {pool} [{i}]: got {yh[i]} want {expected[i]}"
-          doAssert buf[i] == uint32(i div BLK),
-            &"coarse tag K={k} pool {pool} [{i}]: got {buf[i]} want {uint32(i div BLK)}"
-        if k == 1 and pool == 1:
-          refOut = yh
-        else:
+    when compileOption("threads"):
+      for k in [1, 4, wgCount]:
+        for pool in [1, 4, 20]:
+          var xh = xh
+          var yh = yh0
+          var buf: array[N, uint32]
+          var engine = newCpuEngine(pool)
+          engine.launchCpuFn axpyPar(cast[ptr UncheckedArray[float32]](addr yh[0]),
+              2.5'f32,
+              cast[ptr UncheckedArray[float32]](addr xh[0]), int32(N)) do:
+            grid = (wgCount, 1)
+            blk = (BLK, 1)
+            workgroupsPerTask = k
+          engine.launchCpuFn tagWorkgroups(cast[ptr UncheckedArray[uint32]](addr buf[0]),
+              int32(N)) do:
+            grid = (wgCount, 1)
+            blk = (BLK, 1)
+            workgroupsPerTask = k
+          engine.destroyCpuEngine()
           for i in 0 ..< N:
-            doAssert yh[i] == refOut[i],
-              &"coarse bitwise K={k} pool {pool} [{i}]: got {yh[i]} want {refOut[i]}"
-    echo "[OK] coarsening check: axpy and workgroup tags bitwise identical at K = 1, 4, grid across pools 1, 4, 20"
+            doAssert yh[i] == expected[i],
+              &"coarse axpy K={k} pool {pool} [{i}]: got {yh[i]} want {expected[i]}"
+            doAssert buf[i] == uint32(i div BLK),
+              &"coarse tag K={k} pool {pool} [{i}]: got {buf[i]} want {uint32(i div BLK)}"
+          if k == 1 and pool == 1:
+            refOut = yh
+          else:
+            for i in 0 ..< N:
+              doAssert yh[i] == refOut[i],
+                &"coarse bitwise K={k} pool {pool} [{i}]: got {yh[i]} want {refOut[i]}"
+      echo "[OK] coarsening check: axpy and workgroup tags bitwise identical at K = 1, 4, grid across pools 1, 4, 20"
+    else:
+      # serial mode covers the whole grid in one call, a literal knob
+      # is accepted and ignored
+      var yh = yh0
+      var buf: array[N, uint32]
+      var engine = newCpuEngine(1)
+      engine.launchCpuFn axpyPar(cast[ptr UncheckedArray[float32]](addr yh[0]),
+          2.5'f32,
+          cast[ptr UncheckedArray[float32]](addr xh[0]), int32(N)) do:
+        grid = (wgCount, 1)
+        blk = (BLK, 1)
+        workgroupsPerTask = 4
+      engine.launchCpuFn tagWorkgroups(cast[ptr UncheckedArray[uint32]](addr buf[0]),
+          int32(N)) do:
+        grid = (wgCount, 1)
+        blk = (BLK, 1)
+        workgroupsPerTask = 4
+      engine.destroyCpuEngine()
+      for i in 0 ..< N:
+        doAssert yh[i] == expected[i],
+          &"serial axpy [{i}]: got {yh[i]} want {expected[i]}"
+        doAssert buf[i] == uint32(i div BLK),
+          &"serial tag [{i}]: got {buf[i]} want {uint32(i div BLK)}"
+      echo "[OK] coarsening check: the serial launch ignores the knob and covers the whole grid"
 
 runTest()
 echo "t_cpu_parallel_gates: all checks passed"

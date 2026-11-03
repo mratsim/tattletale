@@ -35,6 +35,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   for i in 0 ..< N:
     doAssert yHost[i] == expected[i],
       "axpy: element " & $i & " got " & $yHost[i] & " want " & $expected[i]
-  echo "[OK] launchCpuFn: View kernel runs through the serial C launch on the CPU engine"
+  echo "[OK] launchCpuFn: View kernel runs through the emitted-C launch on the CPU engine"
 
 runTest()

@@ -31,7 +31,7 @@
 ## - `workgroupsPerTask = K`: K adjacent workgroups (x-fastest flat order)
 ##   share one pool task, default 1, one workgroup per task
 ## - a coarse launch runs ceil(workgroups / K) tasks and clamps the last task range at the grid total
-##   the serial launch has no pool tasks, it ignores the knob
+##   the serial launch has no pool tasks, it ignores a literal knob, a non-literal one refuses at compile time
 ## - heuristic starting point: K ~ workgroups / (4 * pool size), about four tasks per worker
 ##
 ## The derived launch (neither given):
@@ -177,8 +177,10 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
   ## - schedule: both nil means derivation, coordinate kernels refuse there
   ## - with `--threads:on` each pool task covers workgroupsPerTask workgroups,
   ##   adjacent in the x-fastest flat order matching the serial decomposition
-  ##   without threads the iteration function covers the whole grid in one call,
-  ##   the serial launch ignores workgroupsPerTask
+  ##   without threads the iteration function covers the whole grid in one call
+  ##
+  ## workgroupsPerTask is ignored in serial mode, a non-literal knob refuses
+  ## at the schedule parse.
   let formals = wrapper[3]
   var runtimeNames: seq[NimNode]
   for i in 1 ..< formals.len:
@@ -345,7 +347,8 @@ macro launchCpuFn*(engine: CpuEngine, call: untyped): untyped =
   ## Launches a kernel on the CPU engine with whole values.
   ##
   ## - schedule in a `do:` block, `grid = ...` / `blk = ...`, both optional
-  ## - `workgroupsPerTask = K` optional: K adjacent workgroups share one pool task. The serial launch ignores it
+  ## - `workgroupsPerTask = K` optional: K adjacent workgroups share one pool task.
+  ##   The serial launch ignores a literal K, a non-literal expression refuses at compile time
   ##
   ##     engine.launchCpuFn axpy(y, 2.5, x) do:
   ##       grid = (1, 1)
@@ -373,9 +376,14 @@ macro launchCpuFn*(engine: CpuEngine, call: untyped): untyped =
       of "blk":
         blkN = a[1]
       of "workgroupsPerTask":
-        # an integer literal validates here, any other expression hits the runtime guard of the parallel launch
+        # an integer literal validates here. The serial launch never
+        # evaluates the knob, a non-literal refuses at compile time
+        # and never reaches codegen. In pooled mode any other
+        # expression hits the runtime guard of the launch
         if a[1].kind == nnkIntLit and a[1].intVal < 1:
           error("launchCpuFn: workgroupsPerTask must be >= 1, got " & $a[1].intVal, a)
+        if not compileOption("threads") and a[1].kind != nnkIntLit:
+          error("launchCpuFn: the serial launch has no pool tasks, workgroupsPerTask must be an integer literal (it is ignored), got the expression " & a[1].repr, a)
         coarsenN = a[1]
   for i in 1 ..< callNode.len:
     doAssert callNode[i].kind notin {nnkExprEqExpr, nnkExprColonExpr},

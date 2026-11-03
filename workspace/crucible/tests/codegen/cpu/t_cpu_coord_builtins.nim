@@ -31,6 +31,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         "threadgroup: gid " & $gid & " got " & $host[gid + 8] & " want " & $tg
       doAssert host[gid + 16] == uint32(tid),
         "thread index: gid " & $gid & " got " & $host[gid + 16] & " want " & $tid
-  echo "[OK] launchCpuFn: coordinate builtins rewrite to loop-variable expressions"
+  echo "[OK] launchCpuFn: coordinate builtins rewrite to data-struct member expressions"
 
 runTest()

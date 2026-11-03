@@ -1,9 +1,11 @@
 ## CPU engine: launch refusals for schedules the emitted C cannot index.
 ##
-## Test that a launch refuses loudly when a grid dim or the grid workgroup
-## total exceeds int32. The emitted C stores the dims and the workgroup
-## total in int32, a truncated value would silently run zero workgroups
-## behind a successful launch.
+## Test that a launch refuses loudly when the schedule exceeds int32:
+##
+## - a grid dim or the grid workgroup total beyond int32 truncates,
+##   the launch would silently run zero workgroups behind a successful return
+## - a non-literal workgroupsPerTask refuses at compile time in serial mode,
+##   the serial launch never evaluates the knob
 ##
 ## Run:
 ##   nim test_crucible_cpu
@@ -45,5 +47,23 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
     echo "[OK] refusal: a single grid dim beyond int32 refuses with the failing dim"
 
   echo "[OK] launchCpuFn: schedules the emitted C launch cannot index refuse loudly"
+
+  block:   # a non-literal knob runs the pooled launch, serial mode refuses it at compile time
+    var outBuf: array[8, uint32]
+    when compileOption("threads"):
+      var k = 4
+      engine.launchCpuFn probe(cast[ptr UncheckedArray[uint32]](addr outBuf[0])) do:
+        grid = (4, 1)
+        blk = (1, 1)
+        workgroupsPerTask = k
+      doAssert outBuf[0] == 1, "a pooled launch with a non-literal knob must run"
+      echo "[OK] workgroupsPerTask: a pooled launch takes a non-literal knob and validates it at runtime"
+    else:
+      engine.launchCpuFn probe(cast[ptr UncheckedArray[uint32]](addr outBuf[0])) do:
+        grid = (4, 1)
+        blk = (1, 1)
+        workgroupsPerTask = 3
+      doAssert outBuf[0] == 1, "a literal knob is accepted but ignored, the launch covers the whole grid"
+      echo "[OK] workgroupsPerTask: the serial launch ignores a literal knob, the non-literal refusal is pinned by manual_cpu_serial_knob_refused.nim"
 
 runTest()
