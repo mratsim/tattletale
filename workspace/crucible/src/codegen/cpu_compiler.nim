@@ -38,14 +38,8 @@ export lang_c.emitCpuSerialTailC, lang_c.emitCpuDataFillC
 export lang_c.emitCpuTypeC, lang_c.kernelRuntimeParams
 
 proc lowerCpuKernel*(wrapper: NimNode): CirModule =
-  ## Lowers a `{.global.}` kernel wrapper to CIRv2 and runs the pass
-  ## registry in stage order, CPU target:
-  ##
-  ## - the compile target is a compile-time global, `ccGetBackend` reads
-  ##   it inside kernel bodies
-  ## - the proc restores the target it found on return
-  ## - a read outside a launch sees the state before it
-  ## - a refusal aborts the compilation, no state survives it
+  ## Lowers a `{.global.}` kernel wrapper to CIRv2 and runs the pass registry in stage order, CPU target.
+  ## The caller's compile target is restored on return, a refusal leaves it untouched.
   let savedTarget = crucibleCompileTarget
   crucibleCompileTarget = ctCpu
   let (m, lerr) = lowerCirv2(wrapper)
