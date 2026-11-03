@@ -61,9 +61,6 @@ proc xorhashChecksum*(meta: SdpaPagedFixtureMetadata, file: string): uint32 =
       return chk
   doAssert false, "no recorded checksum for " & file & " in " & meta.name
 
-proc expectedShape*(meta: SdpaPagedFixtureMetadata): tuple =
-  (meta.numSeqs, meta.Hq, 1, meta.Dv)
-
 proc loadFlatFixtureTensor*(fixtureDir: string, file: string, n: int): auto =
   ## One-dimensional int32 fixture array (block table, cache seqlens).
   ##
@@ -71,9 +68,9 @@ proc loadFlatFixtureTensor*(fixtureDir: string, file: string, n: int): auto =
   ##   A `HostTensor[int32, ...]` over `n` freshly allocated elements,
   ##   filled from `file`'s raw bytes.
   ##
-  ## Why not `loadFixtureTensor`:
-  ##   it builds on `makeHostTensor`, whose origin-offset math needs
-  ##   a multi-dimensional shape.
+  ## Why not `loadFixtureTensor`: `makeHostTensor` rejects rank-1 shapes,
+  ## `originOffset` dies with a type mismatch on the `(n,)` layout
+  ## (ceramic_testutils.nim stride loop), so the layout is built here.
   let layout = make_layout((n,))
   result = HostTensor[int32, typeof(layout.shape), typeof(layout.stride)](
     data: cast[ptr UncheckedArray[int32]](allocShared(n * sizeof(int32))),
@@ -83,3 +80,7 @@ proc loadFlatFixtureTensor*(fixtureDir: string, file: string, n: int): auto =
   doAssert bytes.len == n * sizeof(int32),
     "loadFlatFixtureTensor: " & file & " is " & $bytes.len & " bytes, expected " & $(n * sizeof(int32))
   copyMem(result.data, unsafeAddr bytes[0], bytes.len)
+
+proc expectedShape*(meta: SdpaPagedFixtureMetadata): tuple =
+  (meta.numSeqs, meta.Hq, 1, meta.Dv)
+

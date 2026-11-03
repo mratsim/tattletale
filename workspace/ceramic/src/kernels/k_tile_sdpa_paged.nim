@@ -12,7 +12,8 @@
 ## `block_table` with -1 padding and bounded by `cache_seqlens`.
 ##
 ## - decode regime: one query entry per sequence, causal off, attention
-##   range [0, cache_seqlens[seq])
+##   range [0, cache_seqlens[seq]) with cache_seqlens[seq] >= 1 (an empty
+##   sequence has no softmax normalization, 0/0)
 ## - buffers: query/output (numSeqs, Hq, 1, D)
 ## - kv pools (numPages, numLayers, PageSize, Nkv, D), head dim contiguous,
 ##   layer `layer` served per dispatch
@@ -21,7 +22,8 @@
 ##
 ## Paging contract:
 ##   - a kv tile spans `nt` consecutive kv entries of one page:
-##     PageSize mod nt == 0 (v1's "page_size multiple of 8" is this rule at nt = 8)
+##     PageSize mod nt == 0, the same rule ceramic_v1's
+##     grouped_query_attention_paged states as page_size multiple of 8 at nt = 8
 ##   - the kv loop touches exactly ceil(cache_seqlen / PageSize) table entries
 ##     and never reads a -1 padding slot
 ##   - the caller guarantees cache_seqlen <= maxPages * PageSize
@@ -58,7 +60,7 @@ proc paged_sdpa_decode*(
   ##   - mmaPV: `static TiledMma` for attention·V, reduces over S
   ##
   ## Launch: grid (1, Hq, numSeqs), one simdgroup per threadgroup.
-  ## Grid x addresses the query tile, grid y the head, grid z the sequence.
+  ## Grid y addresses the head, grid z the sequence, grid x stays 1 (one query tile in decode).
   ##
   ## `layer` selects the pool's layer slice: all sequences of one dispatch
   ## read one layer's keys and values.
@@ -98,72 +100,68 @@ proc paged_sdpa_decode*(
     regCrd = qkMap.layout.slice(((thrCrd, _), _))
     crdBase = qkMap.layout.crd2idx(((thrCrd, _), _))
 
-  let
-    (qStride, _, _) = (threadgroups_per_grid.x, threadgroups_per_grid.y, threadgroups_per_grid.z)
-  # Grid x steps the query tile by the grid width, so a grid smaller than the tile count still covers every tile
-  for qTile in countup(threadgroup_position_in_grid.x, 0, qStride):
-    var q: tile(Q.T, qkMma.getMmaLayout(opA))    # (MT, Dk)
-    q.load(vQ, qMap, thrID, (qTile, 0))
+  var q: tile(Q.T, qkMma.getMmaLayout(opA))    # (MT, Dk), one query tile in decode
+  q.load(vQ, qMap, thrID, (0, 0))
 
-    var qk = zeros(tile(float32, qkCLayout))      # S = Q·Kᵀ scores, (MT × NT)
-    const rowStatsL = reducedLayout(qkMap.layout, 1)
-    var m_i = finiteFloor(tile(float32, rowStatsL)) # running max per query entry
-      # init to a finite floor, not -inf: a fully-masked kv tile would NaN alpha through -inf - -inf and poison the entry
-    var l_i = zeros(tile(float32, rowStatsL))     # running sum per query entry
-    var acc = zeros(tile(float32, pvCLayout))     # (MT × Dv) accumulator
+  var qk = zeros(tile(float32, qkCLayout))        # S = Q·Kᵀ scores, (MT × NT)
+  const rowStatsL = reducedLayout(qkMap.layout, 1)
+  var m_i = finiteFloor(tile(float32, rowStatsL)) # running max per query entry
+    # init to a finite floor, not -inf: a fully-masked kv tile would NaN alpha through -inf - -inf and poison the entry
+  var l_i = zeros(tile(float32, rowStatsL))       # running sum per query entry
+  var acc = zeros(tile(float32, pvCLayout))       # (MT × Dv) accumulator
 
-    for kv in 0 ..< seqlen.ceil_div(nt):
-      let
-        kvPos = kv * nt
-        pageIdx = kvPos div PageSize
-        inPage = kvPos mod PageSize
-        pageId = int(blockTable[seqId, pageIdx])
-        kBase = pageId * kvPoolK.stride[0] + int(layer) * kvPoolK.stride[1] +
-                inPage * kvPoolK.stride[2] + kvHead * kvPoolK.stride[3]
-        vBase = pageId * kvPoolV.stride[0] + int(layer) * kvPoolV.stride[1] +
-                inPage * kvPoolV.stride[2] + kvHead * kvPoolV.stride[3]
-        nkvK = kvPoolK.shape[3] * Dk
-        nkvV = kvPoolV.shape[3] * Dv
-        tileRows = nt
-        tileCols = Dk
-        vK = make_view(kvPoolK.data +% kBase,
-                       make_layout((tileRows, tileCols), (nkvK, 1)))
-        vV = make_view(kvPoolV.data +% vBase,
-                       make_layout((tileCols, tileRows), (1, nkvV)))
+  for kv in 0 ..< seqlen.ceil_div(nt):
+    let
+      kvPos = kv * nt
+      pageIdx = kvPos div PageSize
+      inPage = kvPos mod PageSize
+      pageId = int(blockTable[seqId, pageIdx])
+      kBase = pageId * kvPoolK.stride[0] + int(layer) * kvPoolK.stride[1] +
+              inPage * kvPoolK.stride[2] + kvHead * kvPoolK.stride[3]
+      vBase = pageId * kvPoolV.stride[0] + int(layer) * kvPoolV.stride[1] +
+              inPage * kvPoolV.stride[2] + kvHead * kvPoolV.stride[3]
+      nkvK = kvPoolK.shape[3] * Dk
+      nkvV = kvPoolV.shape[3] * Dv
+      tileRows = nt
+      tileCols = Dk
+      vK = make_view(kvPoolK.data +% kBase,
+                     make_layout((tileRows, tileCols), (nkvK, 1)))
+      vV = make_view(kvPoolV.data +% vBase,
+                     make_layout((tileCols, tileRows), (1, nkvV)))
 
-      var k: tile(kvPoolK.T, qkMma.getMmaLayout(opB))  # (NT, Dk)
-      k.load(vK, kMap, thrID, (0, 0))
-      qk.fillWith(0'f32)
-      qkMma.atom.gemm_tile(qk, q, k, qk)         # S = Q·Kᵀ   (MMA 1)
+    var k: tile(kvPoolK.T, qkMma.getMmaLayout(opB))  # (NT, Dk)
+    k.load(vK, kMap, thrID, (0, 0))
+    qk.fillWith(0'f32)
+    qkMma.atom.gemm_tile(qk, q, k, qk)         # S = Q·Kᵀ   (MMA 1)
 
-      qk *= qMul                                 # scale, before the band cut
+    qk *= qMul                                 # scale, before the band cut
 
-      var band: tile(bool, qkCLayout)
-      forEach idx, var c in band:
-        let (_, kCol) = crdBase + regCrd.crd2idx(idx)
-        let kPos = kvPos + kCol                  # kv tile's column base
-        c = kPos >= seqlen
-      qk.where(band, negInf(float32), qk)        # masked keys read -inf
+    var band: tile(bool, qkCLayout)
+    forEach idx, var c in band:
+      let (_, kCol) = crdBase + regCrd.crd2idx(idx)
+      let kPos = kvPos + kCol                  # kv tile's column base
+      c = kPos >= seqlen
+    qk.where(band, negInf(float32), qk)        # masked keys read -inf
 
-      var m_ij: tile(float32, rowStatsL)
-      m_ij.max(qk, axis = 1, qkMap)
-      m_ij = max(m_i, m_ij)                      # running max per query entry
-      var alpha: tile(float32, rowStatsL)        # alpha = exp2(m_prev - m_cur), the online-softmax rescale
-      alpha = m_i - m_ij
-      alpha.exp2()
-      m_i = m_ij
-      qk -.= m_ij
-      qk.exp2()
-      l_i *= alpha                               # rescale the running sum
-      var l_ij: tile(float32, rowStatsL)
-      l_ij.sum(qk, axis = 1, qkMap)
-      l_i += l_ij
+    var m_ij: tile(float32, rowStatsL)
+    m_ij.max(qk, axis = 1, qkMap)
+    m_ij = max(m_i, m_ij)                      # running max per query entry
+    var alpha: tile(float32, rowStatsL)        # alpha = exp2(m_prev - m_cur), the online-softmax rescale
+    alpha = m_i - m_ij
+    alpha.exp2()
+    m_i = m_ij
+    qk -.= m_ij
+    qk.exp2()
+    l_i *= alpha                               # rescale the running sum
+    var l_ij: tile(float32, rowStatsL)
+    l_ij.sum(qk, axis = 1, qkMap)
+    l_i += l_ij
 
-      let p = qk.downcast(Q.T)                   # P.to(Q.T), layout preserved
-      acc *.= alpha
-      var v: tile(kvPoolV.T, pvMma.getMmaLayout(opB))  # (Dv, NT), B operand of MMA 2
-      v.load(vV, vMap, thrID, (0, 0))
-      pvMma.atom.gemm_tile(acc, p, v, acc)       # O += P·V   (MMA 2)
+    let p = qk.downcast(Q.T)                   # P.to(Q.T), layout preserved
+    acc *.= alpha
+    var v: tile(kvPoolV.T, pvMma.getMmaLayout(opB))  # (Dv, NT), B operand of MMA 2
+    v.load(vV, vMap, thrID, (0, 0))
+    pvMma.atom.gemm_tile(acc, p, v, acc)       # O += P·V   (MMA 2)
 
-    acc /.= l_i                                  # (MT × Dv) /.= (MT × 1)
-    vO.store(acc.downcast(O.T), oMap, thrID, (qTile, 0))
+  acc /.= l_i                                  # (MT × Dv) /.= (MT × 1)
+  vO.store(acc.downcast(O.T), oMap, thrID, (0, 0))

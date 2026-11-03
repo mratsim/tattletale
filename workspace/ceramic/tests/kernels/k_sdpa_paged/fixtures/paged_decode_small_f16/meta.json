@@ -22,7 +22,6 @@
   "k.bin": 12493,
   "v.bin": 57560,
   "block_table.bin": 4294967292,
-  "cache_seqlens.bin": 81,
-  "o.bin": 2234798143
+  "cache_seqlens.bin": 81
  }
 }

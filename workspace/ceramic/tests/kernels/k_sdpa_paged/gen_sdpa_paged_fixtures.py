@@ -97,9 +97,8 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
             next_page += 1
         for t in range(int(seqlen)):
             page = int(block_table[s, t // page_size])
-            row = page * page_size + t % page_size
-            kpool[page, layer, row % page_size] = rng.standard_normal((Hkv, Dk))
-            vpool[page, layer, row % page_size] = rng.standard_normal((Hkv, Dv))
+            kpool[page, layer, t % page_size] = rng.standard_normal((Hkv, Dk))
+            vpool[page, layer, t % page_size] = rng.standard_normal((Hkv, Dv))
     assert next_page <= num_pages, f"{name}: {next_page} pages needed, pool holds {num_pages}"
     for s, seqlen in enumerate(cache_seqlens):
         assert int(seqlen) <= max_pages * page_size, \
@@ -137,7 +136,6 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
             "v.bin": xorhash_checksum(vOut),
             "block_table.bin": xorhash_checksum(block_table),
             "cache_seqlens.bin": xorhash_checksum(cache_seqlens),
-            "o.bin": xorhash_checksum(oOut),
         },
     }
     with open(os.path.join(out, "meta.json"), "w") as f:

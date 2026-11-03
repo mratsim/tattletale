@@ -9,8 +9,7 @@
 ## The runtime parts are ordinary procs, one copy total.
 ## Only the runner monomorphizes per dtype and head dim, all in one compile.
 
-import std/[os, math]
-import workspace/math
+import std/os
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
