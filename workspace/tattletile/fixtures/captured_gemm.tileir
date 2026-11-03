@@ -1,0 +1,91 @@
+// tattletile fixture: compiler-emitted Tile IR, kernel gemm from
+// cutile-rs fc74719 (cuda-rust umbrella), captured through
+// cutile::compile_api::KernelCompiler and the DumpStage::Ir pretty-printer
+// (cutile-examples/examples/gemm.rs, f32 BM=16 BN=16 BK=8 K=64).
+// Capture record: .scratchspace/20261025-1258-C15D04-cutile-fixture-capture/CAPTURE.md
+cuda_tile.module @gemm_module {
+  entry @gemm_entry(%0: tile<ptr<f32>>, %1: tile<i32>, %2: tile<i32>, %3: tile<i32>, %4: tile<i32>, %5: tile<i32>, %6: tile<i32>, %7: tile<i32>, %8: tile<i32>, %9: tile<ptr<f32>>, %10: tile<i32>, %11: tile<i32>, %12: tile<i32>, %13: tile<i32>, %14: tile<ptr<f32>>, %15: tile<i32>, %16: tile<i32>, %17: tile<i32>, %18: tile<i32>) di_name = "gemm" {
+    %19 = constant <i32: 16> : tile<i32>
+    %20 = constant <i32: 16> : tile<i32>
+    %21 = constant <i32: 8> : tile<i32>
+    %22 = constant <i32: 64> : tile<i32>
+    %23 = assume bounded<0, ?>, %1 : tile<i32>
+    %24 = assume div_by<16>, %23 : tile<i32>
+    %25 = assume bounded<0, ?>, %2 : tile<i32>
+    %26 = assume div_by<16>, %25 : tile<i32>
+    %27 = make_token : token
+    %28 = assume div_by<16>, %0 : tile<ptr<f32>>
+    %29 = make_tensor_view %28, shape = [%24, %26], strides = [16, 1] : tile<i32> -> tensor_view<?x?xf32, strides=[16,1]>
+    %30 = assume bounded<0, ?>, %10 : tile<i32>
+    %31 = assume div_by<16>, %30 : tile<i32>
+    %32 = make_token : token
+    %33 = assume div_by<16>, %9 : tile<ptr<f32>>
+    %34 = make_tensor_view %33, shape = [%31, 64], strides = [64, 1] : tile<i32> -> tensor_view<?x64xf32, strides=[64,1]>
+    %35 = assume bounded<0, ?>, %16 : tile<i32>
+    %36 = assume div_by<16>, %35 : tile<i32>
+    %37 = make_token : token
+    %38 = assume div_by<16>, %14 : tile<ptr<f32>>
+    %39 = make_tensor_view %38, shape = [64, %36], strides = [16, 1] : tile<i32> -> tensor_view<64x?xf32, strides=[16,1]>
+    %40 = constant <i32: 16> : tile<i32>
+    %41 = constant <i32: 16> : tile<i32>
+    %42 = constant <i32: 8> : tile<i32>
+    %43 = constant <i32: 64> : tile<i32>
+    %44 = constant <i32: 16> : tile<i32>
+    %45 = constant <i32: 8> : tile<i32>
+    %46 = constant <i32: -1> : tile<i32>
+    %47 = constant <i32: 64> : tile<i32>
+    %48 = constant <i32: -1> : tile<i32>
+    %49 = constant <i32: 64> : tile<i32>
+    %50 = make_partition_view %34 : partition_view<tile=(16x8), padding_value = zero, tensor_view<?x64xf32, strides=[64,1]>>
+    %51 = constant <i32: 8> : tile<i32>
+    %52 = constant <i32: 16> : tile<i32>
+    %53 = constant <i32: 64> : tile<i32>
+    %54 = constant <i32: -1> : tile<i32>
+    %55 = constant <i32: 64> : tile<i32>
+    %56 = constant <i32: -1> : tile<i32>
+    %57 = make_partition_view %39 : partition_view<tile=(8x16), padding_value = zero, tensor_view<64x?xf32, strides=[16,1]>>
+    %58, %59, %60 = get_tile_block_id : tile<i32>
+    %61 = assume bounded<0, ?>, %58 : tile<i32>
+    %62 = assume bounded<0, ?>, %59 : tile<i32>
+    %63 = assume bounded<0, ?>, %60 : tile<i32>
+    %64 = constant <i32: 16> : tile<i32>
+    %65 = constant <i32: 16> : tile<i32>
+    %66 = constant <i32: 16> : tile<i32>
+    %67 = constant <i32: 16> : tile<i32>
+    %68, %69, %70 = get_tile_block_id : tile<i32>
+    %71 = assume bounded<0, ?>, %68 : tile<i32>
+    %72 = assume bounded<0, ?>, %69 : tile<i32>
+    %73 = assume bounded<0, ?>, %70 : tile<i32>
+    %74 = constant <i32: 16> : tile<i32>
+    %75 = constant <i32: 16> : tile<i32>
+    %76 = make_partition_view %29 : partition_view<tile=(16x16), tensor_view<?x?xf32, strides=[16,1]>>
+    %77, %78 = load_view_tko weak %76[%71, %72] token = %27 : partition_view<tile=(16x16), tensor_view<?x?xf32, strides=[16,1]>>, tile<i32> -> tile<16x16xf32>, token
+    %79 = constant <i32: 0> : tile<i32>
+    %81 = constant <i32: 8> : tile<i32>
+    %82 = constant <i32: 1> : tile<i32>
+    %95 = for %83 in (%79 to %81, step %82) : tile<i32> iter_values(%84 = %77) -> (tile<16x16xf32>) {
+      %85 = assume bounded<0, 7>, %83 : tile<i32>
+      %86 = constant <i32: 16> : tile<i32>
+      %87 = constant <i32: 8> : tile<i32>
+      %88, %89 = load_view_tko weak %50[%61, %85] token = %32 : partition_view<tile=(16x8), padding_value = zero, tensor_view<?x64xf32, strides=[64,1]>>, tile<i32> -> tile<16x8xf32>, token
+      %90 = constant <i32: 8> : tile<i32>
+      %91 = constant <i32: 16> : tile<i32>
+      %92, %93 = load_view_tko weak %57[%85, %62] token = %37 : partition_view<tile=(8x16), padding_value = zero, tensor_view<64x?xf32, strides=[16,1]>>, tile<i32> -> tile<8x16xf32>, token
+      %94 = mmaf %88, %92, %84 : tile<16x8xf32>, tile<8x16xf32>, tile<16x16xf32>
+      continue %94 : tile<16x16xf32>
+    }
+    %96 = constant <i32: 16> : tile<i32>
+    %97 = constant <i32: 16> : tile<i32>
+    %98 = constant <i32: 16> : tile<i32>
+    %99 = constant <i32: 16> : tile<i32>
+    %100, %101, %102 = get_tile_block_id : tile<i32>
+    %103 = assume bounded<0, ?>, %100 : tile<i32>
+    %104 = assume bounded<0, ?>, %101 : tile<i32>
+    %105 = assume bounded<0, ?>, %102 : tile<i32>
+    %106 = constant <i32: 16> : tile<i32>
+    %107 = constant <i32: 16> : tile<i32>
+    %108 = make_partition_view %29 : partition_view<tile=(16x16), tensor_view<?x?xf32, strides=[16,1]>>
+    %109 = store_view_tko weak %95, %108[%103, %104] token = %27 : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<?x?xf32, strides=[16,1]>>, tile<i32> -> token
+    return
+  }
+}

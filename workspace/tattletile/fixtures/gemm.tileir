@@ -1,0 +1,21 @@
+// tattletile bullet-1 fixture: GEMM kernel, one 16x16x16 mmaf per block.
+// Hand-encoded Tile IR text, grammar evidence cited in
+// fixtures/GRAMMAR-EVIDENCE.md. Run: uv run python run_prototype.py
+cuda_tile.module @kernels {
+  entry @gemm(%ptr_a: tile<ptr<f32>>, %ptr_b: tile<ptr<f32>>, %ptr_c: tile<ptr<f32>>) {
+    %tok = make_token : token
+    %tv_a = make_tensor_view %ptr_a, shape = [16, 16], strides = [16, 1] : tensor_view<16x16xf32, strides=[16,1]>
+    %tv_b = make_tensor_view %ptr_b, shape = [16, 16], strides = [16, 1] : tensor_view<16x16xf32, strides=[16,1]>
+    %tv_c = make_tensor_view %ptr_c, shape = [16, 16], strides = [16, 1] : tensor_view<16x16xf32, strides=[16,1]>
+    %pv_a = make_partition_view %tv_a : partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>
+    %pv_b = make_partition_view %tv_b : partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>
+    %pv_c = make_partition_view %tv_c : partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>
+    %bid_x, %bid_y, %bid_z = get_tile_block_id : tile<i32>
+    %tile_a, %tok_a = load_view_tko weak %pv_a[%bid_x, %bid_y] token = %tok : partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> tile<16x16xf32>, token
+    %tile_b, %tok_b = load_view_tko weak %pv_b[%bid_x, %bid_y] token = %tok_a : partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> tile<16x16xf32>, token
+    %zero = constant <f32: 0.0> : tile<16x16xf32>
+    %acc = mmaf %tile_a, %tile_b, %zero : tile<16x16xf32>, tile<16x16xf32>, tile<16x16xf32>
+    %tok_out = store_view_tko weak %acc, %pv_c[%bid_x, %bid_y] token = %tok_b : tile<16x16xf32>, partition_view<tile=(16x16), tensor_view<16x16xf32, strides=[16,1]>>, tile<i32> -> token
+    yield
+  }
+}

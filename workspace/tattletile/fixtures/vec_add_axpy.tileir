@@ -1,0 +1,25 @@
+// tattletile bullet-1 fixture: axpy kernel, hand-encoded Tile IR text.
+// Grammar: cuda-tile spec as printed by tileirdisasm, evidence cited in
+// fixtures/GRAMMAR-EVIDENCE.md. Run: uv run python run_prototype.py
+cuda_tile.module @kernels {
+  entry @axpy(%ptr_a: tile<ptr<f32>>, %shape_a: tile<i32>,
+              %ptr_b: tile<ptr<f32>>, %shape_b: tile<i32>,
+              %ptr_c: tile<ptr<f32>>, %shape_c: tile<i32>) {
+    %st = constant <i32: 1> : tile<i32>
+    %tok = make_token : token
+    %tv_a = make_tensor_view %ptr_a, shape = [%shape_a], strides = [%st] : tile<i32> -> tensor_view<?xf32, strides=[?]>
+    %tv_b = make_tensor_view %ptr_b, shape = [%shape_b], strides = [%st] : tile<i32> -> tensor_view<?xf32, strides=[?]>
+    %tv_c = make_tensor_view %ptr_c, shape = [%shape_c], strides = [%st] : tile<i32> -> tensor_view<?xf32, strides=[?]>
+    %pv_a = make_partition_view %tv_a : partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>
+    %pv_b = make_partition_view %tv_b : partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>
+    %pv_c = make_partition_view %tv_c : partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>
+    %bid_x, %bid_y, %bid_z = get_tile_block_id : tile<i32>
+    %tile_a, %tok_a = load_view_tko weak %pv_a[%bid_x] token = %tok : partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>, tile<i32> -> tile<8xf32>, token
+    %tile_b, %tok_b = load_view_tko weak %pv_b[%bid_x] token = %tok_a : partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>, tile<i32> -> tile<8xf32>, token
+    %alpha = constant <f32: 3.0> : tile<8xf32>
+    %scaled = mulf %alpha, %tile_a : tile<8xf32>
+    %sum = addf %scaled, %tile_b : tile<8xf32>
+    %tok_out = store_view_tko weak %sum, %pv_c[%bid_x] token = %tok_b : tile<8xf32>, partition_view<tile=(8), tensor_view<?xf32, strides=[?]>>, tile<i32> -> token
+    yield
+  }
+}
