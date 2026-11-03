@@ -215,7 +215,7 @@ proc procD*(name: string, params: seq[CirParam], ret: CirType, body: seq[CirStmt
   CirProc(name: name, params: params, ret: ret, body: body)
 
 proc moduleD*(name: string, types: seq[CirType], procs: seq[CirProc]): CirModule =
-  CirModule(name: name, types: types, procs: procs)
+  CirModule(name: name, types: types, procs: procs, verifyIR: defined(CIR_verify))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Proc pragmas

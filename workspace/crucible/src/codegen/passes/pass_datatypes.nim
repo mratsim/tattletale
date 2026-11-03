@@ -7,6 +7,7 @@
 
 import std/sets
 import ../ir/cirv2_lang
+import ../ir/cirv2_verify
 
 export cirv2_lang
 
@@ -43,6 +44,7 @@ proc runPasses*(m: CirModule, reg: var PassRegistry): string =
   ## - a transform registered after an analysis refuses, as the analysis records
   ##   on the module (features, call graph, ref blocks) would go stale
   ## - the printers read the analysis records, they never rescan
+  ## - on modules with verifyIR set, verifyModule runs after each clean pass
   ## - returns "" when the whole pipeline is clean, else the first refusal
   var sawAnalysis = false
   for p in reg.passes:
@@ -55,3 +57,7 @@ proc runPasses*(m: CirModule, reg: var PassRegistry): string =
     if err.len > 0:
       return "pass " & p.name & ": " & err
     reg.donePasses.incl p.name
+    if m.verifyIR:
+      let verr = verifyModule(m)
+      if verr.len > 0:
+        return "verify: " & verr
