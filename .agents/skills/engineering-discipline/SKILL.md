@@ -1,6 +1,6 @@
 ---
 name: engineering-discipline
-description: "Engineering rulings for the Tattletale monorepo: golden rules (no speculative code, no overdefensive code, no guard without a failing input, check preexisting primitives first), naming rules (action verbs, the get prefix implies a cheap read-only lookup) and comment budget (comments scale with need). Use when writing or reviewing code."
+description: "MANDATORY READING BEFORE ANY EDIT in this monorepo. Engineering rulings for the Tattletale workspace: golden rules (no speculative code, no overdefensive code, no guard without a failing input, no paraphrase comments, no how-narration, check preexisting primitives first), naming rules (action verbs, the get prefix implies a cheap read-only lookup, a better name deletes a comment) and comment budget (comments scale with need). Use when writing or reviewing code."
 license: MIT
 metadata:
   audience: developers
@@ -12,6 +12,8 @@ metadata:
 Recurring engineering rulings for this repo.
 Reading `.agents/skills/writing-docs/SKILL.md` is mandatory alongside this skill.
 Golden rules first, then naming and comment budget.
+Reading this skill is mandatory before any edit in any directory.
+The workspace AGENTS.md repeats the instruction.
 
 ## Golden rules
 
@@ -27,6 +29,15 @@ Golden rules first, then naming and comment budget.
 - Check the preexisting primitives first. The stdlib, the sibling module
   and the helper one directory over come first.
   A new dependency or a new name for an existing mechanism needs a reason.
+- No paraphrase comments. A comment that translates visible code into English
+  words ("sets the counter to zero" over `ctr = 0`) is deleted, not reworded.
+- No how-narration. A comment that narrates the steps of the code below it
+  ("first we X, then Y, finally Z", "this call does X") dies.
+  The code is the narration.
+- The mathematics survives. The equation behind the code is content code
+  alone cannot show: a sum identity like `n*(n+1)/2`, a sigmoid derivative
+  `s*(1-s)` in a backward pass.
+  Math the code shows is narration. Math the code hides is content.
 
 
 ## Package guidance
@@ -63,6 +74,23 @@ A proc that transforms, records or rewrites never takes the prefix.
 Its name states the effect instead.
 
 
+## Naming: a better name deletes a comment
+
+A comment that explains what an identifier failed to say is a finding:
+rename the identifier so it states the meaning, then delete the comment.
+
+The bar: a competent reader recovers the meaning from the identifier alone
+after the rename. Precedent: `calleeRefC` became `calleeSymbolC`,
+stating that the callee resolves to a symbol. The comment that explained the old identifier died with the rename.
+
+- Rename domain: private and internal identifiers of the files under change.
+  Exported identifiers stay frozen without an operator ruling.
+- The commit applies the rename and deletes the comment together.
+- When no identifier can state the constraint, the comment survives:
+  an external contract, a backend behavior, a why-not-else.
+  A name that would need a sentence is not a name.
+
+
 ## Comment budget scales with need
 
 An internal proc with a self-explanatory name and a short body (1-7 lines)
@@ -75,6 +103,7 @@ A comment earns its place by giving exactly one of these three things:
 |---|---|
 | usage contract for a public proc | returns, requires, raises |
 | background context | design ruling, external constraint, bug avoided |
+| the mathematics | the equation or identity the code implements, notation conventions |
 | non-trivial control flow | state machines, lifecycles |
 
 For the third kind prefer a lifecycle or dataflow diagram over prose once

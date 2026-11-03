@@ -115,7 +115,7 @@ Divergence starts at the reserved-word rename.
 | ---         | ---                                                                                                                              |
 | `PassKind`  | `pkValidation` refuses on invariant violation, `pkTransform` rewrites the IR, `pkAnalysis` computes metadata and changes nothing |
 | `CirPass`   | Name, kind, description, `run` over the module                                                                                   |
-| `runPasses` | Executes the registry in registration order, refuses a `pkTransform` registered after a `pkAnalysis`, returns the first refusal   |
+| `runPasses` | Executes the registry in registration order, refuses a `pkTransform` registered after a `pkAnalysis`, returns the first refusal, runs `verifyModule` once at the final pass boundary (after the last transform, or after the last pass when the registry has none) when the module sets `verifyIR` |
 
 The table in `gpu_compiler.nim` is the single source of execution order:
 one ordered column per target, row position is execution position, no scheduler.
@@ -211,6 +211,7 @@ The runtime layer turns it into an executing kernel:
 | ---                                                             | ---                                                                                                               |
 | Registration order is execution order                           | `runPasses` iterates the registry in registration order, there is no scheduler                                    |
 | A transform never runs after an analysis                        | `runPasses` refuses when a `pkTransform` follows a `pkAnalysis`                                                    |
+| Pass-boundary scope closure and emitted-name uniqueness         | `verifyModule` via `runPasses`, gated on the module's `verifyIR` field, which `-d:CIR_verify` defaults            |
 | A refusal anywhere is a compile-time error naming the construct | The macros call `error()` on frontend and pipeline refusals, `codegenModule` calls `error()` on a printer refusal |
 | An analysis result survives only with no transform after it     | The registration sequence in `gpu_compiler.nim`, the registry has no invalidation                                 |
 | Target static data is complete and consistent                   | The `checkScalarRow`/`checkScalarRowsTogether` static block in `targets_rows.nim`; a missing entry is a compile error at the printer's lookup site |
