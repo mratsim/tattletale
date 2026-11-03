@@ -8,8 +8,8 @@
 ##   integer
 ## - the refusal names the parameter, the pointee type and the field
 ##
-## Value aggregates are covered elsewhere, copying one into the kernel
-## fails on DeviceMem's move-only `=copy` operator.
+## A value aggregate holding DeviceMem never reaches the scan, the copy into
+## the kernel fails on DeviceMem's move-only `=copy` operator.
 ##
 ## Run (the compile must fail, both thread modes):
 ##   nim c --hints:off --warnings:off --threads:off \

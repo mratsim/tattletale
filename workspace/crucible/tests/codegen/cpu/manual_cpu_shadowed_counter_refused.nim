@@ -8,7 +8,7 @@
 ## - and the coordinate counters `crucibleGx`, `crucibleGy`, `crucibleGz`,
 ##   `crucibleBx`, `crucibleBy`, `crucibleBz`
 ## - a kernel local of one of those names silently shadows the counter,
-##   the coordinate reads compute the local
+##   the coordinate reads evaluate to the local
 ##
 ## The refusal names the kernel and the shadowing local.
 ##

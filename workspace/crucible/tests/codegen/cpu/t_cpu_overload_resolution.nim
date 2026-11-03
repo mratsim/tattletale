@@ -1,11 +1,9 @@
 ## CPU engine: kernel overload resolution by argument type.
 ##
 ## Test that a launch over two same-arity overloads picks the overload
-## the argument types select, as an ordinary call would:
+## that the argument types select:
 ##
-## - the launch resolves overloads by parameter count alone, two
-##   same-arity candidates reject the launch even when the types select
-##   exactly one
+## - parameter count filters first, the runtime argument types then discriminate same-arity candidates
 ##
 ## Run:
 ##   nim test_crucible_cpu

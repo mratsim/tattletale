@@ -3,7 +3,7 @@
 ## Test that a kernel calling a `{.inline.}` helper compiles, links and computes:
 ##
 ## - the C `inline` qualifier without `static` emits no external definition,
-##   a call the optimizer does not inline fails to link
+##   a call that the optimizer does not inline fails to link
 ##
 ## Run:
 ##   nim test_crucible_cpu

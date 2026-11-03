@@ -16,8 +16,8 @@
 ##   into the generated launch unit. The launch macro assembles the two
 ## - there is no `cpu:` standalone macro, a kernel body without a launch
 ##   has no meaning on the CPU
-## - the compile target is `ctCpu`, the CPU pass stage registers nothing for v0,
-##   CIRv2 identifiers are Nim-derived, the emitters own target specifics
+## - the compile target is `ctCpu`, the CPU pass stage registers the C
+##   reserved-word rename and the array-assign decomposition
 ## - refusals and verifier violations surface as compile-time errors naming the construct
 
 import std/macros

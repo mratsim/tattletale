@@ -62,7 +62,6 @@ type
     flat*: string
 
 proc cpuCoordTableC*(vec: array[CirCoordBuiltinKind, array[3, string]], flat: string): CpuCoordTableC =
-  ## Coordinate table constructor for the launch side.
   CpuCoordTableC(vec: vec, flat: flat)
 
 proc coordExprC(coords: CpuCoordTableC, name: CirCoordBuiltinKind, comp: int): string =
@@ -73,7 +72,6 @@ proc coordExprC(coords: CpuCoordTableC, name: CirCoordBuiltinKind, comp: int): s
     return coords.flat
   if comp >= 0:
     return coords.vec[name][comp]
-  # whole-vector read: reconstruct the three components
   let (e0, e1, e2) = (coords.vec[name][0], coords.vec[name][1], coords.vec[name][2])
   if e0.len == 0 or e1.len == 0 or e2.len == 0:
     return ""
@@ -102,7 +100,6 @@ type
     subst: seq[(string, string)]
 
 proc cRefuse(ctx: EmitCtxC, what: string) {.noreturn, compileTime.} =
-  ## Compile-time refusal naming the construct and the kernel.
   error("cpu workgroup launch, kernel " & ctx.procName & ": " & what)
 
 var cpuCoordUseC {.global, compileTime.}: bool
@@ -264,7 +261,6 @@ proc printFloatLit(e: CirExpr): string =
     result = repr(e.fValue)
 
 proc printBuiltinRefusalC(e: CirExpr, ctx: EmitCtxC): string =
-  ## Refusal for every non-coordinate builtin category.
   let what =
     if e.synchroBuiltin != CirSynchroBuiltinKind.cbkNone: "threadgroup barriers"
     elif e.shuffleBuiltin != CirShuffleBuiltinKind.cbkNone: "simd_shuffle/simd_shuffle_xor"
@@ -274,7 +270,6 @@ proc printBuiltinRefusalC(e: CirExpr, ctx: EmitCtxC): string =
   cRefuse(ctx, what & " are not supported in v0")
 
 proc calleeRefC(name: string, ctx: EmitCtxC): string =
-  ## Call reference for one module proc, the launch-site suffix uniquifies per site.
   ## A `__builtin_` name is a compiler builtin the array-assign pass emits, verbatim.
   if name.startsWith("__builtin_"):
     name
@@ -441,7 +436,6 @@ const LaunchCounterNamesC = [
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[string]) =
-  ## Statement-list printing with a running indent.
   var i = 0
   while i < body.len:
     let s = body[i]
@@ -462,9 +456,9 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
           if name == s.name:
             cRefuse(ctx, "kernel local '" & s.name &
               "' shadows a kernel parameter, rename one")
-        # kernel locals must avoid the launch's generated counter names:
-        # a shadowing local silently corrupts the coordinate reads
         if s.name in LaunchCounterNamesC:
+          # kernel locals must avoid the launch's generated counter names:
+          # a shadowing local silently corrupts the coordinate reads
           cRefuse(ctx, "kernel local '" & s.name &
             "' shadows a counter the launch generates, rename it")
       let decl =
@@ -542,7 +536,6 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
         "`{.emit.}` raw target text has no C meaning in v0")
 
 proc printProcBodyC(p: CirProc, ctx: EmitCtxC): string =
-  ## One proc body as C function text, top-level statements at indent 1.
   var lines: seq[string]
   printStmts(p.body, ctx, 1, lines)
   lines.join("\n")
@@ -552,7 +545,6 @@ proc printProcBodyC(p: CirProc, ctx: EmitCtxC): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc findKernelC(m: CirModule, ctx: EmitCtxC): CirProc =
-  ## Single-kernel lookup for the lowered module.
   for p in m.procs:
     if p.isKernel:
       if result != nil:
@@ -602,9 +594,9 @@ proc kernelRuntimeParams*(m: CirModule): seq[tuple[name: string, typ: CirType]] 
 proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   ## Callee proc emission as C function definitions.
   ##
-  ## - callees emit as file-scope definitions, one prototype before each:
-  ##   the emission order is post-order, a mutual recursion cycle
-  ##   needs a forward declaration
+  ## - callees emit as file-scope definitions, prototypes first:
+  ##   the frontend harvests a callee after its caller, so a mutual
+  ##   recursion cycle needs a forward declaration
   ## - `{.inline.}` callees print the `static inline` qualifier
   ## - the kernel wrapper and the inlined kernel proc print nothing,
   ##   their bodies print at the launch site through emitCpuWorkgroupLaunchC
@@ -631,15 +623,12 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
           "`var` parameters are not supported in v0, the cpu backend takes whole values")
       params.add(typeDeclC(param.typ, param.name, ctx))
     let retT = if p.ret.kind == ctVoid: "void" else: emitTypeC(p.ret, ctx)
-    # file-local definition with an external symbol: a non-inlined call
-    # links against it, the C99+ `inline` qualifier alone emits nothing
-    # a linker can resolve
+    # C99 `inline` alone emits no external definition, a call that the optimizer does not inline fails to link,
+    # `static` gives an inline definition file-local linkage
     let qual = if p.inline: "static inline " else: ""
     let signature = qual & retT & " " & p.name & suffix & "(" & params.join(", ") & ")"
     protos.add(signature & ";")
     blocks.add(signature & " {\n" & printProcBodyC(p, ctx) & "\n}")
-  # prototypes first: the harvest order emits callees after their callers,
-  # a mutual recursion cycle needs a forward declaration
   if protos.len > 0:
     result = protos.join("\n") & "\n\n" & blocks.join("\n\n")
   else:
@@ -734,9 +723,9 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   # iteration function: one call per pool task, tpc_i is the task index.
   # Each task covers crucibleWgsPerTask adjacent workgroups in x-fastest flat order.
   # Every workgroup runs the decomposition prologue, the thread loop nest and the kernel body. The last task clamps at the grid total.
-  # Grid dims and the workgroup total stay within int32, the launch guard
-  # bounds them. The open range end can exceed the total by up to workgroupsPerTask - 1 workgroups,
-  # it computes in int64 before the clamp
+  # grid dims and the workgroup total are bounded to int32 by the launch guard
+  # an open range end can exceed the total by up to workgroupsPerTask - 1 workgroups,
+  # int64 arithmetic precedes the clamp
   var iter = "void crucibleIter" & suffix & "(int32_t tpc_i, void* tpc_env_) {\n"
   iter.add("    struct " & dataName & "* tpc_d_ = (struct " & dataName & "*)tpc_env_;\n")
   iter.add("    int32_t crucibleWgTotal = tpc_d_->crucibleGrid[0] * tpc_d_->crucibleGrid[1] * tpc_d_->crucibleGrid[2];\n")

@@ -40,6 +40,15 @@
 ## - coordinate kernels without a schedule refuse at compile time
 ## - tile-layout schedule derivation is unimplemented
 ##
+## Refusals, all compile time:
+##
+## - a kernel local shadowing a launch counter (`crucibleWg*`, `crucibleG*`, `crucibleB*`)
+##   corrupts the coordinate reads, the launch refuses the local
+## - the launch refuses a pointer argument whose pointee
+##   declares a DeviceMem field at its top level, the kernel would
+##   read the device handle as a host integer, the scan reads
+##   one field level, the same depth as `getDeviceMemFields` in launch_device_fn.nim
+##
 ## Other:
 ##
 ## - runtime formals hoist into locals under their own names, evaluated
@@ -75,7 +84,8 @@ func formalCounts(candFormals: NimNode): tuple[total, required: int] =
 
 func runtimeFormalsAccept(candImpl: NimNode, args: NimNode): bool =
   ## True when every runtime formal of the candidate accepts the corresponding
-  ## argument's type exactly, the discrimination an ordinary call performs.
+  ## argument's type exactly. The check does not rank implicit conversions,
+  ## an argument that only converts never matches and the launch refuses.
   ## Compile-time formals take static and typedesc arguments and do not discriminate.
   let formals = candImpl[3]
   var argIdx = 0
@@ -91,11 +101,11 @@ func runtimeFormalsAccept(candImpl: NimNode, args: NimNode): bool =
   result = true
 
 func resolveKernelOverload(kernel: NimNode, args: NimNode): NimNode =
-  ## Overload selection for `kernel`, the way an ordinary call resolves:
+  ## Overload selection for `kernel`:
   ##
   ## - parameter count filters first
-  ## - the runtime argument types then discriminate same-arity candidates
-  ## - exactly one must survive
+  ## - the runtime argument types then discriminate same-arity candidates,
+  ##   exactly one must survive
   if kernel.kind notin {nnkOpenSymChoice, nnkClosedSymChoice}:
     return kernel
   var arityMatches: seq[NimNode]
@@ -141,7 +151,10 @@ proc isDeviceMemArg(t: NimNode): bool =
 
 proc deviceMemFieldNames(t: NimNode): seq[string] =
   ## DeviceMem field names of the object or tuple type `t`, empty when `t` declares none.
-  ## Nested aggregates do not recurse, matching the GPU pipeline's field scan one level deep.
+  ##
+  ## - one field level only, nested aggregates do not recurse
+  ## - the same depth as `getDeviceMemFields` in launch_device_fn.nim,
+  ##   the GPU launch's field scan
   let impl = t.getTypeImpl()
   case impl.kind
   of nnkObjectTy:
@@ -159,7 +172,7 @@ proc deviceMemFieldNames(t: NimNode): seq[string] =
   else:
     discard
 
-proc pointeeHoldsDeviceMem(v: NimNode): string =
+proc pointeeDeviceMemRefusal(v: NimNode): string =
   ## Refusal text for a pointer argument whose pointee type declares a DeviceMem field, "" otherwise.
   ## Only pointer arguments get this scan: copying a value aggregate into the kernel already
   ## fails on DeviceMem's move-only `=copy` operator.
@@ -210,7 +223,7 @@ proc buildCpuKernel(kernel: NimNode, statics, values: NimNode, siteSuffix: strin
       if v.getTypeInst().isDeviceMemArg():
         error("launchCpuFn " & $kernel & ": parameter " & $formalNames[i].repr &
           " takes DeviceMem, a GPU runtime concept, the cpu engine takes host values")
-      let pointeeRefusal = v.pointeeHoldsDeviceMem()
+      let pointeeRefusal = v.pointeeDeviceMemRefusal()
       if pointeeRefusal.len > 0:
         error("launchCpuFn " & $kernel & ": parameter " & $formalNames[i].repr & " " &
           pointeeRefusal & ", a GPU runtime concept, the cpu engine takes host values")
@@ -323,9 +336,9 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule, pass grid/blk in the do block")
   let calleesC = emitCpuCalleesC(m, siteSuffix)
 
-  # file-scope unit, written at macro time under the project and registered
-  # {.compile.}. Nim hashes the file, so a changed kernel recompiles
-  # while identical text reuses the object
+  # file-scope unit, written at macro time and registered {.compile.}.
+  # Nim hashes the file, so a changed kernel recompiles while identical
+  # text reuses the object
   var unitC = typesAndData
   if serial:
     # serial launches compile without the threadpool_compute force-include

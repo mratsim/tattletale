@@ -3,8 +3,8 @@
 ## Test that a kernel calling mutually recursive helpers compiles and computes:
 ##
 ## - the generated C emits a prototype before every callee definition,
-##   the post-order emission leaves recursion cycles without one
-##   otherwise
+##   the harvest order emits callees after their callers, a recursion cycle
+##   needs the prototype to link
 ##
 ## Run:
 ##   nim test_crucible_cpu
