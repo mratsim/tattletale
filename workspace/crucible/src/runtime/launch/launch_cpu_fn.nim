@@ -16,12 +16,14 @@
 ##   for wg in the task range:                   # x-fastest flat order
 ##     gx/gy/gz from wg
 ##     for bz/by/bx:                             # threads run serially inside the task
-##       <kernel body, coordinates read as loop-variable expressions>
+##       <kernel body, coordinates read as data struct member expressions>
 ##
-## - `--threads:on`: the kernel machinery (lang_c C printer) emits to a generated
-##   .c file registered {.compile.}, the inline launch tail packs the data struct, spawns the loop task, syncAll waits
-##   the tail translation unit duplicates the struct definitions, identical defs per unit are legal C
-## - without threads: serial spliced Nim loops on the caller thread, the parallel variant must match that output bitwise
+## - both thread modes emit C: the lang_c printer writes a generated .c file registered {.compile.}.
+##   The launch tail packs the data struct and launches the workgroup loops.
+##   The tail translation unit duplicates the struct definitions, identical defs per unit are legal C
+## - `--threads:on`: the launch tail spawns the loop task over the threadpool_compute pool, syncAll waits
+## - without threads: the launch tail calls the iteration function directly over the whole grid,
+##   on the caller thread, no pool
 ##
 ## Schedule: a `do:` block with `grid = ...` / `blk = ...`, both optional.
 ##
@@ -42,7 +44,7 @@
 ##
 ## - runtime formals hoist into locals under their own names, evaluated
 ##   once per launch, the pool task receives a copy of the values
-## - each launch splices into a fresh block scope
+## - each launch body sits in a fresh block scope
 ## - the same kernel at two sites emits two copies under per-site suffixes
 
 import std/[macros, os, strutils, tables]
@@ -150,13 +152,9 @@ proc buildCpuKernel(kernel: NimNode, statics, values: NimNode, siteSuffix: strin
 # ▸ Launch
 # ═══════════════════════════════════════════════════════════════════════
 
-proc forLoop(varName: string, bound: NimNode, body: NimNode): NimNode {.compileTime.} =
-  nnkForStmt.newTree(ident(varName),
-    nnkInfix.newTree(ident"..<", newLit(0), bound), body)
-
 macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: untyped, siteSuffix: static string, args: varargs[typed]): untyped =
-  ## Pipeline and launch: CIRv2 lowering of the typed wrapper, Nim emission,
-  ## and the loop nest with the kernel body inlined.
+  ## Pipeline and launch: CIRv2 lowering of the typed wrapper, C emission,
+  ## and the launch tail with the kernel body in the iteration function.
   ##
   ## - the wrapper's formals are the kernel's runtime formals verbatim
   ## - runtime arguments hoist into locals under those names, one evaluation per launch
@@ -165,7 +163,8 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
   ## - schedule: both nil means derivation, coordinate kernels refuse there
   ## - with `--threads:on` each pool task covers workgroupsPerTask workgroups,
   ##   adjacent in the x-fastest flat order matching the serial decomposition
-  ##   without threads the serial nested loops run, the executable spec
+  ##   without threads the iteration function covers the whole grid in one call,
+  ##   the serial launch ignores workgroupsPerTask
   let formals = wrapper[3]
   var runtimeNames: seq[NimNode]
   for i in 1 ..< formals.len:
@@ -197,9 +196,6 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
   let blkDecl = nnkVarSection.newTree(
     nnkIdentDefs.newTree(blkVar, newEmptyNode(), bindSym"dim3".newCall(blkNeff)))
 
-  proc gridDot(field: string): NimNode = nnkDotExpr.newTree(gridVar, ident(field))
-  proc blkDot(field: string): NimNode = nnkDotExpr.newTree(blkVar, ident(field))
-
   var hoists = nnkStmtList.newTree()
   for i, nameNode in runtimeNames:
     let name = $nameNode
@@ -208,82 +204,79 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
       hoists.add(nnkVarSection.newTree(
         nnkIdentDefs.newTree(ident(name), newEmptyNode(), arg)))
 
-  # launch shape: workgroup ranges through the C runtime with --threads:on,
-  # serial nested loops otherwise
   var launchBody = nnkStmtList.newTree(gridDecl, blkDecl, hoists)
-  when compileOption("threads"):
-    # workgroups per pool task. The C iter fn and the launch tail read it
+  # launch shape: both thread modes emit C. The launch splits the text in two:
+  # - file-scope unit: nominal struct definitions, per-launch data struct, callees, iteration function, task function except in serial mode
+  # - launch tail: data struct fill, launch call, inline emit
+  #   function definitions stay out of the enclosing function body:
+  #   block-scope function definitions are a GNU extension, host C compilers reject them
+  let serial = not compileOption("threads")
+  # coordinate builtins rewrite to expressions over the data struct,
+  # which the iteration function reads through tpc_d_ in both modes
+  let gridReads = ["tpc_d_->crucibleGrid[0]", "tpc_d_->crucibleGrid[1]",
+                   "tpc_d_->crucibleGrid[2]"]
+  let blkReads = ["tpc_d_->crucibleBlk[0]", "tpc_d_->crucibleBlk[1]",
+                  "tpc_d_->crucibleBlk[2]"]
+  var vecC: array[CirCoordBuiltinKind, array[3, string]]
+  vecC[cbkThreadgroupPositionInGrid] = ["crucibleGx", "crucibleGy", "crucibleGz"]
+  vecC[cbkThreadPositionInThreadgroup] = ["crucibleBx", "crucibleBy", "crucibleBz"]
+  vecC[cbkThreadPositionInGrid] = [
+    "(crucibleGx * " & blkReads[0] & " + crucibleBx)",
+    "(crucibleGy * " & blkReads[1] & " + crucibleBy)",
+    "(crucibleGz * " & blkReads[2] & " + crucibleBz)"]
+  vecC[cbkThreadsPerThreadgroup] = blkReads
+  vecC[cbkThreadgroupsPerGrid] = gridReads
+  let flatC = "(crucibleBx + crucibleBy * " & blkReads[0] &
+              " + crucibleBz * " & blkReads[0] & " * " & blkReads[1] & ")"
+  let coordsC = cpuCoordTableC(vecC, flatC)
+
+  let runtimeParams = kernelRuntimeParams(m)
+  let (typesAndData, funcsC, coordUseC) = emitCpuWorkgroupLaunchC(
+      m, siteSuffix, coordsC, runtimeParams, serial)
+  if gridN.kind == nnkNilLit and blkN.kind == nnkNilLit and coordUseC:
+    error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule, pass grid/blk in the do block")
+  let calleesC = emitCpuCalleesC(m, siteSuffix)
+
+  # file-scope unit, written at macro time under the project and registered
+  # {.compile.}. Nim hashes the file, so a changed kernel recompiles
+  # while identical text reuses the object
+  var unitC = typesAndData
+  if serial:
+    # serial launches compile without the threadpool_compute force-include
+    unitC = "#include <stdint.h>\n#include <stdbool.h>\n" & unitC
+  if calleesC.len > 0:
+    unitC.add(calleesC & "\n")
+  unitC.add(funcsC)
+  let genDir = getProjectPath() / "crucibleGenerated"
+  createDir(genDir)
+  let genPath = genDir / ("crucibleLaunch_" & siteSuffix & ".c")
+  writeFile(genPath, unitC)
+  launchBody.add(parseStmt("{.compile: \"" & genPath & "\".}"))
+
+  # launch tail: the struct definitions duplicate into the tail translation unit,
+  # identical definitions per unit are legal C. The data struct receives
+  # grid/blk from the dim3 locals of the launch and the runtime arguments,
+  # Nim value objects are C-compatible structs, a struct argument copies
+  # by pointer cast. Nim symbols go inside emit backticks, the codegen substitutes their C names,
+  # immune to the generator's renaming
+  var ctext = typesAndData
+  if serial:
+    ctext.add(emitCpuSerialTailC(siteSuffix, runtimeParams))
+  else:
+    # pooled launch over the threadpool_compute pool, one task per contiguous
+    # workgroup range. The emit backtick resolves a declared Nim symbol,
+    # C text cannot reach into the engine object
     launchBody.add(nnkLetSection.newTree(
       nnkIdentDefs.newTree(ident"crucibleWgsPerTask", newEmptyNode(),
         nnkCall.newTree(bindSym"int32", coarsenNeff))))
     launchBody.add(nnkCall.newTree(bindSym"doAssert",
       nnkInfix.newTree(ident">=", ident"crucibleWgsPerTask", newLit(1'i32)),
       newLit("launchCpuFn: workgroupsPerTask must be >= 1")))
-    # whole workgroup launch, C text against the threadpool_compute runtime.
-    # lang_c prints every piece, the launch splits the text in two:
-    # - file-scope unit: nominal struct definitions, the per-launch data struct, the callees, the iteration function, the task function
-    # - launch tail: data struct fill, task spawn, syncAll, inline emit
-    #   function definitions stay out of the enclosing function body:
-    #   block-scope function definitions are a GNU extension, host C compilers reject them
-    let gridReads = ["tpc_d_->crucibleGrid[0]", "tpc_d_->crucibleGrid[1]",
-                     "tpc_d_->crucibleGrid[2]"]
-    let blkReads = ["tpc_d_->crucibleBlk[0]", "tpc_d_->crucibleBlk[1]",
-                    "tpc_d_->crucibleBlk[2]"]
-    var vecC: array[CirCoordBuiltinKind, array[3, string]]
-    vecC[cbkThreadgroupPositionInGrid] = ["crucibleGx", "crucibleGy", "crucibleGz"]
-    vecC[cbkThreadPositionInThreadgroup] = ["crucibleBx", "crucibleBy", "crucibleBz"]
-    vecC[cbkThreadPositionInGrid] = [
-      "(crucibleGx * " & blkReads[0] & " + crucibleBx)",
-      "(crucibleGy * " & blkReads[1] & " + crucibleBy)",
-      "(crucibleGz * " & blkReads[2] & " + crucibleBz)"]
-    vecC[cbkThreadsPerThreadgroup] = blkReads
-    vecC[cbkThreadgroupsPerGrid] = gridReads
-    let flatC = "(crucibleBx + crucibleBy * " & blkReads[0] &
-                " + crucibleBz * " & blkReads[0] & " * " & blkReads[1] & ")"
-    let coordsC = cpuCoordTableC(vecC, flatC)
-
-    let runtimeParams = kernelRuntimeParams(m)
-    let (typesAndData, funcsC, coordUseC) = emitCpuWorkgroupLaunchC(
-        m, siteSuffix, coordsC, runtimeParams)
-    if gridN.kind == nnkNilLit and blkN.kind == nnkNilLit and coordUseC:
-      error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule, pass grid/blk in the do block")
-    let calleesC = emitCpuCalleesC(m, siteSuffix)
-
-    # file-scope unit, written at macro time under the project and registered
-    # {.compile.}. Nim hashes the file, so a changed kernel recompiles
-    # while identical text reuses the object
-    var unitC = typesAndData
-    if calleesC.len > 0:
-      unitC.add(calleesC & "\n")
-    unitC.add(funcsC)
-    let genDir = getProjectPath() / "crucibleGenerated"
-    createDir(genDir)
-    let genPath = genDir / ("crucibleLaunch_" & siteSuffix & ".c")
-    writeFile(genPath, unitC)
-    launchBody.add(parseStmt("{.compile: \"" & genPath & "\".}"))
-
-    # launch tail: the struct definitions duplicate into the tail translation unit,
-    # identical definitions per unit are legal C. The data struct receives
-    # grid/blk from the dim3 locals of the launch and the runtime arguments,
-    # Nim value objects are C-compatible structs, a struct argument copies
-    # by pointer cast. Nim symbols go inside emit backticks, the codegen substitutes their C names,
-    # immune to the generator's renaming
-    var ctext = typesAndData
     ctext.add("    extern void crucibleTask" & siteSuffix & "(void*);\n")
     ctext.add("    tpc_worker_context* crucibleCtx = tpc_workerContext();\n")
     ctext.add("    struct crucibleData" & siteSuffix & " crucibleData;\n")
-    for (c, ci) in [("x", 0), ("y", 1), ("z", 2)]:
-      ctext.add("    crucibleData.crucibleGrid[" & $ci & "] = (int32_t)`crucibleGrid`." & c & ";\n")
-      ctext.add("    crucibleData.crucibleBlk[" & $ci & "] = (int32_t)`crucibleBlk`." & c & ";\n")
+    ctext.add(emitCpuDataFillC(siteSuffix, runtimeParams))
     ctext.add("    crucibleData.crucibleWgsPerTask = (int32_t)`crucibleWgsPerTask`;\n")
-    for p in runtimeParams:
-      let ctype = emitCpuTypeC(p.typ, siteSuffix)
-      let sym = "`" & p.name & "`"
-      let rhs = if p.typ.kind == ctStruct:
-                  "*(" & ctype & "*)&" & sym
-                else:
-                  "(" & ctype & ")(" & sym & ")"
-      ctext.add("    crucibleData." & p.name & " = " & rhs & ";\n")
     ctext.add("    tpc_task* crucibleTaskH = tpc_task_newLoopEnv(\n")
     ctext.add("        crucibleCtx->currentTask, crucibleCtx->currentScope,\n")
     ctext.add("        crucibleTask" & siteSuffix & ", &crucibleData,\n")
@@ -291,48 +284,10 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     ctext.add("        (int32_t)(((`crucibleGrid`.x * `crucibleGrid`.y * `crucibleGrid`.z) + `crucibleWgsPerTask` - 1) / `crucibleWgsPerTask`), 1, true);\n")
     ctext.add("    tpc_schedule(crucibleCtx, crucibleTaskH, false);\n")
     ctext.add("    tpc_syncAll(`crucibleTpHandle`);\n")
-    # pool handle: read through Nim first, the emit backtick resolves a declared
-    # Nim symbol, C text cannot reach into the engine object
     launchBody.add(nnkLetSection.newTree(nnkIdentDefs.newTree(
       ident"crucibleTpHandle", newEmptyNode(),
       nnkDotExpr.newTree(engine, ident"tp"))))
-    launchBody.add(parseStmt("{.emit: \"\"\"" & ctext & "\"\"\" .}"))
-  else:
-    # coordinate builtins rewrite to loop-variable expressions
-    # x-fastest flat index over the grid, workgroup and thread axes
-    var vec: array[CirCoordBuiltinKind, array[3, NimNode]]
-    vec[cbkThreadgroupPositionInGrid] = [ident"crucibleGx", ident"crucibleGy", ident"crucibleGz"]
-    vec[cbkThreadPositionInThreadgroup] = [ident"crucibleBx", ident"crucibleBy", ident"crucibleBz"]
-    vec[cbkThreadPositionInGrid] = [
-      nnkInfix.newTree(ident"+", nnkInfix.newTree(ident"*", ident"crucibleGx", blkDot("x")), ident"crucibleBx"),
-      nnkInfix.newTree(ident"+", nnkInfix.newTree(ident"*", ident"crucibleGy", blkDot("y")), ident"crucibleBy"),
-      nnkInfix.newTree(ident"+", nnkInfix.newTree(ident"*", ident"crucibleGz", blkDot("z")), ident"crucibleBz")]
-    vec[cbkThreadsPerThreadgroup] = [blkDot("x"), blkDot("y"), blkDot("z")]
-    vec[cbkThreadgroupsPerGrid] = [gridDot("x"), gridDot("y"), gridDot("z")]
-    let flatIdx = nnkInfix.newTree(ident"+",
-      nnkInfix.newTree(ident"+", ident"crucibleBx",
-        nnkInfix.newTree(ident"*", ident"crucibleBy", blkDot("x"))),
-      nnkInfix.newTree(ident"*", ident"crucibleBz",
-        nnkInfix.newTree(ident"*", blkDot("x"), blkDot("y"))))
-    let coords = cpuCoordTable(vec, flatIdx)
-
-    # kernel body, inlined, returns become breaks of the per-thread block
-    let (body, coordUse) = emitCpuKernelBody(m, siteSuffix, coords)
-    if gridN.kind == nnkNilLit and blkN.kind == nnkNilLit and coordUse:
-      error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule, pass grid/blk in the do block")
-    let threadBlock = nnkBlockStmt.newTree(ident"crucibleThread", body)
-
-    proc threadLoops(): NimNode =
-      let loopBx = forLoop("crucibleBx", blkDot("x"), threadBlock)
-      let loopBy = forLoop("crucibleBy", blkDot("y"), loopBx)
-      result = forLoop("crucibleBz", blkDot("z"), loopBy)
-
-    launchBody.add(emitCpuCallees(m, siteSuffix))
-    let bodyGx = threadLoops()
-    let loopGx = forLoop("crucibleGx", gridDot("x"), bodyGx)
-    let loopGy = forLoop("crucibleGy", gridDot("y"), loopGx)
-    let loopGz = forLoop("crucibleGz", gridDot("z"), loopGy)
-    launchBody.add(nnkStmtList.newTree(loopGz))
+  launchBody.add(parseStmt("{.emit: \"\"\"" & ctext & "\"\"\" .}"))
 
   # fresh block scope per launch, two launches in one scope stay isolated
   result = nnkStmtList.newTree(

@@ -7,15 +7,23 @@
 
 ## CIRv2 → C printer for the CPU backend's emitted-C launch.
 ##
-## With `--threads:on` the launch emits C text against the threadpool_compute C runtime (TPC vocabulary):
+## Both launch modes print C. The launch macro picks the mode:
 ##
-## - the kernel body and its callees
-## - the iteration function over one task's contiguous workgroup range,
-##   the task plumbing in TPC_DEFINE_PARFOR shape
+## - pooled, `--threads:on`: text against the threadpool_compute C runtime
+##   (TPC vocabulary), the task plumbing in TPC_DEFINE_PARFOR shape
+## - serial, `--threads:off`: the same file-scope unit minus the task function.
+##   The launch tail calls the iteration function directly over the whole grid, no pool, no spawn, no sync
 ##
-## Emission split: the launch macro writes the printed text to a generated
-## C translation unit registered `{.compile.}`, the launch tail emits inline
-## through `{.emit.}` with `extern` declarations for the functions it calls.
+## Emission contract:
+##
+## - the kernel body and the iteration function print identically
+##   in both modes. The serial launch reproduces the pooled launch
+##   output bitwise
+## - the launch macro writes the printed text to a generated C translation unit
+##   registered `{.compile.}`. The launch tail emits inline through
+##   `{.emit.}` with `extern` declarations for the functions it calls
+## - the serial unit compiles without the threadpool_compute force-include
+##   that only `--threads:on` activates. The launch assembly prepends the unit's stdint/stdbool includes
 ##
 ## Layout bridge, the launch copies Nim arguments into the C data struct:
 ## - Nim value objects are C-compatible structs, a struct argument
@@ -645,7 +653,7 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
   result.body = lines.join("\n")
   result.coordUse = cpuCoordUseC
 
-proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTableC, runtimeParams: seq[tuple[name: string, typ: CirType]]): tuple[typesAndData: string, funcs: string, coordUse: bool] =
+proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTableC, runtimeParams: seq[tuple[name: string, typ: CirType]], serial: bool): tuple[typesAndData: string, funcs: string, coordUse: bool] =
   ## Workgroup task machinery as C text, returned in two parts:
   ##
   ## - typesAndData: the nominal struct definitions and the per-launch
@@ -661,6 +669,10 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   ##   contiguous workgroup range, crucibleWgsPerTask workgroups at a time
   ## - the task function reads the env self-pointer and hands the task
   ##   to the parallelForRunner, TPC_DEFINE_PARFOR shape
+  ## - serial mode omits the task function. The serial launch compiles
+  ##   without the threadpool_compute force-include, the launch assembly
+  ##   prepends the unit's stdint/stdbool includes, and the tail calls
+  ##   the iteration function directly (emitCpuSerialTailC)
   ##
   ## Parameter names must avoid `tpc_` prefixes and the launch-internal crucibleWg/crucibleWgsPerTask/crucibleGrid/crucibleBlk names.
   if m.globals.len > 0:
@@ -729,16 +741,51 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   iter.add("    }\n")
   iter.add("}\n")
 
-  # task function: the iteration function already has the tpc_range_fn
-  # shape (int32, void*), the task reads the env self-pointer and hands
-  # itself to the runner
-  let taskName = "crucibleTask" & suffix
-  var task = "void " & taskName & "(void* tpc_env_) {\n"
-  task.add("    tpc_task* tpc_this = *(tpc_task**)tpc_env_;\n")
-  task.add("    tpc_worker_context* tpc_ctx = tpc_workerContext();\n")
-  task.add("    tpc_parallelForRunner(tpc_ctx, tpc_this, crucibleIter" & suffix & ");\n")
-  task.add("}\n")
-
   result.typesAndData = defs
-  result.funcs = iter & task
+  result.funcs = iter
+  if not serial:
+    # task function: the iteration function already has the tpc_range_fn
+    # shape (int32, void*), the task reads the env self-pointer and hands
+    # itself to the runner
+    var task = "void crucibleTask" & suffix & "(void* tpc_env_) {\n"
+    task.add("    tpc_task* tpc_this = *(tpc_task**)tpc_env_;\n")
+    task.add("    tpc_worker_context* tpc_ctx = tpc_workerContext();\n")
+    task.add("    tpc_parallelForRunner(tpc_ctx, tpc_this, crucibleIter" & suffix & ");\n")
+    task.add("}\n")
+    result.funcs.add(task)
   result.coordUse = coordUse
+
+proc emitCpuDataFillC*(suffix: string, runtimeParams: seq[tuple[name: string, typ: CirType]]): string =
+  ## Data-struct fill for a launch tail, both launch modes.
+  ##
+  ## Grid and block dims copy from the launch's `crucibleGrid`/`crucibleBlk`
+  ## dim3 locals, runtime parameters copy from their Nim formals.
+  ## A struct parameter copies by pointer cast.
+  ##
+  ## The caller appends the mode's workgroup-range and launch-call lines.
+  var fill = ""
+  for (field, axis) in [("x", 0), ("y", 1), ("z", 2)]:
+    fill.add("    crucibleData.crucibleGrid[" & $axis & "] = (int32_t)`crucibleGrid`." & field & ";\n")
+    fill.add("    crucibleData.crucibleBlk[" & $axis & "] = (int32_t)`crucibleBlk`." & field & ";\n")
+  for p in runtimeParams:
+    let ctype = emitCpuTypeC(p.typ, suffix)
+    let sym = "`" & p.name & "`"
+    let rhs = if p.typ.kind == ctStruct:
+                "*(" & ctype & "*)&" & sym
+              else:
+                "(" & ctype & ")(" & sym & ")"
+    fill.add("    crucibleData." & p.name & " = " & rhs & ";\n")
+  fill
+
+proc emitCpuSerialTailC*(suffix: string, runtimeParams: seq[tuple[name: string, typ: CirType]]): string =
+  ## Serial launch tail: the data struct on the caller stack, one direct call of the iteration function over the whole grid.
+  ##
+  ## - crucibleWgsPerTask is the grid workgroup total. One call covers every workgroup in x-fastest flat order
+  ## - the iteration function clamps the range at the grid total
+  ## - the serial launch ignores the pooled-launch knob workgroupsPerTask
+  var tail = "    extern void crucibleIter" & suffix & "(int32_t tpc_i, void* tpc_env_);\n"
+  tail.add("    struct crucibleData" & suffix & " crucibleData;\n")
+  tail.add(emitCpuDataFillC(suffix, runtimeParams))
+  tail.add("    crucibleData.crucibleWgsPerTask = (int32_t)(`crucibleGrid`.x * `crucibleGrid`.y * `crucibleGrid`.z);\n")
+  tail.add("    crucibleIter" & suffix & "(0, &crucibleData);\n")
+  tail

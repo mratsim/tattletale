@@ -1,4 +1,4 @@
-## CPU engine: types and functions through the CIRv2 emitters.
+## CPU engine: types and functions through the CIRv2-to-C printer.
 ##
 ## Test that bit-reinterpret casts preserve the bit pattern in both directions.
 ## Test that a device callee runs from the kernel body and mixed-width integer division, modulo and conversions are exact.

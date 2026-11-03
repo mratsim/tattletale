@@ -5,16 +5,17 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## CPU kernel compiler: CIRv2 lowering + Nim or C emission for `launchCpuFn`.
+## CPU kernel compiler: CIRv2 lowering + C emission for `launchCpuFn`.
 ##
-##   kernel wrapper → lowerCpuKernel → emitCpuCallees + emitCpuKernelBody
+##   kernel wrapper → lowerCpuKernel → emitCpuCalleesC + emitCpuWorkgroupLaunchC
 ##
 ## Launch macro (`runtime/launch/launch_cpu_fn`): drives the pipeline
 ## at compile time:
 ##
-## - it lowers the kernel wrapper, splices the callee procs, and inlines the kernel body into the launch loop nest it generates
+## - it lowers the kernel wrapper, prints the callee procs and the kernel body
+##   into the generated launch unit. The launch macro assembles the two
 ## - there is no `cpu:` standalone macro, a kernel body without a launch
-##   loop nest has no meaning on the CPU
+##   has no meaning on the CPU
 ## - the compile target is `ctCpu`, the CPU pass stage registers nothing for v0,
 ##   CIRv2 identifiers are Nim-derived, the emitters own target specifics
 ## - refusals and verifier violations surface as compile-time errors naming the construct
@@ -29,13 +30,11 @@ import ./passes/passes_normalizations
 import ./passes/passes_lowering
 import ./passes/passes_validations
 import ./passes/passes_lowering_cpu
-import ./backends/lang_nim
 import ./backends/lang_c
 
-export lang_nim.CpuCoordTable, lang_nim.cpuCoordTable
-export lang_nim.emitCpuCallees, lang_nim.emitCpuKernelBody
 export lang_c.CpuCoordTableC, lang_c.cpuCoordTableC
 export lang_c.emitCpuCalleesC, lang_c.emitCpuWorkgroupLaunchC
+export lang_c.emitCpuSerialTailC, lang_c.emitCpuDataFillC
 export lang_c.emitCpuTypeC, lang_c.kernelRuntimeParams
 
 proc lowerCpuKernel*(wrapper: NimNode): CirModule =

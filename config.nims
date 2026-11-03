@@ -628,9 +628,9 @@ task test_crucible_metal, "Test workspace/crucible Metal codegen":
     for cmd in getTestCommands("workspace/crucible/tests/codegen/metal"):
       runCmd(cmd)
 
-task test_crucible_cpu, "Test workspace/crucible CPU backend (serial spec + pooled launch)":
+task test_crucible_cpu, "Test workspace/crucible CPU backend (serial launch + pooled launch)":
   withDir(ProjectRoot):
-    # --threads:off runs the serial spliced-Nim spec
+    # --threads:off runs the serial emitted-C launch, the iteration function on the caller thread
     # --threads:on runs the emitted-C workgroup launch over the threadpool_compute pool
     for cmd in getTestCommands("workspace/crucible/tests/codegen/cpu", extraFlags = "--threads:off"):
       runCmd(cmd)

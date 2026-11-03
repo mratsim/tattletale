@@ -1,4 +1,4 @@
-## CPU engine: control flow through the CIRv2-to-Nim and CIRv2-to-C emitters.
+## CPU engine: control flow through the CIRv2-to-C printer.
 ##
 ## Test that for-loop ranges, if/else statements, if-expressions and compound assignment produce the right output on the CPU.
 ##
