@@ -59,10 +59,10 @@ proc hadamardBenchCaveman(dst, src, preScale, postScale: distinct TensorView, no
 proc separator(length = 100) =
   writeLine(stdout, "-".repeat(length))
 
-proc fillScales[T](data: ptr UncheckedArray[T], size: int) =
-  ## Position mod 5, times 0.25 plus 1.0, matching the fill pattern of the ceramic benches
+proc fillScales(data: ptr UncheckedArray[uint16], size: int) =
+  ## Position mod 5, times 0.25 plus 1.0, encoded fp16, matching the fill pattern of the ceramic benches
   for i in 0 ..< size:
-    data[i] = T(i mod 5) * T(0.25) + T(1.0)
+    data[i] = fp32ToFp16(float32(i mod 5) * 0.25'f32 + 1.0'f32)
 
 template stageViews(engine: MetalEngine, rows, cols, np: int, pattern, preHost, postHost: seq[uint16]): auto =
   ## Uploads the fp16 patterns to fresh device buffers and builds the four views.
@@ -147,10 +147,10 @@ const Cases: array[6, tuple[rows, cols, iters: int]] = [
   (8192, 4096, 50),
   # medium
   (1024, 4096, 50),
-  # large, the exllamav3 quantization shape
-  (65536, 16384, 5),
   # wide, C = 16384
-  (8192, 16384, 10)]
+  (8192, 16384, 10),
+  # largest working set runs last, an allocation failure on a small device costs no later case
+  (65536, 16384, 5)]
 
 proc main() =
   var engine = newEngine(runMetal)
