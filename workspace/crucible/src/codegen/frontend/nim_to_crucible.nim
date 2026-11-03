@@ -5,6 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+{.experimental: "codeReordering".}
+
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import nim_type_resolvers
@@ -12,6 +14,7 @@ import ../../builtins/builtins_catalog
 import ../../builtins/builtins_magic_catalog
 import ../ir/cirv2_pretty
 import std/[macros, tables, strutils, sets]
+
 
 # ############################################################
 #
@@ -192,8 +195,6 @@ proc resolveTypeSection(ctx: var FrontendCtx, n: NimNode) =
     # a pragma-wrapped type name keeps the type node under the pragma
     let typeNode = if head.kind == nnkPragmaExpr: head[0] else: head
     discard ctx.resolver.resolveCirType(typeNode)
-
-proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
 
 proc builtinSymExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
   ## A `{.builtin.}` value reference: the canonical coordinate vectors and the flat thread index,
@@ -510,6 +511,10 @@ proc lowerNestedTernary(ctx: var FrontendCtx,
   if ctx.resolver.err.len > 0:
     return nil
   return ternaryE(resType, cond, thenV, elseV)
+
+# lowerStmt's forward declaration stays, Nim 2.2.12's codeReordering does
+# not defer this call and the metal array-assign suite goes red without it
+proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt]
 
 proc buildBranchBody(ctx: var FrontendCtx, bodyNode: NimNode, dest: CirExpr): seq[CirStmt] =
   ## One branch body: simple statements, or the expression form assigning
