@@ -40,3 +40,46 @@ Effective flops count only the key tiles a query tile visits, the model
 - the "causal" mask string in MLX is lower-right aligned for L != S.
   check_math verifies the installed MLX against the explicit lower-right
   mask and fails loudly if that ever changes
+
+
+# Paged decode bench, Metal Nim vs MLX python
+
+Nim side: `bench_paged_sdpa_decode_metal.nim`, paged decode over Metal through `k_tile_sdpa_paged.nim`.
+Python side: `bench_paged_sdpa_decode_mlx.py`, a block-table gather plus `mx.fast.scaled_dot_product_attention`.
+
+## Run
+
+    nim c -r -d:release \
+      -d:sdpaDtype=f32|bf16 \
+      --outdir:build/bench workspace/ceramic/bench/sdpa_gpu/bench_paged_sdpa_decode_metal.nim
+
+    uv run python workspace/ceramic/bench/sdpa_gpu/bench_paged_sdpa_decode_mlx.py [bf16]
+
+## Shape and cases
+
+- B=1 Hq=32 Hkv=8 Dk=Dv=128, page size 32, schedule tile (MT, NT) = (32, 32)
+- one kv tile per page (the paged test suite's schedule), pool layer 1 of 2
+- cases: 8 seqs x 1024 (L2-resident contrast), 32 x 8192, 64 x 8192, and 32 x 8192 with window 1024
+- block tables fill page ids sequentially, -1 padding beyond each sequence's page count
+
+MLX pays one block-table gather per timed call as the paging tax: the Nim kernel reads pool pages in place.
+The python script checks its gather+sdpa path against an explicit page-walk reference before timing.
+
+## GB/s convention
+
+Decode attention is bandwidth-bound in principle: effective GB/s is the primary metric,
+effective TFLOP/s stays for convention parity with the base bench.
+Both sides use the same byte and flop models:
+
+- effective bytes: sum over sequences of attended_seqlen * Hkv * (Dk + Dv) *
+  sizeof(elem), attended_seqlen = seqlen - windowLo clamped to [0, seqlen]
+- effective flops: 2 * sum over sequences of attended_seqlen * Hq * (Dk + Dv)
+
+Truth cases need an L2-busting K+V working set of at least 2 GB K+V f32:
+
+- once the working set fits cache, in-kernel iteration loops measure L2 bandwidth,
+  which exceeds the 540 GB/s M4 Max DRAM peak
+- a line whose computed bandwidth exceeds the peak prints INVALID (the measurement failed)
+
+Measured on M4 Max the (32, 32) schedule is compute-limited (see the Nim bench header).
+Reported GB/s reflects the kernel's compute ceiling, not DRAM bandwidth.
