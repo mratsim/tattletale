@@ -287,6 +287,26 @@ func containsPtrDeep*(t: CirType): bool =
   else:
     false
 
+func isStaticStruct*(t: CirType): bool =
+  ## True when `t` is a struct with no runtime bytes.
+  ##
+  ## - every field is itself a static struct, recursively fieldless
+  ## - any runtime-reading field (scalar, pointer, array) makes `t` runtime
+  ##
+  ## Counterpart of `isStaticArg` in launch_serialization.nim:
+  ## - marshaling packs zero bytes for a static struct
+  ## - a kernel signature must declare no parameter for a static struct
+  ## - codegen never imports the runtime layer
+  ## - pair with `isStaticArg` by convention, keep both predicates in agreement
+  case t.kind
+  of ctStruct:
+    for f in t.fields:
+      if f.typ.kind != ctVoid and not f.typ.isStaticStruct:
+        return false
+    true
+  else:
+    false
+
 type
   CirParamLeaf* = object
     ## `isBuffer` marks a pointer leaf that binds as a device buffer, a value leaf binds by value.
@@ -299,7 +319,10 @@ proc collectLeaves(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
   of ctPtr, ctAptr:
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: true)
   of ctStruct:
-    if t.containsPtrDeep:
+    if t.isStaticStruct:
+      discard
+      # no runtime bytes, marshaling packs none: no kernel parameter
+    elif t.containsPtrDeep:
       for f in t.fields:
         if f.typ.kind != ctVoid:
           collectLeaves(f.typ, name & "_" & f.name, leaves)
