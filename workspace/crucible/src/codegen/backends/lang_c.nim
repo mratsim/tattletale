@@ -148,7 +148,8 @@ proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
   of ctStruct:
     result = "struct " & t.name & ctx.suffix
   of ctArray:
-    # arrays print at the declaration site: `T name[N]`
+    # element type only, the declaration sites append the dimensions
+    # (typeDeclC, struct fields, data-struct members)
     result = emitTypeC(t.aElem, ctx)
   of ctString:
     cRefuse(ctx, "string values are not supported in v0")
@@ -156,6 +157,14 @@ proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
     cRefuse(ctx, "bfloat16 values are not supported in v0")
   of ctProc:
     cRefuse(ctx, "function pointers are not supported in v0")
+
+proc typeDeclC(t: CirType, name: string, ctx: EmitCtxC): string =
+  ## Type text of one declaration: arrays print their dimensions at the declaration site
+  ## as `T name[N]`, mirroring the struct-field and data-struct member sites.
+  if t.kind == ctArray:
+    emitTypeC(t.aElem, ctx) & " " & name & "[" & $t.aN & "]"
+  else:
+    emitTypeC(t, ctx) & " " & name
 
 proc collectStructs(t: CirType, seen: var seq[CirType]) =
   ## Post-order collection of every nominal struct type reachable
@@ -260,6 +269,14 @@ proc printBuiltinRefusalC(e: CirExpr, ctx: EmitCtxC): string =
     else: "unknown builtins"
   cRefuse(ctx, what & " are not supported in v0")
 
+proc calleeRefC(name: string, ctx: EmitCtxC): string =
+  ## Call reference for one module proc, the launch-site suffix uniquifies per site.
+  ## A `__builtin_` name is a compiler builtin the array-assign pass emits, verbatim.
+  if name.startsWith("__builtin_"):
+    name
+  else:
+    name & ctx.suffix
+
 proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
   case e.kind
   of eNil:
@@ -322,7 +339,13 @@ proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
       if result.len == 0:
         cRefuse(ctx, "no launch expression for coordinate builtin " & $base.coordBuiltin)
     else:
-      result = printExpr(e.dotBase, ctx) & "." & e.fieldName
+      let baseTxt = printExpr(e.dotBase, ctx)
+      # C parses a prefix dereference tighter than the field access,
+      # `*p.field` reads `*(p.field)`
+      if e.dotBase.kind == eDeref:
+        result = "(" & baseTxt & ")." & e.fieldName
+      else:
+        result = baseTxt & "." & e.fieldName
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let op = case e.kind
              of eAdd: "+"
@@ -372,7 +395,10 @@ proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
   of eAddr:
     result = "&" & printExpr(e.addrOperand, ctx)
   of eSizeof:
-    result = "sizeof(" & emitTypeC(e.ofType, ctx) & ")"
+    if e.ofType.kind == ctArray:
+      result = "sizeof(" & emitTypeC(e.ofType.aElem, ctx) & "[" & $e.ofType.aN & "])"
+    else:
+      result = "sizeof(" & emitTypeC(e.ofType, ctx) & ")"
   of eOconstr:
     let t = e.ocType
     if t.kind != ctStruct:
@@ -392,7 +418,7 @@ proc printExpr(e: CirExpr, ctx: EmitCtxC): string =
       discard printBuiltinRefusalC(callee, ctx)
     var calleeRef = printExpr(callee, ctx)
     if callee.kind == eSym and not callee.builtin:
-      calleeRef = callee.name & ctx.suffix
+      calleeRef = calleeRefC(callee.name, ctx)
     var args: seq[string]
     for a in e.args:
       # C converts implicitly at call sites, CIRv2 conversions print
@@ -440,7 +466,7 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
           cRefuse(ctx, "kernel local '" & s.name &
             "' shadows a counter the launch generates, rename it")
       let decl =
-        emitTypeC(s.declType, ctx) & " " & s.name &
+        typeDeclC(s.declType, s.name, ctx) &
         (if s.init != nil: " = " & printExpr(s.init, ctx) else: "") & ";"
       lines.add(pad & decl)
       i += 1
@@ -500,7 +526,7 @@ proc printStmts(body: seq[CirStmt], ctx: EmitCtxC, indent: int, lines: var seq[s
     of sCall:
       var calleeRef = printExpr(s.callCallee, ctx)
       if s.callCallee.kind == eSym and not s.callCallee.builtin:
-        calleeRef = s.callCallee.name & ctx.suffix
+        calleeRef = calleeRefC(s.callCallee.name, ctx)
       var args: seq[string]
       for a in s.callArgs:
         args.add(printExpr(a, ctx))
@@ -574,9 +600,10 @@ proc kernelRuntimeParams*(m: CirModule): seq[tuple[name: string, typ: CirType]] 
 proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   ## Callee proc emission as C function definitions.
   ##
-  ## - callees print under their CIRv2 names plus the launch-site suffix,
-  ##   as file-scope definitions in the generated launch TU
-  ## - `{.inline.}` callees print the C `inline` qualifier
+  ## - callees emit as file-scope definitions, one prototype before each:
+  ##   the emission order is post-order, a mutual recursion cycle
+  ##   needs a forward declaration
+  ## - `{.inline.}` callees print the `static inline` qualifier
   ## - the kernel wrapper and the inlined kernel proc print nothing,
   ##   their bodies print at the launch site through emitCpuWorkgroupLaunchC
   ## - hoisted threadgroup/constant globals refuse in v0
@@ -589,6 +616,7 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
     if p.isKernel:
       inlinedName = inlineSourceC(findKernelC(m, kctx), m, kctx).bodyProc.name
       break
+  var protos: seq[string]
   var blocks: seq[string]
   for p in m.procs:
     if p.isKernel or p.name == inlinedName:
@@ -599,12 +627,21 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
       if param.varParam:
         cRefuse(ctx,
           "`var` parameters are not supported in v0, the cpu backend takes whole values")
-      params.add(emitTypeC(param.typ, ctx) & " " & param.name)
+      params.add(typeDeclC(param.typ, param.name, ctx))
     let retT = if p.ret.kind == ctVoid: "void" else: emitTypeC(p.ret, ctx)
-    let qual = if p.inline: "inline " else: ""
-    blocks.add(qual & retT & " " & p.name & suffix & "(" & params.join(", ") & ") {\n" &
-               printProcBodyC(p, ctx) & "\n}")
-  blocks.join("\n\n")
+    # file-local definition with an external symbol: a non-inlined call
+    # links against it, the C99+ `inline` qualifier alone emits nothing
+    # a linker can resolve
+    let qual = if p.inline: "static inline " else: ""
+    let signature = qual & retT & " " & p.name & suffix & "(" & params.join(", ") & ")"
+    protos.add(signature & ";")
+    blocks.add(signature & " {\n" & printProcBodyC(p, ctx) & "\n}")
+  # prototypes first: the harvest order emits callees after their callers,
+  # a mutual recursion cycle needs a forward declaration
+  if protos.len > 0:
+    result = protos.join("\n") & "\n\n" & blocks.join("\n\n")
+  else:
+    result = blocks.join("\n\n")
 
 proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
                       dataPrefix: string,

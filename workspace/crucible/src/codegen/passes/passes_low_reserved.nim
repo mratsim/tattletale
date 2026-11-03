@@ -132,6 +132,20 @@ const CudaReserved* = [
   "__global__", "__device__", "__shared__", "__constant__",
 ].toHashSet()
 
+const CReserved* = [
+  # C11 keywords
+  "alignas", "alignof", "auto", "bool", "break", "case", "char", "complex",
+  "const", "continue", "default", "do", "double", "else", "enum", "extern",
+  "float", "for", "goto", "if", "imaginary", "inline", "int", "long",
+  "register", "restrict", "return", "short", "signed", "sizeof", "static",
+  "struct", "switch", "typedef", "union", "unsigned", "void", "volatile",
+  "while",
+  # type names and literals the C printer emits, stdint/stdbool vocabulary
+  "int8_t", "int16_t", "int32_t", "int64_t",
+  "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+  "true", "false", "NULL",
+].toHashSet()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
@@ -143,7 +157,7 @@ template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: str
   ## - `passName`: the registry key, one registration per target
   ## - `reserved`: the target's reserved words, one of `MetalReserved`,
   ##   `GlslReserved`, `OpenclReserved`, `WgslReserved`, `HlslReserved`,
-  ##   `CudaReserved`
+  ##   `CudaReserved`, `CReserved`
   ## - `doubleUnderscorePrefix`: the prefix every `__`-prefixed name gains,
   ##   "" for targets without a reserved double-underscore head (WGSL: `wgsl_`)
   reg.register(passName, pkTransform,
