@@ -224,6 +224,22 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
     nnkCall.newTree(bindSym"assertDimsWithinInt32", gridVar, blkVar),
     hoists)
   let serial = not compileOption("threads")
+  if not serial:
+    # envSize in the pooled tail is the data-struct size cast to int32_t,
+    # a struct at or above 2^31 bytes wraps the cast
+    # 64 bytes cover the counters, the grid and block dims and member padding
+    var dataBytes: NimNode = newLit(64)
+    for nameNode in runtimeNames:
+      dataBytes = nnkInfix.newTree(ident"+", dataBytes,
+        nnkCall.newTree(bindSym"sizeof", ident($nameNode)))
+    let refusalMsg = nnkInfix.newTree(ident"&",
+      newLit("launchCpuFn " & $wrapper[0] & ": the launch data struct needs "),
+      nnkInfix.newTree(ident"&",
+        nnkCall.newTree(bindSym"$", dataBytes),
+        newLit(" bytes, the pooled launch stores the struct size in an int32 envSize, keep the runtime parameters under 2 GiB")))
+    launchBody.add(quote do:
+      static:
+        doAssert `dataBytes` <= high(int32), `refusalMsg`)
   let gridReads = ["tpc_d_->crucibleGrid[0]", "tpc_d_->crucibleGrid[1]",
                    "tpc_d_->crucibleGrid[2]"]
   let blkReads = ["tpc_d_->crucibleBlk[0]", "tpc_d_->crucibleBlk[1]",
