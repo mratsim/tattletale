@@ -418,6 +418,8 @@ def _probe_exempt(line):
 
 
 BANNED = [
+    (r"\boff-contract\b",
+     None, "'off-contract' hides who checks what, state the precondition and the checker, the consequence follows from the code"),
     (r"maxloopiterationsvm",
      None, "the VM loop-cap flag is banned tree-wide, no VM iteration cap exists or is configurable"),
     (r"\bmint(s|ed)?\b",
@@ -667,6 +669,8 @@ RULES = {
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "emitted-text-assert": Rule("emitted-text-assert", True,
                                 "a string literal containment, scan, or equality in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
+    "method-call-syntax": Rule("method-call-syntax", True,
+                               "a tile_algebra view method written in dst-first free-call syntax, the receiver is the first argument, write receiver.method(...)"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
     "diag-downgrade": Rule("diag-downgrade", True,
@@ -2298,35 +2302,59 @@ def _line_scan(raw, in_tq):
 _LOGICAL_JOIN_CAP = 20
 
 
-def _logical_code_lines(text):
-    """Returns (first line number, code) pairs, a line joined into the next
-    while its parentheses and brackets stay unbalanced outside string
-    literals. A call wrapped across lines therefore matches the containment
-    patterns, the literal on a continuation line is not invisible.
+def _logical_code_lines_spanned(text):
+    """Returns (first line number, code, spans) triples, a line joined into
+    the next while its parentheses and brackets stay unbalanced outside
+    string literals. A call wrapped across lines therefore matches the
+    containment patterns, the literal on a continuation line is not
+    invisible. `spans` maps a buffer offset to the physical line that wrote
+    it, so a finding can name the line its match sits on.
     """
     out = []
     buf = ""
     start = 0
     depth = 0
     in_tq = False
+    spans = []
     for i, raw in enumerate(text.splitlines(), 1):
         code, d, in_tq = _line_scan(raw, in_tq)
         if buf:
+            spans.append((len(buf), i))
             buf += " " + code
             depth += d
         elif code.strip():
             buf = code
             start = i
             depth = d
+            spans = [(0, i)]
         else:
             continue
         if (depth <= 0 and not in_tq) or i - start + 1 >= _LOGICAL_JOIN_CAP:
-            out.append((start, buf))
+            out.append((start, buf, spans))
             buf = ""
             depth = 0
+            spans = []
     if buf:
-        out.append((start, buf))
+        out.append((start, buf, spans))
     return out
+
+
+def _spanned_line(spans, offset):
+    """The physical line that wrote the buffer character at `offset`.
+    """
+    line = spans[0][1]
+    for at, i in spans:
+        if at <= offset:
+            line = i
+        else:
+            break
+    return line
+
+
+def _logical_code_lines(text):
+    """Returns (first line number, code) pairs; see _logical_code_lines_spanned.
+    """
+    return [(start, buf) for start, buf, _spans in _logical_code_lines_spanned(text)]
 
 
 def nim_emitted_text_assert_checks(path, text, findings):
@@ -2390,6 +2418,42 @@ def nim_emitted_text_assert_checks(path, text, findings):
                 "does not assert on the emitted shader source, behavioral "
                 "tests launch kernels and check readbacks" % (shape, hit),
                 warning=True))
+
+
+
+METHOD_CALL_NAMES = ("alongAxisAt", "simd_shuffle_xor")
+
+
+def nim_method_call_syntax_checks(path, text, findings):
+    """Flags the dst-first free-call spelling of tile_algebra and warp builtin
+    methods.
+
+    - the receiver is the first argument (`alongAxisAt(src, 1, row)`,
+      `simd_shuffle_xor(v, mask)`), the API's form is the method call
+      (`src.alongAxisAt(1, row)`, `v.simd_shuffle_xor(mask)`)
+    - declarations and comment lines stay out
+    """
+    blocked = nim_block_comment_lines(text)
+    names = "|".join(re.escape(n) for n in METHOD_CALL_NAMES)
+    decl_re = re.compile(r"\b(?:proc|func|template|macro|iterator)\s+(?:%s)\b" % names)
+    call_re = re.compile(r"\b(?:%s)\s*\(" % names)
+    for start, joined, spans in _logical_code_lines_spanned(text):
+        if start in blocked or not joined.strip():
+            continue
+        code = _blank_nim_strings(joined)
+        if decl_re.search(code):
+            continue
+        for m in call_re.finditer(code):
+            name = re.match(r"[A-Za-z_]\w*", code[m.start():]).group(0)
+            i = m.start() - 1
+            while i >= 0 and code[i] in " \t":
+                i -= 1
+            if i >= 0 and code[i] == ".":
+                continue
+            findings.append(Finding(
+                path, _spanned_line(spans, m.start()), "method-call-syntax",
+                "%s is a method of its receiver, write "
+                "receiver.%s(...) instead of %s(receiver, ...)" % (name, name, name)))
 
 
 # Refusal slop rules: one-line-refusal, duplicate-refusal-coverage, refusal-essay, refusal-density
@@ -3233,6 +3297,7 @@ def scan(path, text, findings):
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
             nim_emitted_text_assert_checks(path, text, findings)
+            nim_method_call_syntax_checks(path, text, findings)
             nim_callable_semicolon_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
             check_license_driveby(path, text, findings)
