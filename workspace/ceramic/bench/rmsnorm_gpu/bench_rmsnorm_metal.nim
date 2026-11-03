@@ -128,7 +128,7 @@ proc runCase(engine: MetalEngine, shape, srcStrides, dstStrides: tuple, axis: st
       timings[rep] = inNanoseconds(benchStop - benchStart) div iters
   sort(timings)
   let gbps = np.float * 12.0 / (timings[1].float / 1e9) / 1e9
-  writeLine(stdout, &"{np:>10}  {rows:>7}  {gx:>5}  {iters:>6}   {gbps:.1f}")
+  writeLine(stdout, &"{np:>10}  {rows:>7}  {gx:>5}  {iters:>6}   {gbps:>9.1f}")
 
 const Cases2: array[6, tuple[src, dst: tuple[shape, strides: (int, int)], axis, iters: int]] = [
   # row-major, dense rows, the transformer RMSNorm
