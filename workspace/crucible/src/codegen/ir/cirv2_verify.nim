@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[sets, strutils]
+import std/sets
 import cirv2_lang
 
 # ############################################################
@@ -15,7 +15,7 @@ import cirv2_lang
 # ############################################################
 
 const IntrinsicCallees* = ["__builtin_memcpy", "max", "min"]
-  ## Callees no declaration ever backs, exempt from the scope walk.
+  ## Callees that no declaration ever backs, exempt from the scope walk.
   ## The printers emit each name verbatim and the target languages provide it:
   ##
   ## - `__builtin_memcpy`: the decomposeArrayAssign pass emits it, C targets provide the intrinsic
@@ -24,7 +24,7 @@ const IntrinsicCallees* = ["__builtin_memcpy", "max", "min"]
 
 proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string]): string =
   ## Returns "" while every symbol in `e` resolves, else the violation.
-  ## A `{.builtin.}`-marked symbol names a target intrinsic, never a declaration.
+  ## A `{.builtin.}`-marked symbol is a target intrinsic, never a declaration.
   if e.isNil:
     return ""
   if e.kind == eSym:
@@ -114,7 +114,7 @@ proc verifyModule*(m: CirModule): string =
   ## - `{.builtin.}`-marked symbols are target intrinsics, exempt
   ## - declaration precedes use inside the proc body, globals and procs carry no statement order
   ##
-  ## Module procs and kernels walk alike: the lowering passes rewrite device function bodies in place,
+  ## Module procs and kernels are walked the same way: the lowering passes rewrite device function bodies in place,
   ## so a transform can dangle a symbol in either.
   var moduleNames: HashSet[string]
   for g in m.globals:

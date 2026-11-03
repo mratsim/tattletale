@@ -33,7 +33,7 @@ proc runTest() =
     let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("ghost", tInt(32)))])
     let err = runPipeline(m)
     doAssert "verify: " in err, "expected the verify refusal, got: " & err
-    doAssert "k" in err and "ghost" in err, "expected the refusal to name the proc and the symbol, got: " & err
+    doAssert "at k:" in err and "ghost" in err, "expected the refusal to name the proc and the symbol, got: " & err
 
   block declaredBeforeUse:
     let m = kernelModule(@[
