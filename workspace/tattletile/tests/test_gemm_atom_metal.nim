@@ -15,7 +15,7 @@
 ## - the density count is recorded: CIRv2 nodes and scheduled ops per public mmaf
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000
+##   nim c -r --hints:off --warnings:off
 ##     --nimcache:nimcache/tattletile --outdir:build/tattletile
 ##     workspace/tattletile/tests/test_gemm_atom_metal.nim
 

@@ -18,7 +18,7 @@
 ## - gemm: the value loop plus the mma k loop, word-stable across two compiles
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
+##   nim c -r --hints:off --warnings:off \
 ##     --nimcache:nimcache/tattletile --outdir:build/tattletile workspace/tattletile/tests/test_embed_spirv_words.nim
 
 import std/[os, osproc, strutils]

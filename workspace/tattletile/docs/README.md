@@ -48,7 +48,7 @@ One table entry per capability, each naming its test file and what the test prov
 Every test compiles and runs from the worktree root:
 
 ```
-nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
+nim c -r --hints:off --warnings:off \
   --nimcache:nimcache/tattletile --outdir:build/tattletile \
   workspace/tattletile/tests/<test-file>
 ```

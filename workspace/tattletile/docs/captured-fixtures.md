@@ -24,7 +24,7 @@ Production path:
 - shape assertions for the constructs only real IR has
 
 ```
-nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
+nim c -r --hints:off --warnings:off \
   --nimcache:nimcache/tattletile --outdir:build/tattletile \
   workspace/tattletile/tests/test_tile_ir_captured.nim
 ```

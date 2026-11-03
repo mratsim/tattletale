@@ -17,7 +17,7 @@
 ## - references: the float64-then-narrow order of the python runner
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
+##   nim c -r --hints:off --warnings:off \
 ##     --nimcache:nimcache/tattletile --outdir:build/tattletile workspace/tattletile/tests/test_embed_spirv_vulkan.nim
 
 import workspace/crucible
