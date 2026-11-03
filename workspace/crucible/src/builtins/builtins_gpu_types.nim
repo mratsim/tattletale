@@ -171,6 +171,14 @@ targetVocab:
     storageBool:
       bool: "NIM_BOOL"
 
+  cgCpu:
+    scalar void "void", bool "bool", i8 "int8_t", i16 "int16_t", i32 "int32_t",
+      i64 "long long", iword "intptr_t",
+      u8 "uint8_t", u16 "uint16_t", u32 "uint32_t", u64 "unsigned long long",
+      uword "uintptr_t", f32 "float", f64 "double"
+    lit u64Suffix "ull", i64Suffix "ll", u32Suffix "u", narrowCast false,
+      f32Suffix "f", nilToken "NULL"
+
   cgHlsl:
     scalar void "void", bool "bool", i32 "int", u32 "uint", f32 "float", f64 "double"
     lit u32Suffix "u", u64Suffix "u", f16Suffix "f", f32Suffix "f", f64Suffix "l",

@@ -59,3 +59,7 @@ genTargets:
     vector:
       elems bool "bool", i32 "int", u32 "uint", f32 "float"
       lanes 2, 3, 4
+
+  target cpu:
+    kind unrollDirective "", braceSameLine true
+    vector ()

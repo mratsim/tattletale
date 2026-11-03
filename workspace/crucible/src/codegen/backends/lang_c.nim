@@ -11,9 +11,12 @@
 #
 # ############################################################
 
-import std/macros
-import std/strutils
+import std/[macros, strutils]
 import ../ir/cirv2_lang
+import ../../builtins/builtins_gpu_types
+import ../../builtins/builtins_decl_helpers
+import ./targets_registry
+import ./print_common
 
 export cirv2_lang
 
@@ -47,6 +50,40 @@ proc coordExprC(coords: CpuCoordTableC, name: CirCoordBuiltinKind, comp: int): s
   if e0.len == 0 or e1.len == 0 or e2.len == 0:
     return ""
   "(dim3){" & e0 & ", " & e1 & ", " & e2 & "}"
+
+const printerTarget = "cpu"
+
+const cpuEmit = TargetEmit(
+  vocab: BuiltinVocab(),
+  functionalCtor: false,
+  ctorOpen: "{",
+  ctorClose: "}",
+  ctorCast: true,
+  ctorZero: "",
+  aconstrCasts: false,
+  dotDerefParens: true,
+  vectorDots: false,
+  noPointerValues: (spaces: {}, text: ""),
+  noPointerRebind: "",
+  prefixKernel: "",
+  prefixInline: "",
+  prefixDevice: "")
+
+type
+  PrintCtx* = object of WalkCtx
+    ## Per-target walk context. The shared walk procs instantiate against
+    ## the derived type and the overlay procs below resolve per target.
+    ##
+    ## - suffix: uniquifies callee references per launch site
+    ## - coords: the coordinate-builtin rewrite table, coordinate reads
+    ##   refuse outside the kernel body
+    ## - inlineKernel: marks the kernel body walk, returns become gotos
+    ##   to the per-thread exit label, subst maps identifiers to C text
+    ##   for baked static parameters
+    suffix: string
+    coords: CpuCoordTableC
+    inlineKernel: bool
+    subst: seq[(string, string)]
 
 type
   EmitCtxC = object
