@@ -35,7 +35,7 @@ import ./backends/lang_c
 export lang_c.CpuCoordTableC, lang_c.cpuCoordTableC
 export lang_c.emitCpuCalleesC, lang_c.emitCpuWorkgroupLaunchC
 export lang_c.emitCpuSerialTailC, lang_c.emitCpuDataFillC
-export lang_c.emitCpuTypeC, lang_c.kernelRuntimeParams
+export lang_c.kernelRuntimeParams
 
 proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   let savedTarget = crucibleCompileTarget
