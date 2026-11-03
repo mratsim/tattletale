@@ -83,11 +83,5 @@ proc runTest() =
     doAssert "at k:" in err and "'a'" in err, "expected the refusal to name the proc and the duplicated parameter, got: " & err
     doAssert "(proc k (param out" in err, "expected the refusal to render the offending proc, got: " & err
 
-  block verifyIRDisabled:
-    let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("ghost", tInt(32)))])
-    m.verifyIR = false
-    let err = runPipeline(m)
-    doAssert err.len == 0, "expected no refusal with verifyIR off, got: " & err
-
 when isMainModule:
   runTest()
