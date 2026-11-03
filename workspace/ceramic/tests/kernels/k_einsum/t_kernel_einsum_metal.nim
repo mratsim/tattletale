@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Metal fixture replay for the einsum macro's nine elementary recipes.
+## Metal fixture replay for the einsum macro's recipes.
 ##
 ## Test that every recipe replays its fixtures through the `einsum` macro,
 ## matching the numpy f64 reference, stride-permuted operands included.
@@ -30,9 +30,13 @@ proc replayAllFixtures() =
     "dot_rm",
     "hadamard_cm",
     "outer_rm",
+    "contraction_abc_cm",
+    "contraction_2bound_cm",
+    "contraction_3op_cm",
+    "contraction_batched_rm",
   ]
   for name in fixtures:
     engine.replayEinsumFixture(name)
-  echo "all einsum fixture replays pass (9 recipes, ", fixtures.len, " fixtures)"
+  echo "all einsum fixture replays pass (", fixtures.len, " fixtures)"
 
 replayAllFixtures()

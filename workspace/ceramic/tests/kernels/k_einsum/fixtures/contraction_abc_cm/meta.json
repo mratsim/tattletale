@@ -1,0 +1,48 @@
+{
+ "name": "contraction_abc_cm",
+ "recipe": "contraction_abc",
+ "dtype": "float32",
+ "stmt": "D[a,c] = A[a,b,c] * B[c,b]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    2,
+    3,
+    4
+   ],
+   "strides": [
+    12,
+    4,
+    1
+   ]
+  },
+  {
+   "file": "b.bin",
+   "shape": [
+    4,
+    3
+   ],
+   "strides": [
+    1,
+    4
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   2,
+   4
+  ],
+  "strides": [
+   4,
+   1
+  ]
+ },
+ "checksum": 8335431,
+ "xorhash_checksums": {
+  "a.bin": 2166912478,
+  "b.bin": 19703850,
+  "o.bin": 8335431
+ }
+}

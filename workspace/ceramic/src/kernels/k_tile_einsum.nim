@@ -187,9 +187,11 @@ proc parseEinsumStmt(tensors, stmt: NimNode): EinsumPlan =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc isMmClass(plan: EinsumPlan): bool =
-  ## mm-class routing test: exactly 2 operands sharing every bound label.
-  ## Free labels split across the operands with at least one per operand
-  if plan.operands.len != 2 or plan.bound.len == 0:
+  ## mm-class routing test: exactly 2 operands sharing exactly one bound label.
+  ## Free labels are disjoint across the operands with at least one per operand.
+  ## More than one bound label needs a nested K mode, which the gemm kernel's
+  ## flat K-tile iteration cannot traverse, so those contractions stay general
+  if plan.operands.len != 2 or plan.bound.len != 1:
     return false
   let a = plan.operands[0]
   let b = plan.operands[1]

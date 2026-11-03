@@ -96,6 +96,19 @@ RECIPES = {
     "outer": dict(
         stmt="D[i,j] = u[i] * v[j]", sub="i,j->ij",
         operands=[("u.bin", (5,)), ("v.bin", (7,))], out=(5, 7)),
+    "contraction_abc": dict(
+        stmt="D[a,c] = A[a,b,c] * B[c,b]", sub="abc,cb->ac",
+        operands=[("a.bin", (2, 3, 4)), ("b.bin", (4, 3))], out=(2, 4)),
+    "contraction_2bound": dict(
+        stmt="D[i,l] = A[i,j,k] * B[k,j,l]", sub="ijk,kjl->il",
+        operands=[("a.bin", (2, 3, 4)), ("b.bin", (4, 3, 5))], out=(2, 5)),
+    "contraction_3op": dict(
+        stmt="D[a,b] = A[a,b,c] * B[c] * C[b,c]", sub="abc,c,bc->ab",
+        operands=[("a.bin", (2, 3, 4)), ("b.bin", (4,)), ("c.bin", (3, 4))],
+        out=(2, 3)),
+    "contraction_batched": dict(
+        stmt="D[b,i,k] = A[b,i,j] * B[b,j,k]", sub="bij,bjk->bik",
+        operands=[("a.bin", (2, 3, 4)), ("b.bin", (2, 4, 5))], out=(2, 3, 5)),
 }
 
 # one entry per fixture: (name, recipe, storage order per operand)
@@ -113,6 +126,10 @@ CASES = [
     ("dot_rm", "dot", ["rm", "rm"]),
     ("hadamard_cm", "hadamard", ["rm", "cm"]),
     ("outer_rm", "outer", ["rm", "rm"]),
+    ("contraction_abc_cm", "contraction_abc", ["rm", "cm"]),
+    ("contraction_2bound_cm", "contraction_2bound", ["rm", "cm"]),
+    ("contraction_3op_cm", "contraction_3op", ["cm", "rm", "rm"]),
+    ("contraction_batched_rm", "contraction_batched", ["rm", "rm"]),
 ]
 
 
