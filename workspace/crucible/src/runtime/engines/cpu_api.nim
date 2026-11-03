@@ -34,6 +34,9 @@ type
     when compileOption("threads"):
       tp*: ptr Threadpool
 
+proc `=copy`*(dst: var CpuEngine, src: CpuEngine) {.
+    error: "CpuEngine owns its worker pool and is non-copyable".}
+
 proc newCpuEngine*(numThreads: int = 0): CpuEngine =
   ## CPU engine constructor.
   ## numThreads 0 creates the pool with the OS processor count.
@@ -50,5 +53,7 @@ proc destroyCpuEngine*(engine: var CpuEngine) =
   ## Pool shutdown, joins the workers and frees the pool memory.
   ## Call once per engine, from the thread that created it.
   when compileOption("threads"):
+    doAssert engine.tp != nil,
+      "destroyCpuEngine: the engine's pool is already shut down"
     threadpool_shutdown(engine.tp)
     engine.tp = nil

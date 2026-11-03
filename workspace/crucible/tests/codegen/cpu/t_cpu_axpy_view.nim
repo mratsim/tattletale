@@ -17,6 +17,7 @@ proc axpy(y: AxpyView, alpha: float32, x: AxpyView) =
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
   const N = 7
   var xHost: array[N, float32]
   var yHost: array[N, float32]

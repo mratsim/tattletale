@@ -47,7 +47,7 @@
 ## - each launch body sits in a fresh block scope
 ## - the same kernel at two sites emits two copies under per-site suffixes
 
-import std/[macros, os, strutils, tables]
+import std/[compilesettings, macros, md5, os, strutils, tables]
 
 import workspace/crucible/src/codegen/cpu_compiler
 import workspace/crucible/src/codegen/ir/cirv2_lang
@@ -73,25 +73,50 @@ func formalCounts(candFormals: NimNode): tuple[total, required: int] =
     if f[^1].kind == nnkEmpty:
       result.required += f.len - 2
 
-func resolveKernelOverload(kernel: NimNode, argCount: int): NimNode =
-  ## Picks the overload of `kernel` whose parameters accept `argCount`
-  ## runtime-call arguments. Exactly one must match.
+func runtimeFormalsAccept(candImpl: NimNode, args: NimNode): bool =
+  ## True when every runtime formal of the candidate accepts the corresponding
+  ## argument's type exactly, the discrimination an ordinary call performs.
+  ## Compile-time formals take static and typedesc arguments and do not discriminate.
+  let formals = candImpl[3]
+  var argIdx = 0
+  for i in 1 ..< formals.len:
+    let f = formals[i]
+    for j in 0 ..< f.len - 2:
+      if argIdx >= args.len:
+        return true
+      if not isCompileTime(f[^2]) and
+          not sameType(args[argIdx].getTypeInst(), f[^2]):
+        return false
+      argIdx.inc
+  result = true
+
+func resolveKernelOverload(kernel: NimNode, args: NimNode): NimNode =
+  ## Overload selection for `kernel`, the way an ordinary call resolves:
+  ##
+  ## - parameter count filters first
+  ## - the runtime argument types then discriminate same-arity candidates
+  ## - exactly one must survive
   if kernel.kind notin {nnkOpenSymChoice, nnkClosedSymChoice}:
     return kernel
-  var match: NimNode = nil
-  var count = 0
+  var arityMatches: seq[NimNode]
   for cand in kernel:
     let candImpl = cand.getImpl()
     if candImpl.kind != nnkProcDef:
       continue
     let (total, required) = formalCounts(candImpl[3])
-    if required <= argCount and argCount <= total:
-      match = cand
-      count.inc
-  doAssert count == 1,
-    "kernel launch " & $kernel & ": " & $count & " overloads take " &
-    $argCount & " arguments"
-  match
+    if required <= args.len and args.len <= total:
+      arityMatches.add(cand)
+  if arityMatches.len > 1:
+    var typeMatches: seq[NimNode]
+    for cand in arityMatches:
+      if runtimeFormalsAccept(cand.getImpl(), args):
+        typeMatches.add(cand)
+    if typeMatches.len == 1:
+      return typeMatches[0]
+  doAssert arityMatches.len == 1,
+    "kernel launch " & $kernel & ": " & $arityMatches.len & " overloads take " &
+    $args.len & " arguments"
+  arityMatches[0]
 
 proc assertDimsWithinInt32(grid, blk: Dim3) =
   ## Runtime guard for the emitted-C launch's int32 indexing.
@@ -308,9 +333,16 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
   if calleesC.len > 0:
     unitC.add(calleesC & "\n")
   unitC.add(funcsC)
-  let genDir = getProjectPath() / "crucibleGenerated"
+  # nimcache location: a launch from a dependency package must not write
+  # into the main project's source tree
+  let genDir = querySetting(SingleValueSetting.nimcacheDir) / "crucibleGenerated"
   createDir(genDir)
-  let genPath = genDir / ("crucibleLaunch_" & siteSuffix & ".c")
+  # NAME_MAX is 255 and the site suffix embeds the absolute module path
+  # long suffixes shrink to a bounded head plus an md5 hash
+  # C identifiers keep the full suffix
+  let genStem = if siteSuffix.len <= 128: siteSuffix
+                else: siteSuffix[0 ..< 96] & "_" & $toMD5(siteSuffix)
+  let genPath = genDir / ("crucibleLaunch_" & genStem & ".c")
   writeFile(genPath, unitC)
   launchBody.add(parseStmt("{.compile: \"" & genPath & "\".}"))
 
@@ -359,7 +391,7 @@ var launchSiteCounts {.global, compileTime.}: Table[string, int]
 macro launchCpuCall(engine: CpuEngine, kernel: typed, gridN, blkN, coarsenN: untyped, siteSuffix: static string, args: varargs[typed]): untyped =
   ## Overload resolution and the compile-time/runtime split, then the handoff to the lowering macro.
   ## Semantic analysis of the generated proc happens before `cpuExecLower` runs, with the wrapper traveling as a typed argument.
-  let k = kernel.resolveKernelOverload(args.len)
+  let k = kernel.resolveKernelOverload(args)
   let impl = k.getImpl()
   impl.expectKind(nnkProcDef)
   let formals = impl[3]

@@ -35,6 +35,7 @@ proc compoundKernel(C: ptr UncheckedArray[int32]) =
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
 
   block:   # for-loop, infix inclusive range
     var buf: array[4, uint32]

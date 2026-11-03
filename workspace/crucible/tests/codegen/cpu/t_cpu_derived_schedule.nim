@@ -14,6 +14,7 @@ proc scaleAll(outBuf: ptr UncheckedArray[float32], factor: float32) =
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
 
   block:   # derived launch, coordinate-free kernel
     var buf: array[8, float32]

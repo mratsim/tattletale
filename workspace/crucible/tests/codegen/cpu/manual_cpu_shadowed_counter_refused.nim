@@ -28,6 +28,7 @@ proc shadowKernel(outBuf: ptr UncheckedArray[int32]) =
 
 proc runTest() =
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
   var buf: array[4, int32]
   engine.launchCpuFn shadowKernel(cast[ptr UncheckedArray[int32]](addr buf[0])) do:
     grid = (3, 1, 1)

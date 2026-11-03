@@ -33,6 +33,7 @@ proc devmemKernel(ds: ptr DataSet, outBuf: ptr UncheckedArray[int32]) =
 
 proc runTest() =
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
   var buf: array[4, int32]
   engine.launchCpuFn devmemKernel(cast[ptr DataSet](nil),
                                   cast[ptr UncheckedArray[int32]](addr buf[0])) do:

@@ -17,6 +17,7 @@ proc probe(outBuf: ptr UncheckedArray[uint32]) =
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
 
   block:   # a grid workgroup total beyond int32 truncates to a negative count
     var outBuf: array[1, uint32]

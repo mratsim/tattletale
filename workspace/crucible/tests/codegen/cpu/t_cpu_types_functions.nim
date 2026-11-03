@@ -35,6 +35,7 @@ proc widthKernel(outBuf: ptr UncheckedArray[int64]) =
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
 
   block:   # cast[uint32](float32) preserves the bit pattern
     var buf: array[4, uint32]

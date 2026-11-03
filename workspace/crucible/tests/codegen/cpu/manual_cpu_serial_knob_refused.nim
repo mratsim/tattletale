@@ -24,6 +24,7 @@ proc probe(outBuf: ptr UncheckedArray[uint32]) =
 
 proc runTest() =   # private: tests run in a proc so engines are destroyed at return
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
   var k = 4
   var outBuf: array[1, uint32]
   engine.launchCpuFn probe(cast[ptr UncheckedArray[uint32]](addr outBuf[0])) do:

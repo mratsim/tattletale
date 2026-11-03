@@ -16,6 +16,7 @@ proc probe(arr: array[4, int32], outBuf: ptr UncheckedArray[int32]) =
 
 proc runTest() =
   var engine = newEngine(runCpu)
+  defer: engine.destroyCpuEngine()
   var a: array[4, int32] = [1, 2, 3, 4]
   var o: array[4, int32]
   engine.launchCpuFn probe(a, cast[ptr UncheckedArray[int32]](addr o[0])) do:

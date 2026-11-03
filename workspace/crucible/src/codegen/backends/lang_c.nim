@@ -736,11 +736,13 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   # iteration function: one call per pool task, tpc_i is the task index.
   # Each task covers crucibleWgsPerTask adjacent workgroups in x-fastest flat order.
   # Every workgroup runs the decomposition prologue, the thread loop nest and the kernel body. The last task clamps at the grid total.
-  # Grid dims and the workgroup total stay within int32, so the int32 arithmetic cannot overflow.
+  # Grid dims and the workgroup total stay within int32, the launch guard
+  # bounds them. The open range end can exceed the total by up to workgroupsPerTask - 1 workgroups,
+  # it computes in int64 before the clamp
   var iter = "void crucibleIter" & suffix & "(int32_t tpc_i, void* tpc_env_) {\n"
   iter.add("    struct " & dataName & "* tpc_d_ = (struct " & dataName & "*)tpc_env_;\n")
   iter.add("    int32_t crucibleWgTotal = tpc_d_->crucibleGrid[0] * tpc_d_->crucibleGrid[1] * tpc_d_->crucibleGrid[2];\n")
-  iter.add("    int32_t crucibleWgEnd = tpc_i * tpc_d_->crucibleWgsPerTask + tpc_d_->crucibleWgsPerTask;\n")
+  iter.add("    int64_t crucibleWgEnd = (int64_t)tpc_i * tpc_d_->crucibleWgsPerTask + tpc_d_->crucibleWgsPerTask;\n")
   iter.add("    if (crucibleWgEnd > crucibleWgTotal) crucibleWgEnd = crucibleWgTotal;\n")
   iter.add("    for (int32_t crucibleWg = tpc_i * tpc_d_->crucibleWgsPerTask;\n")
   iter.add("         crucibleWg < crucibleWgEnd; ++crucibleWg) {\n")
