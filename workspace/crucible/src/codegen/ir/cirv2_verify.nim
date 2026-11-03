@@ -17,5 +17,4 @@ proc verifyModule*(m: CirModule): string =
   ## Returns "" while the module upholds the pass-boundary contracts,
   ## else the first violation with the offending proc rendered by cirv2_pretty.
   ## Read-only: never rewrites or repairs the IR.
-  ## runPasses calls this after each registered pass on modules with verifyIR set.
-  result = ""
+  ## runPasses calls this after each clean pass on modules with verifyIR set.

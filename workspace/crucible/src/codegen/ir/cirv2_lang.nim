@@ -324,7 +324,7 @@ type
     ## The printer emits one `layout(buffer_reference, std430) buffer` per entry, it never registers a block itself.
     verifyIR*: bool
     ## Pass-boundary verification switch: runPasses calls verifyModule after
-    ## each registered pass when set. Defaulted from the `CIR_verify` define
+    ## each clean pass when set. Defaulted from the `CIR_verify` define
     ## at module construction, tests may override per module.
 
 proc computeCirSizeBytes(t: CirType): int =
