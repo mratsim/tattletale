@@ -1352,7 +1352,7 @@ proc lowerStmt(ctx: var FrontendCtx, n: NimNode): seq[CirStmt] =
 #  Proc translation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc lowerProcBody(ctx: var FrontendCtx, fn: NimNode, formals: NimNode, body: NimNode, params: var seq[CirParam]): seq[CirStmt] =
+proc lowerProcBody(ctx: var FrontendCtx, formals: NimNode, body: NimNode, params: var seq[CirParam]): seq[CirStmt] =
   ctx.pushScope()
   for i in 1 ..< formals.len:
     let formal = formals[i]
@@ -1441,7 +1441,7 @@ proc lowerProcDef(ctx: var FrontendCtx, fn: NimNode): CirProc =
   var params: seq[CirParam] = @[]
   let fnRet = ctx.retType
   let fnName = ctx.fnName
-  let body = ctx.lowerProcBody(fn, formals, getProcBody(fn), params)
+  let body = ctx.lowerProcBody(formals, getProcBody(fn), params)
   result = procD(fnName, params, fnRet, body)
   var paramTypes: seq[CirType]
   for p in params:
@@ -1471,7 +1471,7 @@ proc harvestProc(ctx: var FrontendCtx, callee: NimNode, cirName: string) =
     return
   var params: seq[CirParam] = @[]
   let fnRet = ctx.retType
-  let body = ctx.lowerProcBody(impl, formals, getProcBody(impl), params)
+  let body = ctx.lowerProcBody(formals, getProcBody(impl), params)
   ctx.exitProcBody(save)
   # pending hoists of the callee append to its body first and the caller's own queue resumes after
   let calleeHoists = ctx.drainHoisted()
