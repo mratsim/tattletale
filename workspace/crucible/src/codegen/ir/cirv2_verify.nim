@@ -36,9 +36,6 @@ import cirv2_pretty
 ## - a `sVar` joins scope after its initializer checks
 ## - branch and loop declarations scope to their body
 ## - `{.builtin.}` symbols and `IntrinsicCallees` below are exempt, each pass-backed
-##
-## Not checked, owned elsewhere: registry ordering, autodiff pair ABI,
-## enum dispatch coverage, analysis records, pass-precise blame (bisect the registry).
 
 const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
   ## Each entry is emitted by a named pass and provided by the target languages:
