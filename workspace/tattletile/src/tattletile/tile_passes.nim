@@ -11,22 +11,18 @@
 ##
 ## Gemm extension: rank-2 tiles, multi-dimensional views and the mmaf op.
 ## The abstract mmaf lowers to a per-thread FMA loop with no mma atom,
-## hardware simdgroup mma is a later bullet.
+## an applied atom selection lowers through the hardware fragment program instead.
 ## Constructs outside the subset refuse loudly, naming the construct and the kernel:
 ## - unsupported ops, element types and dynamic tile dims
 ## - thread counts that do not divide a tile, broken token chains
 ## - view disagreements: a partition tile rank unlike its tensor_view's, or a loaded or stored tile unlike its view's partition tile
 ## - unequal-shaped or non-square mmaf operands
 ##
-## Passes in TileLang-cutedsl order:
-## - resolveViews (legalization): records, per view SSA name, the shape,
-##   strides and tile shape of its defining make_tensor_view
-## - inferThreadValueLayouts (layout inference): a compact tile layout
-##   with implicit strides plus the coalesced thread-value layout per tile SSA value
+## Passes in TileLang-cutedsl order, selectMmaAtoms last:
+## - resolveViews (legalization): per view SSA name, the defining view's shape, strides and tile shape
+## - inferThreadValueLayouts (layout inference): the compact tile layout plus the coalesced thread-value layout per tile SSA value
 ## - lowerToProgram (lowering): executable per-thread program ops
-##
-## Before (fixture fragment, kernel axpy):
-## Every pass doc shows a concrete Before/After example.
+## - selectMmaAtoms (atom selection): a hardware mma atom per abstract mmaf, none when no atom applies
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --nimcache:nimcache/tattletile \
