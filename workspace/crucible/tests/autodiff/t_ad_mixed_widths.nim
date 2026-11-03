@@ -7,7 +7,7 @@
 
 ## Mixed-float widths: the scalar's type is the partials width authority
 ##
-## Test that the scalar partials type at the scalar's own width across float32 and float64 gradients
+## Test that each scalar's partials type at the scalar's own width, so the float32 and float64 gradients reduce over matching scratch widths
 ##
 ## A kernel mixing widths (float32 buffers, float64 scalar) types the reduce-partials consistently on all three sites:
 ##

@@ -7,7 +7,7 @@
 
 ## Math-builtin gradients through a launched Metal kernel
 ##
-## Test that exp, sqrt and rsqrt derive to their mechanical gradient rules, value-exact against the closed form and finite differences
+## Test that exp, ln, sqrt and rsqrt derive to their mechanical gradient rules, value-checked against the closed forms and finite differences
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --maxLoopIterationsVM:100000000 \
@@ -17,9 +17,9 @@
 import std/math except exp, ln, sqrt
 import workspace/crucible
 
-# Port surface: exp, ln and sqrt print canonical MSL names from a test-declared
-# {.builtin.} proc. The port ships only exp2 and rsqrt as {.builtin.} procs.
-# MSL prints ln through the target's log at both float widths.
+# Test-declared {.builtin.} procs reach the derivation with their canonical MSL names.
+# crucible ships only exp2 and rsqrt as {.builtin.} procs, so the tests declare exp, ln and sqrt.
+# ln is emitted as log in MSL at both float widths, through the printer's name map.
 proc exp(x: float32): float32 {.builtin.} = discard
 proc ln(x: float32): float32 {.builtin.} = discard
 proc sqrt(x: float32): float32 {.builtin.} = discard

@@ -246,9 +246,9 @@ The gradient mechanics:
 - buffer gradients gather and scatter through shadow adjoint buffers `d_<name>`
 - scalar gradients accumulate into per-index-and-thread partials, one generated
   single-thread reduce kernel folds the partials into the scalar's 1-element buffer
-- constructs outside the differentiable subset refuse at expansion, every message
-  prefixed `bwd_diff: ` for grepping
-- the refusal suite `t_ad_expansion_refusals.nim` locks one red test per refusal entry
+- the derivation refuses constructs outside the differentiable subset at expansion,
+  every message prefixed `bwd_diff: ` for grepping
+- the refusal suite `t_ad_expansion_refusals.nim` locks one red test per reachable refusal site
 
 A multi-thread workgroup annotation requires the affine thread-term analysis to prove
 every buffer-slot write thread-local, else the pair refuses: the threadgroup would race
@@ -262,7 +262,8 @@ The pair targets Metal and Vulkan GLSL:
 
 The test tree:
 
-- gradient round trips live under `tests/autodiff/`, exact-equality against Nim closed forms
+- the gradient round trips run under `tests/autodiff/`, checked against Nim closed forms
+  and finite differences
 - the Metal suites run end to end, one Vulkan GLSL spot runs via MoltenVK
 
 ## Refusals and testing
