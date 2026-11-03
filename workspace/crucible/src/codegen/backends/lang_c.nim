@@ -521,7 +521,13 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, counterTag: string, 
     task.add("    tpc_worker_context* tpc_ctx = tpc_workerContext();\n")
     task.add("    tpc_parallelForRunner(tpc_ctx, tpc_this, crucibleIter" & suffix & ");\n")
     task.add("}\n")
+    # Function declarations in a C++ TU get mangled, global-namespace variables do not. The emitted tail
+    # binds the C symbol through a global function pointer declared extern at block scope,
+    # one declaration form valid in both languages.
+    task.add("void (*crucibleTaskFn" & suffix & ")(void*) = crucibleTask" & suffix & ";\n")
     result.funcs.add(task)
+  else:
+    result.funcs.add("void (*crucibleIterFn" & suffix & ")(int32_t, void*) = crucibleIter" & suffix & ";\n")
   result.coordUse = coordUse
 
 proc emitCpuDataFillC*(suffix: string, runtimeParams: seq[tuple[name: string, typ: CirType]]): string =
@@ -559,9 +565,9 @@ proc emitCpuSerialTailC*(suffix: string, runtimeParams: seq[tuple[name: string, 
   ## - crucibleWgsPerTask is the grid workgroup total. One call covers every workgroup in x-fastest flat order
   ## - the iteration function clamps the range at the grid total
   ## - the product computes in int64 and the launch's dim guard keeps the total within int32
-  var tail = "    extern void crucibleIter" & suffix & "(int32_t tpc_i, void* tpc_env_);\n"
+  var tail = "    extern void (*crucibleIterFn" & suffix & ")(int32_t, void*);\n"
   tail.add("    struct crucibleData" & suffix & " crucibleData;\n")
   tail.add(emitCpuDataFillC(suffix, runtimeParams))
   tail.add("    crucibleData.crucibleWgsPerTask = (int32_t)((int64_t)`crucibleGrid`.x * `crucibleGrid`.y * `crucibleGrid`.z);\n")
-  tail.add("    crucibleIter" & suffix & "(0, &crucibleData);\n")
+  tail.add("    crucibleIterFn" & suffix & "(0, &crucibleData);\n")
   tail
