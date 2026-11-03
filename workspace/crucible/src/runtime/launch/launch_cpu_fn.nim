@@ -180,6 +180,11 @@ proc buildCpuKernel(kernel: NimNode, statics, values: NimNode, siteSuffix: strin
 # ▸ Launch
 # ═══════════════════════════════════════════════════════════════════════
 
+var launchGensymCounter {.global, compileTime.}: int
+  ## Per-launch suffix for the generated launch counters (`crucibleGx_7`).
+  ## A counter shares the C scope of the inlined kernel body.
+  ## No kernel-local name can collide with a counter.
+
 macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: untyped, siteSuffix: static string, args: varargs[typed]): untyped =
   let formals = wrapper[3]
   var runtimeNames: seq[NimNode]
@@ -244,22 +249,26 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
                    "tpc_d_->crucibleGrid[2]"]
   let blkReads = ["tpc_d_->crucibleBlk[0]", "tpc_d_->crucibleBlk[1]",
                   "tpc_d_->crucibleBlk[2]"]
+  launchGensymCounter.inc
+  let counterTag = $launchGensymCounter
   var vecC: array[CirCoordBuiltinKind, array[3, string]]
-  vecC[cbkThreadgroupPositionInGrid] = ["crucibleGx", "crucibleGy", "crucibleGz"]
-  vecC[cbkThreadPositionInThreadgroup] = ["crucibleBx", "crucibleBy", "crucibleBz"]
+  vecC[cbkThreadgroupPositionInGrid] = [
+    "crucibleGx_" & counterTag, "crucibleGy_" & counterTag, "crucibleGz_" & counterTag]
+  vecC[cbkThreadPositionInThreadgroup] = [
+    "crucibleBx_" & counterTag, "crucibleBy_" & counterTag, "crucibleBz_" & counterTag]
   vecC[cbkThreadPositionInGrid] = [
-    "(crucibleGx * " & blkReads[0] & " + crucibleBx)",
-    "(crucibleGy * " & blkReads[1] & " + crucibleBy)",
-    "(crucibleGz * " & blkReads[2] & " + crucibleBz)"]
+    "(crucibleGx_" & counterTag & " * " & blkReads[0] & " + crucibleBx_" & counterTag & ")",
+    "(crucibleGy_" & counterTag & " * " & blkReads[1] & " + crucibleBy_" & counterTag & ")",
+    "(crucibleGz_" & counterTag & " * " & blkReads[2] & " + crucibleBz_" & counterTag & ")"]
   vecC[cbkThreadsPerThreadgroup] = blkReads
   vecC[cbkThreadgroupsPerGrid] = gridReads
-  let flatC = "(crucibleBx + crucibleBy * " & blkReads[0] &
-              " + crucibleBz * " & blkReads[0] & " * " & blkReads[1] & ")"
+  let flatC = "(crucibleBx_" & counterTag & " + crucibleBy_" & counterTag & " * " & blkReads[0] &
+              " + crucibleBz_" & counterTag & " * " & blkReads[0] & " * " & blkReads[1] & ")"
   let coordsC = cpuCoordTableC(vecC, flatC)
 
   let runtimeParams = kernelRuntimeParams(m)
   let (typesAndData, funcsC, coordUseC) = emitCpuWorkgroupLaunchC(
-      m, siteSuffix, coordsC, runtimeParams, serial)
+      m, siteSuffix, counterTag, coordsC, runtimeParams, serial)
   if gridN.kind == nnkNilLit and blkN.kind == nnkNilLit and coordUseC:
     error("launchCpuFn " & $wrapper[0] & ": kernel reads coordinate builtins and the cpu backend cannot derive the schedule, pass grid/blk in the do block")
   let calleesC = emitCpuCalleesC(m, siteSuffix)

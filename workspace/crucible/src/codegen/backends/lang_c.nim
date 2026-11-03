@@ -234,14 +234,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
       ctx.printExpr(e.castOperand) & " })._to"
   "(" & ctx.emitTypeName(e.castType) & ")" & ctx.printExpr(e.castOperand)
 
-const LaunchCounterNamesC = [
-  # counters the iteration function generates around the inlined kernel
-  # body (see emitCpuWorkgroupLaunchC), the body shares their scope
-  "crucibleWg", "crucibleWgTotal", "crucibleWgEnd",
-  "crucibleGx", "crucibleGy", "crucibleGz",
-  "crucibleBx", "crucibleBy", "crucibleBz",
-]
-
 # ═══════════════════════════════════════════════════════════════════════
 # Statements
 # ═══════════════════════════════════════════════════════════════════════
@@ -265,11 +257,6 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
       if name == s.name:
         ctx.fail("kernel local '" & s.name & "' shadows a kernel parameter, rename one")
         return false
-    if s.name in LaunchCounterNamesC:
-      # kernel locals must avoid the launch's generated counter names:
-      # a shadowing local silently corrupts the coordinate reads
-      ctx.fail("kernel local '" & s.name & "' shadows a counter the launch generates, rename it")
-      return false
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
@@ -428,7 +415,7 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
   if bctx.failing():
     error(bctx.err)
 
-proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTableC, runtimeParams: seq[tuple[name: string, typ: CirType]], serial: bool): tuple[typesAndData: string, funcs: string, coordUse: bool] =
+proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, counterTag: string, coords: CpuCoordTableC, runtimeParams: seq[tuple[name: string, typ: CirType]], serial: bool): tuple[typesAndData: string, funcs: string, coordUse: bool] =
   ## Workgroup task machinery as C text, returned in two parts:
   ##
   ## - typesAndData: the nominal struct definitions and the per-launch
@@ -447,7 +434,8 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   ## - serial mode omits the task function, the launch tail
   ##   (emitCpuSerialTailC) calls the iteration function directly
   ##
-  ## Parameter names must avoid `tpc_` prefixes and the launch-internal crucibleWg/crucibleWgsPerTask/crucibleGrid/crucibleBlk names.
+  ## Parameter names must avoid `tpc_` prefixes and the launch data-struct
+  ## member names crucibleWgsPerTask/crucibleGrid/crucibleBlk.
   var mctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
   mctx.suffix = suffix
   if m.globals.len > 0:
@@ -455,7 +443,7 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
     error(mctx.err)
   for p in runtimeParams:
     if p.name.startsWith("tpc_") or p.name in
-        ["crucibleWg", "crucibleWgsPerTask", "crucibleGrid", "crucibleBlk"]:
+        ["crucibleWgsPerTask", "crucibleGrid", "crucibleBlk"]:
       error("cpu backend: kernel parameter '" & p.name & "' collides with the launch's internal names")
 
   let structDefs = mctx.printStructs(m, cpuModuleShape)
@@ -463,7 +451,6 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
     error(mctx.err)
 
   var members: seq[string]
-  members.add("int32_t crucibleWg;")
   members.add("int32_t crucibleGrid[3];")
   members.add("int32_t crucibleBlk[3];")
   members.add("int32_t crucibleWgsPerTask;")
@@ -487,21 +474,30 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
   # grid dims and the workgroup total are bounded to int32 by the launch guard
   # an open range end can exceed the total by up to workgroupsPerTask - 1 workgroups,
   # int64 arithmetic precedes the clamp
+  let wgTotalC = "crucibleWgTotal_" & counterTag
+  let wgEndC = "crucibleWgEnd_" & counterTag
+  let wgC = "crucibleWg_" & counterTag
+  let gxC = "crucibleGx_" & counterTag
+  let gyC = "crucibleGy_" & counterTag
+  let gzC = "crucibleGz_" & counterTag
+  let bxC = "crucibleBx_" & counterTag
+  let byC = "crucibleBy_" & counterTag
+  let bzC = "crucibleBz_" & counterTag
   var iter = "void crucibleIter" & suffix & "(int32_t tpc_i, void* tpc_env_) {\n"
   iter.add("    struct " & dataName & "* tpc_d_ = (struct " & dataName & "*)tpc_env_;\n")
-  iter.add("    int32_t crucibleWgTotal = tpc_d_->crucibleGrid[0] * tpc_d_->crucibleGrid[1] * tpc_d_->crucibleGrid[2];\n")
-  iter.add("    int64_t crucibleWgEnd = (int64_t)tpc_i * tpc_d_->crucibleWgsPerTask + tpc_d_->crucibleWgsPerTask;\n")
-  iter.add("    if (crucibleWgEnd > crucibleWgTotal) crucibleWgEnd = crucibleWgTotal;\n")
-  iter.add("    for (int32_t crucibleWg = tpc_i * tpc_d_->crucibleWgsPerTask;\n")
-  iter.add("         crucibleWg < crucibleWgEnd; ++crucibleWg) {\n")
-  iter.add("        int32_t crucibleGx = crucibleWg % tpc_d_->crucibleGrid[0];\n")
-  iter.add("        int32_t crucibleGy = (crucibleWg / tpc_d_->crucibleGrid[0]) % tpc_d_->crucibleGrid[1];\n")
-  iter.add("        int32_t crucibleGz = crucibleWg / (tpc_d_->crucibleGrid[0] * tpc_d_->crucibleGrid[1]);\n")
+  iter.add("    int32_t " & wgTotalC & " = tpc_d_->crucibleGrid[0] * tpc_d_->crucibleGrid[1] * tpc_d_->crucibleGrid[2];\n")
+  iter.add("    int64_t " & wgEndC & " = (int64_t)tpc_i * tpc_d_->crucibleWgsPerTask + tpc_d_->crucibleWgsPerTask;\n")
+  iter.add("    if (" & wgEndC & " > " & wgTotalC & ") " & wgEndC & " = " & wgTotalC & ";\n")
+  iter.add("    for (int32_t " & wgC & " = tpc_i * tpc_d_->crucibleWgsPerTask;\n")
+  iter.add("         " & wgC & " < " & wgEndC & "; ++" & wgC & ") {\n")
+  iter.add("        int32_t " & gxC & " = " & wgC & " % tpc_d_->crucibleGrid[0];\n")
+  iter.add("        int32_t " & gyC & " = (" & wgC & " / tpc_d_->crucibleGrid[0]) % tpc_d_->crucibleGrid[1];\n")
+  iter.add("        int32_t " & gzC & " = " & wgC & " / (tpc_d_->crucibleGrid[0] * tpc_d_->crucibleGrid[1]);\n")
   # per-thread-iteration do-block: a kernel return jumps to the label
   # inside the loops and the remaining thread iterations still run
-  iter.add("        for (int32_t crucibleBz = 0; crucibleBz < tpc_d_->crucibleBlk[2]; ++crucibleBz)\n")
-  iter.add("            for (int32_t crucibleBy = 0; crucibleBy < tpc_d_->crucibleBlk[1]; ++crucibleBy)\n")
-  iter.add("                for (int32_t crucibleBx = 0; crucibleBx < tpc_d_->crucibleBlk[0]; ++crucibleBx) {\n")
+  iter.add("        for (int32_t " & bzC & " = 0; " & bzC & " < tpc_d_->crucibleBlk[2]; ++" & bzC & ")\n")
+  iter.add("            for (int32_t " & byC & " = 0; " & byC & " < tpc_d_->crucibleBlk[1]; ++" & byC & ")\n")
+  iter.add("                for (int32_t " & bxC & " = 0; " & bxC & " < tpc_d_->crucibleBlk[0]; ++" & bxC & ") {\n")
   iter.add("                    do {\n")
   for line in bodyC.split('\n'):
     if line.len > 0:
