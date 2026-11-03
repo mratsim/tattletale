@@ -521,9 +521,7 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, counterTag: string, 
     task.add("    tpc_worker_context* tpc_ctx = tpc_workerContext();\n")
     task.add("    tpc_parallelForRunner(tpc_ctx, tpc_this, crucibleIter" & suffix & ");\n")
     task.add("}\n")
-    # Function declarations in a C++ TU get mangled, global-namespace variables do not. The emitted tail
-    # binds the C symbol through a global function pointer declared extern at block scope,
-    # one declaration form valid in both languages.
+    # Function declarations in a C++ translation unit get mangled, global-namespace variables do not.
     task.add("void (*crucibleTaskFn" & suffix & ")(void*) = crucibleTask" & suffix & ";\n")
     result.funcs.add(task)
   else:
