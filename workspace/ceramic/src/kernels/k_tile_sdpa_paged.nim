@@ -45,6 +45,20 @@ import workspace/ceramic/src/kernels/k_layout_gemm
 import workspace/math
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Launch guard
+# ═══════════════════════════════════════════════════════════════════════
+
+proc paged_sdpa_check_window*(windowed: static bool, windowSize: int) =
+  ## Host-side launch guard for `paged_sdpa_decode`, call before `launchDeviceFn`.
+  ##
+  ## Precondition: a windowed decode needs `windowSize > 0`.
+  ## A non-positive width empties the attention band and the output stores NaN.
+  ## A full-context decode (windowed = false) accepts the `low(int32)` sentinel untouched.
+  when windowed:
+    doAssert windowSize > 0,
+      "paged sdpa decode: windowed=true needs windowSize > 0, got " & $windowSize
+
+# ═══════════════════════════════════════════════════════════════════════
 #  The kernel
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -62,6 +76,10 @@ proc paged_sdpa_decode*(
   ##   - mmaPV: `static TiledMma` for attention·V, reduces over S
   ##   - windowed + windowSize: the sliding-window left bound, the band masks
   ##     entries below max(0, cache_seqlens[s] - windowSize)
+  ##
+  ## Precondition: a windowed decode needs windowSize > 0, a non-positive width
+  ## empties the band and the output stores NaN.
+  ## `paged_sdpa_check_window` raises on non-positive widths before launch.
   ##
   ## Launch: grid (1, Hq, numSeqs), one simdgroup per threadgroup.
   ## Grid y addresses the head, grid z the sequence, grid x stays 1 (one query tile in decode).

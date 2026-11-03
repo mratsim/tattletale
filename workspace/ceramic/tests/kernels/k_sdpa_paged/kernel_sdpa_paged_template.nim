@@ -81,6 +81,7 @@ proc sdpaPagedReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static in
     scaleVal = meta.scale
     layerVal = int32(meta.layer)
 
+  paged_sdpa_check_window(windowed, meta.windowSize)
   engine.launchDeviceFn sdpaPagedCombo(
       oDev, qDev, kDev, vDev, btDev, csDev, scaleVal, HeadDim, HeadDim,
       SdpaPagedTile, windowed,
