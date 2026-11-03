@@ -22,7 +22,7 @@ entries with no causal mask, kv head = h div (Hq div Nkv).
 
 A sliding window narrows the attended range to [cache_seqlens[s] - window_size, cache_seqlens[s]).
 
-Pool entries beyond an attended range default to finite random values, the nan_tail option writes NaN there, checked against the recorded output.
+Pool entries beyond an attended range default to finite random values, the nan_tail option writes NaN there, checked against the output.
 
 Run:  uv run --with numpy python3 gen_sdpa_paged_fixtures.py [name ...]
       (default: all fixtures)
