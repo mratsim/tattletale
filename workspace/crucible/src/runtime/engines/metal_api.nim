@@ -22,11 +22,13 @@ import workspace/crucible/src/runtime/engines/engines_common
 # ═══════════════════════════════════════════════════════════════════════
 type
   MetalCache = object
-    ## Two per-engine caches:
-    ## - library, keyed by source, replaced by re-ingest
+    ## Three per-engine caches:
+    ## - main library, one per ingested source, replaced by re-ingest
     ## - pipeline states, keyed by kernel name, cleared by re-ingest
+    ## - autodiff-kernel libraries, keyed by launch name, one per `ingestADKernel` call, kept alive across re-ingests of the main artifact
     library: objc.ID
     psos: Table[string, objc.ID]
+    adLibs: Table[string, objc.ID]
 
   MetalEngine* = ref object
     source: string
@@ -59,12 +61,16 @@ when defined(macosx):
       for pso in cache.psos.values:
         objc.release(pso)
       cache.psos.clear()
+      for lib in cache.adLibs.values:
+        objc.release(lib)
+      cache.adLibs.clear()
 
   proc newMetalEngine*(): MetalEngine =
     objc.withMemPool:
       result = MetalEngine(
         ctx: newMetalContext(),
-        cache: MetalCache(psos: initTable[string, objc.ID]())
+        cache: MetalCache(psos: initTable[string, objc.ID](),
+                          adLibs: initTable[string, objc.ID]())
       )
 
   # ════════════════════════════════════════════════════════════════════════
@@ -84,6 +90,28 @@ when defined(macosx):
       engine.cache.psos.clear()
       engine.cache.library = library
       engine.source = source
+
+  proc ingestADKernel*(engine: MetalEngine, kernel, source: string) =
+    ## Compiles one standalone autodiff-kernel source into its own library,
+    ## cached by kernel name, without replacing the engine's main artifact.
+    ##
+    ## - `kernel`: the launch name that selects the cached library
+    ## - `source`: the kernel's standalone translation unit
+    ##
+    ## Bridge re-ingests keep the autodiff kernels alive.
+    ## Re-ingest under a held launch name drops the cached pipeline state:
+    ## a cached pipeline state would run the old binary. The main `ingest`
+    ## clears its pipeline states for the same reason.
+    objc.withMemPool:
+      let opts = compileOptions()
+      let library = compileLibrary(engine.ctx.device, source, opts)
+      objc.release(opts)
+      if engine.cache.psos.hasKey(kernel):
+        objc.release(engine.cache.psos[kernel])
+        engine.cache.psos.del(kernel)
+      if engine.cache.adLibs.hasKey(kernel):
+        objc.release(engine.cache.adLibs[kernel])
+      engine.cache.adLibs[kernel] = library
 
   proc getArtifact*(engine: MetalEngine): string {.inline.} =
     engine.source
@@ -169,7 +197,12 @@ when defined(macosx):
       if engine.cache.psos.hasKey(kernel):
         pso = engine.cache.psos[kernel]
       else:
-        pso = compilePipelineState(engine.ctx.device, engine.cache.library, kernel)
+        # An autodiff kernel launches from its own library, the main artifact's library lacks the pair's symbols.
+        let lib = if engine.cache.adLibs.hasKey(kernel):
+          engine.cache.adLibs[kernel]
+        else:
+          engine.cache.library
+        pso = compilePipelineState(engine.ctx.device, lib, kernel)
         engine.cache.psos[kernel] = pso
 
       let cmdBuf = objc.msgSend(engine.ctx.queue, objc.`$$`("commandBuffer"))
