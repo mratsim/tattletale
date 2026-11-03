@@ -1,0 +1,29 @@
+{
+ "name": "paged_decode_gqa_f16",
+ "dtype": "float16",
+ "num_seqs": 3,
+ "Hq": 4,
+ "Hkv": 2,
+ "Dk": 64,
+ "Dv": 64,
+ "page_size": 32,
+ "max_pages": 4,
+ "num_layers": 2,
+ "layer": 1,
+ "num_pages": 6,
+ "scale": 0.125,
+ "cache_seqlens": [
+  70,
+  33,
+  1
+ ],
+ "checksum": 30276704,
+ "xorhash_checksums": {
+  "q.bin": 59013,
+  "k.bin": 15265,
+  "v.bin": 59412,
+  "block_table.bin": 1,
+  "cache_seqlens.bin": 102,
+  "o.bin": 30276704
+ }
+}
