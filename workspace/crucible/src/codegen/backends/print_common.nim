@@ -889,11 +889,17 @@ proc printSig*(ctx: var auto, fn: CirProc): string =
   result = ctx.emitComputePrefix(fn) & ctx.emitTypeName(fn.ret) & ' ' & name &
     '(' & params.join(", ") & ")"
 
+proc structDeclName*(ctx: var auto, t: CirType): string =
+  ## Header name of one struct declaration. A target that renames structs
+  ## per launch site overrides the default.
+  t.name
+
 proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
     emitted: var HashSet[string], name: string, outp: var string,
     shape: static ModuleShape) =
   ## One struct declaration into `outp`, member structs first, deduplicated by name.
-  mixin emitStructField
+  ## Member structs collect through pointer, array and scalar-named fields.
+  mixin emitStructField, structDeclName
   if name in emitted:
     return
   let t = byName.getOrDefault(name, nil)
@@ -901,16 +907,17 @@ proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
     return
   emitted.incl name
   for f in t.fields:
-    if f.typ.kind == ctStruct:
-      ctx.printStructDecl(byName, emitted, f.typ.name, outp, shape)
-    elif f.typ.kind == ctArray and f.typ.aElem.kind == ctStruct:
-      ctx.printStructDecl(byName, emitted, f.typ.aElem.name, outp, shape)
+    var ft = f.typ
+    while ft != nil and ft.kind in {ctPtr, ctAptr, ctArray}:
+      ft = if ft.kind == ctArray: ft.aElem else: ft.pElem
+    if ft != nil and ft.kind == ctStruct:
+      ctx.printStructDecl(byName, emitted, ft.name, outp, shape)
   if ctx.failing():
     return
   if shape.structTypedef:
     outp.add "typedef struct {\n"
   else:
-    outp.add "struct " & name & " {\n"
+    outp.add "struct " & ctx.structDeclName(t) & " {\n"
   var members = 0
   for f in t.fields:
     let fieldTxt = ctx.emitStructField(t, f)
@@ -925,17 +932,32 @@ proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
   else:
     outp.add shape.structClose & "\n\n"
 
+proc seedStructType(t: CirType, byName: var Table[string, CirType]) =
+  ## Adds the struct behind a proc parameter or return type to `byName`, through pointers and arrays.
+  var t = t
+  while t != nil and t.kind in {ctPtr, ctAptr, ctArray}:
+    t = if t.kind == ctArray: t.aElem else: t.pElem
+  if t != nil and t.kind == ctStruct:
+    byName[t.name] = t
+
 proc printStructs*(ctx: var auto, m: CirModule, shape: static ModuleShape): string =
   ## Struct declarations of the module, "" once the walk refused.
+  ##
+  ## Collection covers:
+  ##
+  ## - the declared types of `m.types`
+  ## - struct types that appear only as proc parameter or return types
   var byName: Table[string, CirType]
   for t in m.types:
     if t.kind == ctStruct:
       byName[t.name] = t
+  for fn in m.procs:
+    for param in fn.params:
+      seedStructType(param.typ, byName)
+    seedStructType(fn.ret, byName)
   var emitted: HashSet[string]
-  for t in m.types:
-    if t.kind != ctStruct:
-      continue
-    ctx.printStructDecl(byName, emitted, t.name, result, shape)
+  for name, t in byName.pairs:
+    ctx.printStructDecl(byName, emitted, name, result, shape)
 
 proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   ## One device function or kernel, "" once the walk refused.

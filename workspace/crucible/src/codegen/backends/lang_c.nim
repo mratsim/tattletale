@@ -70,6 +70,20 @@ const cpuEmit = TargetEmit(
   prefixInline: "",
   prefixDevice: "")
 
+const cpuModuleShape = ModuleShape(
+  spaces: {caThread},
+  structTypedef: false,
+  structPadding: "char _",
+  structFieldTerm: ';',
+  structClose: "};",
+  fwdDecls: false,
+  moduleOrderProcs: false,
+  kernelSep: "",
+  customProcHead: false,
+  printsRefBlocks: false,
+  printsParamBindings: false,
+  printsReduceTemplates: false)
+
 type
   PrintCtx* = object of WalkCtx
     ## Per-target walk context. The shared walk procs instantiate against
@@ -140,6 +154,15 @@ proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
   else:
     getFullTypeName(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, t, "struct ", ctx.suffix)
 
+proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
+  ## C declaration text of one struct member via the shared declarator.
+  printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
+    f.typ, f.name, false, "struct ", ctx.suffix)
+
+proc structDeclName(ctx: var PrintCtx, t: CirType): string =
+  ## Header name of one struct declaration with the launch-site suffix.
+  t.name & ctx.suffix
+
 proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
   ## CIRv2 type as C type text, used for locals, params, data members.
   case t.kind
@@ -185,54 +208,6 @@ proc emitTypeC(t: CirType, ctx: EmitCtxC): string =
     cRefuse(ctx, "bfloat16 values are not supported in v0")
   of ctProc:
     cRefuse(ctx, "function pointers are not supported in v0")
-
-proc collectStructs(t: CirType, seen: var seq[CirType]) =
-  ## Post-order collection of every nominal struct type reachable
-  ## from t. Fields collect before the struct, the printed definitions
-  ## come out in an order C accepts.
-  if t.isNil:
-    return
-  case t.kind
-  of ctStruct:
-    for s in seen:
-      if s == t:
-        return
-    for f in t.fields:
-      collectStructs(f.typ, seen)
-    seen.add(t)
-  of ctPtr, ctAptr:
-    collectStructs(t.pElem, seen)
-  of ctArray:
-    collectStructs(t.aElem, seen)
-  else:
-    discard
-
-proc moduleStructs(m: CirModule): seq[CirType] =
-  ## Every printable nominal struct: declared types plus the proc
-  ## parameter and return types.
-  var seen: seq[CirType]
-  for t in m.types:
-    collectStructs(t, seen)
-  for p in m.procs:
-    for param in p.params:
-      collectStructs(param.typ, seen)
-    collectStructs(p.ret, seen)
-  seen
-
-proc emitStructDefsC(m: CirModule, ctx: EmitCtxC): string =
-  ## One definition per nominal struct type, dependency order.
-  var lines: seq[string]
-  for t in moduleStructs(m):
-    var def = "struct " & t.name & ctx.suffix & " {\n"
-    for f in t.fields:
-      def.add("    " & printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
-        f.typ, f.name, false, "struct ", ctx.suffix) & ";\n")
-    def.add("};")
-    lines.add(def)
-  if lines.len > 0:
-    lines.join("\n") & "\n"
-  else:
-    ""
 
 # ═══════════════════════════════════════════════════════════════════════
 # Expressions
@@ -722,8 +697,11 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, coords: CpuCoordTabl
         ["crucibleWg", "crucibleWgsPerTask", "crucibleGrid", "crucibleBlk"]:
       error("cpu backend: kernel parameter '" & p.name & "' collides with the launch's internal names")
 
-  let structDefs = emitStructDefsC(m,
-      EmitCtxC(procName: "module", suffix: suffix))
+  var mctx = PrintCtx(fnName: "module", policy: cpuWalkPolicy,
+    vectorRule: cpuVectorRule, emit: cpuEmit, backend: cgCpu, suffix: suffix)
+  let structDefs = mctx.printStructs(m, cpuModuleShape)
+  if mctx.failing():
+    error(mctx.err)
 
   var members: seq[string]
   members.add("int32_t crucibleWg;")
