@@ -22,7 +22,8 @@ entries with no causal mask, kv head = h div (Hq div Nkv).
 
 A sliding window narrows the attended range to [cache_seqlens[s] - window_size, cache_seqlens[s]).
 
-Pool entries beyond a sequence's attended range stay finite random values, matching untouched slab memory in a production pool.
+Pool entries beyond a sequence's attended range stay finite random values by
+default, the nan_tail option writes NaN there instead to pin the bounded loads.
 
 Run:  uv run --with numpy python3 gen_sdpa_paged_fixtures.py [name ...]
       (default: all fixtures)
@@ -79,7 +80,8 @@ def sdpa_paged_reference(q, kpool, vpool, block_table, cache_seqlens, layer, sca
 
 
 def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
-                 num_layers, layer, num_pages, cache_seqlens, seed, window_size=None):
+                 num_layers, layer, num_pages, cache_seqlens, seed, window_size=None,
+                 nan_tail=False):
     """Generates one fixture directory, prints its shape line."""
     rng = np.random.default_rng(seed)
     scale = 1.0 / np.sqrt(Dk)
@@ -103,6 +105,16 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
             kpool[page, layer, t % page_size] = rng.standard_normal((Hkv, Dk))
             vpool[page, layer, t % page_size] = rng.standard_normal((Hkv, Dv))
     assert next_page <= num_pages, f"{name}: {next_page} pages needed, pool holds {num_pages}"
+    if nan_tail:
+        covered = np.zeros((num_pages, page_size), dtype=bool)
+        for s, seqlen in enumerate(cache_seqlens):
+            for t in range(int(seqlen)):
+                covered[int(block_table[s, t // page_size]), t % page_size] = True
+        for page in range(num_pages):
+            for pr in range(page_size):
+                if not covered[page, pr]:
+                    kpool[page, layer, pr] = np.nan
+                    vpool[page, layer, pr] = np.nan
     for s, seqlen in enumerate(cache_seqlens):
         assert int(seqlen) <= max_pages * page_size, \
             f"{name}: seq {s} length {int(seqlen)} exceeds the table capacity"
@@ -133,6 +145,7 @@ def make_fixture(name, dtype, num_seqs, Hq, Hkv, Dk, Dv, page_size, max_pages,
         "page_size": page_size, "max_pages": max_pages,
         "num_layers": num_layers, "layer": layer, "num_pages": num_pages,
         "scale": scale, "window_size": int(window_size or 0),
+        "nan_tail": bool(nan_tail),
         "cache_seqlens": [int(x) for x in cache_seqlens],
         "checksum": xorhash_checksum(oOut),
         "xorhash_checksums": {
@@ -160,6 +173,11 @@ FIXTURES = [
     dict(name="paged_decode_small_f16", dtype="float16", num_seqs=2, Hq=2, Hkv=1,
          Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
          num_pages=6, cache_seqlens=[17, 64], seed=102),
+    # NaN on every uncovered pool entry: seq 0's in-page tail rows 17..31 and
+    # the unassigned pages 3..5, the bounded loads must zero-pad them away
+    dict(name="paged_nan_tail_decode_f16", dtype="float16", num_seqs=2, Hq=2, Hkv=1,
+         Dk=64, Dv=64, page_size=32, max_pages=4, num_layers=2, layer=1,
+         num_pages=6, cache_seqlens=[17, 64], seed=104, nan_tail=True),
     # a mid-page window left edge (70 - 40 = 30) and a window starting past
     # page 0 (100 - 40 = 60, kv tile 1), the mask cuts the skipped entries
     dict(name="paged_window_decode_f16", dtype="float16", num_seqs=2, Hq=4, Hkv=2,

@@ -13,6 +13,7 @@
  "num_pages": 7,
  "scale": 0.125,
  "window_size": 40,
+ "nan_tail": false,
  "cache_seqlens": [
   70,
   100

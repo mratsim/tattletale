@@ -20,7 +20,8 @@ import workspace/crucible
 import workspace/ceramic/tests/kernels/k_sdpa_paged/kernel_sdpa_paged_template
 
 const
-  pagedDecodeFixtures = ["paged_decode_gqa_f16", "paged_decode_small_f16"]
+  pagedDecodeFixtures = ["paged_decode_gqa_f16", "paged_decode_small_f16",
+                         "paged_nan_tail_decode_f16"]
   pagedWindowFixtures = ["paged_window_decode_f16"]
 
 proc replayAllPagedFixtures() =

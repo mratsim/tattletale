@@ -1,0 +1,29 @@
+{
+ "name": "paged_nan_tail_decode_f16",
+ "dtype": "float16",
+ "num_seqs": 2,
+ "Hq": 2,
+ "Hkv": 1,
+ "Dk": 64,
+ "Dv": 64,
+ "page_size": 32,
+ "max_pages": 4,
+ "num_layers": 2,
+ "layer": 1,
+ "num_pages": 6,
+ "scale": 0.125,
+ "window_size": 0,
+ "nan_tail": true,
+ "cache_seqlens": [
+  17,
+  64
+ ],
+ "checksum": 40993329,
+ "xorhash_checksums": {
+  "q.bin": 9250,
+  "k.bin": 15435,
+  "v.bin": 2777,
+  "block_table.bin": 4294967292,
+  "cache_seqlens.bin": 81
+ }
+}
