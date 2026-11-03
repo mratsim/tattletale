@@ -62,32 +62,27 @@ proc ivec3Type(): CirType =
     fld("x", tInt(32)), fld("y", tInt(32)), fld("z", tInt(32)))
 
 proc cirElemType(e: ScalarElem): CirType =
-  ## CIRv2 type of a Tile IR scalar element.
   case e
   of eI32: tInt(32)
   of eF32: tFloat(32)
 
 proc constToExpr(v: ConstScalar, e: ScalarElem): CirExpr =
-  ## One constant scalar to its CIRv2 literal, `1` vs `1.0` as written.
   if v.isInt:
     intLit(v.intVal, cirElemType(e))
   else:
     fltLit(v.floatVal, cirElemType(e))
 
 proc binSpelling(k: BinaryKind): string =
-  ## Tile IR text form of a program binary op, for refusal messages.
   case k
   of bkAddf: "addf"
   of bkMulf: "mulf"
 
 proc refuseBridge(kernel, construct, detail: string): ref SubsetError =
-  ## Builds the loud refusal for a program construct the bridge cannot lower.
-  ## The message names the construct and the kernel, same contract as the parser.
   subsetError("kernel '" & kernel & "': construct '" & construct &
     "' is outside the supported tattletile subset: " & detail)
 
 proc coordBuiltinExpr(k: CirCoordBuiltinKind): CirExpr =
-  ## Coordinate builtin symbol: the canonical name, the ivec3 struct type, `builtin` true and the kind set.
+  ## Coordinate builtin symbol, downstream behavior:
   ##
   ## - the MSL printer appends the attributed `uint3` kernel parameter, the SPIR-V encoder declares the matching input variable
   ## - component access goes through `dotE`, the printer folds the int cast from the assigned local's declared type
@@ -96,21 +91,18 @@ proc coordBuiltinExpr(k: CirCoordBuiltinKind): CirExpr =
   e
 
 proc builtinComponent(k: CirCoordBuiltinKind, component: string): CirExpr =
-  ## One `.x`/`.y`/`.z` component of a coordinate builtin, the flat index source.
   dotE(coordBuiltinExpr(k), component)
 
 proc whileLoop(counter: string, bound: int, body: seq[CirStmt]): seq[CirStmt] =
-  ## While-form loop idiom over `0 ..< bound`: counter declaration and init before the loop, the increment trails the body.
   let c = sym(counter, tInt(32))
   result = @[varD(counter, tInt(32)), asgnS(c, intLit(0, tInt(32)))]
   result.add whileS(ltE(c, intLit(bound, tInt(32))),
     body & asgnS(c, addE(tInt(32), c, intLit(1, tInt(32)))))
 
 proc storeTargetOrder(prog: Program): seq[string] =
-  ## Kernel parameter order, store target first. The launch binds the output
-  ## buffer to slot 0:
-  ## - the store target's pointer and shape argument names
-  ## - the remaining entry arguments in entry order
+  ## Entry argument names in launch order: the store target's pointer and shape
+  ## argument names first, the remaining entry arguments in entry order.
+  ## The launch binds the output buffer to slot 0, hence the store target first.
   for op in prog.ops:
     if op.kind == pgStoreTile:
       result.add op.storeViewInfo.base
@@ -139,10 +131,9 @@ proc entryArgCirType(prog: Program, arg: EntryArg): CirType =
     raise refuseBridge(prog.name, "kernel argument %" & arg.name, "unsupported kernel argument type " & $arg.typ.kind)
 
 proc lowerParams(prog: Program, env: Table[string, CirExpr]): seq[CirParam] =
-  ## Entry arguments to kernel parameters in launch order: the store target's
-  ## pointer and shape args first (the launch binds the output to slot 0),
-  ## then the remaining entry arguments in entry order. Store targets bound
-  ## to 0-d constants resolve through the kernel bindings and take no parameter.
+  ## Entry arguments to kernel parameters in launch order, per `storeTargetOrder`.
+  ## Store targets bound to 0-d constants resolve through the kernel bindings
+  ## and take no parameter.
   ##
   ## Raises:
   ## - SubsetError via entryArgCirType for any other argument type
@@ -195,21 +186,18 @@ proc entryToExpr(prog: Program, e: ShapeEntry, env: Table[string, CirExpr], what
     intLit(e.value, tInt(32))
 
 proc opViewInfo(op: ProgramOp): ViewInfo =
-  ## Frozen view behind a load or store program op.
   case op.kind
   of pgLoadTile: op.loadViewInfo
   of pgStoreTile: op.storeViewInfo
   else: raise subsetError("opViewInfo: not a view op")
 
 proc opViewName(op: ProgramOp): string =
-  ## View SSA name behind a load or store program op.
   case op.kind
   of pgLoadTile: op.loadView
   of pgStoreTile: op.storeView
   else: raise subsetError("opViewName: not a view op")
 
 proc opViewIndices(op: ProgramOp): seq[string] =
-  ## View index operand names behind a load or store program op.
   case op.kind
   of pgLoadTile: op.loadIndices
   of pgStoreTile: op.storeIndices
@@ -217,9 +205,9 @@ proc opViewIndices(op: ProgramOp): seq[string] =
 
 proc lowerBlockOffsets(prog: Program, env: Table[string, CirExpr], statements: var seq[CirStmt]) =
   ## Block offset of every loaded or stored view, one offset local per view
-  ## SSA name, emitted before the value loop.
-  ## One term per view dimension: block index x tile size x view stride.
-  ## One offset local per view SSA name:
+  ## SSA name, emitted before the value loop. One term per view dimension:
+  ## block index x tile size x view stride.
+  ##
   ## - several ops on one view with the same block indices share the local,
   ##   an in-place load + store
   ## - one view addressed with two different block index lists refuses:
@@ -291,8 +279,6 @@ proc loopTripCount(prog: Program): TileValueInfo =
     raise refuseBridge(prog.name, "kernel body", "no tile value to partition")
 
 proc loadViews(prog: Program): Table[string, LoadView] =
-  ## Defining view of every loaded tile SSA value, keyed by the tile name.
-  ## The mma lowering resolves its A and B operands through this map.
   for op in prog.ops:
     if op.kind == pgLoadTile:
       result[op.results[0]] = LoadView(
@@ -300,18 +286,6 @@ proc loadViews(prog: Program): Table[string, LoadView] =
         viewInfo: op.loadViewInfo)
 
 proc cirTileOffset(prog: Program, name: string, view: ViewInfo, dimLocals: seq[string], env: Table[string, CirExpr]): CirExpr =
-  ## Address offset of one per-thread tile element: the view's block offset
-  ## local plus one stride term per view dimension.
-  ##
-  ## Before (axpy view pv_a, stride st, rank-1 coordinate tt_coord):
-  ##   cirTileOffset("pv_a", view, @["tt_coord"], env)
-  ## After:
-  ##   (tt_block_off_pv_a + (tt_coord * st))
-  ##
-  ## Before (gemm view pv_a, strides (16, 1), rank-2 coordinates):
-  ##   cirTileOffset("pv_a", view, @["tt_c0", "tt_c1"], env)
-  ## After:
-  ##   (tt_block_off_pv_a + ((tt_c0 * 16) + (tt_c1 * 1)))
   result = sym("tt_block_off_" & name, tInt(32))
   for d in 0 ..< view.strideEntries.len:
     let stride = prog.entryToExpr(view.strideEntries[d], env,
@@ -320,14 +294,6 @@ proc cirTileOffset(prog: Program, name: string, view: ViewInfo, dimLocals: seq[s
     result = addE(tInt(32), result, term)
 
 proc cirMmaOffsets(prog: Program, view: LoadView, dim0, dim1: string, env: Table[string, CirExpr]): CirExpr =
-  ## Address offset of one element of an mma operand tile, one stride term
-  ## per view dimension with the given coordinate expressions.
-  ##
-  ## Before, gemm A operand (view pv_a, strides (16, 1)):
-  ## - coordinates: tt_c0, the k loop variable tt_kk
-  ##   cirMmaOffsets(prog, loadMap["tile_a"], "tt_c0", "tt_kk", env)
-  ## After:
-  ##   (tt_block_off_pv_a + ((tt_c0 * 16) + (tt_kk * 1)))
   let stride0 = prog.entryToExpr(view.viewInfo.strideEntries[0], env,
     "stride of view %" & view.viewName)
   let stride1 = prog.entryToExpr(view.viewInfo.strideEntries[1], env,
@@ -338,16 +304,12 @@ proc cirMmaOffsets(prog: Program, view: LoadView, dim0, dim1: string, env: Table
        addE(tInt(32), term0, term1))
 
 proc refuseMmaOperand(kernel, result, operand: string) =
-  ## Loud refusal for an mmaf operand that is not a loaded tile.
-  ## Both the abstract FMA lowering and the atom fragment program read the mma operands through their load views.
   raise refuseBridge(kernel, "mmaf %" & result, "%" & operand & " is not a loaded tile, read the operands through their load views")
 
 proc refuseRedefinition(kernel, construct, name: string) =
-  ## Loud refusal for a tile value that redefines a kernel-level name.
   raise refuseBridge(kernel, construct, "%" & name & " redefines a kernel-level name")
 
 proc refuseUnboundOperand(kernel, construct, name: string) =
-  ## Loud refusal for an operand name with no kernel binding.
   raise refuseBridge(kernel, construct, "operand %" & name & " is not bound in the kernel")
 
 proc lowerMma(prog: Program, op: ProgramOp, loadMap: Table[string, LoadView], env: var Table[string, CirExpr]): seq[CirStmt] =
@@ -518,7 +480,6 @@ proc atomBitsExpr(bl: BitLinear, v: int): CirExpr =
     result = addE(tInt(32), result, mulE(tInt(32), bit, intLit(bl.s[i], tInt(32))))
 
 proc repAxisExpr(axis: RepAxis, rm, rn, rk: CirExpr): CirExpr =
-  ## Repetition loop variable of one atom repetition axis
   case axis
   of raM: rm
   of raN: rn
@@ -554,9 +515,11 @@ proc atomFragOffset(prog: Program, bl: BitLinear, map: FragmentMap, v: int, rm, 
       mulE(tInt(32), col, strideCol)))
 
 proc atomMmaAsm(dNames, aNames, bNames: seq[string]): CirStmt =
-  ## One simdgroup_multiply_accumulate call: sd <- sa*sb + sd, the staged scalars sit in the operand slots the printer splices.
+  ## One simdgroup_multiply_accumulate call: sd <- sa*sb + sd.
+  ## The staged scalars sit in the operand slots the printer splices.
   ##
   ## Operand names are literals unique per fragment instance:
+  ##
   ## - crucible's rename pass rewrites reserved words only, it never
   ##   uniquifies repeated declarations
   ## - the splice references operands by name, so a reused name would
@@ -589,9 +552,11 @@ proc atomMmaAsm(dNames, aNames, bNames: seq[string]): CirStmt =
 proc atomShapeCheck(prog: Program, mma, store: ProgramOp, loadMap: Table[string, LoadView]) =
   ## Subset check for the atom fragment program: the kernel tile dataflow must
   ## be exactly one mmaf, its two loaded operands, one splat accumulator
-  ## constant and one store of the mma result. The store view's partition tile
-  ## matches the mmaf tile, checked by the tile-passes checkTileMatchesView invariant.
-  ## The fragment addressing derives from the mmaf tile and reads the store view's strides.
+  ## constant and one store of the mma result.
+  ##
+  ## The store view's partition tile matches the mmaf tile,
+  ## the invariant checkTileMatchesView enforces. Fragment addressing derives
+  ## from the mmaf tile and reads the store view's strides.
   ##
   ## Raises:
   ## - SubsetError naming the construct and the kernel
@@ -717,8 +682,8 @@ proc lowerTileToCirv2*(prog: Program, atomMma = false): CirModule =
   var body = prelude
   if atomMma and prog.atomMmas.len > 0:
     if prog.atomMmas.len != 1:
-      # atom-selected mmafs lower through the fragment program here, every other
-      # shape keeps the abstract FMA fallback below
+      # atom-selected mmafs lower through the fragment program,
+      # every other kernel shape keeps the abstract FMA fallback below
       raise refuseBridge(prog.name, "mma atom selection", "the atom fragment program lowers exactly one mmaf per kernel, got " & $prog.atomMmas.len & " selections")
     var mmaOp, storeOp, accOp: ProgramOp
     var sawAcc = false
@@ -736,7 +701,7 @@ proc lowerTileToCirv2*(prog: Program, atomMma = false): CirModule =
             of pgBinary: binSpelling(op.binKind) & " %" & name
             of pgMma: "mmaf %" & name
             of pgGetBlockId, pgYield: $op.kind
-          raise refuseBridge(prog.name, construct, "%" & name & " redefines a kernel-level name")
+          refuseRedefinition(prog.name, construct, name)
         defined.add name
       case op.kind
       of pgMma: mmaOp = op
