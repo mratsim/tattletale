@@ -7,12 +7,8 @@
 
 ## Tile IR parser: compiler-emitted fixtures
 ##
-## Checks on the cutile-rs-captured fixtures:
-##
-## - parse + print round-trip fixed point (parse o print o parse)
-## - shape assertions for the constructs only real IR has:
-##   `di_name`, `assume`, `reshape`/`broadcast`, `padding_value = zero`,
-##   the `for` region and the operand-free `return`
+## Test that the cutile-rs-captured fixtures parse and print to a round-trip fixed
+## point (parse o print o parse), the real-IR-only constructs included.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --nimcache:nimcache/tattletile \

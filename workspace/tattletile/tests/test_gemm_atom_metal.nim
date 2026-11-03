@@ -7,12 +7,9 @@
 
 ## GEMM through the atom-selected hardware mma path, end to end on Metal
 ##
-## Same gemm Tile IR fixture as the abstract-mma tests, compiled at 32
-## threads (one simdgroup):
-## - the Apple 8x8x8 f32 atom selects, the mmaf lowers to the per-thread
-##   fragment program with simdgroup_multiply_accumulate calls
-## - results bitwise-identical (int32 view) against the float64-then-narrow matmul reference
-## - the density count is recorded: CIRv2 nodes and scheduled ops per public mmaf
+## Test that the Apple 8x8x8 f32 atom selects on the gemm fixture at 32 threads,
+## the mmaf lowers to the per-thread fragment program and the kernel finishes
+## bitwise-exact (int32 view) against the float64-then-narrow matmul reference.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off

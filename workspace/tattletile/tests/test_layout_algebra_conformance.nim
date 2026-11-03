@@ -9,11 +9,14 @@
 ##
 ## The same cases as python/tests/test_partition_identity.py.
 ##
-## - the partition identity `composition(zipped_divide(D, tiler), (tv, None)) ==
-##   zipped_divide(D, composition(tiler, tv))` proven in Nim for the SM70 MMA
-##   layout pair and for the tv/tiler pairs the tattletile passes choose
-## - the byte-exact ownership tables and the reference layout dumps, verified
-##   string for string
+## Test that the partition identity, proven in python, reproduces in Nim
+## across the layouts the passes choose:
+##
+##   composition(zipped_divide(D, tiler), (tv, None)) ==
+##     zipped_divide(D, composition(tiler, tv))
+##
+## The ownership tables and the reference layout dumps match the vendored
+## pycute reference byte for byte.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --nimcache:nimcache/b4 \

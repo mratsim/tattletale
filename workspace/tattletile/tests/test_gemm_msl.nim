@@ -7,11 +7,9 @@
 
 ## GEMM Tile IR to MSL through the tattletile bridge and crucible's shipped pipeline
 ##
-## Test that the gemm fixture compiles to the expected Metal Shading
-## Language, stable across compiles:
-## - the kernel signature with buffer slots and coordinate builtins
-## - the fused per-thread value loop over the 2-d tile coordinates
-## - the abstract mmaf lowered to a per-thread FMA loop over the k dimension
+## Test that the gemm fixture compiles to the expected Metal Shading Language,
+## stable across compiles: the kernel signature, the fused per-thread value loop
+## over the 2-d tile coordinates and the mmaf lowered to a per-thread FMA loop.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --nimcache:nimcache/tattletile \

@@ -7,14 +7,9 @@
 
 ## Embedded fixtures executed on MoltenVK: the second backend runs the Metal fixtures
 ##
-## Claim under test: the Metal path's bridge CIRv2 module compiles unchanged on a second backend, zero tattletile lowering added.
-##
-## The Vulkan engine ingests the raw `embedKernel(backendKind = gbSpirv)` words.
-## The launches match the Metal tests: same grids, same inputs, bitwise (int32 view) checks:
-##
-## - axpy on MoltenVK: c = alpha * a + b over 16 elements, 2 blocks x 4 threads
-## - gemm on MoltenVK: C = A @ B over 16x16, one block x 4 threads
-## - references: the float64-then-narrow order of the python runner
+## Test that the Metal path's bridge CIRv2 module compiles unchanged for MoltenVK,
+## axpy and gemm embed through gbSpirv, launch over the same grids and finish
+## bitwise-exact (int32 view) against the python float64-then-narrow reference.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

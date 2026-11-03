@@ -7,15 +7,9 @@
 
 ## Embedded fixtures to SPIR-V words: the layering dividend, structure-checked
 ##
-## Claim under test: the same bridge CIRv2 module the Metal path produces feeds
-## crucible's SPIR-V backend unchanged, zero tattletile lowering added.
-##
-## Both fixtures embed through `embedKernel(backendKind = gbSpirv)`, the words pass `spirv-val --target-env vulkan1.4`:
-##
-## - the SPIR-V header magic and the LocalSize 4 1 1 kernel entry
-## - the one push block and the BDA pointer capability set
-## - the loop shape: OpLoopMerge, phi-free, one fused value loop for axpy
-## - gemm: the value loop plus the mma k loop, word-stable across two compiles
+## Test that the bridge CIRv2 module of the Metal path feeds crucible's SPIR-V
+## backend unchanged: the words pass spirv-val --target-env vulkan1.4,
+## the locked structure matches, and two compiles are word-identical.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

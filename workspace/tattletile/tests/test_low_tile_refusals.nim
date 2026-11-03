@@ -7,13 +7,9 @@
 
 ## CIRv2 bridge: loud refusals and one offset local per view
 ##
-## Out-of-subset kernels refuse through SubsetError at the bridge.
-## An in-place kernel (load + store through one view) compiles with exactly one declaration per offset local:
-##
-## - mixed tile shapes in one kernel refuse
-## - one view addressed with two block index lists refuses
-## - duplicate SSA result names refuse on the atom path
-## - an atom store view of a different partition tile refuses, as does a store target bound nowhere
+## Test that out-of-subset kernels refuse through SubsetError naming the construct
+## and the kernel, and that an in-place kernel compiles with exactly one offset
+## local declaration per view.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --nimcache:nimcache/tattletile \

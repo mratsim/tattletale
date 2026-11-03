@@ -7,13 +7,10 @@
 
 ## Swizzle concretization: F2 arithmetic, the Swizzle functor, swizzled layouts
 ##
-## Checks against the vendored pycute reference values:
-## - F2 XOR and carry-less multiplication examples from the F2 docstring
-## - Swizzle functor examples, its involution property, and the F2 codomain bounds
-## - functor form and F2-strided form agree elementwise on the canonical 8x8 swizzle
-## - bank-conflict-free property: every aligned 32-element segment of the canonical 128B swizzled tile hits all 32 banks exactly once
-##
-## Algebra layouts swizzle compositionally, size preserved, bijective offsets.
+## Test that the F2 arithmetic, the Swizzle functor and the swizzled layouts match
+## the vendored pycute reference values, the functor form an involution and every
+## aligned 32-element segment of the canonical 128B swizzled tile hitting all 32
+## banks exactly once.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --nimcache:nimcache/b8

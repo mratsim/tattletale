@@ -7,11 +7,9 @@
 
 ## Mma atom layer: selection, fragment layouts, thread-value partitions
 ##
-## Checks on the gemm fixture abstract mmaf:
-## - the Apple 8x8x8 f32 simdgroup atom selects at 32 threads only
-## - operand thread-value layouts cover their tiles exactly once with the hardware ownership tables
-## - bit-linear fragment forms match the ceramic registry numbers
-## - unselected shapes fall back to the abstract mma without refusals
+## Test that the Apple 8x8x8 f32 simdgroup atom selects at 32 threads only,
+## operand thread-value layouts cover their tiles exactly once, and the fragment
+## forms match the ceramic registry numbers.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --nimcache:nimcache/b8
