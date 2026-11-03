@@ -5,20 +5,18 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# Benchmark: paged SDPA decode over Metal, effective GB/s (primary) and TFLOP/s.
+# Benchmark: paged SDPA decode over Metal, effective TFLOP/s.
 #
-# Effective bytes count only the K/V entries the kernel reads:
-#   sum over sequences of attended_seqlen * Hkv * (Dk + Dv) * sizeof(Elem)
-# attended_seqlen = seqlen - windowLo, windowLo = max(0, seqlen - windowSize).
-# bench_paged_sdpa_decode_mlx.py (the MLX side) applies the same byte and flop model.
-#
-# Truth cases need an L2-busting K+V working set, so in-cache iteration
-# loops measure cache bandwidth above the 540 GB/s M4 Max DRAM peak.
-# A computed bandwidth over the peak prints INVALID.
+# Effective flops per the non-paged SDPA bench convention (README.md):
+#   2 * sum over sequences of attended_seqlen * Hq * (Dk + Dv)
+# attended_seqlen[b] = cache_seqlens[b] for full decode,
+# min(cache_seqlens[b], windowSize) when the window applies.
+# bench_paged_sdpa_decode_mlx.py applies the identical flop model.
+# Large-case timing measures steady-state DRAM streaming with the K+V working set above L2.
 #
 # Run:
 #   nim c -r -d:release \
-#     -d:sdpaDtype=f32|bf16 \
+#     -d:sdpaDtype=f32 \
 #     --outdir:build/bench workspace/ceramic/bench/sdpa_gpu/bench_paged_sdpa_decode_metal.nim
 
 import std/[algorithm, math, monotimes, strformat, times]
@@ -47,7 +45,6 @@ const
   benchNT = 32
   numLayers = 2
   benchLayer = 1
-  peakBw = 540.0e9  # M4 Max DRAM peak, bytes per second
 
 proc sdpaBenchLoop(o, q, kPool, vPool, blockTable, cacheSeqlens: distinct TensorView,
                    scale: float32, Dk, Dv, PageSize: static int,
@@ -76,6 +73,18 @@ proc attendedSeqlen(seqlen, windowSize: int, Windowed: static bool): int =
     seqlen - max(0, seqlen - windowSize)
   else:
     seqlen
+
+proc caseFlops(numSeqs, seqlen, windowSize: int, Windowed: static bool): float64 =
+  ## Effective flops: 2 * sum over sequences of attended_seqlen * Hq * (Dk + Dv),
+  ## the non-paged SDPA bench convention.
+  2.0 * float64(numSeqs * attendedSeqlen(seqlen, windowSize, Windowed)) *
+    float64(Hq * (Dk + Dv))
+
+when defined(benchSmokeFlops):
+  doAssert caseFlops(8, 1024, 0, Windowed = false) == 134217728.0
+  doAssert caseFlops(32, 8192, 0, Windowed = false) == 4294967296.0
+  doAssert caseFlops(64, 8192, 0, Windowed = false) == 8589934592.0
+  doAssert caseFlops(32, 8192, 1024, Windowed = true) == 536870912.0
 
 proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed: static bool, windowSize: int, iters: int) =
   let
@@ -133,8 +142,7 @@ proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed:
       grid = launchGrid
       blk = (32, 1)
 
-  # Device-to-host copies drain the launch queue, so the measured time
-  # includes the launch overhead.
+  # Device-to-host copies drain the launch queue, so the measured time includes launch overhead.
   var timings: array[3, int64]
   for rep in 0 ..< 3:
     block:
@@ -155,26 +163,22 @@ proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed:
   sort(timings)
   let
     med = timings[1].float64 / 1e9
-    attended = attendedSeqlen(seqlen, windowSize, Windowed)
-    bytes = float64(numSeqs * attended * Hkv * (Dk + Dv)) * float64(sizeof(Elem))
-    flops = 2.0 * float64(numSeqs * attended) * float64(Hq * (Dk + Dv))
+    flops = caseFlops(numSeqs, seqlen, windowSize, Windowed)
     tflops = flops / med / 1e12
-    bw = bytes / med
-    bwText = if bw > peakBw: "INVALID (above M4 Max peak)" else: &"{bw / 1e9:>8.1f} GB/s"
     winText = if Windowed: $windowSize else: "-"
   writeLine(stdout, &"{label:>12} seqs={numSeqs:>3} seqlen={seqlen:>5} win={winText:>5}  " &
-    &"median {med * 1e6:>10.1f} us  effective {bwText}  {tflops:>6.2f} TFLOP/s")
+    &"median {med * 1e6:>10.1f} us  effective {tflops:>6.2f} TFLOP/s")
 
 proc main =
-  writeLine(stdout, "Paged SDPA decode Metal bench, B=1 Hq=32 Hkv=8 Dk=Dv=128 " &
-    "page=32 tile=32x32 layer=1 of 2 " & sdpaDtype & " (M4 Max)")
   var engine = newEngine(runMetal)
+  writeLine(stdout, "Paged SDPA decode Metal bench, B=1 Hq=32 Hkv=8 Dk=Dv=128 " &
+    "page=32 tile=32x32 layer=1 of 2 " & sdpaDtype & " (" & engine.deviceName() & ")")
   # Contrast case: the K+V working set fits the L2, so iteration measures cache bandwidth, not DRAM bandwidth.
   runCase(engine, "l2-resident", 8, 1024, Windowed = false, 0, iters = 50)
-  # truth cases: the K+V working set busts L2 (>= 2 GB f32)
-  runCase(engine, "truth", 32, 8192, Windowed = false, 0, iters = 2)
-  runCase(engine, "truth", 64, 8192, Windowed = false, 0, iters = 2)
-  # windowed truth case: same pool size, attended bytes = window per sequence
-  runCase(engine, "truth-window", 32, 8192, Windowed = true, 1024, iters = 10)
+  # Large cases: the K+V working set exceeds L2 and the timing measures steady-state DRAM streaming
+  runCase(engine, "dram", 32, 8192, Windowed = false, 0, iters = 2)
+  runCase(engine, "dram", 64, 8192, Windowed = false, 0, iters = 2)
+  runCase(engine, "dram-window", 32, 8192, Windowed = true, 1024, iters = 10)
 
-main()
+when not defined(benchSmokeFlops):
+  main()
