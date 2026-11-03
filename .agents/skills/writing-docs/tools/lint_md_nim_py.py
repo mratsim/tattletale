@@ -418,6 +418,8 @@ def _probe_exempt(line):
 
 
 BANNED = [
+    (r"maxloopiterationsvm",
+     None, "the VM loop-cap flag is banned tree-wide, no VM iteration cap exists or is configurable"),
     (r"\bmint(s|ed)?\b",
      None, "minting jargon, name the actor that defines or writes the specialized type"),
     (r"\bpast the\b",
