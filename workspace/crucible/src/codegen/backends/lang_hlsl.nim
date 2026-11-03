@@ -61,7 +61,8 @@ type
     ## Buffer parameters of the proc in flight by name to their `aptr` type:
     ## the fvVulkan access emitter reads the element type per access.
     coordReads: HashSet[CirCoordBuiltinKind]
-    ## Canonical coordinate builtin names that the kernel body reads, the entry head declares their inputs in `CoordBuiltinNames` order.
+    ## Canonical coordinate builtin names that the kernel body reads.
+    ## The entry head declares their inputs in `CirCoordBuiltinKind` declaration order.
     procs: Table[string, CirProc]
     ## Module procs by name, by-reference call arguments read callee
     ## parameter types here.
@@ -376,7 +377,8 @@ proc getCoordEntryInput(k: CirCoordBuiltinKind): string =
   else: ""
 
 proc orderedCoordReads(reads: HashSet[CirCoordBuiltinKind]): seq[CirCoordBuiltinKind] =
-  ## Kernel coordinate reads in `CoordBuiltinNames` order, the order that the entry head declares their inputs.
+  ## Kernel coordinate reads in `CirCoordBuiltinKind` declaration order.
+  ## The entry head declares its inputs in the same order.
   for k in cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup:
     if k in reads:
       result.add k

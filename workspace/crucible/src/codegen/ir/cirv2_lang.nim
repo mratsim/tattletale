@@ -15,22 +15,6 @@ export builtins_catalog
 #
 # ############################################################
 
-const CoordBuiltinNames*: array[cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup, string] = [
-  "thread_position_in_grid",
-  "threadgroup_position_in_grid",
-  "thread_position_in_threadgroup",
-  "threads_per_threadgroup",
-  "threadgroups_per_grid",
-  "thread_index_in_threadgroup",
-]
-## Canonical coordinate builtin names indexed by kind.
-## - Array order matches the parameter declaration order of the passes
-##   and the input order of the entry heads.
-## - The IR names every coordinate builtin by its canonical name,
-##   the family enums hold the dispatch.
-## - A symbol sharing a name without a `{.builtin.}` read has
-##   `builtin` false and every family kind at none.
-
 type
   AddressSpace* = enum
     ## Memory class a pointer or aptr addresses.

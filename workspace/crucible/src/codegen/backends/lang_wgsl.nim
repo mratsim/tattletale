@@ -217,7 +217,7 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   ## One coordinate builtin read in the kernel body. WGSL builtins are
   ## entry-point parameters, a device function read refuses.
   if not ctx.inKernel:
-    ctx.fail("coordinate builtin " & CoordBuiltinNames[e.coordBuiltin] & " in a device function, WGSL builtins are entry-point parameters")
+    ctx.fail("coordinate builtin " & $e.coordBuiltin & " in a device function, WGSL builtins are entry-point parameters")
     return ""
   if e.coordBuiltin == cbkThreadsPerThreadgroup:
     ctx.fail("threads_per_threadgroup has no WGSL builtin, WGSL has only the @workgroup_size attribute")
@@ -230,7 +230,7 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   ## One coordinate builtin component read in the kernel body.
   if not ctx.inKernel:
-    ctx.fail("a device function reads " & CoordBuiltinNames[e.dotBase.coordBuiltin] & ", WGSL coordinate builtins are entry-point parameters")
+    ctx.fail("a device function reads " & $e.dotBase.coordBuiltin & ", WGSL coordinate builtins are entry-point parameters")
     return ""
   let mapped = getWgslCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
   if mapped.len == 0:

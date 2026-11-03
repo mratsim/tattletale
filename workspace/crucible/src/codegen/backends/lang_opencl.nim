@@ -172,7 +172,7 @@ const OpenclFlatThreadIndex =
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   if e.coordBuiltin == cbkThreadIndexInThreadgroup:
     return OpenclFlatThreadIndex
-  ctx.fail("whole-vector coordinate read " & CoordBuiltinNames[e.coordBuiltin] & " has no OpenCL C vector form, read the components")
+  ctx.fail("whole-vector coordinate read " & $e.coordBuiltin & " has no OpenCL C vector form, read the components")
   ""
 
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =

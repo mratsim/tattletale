@@ -239,7 +239,7 @@ proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[CirCoordBuiltin
   return true
 
 proc orderedCoordKinds(kinds: HashSet[CirCoordBuiltinKind]): seq[CirCoordBuiltinKind] =
-  ## Needed builtin kinds in `CoordBuiltinNames` order, which also fixes the parameter order.
+  ## Needed builtin kinds in `CirCoordBuiltinKind` declaration order, which also fixes the parameter order.
   for k in cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup:
     if k in kinds:
       result.add(k)
@@ -248,7 +248,7 @@ proc appendCoordParam(fn: CirProc, k: CirCoordBuiltinKind): string =
   ## A parameter uses the builtin's canonical identifier so the body's
   ## builtin-marked reads print it unchanged, in a kernel the identifier
   ## binds to the attributed parameter, in a device function to this parameter.
-  let name = CoordBuiltinNames[k]
+  let name = $k
   for p in fn.params:
     if p.name == name:
       return "at " & fn.name & ": parameter " & name &
@@ -275,7 +275,7 @@ proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
       extra.add(getBuiltinParamType(k))
     callee.typ = extendedProcType(callee.typ, extra)
   for k in calleeKinds:
-    let arg = sym(CoordBuiltinNames[k], getBuiltinParamType(k), builtin = true)
+    let arg = sym($k, getBuiltinParamType(k), builtin = true)
     arg.coordBuiltin = k
     args.add(arg)
   return ""

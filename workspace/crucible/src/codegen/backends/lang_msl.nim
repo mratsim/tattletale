@@ -136,7 +136,7 @@ proc printBuiltinRef(ctx: var PrintCtx, k: CirCoordBuiltinKind, whole: bool): st
   ## A whole vector use constructs `int3`, a component use casts to `int`,
   ## the flat thread index is a scalar `uint`.
   ctx.builtins.incl(k)
-  let name = CoordBuiltinNames[k]
+  let name = $k
   if whole and k != cbkThreadIndexInThreadgroup:
     return "int3((int)" & name & ".x, (int)" & name & ".y, (int)" & name & ".z)"
   return name
@@ -148,7 +148,7 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   ## One component of an attributed `uint3` builtin parameter, cast to `int`.
   ctx.builtins.incl(e.dotBase.coordBuiltin)
-  "(int)(" & CoordBuiltinNames[e.dotBase.coordBuiltin] & '.' & e.fieldName & ")"
+  "(int)(" & $e.dotBase.coordBuiltin & '.' & e.fieldName & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Expressions
@@ -235,7 +235,7 @@ proc emitBuiltinParam(k: CirCoordBuiltinKind): string =
   ## Attributed MSL parameter of a coordinate builtin reference:
   ## `uint3 name [[name]]` for the coordinate vectors, a scalar `uint` for the flat thread index.
   ## No binding, no buffer slot.
-  let name = CoordBuiltinNames[k]
+  let name = $k
   if k == cbkThreadIndexInThreadgroup:
     return "uint " & name & " [[" & name & "]]"
   return "uint3 " & name & " [[" & name & "]]"

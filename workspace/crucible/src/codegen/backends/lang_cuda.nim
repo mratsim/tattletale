@@ -160,7 +160,7 @@ proc getCudaCoordToken(k: CirCoordBuiltinKind, whole: bool, field: string, coord
       result = "(int)(threadIdx." & field & ")"
   of cbkThreadPositionInGrid:
     if whole:
-      result = CoordBuiltinNames[k]
+      result = $k
     else:
       result = "(int)(blockIdx." & field & "*blockDim." & field &
         "+threadIdx." & field & ")"
