@@ -6,11 +6,11 @@
 # No fused paged attention exists in MLX: the bench gathers each sequence's K/V
 # through the block table, then runs mx.fast.scaled_dot_product_attention.
 # Fused arguments: L=1, causal off, per-sequence validity masking.
-# MLX pays one block-table gather per call as the paging tax: the Nim kernel reads pool pages in place.
+# MLX pays one block-table gather per timed call: the Nim kernel reads pool pages in place.
 #
 # Effective bytes and flops, identical to bench_paged_sdpa_decode_metal.nim:
 # - bytes: sum over sequences of attended_seqlen * Hkv * (Dk + Dv) * itemsize
-# - attended_seqlen = seqlen - windowLo clamped to [0, seqlen], windowLo = max(0, seqlen - window)
+# - attended_seqlen = seqlen - windowLo, windowLo = max(0, seqlen - window)
 # - flops: 2 * sum over sequences of attended_seqlen * Hq * (Dk + Dv)
 # - a line whose computed bandwidth exceeds the 540 GB/s M4 Max DRAM peak prints INVALID
 #
@@ -35,6 +35,7 @@ PEAK_BW = 540.0e9  # M4 Max DRAM peak, bytes per second
 
 # Case list of bench_paged_sdpa_decode_metal.nim:
 # (label, num_seqs, seqlen, window, batch, rounds). Window 0 attends the full sequence.
+# batch and rounds size each timed round into the tens of ms.
 # Truth cases keep the gathered K+V per call well above L2.
 CASES = [
     ("l2-resident", 8, 1024, 0, 20, 10),
@@ -51,8 +52,8 @@ def make(shape):
 
 
 def block_table(num_seqs, pages_per_seq):
-    # sequential page ids across sequences, -1 padding beyond each sequence's page count
-    bt = mx.full((num_seqs, pages_per_seq), -1, dtype=mx.int32)
+    # sequential page ids across sequences, bench tables are exactly full, no -1 padding
+    bt = mx.zeros((num_seqs, pages_per_seq), dtype=mx.int32)
     next_page = 0
     for s in range(num_seqs):
         for p in range(pages_per_seq):
@@ -62,7 +63,8 @@ def block_table(num_seqs, pages_per_seq):
 
 
 def gather_kv(kpool, vpool, bt, page_lo, page_hi):
-    # Paging tax: per-sequence K/V gathered through the block table.
+    # Per-sequence K/V gathered through the block table: the overhead MLX
+    # pays for the paged representation.
     # Input pools: (num_pages, LAYERS, PAGE, Hkv, D), layer LAYER served.
     # Output: (num_seqs, Hkv, (page_hi - page_lo) * PAGE, D) per tensor.
     idx = bt[:, page_lo:page_hi]
@@ -87,7 +89,7 @@ def validity_mask(gathered_s, key_lo, cache_seqlens, window):
 
 def ref_paged(q, kpool, vpool, bt, cache_seqlens, page, window, scale):
     # check_math reference: explicit per-sequence page walk and masked softmax,
-    # no block-table take, no fused sdpa
+    # no vectorized gather, no fused sdpa
     k_l1, v_l1 = kpool[:, LAYER], vpool[:, LAYER]
     reps = q.shape[1] // k_l1.shape[2]
     outs = []
@@ -127,14 +129,14 @@ def check_math():
     # full-sequence validity while the windowed case runs on uniform seqlens.
     num_seqs, hq, hkv, d, page = 3, 4, 2, 16, 8
     scale = d ** -0.5
-    # 2 pages per sequence, all referenced pages real: reading a -1 slot is
-    # out of bounds, so the kernel contract never reads one
+    # 2 pages per sequence, every referenced slot real: a -1 slot would
+    # silently alias the last page, MLX negative indexing wraps
     kpool = make((7, LAYERS, page, hkv, d))
     vpool = make((7, LAYERS, page, hkv, d))
     bt = block_table(num_seqs, 2)
     q = make((num_seqs, hq, 1, d))
     tol = 5e-2 if DTYPE == mx.bfloat16 else 1e-4
-    checks = [([16, 9, 3], 0), ([16, 16, 16], 8)]
+    checks = [([16, 9, 3], 0), ([16, 16, 16], 5)]
     for cache_seqlens, window in checks:
         fused = paged_decode_call(q, kpool, vpool, bt, cache_seqlens, page, window, scale)
         want = ref_paged(q, kpool, vpool, bt, cache_seqlens, page, window, scale)
@@ -163,8 +165,8 @@ def run_case(label, num_seqs, seqlen, window, batch, rounds):
             mx.eval([call() for _ in range(batch)])
         timings.append(time.perf_counter() - t0)
     med = sorted(timings)[1] / (rounds * batch)
-    attended = seqlen if not window else min(seqlen, seqlen - max(0, seqlen - window))
-    itemsize = mx.array(0, dtype=DTYPE).itemsize
+    attended = seqlen - max(0, seqlen - window) if window else seqlen
+    itemsize = DTYPE.size
     bw = num_seqs * attended * HKV * (DK + DV) * itemsize / med
     flops = 2 * num_seqs * attended * HQ * (DK + DV)
     tflops = flops / med / 1e12

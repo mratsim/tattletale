@@ -9,8 +9,8 @@
 #
 # Effective bytes count only the K/V entries the kernel reads:
 #   sum over sequences of attended_seqlen * Hkv * (Dk + Dv) * sizeof(Elem)
-# attended_seqlen = seqlen - windowLo clamped to [0, seqlen]. Apply the same
-# byte and flop model on the MLX side (bench_paged_sdpa_decode_mlx.py).
+# attended_seqlen = seqlen - windowLo, windowLo = max(0, seqlen - windowSize).
+# Apply the same byte and flop model on the MLX side (bench_paged_sdpa_decode_mlx.py).
 #
 # Truth cases need an L2-busting K+V working set: once the K+V bytes fit L2,
 # iteration loops measure cache bandwidth, which exceeds the 540 GB/s M4 Max
@@ -21,7 +21,7 @@
 #     -d:sdpaDtype=f32|bf16 \
 #     --outdir:build/bench workspace/ceramic/bench/sdpa_gpu/bench_paged_sdpa_decode_metal.nim
 
-import std/[algorithm, math, monotimes, strformat, strutils, times]
+import std/[algorithm, math, monotimes, strformat, times]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
@@ -63,7 +63,7 @@ proc sdpaBenchLoop(o, q, kPool, vPool, blockTable, cacheSeqlens: distinct Tensor
       scale, Dk, Dv, PageSize, Windowed, windowSize, layer)
 
 proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
-  ## Logical position mod 7, times 0.25 plus 0.5
+  ## Non-uniform deterministic data, the base SDPA benches' pattern
   for i in 0 ..< tv.size():
     tv(i) = to(float32(i mod 7) * 0.25'f32 + 0.5'f32, T)
 
@@ -80,8 +80,7 @@ proc makeFlatHostTensor(n: int): auto =
 proc attendedSeqlen(seqlen, windowSize: int, Windowed: static bool): int =
   ## Keys one sequence attends: [windowLo, seqlen), windowLo = max(0, seqlen - windowSize)
   when Windowed:
-    let windowLo = max(0, seqlen - windowSize)
-    min(seqlen, seqlen - windowLo)
+    seqlen - max(0, seqlen - windowSize)
   else:
     seqlen
 
@@ -114,8 +113,7 @@ proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed:
     fillPattern(kv)
     fillPattern(vv)
 
-  # block_table: sequential page ids across sequences, -1 padding beyond each
-  # sequence's page count
+  # block_table: sequential page ids across sequences, the bench tables fill every slot
   block:
     var btv = btHost.view()
     var nextPage = 0
@@ -123,10 +121,6 @@ proc runCase(engine: MetalEngine, label: string, numSeqs, seqlen: int, Windowed:
       for p in 0 ..< pagesPerSeq:
         btv[s, p] = int32(nextPage)
         nextPage.inc
-      for p in pagesPerSeq ..< maxPages:
-        btv[s, p] = -1
-    doAssert nextPage <= numPages,
-      "block table references " & $nextPage & " pages, pool holds " & $numPages
     var csv = csHost.view()
     for s in 0 ..< numSeqs:
       csv[s] = int32(seqlen)
