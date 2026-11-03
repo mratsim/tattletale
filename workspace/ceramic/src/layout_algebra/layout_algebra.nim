@@ -404,7 +404,8 @@ macro composeImpl(aShape, aStride, bShape, bStride: typed): untyped =
   if nVal == 1:
     # A' evaluated at one point, evaluation is coalesce-invariant
     result.add make_layout(IntCT(1),
-      bindSym"crd2idx".newCall(make_layout(aShape, aStride), bStride))
+      bindSym"crd2idx".newCall(make_layout(aShape, aStride),
+        newLit(bStride.getTypeOf().getStaticInt())))
     return
   let stmts = newStmtList()
   var shapeAst, strideAst: NimNode = nil
