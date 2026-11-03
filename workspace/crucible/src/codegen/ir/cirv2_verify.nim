@@ -113,7 +113,8 @@ proc checkUniqueNames(names: seq[string]): string =
     seen.incl n
 
 proc verifyModule*(m: CirModule): string =
-  ## Returns "" while every symbol in every proc resolves, else the first violation naming the proc and the symbol.
+  ## Returns "" while the module upholds the pass-boundary contracts,
+  ## else the first violation naming the offending proc.
   ## Read-only: the walk never rewrites or repairs the IR.
   ## Runs at the final pass boundary: runPasses calls it once, after the last transform pass.
   ##
@@ -142,14 +143,13 @@ proc verifyModule*(m: CirModule): string =
     return "duplicate proc name '" & result & "'"
   for fn in m.procs:
     var paramNames: seq[string]
+    var visible: HashSet[string]
     for p in fn.params:
       paramNames.add p.name
+      visible.incl p.name
     result = checkUniqueNames(paramNames)
     if result.len > 0:
       return "at " & fn.name & ": duplicate parameter name '" & result & "'"
-    var visible: HashSet[string]
-    for p in fn.params:
-      visible.incl p.name
     result = checkScopeStmts(fn.body, visible, moduleNames)
     if result.len > 0:
       return "at " & fn.name & ": " & result

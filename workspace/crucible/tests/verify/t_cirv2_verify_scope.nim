@@ -1,8 +1,8 @@
 ## CIRv2 pass-boundary verification: scope and name uniqueness
 ##
 ## Test that runPasses verifies a module at the final pass boundary.
-## A kernel body that uses an undeclared symbol refuses with the proc and symbol.
-## Colliding proc names or colliding parameter names refuse with the offending name.
+## A kernel body that uses an undeclared symbol refuses, runPasses names the proc and symbol.
+## Two procs that share a name refuse, and a proc with two same-named params refuses.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
