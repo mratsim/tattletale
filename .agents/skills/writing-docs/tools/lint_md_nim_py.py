@@ -2302,35 +2302,59 @@ def _line_scan(raw, in_tq):
 _LOGICAL_JOIN_CAP = 20
 
 
-def _logical_code_lines(text):
-    """Returns (first line number, code) pairs, a line joined into the next
-    while its parentheses and brackets stay unbalanced outside string
-    literals. A call wrapped across lines therefore matches the containment
-    patterns, the literal on a continuation line is not invisible.
+def _logical_code_lines_spanned(text):
+    """Returns (first line number, code, spans) triples, a line joined into
+    the next while its parentheses and brackets stay unbalanced outside
+    string literals. A call wrapped across lines therefore matches the
+    containment patterns, the literal on a continuation line is not
+    invisible. `spans` maps a buffer offset to the physical line that wrote
+    it, so a finding can name the line its match sits on.
     """
     out = []
     buf = ""
     start = 0
     depth = 0
     in_tq = False
+    spans = []
     for i, raw in enumerate(text.splitlines(), 1):
         code, d, in_tq = _line_scan(raw, in_tq)
         if buf:
+            spans.append((len(buf), i))
             buf += " " + code
             depth += d
         elif code.strip():
             buf = code
             start = i
             depth = d
+            spans = [(0, i)]
         else:
             continue
         if (depth <= 0 and not in_tq) or i - start + 1 >= _LOGICAL_JOIN_CAP:
-            out.append((start, buf))
+            out.append((start, buf, spans))
             buf = ""
             depth = 0
+            spans = []
     if buf:
-        out.append((start, buf))
+        out.append((start, buf, spans))
     return out
+
+
+def _spanned_line(spans, offset):
+    """The physical line that wrote the buffer character at `offset`.
+    """
+    line = spans[0][1]
+    for at, i in spans:
+        if at <= offset:
+            line = i
+        else:
+            break
+    return line
+
+
+def _logical_code_lines(text):
+    """Returns (first line number, code) pairs; see _logical_code_lines_spanned.
+    """
+    return [(start, buf) for start, buf, _spans in _logical_code_lines_spanned(text)]
 
 
 def nim_emitted_text_assert_checks(path, text, findings):
@@ -2413,24 +2437,23 @@ def nim_method_call_syntax_checks(path, text, findings):
     names = "|".join(re.escape(n) for n in METHOD_CALL_NAMES)
     decl_re = re.compile(r"\b(?:proc|func|template|macro|iterator)\s+(?:%s)\b" % names)
     call_re = re.compile(r"\b(?:%s)\s*\(" % names)
-    for start, code in _logical_code_lines(text):
-        if start in blocked or not code.strip():
+    for start, joined, spans in _logical_code_lines_spanned(text):
+        if start in blocked or not joined.strip():
             continue
+        code = _blank_nim_strings(joined)
         if decl_re.search(code):
             continue
-        m = call_re.search(code)
-        if not m:
-            continue
-        name = re.match(r"[A-Za-z_]\w*", code[m.start():]).group(0)
-        i = m.start() - 1
-        while i >= 0 and code[i] in " \t":
-            i -= 1
-        if i >= 0 and code[i] == ".":
-            continue
-        findings.append(Finding(
-            path, start, "method-call-syntax",
-            "%s is a method of its receiver, write "
-            "receiver.%s(...) instead of %s(receiver, ...)" % (name, name, name)))
+        for m in call_re.finditer(code):
+            name = re.match(r"[A-Za-z_]\w*", code[m.start():]).group(0)
+            i = m.start() - 1
+            while i >= 0 and code[i] in " \t":
+                i -= 1
+            if i >= 0 and code[i] == ".":
+                continue
+            findings.append(Finding(
+                path, _spanned_line(spans, m.start()), "method-call-syntax",
+                "%s is a method of its receiver, write "
+                "receiver.%s(...) instead of %s(receiver, ...)" % (name, name, name)))
 
 
 # Refusal slop rules: one-line-refusal, duplicate-refusal-coverage, refusal-essay, refusal-density
