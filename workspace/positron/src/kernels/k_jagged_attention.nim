@@ -117,6 +117,7 @@ proc jagged_attn_fwd*(
     kv: JaggedKv,
     scale: float32, layer, H, Nkv: int,
     page_size, D: static int,
+    windowed: static bool = false, windowSize: int = low(int32),
     mmaQK, mmaPV: static TiledMma) =
   ## Launch dims: (q token blocks, H, num_seqs), 32 lanes.
   ##
@@ -135,6 +136,10 @@ proc jagged_attn_fwd*(
   ##   q tok mt−1 ███████   ███████   ██
   ##
   ##   █ = attended (kPos <= bandBase + qPos), X = masked
+  ##
+  ## - a windowed launch masks the KV tokens more than windowSize - 1 below
+  ##   each query token's position bandBase + qPos, and the loop start skips
+  ##   the tiles entirely below the window
   ##
   ## Dataflow, one threadgroup, per KV block of the online softmax, tensors on edges, ops in boxes:
   ##
@@ -178,33 +183,26 @@ proc jagged_attn_fwd*(
   let qMul = scale * Log2e                     # exp2 shape of the softmax
 
   let
-    qBlock = threadgroup_position_in_grid.x
+    qBlock0 = threadgroup_position_in_grid.x
+    (qStride, _, _) = (threadgroups_per_grid.x, threadgroups_per_grid.y, threadgroups_per_grid.z)
     head = threadgroup_position_in_grid.y
     segId = threadgroup_position_in_grid.z
     thrID = getLocalThreadID()
 
-  let qOffsets = cast[ptr UncheckedArray[int32]](q_offsets.data)
   let
-    q0: int = qOffsets[segId]
-    qLen = qOffsets[segId + 1] - q0
+    q0: int = q_offsets.data[segId]
+    qLen = q_offsets.data[segId + 1] - q0
     kvLen: int = kv.seqlens[segId]
     # decode (q_len = 1) attends cached tokens only, prefill (q_len >= 2)
     # also attends the new tokens, one token more per q token
     decodeAdj = (if qLen == 1: 1 else: 0)
     cachedLen = kvLen - qLen + decodeAdj
     totalK = cachedLen + qLen - decodeAdj
-    q0Local = qBlock * mt
     bandBase = cachedLen - decodeAdj
-    # KV loop bounds: the segment's pages and the last attended block.
+    # KV loop bounds: the segment's pages and the query tiles cap the walk
     pageBlocks = round_multiple_up(totalK, page_size) div nt
-    lastKey = (if cachedLen + q0Local + (mt - 1) < totalK - 1:
-                 cachedLen + q0Local + (mt - 1)
-               else:
-                 totalK - 1)
-    lastAttBlock = lastKey div nt + 1
-    kvBlocks = (if pageBlocks < lastAttBlock: pageBlocks else: lastAttBlock)
     kvHead = head div (H div Nkv)
-
+    qBlocks = qLen.ceil_div(mt)
   # Per-head q/o tokens:
   # - [q0, q0 + qLen) of the packed (num_qo_tokens, H, D) tensors.
   # - Loads/stores past qLen are padded/dropped.
@@ -220,61 +218,81 @@ proc jagged_attn_fwd*(
     lI = zeros(tile(float32, rowStatsL))        # running attention-weight sum, (mt × 1)
     acc = zeros(tile(float32, pvCLayout))       # (mt × D) accumulator
 
-  qReg.load(segQ, qMap, thrID, (qBlock, 0))
-
   let
     thrCrd = idx2crd(qkMap.getThreadPartitioning(), thrID)
     regCrd = qkMap.layout.slice(((thrCrd, _), _))
     crdBase = qkMap.layout.crd2idx(((thrCrd, _), _))
 
-  for kvBlk in 0 ..< kvBlocks:
+  # Each workgroup starts at its own query tile and steps by the grid width,
+  # so a grid smaller than the tile count still covers every tile
+  for qBlock in countup(qBlock0, qBlocks - 1, qStride):
     let
-      kvPos = kvBlk * nt
-      pageIdx = kvPos div page_size
-      inPage = kvPos - pageIdx * page_size
-      pageId: int = kv.indices[kv.offsets[segId] + pageIdx]
-      # Bounds at the covered tokens: a 0·NaN from the garbage tail would poison the P·V mma.
-      covered = min(nt, kvLen - kvPos)
-      # K subview: (covered, D) over the token stride
-      # V subview: the transposed slab view (D, covered) that the P·V mma reads as Vᵀ
-      vK = k_pool(pageId, layer, inPage ..< inPage + covered, kvHead, _)
-      vV = v_pool(pageId, layer, inPage ..< inPage + covered, kvHead, _)
-             .transpose(0, 1)
+      q0Local = qBlock * mt
+      lastKey = (if cachedLen + q0Local + (mt - 1) < totalK - 1:
+                   cachedLen + q0Local + (mt - 1)
+                 else:
+                   totalK - 1)
+      lastAttBlock = lastKey div nt + 1
+      kvBlocks = (if pageBlocks < lastAttBlock: pageBlocks else: lastAttBlock)
+      # kvStart skips the tiles entirely below the window's left edge
+      kvStart = (when windowed:
+                   max(0, (bandBase + q0Local - windowSize + 1) div nt)
+                 else:
+                   0)
+    qReg.load(segQ, qMap, thrID, (qBlock, 0))
 
-    var kReg: tile(k_pool.T, qkMma.getMmaLayout(opB))  # (nt, D)
-    kReg.load(vK, kMap, thrID, (0, 0))
-    qk.fillWith(0'f32)
-    qkMma.atom.gemm_tile(qk, qReg, kReg, qk)   # S = Q·Kᵀ   (MMA 1)
+    for kvBlk in kvStart ..< kvBlocks:
+      let
+        kvPos = kvBlk * nt
+        pageIdx = kvPos div page_size
+        inPage = kvPos - pageIdx * page_size
+        pageId: int = kv.indices[kv.offsets[segId] + pageIdx]
+        # Bounds at the covered tokens: a 0·NaN from the garbage tail would poison the P·V mma.
+        covered = min(nt, kvLen - kvPos)
+        # K subview: (covered, D) over the token stride
+        # V subview: the transposed slab view (D, covered) that the P·V mma reads as Vᵀ
+        vK = k_pool(pageId, layer, inPage ..< inPage + covered, kvHead, _)
+        vV = v_pool(pageId, layer, inPage ..< inPage + covered, kvHead, _)
+               .transpose(0, 1)
 
-    qk *= qMul                                 # scale, before the band cut
+      var kReg: tile(k_pool.T, qkMma.getMmaLayout(opB))  # (nt, D)
+      kReg.load(vK, kMap, thrID, (0, 0))
+      qk.fillWith(0'f32)
+      qkMma.atom.gemm_tile(qk, qReg, kReg, qk)   # S = Q·Kᵀ   (MMA 1)
 
-    var band: tile(bool, qkCLayout)
-    forEach idx, var c in band:
-      let (qRow, kCol) = crdBase + regCrd.crd2idx(idx)
-      let qPos = q0Local + qRow                # query token in the segment
-      let kPos = kvPos + kCol                  # KV token in the segment
-      c = kPos > bandBase + qPos
-    qk.where(band, negInf(float32), qk)        # masked scores are -inf
+      qk *= qMul                                 # scale, before the band cut
 
-    var mIj: tile(float32, rowStatsL)
-    mIj.max(qk, axis = 1, qkMap)
-    mIj = max(mI, mIj)                         # merge into the running max
-    var alpha: tile(float32, rowStatsL)        # rescale factor (mt × 1)
-    alpha = mI - mIj
-    alpha.exp2()
-    mI = mIj
-    qk -.= mIj
-    qk.exp2()
-    lI *= alpha                                # attention-weight-sum rescale
-    var lIj: tile(float32, rowStatsL)          # (mt × 1) attention-weight sum
-    lIj.sum(qk, axis = 1, qkMap)
-    lI += lIj
+      var band: tile(bool, qkCLayout)
+      forEach idx, var c in band:
+        let (qRow, kCol) = crdBase + regCrd.crd2idx(idx)
+        let qPos = q0Local + qRow                # query token in the segment
+        let kPos = kvPos + kCol                  # KV token in the segment
+        c = kPos > bandBase + qPos or
+            (when windowed:
+               kPos < bandBase + qPos - windowSize + 1
+             else:
+               false)
+      qk.where(band, negInf(float32), qk)        # masked scores are -inf
 
-    let p = qk.downcast(q.T)                   # P.to(q.T), layout preserved
-    acc *.= alpha                              # (mt × D) *.= (mt × 1)
-    var vReg: tile(v_pool.T, pvMma.getMmaLayout(opB))  # (D, nt), B operand of MMA 2
-    vReg.load(vV, vMap, thrID, (0, 0))
-    pvMma.atom.gemm_tile(acc, p, vReg, acc)    # O += P·V   (MMA 2)
+      var mIj: tile(float32, rowStatsL)
+      mIj.max(qk, axis = 1, qkMap)
+      mIj = max(mI, mIj)                         # merge into the running max
+      var alpha: tile(float32, rowStatsL)        # rescale factor (mt × 1)
+      alpha = mI - mIj
+      alpha.exp2()
+      mI = mIj
+      qk -.= mIj
+      qk.exp2()
+      lI *= alpha                                # attention-weight-sum rescale
+      var lIj: tile(float32, rowStatsL)          # (mt × 1) attention-weight sum
+      lIj.sum(qk, axis = 1, qkMap)
+      lI += lIj
 
-  acc /.= lI                                   # (mt × D) /.= (mt × 1)
-  segO.store(acc.downcast(o.T), oMap, thrID, (qBlock, 0))
+      let p = qk.downcast(q.T)                   # P.to(q.T), layout preserved
+      acc *.= alpha                              # (mt × D) *.= (mt × 1)
+      var vReg: tile(v_pool.T, pvMma.getMmaLayout(opB))  # (D, nt), B operand of MMA 2
+      vReg.load(vV, vMap, thrID, (0, 0))
+      pvMma.atom.gemm_tile(acc, p, vReg, acc)    # O += P·V   (MMA 2)
+
+    acc /.= lI                                   # (mt × D) /.= (mt × 1)
+    segO.store(acc.downcast(o.T), oMap, thrID, (qBlock0, 0))

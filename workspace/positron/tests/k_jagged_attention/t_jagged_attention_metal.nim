@@ -33,6 +33,9 @@ proc replayAllJaggedFixtures() =
   fixture("jagged_prefix_share_f16", float16)
   fixture("jagged_dense_degenerate_f16", float16)
   fixture("jagged_prefill_f32", float32)
+  fixture("jagged_swa_prefill_f16", float16)
+  fixture("jagged_swa_decode_f16", float16)
+  fixture("jagged_swa_ragged_f32", float32)
   echo "all jagged attention fixture replays pass"
 
 replayAllJaggedFixtures()

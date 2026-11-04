@@ -60,7 +60,9 @@ proc jaggedAttnCombo*(o, q, kPool, vPool: distinct TensorView,
                       qOffsets: distinct TensorView,
                       kv: JaggedKv,
                       scale: float32, layer, H, Nkv: int,
-                      PageSize, D: static int) =
+                      PageSize, D: static int,
+                      windowed: static bool = false,
+                      windowSize: int = -2147483648) =
   ## Zips the two mma schedule tiles into the kernel's trailing statics.
   ##
   ## Contract:
@@ -69,6 +71,7 @@ proc jaggedAttnCombo*(o, q, kPool, vPool: distinct TensorView,
   ##   separates the element dtypes
   jagged_attn_fwd(o, q, kPool, vPool, qOffsets, kv,
                   scale, layer, H, Nkv, PageSize, D,
+                  windowed, windowSize,
                   tiledMma(float32, q.T, kPool.T, JaggedAttnTile, JaggedAttnTile, D),
                   tiledMma(float32, o.T, vPool.T, JaggedAttnTile, JaggedAttnTile, D))
 
@@ -166,12 +169,20 @@ proc jaggedAttnReplayCase*(engine: MetalEngine, Elem: typedesc, name: string): s
       oDev = engine.bridge(oStage)
       qOffDev = engine.bridge(qOffHost)
       kvB = engine.bridge(kvHost)
-    engine.launchDeviceFn jaggedAttnCombo(
-        oDev, qDev, kDev, vDev, qOffDev, kvB,
-        meta.scale, meta.layer, meta.H, meta.Nkv,
-        JaggedAttnTile, 64) do:
-      grid = (qBlocks, meta.H, meta.numSeqs)
-      blk = (32, 1)
+    if meta.windowSize > 0:
+      engine.launchDeviceFn jaggedAttnCombo(
+          oDev, qDev, kDev, vDev, qOffDev, kvB,
+          meta.scale, meta.layer, meta.H, meta.Nkv,
+          JaggedAttnTile, 64, true, meta.windowSize) do:
+        grid = (qBlocks, meta.H, meta.numSeqs)
+        blk = (32, 1)
+    else:
+      engine.launchDeviceFn jaggedAttnCombo(
+          oDev, qDev, kDev, vDev, qOffDev, kvB,
+          meta.scale, meta.layer, meta.H, meta.Nkv,
+          JaggedAttnTile, 64) do:
+        grid = (qBlocks, meta.H, meta.numSeqs)
+        blk = (32, 1)
     engine.copyToHostFromDevice(addr oStage.data[0], oDev.data, oStage.len())
     result = newSeq[uint32](oStage.len())
     for i in 0 ..< oStage.len():

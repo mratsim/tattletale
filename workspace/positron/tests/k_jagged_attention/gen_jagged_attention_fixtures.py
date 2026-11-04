@@ -87,7 +87,8 @@ def widen(bits, dtype):
 
 
 def jagged_attention_reference(q, k, v, q_offsets, kv_offsets, kv_indices,
-                               kv_seqlens, H, Nkv, D, page_size, layer, scale):
+                               kv_seqlens, H, Nkv, D, page_size, layer, scale,
+                               window_size=0):
     """float64 reference over the exact widened element values.
 
     Shapes:
@@ -117,14 +118,15 @@ def jagged_attention_reference(q, k, v, q_offsets, kv_offsets, kv_indices,
             hkv = h // (H // Nkv)
             for j in range(q_len):
                 hi = kv_len - 1 if q_len == 1 else kv_len - q_len + j
-                scores = (kg[:hi + 1, hkv] @ q[q0 + j, h]) * scale
+                lo = max(0, hi - window_size + 1) if window_size else 0
+                scores = (kg[lo:hi + 1, hkv] @ q[q0 + j, h]) * scale
                 p = np.exp(scores - scores.max())
-                o[q0 + j, h] = (p @ vg[:hi + 1, hkv]) / p.sum()
+                o[q0 + j, h] = (p @ vg[lo:hi + 1, hkv]) / p.sum()
     return o
 
 
 def make_fixture(name, dtype, H, Nkv, D, page_size, num_layers, layer,
-                 segments, seed):
+                 segments, seed, window_size=0):
     """Generates one fixture directory, prints its shape line.
 
     Preconditions:
@@ -184,7 +186,7 @@ def make_fixture(name, dtype, H, Nkv, D, page_size, num_layers, layer,
         widen(qBits, dtype).reshape(num_qo, H, D),
         widen(kBits, dtype), widen(vBits, dtype),
         q_offsets, kv_offsets, indices, [seg[1] for seg in segments],
-        H, Nkv, D, page_size, layer, scale)
+        H, Nkv, D, page_size, layer, scale, window_size)
     oOut = o.astype(np.float32)
 
     qOff = np.asarray(q_offsets, dtype=np.int32)
@@ -211,6 +213,7 @@ def make_fixture(name, dtype, H, Nkv, D, page_size, num_layers, layer,
         "dtype": dtype,
         "num_seqs": num_seqs, "H": H, "Nkv": Nkv, "D": D,
         "page_size": page_size, "num_layers": num_layers, "layer": layer,
+        "window_size": window_size,
         "num_pages": num_pages, "num_qo_tokens": num_qo,
         "num_indices": len(indices),
         "scale": scale,
@@ -247,6 +250,17 @@ FIXTURES = [
     # f32 elements, decode + prefill over GQA, judged at the f32 band
     dict(name="jagged_prefill_f32", dtype="float32", H=8, Nkv=2,
          segments=[(1, 50), (8, 28)], seed=0xC17D4105),
+    # sliding window over prefill, the window crosses a page boundary and is
+    # narrower than the sequences, window not a multiple of the mma tile
+    dict(name="jagged_swa_prefill_f16", dtype="float16", H=8, Nkv=2,
+         segments=[(33, 33), (17, 17)], window_size=20, seed=0xC17D4201),
+    # decode with the cache beyond the window, one sequence trimmed and one
+    # shorter than the window
+    dict(name="jagged_swa_decode_f16", dtype="float16", H=8, Nkv=2,
+         segments=[(1, 70), (1, 40)], window_size=50, seed=0xC17D4202),
+    # f32 elements, sliding window aligned to the mma tile, ragged lengths
+    dict(name="jagged_swa_ragged_f32", dtype="float32", H=8, Nkv=2,
+         segments=[(1, 70), (8, 45)], window_size=32, seed=0xC17D4203),
 ]
 
 

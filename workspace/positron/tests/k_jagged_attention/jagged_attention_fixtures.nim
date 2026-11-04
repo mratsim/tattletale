@@ -31,6 +31,7 @@ type JaggedAttnFixtureMetadata* = object
   dtype*: string          # "float16" | "float32"
   numSeqs*, H*, Nkv*, D*: int
   pageSize*, numLayers*, numPages*, layer*: int
+  windowSize*: int        # 0 = no window
   numQoTokens*, numIndices*: int
   scale*: float32
   qOffsets*, kvOffsets*, kvSeqlens*: seq[int]
@@ -49,6 +50,7 @@ proc parseJaggedAttnMetadata*(fixtureDir: string): JaggedAttnFixtureMetadata =
   result.numLayers = j["num_layers"].getInt()
   result.numPages = j["num_pages"].getInt()
   result.layer = j["layer"].getInt()
+  result.windowSize = j["window_size"].getInt()
   result.numQoTokens = j["num_qo_tokens"].getInt()
   result.numIndices = j["num_indices"].getInt()
   result.scale = j["scale"].getFloat().float32

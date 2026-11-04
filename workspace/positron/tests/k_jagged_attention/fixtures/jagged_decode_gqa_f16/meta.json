@@ -8,6 +8,7 @@
  "page_size": 32,
  "num_layers": 2,
  "layer": 1,
+ "window_size": 0,
  "num_pages": 9,
  "num_qo_tokens": 4,
  "num_indices": 9,
