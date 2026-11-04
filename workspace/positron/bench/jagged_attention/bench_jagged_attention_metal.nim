@@ -34,8 +34,10 @@ else:
   type Elem = float32
 
 const
-  ## Tile shape of the bench kernel, page_size = the mma tile
-  benchTile = 32
+  ## Tile shape of the bench kernel, measured per dtype on M4 Max like
+  ## the sdpa bench measures its own, page_size stays at the kernel's 32
+  benchMT = 8
+  benchNT = when Elem is float32: 8 else: 16
   benchD = 64
 
 proc jaggedBenchLoop(o, q, kPool, vPool: distinct TensorView,
@@ -44,9 +46,10 @@ proc jaggedBenchLoop(o, q, kPool, vPool: distinct TensorView,
   ## `iters` attention passes in one launch, idempotent stores
   for _ in 0 ..< iters:
     jagged_attn_fwd(o, q, kPool, vPool, qOffsets, kv,
-      scale, layer, H, Nkv, benchTile, benchD,
-      tiledMma(float32, q.T, kPool.T, benchTile, benchTile, benchD),
-      tiledMma(float32, o.T, vPool.T, benchTile, benchTile, benchD))
+      scale, layer, H, Nkv, 32, benchD,
+      false, -2147483648,
+      tiledMma(float32, q.T, kPool.T, benchMT, benchNT, benchD),
+      tiledMma(float32, o.T, vPool.T, benchMT, benchNT, benchD))
 
 proc makeOffsetsTensor(n: int): auto =
   ## One-dimensional int32 host tensor over `n` zeroed elements
@@ -84,14 +87,14 @@ proc runCase(engine: MetalEngine, kvLen: int, numSeqs: int, iters: int) =
   const
     H = 32
     Nkv = 8
-    MT = benchTile
-    NT = benchTile
+    MT = benchMT
+    NT = benchNT
   let numQo = kvLen * numSeqs
-  let numPages = (kvLen * numSeqs + benchTile - 1) div benchTile
+  let numPages = (kvLen * numSeqs + 31) div 32
   var
     qHost = makeHostTensor(Elem, (numQo, H, benchD), LayoutRight)
-    kHost = makeHostTensor(Elem, (numPages, 2, benchTile, Nkv, benchD), LayoutRight)
-    vHost = makeHostTensor(Elem, (numPages, 2, benchTile, Nkv, benchD), LayoutRight)
+    kHost = makeHostTensor(Elem, (numPages, 2, 32, Nkv, benchD), LayoutRight)
+    vHost = makeHostTensor(Elem, (numPages, 2, 32, Nkv, benchD), LayoutRight)
     oHost = makeHostTensor(Elem, (numQo, H, benchD), LayoutRight)
     qOffHost = makeOffsetsTensor(numSeqs + 1)
   block:
@@ -104,8 +107,8 @@ proc runCase(engine: MetalEngine, kvLen: int, numSeqs: int, iters: int) =
   var kvHost = new(JaggedKvHost, capacity = numPages)
   for s in 0 ..< numSeqs:
     var pageIds: seq[int32]
-    let firstPage = s * (kvLen div benchTile)
-    for p in 0 ..< (kvLen div benchTile):
+    let firstPage = s * (kvLen div 32)
+    for p in 0 ..< (kvLen div 32):
       pageIds.add(int32(firstPage + p))
     kvHost.addSequence(tokens = kvLen, pageIds = pageIds)
   for s in 0 .. numSeqs:
