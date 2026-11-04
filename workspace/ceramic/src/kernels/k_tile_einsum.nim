@@ -7,12 +7,42 @@
 
 ## Einsum over the tile algebra: index notation inside a device proc body.
 ##
-## The macro parses the statement statically and lowers every operand
-## into a relabeled view with one (size, stride) mode per einsum label,
-## stride-0 size-1 modes for labels that the operand lacks.
+## `einsum` parses the statement statically.
+## Every operand is lowered to a relabeled view:
+## one (size, stride) mode per einsum label,
+## stride-0 size-1 where the operand lacks a label.
 ##
-## The general contraction body addresses threads as threadgroup-flat-id * 32 + lane.
-## Launch it with one lane-width of threads per threadgroup (`blk = (32, 1)`).
+## Routes:
+## - mm shape -> the mma gemm of k_tile_gemm
+## - 1 fully contracted operand -> k_tile_sum's `sum(dst, src)`
+## - everything else -> the general per-thread contraction body, `blk = (32, 1)`
+##
+## Dataflow of the batched contraction `D[b, i, k] = A[b, i, j] * B[b, j, k]`,
+## b=2, i=3, j=4, k=5, strides A (12, 4, 1), B (20, 5, 1), D (15, 5, 1):
+##
+## - Label analysis: output axes (b, i, k), bound label j summed with +=
+## - Free labels (b, i) on A and (b, k) on B share b -> not mm-class, general route
+## - Relabeled views over the canonical label order (b, i, k, j), one (size, stride) mode per label, (1, 0) where the operand lacks it:
+##
+##     aView  shape (2, 3, 1, 4)   stride (12, 4, 0, 1)
+##     bView  shape (2, 1, 5, 4)   stride (20, 0, 1, 5)
+##     dView  shape (2, 3, 5)      stride (15, 5, 1)
+##
+## - General contraction body, one output element per (tile, lane) pair:
+##
+##     ┌────────────────────────────────────────────────────────┐
+##     │ for outFlat in countup(out0, 29, totalThreads):        │
+##     │   (b, i, k) = idx2crd(dView, outFlat)                  │
+##     │   acc = 0                                              │
+##     │   for j in 0 ..< 4:                                    │
+##     │     acc += aView[b, i, 0, j] * bView[b, 0, k, j]       │
+##     │   dst[b, i, k] = acc                                   │
+##     └────────────────────────────────────────────────────────┘
+##
+## - Worked element D[1, 2, 3] = sum over j of A[1, 2, j] * B[1, j, 3]:
+## - aView reads A's linear slots 20+j, bView reads B's linear slots 23+5j
+## - The stride-0 k mode of aView fixes the A read at (b, i, j) across every output k
+## - The stride-0 i mode of bView fixes the B read at (b, j, k) across every output i
 
 import std/[macros, sequtils, strutils, tables]
 import workspace/crucible
@@ -31,7 +61,7 @@ proc mkLet(name, val: NimNode): NimNode =
   nnkLetSection.newTree(nnkIdentDefs.newTree(name, newEmptyNode(), val))
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Static parse: statement -> labels
+#  Statement parsing
 # ═══════════════════════════════════════════════════════════════════════
 
 type EinsumOperand = object
@@ -135,8 +165,7 @@ proc resolveOperands(plan: var EinsumPlan, tensors: NimNode, stmt: NimNode) =
 
 proc checkLabelSizes(plan: EinsumPlan, stmt: NimNode) =
   ## Compile-time contradiction check over the labels whose sizes are static.
-  ## Runtime leaves hide their sizes from the macro, the caller's shapes
-  ## are trusted then
+  ## Runtime leaves hide their sizes from the macro. The caller's shapes are trusted then.
   var known = initTable[string, int]()
   for op in plan.operands:
     for k, l in op.labels:
@@ -163,7 +192,7 @@ proc parseEinsumStmt(tensors, stmt: NimNode): EinsumPlan =
   var s = if stmt.kind == nnkStmtList and stmt.len == 1: stmt[0] else: stmt
   if s.kind == nnkCall and callHeadName(s) == "[]=":
     # generic-context form of `dst[i] = rhs`: the left side's arguments
-    # flatten into the call, the right side is its last argument
+    # flatten into the call and the right side is its last argument
     var lhs = nnkBracketExpr.newTree(s[1])
     for i in 2 ..< s.len - 1:
       lhs.add s[i]
@@ -183,14 +212,14 @@ proc parseEinsumStmt(tensors, stmt: NimNode): EinsumPlan =
   classifyLabels(result, s)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Lowering: relabeled views + kernel class
+#  Lowering to relabeled views
 # ═══════════════════════════════════════════════════════════════════════
 
 proc isMmClass(plan: EinsumPlan): bool =
   ## mm-class routing test: exactly 2 operands sharing exactly one bound label.
   ## Free labels are disjoint across the operands with at least one per operand.
-  ## More than one bound label needs a nested K mode, which the gemm kernel's
-  ## flat K-tile iteration cannot traverse, so those contractions stay general
+  ## More than one bound label needs a nested K mode. The gemm kernel iterates
+  ## K tiles along one axis, so those contractions stay general
   if plan.operands.len != 2 or plan.bound.len != 1:
     return false
   let a = plan.operands[0]
@@ -255,7 +284,7 @@ proc emitMm(plan: EinsumPlan): NimNode =
 
 proc readComponent(plan: EinsumPlan, l: string, outCrd: NimNode, boundVars: seq[NimNode]): NimNode =
   ## Coordinate component of label `l` for an operand read: the output coordinate
-  ## slot of a free label, the bound label's loop variable
+  ## slot of a free label or the bound label's loop variable
   let p = plan.lhsLabels.find(l)
   if p >= 0:
     if plan.lhsLabels.len == 1:
@@ -279,10 +308,11 @@ proc boundEndExpr(plan: EinsumPlan, q: int, viewNodes: seq[NimNode]): NimNode =
 
 proc emitGeneral(plan: EinsumPlan): NimNode =
   ## One general per-thread contraction body:
-  ## - grid-stride over the output's flat size
+  ## - grid-stride over the output's linear size
   ## - per element, a serial product over the bound labels accumulates
   ##   into `acc`
   ## - one overwrite writes the output slot
+  ## - launch with one lane-width of threads per threadgroup, `blk = (32, 1)`
   let canonical = plan.lhsLabels & plan.bound
   var boundVars: seq[NimNode]
   for l in plan.bound:
@@ -347,19 +377,19 @@ proc emitGeneral(plan: EinsumPlan): NimNode =
       `loopBody`
 
 # ═══════════════════════════════════════════════════════════════════════
-#  The macro
+#  Einsum macro
 # ═══════════════════════════════════════════════════════════════════════
 
 macro einsum*(tensors: varargs[typed], stmt: untyped): untyped =
-  ## Einstein summation inside a device proc body over `distinct TensorView` operands
-  ## parsed statically and lowered to relabeled views over the tile algebra.
+  ## Einstein summation inside a device proc body over `distinct TensorView` operands, parsed statically and lowered to relabeled views.
   ##
-  ## Explicit form only, the left side is the caller-provided output view:
+  ## Explicit form only.
+  ## The left side is the caller-provided output view:
   ##
   ##   einsum(A, B):
   ##     D[i, k] = A[i, j] * B[j, k]
   ##
-  ## Left-side indices are never summed, their order is the output axis order.
+  ## Left-side indices are never summed and their order is the output axis order.
   ## Right-side labels absent from the left side are contraction labels, summed with `+=`.
   ##
   ## Constraints:
@@ -370,11 +400,13 @@ macro einsum*(tensors: varargs[typed], stmt: untyped): untyped =
   ## - a static `Int[N]` leaf breaks the generated runtime loops
   ##
   ## Kernel classes:
-  ## - mm shape -> the mma gemm
-  ## - 1 fully contracted operand -> k_tile_sum's `sum(dst, src)`, whose
-  ##   zero-initialized-dst contract applies
-  ## - everything else -> the general per-thread contraction body, which
-  ##   overwrites every output slot it owns. Launch it with `blk = (32, 1)`
+  ##   statement shape              route
+  ##   D[i, k] = A[i, j] * B[j, k]  the mma gemm
+  ##   S = A[i, j]                  k_tile_sum's `sum(dst, src)`, dst starts 0,
+  ##                                atomic accumulation
+  ##   anything else                the general per-thread contraction body,
+  ##                                every output slot overwritten,
+  ##                                launched with `blk = (32, 1)`
   let plan = parseEinsumStmt(tensors, stmt)
   if plan.lhsLabels.len == 0 and plan.operands.len == 1:
     result = emitSumTotal(plan)
