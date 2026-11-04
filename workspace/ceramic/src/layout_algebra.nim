@@ -66,7 +66,7 @@ export layout_indexing.crd2idx
 export layout_indexing.crd2idxImpl
 export layout_indexing.idx2crd
 export layout_indexing.inBounds
-export layout_indexing.hasUnderscore
+export layout_indexing.isSubview
 export layout_indexing.`()`
 export layout_indexing_slicedice.X
 export layout_indexing_slicedice.Y

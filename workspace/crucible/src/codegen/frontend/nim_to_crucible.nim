@@ -360,6 +360,19 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
                    elif callee.kind in {nnkOpenSymChoice, nnkClosedSymChoice} and callee.len > 0:
                      callee[0].strVal
                    else: ""
+  if magic == "DotDot":
+    # an `a .. b` call lowers into the HSlice construction with the bounds in the fields a and b
+    let lo = ctx.lowerExpr(call[1])
+    if ctx.resolver.err.len > 0:
+      return nil
+    let hi = ctx.lowerExpr(call[2])
+    if ctx.resolver.err.len > 0:
+      return nil
+    let typ = ctx.resolver.resolveStructType(call.getTypeInst(),
+        initTable[string, AddressSpace]())
+    if ctx.resolver.err.len > 0:
+      return nil
+    return oconstrE(typ, kv("a", lo), kv("b", hi))
   if magic == "Slice" and targetName == "toOpenArray":
     # a `toOpenArray(base, first, last)` call lowers into the span construction
     # for the span split pass, the span type comes from the base pointer's
@@ -396,6 +409,16 @@ proc lowerCallValue(ctx: var FrontendCtx, callee: NimNode, call: NimNode): CirEx
       return nil
     let opType = getExprType(args[0])
     return arithExpr(NimGpuNumericBuiltinsOps[magic], opType, args[0], args[1])
+  if magic in NimGpuNumericBuiltinsUnaryOps:
+    # a `pred(x, step)` call lowers to `x - step`,
+    # a `succ(x, step)` call to `x + step`
+    # `step` has default value 1
+    let args = ctx.lowerCallArgs(callee, call)
+    if ctx.resolver.err.len > 0:
+      return nil
+    let opType = getExprType(args[0])
+    let step = if args.len > 1: args[1] else: intLit(1, opType)
+    return arithExpr(NimGpuNumericBuiltinsUnaryOps[magic], opType, args[0], step)
   let calleeSym = resolveCallCallee(callee)
   # `abs` over scalars lowers as a builtin call, printers use the native name.
   # Only `abs` intercepts: system `abs` over floats has a refused body.
@@ -712,6 +735,9 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
     return dotE(base, sanitizeIdent(n[1].strVal))
   of nnkInfix:
     let op = n[0].strVal
+    if op == "..":
+      # Range operator lowering: an HSlice construction over the magic call, bounds as operands
+      return ctx.lowerCallValue(n[0], n)
     case op
     of "+", "-", "*", "div", "mod", "shl", "shr", "/", "and", "or", "xor":
       if not (ctx.isBuiltinScalar(n[1]) and ctx.isBuiltinScalar(n[2])):

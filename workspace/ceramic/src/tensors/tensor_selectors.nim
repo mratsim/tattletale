@@ -23,7 +23,7 @@ proc pop(tree: var NimNode): NimNode {.compileTime.} =
 {.experimental: "callOperator".}
 
 # ═════════════════════════════════════════════════════════════════════════
-#  `()` — dual dispatch: all-int → element, has _ → sub-View
+#  `()` — dual dispatch: all-int → element, `_` or `a ..< b` → sub-View
 # ═════════════════════════════════════════════════════════════════════════
 
 template tensorSubViewImpl(dataBase: untyped, layout: Layout, coords: varargs[untyped]): untyped =
@@ -35,7 +35,7 @@ template tensorSubViewImpl(dataBase: untyped, layout: Layout, coords: varargs[un
   make_view(dataBase +% toInt(crd2idx(layout, varargs_to_par(coords))), slice(layout, varargs_to_par(coords)))
 
 template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
-  when hasUnderscore(args):
+  when isSubview(args):
     tensorSubViewImpl(t.data[0].addr, t.getLayout(), args)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
@@ -45,7 +45,7 @@ template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
     t.data[toInt crd2idx(t.getLayout(), varargs_to_par(args))]
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
-  when hasUnderscore(args):
+  when isSubview(args):
     tensorSubViewImpl(tv.data, tv.getLayout(), args)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
@@ -59,12 +59,12 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
 # ═════════════════════════════════════════════════════════════════════════
 
 template `[]`*(t: TensorOwned; args: varargs[untyped]): untyped =
-  when hasUnderscore(varargs_to_par(args)):
+  when isSubview(varargs_to_par(args)):
     {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
   t.data[toInt crd2idx(t.getLayout(), varargs_to_par(args))]
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
-  when hasUnderscore(varargs_to_par(args)):
+  when isSubview(varargs_to_par(args)):
     {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
   tv.data[toInt crd2idx(tv.getLayout(), varargs_to_par(args))]
 
@@ -73,7 +73,7 @@ macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
   let val = pop(a)
   let coord = getAST(varargs_to_par(a))
   result = quote do:
-    when hasUnderscore(`coord`):
+    when isSubview(`coord`):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
     else:
       `t`.data[toInt crd2idx(`t`.getLayout(), `coord`)] = `val`
@@ -83,7 +83,7 @@ macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
   let val = pop(a)
   let coord = getAST(varargs_to_par(a))
   result = quote do:
-    when hasUnderscore(`coord`):
+    when isSubview(`coord`):
       {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
     else:
       `tv`.data[toInt crd2idx(`tv`.getLayout(), `coord`)] = `val`
