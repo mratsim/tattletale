@@ -6,7 +6,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/wip --nimcache:nimcache/c17d42 \
-##     workspace/crucible/tests/codegen/metal/device/t_minimal_red_launch.nim
+##     workspace/crucible/tests/codegen/metal/device/t_metal_launch_output_alias.nim
 
 import workspace/crucible
 

@@ -294,7 +294,7 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
     launchDescriptorRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)
 
 proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
-                        output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
+                        output: auto, args: tuple, cfg: LaunchConfig, squadron: Dim3) =
   var dctx = SerializationCtx(vctx: engine.ctx)
   bindArgs(dctx, output, args, store, VulkanBuffer, cgGlsl)
   let pushConstLen = dctx.pn
@@ -332,7 +332,7 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[
                  pushConstLen)
 
 proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
-                           output: auto, args: var tuple, cfg: LaunchConfig, squadron: Dim3) =
+                           output: auto, args: tuple, cfg: LaunchConfig, squadron: Dim3) =
   var bufs: seq[VulkanBuffer]
   template collectBuffer(ctx: var auto, v: VulkanBuffer, argIdx: int) =
     bufs.add v
