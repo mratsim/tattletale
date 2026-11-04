@@ -1,0 +1,52 @@
+{
+ "name": "contraction_batched_rm",
+ "recipe": "contraction_batched",
+ "dtype": "float32",
+ "stmt": "D[b,i,k] = A[b,i,j] * B[b,j,k]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    2,
+    3,
+    4
+   ],
+   "strides": [
+    12,
+    4,
+    1
+   ]
+  },
+  {
+   "file": "b.bin",
+   "shape": [
+    2,
+    4,
+    5
+   ],
+   "strides": [
+    20,
+    5,
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   2,
+   3,
+   5
+  ],
+  "strides": [
+   15,
+   5,
+   1
+  ]
+ },
+ "checksum": 2170461114,
+ "xorhash_checksums": {
+  "a.bin": 2155716039,
+  "b.bin": 2267999484,
+  "o.bin": 2170461114
+ }
+}

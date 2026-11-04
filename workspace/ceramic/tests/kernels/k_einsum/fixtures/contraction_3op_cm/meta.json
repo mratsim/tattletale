@@ -1,0 +1,58 @@
+{
+ "name": "contraction_3op_cm",
+ "recipe": "contraction_3op",
+ "dtype": "float32",
+ "stmt": "D[a,b] = A[a,b,c] * B[c] * C[b,c]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    2,
+    3,
+    4
+   ],
+   "strides": [
+    1,
+    2,
+    6
+   ]
+  },
+  {
+   "file": "b.bin",
+   "shape": [
+    4
+   ],
+   "strides": [
+    1
+   ]
+  },
+  {
+   "file": "c.bin",
+   "shape": [
+    3,
+    4
+   ],
+   "strides": [
+    4,
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   2,
+   3
+  ],
+  "strides": [
+   3,
+   1
+  ]
+ },
+ "checksum": 2153026476,
+ "xorhash_checksums": {
+  "a.bin": 2060754314,
+  "b.bin": 35710486,
+  "c.bin": 2046389865,
+  "o.bin": 2153026476
+ }
+}

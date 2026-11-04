@@ -1,0 +1,46 @@
+{
+ "name": "mm_rm",
+ "recipe": "mm",
+ "dtype": "float32",
+ "stmt": "D[i,k] = A[i,j] * B[j,k]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    3,
+    4
+   ],
+   "strides": [
+    4,
+    1
+   ]
+  },
+  {
+   "file": "b.bin",
+   "shape": [
+    4,
+    5
+   ],
+   "strides": [
+    5,
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   3,
+   5
+  ],
+  "strides": [
+   5,
+   1
+  ]
+ },
+ "checksum": 1059779715,
+ "xorhash_checksums": {
+  "a.bin": 2098491303,
+  "b.bin": 4271479038,
+  "o.bin": 1059779715
+ }
+}

@@ -1,0 +1,42 @@
+{
+ "name": "dot_rm",
+ "recipe": "dot",
+ "dtype": "float32",
+ "stmt": "d = u[i] * v[i]",
+ "operands": [
+  {
+   "file": "u.bin",
+   "shape": [
+    5
+   ],
+   "strides": [
+    1
+   ]
+  },
+  {
+   "file": "v.bin",
+   "shape": [
+    5
+   ],
+   "strides": [
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   1,
+   1
+  ],
+  "strides": [
+   1,
+   1
+  ]
+ },
+ "checksum": 1079154491,
+ "xorhash_checksums": {
+  "u.bin": 1035964764,
+  "v.bin": 1020614482,
+  "o.bin": 1079154491
+ }
+}

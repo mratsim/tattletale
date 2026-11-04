@@ -1,0 +1,50 @@
+{
+ "name": "contraction_2bound_cm",
+ "recipe": "contraction_2bound",
+ "dtype": "float32",
+ "stmt": "D[i,l] = A[i,j,k] * B[k,j,l]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    2,
+    3,
+    4
+   ],
+   "strides": [
+    12,
+    4,
+    1
+   ]
+  },
+  {
+   "file": "b.bin",
+   "shape": [
+    4,
+    3,
+    5
+   ],
+   "strides": [
+    1,
+    4,
+    12
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   2,
+   5
+  ],
+  "strides": [
+   5,
+   1
+  ]
+ },
+ "checksum": 2142883850,
+ "xorhash_checksums": {
+  "a.bin": 15519151,
+  "b.bin": 2087610294,
+  "o.bin": 2142883850
+ }
+}

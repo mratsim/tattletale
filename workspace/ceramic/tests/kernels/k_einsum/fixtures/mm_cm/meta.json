@@ -1,0 +1,46 @@
+{
+ "name": "mm_cm",
+ "recipe": "mm",
+ "dtype": "float32",
+ "stmt": "D[i,k] = A[i,j] * B[j,k]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    3,
+    4
+   ],
+   "strides": [
+    1,
+    3
+   ]
+  },
+  {
+   "file": "b.bin",
+   "shape": [
+    4,
+    5
+   ],
+   "strides": [
+    5,
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   3,
+   5
+  ],
+  "strides": [
+   5,
+   1
+  ]
+ },
+ "checksum": 3195774084,
+ "xorhash_checksums": {
+  "a.bin": 2254861534,
+  "b.bin": 2176150909,
+  "o.bin": 3195774084
+ }
+}

@@ -1,0 +1,32 @@
+{
+ "name": "sum_col_rm",
+ "recipe": "sum_col",
+ "dtype": "float32",
+ "stmt": "D[j] = A[i,j]",
+ "operands": [
+  {
+   "file": "a.bin",
+   "shape": [
+    3,
+    4
+   ],
+   "strides": [
+    4,
+    1
+   ]
+  }
+ ],
+ "out": {
+  "shape": [
+   4
+  ],
+  "strides": [
+   1
+  ]
+ },
+ "checksum": 2148556357,
+ "xorhash_checksums": {
+  "a.bin": 2083215385,
+  "o.bin": 2148556357
+ }
+}
