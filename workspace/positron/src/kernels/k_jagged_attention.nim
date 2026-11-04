@@ -141,16 +141,18 @@ proc jagged_attn_fwd*(
   ##
   ##   q (mt, D) ──┐
   ##               ▼
-  ##   K (D, nt) ──► [ S = q·Kᵀ ] ──× q_mul ──► [ band mask ] ──► [ m ← max(m, S) ]
-  ##                                                            │      │
-  ##   P̃ = exp2(S − m) ◄───────────────────────────────────────┘      ▼
-  ##        │                               rescale = exp2(m_prev − m)
-  ##        │             ┌──────────────────────────────────────────────┐
-  ##        │             │  l ← l·rescale + tokensum(P̃)                │
-  ##   V (nt, D) ──► [ O ← O·rescale + P̃·V (fp32) ]                   │
-  ##                └───────────────┬────────────────────────────────────┘
-  ##                                ▼
-  ##                 o (mt, D) = O / l, element-dtype store
+  ##   K (D, nt) ──► [ S = q·Kᵀ (fp32) ]──× q_mul──► [ band mask ]──► [ m ← max(m, S) ]
+  ##                                                                      │        │
+  ##   P̃ = exp2(S − m) ◄──────────────────────────────────────────────────┘        ▼
+  ##         │                                                        rescale = exp2(m_prev − m)
+  ##         │            ┌─────────────────────────────────────────────────────────┐
+  ##         └───────────►│  l ← l·rescale + tokensum(P̃)                            │
+  ##                      │                                                         │
+  ##   V (nt, D) ────────►│  O ← O·rescale + P̃·V (fp32)                             │
+  ##                      └────────────────────────────┬────────────────────────────┘
+  ##                                                   │  per KV block
+  ##                                                   ▼
+  ##                                o (mt, D) = O / l, element-dtype store
   ##
   ## Output:
   ##
@@ -182,17 +184,11 @@ proc jagged_attn_fwd*(
     segId = threadgroup_position_in_grid.z
     thrID = getLocalThreadID()
 
-  # Metadata: q token ranges from the launch bridge, KV walks through the descriptor's pointers.
+  let qOffsets = cast[ptr UncheckedArray[int32]](q_offsets.data)
   let
-    qOffsets = cast[ptr UncheckedArray[int32]](q_offsets.data)
-    kvOffsets = kv.offsets
-    kvIndices = kv.indices
-    kvSeqlens = kv.seqlens
-
-  let
-    q0 = int(qOffsets[segId])
-    qLen = int(qOffsets[segId + 1]) - q0
-    kvLen = int(kvSeqlens[segId])
+    q0: int = qOffsets[segId]
+    qLen = qOffsets[segId + 1] - q0
+    kvLen: int = kv.seqlens[segId]
     # decode (q_len = 1) attends cached tokens only, prefill (q_len >= 2)
     # also attends the new tokens, one token more per q token
     decodeAdj = (if qLen == 1: 1 else: 0)
@@ -210,10 +206,9 @@ proc jagged_attn_fwd*(
     kvBlocks = (if pageBlocks < lastAttBlock: pageBlocks else: lastAttBlock)
     kvHead = head div (H div Nkv)
 
-  # Per-head q/o tokens: the token range [q0, q0 + qLen) of the packed
-  # (num_qo_tokens, H, D) tensors, head dim contiguous. Loads past qLen pad
-  # with zero and stores past qLen drop, so a q block shorter than mt never
-  # reads the next segment's tokens nor writes beyond the segment's tokens.
+  # Per-head q/o tokens: [q0, q0 + qLen) of the packed
+  # (num_qo_tokens, H, D) tensors, loads past qLen pad with zero,
+  # stores past qLen drop.
   let
     segQ = q(q0 ..< q0 + qLen, head, _)
     segO = o(q0 ..< q0 + qLen, head, _)
@@ -233,12 +228,12 @@ proc jagged_attn_fwd*(
     regCrd = qkMap.layout.slice(((thrCrd, _), _))
     crdBase = qkMap.layout.crd2idx(((thrCrd, _), _))
 
-  for kv in 0 ..< kvBlocks:
+  for kvBlk in 0 ..< kvBlocks:
     let
-      kvPos = kv * nt
+      kvPos = kvBlk * nt
       pageIdx = kvPos div page_size
       inPage = kvPos - pageIdx * page_size
-      pageId = int(kvIndices[int(kvOffsets[segId]) + pageIdx])
+      pageId: int = kv.indices[kv.offsets[segId] + pageIdx]
       # Bounds at the covered tokens: a 0·NaN from the garbage tail would poison the P·V mma.
       covered = min(nt, kvLen - kvPos)
       # K subview: (covered, D) over the token stride
