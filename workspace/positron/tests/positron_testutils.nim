@@ -53,6 +53,23 @@ proc `=destroy`(o: var JaggedKvHost) =
 proc `=copy`(dst: var JaggedKvHost, src: JaggedKvHost) {.
     error: "JaggedKvHost owns its metadata and is move-only".}
 
+type JaggedKvBridge[DM] = object
+  ## Launch argument for JaggedKv: one buffer binding per metadata array, batchSize packs as a scalar.
+  offsets*, indices*, seqlens*: DM
+  batchSize*: int
+
+proc bridge*[E: HwEngine](engine: E, kv: var JaggedKvHost): auto =
+  ## Bridges the host metadata to device buffers behind one JaggedKv descriptor.
+  let
+    offDev = engine.allocDevice(int32, kv.capacity + 1)
+    idxDev = engine.allocDevice(int32, kv.capacity)
+    seqDev = engine.allocDevice(int32, kv.capacity)
+  engine.copyToDeviceFromHost(offDev, kv.offsets, kv.capacity + 1)
+  engine.copyToDeviceFromHost(idxDev, kv.indices, kv.capacity)
+  engine.copyToDeviceFromHost(seqDev, kv.seqlens, kv.capacity)
+  JaggedKvBridge[typeof(offDev)](offsets: offDev, indices: idxDev, seqlens: seqDev,
+                                 batchSize: kv.batchSize)
+
 proc new*(t: typedesc[JaggedKvHost], capacity: int): JaggedKvHost =
   ## Allocates offsets, indices and seqlens of `capacity` sequences, zero-filled, owned.
   ## offsets has capacity + 1 entries:

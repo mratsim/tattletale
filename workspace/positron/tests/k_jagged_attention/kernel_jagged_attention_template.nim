@@ -56,23 +56,6 @@ const
   PadTokens = 2
   ## zero sentinel tokens after the logical output, written entries there fail the replay
 
-type JaggedKvBridge[DM] = object
-  ## Launch argument for JaggedKv: one buffer binding per metadata array, batchSize packs as a scalar.
-  offsets*, indices*, seqlens*: DM
-  batchSize*: int
-
-proc bridge*[E: HwEngine](engine: E, kv: var JaggedKvHost): auto =
-  ## Bridges the host metadata to device buffers behind one JaggedKv descriptor.
-  let
-    offDev = engine.allocDevice(int32, kv.capacity + 1)
-    idxDev = engine.allocDevice(int32, kv.capacity)
-    seqDev = engine.allocDevice(int32, kv.capacity)
-  engine.copyToDeviceFromHost(offDev, kv.offsets, kv.capacity + 1)
-  engine.copyToDeviceFromHost(idxDev, kv.indices, kv.capacity)
-  engine.copyToDeviceFromHost(seqDev, kv.seqlens, kv.capacity)
-  JaggedKvBridge[typeof(offDev)](offsets: offDev, indices: idxDev, seqlens: seqDev,
-                                 batchSize: kv.batchSize)
-
 proc jaggedAttnCombo*(o, q, kPool, vPool: distinct TensorView,
                       qOffsets: distinct TensorView,
                       kv: JaggedKv,
