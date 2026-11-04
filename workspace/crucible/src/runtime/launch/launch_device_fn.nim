@@ -58,13 +58,6 @@ func base58(h: int): string =
     x = x div 58
 
 macro bridge(engine: HwEngine, lang: static string, node: untyped): untyped =
-  ## Defers the generated global function generation into a `device` environment:
-  ##
-  ## - functions depending on `ccGetBackend` resolve the target backend,
-  ##   never the CPU host
-  ##
-  ## On VulkanEngine `lang` picks the ingestion language: SPIR-V words
-  ## (default), GLSL through glslangValidator or HLSL through dxc.
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
@@ -126,8 +119,6 @@ func assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
       getElemType(formal).repr & ", the DeviceMem argument holds " & vtype[2].repr)
 
 func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
-  ## DeviceMem fields of the value's type: a top-level DeviceMem yields
-  ## the value itself with an empty name
   let t = v.getTypeInst()
   if isDeviceMemType(t):
     result.add((name: "", t: t))
@@ -151,7 +142,6 @@ func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
     discard
 
 func hashNode(n: NimNode): Hash =
-  ## Structural hash of an AST node: kind, leaves by value, children by shape
   result = hash(n.kind)
   case n.kind
   of nnkIdent, nnkSym:
@@ -277,11 +267,7 @@ func getWorkgroupPragma(blkN: NimNode): NimNode =
   nnkExprColonExpr.newTree(ident"workgroup", size)
 
 macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, lang: static string, values: varargs[typed]): untyped =
-  ## Builds the `{.global.}` proc for the kernel, ingests its lowered source
-  ## when it differs and launches it: the first value is the output.
-  ## On VulkanEngine `lang` routes the bridge, SPIR-V words by default or GLSL/HLSL text otherwise.
-  ## Words compare through getSpirV and text compares through getArtifact.
-  ## The engine sniffs the printed text to its compile+ingest path.
+  ## Builds and launches the `{.global.}` kernel: the first value is the output.
   let procdef = buildGlobalFn(kernel, statics, values)
   let wg = getWorkgroupPragma(blkN)
   if not wg.isNil:
@@ -297,9 +283,8 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
   for i in 1 ..< values.len:
     argsN.add(values[i])
   let langLit = newLit(lang)
-  # words compare on VulkanEngine only, with text routes going through getArtifact
-  let wordsRoute = sameType(engine.getTypeInst(), bindSym"VulkanEngine") and lang == "spirv"
-  let ingestN = if wordsRoute:
+  let ingestSpirvWords = sameType(engine.getTypeInst(), bindSym"VulkanEngine") and lang == "spirv"
+  let ingestN = if ingestSpirvWords:
     quote do:
       if `engine`.getSpirV() != `bridgeSource`:
         `engine`.ingest(`bridgeSource`)
@@ -311,8 +296,7 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
     block:
       const `bridgeSource` = `bridgeN`(`engine`, `langLit`, `procdef`)
       `ingestN`
-      var argsVal = `argsN`
-      `engine`.launchKernelImpl(`kname`, `outputN`, argsVal,
+      `engine`.launchKernelImpl(`kname`, `outputN`, `argsN`,
         LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`))
 
 func countFormals(candFormals: NimNode): tuple[total, required: int] =
