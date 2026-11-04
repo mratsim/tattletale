@@ -1,0 +1,43 @@
+{
+ "name": "jagged_prefill_gqa_f16",
+ "dtype": "float16",
+ "num_seqs": 3,
+ "H": 8,
+ "Nkv": 2,
+ "D": 64,
+ "page_size": 32,
+ "num_layers": 2,
+ "layer": 1,
+ "num_pages": 6,
+ "num_qo_tokens": 15,
+ "num_indices": 6,
+ "scale": 0.125,
+ "q_offsets": [
+  0,
+  1,
+  6,
+  15
+ ],
+ "kv_offsets": [
+  0,
+  1,
+  3,
+  6
+ ],
+ "kv_seqlens": [
+  1,
+  35,
+  79
+ ],
+ "seed": 3246211330,
+ "xorhash_checksums": {
+  "q.bin": 60371,
+  "k.bin": 44424,
+  "v.bin": 31754,
+  "o.bin": 261477740,
+  "q_offsets.bin": 8,
+  "kv_offsets.bin": 4,
+  "kv_indices.bin": 1,
+  "kv_seqlens.bin": 109
+ }
+}

@@ -1,0 +1,40 @@
+{
+ "name": "jagged_dense_degenerate_f16",
+ "dtype": "float16",
+ "num_seqs": 2,
+ "H": 8,
+ "Nkv": 4,
+ "D": 64,
+ "page_size": 32,
+ "num_layers": 2,
+ "layer": 1,
+ "num_pages": 3,
+ "num_qo_tokens": 6,
+ "num_indices": 3,
+ "scale": 0.125,
+ "q_offsets": [
+  0,
+  4,
+  6
+ ],
+ "kv_offsets": [
+  0,
+  2,
+  3
+ ],
+ "kv_seqlens": [
+  36,
+  5
+ ],
+ "seed": 3246211332,
+ "xorhash_checksums": {
+  "q.bin": 24148,
+  "k.bin": 16600,
+  "v.bin": 11651,
+  "o.bin": 34510886,
+  "q_offsets.bin": 2,
+  "kv_offsets.bin": 1,
+  "kv_indices.bin": 3,
+  "kv_seqlens.bin": 33
+ }
+}
