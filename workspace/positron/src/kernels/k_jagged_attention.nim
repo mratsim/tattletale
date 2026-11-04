@@ -35,6 +35,7 @@
 ## - decode (q_len == 1): causal off with the query attending the KV tokens `[0, kv_len)`
 ## - prefill (q_len >= 2): causal on over `[0, kv_len)`, query token j
 ##   attends keys `[0, kv_len − q_len + j]`, flash-attn varlen semantics
+## - causal = false: every query attends the KV tokens `[0, kv_len)`, decode unchanged
 ## - grouped-query attention (GQA): kv_head = q_head div (H div Nkv)
 ##
 ## Buffers, element dtype first then int32 tables then scalars:
@@ -118,6 +119,7 @@ proc jagged_attn_fwd*(
     scale: float32, layer, H, Nkv: int,
     page_size, D: static int,
     windowed: static bool = false, windowSize: int = low(int32),
+    causal: static bool = true,
     mmaQK: static TiledMma) =
   ## Launch dims: (q token blocks, H, num_seqs), 32 lanes.
   ##
@@ -226,8 +228,11 @@ proc jagged_attn_fwd*(
       acc = zeros(tile(float32, pvCLayout))       # (mt × D) accumulator
     let
       q0Local = qBlock * mt
-      lastKey = (if cachedLen + q0Local + (mt - 1) < totalK - 1:
-                   cachedLen + q0Local + (mt - 1)
+      lastKey = (when causal:
+                   (if cachedLen + q0Local + (mt - 1) < totalK - 1:
+                      cachedLen + q0Local + (mt - 1)
+                    else:
+                      totalK - 1)
                  else:
                    totalK - 1)
       lastAttBlock = lastKey div nt + 1
@@ -261,7 +266,14 @@ proc jagged_attn_fwd*(
       qk *= qMul                                 # scale, before the band cut
 
       qk.applyAttentionMask(qkCLayout, qkMap, thrID, q0Local, kvPos):
-        kPos > bandBase + qPos or
+        # non-causal cut bounds at the segment's covered tokens.
+        # - the last KV tile zero-pads past kvLen
+        # - its padded entries would enter the softmax denominator
+        #   unmasked (score 0, V 0, weight exp2(-m) > 0)
+        (when causal:
+           kPos > bandBase + qPos
+         else:
+           kPos > totalK - 1) or
         (when windowed:
            kPos < bandBase + qPos - windowSize + 1
          else:
@@ -289,3 +301,65 @@ proc jagged_attn_fwd*(
 
     acc /.= lI                                   # (mt × D) /.= (mt × 1)
     segO.store(acc.downcast(o.T), oMap, thrID, (qBlock, 0))
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Paged KV append
+# ═══════════════════════════════════════════════════════════════════════
+
+
+proc jagged_kv_append*(
+    pool, new_kv: distinct TensorView,
+    q_offsets: distinct TensorView,
+    kv: JaggedKv,
+    layer, Nkv: int,
+    page_size, D: static int) =
+  ## Appends the new K/V entries into one pool, the exllamav3 paged
+  ## cache update on the jagged metadata
+  ## (attention.cu's `kv_cache_update_kernel_paged`).
+  ##
+  ## - one copy per (appended token, kv head), with no arithmetic
+  ## - element bits pass through unmodified
+  ## - the K and V pools append through two launches, one per pool.
+  ##   The launch surface reads back one buffer per launch
+  ##
+  ## Shapes:
+  ##
+  ## - pool: (num_pages, num_layers, page_size, Nkv, D).
+  ##   The attention kernel reads this pool
+  ## - new_kv: (num_append_tokens, Nkv, D), the appended entries packed
+  ##   across segments in q_offsets order
+  ## - q_offsets: (num_seqs+1), segment s appends the entries
+  ##   `q_offsets[s] ..< q_offsets[s+1]`. Prefill appends its q tokens,
+  ##   decode appends the single new token
+  ##
+  ## Ordering contract:
+  ##
+  ## - kv.seqlens has the post-append totals the attention kernel reads,
+  ##   so segment s's append starts at `kv.seqlens[s] - q_len`.
+  ##   The caller updates seqlens before the launch
+  ## - exllamav3's pre-append `cache_seqlens` plus its uniform
+  ##   `kv_append_len` names the same positions
+  ##
+  ## Launch dims: (max q_len, Nkv, num_seqs), 32 lanes.
+  ## Grid x past a segment's q_len exits.
+  let
+    appendT = threadgroup_position_in_grid.x
+    kvHead = threadgroup_position_in_grid.y
+    segId = threadgroup_position_in_grid.z
+    thrID = getLocalThreadID()
+  let
+    q0: int = q_offsets.data[segId]
+    qLen = q_offsets.data[segId + 1] - q0
+  if appendT < qLen:
+    let
+      # logical points right below the post-append total kv.seqlens has
+      logical = kv.seqlens[segId] - qLen + appendT
+      pageIdx = logical div page_size
+      inPage = logical - pageIdx * page_size
+      pageId: int = kv.indices[kv.offsets[segId] + pageIdx]
+      srcEntry = q0 + appendT
+      # one pool token entry, the head dim contiguous per the pool layout contract
+      dst = pool(pageId, layer, inPage, kvHead, _)
+    for d in countup(thrID, D - 1, 32):
+      dst.data[d] = new_kv.data[(srcEntry * Nkv + kvHead) * D + d]
+

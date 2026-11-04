@@ -28,6 +28,9 @@ reproducing the semantics of the v1 kernel at workspace/positron/src/kernels/cer
   from the kernel's exp2 shape exp2((s - m) * log2(e)) with q_mul = scale * log2(e) folded into q
 - expected o is recorded once as float32 bits with the f64 result rounded round-to-nearest-even
 
+causal=False records the non-causal regime, every query attends
+all kv_len keys, decode segments attend the same range either way.
+
 Pool garbage: every pool entry outside the union of the segments' covered
 token positions at the attended layer is NaN. The reference gathers only
 attended tokens so the recorded output is finite, and a kernel that reads
@@ -88,7 +91,7 @@ def widen(bits, dtype):
 
 def jagged_attention_reference(q, k, v, q_offsets, kv_offsets, kv_indices,
                                kv_seqlens, H, Nkv, D, page_size, layer, scale,
-                               window_size=0):
+                               window_size=0, causal=True):
     """float64 reference over the exact widened element values.
 
     Shapes:
@@ -117,7 +120,7 @@ def jagged_attention_reference(q, k, v, q_offsets, kv_offsets, kv_indices,
         for h in range(H):
             hkv = h // (H // Nkv)
             for j in range(q_len):
-                hi = kv_len - 1 if q_len == 1 else kv_len - q_len + j
+                hi = kv_len - 1 if (q_len == 1 or not causal) else kv_len - q_len + j
                 lo = max(0, hi - window_size + 1) if window_size else 0
                 scores = (kg[lo:hi + 1, hkv] @ q[q0 + j, h]) * scale
                 p = np.exp(scores - scores.max())
@@ -126,13 +129,14 @@ def jagged_attention_reference(q, k, v, q_offsets, kv_offsets, kv_indices,
 
 
 def make_fixture(name, dtype, H, Nkv, D, page_size, num_layers, layer,
-                 segments, seed, window_size=0):
+                 segments, seed, window_size=0, causal=True):
     """Generates one fixture directory, prints its shape line.
 
     Preconditions:
     - H is a multiple of Nkv (GQA head mapping)
     - segments: one (q_len, kv_len) pair per segment or (q_len, kv_len, pages) with an explicit page-id list for shared pages
     - page ids are assigned sequentially across segments unless explicit
+    - causal=False records the non-causal reference (every query attends all kv_len keys)
     """
     assert H % Nkv == 0, f"{name}: H {H} is not a multiple of Nkv {Nkv}"
     assert D == 64 and page_size == 32 and num_layers == 2, \
@@ -186,7 +190,7 @@ def make_fixture(name, dtype, H, Nkv, D, page_size, num_layers, layer,
         widen(qBits, dtype).reshape(num_qo, H, D),
         widen(kBits, dtype), widen(vBits, dtype),
         q_offsets, kv_offsets, indices, [seg[1] for seg in segments],
-        H, Nkv, D, page_size, layer, scale, window_size)
+        H, Nkv, D, page_size, layer, scale, window_size, causal)
     oOut = o.astype(np.float32)
 
     qOff = np.asarray(q_offsets, dtype=np.int32)
@@ -214,6 +218,7 @@ def make_fixture(name, dtype, H, Nkv, D, page_size, num_layers, layer,
         "num_seqs": num_seqs, "H": H, "Nkv": Nkv, "D": D,
         "page_size": page_size, "num_layers": num_layers, "layer": layer,
         "window_size": window_size,
+        "causal": causal,
         "num_pages": num_pages, "num_qo_tokens": num_qo,
         "num_indices": len(indices),
         "scale": scale,
@@ -261,6 +266,13 @@ FIXTURES = [
     # f32 elements, sliding window aligned to the mma tile, ragged lengths
     dict(name="jagged_swa_ragged_f32", dtype="float32", H=8, Nkv=2,
          segments=[(1, 70), (8, 45)], window_size=32, seed=0xC17D4203),
+    # non-causal regime, mixed decode and prefill segments, every query attends
+    # all keys (the decode segment is the causal-equivalent special case)
+    dict(name="jagged_noncausal_f16", dtype="float16", H=8, Nkv=2,
+         segments=[(1, 20), (4, 33), (9, 45)], causal=False, seed=0xC17D4301),
+    # non-causal regime at f32 elements, the f32 instantiation of the mask branch
+    dict(name="jagged_noncausal_f32", dtype="float32", H=8, Nkv=2,
+         segments=[(1, 20), (4, 33), (9, 45)], causal=False, seed=0xC17D4302),
 ]
 
 

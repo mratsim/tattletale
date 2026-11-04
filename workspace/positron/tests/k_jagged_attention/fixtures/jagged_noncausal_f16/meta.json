@@ -1,0 +1,45 @@
+{
+ "name": "jagged_noncausal_f16",
+ "dtype": "float16",
+ "num_seqs": 3,
+ "H": 8,
+ "Nkv": 2,
+ "D": 64,
+ "page_size": 32,
+ "num_layers": 2,
+ "layer": 1,
+ "window_size": 0,
+ "causal": false,
+ "num_pages": 5,
+ "num_qo_tokens": 14,
+ "num_indices": 5,
+ "scale": 0.125,
+ "q_offsets": [
+  0,
+  1,
+  5,
+  14
+ ],
+ "kv_offsets": [
+  0,
+  1,
+  3,
+  5
+ ],
+ "kv_seqlens": [
+  20,
+  33,
+  45
+ ],
+ "seed": 3246211841,
+ "xorhash_checksums": {
+  "q.bin": 13266,
+  "k.bin": 14556,
+  "v.bin": 63349,
+  "o.bin": 238136140,
+  "q_offsets.bin": 10,
+  "kv_offsets.bin": 7,
+  "kv_indices.bin": 4,
+  "kv_seqlens.bin": 24
+ }
+}

@@ -32,6 +32,7 @@ type JaggedAttnFixtureMetadata* = object
   numSeqs*, H*, Nkv*, D*: int
   pageSize*, numLayers*, numPages*, layer*: int
   windowSize*: int        # 0 = no window
+  causal*: bool           # false = the non-causal regime, every query attends all keys
   numQoTokens*, numIndices*: int
   scale*: float32
   qOffsets*, kvOffsets*, kvSeqlens*: seq[int]
@@ -51,6 +52,8 @@ proc parseJaggedAttnMetadata*(fixtureDir: string): JaggedAttnFixtureMetadata =
   result.numPages = j["num_pages"].getInt()
   result.layer = j["layer"].getInt()
   result.windowSize = j["window_size"].getInt()
+  # fixture dirs generated before the non-causal regime carry no causal entry
+  result.causal = if j.hasKey("causal"): j["causal"].getBool() else: true
   result.numQoTokens = j["num_qo_tokens"].getInt()
   result.numIndices = j["num_indices"].getInt()
   result.scale = j["scale"].getFloat().float32

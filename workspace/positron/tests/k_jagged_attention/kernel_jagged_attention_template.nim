@@ -10,7 +10,7 @@
 ## The runtime parts are ordinary procs, one copy total.
 ## Only the runner monomorphizes per element dtype, all in one compile.
 
-import std/[os, strformat]
+import std/[os, random, strformat]
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
@@ -22,6 +22,9 @@ import jagged_attention_fixtures
 
 export tile_algebra, layout_algebra, tensors, int_tuples
 export jagged_attention_fixtures
+# kernel module re-exports to the driver scope: the launch's generated
+# global fn re-emits the callee by name there
+export k_jagged_attention
 
 # ─── Pass bands, stated before measurement ────────────────────────────
 #
@@ -62,8 +65,9 @@ proc jaggedAttnCombo*(o, q, kPool, vPool: distinct TensorView,
                       scale: float32, layer, H, Nkv: int,
                       PageSize, D: static int,
                       windowed: static bool = false,
-                      windowSize: int = -2147483648) =
-  ## Passes the QK mma schedule as the kernel's trailing static.
+                      windowSize: int = -2147483648,
+                      causal: static bool = true) =
+  ## Passes the QK mma schedule and the causal flag as trailing statics.
   ##
   ## Contract:
   ##
@@ -71,7 +75,7 @@ proc jaggedAttnCombo*(o, q, kPool, vPool: distinct TensorView,
   ##   separates the element dtypes
   jagged_attn_fwd(o, q, kPool, vPool, qOffsets, kv,
                   scale, layer, H, Nkv, PageSize, D,
-                  windowed, windowSize,
+                  windowed, windowSize, causal,
                   tiledMma(float32, q.T, kPool.T, JaggedAttnTile, JaggedAttnTile, D))
 
 proc jaggedAttnReplayCase*(engine: MetalEngine, Elem: typedesc, name: string, gridX = 0): seq[uint32] =
@@ -172,20 +176,27 @@ proc jaggedAttnReplayCase*(engine: MetalEngine, Elem: typedesc, name: string, gr
       oDev = engine.bridge(oStage)
       qOffDev = engine.bridge(qOffHost)
       kvB = engine.bridge(kvHost)
-    if meta.windowSize > 0:
-      engine.launchDeviceFn jaggedAttnCombo(
-          oDev, qDev, kDev, vDev, qOffDev, kvB,
-          meta.scale, meta.layer, meta.H, meta.Nkv,
-          JaggedAttnTile, 64, true, meta.windowSize) do:
-        grid = (gridX, meta.H, meta.numSeqs)
-        blk = (32, 1)
+    template launch(causalOn: static bool) =
+      ## One instantiation per causal static, the engine's monomorphization key
+      ## separates the compile-time combinations.
+      if meta.windowSize > 0:
+        engine.launchDeviceFn jaggedAttnCombo(
+            oDev, qDev, kDev, vDev, qOffDev, kvB,
+            meta.scale, meta.layer, meta.H, meta.Nkv,
+            JaggedAttnTile, 64, true, meta.windowSize, causalOn) do:
+          grid = (gridX, meta.H, meta.numSeqs)
+          blk = (32, 1)
+      else:
+        engine.launchDeviceFn jaggedAttnCombo(
+            oDev, qDev, kDev, vDev, qOffDev, kvB,
+            meta.scale, meta.layer, meta.H, meta.Nkv,
+            JaggedAttnTile, 64, false, -2147483648, causalOn) do:
+          grid = (gridX, meta.H, meta.numSeqs)
+          blk = (32, 1)
+    if meta.causal:
+      launch(true)
     else:
-      engine.launchDeviceFn jaggedAttnCombo(
-          oDev, qDev, kDev, vDev, qOffDev, kvB,
-          meta.scale, meta.layer, meta.H, meta.Nkv,
-          JaggedAttnTile, 64) do:
-        grid = (gridX, meta.H, meta.numSeqs)
-        blk = (32, 1)
+      launch(false)
     engine.copyToHostFromDevice(addr oStage.data[0], oDev.data, oStage.len())
     result = newSeq[uint32](oStage.len())
     for i in 0 ..< oStage.len():
@@ -382,3 +393,121 @@ proc jaggedAttnDenseCrossCheck*(engine: MetalEngine, Elem: typedesc, name: strin
     &"dense-vs-jagged band mismatches={djBad} dense-vs-oracle band mismatches={doBad}"
   doAssert djBad == 0 and doBad == 0,
     name & ": the dense reference path disagrees with the jagged kernel or the oracle"
+
+# ─── Jagged KV append: the new K/V rows into the pool pages ───────────
+
+proc jaggedKvAppendCase*(engine: MetalEngine, Elem: typedesc) =
+  ## Appends ragged new K/V entries into a garbage-poisoned pool and judges
+  ## the whole pool bit-exactly against the Nim copy reference.
+  ##
+  ## - three segments with ragged append lengths (1, 4, 9), post-append
+  ##   KV totals (33, 40, 45), two appends crossing a page boundary
+  ## - the pool's append-target slots hold NaN before the launch, so a missed
+  ##   copy fails as a NaN or a stale value, never as a lucky zero
+  ## - the append is a copy, the judgment is bit-exact with no band
+  const
+    NumLayers = 2
+    Layer = 1
+    PageSize = 32
+    D = 64
+    Nkv = 2
+  let
+    qLens = [1, 4, 9]
+    kvTotals = [33, 40, 45]
+    numSeqs = qLens.len
+  var
+    rng = initRand(0xC17D4303'i64)
+    qOffsets = @[0]
+    kvOffsets = @[0]
+    indices: seq[int32]
+    nextPage = 0
+  for s in 0 ..< numSeqs:
+    let pages = (kvTotals[s] + PageSize - 1) div PageSize
+    for p in 0 ..< pages:
+      indices.add int32(nextPage)
+      inc nextPage
+    qOffsets.add qOffsets[^1] + qLens[s]
+    kvOffsets.add kvOffsets[^1] + pages
+  let
+    numPages = nextPage
+    numAppend = qOffsets[^1]
+    maxQLen = max(qLens)
+
+  # append-target slots poison as the canonical NaN bit pattern of Elem
+  let poison = when Elem is float16:
+    cast[float16](0x7E00'u16)
+  else:
+    cast[float32](0x7FC00000'u32)
+
+  proc targetSlot(s, t, kvh, d: int): int =
+    ## Pool flat index of segment s's appended token t at (kvh, d).
+    let logical = kvTotals[s] - qLens[s] + t
+    let page = indices[kvOffsets[s] + logical div PageSize]
+    (((page * NumLayers + Layer) * PageSize + logical mod PageSize) * Nkv + kvh) * D + d
+
+  var
+    poolK = makeHostTensor(Elem, (numPages, NumLayers, PageSize, Nkv, D), LayoutRight)
+    poolV = makeHostTensor(Elem, (numPages, NumLayers, PageSize, Nkv, D), LayoutRight)
+    kNew = makeHostTensor(Elem, (numAppend, Nkv, D), LayoutRight)
+    vNew = makeHostTensor(Elem, (numAppend, Nkv, D), LayoutRight)
+    wantK = makeHostTensor(Elem, (numPages, NumLayers, PageSize, Nkv, D), LayoutRight)
+    wantV = makeHostTensor(Elem, (numPages, NumLayers, PageSize, Nkv, D), LayoutRight)
+  for i in 0 ..< poolK.len():
+    poolK.data[i] = to(rng.rand(1.0'f32 .. 2.0'f32), Elem)
+    poolV.data[i] = to(rng.rand(1.0'f32 .. 2.0'f32), Elem)
+  for i in 0 ..< kNew.len():
+    kNew.data[i] = to(rng.rand(1.0'f32 .. 2.0'f32), Elem)
+    vNew.data[i] = to(rng.rand(1.0'f32 .. 2.0'f32), Elem)
+  copyMem(wantK.data, poolK.data, poolK.len() * sizeof(Elem))
+  copyMem(wantV.data, poolV.data, poolV.len() * sizeof(Elem))
+  for s in 0 ..< numSeqs:
+    for t in 0 ..< qLens[s]:
+      for kvh in 0 ..< Nkv:
+        for d in 0 ..< D:
+          let i = targetSlot(s, t, kvh, d)
+          poolK.data[i] = poison
+          poolV.data[i] = poison
+          when Elem is float16:
+            doAssert cast[uint16](poolK.data[i]) == 0x7E00'u16,
+              "append-target K slot is not NaN before the launch"
+          else:
+            doAssert cast[uint32](poolK.data[i]) == 0x7FC00000'u32,
+              "append-target K slot is not NaN before the launch"
+          wantK.data[i] = kNew.data[((qOffsets[s] + t) * Nkv + kvh) * D + d]
+          wantV.data[i] = vNew.data[((qOffsets[s] + t) * Nkv + kvh) * D + d]
+
+  let qOffLayout = make_layout((qOffsets.len,))
+  var qOffHost = HostTensor[int32, typeof(qOffLayout.shape), typeof(qOffLayout.stride)](
+    data: cast[ptr UncheckedArray[int32]](allocShared(qOffsets.len * sizeof(int32))),
+    offset: 0, layout: qOffLayout)
+  for i in 0 ..< qOffsets.len:
+    qOffHost.data[i] = int32(qOffsets[i])
+
+  var kvHost = new(JaggedKvHost, capacity = indices.len)
+  for s in 0 ..< numSeqs:
+    kvHost.addSequence(tokens = kvTotals[s],
+      pageIds = indices.toOpenArray(kvOffsets[s], kvOffsets[s + 1] - 1))
+
+  # one launch per pool: the launch surface reads back one buffer per launch,
+  # every device buffer bridges fresh per launch
+  template appendAndJudge(poolHost, rowsHost, want: untyped) =
+    let
+      poolDev = engine.bridge(poolHost)
+      rowsDev = engine.bridge(rowsHost)
+      qOffDev = engine.bridge(qOffHost)
+      kvB = engine.bridge(kvHost)
+    engine.launchDeviceFn jagged_kv_append(
+        poolDev, rowsDev, qOffDev, kvB, Layer, Nkv, PageSize, D) do:
+      grid = (maxQLen, Nkv, numSeqs)
+      blk = (32, 1)
+    engine.copyToHostFromDevice(addr poolHost.data[0], poolDev.data, poolHost.len())
+    for i in 0 ..< poolHost.len():
+      when Elem is float16:
+        doAssert cast[uint16](poolHost.data[i]) == cast[uint16](want.data[i]),
+          "appended pool differs from the copy reference at element " & $i
+      else:
+        doAssert cast[uint32](poolHost.data[i]) == cast[uint32](want.data[i]),
+          "appended pool differs from the copy reference at element " & $i
+  appendAndJudge(poolK, kNew, wantK)
+  appendAndJudge(poolV, vNew, wantV)
+  echo "jagged_kv_append ", Elem, ": pools bit-exact over ", 2 * poolK.len(), " elements"

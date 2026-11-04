@@ -36,6 +36,10 @@ proc replayAllJaggedFixtures() =
   fixture("jagged_swa_prefill_f16", float16)
   fixture("jagged_swa_decode_f16", float16)
   fixture("jagged_swa_ragged_f32", float32)
+  fixture("jagged_noncausal_f16", float16)
+  fixture("jagged_noncausal_f32", float32)
+  engine.jaggedKvAppendCase(float16)
+  engine.jaggedKvAppendCase(float32)
   # gridX = 1 launches one workgroup per (head, segment), the grid-stride loop covers every query tile
   discard engine.jaggedAttnReplayCase(float16, "jagged_swa_prefill_f16", gridX = 1)
   echo "all jagged attention fixture replays pass"
