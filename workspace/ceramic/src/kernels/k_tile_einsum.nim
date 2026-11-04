@@ -15,7 +15,7 @@
 ## Routes:
 ## - mm shape -> the mma gemm of k_tile_gemm
 ## - 1 fully contracted operand -> k_tile_sum's `sum(dst, src)`
-## - everything else -> the general per-thread contraction body, `blk = (32, 1)`
+## - everything else -> the general per-thread contraction body
 ##
 ## Dataflow of the batched contraction `D[b, i, k] = A[b, i, j] * B[b, j, k]`,
 ## b=2, i=3, j=4, k=5, strides A (12, 4, 1), B (20, 5, 1), D (15, 5, 1):
@@ -24,25 +24,30 @@
 ## - Free labels (b, i) on A and (b, k) on B share b -> not mm-class, general route
 ## - Relabeled views over the canonical label order (b, i, k, j), one (size, stride) mode per label, (1, 0) where the operand lacks it:
 ##
-##     aView  shape (2, 3, 1, 4)   stride (12, 4, 0, 1)
-##     bView  shape (2, 1, 5, 4)   stride (20, 0, 1, 5)
-##     dView  shape (2, 3, 5)      stride (15, 5, 1)
+##     ┌────────────────────────────────────────────────────────────────────┐
+##     │ aView  shape (2, 3, 1, 4)   stride (12, 4, 0, 1)                   │
+##     │ bView  shape (2, 1, 5, 4)   stride (20, 0, 1, 5)                   │
+##     │ the output D is used directly, shape (2, 3, 5), stride (15, 5, 1)  │
+##     └────────────────────────────────────────────────────────────────────┘
 ##
-## - General contraction body, one output element per (tile, lane) pair:
+## - General contraction body, grid-stride over the output's 30 linear slots:
 ##
 ##     ┌────────────────────────────────────────────────────────┐
 ##     │ for outFlat in countup(out0, 29, totalThreads):        │
-##     │   (b, i, k) = idx2crd(dView, outFlat)                  │
+##     │   (b, i, k) = idx2crd(D.layout.shape, outFlat)         │
 ##     │   acc = 0                                              │
 ##     │   for j in 0 ..< 4:                                    │
-##     │     acc += aView[b, i, 0, j] * bView[b, 0, k, j]       │
-##     │   dst[b, i, k] = acc                                   │
+##     │     acc += aView[b, i, k, j] * bView[b, i, k, j]       │
+##     │   D[b, i, k] = acc                                     │
+##     │                                                        │
+##     │ worked element D[1, 2, 3] = sum over j of              │
+##     │   A[1, 2, j] * B[1, j, 3]:                             │
+##     │   aView[b, i, k, j] at A's linear slot 20+j,           │
+##     │   bView[b, i, k, j] at B's linear slot 23+5j           │
 ##     └────────────────────────────────────────────────────────┘
 ##
-## - Worked element D[1, 2, 3] = sum over j of A[1, 2, j] * B[1, j, 3]:
-## - aView reads A's linear slots 20+j, bView reads B's linear slots 23+5j
-## - The stride-0 k mode of aView fixes the A read at (b, i, j) across every output k
-## - The stride-0 i mode of bView fixes the B read at (b, j, k) across every output i
+## - aView's k mode is size-1 stride-0, every output k addresses the same A slot
+## - bView's i mode is size-1 stride-0, every output i addresses the same B slot
 
 import std/[macros, sequtils, strutils, tables]
 import workspace/crucible
@@ -312,7 +317,6 @@ proc emitGeneral(plan: EinsumPlan): NimNode =
   ## - per element, a serial product over the bound labels accumulates
   ##   into `acc`
   ## - one overwrite writes the output slot
-  ## - launch with one lane-width of threads per threadgroup, `blk = (32, 1)`
   let canonical = plan.lhsLabels & plan.bound
   var boundVars: seq[NimNode]
   for l in plan.bound:
@@ -396,8 +400,8 @@ macro einsum*(tensors: varargs[typed], stmt: untyped): untyped =
   ## - operands name the macro's arguments, one index per rank
   ## - with static layout leaves, a size contradiction across operands is
   ##   a compile-time error
-  ## - operand layouts need runtime int leaves at launch sites
-  ## - a static `Int[N]` leaf breaks the generated runtime loops
+  ## - operand layouts need runtime int leaves at launch sites, a static `Int[N]` leaf breaks the generated runtime loops
+  ## - the general route launches with one lane-width of threads per threadgroup, `blk = (32, 1)`
   ##
   ## Kernel classes:
   ##   statement shape              route
@@ -405,8 +409,7 @@ macro einsum*(tensors: varargs[typed], stmt: untyped): untyped =
   ##   S = A[i, j]                  k_tile_sum's `sum(dst, src)`, dst starts 0,
   ##                                atomic accumulation
   ##   anything else                the general per-thread contraction body,
-  ##                                every output slot overwritten,
-  ##                                launched with `blk = (32, 1)`
+  ##                                every output slot overwritten
   let plan = parseEinsumStmt(tensors, stmt)
   if plan.lhsLabels.len == 0 and plan.operands.len == 1:
     result = emitSumTotal(plan)

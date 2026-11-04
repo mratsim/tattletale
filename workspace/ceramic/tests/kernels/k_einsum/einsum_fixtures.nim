@@ -65,7 +65,7 @@ proc loadFixtureBin[T](fixtureDir: string, file: string, n: int): seq[T] =
   copyMem(addr result[0], unsafeAddr bytes[0], bytes.len)
 
 proc loadFixtureTensor*[T](fixtureDir: string, file: string, shape, strides: tuple, elemType: typedesc[T]): HostTensor[T, typeof(shape), typeof(strides)] =
-  ## Host tensor over a fixture bin, laid out as the caller names
+  ## Host tensor over a fixture bin with the caller's shape and strides
   result = makeHostTensor(elemType, shape, strides)
   let raw = loadFixtureBin[T](fixtureDir, file, toInt(result.layout.size()))
   copyMem(result.data, addr raw[0], raw.len * sizeof(T))

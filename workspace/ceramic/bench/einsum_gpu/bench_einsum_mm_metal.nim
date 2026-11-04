@@ -12,9 +12,8 @@
 #
 ## Flops: 2*M*N*K, one multiply-add per output element (bench_gemm convention).
 #
-## Methodology: one warmup launch, then 3 timed reps of `iters` contractions.
-## The median rep's TFLOP/s is printed. Numbers are session-local medians.
-## Re-record on a quiet GPU before citing.
+## Methodology: one warmup launch of 2 contractions, then 3 timed reps of `iters` contractions each.
+## The median rep's TFLOP/s is printed. Numbers are session-local medians. Re-record on a quiet GPU before citing.
 ##
 ## Run:
 ##   nim c -r -d:release --outdir:build/bench \
@@ -86,7 +85,7 @@ proc correctnessLeg[E: HwEngine](engine: E) =
     msg = "einsum mm vs f64 host loop")
 
 proc runCase[E: HwEngine](engine: E, M, N, K, iters: int) =
-  ## One (M, N, K) case: warmup, then 3 timed launches of `iters` contractions each, median TFLOP/s
+  ## One (M, N, K) case, methodology per the module header
   let one = 1 # one is a runtime int, layouts stay dynamic
   var
     aHost = makeHostTensor(float32, (M, K), (K, one))
