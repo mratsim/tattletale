@@ -12,8 +12,9 @@
 #
 ## Flops: 2*M*N*K, one multiply-add per output element (bench_gemm convention).
 #
-## A co-tenancy warning prints on every run: each reported timing
-## needs a quiet-window re-record before use.
+## Methodology: one warmup launch, then 3 timed reps of `iters` contractions.
+## The median rep's TFLOP/s is printed. Numbers are session-local medians.
+## Re-record on a quiet GPU before citing.
 ##
 ## Run:
 ##   nim c -r -d:release --outdir:build/bench \
@@ -31,7 +32,7 @@ import workspace/ceramic/tests/kernels/k_einsum/kernel_einsum_template
 const EinsumBenchMmaTile = 8 # EinsumMmaTile in k_tile_einsum, one (8, 8) D tile per squadron
 
 proc fillMmPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
-  ## Deterministic fill: element value = (flat position mod 13) * 0.25 + 0.5
+  ## Deterministic fill: element value = (linear position mod 13) * 0.25 + 0.5
   for i in 0 ..< tv.size():
     tv(i) = to(float32(i mod 13) * 0.25'f32 + 0.5'f32, T)
 
@@ -128,11 +129,11 @@ proc runCase[E: HwEngine](engine: E, M, N, K, iters: int) =
 
 proc main() =
   writeLine(stdout, "Einsum mm bench, D[i,k] = A[i,j] * B[j,k] through k_tile_einsum (Metal)")
-  writeLine(stdout, "WARNING: co-tenanted GPU, each reported timing needs a quiet-window re-record before use")
+  writeLine(stdout, "WARNING: timings are session-local medians, re-record on a quiet GPU before citing")
   var engine = newEngine(runMetal)
   correctnessLeg(engine)
-  # 1024: 12 MB of f32 operands + output, near cache scale.
-  # 2048: 48 MB of f32, beyond L2, target config for a quiet-window re-record.
+  # 1024: 12 MB of f32 operand+output footprint.
+  # 2048: 48 MB of f32 operand+output footprint.
   runCase(engine, 1024, 1024, 1024, 20)
   runCase(engine, 2048, 2048, 2048, 10)
 

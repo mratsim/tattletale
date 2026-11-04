@@ -3,11 +3,11 @@
 
 Each fixture directory under this script's directory contains:
 
-- meta.json: recipe, the einsum statement, per-operand shape/strides,
+- meta.json: recipe, einsum statement, per-operand shape/strides,
   output shape/strides, xorhash checksums of every file
-- one raw little-endian float32 .bin per operand, the storage-order elements
+- one raw little-endian float32 .bin per operand holding the storage-order elements
   of the logical array over a C-order or Fortran-order host layout
-- o.bin, the expected output in raw float32, C order
+- o.bin: the expected output in raw float32, C order
 
 The reference runs in float64 end to end: the operand bins contain
 the float64 values cast to float32. np.einsum computes the expected output from the same
