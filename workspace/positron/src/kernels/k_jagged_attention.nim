@@ -218,11 +218,6 @@ proc jagged_attn_fwd*(
     lI = zeros(tile(float32, rowStatsL))        # running attention-weight sum, (mt × 1)
     acc = zeros(tile(float32, pvCLayout))       # (mt × D) accumulator
 
-  let
-    thrCrd = idx2crd(qkMap.getThreadPartitioning(), thrID)
-    regCrd = qkMap.layout.slice(((thrCrd, _), _))
-    crdBase = qkMap.layout.crd2idx(((thrCrd, _), _))
-
   # Each workgroup starts at its own query tile and steps by the grid width,
   # so a grid smaller than the tile count still covers every tile
   for qBlock in countup(qBlock0, qBlocks - 1, qStride):
@@ -262,17 +257,12 @@ proc jagged_attn_fwd*(
 
       qk *= qMul                                 # scale, before the band cut
 
-      var band: tile(bool, qkCLayout)
-      forEach idx, var c in band:
-        let (qRow, kCol) = crdBase + regCrd.crd2idx(idx)
-        let qPos = q0Local + qRow                # query token in the segment
-        let kPos = kvPos + kCol                  # KV token in the segment
-        c = kPos > bandBase + qPos or
-            (when windowed:
-               kPos < bandBase + qPos - windowSize + 1
-             else:
-               false)
-      qk.where(band, negInf(float32), qk)        # masked scores are -inf
+      qk.applyAttentionMask(qkCLayout, qkMap, thrID, q0Local, kvPos):
+        kPos > bandBase + qPos or
+        (when windowed:
+           kPos < bandBase + qPos - windowSize + 1
+         else:
+           false)
 
       var mIj: tile(float32, rowStatsL)
       mIj.max(qk, axis = 1, qkMap)
