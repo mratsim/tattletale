@@ -154,8 +154,8 @@ when defined(macosx):
       failLoud("copyToHostFromDevice: n must be positive, got " & $n)
     copyMem(dst, bufferContents(src), n)
 
-  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
-    ## Runs `kernel` with the launch values bound whole, bridges and direct runs alike.
+  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+    ## Runs `kernel`.
     ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
       if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:

@@ -82,7 +82,7 @@ proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
 # ▸ PRIVATE
 # ═══════════════════════════════════════════════════════════════════════
 
-proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: var tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: OpenCLEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   if cfg.sharedMem != 0 or cfg.stream != 0:
