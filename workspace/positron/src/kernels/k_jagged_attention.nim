@@ -73,9 +73,8 @@
 ##   The last page may therefore hold garbage beyond the covered length, NaN included
 ## - the tile loads bound at the segment's covered tokens, so the garbage tail
 ##   zero-pads and never enters the math, a 0·NaN in the P·V mma would poison the output
-## - padded scores sit outside the band and read -inf
-## - the KV loop bounds at min(pageBlocks, lastAttBlock), never reading beyond
-##   the segment's pages nor the last attended block
+## - padded scores sit outside the band and are -inf
+## - the KV loop bounds at min(pageBlocks, lastAttBlock) within the segment's pages and the last attended block
 ##
 ## Numerics:
 ##
@@ -206,9 +205,9 @@ proc jagged_attn_fwd*(
     kvBlocks = (if pageBlocks < lastAttBlock: pageBlocks else: lastAttBlock)
     kvHead = head div (H div Nkv)
 
-  # Per-head q/o tokens: [q0, q0 + qLen) of the packed
-  # (num_qo_tokens, H, D) tensors, loads past qLen pad with zero,
-  # stores past qLen drop.
+  # Per-head q/o tokens:
+  # - [q0, q0 + qLen) of the packed (num_qo_tokens, H, D) tensors.
+  # - Loads/stores past qLen are padded/dropped.
   let
     segQ = q(q0 ..< q0 + qLen, head, _)
     segO = o(q0 ..< q0 + qLen, head, _)
@@ -255,7 +254,7 @@ proc jagged_attn_fwd*(
       let qPos = q0Local + qRow                # query token in the segment
       let kPos = kvPos + kCol                  # KV token in the segment
       c = kPos > bandBase + qPos
-    qk.where(band, negInf(float32), qk)        # masked tokens read -inf
+    qk.where(band, negInf(float32), qk)        # masked scores are -inf
 
     var mIj: tile(float32, rowStatsL)
     mIj.max(qk, axis = 1, qkMap)

@@ -107,6 +107,11 @@ A CS undergraduate is the comprehension floor.
   "names no MSL type" becomes "MSL has no type for" or "no MSL type exists for" alike.
 - Worked pair: "`bfloat16` names no MSL type here, values travel as raw bits" reads
   "no MSL type exists for bfloat16, the value emits as raw bits".
+- Data never reads, pads, drops, or bounds. Loads, stores, tokens, scores, and loop
+  bounds are not actors.
+- "loads past qLen pad with zero" -> "loads past qLen are padded with zeros".
+- "masked tokens read -inf" -> "masked scores are -inf".
+- "padded scores read -inf" -> "padded scores are -inf".
 - The agent-verb test: the comment's verb must be something the grammatical subject
   can actually do in the real world. A compiler refuses, a spec keeps, a type does neither, it has or it lacks.
 - A file, a row, a module, or a doc never "states" its contents. The word "states"
