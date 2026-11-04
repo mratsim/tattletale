@@ -8,7 +8,7 @@
 ## Benchmark: the einsum macro's mm recipe on Metal, effective TFLOP/s.
 #
 ## D[i,k] = A[i,j] * B[j,k] through the k_tile_einsum macro's mma path
-## (EinsumMmaTile = 8, one (8, 8) D tile per launch squadron).
+## (EinsumMmaTile = 16x16x32, one (16, 16) D tile per launch squadron).
 #
 ## Flops: 2*M*N*K, one multiply-add per output element (bench_gemm convention).
 #
@@ -28,7 +28,7 @@ import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/tests/ceramic_testutils
 import workspace/ceramic/tests/kernels/k_einsum/kernel_einsum_template
 
-const EinsumBenchMmaTile = 8 # EinsumMmaTile in k_tile_einsum, one (8, 8) D tile per squadron
+const EinsumBenchMmaTile = 16 # EinsumMmaTile in k_tile_einsum, one (16, 16) D tile per squadron
 
 proc fillMmPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
   ## Deterministic fill: element value = (linear position mod 13) * 0.25 + 0.5

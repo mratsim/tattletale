@@ -60,7 +60,10 @@ import workspace/ceramic/src/kernels/k_tile_gemm
 
 # Mma schedule tile size: a multiple of the Metal atom's (8, 8, 8) cell,
 # paddedLoad/guardedStore edges of the gemm handle tiles that do not divide it
-const EinsumMmaTile = 8
+const
+  EinsumMmaTileM = 16
+  EinsumMmaTileN = 16
+  EinsumMmaTileK = 32
 
 proc mkLet(name, val: NimNode): NimNode =
   nnkLetSection.newTree(nnkIdentDefs.newTree(name, newEmptyNode(), val))
@@ -274,7 +277,9 @@ proc emitMm(plan: EinsumPlan): NimNode =
     mma = genSym(nskConst, "mma")
     aT = nnkDotExpr.newTree(a.arg, ident"T")
     bT = nnkDotExpr.newTree(b.arg, ident"T")
-    tile = newLit(EinsumMmaTile)
+    tileM = newLit(EinsumMmaTileM)
+    tileN = newLit(EinsumMmaTileN)
+    tileK = newLit(EinsumMmaTileK)
   result = newStmtList()
   result.add mkLet(aView, relabelCall(a.arg, a.labels, freeA & plan.bound))
   result.add mkLet(bView, relabelCall(b.arg, b.labels, freeB & plan.bound))
@@ -284,7 +289,7 @@ proc emitMm(plan: EinsumPlan): NimNode =
   # Mma schedule: a const inside the kernel body, where the backend
   # resolves the atom and accumulates in fp32
   result.add quote do:
-    const `mma` = tiledMma(float32, `aT`, `bT`, `tile`, `tile`, `tile`)
+    const `mma` = tiledMma(float32, `aT`, `bT`, `tileM`, `tileN`, `tileK`)
   result.add nnkCall.newTree(bindSym"matmul", mma, dView, aView, bView)
 
 proc readComponent(plan: EinsumPlan, l: string, outCrd: NimNode, boundVars: seq[NimNode]): NimNode =
