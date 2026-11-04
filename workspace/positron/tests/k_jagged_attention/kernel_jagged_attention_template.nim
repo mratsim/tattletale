@@ -63,7 +63,7 @@ proc jaggedAttnCombo*(o, q, kPool, vPool: distinct TensorView,
                       PageSize, D: static int,
                       windowed: static bool = false,
                       windowSize: int = -2147483648) =
-  ## Zips the two mma schedule tiles into the kernel's trailing statics.
+  ## Passes the QK mma schedule as the kernel's trailing static.
   ##
   ## Contract:
   ##
@@ -72,15 +72,17 @@ proc jaggedAttnCombo*(o, q, kPool, vPool: distinct TensorView,
   jagged_attn_fwd(o, q, kPool, vPool, qOffsets, kv,
                   scale, layer, H, Nkv, PageSize, D,
                   windowed, windowSize,
-                  tiledMma(float32, q.T, kPool.T, JaggedAttnTile, JaggedAttnTile, D),
-                  tiledMma(float32, o.T, vPool.T, JaggedAttnTile, JaggedAttnTile, D))
+                  tiledMma(float32, q.T, kPool.T, JaggedAttnTile, JaggedAttnTile, D))
 
-proc jaggedAttnReplayCase*(engine: MetalEngine, Elem: typedesc, name: string): seq[uint32] =
+proc jaggedAttnReplayCase*(engine: MetalEngine, Elem: typedesc, name: string, gridX = 0): seq[uint32] =
   ## Replays one fixture, with relaunch:
   ##
   ## - one launch over the production grid, per-element band judgment
   ##   against the recorded f64 reference
   ## - a relaunch judged bit-identical on the raw output bits
+  ##
+  ## gridX overrides the production x dim when positive: an undersized grid
+  ## drives the kernel's grid-stride query-tile loop and its per-tile resets
   ##
   ## Returns the first launch's raw output bits over the staging tensor
   ## (logical tokens plus the sentinel tokens) as the jagged side of the dense cross-check comparison.
@@ -159,6 +161,7 @@ proc jaggedAttnReplayCase*(engine: MetalEngine, Elem: typedesc, name: string): s
   for s in 0 ..< meta.numSeqs:
     maxQLen = max(maxQLen, meta.qOffsets[s + 1] - meta.qOffsets[s])
   let qBlocks = (maxQLen + JaggedAttnTile - 1) div JaggedAttnTile
+  let gridX = (if gridX > 0: gridX else: qBlocks)
 
   proc launchOnce(): seq[uint32] =
     ## One launch over fresh bridges, returns the raw output bits.
@@ -174,14 +177,14 @@ proc jaggedAttnReplayCase*(engine: MetalEngine, Elem: typedesc, name: string): s
           oDev, qDev, kDev, vDev, qOffDev, kvB,
           meta.scale, meta.layer, meta.H, meta.Nkv,
           JaggedAttnTile, 64, true, meta.windowSize) do:
-        grid = (qBlocks, meta.H, meta.numSeqs)
+        grid = (gridX, meta.H, meta.numSeqs)
         blk = (32, 1)
     else:
       engine.launchDeviceFn jaggedAttnCombo(
           oDev, qDev, kDev, vDev, qOffDev, kvB,
           meta.scale, meta.layer, meta.H, meta.Nkv,
           JaggedAttnTile, 64) do:
-        grid = (qBlocks, meta.H, meta.numSeqs)
+        grid = (gridX, meta.H, meta.numSeqs)
         blk = (32, 1)
     engine.copyToHostFromDevice(addr oStage.data[0], oDev.data, oStage.len())
     result = newSeq[uint32](oStage.len())

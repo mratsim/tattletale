@@ -30,8 +30,10 @@ const jagDtype {.strdefine.} = "f32"
 
 when jagDtype == "f16":
   type Elem = float16
-else:
+elif jagDtype == "f32":
   type Elem = float32
+else:
+  {.error: "unsupported -d:jagDtype=" & jagDtype & ", use f32 or f16".}
 
 const
   ## Tile shape of the bench kernel, measured per dtype on M4 Max like
@@ -48,8 +50,7 @@ proc jaggedBenchLoop(o, q, kPool, vPool: distinct TensorView,
     jagged_attn_fwd(o, q, kPool, vPool, qOffsets, kv,
       scale, layer, H, Nkv, 32, benchD,
       false, -2147483648,
-      tiledMma(float32, q.T, kPool.T, benchMT, benchNT, benchD),
-      tiledMma(float32, o.T, vPool.T, benchMT, benchNT, benchD))
+      tiledMma(float32, q.T, kPool.T, benchMT, benchNT, benchD))
 
 proc makeOffsetsTensor(n: int): auto =
   ## One-dimensional int32 host tensor over `n` zeroed elements
@@ -65,9 +66,9 @@ proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
   for i in 0 ..< tv.size():
     tv(i) = to(float32(i mod 7) * 0.25'f32 + 0.5'f32, T)
 
-proc visitedKvBlocks(qLen, kvLen, qBase: int, NT: static int): int =
+proc visitedKvBlocks(qLen, kvLen, qBase: int, MT, NT: static int): int =
   ## KV blocks the query block at qBase visits in its segment
-  let attended = min(kvLen, kvLen - qLen + qBase + NT)
+  let attended = min(kvLen, kvLen - qLen + qBase + MT)
   if attended <= 0:
     return 0
   result = (attended + NT - 1) div NT
@@ -79,7 +80,7 @@ func computeJaggedFlops(seqlens: seq[int], H: int, MT, NT, D: static int): float
     let qLen = kvLen
     let qBlocks = (qLen + MT - 1) div MT
     for qBlock in 0 ..< qBlocks:
-      result += float64(visitedKvBlocks(qLen, kvLen, qBlock * MT, NT)) *
+      result += float64(visitedKvBlocks(qLen, kvLen, qBlock * MT, MT, NT)) *
         float64(H) * 2.0 * float64(MT * NT) * 2.0 * float64(D)
 
 proc runCase(engine: MetalEngine, kvLen: int, numSeqs: int, iters: int) =

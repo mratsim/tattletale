@@ -55,17 +55,17 @@ template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
     tv.data[toInt crd2idx(tv.getLayout(), varargs_to_par(args))]
 
 # ═════════════════════════════════════════════════════════════════════════
-#  `[]` — element access only (underscore rejected)
+#  `[]` — element access only (underscore and ranges rejected)
 # ═════════════════════════════════════════════════════════════════════════
 
 template `[]`*(t: TensorOwned; args: varargs[untyped]): untyped =
   when isSubview(varargs_to_par(args)):
-    {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+    {.fatal: "_ and ranges not allowed in operator[] — use operator() for sub-Views".}
   t.data[toInt crd2idx(t.getLayout(), varargs_to_par(args))]
 
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
   when isSubview(varargs_to_par(args)):
-    {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+    {.fatal: "_ and ranges not allowed in operator[] — use operator() for sub-Views".}
   tv.data[toInt crd2idx(tv.getLayout(), varargs_to_par(args))]
 
 macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
@@ -74,7 +74,7 @@ macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
   let coord = getAST(varargs_to_par(a))
   result = quote do:
     when isSubview(`coord`):
-      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+      {.fatal: "_ and ranges not allowed in operator[] — use operator() for sub-Views".}
     else:
       `t`.data[toInt crd2idx(`t`.getLayout(), `coord`)] = `val`
 
@@ -84,7 +84,7 @@ macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
   let coord = getAST(varargs_to_par(a))
   result = quote do:
     when isSubview(`coord`):
-      {.fatal: "_ not allowed in operator[] — use operator() for sub-Views".}
+      {.fatal: "_ and ranges not allowed in operator[] — use operator() for sub-Views".}
     else:
       `tv`.data[toInt crd2idx(`tv`.getLayout(), `coord`)] = `val`
 

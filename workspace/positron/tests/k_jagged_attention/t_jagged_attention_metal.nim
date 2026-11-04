@@ -13,7 +13,7 @@
 ##   nim c -r -d:release --threads:off --hints:off --warnings:off \
 ##     -o:build/tests/t_jagged_attention_metal \
 ##     --nimcache:nimcache/t_jagged_attention_metal \
-##     workspace/positron/tests/ceramic/k_jagged_attention/t_jagged_attention_metal.nim
+##     workspace/positron/tests/k_jagged_attention/t_jagged_attention_metal.nim
 
 import workspace/crucible
 import kernel_jagged_attention_template
@@ -36,6 +36,8 @@ proc replayAllJaggedFixtures() =
   fixture("jagged_swa_prefill_f16", float16)
   fixture("jagged_swa_decode_f16", float16)
   fixture("jagged_swa_ragged_f32", float32)
+  # gridX = 1 launches one workgroup per (head, segment), the grid-stride loop covers every query tile
+  discard engine.jaggedAttnReplayCase(float16, "jagged_swa_prefill_f16", gridX = 1)
   echo "all jagged attention fixture replays pass"
 
 replayAllJaggedFixtures()

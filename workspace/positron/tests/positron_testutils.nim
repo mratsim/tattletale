@@ -245,6 +245,9 @@ proc allClose*[T, ShA, StA, ShB, StB](
   doAssert n == flatSize(expected.getLayout()),
     "allClose: size mismatch, got " & $n &
     " want " & $flatSize(expected.getLayout())
+  # Equal size is not equal shape, a (2, 3) and a (3, 2) tensor share flatSize
+  static:
+    doAssert ShA is ShB, "allClose: shape mismatch"
   let actualL = actual.getLayout()
   let expectedL = expected.getLayout()
   for i in 0 ..< n:

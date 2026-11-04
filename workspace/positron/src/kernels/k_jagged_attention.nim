@@ -118,7 +118,7 @@ proc jagged_attn_fwd*(
     scale: float32, layer, H, Nkv: int,
     page_size, D: static int,
     windowed: static bool = false, windowSize: int = low(int32),
-    mmaQK, mmaPV: static TiledMma) =
+    mmaQK: static TiledMma) =
   ## Launch dims: (q token blocks, H, num_seqs), 32 lanes.
   ##
   ## - x: the segment's mt-token q block
@@ -213,14 +213,17 @@ proc jagged_attn_fwd*(
   var
     qReg: tile(q.T, qkMma.getMmaLayout(opA))    # (mt, D)
     qk = zeros(tile(float32, qkCLayout))        # S = Q·Kᵀ scores, (mt × nt)
-    mI = finiteFloor(tile(float32, rowStatsL))  # running max over keys, (mt × 1)
-      # k_tile_sdpa's finite-floor init: with bandBase >= 0 the first tile always contains the attended kPos 0
-    lI = zeros(tile(float32, rowStatsL))        # running attention-weight sum, (mt × 1)
-    acc = zeros(tile(float32, pvCLayout))       # (mt × D) accumulator
 
   # Each workgroup starts at its own query tile and steps by the grid width,
   # so a grid smaller than the tile count still covers every tile
   for qBlock in countup(qBlock0, qBlocks - 1, qStride):
+    # Per-tile softmax state: a workgroup runs several tiles when the grid
+    # is smaller than the tile count
+    var
+      mI = finiteFloor(tile(float32, rowStatsL))  # running max over keys, (mt × 1)
+        # k_tile_sdpa's finite-floor init: with bandBase >= 0 the first tile always contains the attended kPos 0
+      lI = zeros(tile(float32, rowStatsL))        # running attention-weight sum, (mt × 1)
+      acc = zeros(tile(float32, pvCLayout))       # (mt × D) accumulator
     let
       q0Local = qBlock * mt
       lastKey = (if cachedLen + q0Local + (mt - 1) < totalK - 1:
@@ -285,4 +288,4 @@ proc jagged_attn_fwd*(
       pvMma.atom.gemm_tile(acc, p, vReg, acc)    # O += P·V   (MMA 2)
 
     acc /.= lI                                   # (mt × D) /.= (mt × 1)
-    segO.store(acc.downcast(o.T), oMap, thrID, (qBlock0, 0))
+    segO.store(acc.downcast(o.T), oMap, thrID, (qBlock, 0))
