@@ -1,0 +1,44 @@
+{
+ "name": "jagged_prefix_share_f16",
+ "dtype": "float16",
+ "num_seqs": 3,
+ "H": 8,
+ "Nkv": 1,
+ "D": 64,
+ "page_size": 32,
+ "num_layers": 2,
+ "layer": 1,
+ "window_size": 0,
+ "num_pages": 3,
+ "num_qo_tokens": 3,
+ "num_indices": 6,
+ "scale": 0.125,
+ "q_offsets": [
+  0,
+  1,
+  2,
+  3
+ ],
+ "kv_offsets": [
+  0,
+  2,
+  5,
+  6
+ ],
+ "kv_seqlens": [
+  33,
+  65,
+  17
+ ],
+ "seed": 3246211331,
+ "xorhash_checksums": {
+  "q.bin": 48588,
+  "k.bin": 64682,
+  "v.bin": 47652,
+  "o.bin": 38763993,
+  "q_offsets.bin": 0,
+  "kv_offsets.bin": 1,
+  "kv_indices.bin": 2,
+  "kv_seqlens.bin": 113
+ }
+}

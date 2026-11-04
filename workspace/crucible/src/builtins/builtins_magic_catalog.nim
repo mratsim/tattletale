@@ -19,3 +19,7 @@ const NimGpuNumericBuiltinsOps* = {
   "ModI": "mod", "ModU": "mod",
   "ShlI": "shl", "ShrI": "shr",
 }.toTable()
+
+const NimGpuNumericBuiltinsUnaryOps* = {
+  "Pred": "-", "Succ": "+",
+}.toTable()

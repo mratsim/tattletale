@@ -61,6 +61,13 @@ Output/mutable parameters come first, except where the function name itself enco
 | gemm | `gemm(C, A, B)` | `gemm(A, B, C)` | output first |
 | epilogue | `apply(op, D, AB)` | (fused; no CuTe twin) | output first |
 
+## Benchmarks
+
+- Score of record: arithmetic flops actually done divided by end-to-end wall-clock, all loads, stores and copies paid in the denominator.
+- An mma-only rate is never an achievement metric, no percent-of-peak claims, no parity claims.
+- Optimizing a kernel is mostly optimizing data movement, keeping the cores busy is the goal, not a given.
+- Roofline terms (bytes moved, achieved bandwidth, compute ceiling) are diagnostics that attribute time, never scores.
+
 ## Kernel file structure
 
 GPU-suitable kernels use flat-index iteration (`for i: tv(i) = ...`), acceptable on GPU (divmod hidden by parallelism). CPU kernels may use contiguity-fused paths.

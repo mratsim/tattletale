@@ -1,0 +1,292 @@
+# Tattletale
+# Copyright (c) 2026 Mamy André-Ratsimbazafy
+# Licensed and distributed under either of
+#   * MIT license (license terms in the root directory or at http://opensource.org/licenses/MIT).
+#   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
+## Host-side test staging for positron.
+##
+## The KV cache lives on device, JaggedKvHost stages the jagged metadata
+## a kernel test bridges to its descriptor. The host/bridge tensor
+## machinery stages dense fixtures the same way.
+
+import std/[macros, math, os, random]
+import workspace/crucible
+import workspace/ceramic/src/ptr_arithmetic
+import workspace/ceramic/src/macros/varargs_to_par
+import workspace/ceramic/src/int_tuples
+import workspace/ceramic/src/tensors
+import workspace/ceramic/src/layout_algebra
+import workspace/ceramic/src/layout_algebra/layout_indexing_slicedice
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Randomness
+# ═══════════════════════════════════════════════════════════════════════
+
+proc seed*(rng: var Rand, x: SomeInteger) =
+  ## Re-seed a std/rand state, constantine-style method call
+  rng = initRand(int64(x))
+
+template preCondition*(body: untyped): untyped {.pragma.}
+  ## Unwired marker for future formal verification of proc preconditions,
+  ## checked by nothing today. Stated one clause at a time, repeatable.
+
+type
+  JaggedKvHost* = object
+    ## Test staging of a paged KV cache: owns the metadata arrays a kernel
+    ## test bridges to JaggedKv, the page storage belongs to the PagePool.
+    ## Allocated once, freed on destruction.
+    offsets*: ptr UncheckedArray[int32]
+    indices*: ptr UncheckedArray[int32]
+    seqlens*: ptr UncheckedArray[int32]
+    capacity*: int
+    batchSize*: int
+
+proc `=destroy`(o: var JaggedKvHost) =
+  ## ORC destroys closure-env fields before their first assignment, a zero field is a legal destroy input
+  if o.offsets != nil:
+    deallocShared(cast[pointer](o.offsets))
+    deallocShared(cast[pointer](o.indices))
+    deallocShared(cast[pointer](o.seqlens))
+
+proc `=copy`(dst: var JaggedKvHost, src: JaggedKvHost) {.
+    error: "JaggedKvHost owns its metadata and is move-only".}
+
+type JaggedKvBridge[DM] = object
+  ## Launch argument for JaggedKv: one buffer binding per metadata array, batchSize packs as a scalar.
+  offsets*, indices*, seqlens*: DM
+  batchSize*: int
+
+proc bridge*[E: HwEngine](engine: E, kv: var JaggedKvHost): auto =
+  ## Bridges the host metadata to device buffers behind one JaggedKv descriptor.
+  let
+    offDev = engine.allocDevice(int32, kv.capacity + 1)
+    idxDev = engine.allocDevice(int32, kv.capacity)
+    seqDev = engine.allocDevice(int32, kv.capacity)
+  engine.copyToDeviceFromHost(offDev, kv.offsets, kv.capacity + 1)
+  engine.copyToDeviceFromHost(idxDev, kv.indices, kv.capacity)
+  engine.copyToDeviceFromHost(seqDev, kv.seqlens, kv.capacity)
+  JaggedKvBridge[typeof(offDev)](offsets: offDev, indices: idxDev, seqlens: seqDev,
+                                 batchSize: kv.batchSize)
+
+proc new*(t: typedesc[JaggedKvHost], capacity: int): JaggedKvHost =
+  ## Allocates offsets, indices and seqlens of `capacity` sequences, zero-filled, owned.
+  ## offsets has capacity + 1 entries:
+  ## - entry s is where sequence s starts
+  ## - entry batchSize is where the newest sequence ends, so the cursor stays in bounds up to a full batch
+  JaggedKvHost(
+    offsets: cast[ptr UncheckedArray[int32]](allocShared0((capacity + 1) * sizeof(int32))),
+    indices: cast[ptr UncheckedArray[int32]](allocShared0(capacity * sizeof(int32))),
+    seqlens: cast[ptr UncheckedArray[int32]](allocShared0(capacity * sizeof(int32))),
+    capacity: capacity,
+    batchSize: 0)
+
+proc append*(o: var JaggedKvHost, pageId: int32) =
+  ## Extends the newest sequence by one page: one indices write and one
+  ## offsets boundary bump, O(1).
+  {.preCondition: o.batchSize >= 1.}
+  {.preCondition: o.offsets[o.batchSize] < o.capacity.}
+  o.indices[o.offsets[o.batchSize]] = pageId
+  o.offsets[o.batchSize] += 1
+
+proc addSequence*(o: var JaggedKvHost, tokens: int, pageIds: openArray[int32]) =
+  ## Registers a new sequence of `tokens` tokens over `pageIds`.
+  {.preCondition: o.batchSize < o.capacity.}
+  {.preCondition: o.offsets[o.batchSize] + int32(pageIds.len) <= o.capacity.}
+  let start = o.offsets[o.batchSize]
+  o.seqlens[o.batchSize] = int32(tokens)
+  o.offsets[o.batchSize + 1] = o.offsets[o.batchSize] + int32(pageIds.len)
+  for k in 0 ..< pageIds.len:
+    o.indices[start + k] = pageIds[k]
+  inc o.batchSize
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Host and bridge tensors
+# ═══════════════════════════════════════════════════════════════════════
+
+type
+  HostTensor*[T, Sh, St] = object
+    data*: ptr UncheckedArray[T]
+    offset*: int
+    layout*: Layout[Sh, St]
+
+  BridgeTensor*[DevMem, Sh, St] = object
+    data*: DevMem
+    layout*: Layout[Sh, St]
+
+proc `=destroy`*[T, Sh, St](ht: var HostTensor[T, Sh, St]) =
+  if ht.data != nil:
+    freeShared(ht.data)
+    ht.data = nil
+
+proc `=copy`*[T, Sh, St](dst: var HostTensor[T, Sh, St], src: HostTensor[T, Sh, St]) {.error: "HostTensor is move-only".}
+
+proc popNode(tree: var NimNode): NimNode {.compileTime.} =
+  result = tree[tree.len - 1]
+  tree.del(tree.len - 1)
+
+template `[]`*(ht: HostTensor, args: varargs[untyped]): untyped =
+  ht.data[ht.offset + toInt crd2idx(ht.layout, varargs_to_par(args))]
+
+macro `[]=`*(ht: HostTensor, args: varargs[untyped]): untyped =
+  var a = args
+  let val = popNode(a)
+  let coord = getAst(varargs_to_par(a))
+  result = quote do:
+    `ht`.data[`ht`.offset + toInt crd2idx(`ht`.layout, `coord`)] = `val`
+
+func originOffset[Sh, St](layout: Layout[Sh, St]): int =
+  ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
+  let sh = layout.shape.flatten()
+  let st = layout.stride.flatten()
+  var strides: seq[int]
+  for f in fields(st):
+    strides.add(toInt(f))
+  var i = 0
+  for f in fields(sh):
+    if strides[i] < 0:
+      result += (toInt(f) - 1) * (-strides[i])
+    i.inc
+
+proc to*[T, Sh, St, U](src: HostTensor[T, Sh, St], _: typedesc[U]): HostTensor[U, Sh, St] =
+  let layout = src.layout
+  result = HostTensor[U, Sh, St](
+    data: cast[ptr UncheckedArray[U]](allocShared(toInt(layout.cosize()) * sizeof(U))),
+    offset: originOffset(layout),
+    layout: layout)
+  for i in 0 ..< toInt(layout.cosize()):
+    result.data[i] = src.data[i].to(U)
+
+proc makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder): auto =
+  let layout = make_layout(shape, order)
+  HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
+    offset: originOffset(layout),
+    layout: layout)
+
+proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
+  let layout = make_layout(shape, strides)
+  HostTensor[T, typeof(shape), typeof(strides)](
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
+    offset: originOffset(layout),
+    layout: layout)
+
+template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
+  # Workaround `..` or Slice[T](...) not resolving T as a default value
+  Slice[T](a: T(start), b: T(stopIncl))
+
+proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds[float32](1, 2)): auto =
+  let layout = make_layout(shape, strides)
+  result = HostTensor[T, typeof(shape), typeof(strides)](
+    data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
+    offset: originOffset(layout),
+    layout: layout)
+  for i in 0 ..< toInt(layout.size()):
+    let crd = idx2crd(layout.shape, i)
+    when T is float32 or T is float64:
+      result.data[result.offset + toInt crd2idx(layout, crd)] = rng.rand(bounds)
+    else:
+      result.data[result.offset + toInt crd2idx(layout, crd)] = to(rng.rand(bounds.a .. bounds.b), T)
+
+func len*[T, Sh, St](ht: HostTensor[T, Sh, St]): int =
+  toInt(ht.layout.cosize())
+
+func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
+  TensorView[T, Sh, St](data: ht.data +% ht.offset, layout: ht.layout)
+
+proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
+  let n = ht.layout.cosize()
+  let dev = engine.allocDevice(T, n)
+  engine.copyToDeviceFromHost(dev, ht.data +% ht.offset, n)
+  BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
+
+func xorHash*[T, Sh, St](ht: HostTensor[T, Sh, St]): uint32 =
+  ## Order-independent checksum over the raw bit patterns of a host tensor
+  for i in 0 ..< ht.len():
+    when sizeof(T) == 4:
+      result = result xor cast[uint32](ht.data[i])
+    elif sizeof(T) == 2:
+      result = result xor uint32(cast[uint16](ht.data[i]))
+    else:
+      result = result xor uint32(ht.data[i])
+
+proc loadFixtureTensor*(fixtureDir: string, file: string, shape: tuple, elemType: typedesc): auto =
+  result = makeHostTensor(elemType, shape, LayoutRight)
+  let bytes = readFile(fixtureDir / file)
+  doAssert bytes.len == result.len() * sizeof(elemType),
+    "loadFixtureTensor: " & file & " is " & $bytes.len & " bytes, expected " &
+    $(result.len() * sizeof(elemType))
+  copyMem(result.data, unsafeAddr bytes[0], bytes.len)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Tensor assertions
+# ═══════════════════════════════════════════════════════════════════════
+
+func flatSize[L](l: L): int =
+  ## Size as a runtime int, static `Int[N]` layouts included
+  when typeof(size(l)) is Int:
+    toInt(size(l))
+  else:
+    size(l)
+
+type AllCloseReport* = object
+  bad*: int
+  worst*, firstGot*, firstWant*: float64
+  firstCrd*: string
+
+proc allClose*[T, ShA, StA, ShB, StB](
+    actual: TensorView[T, ShA, StA], expected: TensorView[T, ShB, StB],
+    rtol, abstol: float64): AllCloseReport =
+  ## Element-wise closeness, |a - e| <= abstol + rtol*|e| per element,
+  ## compared in float64, same shape required, strides may differ.
+  let n = flatSize(actual.getLayout())
+  doAssert n == flatSize(expected.getLayout()),
+    "allClose: size mismatch, got " & $n &
+    " want " & $flatSize(expected.getLayout())
+  # Equal size is not equal shape, a (2, 3) and a (3, 2) tensor share flatSize
+  doAssert actual.shape === expected.shape, "allClose: shape mismatch"
+  let actualL = actual.getLayout()
+  let expectedL = expected.getLayout()
+  for i in 0 ..< n:
+    let crd = idx2crd(actual.shape, i)
+    let a = to(actual.data[toInt crd2idx(actualL, crd)], float64)
+    let e = to(expected.data[toInt crd2idx(expectedL, idx2crd(expected.shape, i))], float64)
+    # NaN never matches, a NaN difference is not greater than any bound,
+    # an infinite expected value must not inflate the relative bound
+    var d = abs(a - e)
+    if a != e and (a != a or e != e):
+      d = Inf
+    let re = if e == e and abs(e) != Inf: abs(e) else: 0.0
+    if d > abstol + rtol * re:
+      if result.bad == 0:
+        result.firstCrd = $crd
+        result.firstGot = a
+        result.firstWant = e
+      result.worst = max(result.worst, d)
+      inc result.bad
+
+template assertAllClose*(actual, expected: untyped, rtol: float64 = 1e-4, abstol: float64 = 1e-4, msg = "") =
+  ## Assert two views are element-wise close, compared in float64:
+  ## |a - e| <= abstol + rtol*|e| for every element.
+  ##
+  ## Args:
+  ## - actual: the view produced by the code under test
+  ## - expected: the reference view, same shape and strides
+  ## - rtol, abstol: relative and absolute tolerance
+  ## - msg: optional context echoed on failure
+  block:
+    let actualView = actual
+    let expectedView = expected
+    let report = allClose(actualView, expectedView, rtol, abstol)
+    if report.bad > 0:
+      echo "Assertion failed: allClose"
+      echo "  '", astToStr(actual), "'"
+      if msg.len > 0:
+        echo "  ", msg
+      echo "  ", report.bad, " mismatched elements of ",
+           flatSize(actualView.getLayout()), ", worst |d| = ", report.worst
+      echo "  first mismatch at ", report.firstCrd, ": got ", report.firstGot,
+           " want ", report.firstWant, " (rtol ", rtol, ", abstol ", abstol, ")"
+      raise newException(AssertionDefect, "[positron] allClose assertion failed")

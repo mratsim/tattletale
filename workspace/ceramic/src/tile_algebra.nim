@@ -25,9 +25,10 @@ import
   workspace/ceramic/src/tile_algebra/tile_ops_ternary,
   workspace/ceramic/src/tile_algebra/tile_loadstore,
   workspace/ceramic/src/tile_algebra/tile_tvm_reductions,
-  workspace/ceramic/src/tile_algebra/tile_matmul
+  workspace/ceramic/src/tile_algebra/tile_matmul,
+  workspace/ceramic/src/tile_algebra/tile_attn_mask
 
-export tiles, tile_foreach, tile_elementary, tile_ops_unary, tile_ops_binary, tile_ops_ternary,
+export tiles, tile_foreach, tile_elementary, tile_ops_unary, tile_ops_binary, tile_ops_ternary, tile_attn_mask,
        tile_loadstore, tile_tvm_reductions, tile_matmul
 
 # Symbols outside tile_algebra's jurisdiction, re-exported per symbol

@@ -142,6 +142,8 @@ macro crd2idx*(layout: Layout, coord: IntOrIntTuple): auto =
   ## - an `int`, a flat position walked dimension by dimension,
   ##   dimension 0 fastest, `c = c mod sh; c = c div sh` per dimension
   ## - static `Int` values, the offset expression folds at compile time
+  ## - an `a ..< b` range in a tuple, the range start contributes
+  ##   `a * stride[k]`, the sub-View window starts at element `a`
   ##
   ##   Layout ──▶ destructureLayout ──▶ (shape, stride) ──┐
   ##   coord ─────────────────────────────────────────────┼──▶ crd2idxImpl ──▶ offset
@@ -178,7 +180,6 @@ func inBoundsLeaf(x, s: NimNode): NimNode {.compileTime.} =
 
 macro inBoundsImpl(coord, shape: typed): untyped =
   ## Returns true if a coordinate is within bounds of a shape
-
   var coordStream = TupleStream()
   if coord.isTupleTy():
     coordStream = coord.tupleStream()
@@ -264,7 +265,7 @@ macro inBounds*(coord: IntOrIntTuple, layout: Layout): auto =
 
 template `()`*(layout: Layout, args: varargs[typed]): auto =
   ## Multi-argument: `L(i, j)` ≡ `L((i, j))`.
-  when hasUnderscore(varargs_to_par(args)):
+  when isSubview(varargs_to_par(args)):
     slice(layout, args)
   else:
     crd2idx(layout, varargs_to_par(args))

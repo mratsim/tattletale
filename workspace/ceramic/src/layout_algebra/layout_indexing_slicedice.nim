@@ -34,9 +34,30 @@ template `*`*[V: static int](s: Int[V], c: X): Int[0] = Int[0]()
 # X coords contribute 0 to any crd2idx inner product, the marker
 # arithmetic folds through the scalar leaf dispatch
 
+# A range leaf contributes its start to an inner product, the size half reads the exclusive bound stored in the HSlice value.
+template `*`*(r: HSlice, s: int): auto = r.a * s
+template `*`*[V: static int](r: HSlice, s: Int[V]): auto = r.a * s
+
+func isSliceTy(ty: NimNode): bool {.compileTime.} =
+  ty.kind == nnkBracketExpr and ty[0].kind == nnkSym and ty[0].strVal == "HSlice"
+
 # ═══════════════════════════════════════════════════════════════
 #  slice and dice, marker-based dimension selection
 # ═══════════════════════════════════════════════════════════════
+
+macro ignoreSlices(sel: typed): untyped =
+  proc walk(n: NimNode): NimNode =
+    let ty = n.getTypeInst()
+    if ty.kind == nnkBracketExpr and ty[0].kind == nnkSym and
+        ty[0].strVal == "HSlice":
+      return newIdentNode"_"
+    if n.kind in {nnkPar, nnkTupleConstr} and n.len > 0:
+      var kept = nnkPar.newTree()
+      for child in n:
+        kept.add(walk(child))
+      return kept
+    return n
+  result = walk(sel)
 
 macro slice*(target: tuple, selector: typed): untyped =
   ## Slice a tuple, keep elements where the selector entry is X,
@@ -45,6 +66,8 @@ macro slice*(target: tuple, selector: typed): untyped =
   ## The selector and target are weakly congruent:
   ## - a selector leaf facing a nested target mode selects the whole mode
   ## - one X keeps an entire subtree, one int drops it
+  ## - an `a ..< b` range keeps the mode, sized to the range's
+  ##   length (`2 ..< 5` sizes the mode to 3).
 
   var builder = TupleBuilderNested.new(1)
   var selStream = selector.tupleStream()
@@ -68,12 +91,20 @@ macro slice*(target: tuple, selector: typed): untyped =
                     raw[1]
                   else: raw
       let isX = selTy != nil and selTy.hasType"X"
+      let isSlice = selTy != nil and selTy.isSliceTy()
       let tgtEvent = tgtStream.next()
       if tgtEvent.kind == kLeaf:
         if isX:
           builder.append(tgtEvent)
+        elif isSlice:
+          let sizeExpr =
+            nnkDotExpr.newTree(selEvent.leaf, newIdentNode"b") -
+            nnkDotExpr.newTree(selEvent.leaf, newIdentNode"a") + newLit(1)
+          builder.append((sizeExpr, bindSym"int"))
         # int, Int and Y selectors drop the leaf
       else:
+        if isSlice:
+          error "slice: a range leaf takes a leaf mode, not a nested mode", selEvent.leaf
         # a selector leaf facing a nested target mode takes the whole mode,
         # the mode's kOpen was consumed as tgtEvent, replayed to open
         # the subtree only when the selector keeps it
@@ -153,8 +184,13 @@ macro dice*(target: tuple, selector: typed): untyped =
 template slice*(target: Layout, selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout.
   ##
-  ## Returns the layout keeping the dimensions marked X or _,
-  ## dimensions marked Y, int, or Int are dropped.
+  ## Returns the layout keeping:
+  ## - the dimensions marked X or _
+  ## - any `a ..< b` range, its dimension sized to the range's
+  ##   length (`2 ..< 5` sizes it to 3)
+  ##
+  ## Dimensions marked Y, int, or Int are dropped.
+  ##
   ##
   ## Accepts both varargs and a single tuple argument:
   ## - slice(L, X, Y)     two separate args
@@ -163,7 +199,7 @@ template slice*(target: Layout, selectors: varargs[untyped]): untyped =
     evalOnceAs(t, target)
     make_layout(
       slice(t.shape, varargs_to_par(selectors)),
-      slice(t.stride, varargs_to_par(selectors)))
+      slice(t.stride, ignoreSlices(varargs_to_par(selectors))))
 
 template dice*(target: Layout, selectors: varargs[untyped]): untyped =
   ## Extract a sub-Layout.
@@ -180,35 +216,44 @@ template dice*(target: Layout, selectors: varargs[untyped]): untyped =
       dice(t.shape, varargs_to_par(selectors)),
       dice(t.stride, varargs_to_par(selectors)))
 
-macro hasUnderscore*(Cs: varargs[typed]): bool =
-  proc walkImpl(t: NimNode): bool {.compileTime.} =
-    ## True if the type subtree contains the X marker
-    let ty = t.getTypeInst()
-    if ty.kind in [nnkTupleTy, nnkPar, nnkTupleConstr]:
-      for i in 0 ..< ty.len:
-        if walkImpl(ty[i]):
+proc walkSubviewTy(t: NimNode): bool {.compileTime.} =
+  ## True if the type subtree contains a sub-View selector leaf.
+  ## Selector leaves:
+  ## - X, the whole mode stays
+  ## - `a ..< b`, the mode size reads `b - a`, the offset gains
+  ##   `a * stride`
+  let ty = t.getTypeInst()
+  if ty.kind in [nnkTupleTy, nnkPar, nnkTupleConstr]:
+    for i in 0 ..< ty.len:
+      if walkSubviewTy(ty[i]):
+        return true
+    return false
+  if ty.kind == nnkBracketExpr:
+    # Int[V] instances and friends: the marker never hides in them
+    if ty[0].kind == nnkSym and ty[0].strVal == "Int":
+      return false
+    if ty[0].kind == nnkSym and ty[0].strVal == "HSlice":
+      return true
+    error "[ttt] unsupported type: " & ty.repr
+  if ty.kind == nnkSym:
+    if ty.strVal == "X":
+      return true
+    if ty.strVal == "int" or ty.strVal == "Int":
+      return false
+    let impl = ty.getImpl()
+    if impl.kind == nnkTupleTy:
+      for i in 0 ..< impl.len:
+        if walkSubviewTy(impl[i]):
           return true
       return false
-    if ty.kind == nnkBracketExpr:
-      # Int[V] instances and friends: the marker never hides in them
-      if ty[0].kind == nnkSym and ty[0].strVal == "Int":
-        return false
-      error "[ttt] unsupported type: " & ty.repr
-    if ty.kind == nnkSym:
-      if ty.strVal == "X":
-        return true
-      if ty.strVal == "int" or ty.strVal == "Int":
-        return false
-      let impl = ty.getImpl()
-      if impl.kind == nnkTupleTy:
-        for i in 0 ..< impl.len:
-          if walkImpl(impl[i]):
-            return true
-        return false
-    error "[ttt] unsupported type: " & ty.repr
+  error "[ttt] unsupported type: " & ty.repr
+
+macro isSubview*(Cs: varargs[typed]): bool =
+  ## True when the coordinate names a sub-View: any leaf is `_` or a range.
+  ## All-definite coordinates are element access.
   result = newLit(false)
   for i in 0 ..< Cs.len:
-    result = newLit(result.boolVal or walkImpl(Cs[i]))
+    result = newLit(result.boolVal or walkSubviewTy(Cs[i]))
 
 # ═══════════════════════════════════════════════════════════════
 #  sliceAxes and diceAxes, reduction-axis selection by axis number

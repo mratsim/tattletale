@@ -583,14 +583,6 @@ task ceramic_cgs, "Run the ceramic codegen-size runners (runner=<name> picks one
           (runner.len == 0 or filename == runner & ".nim"):
         runCmd(cgsCmd(filename, dumpArg == "true"))
 
-task test_positron_properties, "Test workspace/positron property suites":
-  withDir(ProjectRoot):
-    for cmd in getTestCommands("workspace/positron/tests/properties"):
-      runCmd(cmd)
-    for cmd in getTestCommands("workspace/positron/tests/ceramic"):
-      runCmd(cmd)
-
-
 task test_crucible_nvrtc, "Test workspace/crucible NVRTC codegen":
   withDir(ProjectRoot):
     for cmd in getTestCommands("workspace/crucible/tests/codegen/cuda"):

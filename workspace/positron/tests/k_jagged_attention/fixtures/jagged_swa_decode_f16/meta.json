@@ -1,0 +1,41 @@
+{
+ "name": "jagged_swa_decode_f16",
+ "dtype": "float16",
+ "num_seqs": 2,
+ "H": 8,
+ "Nkv": 2,
+ "D": 64,
+ "page_size": 32,
+ "num_layers": 2,
+ "layer": 1,
+ "window_size": 50,
+ "num_pages": 5,
+ "num_qo_tokens": 2,
+ "num_indices": 5,
+ "scale": 0.125,
+ "q_offsets": [
+  0,
+  1,
+  2
+ ],
+ "kv_offsets": [
+  0,
+  3,
+  5
+ ],
+ "kv_seqlens": [
+  70,
+  40
+ ],
+ "seed": 3246211586,
+ "xorhash_checksums": {
+  "q.bin": 5960,
+  "k.bin": 27169,
+  "v.bin": 57999,
+  "o.bin": 210823079,
+  "q_offsets.bin": 3,
+  "kv_offsets.bin": 6,
+  "kv_indices.bin": 4,
+  "kv_seqlens.bin": 110
+ }
+}
