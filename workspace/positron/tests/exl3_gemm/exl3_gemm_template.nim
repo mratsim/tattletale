@@ -144,6 +144,48 @@ proc hadamardRef*(dst, src, preScale: ptr UncheckedArray[float16], M, C: int32, 
       for kk in 0'i32 ..< 128:
         dst[i * C + blk * 128 + kk] = (row[kk].float32 * norm).to(float16)
 
+func fp16MulRef*(a, b: float16): float16 =
+  ## One fp16 rounding over the exact fp32 product (the native fp16 multiply).
+  to(to(a, float32) * to(b, float32), float16)
+
+func hadFfRef*(d: openArray[float64], svh: openArray[uint16], m, n: int, norm: float32): seq[float64] =
+  ## Reference of the fp32-output sv pass `had_ff`, per 128-block over n:
+  ## f64 FWHT over the GEMM image, one fp32 norm product, one fp32 svh
+  ## product with the fp16 scale widened exactly.
+  ##
+  ## Args:
+  ## - d: (m, n) GEMM image in float64
+  ## - svh: n fp16 output scales/flips
+  result = newSeq[float64](m * n)
+  var row: array[128, float64]
+  for i in 0'i32 ..< m:
+    for blk in 0'i32 ..< n div 128:
+      for kk in 0'i32 ..< 128:
+        row[kk] = d[i * n + blk * 128 + kk]
+      refFwht128(row)
+      for kk in 0'i32 ..< 128:
+        let v = row[kk].float32 * norm
+        result[i * n + blk * 128 + kk] = v.float64 * to(cast[float16](svh[blk * 128 + kk]), float32).float64
+
+func hadFhRef*(d: openArray[float64], svh: openArray[uint16], m, n: int, norm: float32): seq[float64] =
+  ## Reference of the fp16-output sv pass `had_fh`, per 128-block over n:
+  ## f64 FWHT over the GEMM image, one fp32 norm product, one RNE round
+  ## into fp16, one fp16 svh multiply.
+  ##
+  ## Args:
+  ## - d: (m, n) GEMM image in float64
+  ## - svh: n fp16 output scales/flips
+  result = newSeq[float64](m * n)
+  var row: array[128, float64]
+  for i in 0'i32 ..< m:
+    for blk in 0'i32 ..< n div 128:
+      for kk in 0'i32 ..< 128:
+        row[kk] = d[i * n + blk * 128 + kk]
+      refFwht128(row)
+      for kk in 0'i32 ..< 128:
+        let v = (row[kk].float32 * norm).to(float16)
+        result[i * n + blk * 128 + kk] = fp16MulRef(v, cast[float16](svh[blk * 128 + kk])).to(float32).float64
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Fixtures
 # ═══════════════════════════════════════════════════════════════════════
@@ -219,6 +261,20 @@ proc hadamardCombo*(dst, src, preScale: distinct TensorView, M, C: int, norm: fl
     cast[ptr UncheckedArray[float16]](dst.data), cast[ptr UncheckedArray[float16]](src.data),
     cast[ptr UncheckedArray[float16]](preScale.data), cast[ptr UncheckedArray[float16]](preScale.data),
     int32(M), int32(C), norm, true, false)
+
+proc hadamardFfCombo*(dst, src, postScale: distinct TensorView, norm: float32) =
+  # Requires export: the launch machinery re-emits the callee name into the importing module, an imported-only symbol does not resolve there.
+  hadamard_rotate_128_fwd_ff(
+    cast[ptr UncheckedArray[float32]](dst.data), cast[ptr UncheckedArray[float32]](src.data),
+    cast[ptr UncheckedArray[float16]](postScale.data),
+    int32(dst.shape[0]), int32(dst.shape[1]), norm)
+
+proc hadamardFhCombo*(dst, src, postScale: distinct TensorView, norm: float32) =
+  # Requires export: the launch machinery re-emits the callee name into the importing module, an imported-only symbol does not resolve there.
+  hadamard_rotate_128_fwd_fh(
+    cast[ptr UncheckedArray[float16]](dst.data), cast[ptr UncheckedArray[float32]](src.data),
+    cast[ptr UncheckedArray[float16]](postScale.data),
+    int32(src.shape[0]), int32(src.shape[1]), norm)
 
 proc launchDequant*[E: HwEngine](engine: E, trellis: seq[uint16], numTiles: int, bits: int, cb: Exl3Codebook): seq[uint16] =
   ## One dequant launch over `numTiles` tiles, dst bits read back.
@@ -314,6 +370,67 @@ proc launchGemm*[E: HwEngine](engine: E, aBits, trellis: seq[uint16], m, k, n: i
     for i in 0 ..< m * n:
       result[i] = to(cast[float16](outBits[i]), float32)
 
+proc launchGemmSv*[E: HwEngine](engine: E, aBits, trellis: seq[uint16], m, k, n: int, bits: int, cb: Exl3Codebook, OutT: typedesc, svh: seq[uint16], gridTiles: int = 0, gridM: int = 0, hadGridLines: int = 0): seq[float32] =
+  ## One EXL3 GEMM replay with the sv output pass, d read back as fp32 values.
+  ##
+  ## Args:
+  ##
+  ## - two launches: the GEMM stores its fp32 accumulators into a scratch
+  ##   image and the sv pass rotates that image into the final d
+  ## - had_ff serves OutT float32 and had_fh serves OutT float16
+  ## - svh: n fp16 output scales/flips, one value per output column
+  ## - gridTiles, gridM, hadGridLines: threadgroups along the output tiles,
+  ##   m chunks and sv pass lines. A count of 0 selects each natural value,
+  ##   a smaller count grid-strides every tile, chunk or line
+  result = newSeq[float32](m * n)
+  doAssert k mod 16 == 0, "launchGemmSv: sizeK not a multiple of 16"
+  doAssert n mod exl3GemmNT == 0, "launchGemmSv: sizeN not a multiple of exl3GemmNT"
+  doAssert n mod 128 == 0, "launchGemmSv: sizeN not a multiple of 128"
+  let
+    aDev = engine.allocDevice(float16, m * k)
+    tDev = engine.allocDevice(uint32, trellis.len div 2)
+    cDev = engine.allocDevice(float32, m * n)
+    dDev = engine.allocDevice(OutT, m * n)
+    svhDev = engine.allocDevice(float16, n)
+    aLay = make_layout((m, k), (k, 1))
+    cLay = make_layout((m, n), (n, 1))
+    dLay = make_layout((m, n), (n, 1))
+    svhLay = make_layout((n,))
+    tLay = make_layout((trellis.len div 2,))
+  engine.copyToDeviceFromHost(aDev, cast[ptr float16](addr aBits[0]), m * k)
+  engine.copyToDeviceFromHost(tDev, cast[ptr uint32](addr trellis[0]), trellis.len div 2)
+  engine.copyToDeviceFromHost(svhDev, cast[ptr float16](addr svh[0]), n)
+  let
+    aView = BridgeTensor[typeof(aDev), typeof(aLay.shape), typeof(aLay.stride)](
+      data: aDev, layout: aLay)
+    tView = BridgeTensor[typeof(tDev), typeof(tLay.shape), typeof(tLay.stride)](
+      data: tDev, layout: tLay)
+    cView = BridgeTensor[typeof(cDev), typeof(cLay.shape), typeof(cLay.stride)](
+      data: cDev, layout: cLay)
+    dView = BridgeTensor[typeof(dDev), typeof(dLay.shape), typeof(dLay.stride)](
+      data: dDev, layout: dLay)
+    svhView = BridgeTensor[typeof(svhDev), typeof(svhLay.shape), typeof(svhLay.stride)](
+      data: svhDev, layout: svhLay)
+  engine.launchDeviceFn exl3GemmCombo(cView, aView, tView, bits, cb) do:
+    grid = ((if gridTiles == 0: n div exl3GemmNT else: gridTiles),
+            (if gridM == 0: m.ceil_div(exl3GemmMT) else: gridM), 1)
+    blk = (32, 1)
+  when OutT is float32:
+    engine.launchDeviceFn hadamardFfCombo(dView, cView, svhView, exl3Norm128) do:
+      grid = ((if hadGridLines == 0: m else: hadGridLines), n div 128, 1)
+      blk = (32, 1)
+  else:
+    engine.launchDeviceFn hadamardFhCombo(dView, cView, svhView, exl3Norm128) do:
+      grid = ((if hadGridLines == 0: m else: hadGridLines), n div 128, 1)
+      blk = (32, 1)
+  when OutT is float32:
+    engine.copyToHostFromDevice(cast[ptr float32](addr result[0]), dView.data, m * n)
+  else:
+    let outBits = newSeq[uint16](m * n)
+    engine.copyToHostFromDevice(cast[ptr float16](addr outBits[0]), dView.data, m * n)
+    for i in 0 ..< m * n:
+      result[i] = to(cast[float16](outBits[i]), float32)
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Comparisons
 # ═══════════════════════════════════════════════════════════════════════
@@ -343,5 +460,5 @@ proc bandedCheck*(got: openArray[float32], want: openArray[float64], rtol, absto
 export int_tuples, layout_algebra, tensors, tile_algebra
 export exl3GemmMT, exl3GemmNT, exl3Norm128, trellisValueIndex, trellisValueCoords
 export Exl3Codebook
-export dequantRef, gemmRef, makeTrellis, makeF16Tensor, packCodes, launchDequant, launchGemm,
-       bandedCheck, refWindow, hadamardRef
+export dequantRef, gemmRef, makeTrellis, makeF16Tensor, packCodes, launchDequant, launchGemm, launchGemmSv,
+       bandedCheck, refWindow, hadamardRef, hadFfRef, hadFhRef

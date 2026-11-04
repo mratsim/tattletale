@@ -48,6 +48,19 @@
 ##
 ## Decoding is exact integer arithmetic plus one round-to-nearest-even
 ## fp16 conversion, kernel and CPU reference agree bit for bit.
+##
+## su/sv scaling points:
+##
+##   A --[su: hadamard_rotate_128_fwd, preScale suh]--> A_had
+##   A_had --[exl3_gemm]--> fp32 image
+##   image --[sv: hadamard_rotate_128_fwd_ff | _fh, postScale svh]--> d
+##
+## - su: host-composed pre-pass into a scratch copy of the activations
+## - sv: host-composed post-pass over the fp32 accumulator image: d itself
+##   under fp32 out, an fp32 scratch before the fp16 store
+## - sv stays two-launch: in-kernel fusion needs one 128-column mma tile
+##   holding double the accumulator registers, and the exact fp32 image
+##   round-trip preserves the accumulator numerics
 
 import workspace/crucible
 import workspace/ceramic/src/int_tuples

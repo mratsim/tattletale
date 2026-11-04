@@ -33,6 +33,16 @@
 ## - GEMM fp16 out: rtol 2e-3 + abstol 5e-2, one fp16 ulp of |C| beyond the fp32
 ##   accumulation gap
 ##
+## Stage 3 replays the sv output pass against the composed float64 reference:
+## the GEMM writes an fp32 image, the fp32-input Hadamard rotate with svh
+## scales produces the final d, had_ff for fp32 out and had_fh for fp16 out.
+##
+## sv bands, on top of the stage 2 GEMM gap:
+##
+## - the norm-preserving Hadamard adds a 1e-5-scale relative rounding term
+## - the fp16 path adds one RNE round and one fp16 scale multiply
+## - stage 2 bands absorb both terms and hold unchanged
+##
 ## Run from the worktree root:
 ##   nim c -r --threads:off -o:build/tests/t_exl3_gemm_metal \
 ##     workspace/positron/tests/exl3_gemm/t_exl3_gemm_metal.nim
@@ -124,6 +134,24 @@ proc checkGemm(engine: HwEngine, rng: var Rand, m, k, n: int,
     want = gemmRef(aBits, trellis, m, k, n, bits, cb)
   bandedCheck(got, want, rtol, abstol, label)
 
+proc checkGemmSv(engine: HwEngine, rng: var Rand, m, k, n: int,
+    bits: int, cb: Exl3Codebook, OutT: typedesc, rtol, abstol: float64, label: string,
+    gridTiles: int = 0, gridM: int = 0, hadGridLines: int = 0) =
+  ## sv replay, banded against the composed float64 reference:
+  ## GEMM reference in float64, then the fp32-input Hadamard rotate with svh.
+  let
+    aBits = makeF16Tensor(rng, -2.0'f32, 2.0'f32, m, k)
+    trellis = makeTrellis(rng, (k div 16) * (n div 16), bits)
+    svh = makeF16Tensor(rng, -1.75'f32, 1.75'f32, 1, n)
+    gemm64 = gemmRef(aBits, trellis, m, k, n, bits, cb)
+    got = engine.launchGemmSv(aBits, trellis, m, k, n, bits, cb, OutT, svh,
+      gridTiles, gridM, hadGridLines)
+  when OutT is float32:
+    let want = hadFfRef(gemm64, svh, m, n, exl3Norm128)
+  else:
+    let want = hadFhRef(gemm64, svh, m, n, exl3Norm128)
+  bandedCheck(got, want, rtol, abstol, label)
+
 proc main =
   var engine = newEngine(runMetal)
   var rng = initRand(0xC17D44'i64)
@@ -155,5 +183,15 @@ proc main =
   checkGemm(engine, rng, 37, 64, 128, 2, cb3inst, float16, false, 2e-3, 5e-2, "bits2 multi-chunk undersized grid y", 0, 1)
   checkGemm(engine, rng, 37, 64, 128, 2, cb3inst, float16, false, 2e-3, 5e-2, "bits2 multi-chunk undersized both axes", 1, 1)
   echo "T_EXL3_GEMM_METAL VERDICT: dequant bit-exact, GEMM inside band vs f64 reference on all cases"
+
+  # Stage 3: sv output pass, fp32 GEMM image rotated with svh scales
+  checkGemmSv(engine, rng, 16, 64, 128, 2, cb3inst, float32, 1e-3, 1e-3, "sv bits2 fp32")
+  checkGemmSv(engine, rng, 16, 64, 128, 2, cb3inst, float16, 2e-3, 5e-2, "sv bits2 fp16")
+  checkGemmSv(engine, rng, 37, 64, 128, 2, cb3inst, float16, 2e-3, 5e-2, "sv multi-chunk fp16")
+  checkGemmSv(engine, rng, 16, 64, 256, 4, cbMcg, float16, 2e-3, 5e-2, "sv bits4 mcg fp16")
+  checkGemmSv(engine, rng, 16, 64, 128, 4, cbMul1, float32, 1e-3, 1e-3, "sv bits4 mul1 fp32")
+  checkGemmSv(engine, rng, 37, 64, 128, 2, cb3inst, float16, 2e-3, 5e-2,
+    "sv undersized grids", 1, 1, 1)
+  echo "T_EXL3_GEMM_METAL VERDICT: sv output pass inside band vs composed f64 oracle on all cases"
 
 main()
