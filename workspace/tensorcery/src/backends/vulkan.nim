@@ -84,10 +84,10 @@ const kernelNames: array[KernelId, string] =
    opLayerNormBwdB: "", opCrossEntropyBwd: "", opGatherBwd: "", opSliceBwd: ""]
 
 const kernelGlsl: array[KernelId, string] =
-  [opAdd: kAddGlsl, opMul: "", opMul2: "", opFill: "",
+  [opAdd: kAddGlsl, opMul: kMulGlsl, opMul2: kMul2Glsl, opFill: kFillGlsl,
    opReshape: "", opPermute: "", opSlice: "",
    opGather: "", opLayerNorm: "", opGelu: "",
-   opSoftmax: "", opCrossEntropy: "", opWhere: "",
+   opSoftmax: "", opCrossEntropy: "", opWhere: kWhereGlsl,
    opSgd: "", opAdam: "",
    opSoftmaxBwd: "", opGeluBwd: "", opLayerNormBwdDx: "", opLayerNormBwdW: "",
    opLayerNormBwdB: "", opCrossEntropyBwd: "", opGatherBwd: "", opSliceBwd: ""]
@@ -321,11 +321,19 @@ proc drainVulkan(ctx: Ctx) {.nimcall.} =
     case entry.kernel
     of opAdd:
       bindAndDispatch(cmdBuf, entry, addBufferSlots, scalarBuf, pipe, pools)
-    of opMul, opMul2, opFill, opGather, opLayerNorm, opGelu, opSoftmax,
-       opCrossEntropy, opWhere, opSgd, opAdam, opSoftmaxBwd, opGeluBwd,
+    of opMul:
+      bindAndDispatch(cmdBuf, entry, mulBufferSlots, scalarBuf, pipe, pools)
+    of opMul2:
+      bindAndDispatch(cmdBuf, entry, mul2BufferSlots, scalarBuf, pipe, pools)
+    of opFill:
+      bindAndDispatch(cmdBuf, entry, fillBufferSlots, scalarBuf, pipe, pools)
+    of opGather, opLayerNorm, opGelu, opSoftmax, opCrossEntropy,
+       opSgd, opAdam, opSoftmaxBwd, opGeluBwd,
        opLayerNormBwdDx, opLayerNormBwdW, opLayerNormBwdB, opCrossEntropyBwd,
        opGatherBwd, opSliceBwd:
       doAssert false, "vulkan drain: " & $entry.kernel & " has no Vulkan kernel"
+    of opWhere:
+      bindAndDispatch(cmdBuf, entry, whereBufferSlots, scalarBuf, pipe, pools)
     of opReshape, opPermute, opSlice:
       # pure metadata, skipped above
       discard
@@ -478,19 +486,59 @@ proc mulScalarNoGrad*[T](s: TensorImpl[T, bkVulkan], scalar: float64): AnyTensor
       "vulkan: mulScalarNoGrad(tensor " & $s.tid & ", scalar " & $scalar & ") refused, the Vulkan backend ships the forward op set only"
 
 proc mul*[T](s: TensorImpl[T, bkVulkan], other: AnyTensorImpl): AnyTensorImpl =
-  ## Refusal: opMul2 has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: mul(tensor " & $s.tid & ", tensor " & $other.getTid() & ") refused, opMul2 has no Vulkan kernel yet"
+  ## Erased tensor product: packs the op's args into one blob at enqueue,
+  ## appends one record entry, returns the erased output tensor.
+  ## The output requires grad when either input does.
+  let o = other.to(TensorImpl[T, bkVulkan])
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let sc = Mul2Scalars(
+    aOff: int32(s.offset),
+    bOff: int32(o.offset),
+    shape: padTo4(s.shape, 1),
+    sa: padTo4(s.strides, 0),
+    sb: padTo4(o.strides, 0),
+    n: int32(n))
+  let blob = packMul2Args(Mul2Args(
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
+    bAddr: cast[uint64](o.mem.handle),
+    scalars: sc))
+  s.record(opMul2, blob, elementwiseCfg(n), outMem, s.shape,
+      s.requiresGrad or o.requiresGrad, false, s.tid, o.tid, 0,
+      sc.addr, sizeof(Mul2Scalars)).to(AnyTensorImpl)
 
 proc mulScalar*[T](s: TensorImpl[T, bkVulkan], scalar: float64): AnyTensorImpl =
-  ## Refusal: opMul has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: mulScalar(tensor " & $s.tid & ", scalar " & $scalar & ") refused, opMul has no Vulkan kernel yet"
+  ## Erased scalar multiply: the scalar narrows to the storage element type at pack time.
+  ## The output requires grad when the input does.
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let sc = MulScalars(
+    aOff: int32(s.offset),
+    shape: padTo4(s.shape, 1),
+    sa: padTo4(s.strides, 0),
+    scalar: float32(scalar),
+    n: int32(n))
+  let blob = packMulArgs(MulArgs(
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
+    scalars: sc))
+  s.record(opMul, blob, elementwiseCfg(n), outMem, s.shape,
+      s.requiresGrad, false, s.tid, 0, 0,
+      sc.addr, sizeof(MulScalars)).to(AnyTensorImpl)
 
 proc onesNoGrad*[T](s: TensorImpl[T, bkVulkan]): AnyTensorImpl =
-  ## Refusal: opFill has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: onesNoGrad(tensor " & $s.tid & ") refused, opFill has no Vulkan kernel yet"
+  ## Erased ones fill: one record entry over a fresh output storage, grad flag off.
+  ## backward() seeds the cotangent map from it.
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let sc = FillScalars(n: int32(n))
+  let blob = packFillArgs(FillArgs(
+    outAddr: cast[uint64](outMem.handle),
+    scalars: sc))
+  s.record(opFill, blob, elementwiseCfg(n), outMem, s.shape,
+      false, true, 0, 0, 0,
+      sc.addr, sizeof(FillScalars)).to(AnyTensorImpl)
 
 proc gather*[T](s: TensorImpl[T, bkVulkan], indices: AnyTensorImpl): AnyTensorImpl =
   ## Refusal: opGather has no Vulkan kernel yet.
@@ -518,9 +566,33 @@ proc crossEntropy*[T](s: TensorImpl[T, bkVulkan], targets: AnyTensorImpl): AnyTe
       "vulkan: crossEntropy(tensor " & $s.tid & ", tensor " & $targets.getTid() & ") refused, opCrossEntropy has no Vulkan kernel yet"
 
 proc where*[T](s: TensorImpl[T, bkVulkan], cond, other: AnyTensorImpl): AnyTensorImpl =
-  ## Refusal: opWhere has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: where(tensor " & $s.tid & ", tensor " & $cond.getTid() & ", tensor " & $other.getTid() & ") refused, opWhere has no Vulkan kernel yet"
+  ## Erased elementwise select with `s` on the true branch and `other` on the false branch.
+  ## The output requires grad when any operand does.
+  ##
+  ## Raises AssertionDefect on a shape mismatch, no broadcasting.
+  let c = cond.to(TensorImpl[T, bkVulkan])
+  let o = other.to(TensorImpl[T, bkVulkan])
+  doAssert s.shape == c.shape and s.shape == o.shape,
+      "where: shape mismatch " & $s.shape & " vs " & $c.shape & " vs " & $o.shape &
+      " refused, no broadcasting"
+  doAssert isContiguous(c.shape, c.strides) and isContiguous(s.shape, s.strides) and
+      isContiguous(o.shape, o.strides),
+      "where: non-contiguous operands refused, the kernel reads them linearly from their offsets"
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let sc = WhereScalars(
+    condOff: int32(c.offset), aOff: int32(s.offset), bOff: int32(o.offset),
+    n: int32(n))
+  let blob = packWhereArgs(WhereArgs(
+    outAddr: cast[uint64](outMem.handle),
+    condAddr: cast[uint64](c.mem.handle),
+    aAddr: cast[uint64](s.mem.handle),
+    bAddr: cast[uint64](o.mem.handle),
+    scalars: sc))
+  s.record(opWhere, blob, elementwiseCfg(n), outMem, s.shape,
+      s.requiresGrad or c.requiresGrad or o.requiresGrad, false,
+      c.tid, s.tid, o.tid,
+      sc.addr, sizeof(WhereScalars)).to(AnyTensorImpl)
 
 proc sgdUpdate*[T](s: TensorImpl[T, bkVulkan], grad: AnyTensorImpl, lr: float64): void =
   ## Refusal: in-place optimizer updates stay on CPU and Metal.

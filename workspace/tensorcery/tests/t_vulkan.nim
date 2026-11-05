@@ -122,14 +122,62 @@ proc main() =
         expected.add float64(adata[12 + j * 4 + col])
     checkBand(toSeq[float32](s), expected, "slice readback gathers through strides")
 
+  block mulMulScalar:
+    let ctx = Ctx()
+    let n = 700
+    var adata, bdata: seq[float32]
+    for i in 0 ..< n:
+      adata.add frandSigned(i + 5)
+      bdata.add frandSigned(i + 13)
+    let a = toTensor(ctx, adata, bkVulkan, n)
+    let b = toTensor(ctx, bdata, bkVulkan, n)
+    let prod = a * b
+    let scaled = prod * 2.5
+    let filled = toTensor(ctx, a.getImpl().onesNoGrad(), dtFloat32, devVulkan)
+    vulkan.resetSubmissionCount()
+    ctx.eval()
+    doAssert vulkan.submissionCount == 1,
+        "mul, mulScalar and fill drain in ONE Vulkan submission, got " & $vulkan.submissionCount
+    var expected: seq[float64]
+    for i in 0 ..< n:
+      expected.add 2.5 * float64(adata[i]) * float64(bdata[i])
+    checkBand(toSeq[float32](scaled), expected, "mul then mulScalar")
+    var ones: seq[float64]
+    for i in 0 ..< n:
+      ones.add 1.0
+    checkBand(toSeq[float32](filled), ones, "fill")
+
+  block where:
+    let ctx = Ctx()
+    let n = 256
+    var cdata, adata, bdata: seq[float32]
+    for i in 0 ..< n:
+      cdata.add frand(i + 31)
+      adata.add frandSigned(i + 17)
+      bdata.add frandSigned(i + 23)
+    let cond = toTensor(ctx, cdata, bkVulkan, n)
+    let a = toTensor(ctx, adata, bkVulkan, n)
+    let b = toTensor(ctx, bdata, bkVulkan, n)
+    let sel = where(cond, a, b)
+    vulkan.resetSubmissionCount()
+    ctx.eval()
+    doAssert vulkan.submissionCount == 1, "one eval is one Vulkan submission"
+    var expected: seq[float64]
+    for i in 0 ..< n:
+      if cdata[i] != 0.0:
+        expected.add float64(adata[i])
+      else:
+        expected.add float64(bdata[i])
+    checkBand(toSeq[float32](sel), expected, "where")
+
   block vulkanRefusals:
     let ctx = Ctx()
     let a = toTensor(ctx, @[1.0'f32, 2.0], bkVulkan, 2)
     var refused = false
     try:
-      discard a * a
+      discard a.getImpl().addNoGrad(a.getImpl())
     except AssertionDefect as e:
-      refused = "mul(" in e.msg
-    doAssert refused, "the tensor product is refused on Vulkan, naming the input"
+      refused = "addNoGrad(tensor" in e.msg
+    doAssert refused, "grad-chain composition is refused on Vulkan, naming the input"
 
 main()
