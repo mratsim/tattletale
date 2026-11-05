@@ -209,3 +209,55 @@ proc flowEvent_trigger*(ev: FlowEvent, queue: pointer, enqueue: FlowEventEnqueue
 
 proc flowEvent_triggerIter*(ev: FlowEvent, index: int32, queue: pointer, enqueue: FlowEventEnqueue) {.tpcev, importc: "tpc_flow_event_triggerIter".}
   ## Fires iteration `index` of an iteration event, same contract as flowEvent_trigger
+
+# ################################################## #
+#                 data parallelism                   #
+# ################################################## #
+# Nim wrapper over the C parallelFor runner: one loop task
+# with lazy binary splitting of chunks to idle workers.
+
+proc parallelForRunner*(ctx: ptr WorkerContext, task: ptr Task, body: RangeFn) {.tpc, importc: "tpc_parallelForRunner".}
+  ## Runs the loop task over its remaining range, splitting chunks to idle
+  ## workers with lazy binary splitting
+
+type ParforShell[E] = object
+  ## Env block of a parallelFor chunk: the range body travels inside
+  ## the shell so the C runner copies it whole to every split
+  body: proc(idx: int32, env: ptr E) {.cdecl.}
+  user: E
+
+proc parforRange[E](idx: int32, data: pointer) {.cdecl.} =
+  ## Range adapter: unpacks the shell and calls the user body
+  let shell = cast[ptr ParforShell[E]](data)
+  shell.body(idx, shell.user.addr)
+
+proc parforTask[E](env: pointer) {.cdecl.} =
+  ## Task body of a parallelFor chunk, hands the loop to the C runner
+  let task = cast[ptr Task](cast[ptr pointer](env)[])
+  parallelForRunner(workerContext(), task, parforRange[E])
+
+proc parallelFor*[E](start, stop: int32, env: var E, body: proc(idx: int32, env: ptr E) {.cdecl.}) =
+  ## Runs body over [start, stop) on the calling pool, chunks split lazily
+  ## to idle workers
+  ##
+  ## Contract:
+  ## - body must be a non-capturing proc. The shell copies by value into every chunk
+  ## - call inside syncScope so the chunks join the scope barrier
+  var shell = ParforShell[E](body: body, user: env)
+  let ctx = workerContext()
+  let task = task_newLoopEnv(ctx.currentTask, ctx.currentScope,
+                             parforTask[E], shell.addr, int32 sizeof ParforShell[E],
+                             start, stop, 1, true)
+  schedule(ctx, task, false)
+
+template syncScope*(body: untyped) =
+  ## Runs body inside a scoped barrier and waits until every task
+  ## spawned in the block completes
+  var scopeBarrier: ScopedBarrier
+  scoped_barrier_initialize(scopeBarrier.addr)
+  let ctx = workerContext()
+  let suspendedScope = ctx.currentScope
+  ctx.currentScope = scopeBarrier.addr
+  body
+  syncScopeWait(scopeBarrier.addr)
+  ctx.currentScope = suspendedScope
