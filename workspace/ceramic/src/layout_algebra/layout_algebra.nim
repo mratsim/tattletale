@@ -60,6 +60,8 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #     the size is unchanged and every input integer maps to the
 #     same output integer
 
+proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.}
+
 macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
   ## Merges adjacent dimensions as long as there are no gaps between their elements.
   var builder = TupleBuilderFlat.new(2)
@@ -86,6 +88,24 @@ macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
     let shapeEv = shS.next()
     let strideEv = stS.next()
     if shapeEv.kind != kLeaf:
+      continue
+    if strideEv.kind != kLeaf:
+      # a coordinate-vector stride value evaluates to a coefficient tuple under its scalar shape mode, never merging
+      var depth = 1
+      while depth > 0:
+        let sub = stS.next()
+        case sub.kind
+        of kOpen: depth.inc
+        of kClose: depth.dec
+        else: discard
+      if not headTy.isNil:
+        appendChain()
+      builder.append((shapeEv.leaf, shapeEv.leafTy),
+        (pathSelect(st, strideEv.path), nil))
+      span = 0
+      headTy = nil
+      pending = newEmptyNode()
+      pendingVal = DynamicSentinel
       continue
     let shapeVal = shapeEv.leafTy.getStaticInt()
     let strideVal = strideEv.leafTy.getStaticInt()

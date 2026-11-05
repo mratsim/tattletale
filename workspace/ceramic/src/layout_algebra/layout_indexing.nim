@@ -29,6 +29,29 @@ export layout_indexing_slicedice
 #  crd2idx, coordinate to logical offset
 # ═══════════════════════════════════════════════════════════════
 
+proc isStaticZeroStride(leaf, leafTy: NimNode): bool {.compileTime.} =
+  ## Statically-zero stride leaf: 0, Int[0], or a coordinate
+  ## stride with all-zero coefficients.
+  ##
+  ## A zero stride contributes nothing to a crd2idx sum. A scalar zero
+  ## never joins a coordinate-tuple sum, Int[0] + tuple does not typecheck.
+  if leaf.getStaticInt() == 0:
+    return true
+  if leafTy != nil and leafTy.isStaticInt() and leafTy.getStaticInt() == 0:
+    # an Int[0]() construction node, its value node is an objconstr
+    # that getStaticInt does not fold
+    return true
+  let desc = leafTy.getCoordStrideDescriptor()
+  result = desc.kind == caSingle and desc.scale == 0
+
+proc strideSubtreeAt(stride: NimNode, path: seq[int]): NimNode {.compileTime.} =
+  ## Stride value at `path`, one bracket read per level.
+  ## A coordinate-vector stride value is a tuple sitting one level
+  ## under the scalar shape mode, so the path stops at the mode boundary.
+  result = stride
+  for i in path:
+    result = nnkBracketExpr.newTree(result, newLit(i))
+
 macro crd2idxImpl*(coord, shape, stride: typed): untyped =
   ## One pass over the coord, shape, and stride streams
   ##
@@ -55,6 +78,7 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
   var shapeStream = shape.tupleStream()
   var strideStream = stride.tupleStream()
   var sum: NimNode = nil
+  var zeroSum: NimNode = nil        # statically-zero contributions, summed only when every stride is zero
   var remaining: NimNode = nil       # the quotient thread, decompose only
   var pending, pendingFinal: NimNode # the pending contribution, decompose only
   var decomposing = false
@@ -72,16 +96,39 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
       let strideEvent = strideStream.next()
       case shapeEvent.kind
       of kLeaf:
-        if strideEvent.kind != shapeEvent.kind:
-          error "crd2idx: `shape` and `stride` have different structures", stride
+        var strideLeaf =
+          if strideEvent.kind == kLeaf: strideEvent.leaf else: nil
+        var strideLeafTy =
+          if strideEvent.kind == kLeaf: strideEvent.leafTy else: nil
+        if strideEvent.kind != kLeaf:
+          # a coordinate-vector stride value, a runtime-scaled coordinate
+          # stride evaluated to a coefficient tuple, one stride value
+          # sits under the scalar shape mode
+          var depth = 1
+          while depth > 0:
+            let sub = strideStream.next()
+            case sub.kind
+            of kOpen: depth.inc
+            of kClose: depth.dec
+            else: discard
+          strideLeaf = strideSubtreeAt(stride, strideEvent.path)
+          strideLeafTy = nil
 
         if pending != nil: # pending is nil before the subtree's first leaf
           sum = if sum == nil: pending else: sum + pending
         let shapeLeaf = shapeEvent.leaf
-        let strideLeaf = strideEvent.leaf
         let oldRemaining = remaining
-        pending = oldRemaining mod shapeLeaf * strideLeaf
-        pendingFinal = oldRemaining * strideLeaf
+        if isStaticZeroStride(strideLeaf, strideLeafTy):
+          # a statically-zero stride contributes nothing to the offset,
+          # a scalar zero never joins the coordinate-tuple sum
+          # (Int[0] + tuple does not typecheck)
+          if zeroSum == nil:
+            zeroSum = oldRemaining mod shapeLeaf * strideLeaf
+          pending = nil
+          pendingFinal = nil
+        else:
+          pending = oldRemaining mod shapeLeaf * strideLeaf
+          pendingFinal = oldRemaining * strideLeaf
         remaining = oldRemaining div shapeLeaf
       of kClose:
         if shapeEvent.depth == openDepth:
@@ -100,18 +147,22 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
     if coordEvent.kind == kLeaf and shapeEvent.kind == kOpen:
       # a wildcard coord leaf swallows the nested mode, it contributes nothing
       if coordEvent.leafTy != nil and coordEvent.leafTy.hasType"X":
+        # a wildcard consumes the whole nested mode, both subtrees discarded. A stride subtree may out-nest the shape subtree:
+        # a coordinate-vector stride value sits one level under its scalar shape mode
         var depth = 1
-        while true:
+        while depth > 0:
           let shapeSub = shapeStream.next()
-          discard strideStream.next()
           case shapeSub.kind
-          of kOpen:
-            depth.inc
-          of kClose:
-            depth.dec
-            if depth == 0: break
-          else:
-            discard
+          of kOpen: depth.inc
+          of kClose: depth.dec
+          else: discard
+        depth = 1
+        while depth > 0:
+          let strideSub = strideStream.next()
+          case strideSub.kind
+          of kOpen: depth.inc
+          of kClose: depth.dec
+          else: discard
         continue
       # A scalar coord element into a nested dimension, the coord
       # stream holds still until the subtree closes.
@@ -119,11 +170,40 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
       openDepth = shapeEvent.depth
       decomposing = true
       continue
-    if shapeEvent.kind != coordEvent.kind or strideEvent.kind != coordEvent.kind:
+    var strideLeaf =
+      if strideEvent.kind == kLeaf: strideEvent.leaf else: nil
+    var strideLeafTy =
+      if strideEvent.kind == kLeaf: strideEvent.leafTy else: nil
+    if strideEvent.kind != kLeaf and coordEvent.kind == kLeaf:
+      # a coordinate-vector stride value, a runtime-scaled coordinate
+      # stride evaluated to a coefficient tuple, one stride value
+      # sits under the scalar shape mode
+      var depth = 1
+      while depth > 0:
+        let sub = strideStream.next()
+        case sub.kind
+        of kOpen: depth.inc
+        of kClose: depth.dec
+        else: discard
+      strideLeaf = strideSubtreeAt(stride, strideEvent.path)
+      strideLeafTy = nil
+    elif shapeEvent.kind != coordEvent.kind or strideEvent.kind != coordEvent.kind:
       error "crd2idx: `coord` and `shape` have different structures", shape
     if coordEvent.kind == kLeaf:
-      let prod = coordEvent.leaf * strideEvent.leaf
+      # a wildcard coordinate contributes nothing at a fixed offset
+      if coordEvent.leafTy != nil and coordEvent.leafTy.hasType"X":
+        continue
+      let prod = coordEvent.leaf * strideLeaf
+      if isStaticZeroStride(strideLeaf, strideLeafTy):
+        # a statically-zero stride contributes nothing to the offset,
+        # a scalar zero never joins the coordinate-tuple sum
+        # (Int[0] + tuple does not typecheck)
+        if zeroSum == nil:
+          zeroSum = prod
+        continue
       sum = if sum == nil: prod else: sum + prod
+  if sum == nil:
+    sum = zeroSum
   if sum == nil:
     error "crd2idx: empty shape", shape
   return sum
