@@ -91,13 +91,7 @@ macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
       continue
     if strideEv.kind != kLeaf:
       # a coordinate-vector stride value evaluates to a coefficient tuple under its scalar shape mode, never merging
-      var depth = 1
-      while depth > 0:
-        let sub = stS.next()
-        case sub.kind
-        of kOpen: depth.inc
-        of kClose: depth.dec
-        else: discard
+      stS.drainSubtree()
       if not headTy.isNil:
         appendChain()
       builder.append((shapeEv.leaf, shapeEv.leafTy),

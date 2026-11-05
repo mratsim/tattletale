@@ -248,6 +248,15 @@ proc runRuntimeBlockComplementTests =
     doAssert r.stride[0] === E(32, 0)
     doAssert r.stride[1] === E(2, 1)
   block:
+    # every tiler pair is stride-0 or size-1, no slot exists:
+    # complement = the whole codomain, one terminal at stride 1
+    var m = 6
+    var k = 5
+    let src = make_identity_layout((m, k))
+    let r = complement(make_layout((4, 1), (0, 1)), src.shape)
+    doAssert toInt(r.shape) == m * k
+    doAssert toInt(r.stride) == 1
+  block:
     # divisible box: the block sizes divide both axes exactly
     var m = 64
     var k = 8

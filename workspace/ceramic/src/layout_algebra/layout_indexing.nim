@@ -44,7 +44,7 @@ proc isStaticZeroStride(leaf, leafTy: NimNode): bool {.compileTime.} =
   let desc = leafTy.getCoordStrideDescriptor()
   result = desc.kind == caSingle and desc.scale == 0
 
-proc strideSubtreeAt(stride: NimNode, path: seq[int]): NimNode {.compileTime.} =
+proc strideNodeAt(stride: NimNode, path: seq[int]): NimNode {.compileTime.} =
   ## Stride value at `path`, one bracket read per level.
   ## A coordinate-vector stride value is a tuple sitting one level
   ## under the scalar shape mode, so the path stops at the mode boundary.
@@ -104,14 +104,8 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
           # a coordinate-vector stride value, a runtime-scaled coordinate
           # stride evaluated to a coefficient tuple, one stride value
           # sits under the scalar shape mode
-          var depth = 1
-          while depth > 0:
-            let sub = strideStream.next()
-            case sub.kind
-            of kOpen: depth.inc
-            of kClose: depth.dec
-            else: discard
-          strideLeaf = strideSubtreeAt(stride, strideEvent.path)
+          strideStream.drainSubtree()
+          strideLeaf = strideNodeAt(stride, strideEvent.path)
           strideLeafTy = nil
 
         if pending != nil: # pending is nil before the subtree's first leaf
@@ -149,20 +143,8 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
       if coordEvent.leafTy != nil and coordEvent.leafTy.hasType"X":
         # a wildcard consumes the whole nested mode, both subtrees discarded. A stride subtree may out-nest the shape subtree:
         # a coordinate-vector stride value sits one level under its scalar shape mode
-        var depth = 1
-        while depth > 0:
-          let shapeSub = shapeStream.next()
-          case shapeSub.kind
-          of kOpen: depth.inc
-          of kClose: depth.dec
-          else: discard
-        depth = 1
-        while depth > 0:
-          let strideSub = strideStream.next()
-          case strideSub.kind
-          of kOpen: depth.inc
-          of kClose: depth.dec
-          else: discard
+        shapeStream.drainSubtree()
+        strideStream.drainSubtree()
         continue
       # A scalar coord element into a nested dimension, the coord
       # stream holds still until the subtree closes.
@@ -178,14 +160,8 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
       # a coordinate-vector stride value, a runtime-scaled coordinate
       # stride evaluated to a coefficient tuple, one stride value
       # sits under the scalar shape mode
-      var depth = 1
-      while depth > 0:
-        let sub = strideStream.next()
-        case sub.kind
-        of kOpen: depth.inc
-        of kClose: depth.dec
-        else: discard
-      strideLeaf = strideSubtreeAt(stride, strideEvent.path)
+      strideStream.drainSubtree()
+      strideLeaf = strideNodeAt(stride, strideEvent.path)
       strideLeafTy = nil
     elif shapeEvent.kind != coordEvent.kind or strideEvent.kind != coordEvent.kind:
       error "crd2idx: `coord` and `shape` have different structures", shape
