@@ -641,7 +641,7 @@ RULES = {
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
     "test-header-testthat": Rule("test-header-testthat", True,
-                                 "a test file header with the \"Test that\" line after the run command, the shape is title, Test that, blank, run command"),
+                                 "a test file header without the \"Test that\" line before the run command, the shape is title, Test that, blank, run command"),
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
@@ -1687,12 +1687,10 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
     # The run command may wrap, so its first line anchors it.
     test_that = [n for n, c in header_lines if TEST_THAT_RE.search(c)]
     run_cmd = [n for n, c in header_lines if RUN_CMD_RE.search(c)]
-    # A bare Run header (title, blank, run command) is also valid;
-    # "Test that" is only required when present to sit before the run command.
-    if is_test and test_that and (run_cmd and min(test_that) > min(run_cmd)):
+    if is_test and run_cmd and (not test_that or min(test_that) > min(run_cmd)):
         findings.append(Finding(
             path, first_line, "test-header-testthat",
-            "the \"Test that\" line sits after the run command, "
+            "test file header carries no \"Test that\" line before the run command, "
             "the shape is title, Test that, blank, run command"))
 
 
