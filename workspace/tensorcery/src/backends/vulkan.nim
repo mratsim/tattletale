@@ -12,13 +12,18 @@
 ## eval() encodes every pending entry into ONE command buffer. Dispatches run in record order,
 ## a full memory barrier separates them, one vkQueueSubmit waits on one fence.
 ##
-## Scalar ruling: vulkan_api has no uniform-block layout model, so no scalar kernel argument exists.
-## Each entry's scalar image uploads into its own device buffer at record time. An upload maps
-## host-visible memory and never submits.
+## Scalar ruling: the scalar image stays byte-identical to the packed Nim Scalars
+## object that the MSL twins setBytes.
+##
+## - std430 storage buffers preserve that image, std140 uniform blocks would pad
+##   int[4] arrays to 16-byte strides
+## - each entry's scalar image uploads into its own device buffer at record time
+## - an upload maps host-visible memory and never submits
 ##
 ## Tensor buffers leak (tensorcery frees no device memory yet), scalar buffers free after the fence wait.
 
 import std/tables
+import std/strutils
 import pkg/iface
 
 import
@@ -54,8 +59,11 @@ const
     ## VK_ACCESS_SHADER_READ_BIT.
   accessShaderWrite = 1'u32 shl 6
     ## VK_ACCESS_SHADER_WRITE_BIT.
-  workgroupSize = 256
+  workgroupSize* = 256
     ## Threads per workgroup of the elementwise dispatches, baked into the GLSL sources.
+  maxVulkanBindings = 5
+    ## Descriptor staging cap: today's largest binding count, one buffer slot set
+    ## plus the scalar image. Raises at dispatch when a kernel exceeds it.
 
 type
   VkMemoryBarrier = object
@@ -134,7 +142,8 @@ proc addressSlots(kernel: KernelId): int =
 proc cachePipeline(kernel: KernelId): PipeBundle =
   ## Compiles the kernel's GLSL source and builds the compute pipeline on first use.
   let name = kernelNames[kernel]
-  let glsl = kernelGlsl[kernel]
+  # one source of truth for the workgroup size: it interpolates into the GLSL and the grid math
+  let glsl = kernelGlsl[kernel] % $workgroupSize
   doAssert glsl.len > 0, "vulkan: kernel " & $kernel & " has no GLSL source"
   if not pipelines.hasKey(name):
     let spirv = compileGlslToSpirvViaGlslang(glsl, name)
@@ -205,7 +214,7 @@ proc readAddr(blob: openArray[byte], off: int): vk.VkBuffer =
   copyMem(v.addr, unsafeAddr blob[off], 8)
   cast[vk.VkBuffer](v)
 
-proc hasPendingAfter*(ctx: Ctx, backend: BackendKind, opId: int): bool =
+proc hasPendingAfter(ctx: Ctx, backend: BackendKind, opId: int): bool =
   ## Returns true when a later pending entry of `backend` still dispatches.
   for entry in ctx.record:
     if entry.backend == backend and entry.id > opId and
@@ -234,8 +243,8 @@ proc bindAndDispatch(cmdBuf: vk.VkCommandBuffer, entry: OpEntry, slots: int,
   let pool = session.createDescriptorPool(uint32(bindings))
   pools.add pool
   let ds = session.allocateDescriptorSet(pool, pipe.setLayout)
-  var infos: array[5, vk.VkDescriptorBufferInfo]
-  var writes: array[5, vk.VkWriteDescriptorSet]
+  var infos: array[maxVulkanBindings, vk.VkDescriptorBufferInfo]
+  var writes: array[maxVulkanBindings, vk.VkWriteDescriptorSet]
   for i in 0 ..< slots:
     infos[i] = vk.VkDescriptorBufferInfo(
       buffer: readAddr(entry.blob, i * 8), offset: 0, range: vk.VkDeviceSize.high)
@@ -261,7 +270,7 @@ proc bindAndDispatch(cmdBuf: vk.VkCommandBuffer, entry: OpEntry, slots: int,
 proc drainVulkan(ctx: Ctx) {.nimcall.} =
   ## One submission for the pending entries: one command buffer, one dispatch per
   ## entry in record order, a full memory barrier between dispatches, one submit,
-  ## one fence wait. Scalar-image buffers free after the wait consumed them.
+  ## one fence wait. Scalar-image buffers free once the fence wait consumed them.
   let vkAllocateCommandBuffers = cast[
     proc(device: vk.VkDevice, pAllocateInfo: ptr vk.VkCommandBufferAllocateInfo, pCommandBuffers: ptr vk.VkCommandBuffer): vk.VkResult {.cdecl.}
   ](load("vkAllocateCommandBuffers"))
@@ -384,13 +393,12 @@ proc elementwiseCfg(n: int): LaunchCfg =
     blkX: workgroupSize, blkY: 1, blkZ: 1)
 
 proc padTo4(v: SmallSeq[4, int32], pad: int32): array[4, int32] =
-  ## Pads to 4 axes with `pad`: shapes pad with 1s (the divmod chain stays safe), strides with 0s (padded axes contribute nothing).
+  ## Pads to 4 axes with `pad`: shapes pad with 1s (padded axes contribute nothing to the divmod chain), strides with 0s.
   for i in 0 ..< 4:
     result[i] = if i < int(v.len): v[i] else: pad
 
 proc toVulkanTensorImpl*[T](ctx: Ctx, data: openArray[T], shape: openArray[int], requiresGrad = false): TensorImpl[T, bkVulkan] =
   ## Builds a Vulkan tensor from host data, contiguous, uploaded at construction.
-  ## The upload maps host-visible memory, it never submits.
   let meta = contiguousMeta(shape)
   result = TensorImpl[T, bkVulkan](
     ctx: ctx,
@@ -406,7 +414,7 @@ proc record[T](s: TensorImpl[T, bkVulkan], kernel: KernelId, blob: sink seq[byte
     outMem: SharedMemory, outShape: SmallSeq[4, int32], requiresGrad, isGrad: bool,
     inA, inB, inC: int, scalars: pointer, scalarBytes: int): TensorImpl[T, bkVulkan] =
   ## Enqueues one record entry, uploads the scalar image into its device buffer
-  ## (an upload, never a submission) and wraps the freshly allocated output storage.
+  ## and wraps the freshly allocated output storage.
   ##
   ## The storage epoch advances to the entry, so reads of the output materialize it first.
   ## The output registers in the tape registry.
@@ -470,8 +478,6 @@ proc readbackBytes*[T](s: TensorImpl[T, bkVulkan]): seq[byte] =
   ## evals the context first (the MLX rule).
   if s.ctx.isPending(s.mem.seqNo):
     s.ctx.eval()
-  if s.getNumel() == 0:
-    return newSeq[byte](0)
   var buf = deviceBuffers[uint64(s.mem.handle)]
   let raw = readBuffer[T](session, buf)
   let base = raw[s.offset].unsafeAddr
@@ -481,17 +487,17 @@ proc readbackBytes*[T](s: TensorImpl[T, bkVulkan]): seq[byte] =
 # ------------------------------------------------------------
 
 proc addNoGrad*[T](s: TensorImpl[T, bkVulkan], other: AnyTensorImpl): AnyTensorImpl =
-  ## Refusal: the Vulkan backend ships the forward op set, grad-chain composition stays on CPU and Metal.
+  ## Refusal: the Vulkan backend ships the forward op set. Grad-chain composition is CPU and Metal only.
   doAssert false,
       "vulkan: addNoGrad(tensor " & $s.tid & ", tensor " & $other.getTid() & ") refused, the Vulkan backend ships the forward op set only"
 
 proc mulNoGrad*[T](s: TensorImpl[T, bkVulkan], other: AnyTensorImpl): AnyTensorImpl =
-  ## Refusal: the Vulkan backend ships the forward op set, grad-chain composition stays on CPU and Metal.
+  ## Refusal: the Vulkan backend ships the forward op set. Grad-chain composition is CPU and Metal only.
   doAssert false,
       "vulkan: mulNoGrad(tensor " & $s.tid & ", tensor " & $other.getTid() & ") refused, the Vulkan backend ships the forward op set only"
 
 proc mulScalarNoGrad*[T](s: TensorImpl[T, bkVulkan], scalar: float64): AnyTensorImpl =
-  ## Refusal: the Vulkan backend ships the forward op set, grad-chain composition stays on CPU and Metal.
+  ## Refusal: the Vulkan backend ships the forward op set. Grad-chain composition is CPU and Metal only.
   doAssert false,
       "vulkan: mulScalarNoGrad(tensor " & $s.tid & ", scalar " & $scalar & ") refused, the Vulkan backend ships the forward op set only"
 

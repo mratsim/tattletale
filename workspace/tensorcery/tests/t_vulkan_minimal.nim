@@ -13,12 +13,14 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" --outdir:build/tests workspace/tensorcery/tests/t_vulkan_minimal.nim
 
+import std/strutils
 import
   workspace/crucible/src/runtime/backends/vulkan_common,
   workspace/crucible/src/runtime/backends/vulkan_compile {.all.},
   workspace/crucible/src/runtime/backends/vulkan_descriptor_runtime,
   workspace/crucible/src/abis/vulkan_abi as vk,
   workspace/tensorcery/src/kernels/k_add,
+  workspace/tensorcery/src/backends/vulkan,
   workspace/tensorcery/src/kernels/k_vulkan
 
 const
@@ -51,7 +53,7 @@ proc load(ctx: VulkanContext, name: cstring): pointer =
 
 proc buildAddPipeline(ctx: VulkanContext, setLayout: vk.VkDescriptorSetLayout): PipeBundle =
   ## Compiles the k_add GLSL source and builds the compute pipeline over 4 SSBO bindings.
-  let spirv = compileGlslToSpirvViaGlslang(kAddGlsl, "k_add")
+  let spirv = compileGlslToSpirvViaGlslang(kAddGlsl % $workgroupSize, "k_add")
   let shaderModule = ctx.createShaderModule(spirv)
   let vkCreatePipelineLayout = cast[
     proc(device: vk.VkDevice, pCI: ptr vk.VkPipelineLayoutCreateInfo, pAlloc: pointer, pLayout: ptr vk.VkPipelineLayout): vk.VkResult {.cdecl.}

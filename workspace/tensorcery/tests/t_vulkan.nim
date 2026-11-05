@@ -99,23 +99,36 @@ proc main() =
         expected.add float64(adata[r * 8 + 1 + col]) + float64(bdata[(r + 1) * 8 + col])
     checkBand(toSeq[float32](c), expected, "add of slice views")
 
-  block shapeOpsNeverEnqueue:
+  block shapeOpsNeverSubmit:
     let ctx = Ctx()
     var adata: seq[float32]
     for i in 0 ..< 24:
       adata.add frandSigned(i)
     let a = toTensor(ctx, adata, bkVulkan, 2, 3, 4)
-    vulkan.resetSubmissionCount()
     let r = a.reshape(6, 4)
     let p = a.permute(2, 1, 0)
     let t = a.reshape(6, 4).transpose()
     let s = a.slice(1 .. 1, 0 .. 2, 0 .. 3)
-    doAssert vulkan.submissionCount == 0, "shape ops never enqueue"
+    vulkan.resetSubmissionCount()
+    ctx.eval()
+    doAssert vulkan.submissionCount == 0,
+        "shape ops never dispatch, a shape-op-only record submits nothing"
     let rs = getShape(r)
     doAssert int(rs.len) == 2 and rs[0] == 6 and rs[1] == 4,
         "reshape is pure metadata over the same storage"
-    discard p
-    discard t
+    # permute readback: out axis k reads x axis perm[k], out[a, b, c] = x[c, b, a]
+    var expectedP: seq[float64]
+    for i in 0 ..< 4:
+      for j in 0 ..< 3:
+        for k in 0 ..< 2:
+          expectedP.add float64(adata[k * 12 + j * 4 + i])
+    checkBand(toSeq[float32](p), expectedP, "permute readback gathers through strides")
+    # transpose readback of the (6, 4) reshape: out[r, c] = reshaped[c, r] = adata[c * 4 + r]
+    var expectedT: seq[float64]
+    for r in 0 ..< 4:
+      for c in 0 ..< 6:
+        expectedT.add float64(adata[c * 4 + r])
+    checkBand(toSeq[float32](t), expectedT, "transpose readback gathers through strides")
     var expected: seq[float64]
     for j in 0 ..< 3:
       for col in 0 ..< 4:

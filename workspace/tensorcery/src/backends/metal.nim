@@ -431,8 +431,6 @@ proc readbackBytes*[T](s: TensorImpl[T, bkMetal]): seq[byte] =
   ## evals the context first (the MLX rule).
   if s.ctx.isPending(s.mem.seqNo):
     s.ctx.eval()
-  if s.getNumel() == 0:
-    return newSeq[byte](0)
   let base = cast[ptr T](cast[int](contents(cast[objc.ID](s.mem.handle))) + s.offset * sizeof(T))
   stridedBytes[T](base, s.shape, s.strides)
 

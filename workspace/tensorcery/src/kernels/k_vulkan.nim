@@ -19,7 +19,7 @@
 
 const kAddGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer ABuf { float a[]; } abuf;
 layout(std430, set = 0, binding = 2) buffer BBuf { float b[]; } bbuf;
@@ -49,7 +49,7 @@ void main() {
 
 const kMulGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer ABuf { float a[]; } abuf;
 layout(std430, set = 0, binding = 2) buffer MulSBuf {
@@ -76,7 +76,7 @@ void main() {
 
 const kMul2Glsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer ABuf { float a[]; } abuf;
 layout(std430, set = 0, binding = 2) buffer BBuf { float b[]; } bbuf;
@@ -106,7 +106,7 @@ void main() {
 
 const kFillGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer FillSBuf { int n; } p;
 void main() {
@@ -119,7 +119,7 @@ void main() {
 
 const kWhereGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer CBuf { float c[]; } cbuf;
 layout(std430, set = 0, binding = 2) buffer ABuf { float a[]; } abuf;
@@ -144,7 +144,7 @@ void main() {
 
 const kGatherGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer WBuf { float w[]; } wbuf;
 layout(std430, set = 0, binding = 2) buffer IdxBuf { int idx[]; } idxbuf;
@@ -167,7 +167,7 @@ void main() {
 
 const kLayerNormGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer XBuf { float x[]; } xbuf;
 layout(std430, set = 0, binding = 2) buffer WBuf { float w[]; } wbuf;
@@ -215,7 +215,7 @@ void main() {
 
 const kGeluGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer ABuf { float a[]; } abuf;
 layout(std430, set = 0, binding = 2) buffer GeluSBuf {
@@ -234,7 +234,7 @@ void main() {
 
 const kSoftmaxGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
 layout(std430, set = 0, binding = 1) buffer XBuf { float x[]; } xbuf;
 layout(std430, set = 0, binding = 2) buffer SoftmaxSBuf {
@@ -275,7 +275,7 @@ void main() {
 
 const kCrossEntropyGlsl* = """
 #version 450
-layout(local_size_x = 256) in;
+layout(local_size_x = $1) in;
 layout(std430, set = 0, binding = 0) buffer LossBuf { float l[]; } lossbuf;
 layout(std430, set = 0, binding = 1) buffer LogitsBuf { float g[]; } logitsbuf;
 layout(std430, set = 0, binding = 2) buffer TargetBuf { int t[]; } targetbuf;
