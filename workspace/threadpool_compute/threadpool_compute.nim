@@ -13,6 +13,7 @@ const tpcRoot = currentSourcePath.parentDir
 
 {.passc: "-I\"" & tpcRoot & "\"".}
 {.passc: "-I\"" & tpcRoot / "src" / "threadpool" & "\"".}
+{.passc: "-I\"" & tpcRoot / "include" & "\"".}
 
 # Every generated C file sees the C API declarations, emitted-C launch sites
 # call the runtime directly
@@ -134,3 +135,130 @@ proc spawn*[T](fn: TaskFn, env: var T): Flowvar =
 proc sync*[T](fv: Flowvar): T =
   ## Waits for the flowvar and yields its result
   flowvar_sync(result.addr, fv.unsafeAddr, csize_t sizeof T)
+
+# ################################################## #
+#                 flow events                        #
+# ################################################## #
+# Dataflow task dependencies, Nim wrapper over include/flow_events.h.
+# A flow event is a delayed input: consumer tasks defer until a producer
+# triggers the event.
+
+const tpcFlowEventsHeader = "include/flow_events.h"
+{.pragma: tpcev, importc, cdecl, header: tpcFlowEventsHeader.}
+
+type
+  FlowEvent* {.importc: "tpc_flow_event", header: tpcFlowEventsHeader.} = object
+    ## Reference-counted event handle, C `tpc_flow_event`
+    e*: ptr FlowEventObj
+
+  FlowEventObj* {.importc: "tpc_event", header: tpcFlowEventsHeader.} = object
+    ## Opaque event state behind a FlowEvent handle
+
+  FlowEventDep* {.importc: "tpc_flow_event_dep", header: tpcFlowEventsHeader.} = object
+    ## One dependency of a multi-dependency task: the awaited event,
+    ## and for an iteration event the iteration index
+    event*: FlowEvent
+    index*: int32
+
+  FlowEventEnqueue* = proc(queue: pointer, task: ptr Task) {.cdecl.}
+    ## Schedules a task drained from a triggered event's channel,
+    ## matching the C `tpc_flow_event_enqueue` signature
+
+const noIterDep* = int32(-1)
+  ## FlowEventDep.index of a single (non-iteration) event dependency,
+  ## TPC_NO_ITER in C
+
+proc flowEvent_initSingle*(ev: var FlowEvent) {.tpcev, importc: "tpc_flow_event_initSingle".}
+  ## Initializes a single event with reference count 1,
+  ## aborts when the event is already initialized
+
+proc flowEvent_initIter*(ev: var FlowEvent, start, stop, stride: int32) {.tpcev, importc: "tpc_flow_event_initIter".}
+  ## Initializes an iteration event over [start, stop) with one channel bucket
+  ## per iteration and reference count 1
+
+proc flowEvent_ref*(ev: FlowEvent) {.tpcev, importc: "tpc_flow_event_ref".}
+  ## Adds one reference to the event behind the handle
+
+proc flowEvent_unref*(ev: var FlowEvent) {.tpcev, importc: "tpc_flow_event_unref".}
+  ## Drops one reference and frees the event on the last one,
+  ## every dependent task must already be drained or re-deferred
+
+proc flowEvent_delayedUntil*(task: ptr Task, ev: FlowEvent): bool {.tpcev, importc: "tpc_flow_event_delayedUntil".}
+  ## Defers task until ev triggers
+  ##
+  ## Returns true when the task was delayed and the triggerer schedules it.
+  ## Returns false when the event already fired and the caller schedules the task.
+
+proc flowEvent_delayedUntilIter*(task: ptr Task, ev: FlowEvent, index: int32): bool {.tpcev, importc: "tpc_flow_event_delayedUntilIter".}
+  ## Defers task until iteration `index` of the iteration event ev triggers,
+  ## with the same contract as flowEvent_delayedUntil
+
+proc flowEvent_delayedUntilMulti*(task: ptr Task, deps: ptr UncheckedArray[FlowEventDep], n: int32): bool {.tpcev, importc: "tpc_flow_event_delayedUntilMulti".}
+  ## Defers task until every event in deps[0 ..< n] triggered
+  ##
+  ## Returns true when the task was delayed on some still-untriggered event.
+  ## Returns false when every dependency already fired.
+
+proc flowEvent_delayUntilMulti*(task: ptr Task, deps: openArray[FlowEventDep]): bool =
+  ## openArray convenience over flowEvent_delayedUntilMulti
+  doAssert deps.len > 0, "flowEvent_delayUntilMulti: empty dependency list"
+  flowEvent_delayedUntilMulti(task, cast[ptr UncheckedArray[FlowEventDep]](deps[0].unsafeAddr), int32 deps.len)
+
+proc flowEvent_trigger*(ev: FlowEvent, queue: pointer, enqueue: FlowEventEnqueue) {.tpcev, importc: "tpc_flow_event_trigger".}
+  ## Fires a single event, schedules every drained dependent task through
+  ## enqueue(queue, task). An event triggers once, a re-trigger aborts.
+
+proc flowEvent_triggerIter*(ev: FlowEvent, index: int32, queue: pointer, enqueue: FlowEventEnqueue) {.tpcev, importc: "tpc_flow_event_triggerIter".}
+  ## Fires iteration `index` of an iteration event, same contract as flowEvent_trigger
+
+# ################################################## #
+#                 data parallelism                   #
+# ################################################## #
+# Nim wrapper over the C parallelFor runner: one loop task
+# with lazy binary splitting of chunks to idle workers.
+
+proc parallelForRunner*(ctx: ptr WorkerContext, task: ptr Task, body: RangeFn) {.tpc, importc: "tpc_parallelForRunner".}
+  ## Runs the loop task over its remaining range, splitting chunks to idle
+  ## workers with lazy binary splitting
+
+type ParforShell[E] = object
+  ## Env block of a parallelFor chunk.
+  ## The shell contains the range body, the C runner copies it whole to every split
+  body: proc(idx: int32, env: ptr E) {.cdecl.}
+  user: E
+
+proc parforRange[E](idx: int32, data: pointer) {.cdecl.} =
+  ## Range adapter: unpacks the shell and calls the user body
+  let shell = cast[ptr ParforShell[E]](data)
+  shell.body(idx, shell.user.addr)
+
+proc parforTask[E](env: pointer) {.cdecl.} =
+  ## Task body of a parallelFor chunk, hands the loop to the C runner
+  let task = cast[ptr Task](cast[ptr pointer](env)[])
+  parallelForRunner(workerContext(), task, parforRange[E])
+
+proc parallelFor*[E](start, stop: int32, env: var E, body: proc(idx: int32, env: ptr E) {.cdecl.}) =
+  ## Runs body over [start, stop) on the calling pool, chunks split lazily
+  ## to idle workers
+  ##
+  ## Contract:
+  ## - body must be a non-capturing proc. The shell copies by value into every chunk
+  ## - call inside syncScope so the chunks join the scope barrier
+  var shell = ParforShell[E](body: body, user: env)
+  let ctx = workerContext()
+  let task = task_newLoopEnv(ctx.currentTask, ctx.currentScope,
+                             parforTask[E], shell.addr, int32 sizeof ParforShell[E],
+                             start, stop, 1, true)
+  schedule(ctx, task, false)
+
+template syncScope*(body: untyped) =
+  ## Runs body inside a scoped barrier and waits until every task
+  ## spawned in the block completes
+  var scopeBarrier: ScopedBarrier
+  scoped_barrier_initialize(scopeBarrier.addr)
+  let ctx = workerContext()
+  let suspendedScope = ctx.currentScope
+  ctx.currentScope = scopeBarrier.addr
+  body
+  syncScopeWait(scopeBarrier.addr)
+  ctx.currentScope = suspendedScope

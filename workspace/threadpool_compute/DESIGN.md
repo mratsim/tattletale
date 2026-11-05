@@ -147,3 +147,73 @@ Besides design issues, there are also engineering issues as we can't wake a spec
 - or we create a backoff data structure where specific waiters can be woken up.
 
 Our solution is to embed the backoff structure in the task and add an additional flag to notify when the task can be freed safely.
+
+## Flow events
+
+Flow events model precise data dependencies between tasks.
+The C port adapts weave's `cross_thread_com/flow_events.nim` (weave PR #92),
+see https://github.com/mratsim/weave.
+
+A flow event is a delayed input: consumer tasks defer until a producer task
+triggers the event. A flowvar is a delayed result instead.
+
+### Protocol
+
+Consumer (`delayedUntil`):
+
+1. fast path: the event already triggered, return false and the caller schedules
+   the task itself
+2. `deferredIn.fetchAdd(1)`, then recheck the triggered flag under the channel lock.
+   The producer may have fired in between. When the flag is set,
+   `deferredOut.fetchAdd(1)` and return false
+3. otherwise send the TaskNode to the event channel, `deferredOut.fetchAdd(1)`
+   and return true
+
+Producer (`trigger`):
+
+1. write-once: store `triggered = true` (release fence), then drain the channel.
+   Every drained task is scheduled, unless its TaskNode has a `nextDep` chain:
+   each chain entry is re-deferred on its own event, and on the first successful
+   re-delay the remaining chain moves with it
+2. spin on `deferredIn == deferredOut` and re-drain while a consumer is
+   mid-delay. The two monotonic counters avoid the ABA problem
+
+### API
+
+Lifecycle: `tpc_flow_event_initSingle`, `tpc_flow_event_initIter`,
+`tpc_flow_event_ref`, `tpc_flow_event_unref`. initIter creates one channel
+bucket per iteration.
+
+Deferring: `tpc_flow_event_delayedUntil`, `tpc_flow_event_delayedUntilIter`,
+`tpc_flow_event_delayedUntilMulti`. The multi variant builds one TaskNode per
+dependency and links the nodes through `nextDep` in dependency order.
+The task defers on the first still-untriggered dependency.
+
+Triggering: `tpc_flow_event_trigger`, `tpc_flow_event_triggerIter`. Both take an opaque
+queue pointer and an enqueue callback that schedules every drained task.
+
+Memory: malloc/free, no memory pool. Events are reference counted. refCount is 1 on init,
+one reference per handle. Multi-dependency nodes hold one reference
+and release it when the node frees. unref requires every dependent task drained
+or re-deferred and no trigger in flight.
+
+The channel trades weave's lock-free MPSC for a mutex-guarded FIFO.
+The dual deferred counters and the write-once flag keep the weave protocol.
+The mutex keeps the drain and the channel send mutually exclusive.
+
+### Nim wrapper
+
+`threadpool_compute.nim` exports the wrapper next to the spawn/flowvar/sync API:
+`FlowEvent`, `FlowEventDep`, `FlowEventEnqueue` and the `flowEvent_*` procs carry
+the C names. `noIterDep` is the `TPC_NO_ITER` sentinel for a single-event dependency.
+
+Tests:
+
+- `tests/test_flow_events.c` ports weave's `mainSingle`/`mainLoop` self-tests
+  and adds multi-dependency chains, run through `make`
+- `tests/t_nim_flowevents.nim` exercises the wrapper path
+
+```sh
+make CFLAGS="-O2 -std=c11 -Wall -Wextra -Werror -Wno-cast-function-type-mismatch" test
+nim c --path:../.. -r tests/t_nim_flowevents.nim
+```

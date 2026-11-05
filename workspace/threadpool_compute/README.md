@@ -124,4 +124,25 @@ word is the task self-pointer. `tests/t_nim_api.nim` runs the smoke test:
 nim c --path:../.. -r tests/t_nim_api.nim
 ```
 
+Data parallel loops run through `parallelFor` inside `syncScope`:
+
+```nim
+type AxpyEnv = object
+  a: float32
+  x, y: ptr UncheckedArray[float32]
+
+proc axpyBody(idx: int32, env: ptr AxpyEnv) {.cdecl.} =
+  env.y[][idx] += env.a * env.x[][idx]
+
+syncScope:
+  parallelFor(0, int32 n, env, axpyBody)
+```
+
+The body proc must be non-capturing. The shell copies by value into every chunk.
+`tests/t_nim_parfor.nim` runs a value-checked parallel sum reduction:
+
+```sh
+nim c --path:../.. -r tests/t_nim_parfor.nim
+```
+
 See also [DESIGN.md](DESIGN.md) and [RANDOM_PERMUTATIONS.md](RANDOM_PERMUTATIONS.md).

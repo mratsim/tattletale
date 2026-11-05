@@ -186,6 +186,16 @@ macro `+`*(a, b: tuple): untyped =
         builder.appendTyped(sumExpr)
   return builder.emit(0)
 
+macro `*`*(k: typed, a: tuple): untyped =
+  ## Semimodule completion, evaluation side: a leafwise scalar x
+  ## coordinate-vector product at runtime, scaling a coordinate
+  ## stride's coefficients leafwise
+  var builder = TupleBuilderNested.new(1)
+  for ev in a.tupleStream():
+    builder.onLeaves(ev):
+      builder.appendTyped(k * ev.leaf)
+  return builder.emit(0)
+
 # ═══════════════════════════════════════════════════════════════
 #   Constructors
 # ═══════════════════════════════════════════════════════════════
