@@ -23,7 +23,6 @@
 import workspace/crucible
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/ptr_arithmetic
 import workspace/tensorcery/src/kernels/k_gemm_vulkan
 import workspace/ceramic/tests/ceramic_testutils
 

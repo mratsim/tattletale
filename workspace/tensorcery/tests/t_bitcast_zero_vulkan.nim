@@ -5,14 +5,12 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Bitcast zero sanity test on Vulkan (MoltenVK): zero bits move as zero.
+## Vulkan (MoltenVK): the bit-reinterpret cast moves +0.0 exactly.
 ##
-## The f16/bf16 storage work starts from known-zero bit patterns:
-## the bit-reinterpret path must move +0.0 exactly.
-##
-## - f32 +0.0 -> u32 == 0x00000000, f32 -0.0 -> u32 == 0x80000000
-## - u32 0x00000000 -> f32 +0.0, u32 0x80000000 -> f32 -0.0
-## - bf16 view of f32 +0.0: the top 16 bits are 0x0000
+## Test that zero bit patterns survive the device bitcast round trip:
+## f32 +0.0/-0.0 to u32 0x00000000/0x80000000 and back, and the top 16
+## bits of f32 +0.0 (the bf16 view) are 0x0000. The f16 and bf16 formats
+## store zeros as these bit patterns.
 ##
 ## Run:
 ##   cd tattletale (worktree root)

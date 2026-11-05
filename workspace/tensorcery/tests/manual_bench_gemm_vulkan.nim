@@ -17,7 +17,7 @@
 ##     --outdir:build/tests/bench_gemm_vulkan --nimcache:nimcache/tests/bench_gemm_vulkan \
 ##     workspace/tensorcery/tests/manual_bench_gemm_vulkan.nim
 
-import std/[times, math, strformat]
+import std/[times, strformat]
 import workspace/crucible
 import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/tile_algebra
@@ -27,8 +27,9 @@ import workspace/ceramic/tests/ceramic_testutils
 
 proc gemmTileVulkan8x4(d: distinct TensorView, a: distinct TensorView, b: distinct TensorView, alpha, beta: float32) =
   ## 8x4-cell schedule, each thread owns 8 m-lines x 4 n-columns instead
-  ## of 4x8. Same fragment sizes: the A fragment doubles and the B
-  ## fragment halves per k-tile. Bench-only, the kernel boundary ships 4x8.
+  ## of 4x8. The fragment budget is unchanged, the A fragment doubles
+  ## and the B fragment halves per k-tile. The kernel boundary ships 4x8,
+  ## this variant is bench-only.
   let
     thrID = getLocalThreadID()
     rowBlock = thrID div 8
