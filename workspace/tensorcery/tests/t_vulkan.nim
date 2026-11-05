@@ -243,6 +243,45 @@ proc main() =
       expected.add 0.5 * v * (1.0 + tanh(u))
     checkBand(toSeq[float32](outT), expected, "gelu")
 
+  block softmaxCrossEntropy:
+    let ctx = Ctx()
+    let rows, v = 9
+    var xdata: seq[float32]
+    var tdata: seq[int32]
+    for i in 0 ..< rows * v:
+      xdata.add frandSigned(i + 19) * 4.0
+    for r in 0 ..< rows:
+      tdata.add int32((r * 7 + 3) mod v)
+    let x = toTensor(ctx, xdata, bkVulkan, rows, v)
+    let targets = toTensor(ctx, tdata, bkVulkan, rows)
+    let sm = softmax(x)
+    let ce = crossEntropy(x, targets)
+    vulkan.resetSubmissionCount()
+    ctx.eval()
+    doAssert vulkan.submissionCount == 1,
+        "softmax and cross entropy drain in ONE Vulkan submission, got " & $vulkan.submissionCount
+    var smExpected: seq[float64]
+    var ceExpected: seq[float64]
+    for r in 0 ..< rows:
+      var m = -1.0e300
+      for c in 0 ..< v:
+        m = max(m, float64(xdata[r * v + c]))
+      var s = 0.0
+      var e: seq[float64]
+      for c in 0 ..< v:
+        let ex = exp(float64(xdata[r * v + c]) - m)
+        e.add ex
+        s += ex
+      for c in 0 ..< v:
+        smExpected.add e[c] / s
+      var lseSum = 0.0
+      for c in 0 ..< v:
+        lseSum += exp(float64(xdata[r * v + c]) - m)
+      let lse = m + ln(lseSum)
+      ceExpected.add lse - float64(xdata[r * v + tdata[r]])
+    checkBand(toSeq[float32](sm), smExpected, "softmax")
+    checkBand(toSeq[float32](ce), ceExpected, "cross entropy")
+
   block vulkanRefusals:
     let ctx = Ctx()
     let a = toTensor(ctx, @[1.0'f32, 2.0], bkVulkan, 2)

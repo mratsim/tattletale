@@ -88,7 +88,7 @@ const kernelGlsl: array[KernelId, string] =
   [opAdd: kAddGlsl, opMul: kMulGlsl, opMul2: kMul2Glsl, opFill: kFillGlsl,
    opReshape: "", opPermute: "", opSlice: "",
    opGather: kGatherGlsl, opLayerNorm: kLayerNormGlsl, opGelu: kGeluGlsl,
-   opSoftmax: "", opCrossEntropy: "", opWhere: kWhereGlsl,
+   opSoftmax: kSoftmaxGlsl, opCrossEntropy: kCrossEntropyGlsl, opWhere: kWhereGlsl,
    opSgd: "", opAdam: "",
    opSoftmaxBwd: "", opGeluBwd: "", opLayerNormBwdDx: "", opLayerNormBwdW: "",
    opLayerNormBwdB: "", opCrossEntropyBwd: "", opGatherBwd: "", opSliceBwd: ""]
@@ -334,8 +334,11 @@ proc drainVulkan(ctx: Ctx) {.nimcall.} =
       bindAndDispatch(cmdBuf, entry, layerNormBufferSlots, scalarBuf, pipe, pools)
     of opGelu:
       bindAndDispatch(cmdBuf, entry, geluBufferSlots, scalarBuf, pipe, pools)
-    of opSoftmax, opCrossEntropy,
-       opSgd, opAdam, opSoftmaxBwd, opGeluBwd,
+    of opSoftmax:
+      bindAndDispatch(cmdBuf, entry, softmaxBufferSlots, scalarBuf, pipe, pools)
+    of opCrossEntropy:
+      bindAndDispatch(cmdBuf, entry, crossEntropyBufferSlots, scalarBuf, pipe, pools)
+    of opSgd, opAdam, opSoftmaxBwd, opGeluBwd,
        opLayerNormBwdDx, opLayerNormBwdW, opLayerNormBwdB, opCrossEntropyBwd,
        opGatherBwd, opSliceBwd:
       doAssert false, "vulkan drain: " & $entry.kernel & " has no Vulkan kernel"
@@ -623,14 +626,45 @@ proc gelu*[T](s: TensorImpl[T, bkVulkan]): AnyTensorImpl =
       sc.addr, sizeof(GeluScalars)).to(AnyTensorImpl)
 
 proc softmax*[T](s: TensorImpl[T, bkVulkan]): AnyTensorImpl =
-  ## Refusal: opSoftmax has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: softmax(tensor " & $s.tid & ") refused, opSoftmax has no Vulkan kernel yet"
+  ## Erased last-axis softmax over `s`. The output requires grad when `s` does.
+  let dAxis = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div dAxis
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let sc = SoftmaxScalars(
+    xOff: int32(s.offset),
+    xShape: padTo4(s.shape, 1), xs: padTo4(s.strides, 0),
+    d: int32(dAxis), rows: int32(rows), xStep: int32(s.strides[int(s.shape.len) - 1]))
+  let blob = packSoftmaxArgs(SoftmaxArgs(
+    outAddr: cast[uint64](outMem.handle),
+    xAddr: cast[uint64](s.mem.handle),
+    scalars: sc))
+  s.record(opSoftmax, blob, elementwiseCfg(rows), outMem, s.shape,
+      s.requiresGrad, false, s.tid, 0, 0,
+      sc.addr, sizeof(SoftmaxScalars)).to(AnyTensorImpl)
 
 proc crossEntropy*[T](s: TensorImpl[T, bkVulkan], targets: AnyTensorImpl): AnyTensorImpl =
-  ## Refusal: opCrossEntropy has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: crossEntropy(tensor " & $s.tid & ", tensor " & $targets.getTid() & ") refused, opCrossEntropy has no Vulkan kernel yet"
+  ## Erased cross entropy: one loss per set of `v` logits over the last axis of `s`,
+  ## the int32 `targets` name the class per set. The output requires grad when the logits do.
+  ##
+  ## Raises AssertionDefect for a non-contiguous target view.
+  let tgt = targets.to(TensorImpl[int32, bkVulkan])
+  doAssert isContiguous(tgt.shape, tgt.strides), "cross entropy: non-contiguous target view refused"
+  let v = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div v
+  let outMem = allocSharedMem(rows * sizeof(T), rows)
+  let sc = CrossEntropyScalars(
+    logitsOff: int32(s.offset), targetOff: int32(tgt.offset),
+    logitsShape: padTo4(s.shape, 1), logitsStrides: padTo4(s.strides, 0),
+    v: int32(v), rows: int32(rows), logitStep: int32(s.strides[int(s.shape.len) - 1]))
+  let blob = packCrossEntropyArgs(CrossEntropyArgs(
+    lossAddr: cast[uint64](outMem.handle),
+    logitsAddr: cast[uint64](s.mem.handle),
+    targetAddr: cast[uint64](tgt.mem.handle),
+    scalars: sc))
+  s.record(opCrossEntropy, blob, elementwiseCfg(rows), outMem, dropLastDim(s.shape),
+      s.requiresGrad, false, s.tid, tgt.tid, 0,
+      sc.addr, sizeof(CrossEntropyScalars)).to(AnyTensorImpl)
 
 proc where*[T](s: TensorImpl[T, bkVulkan], cond, other: AnyTensorImpl): AnyTensorImpl =
   ## Erased elementwise select with `s` on the true branch and `other` on the false branch.

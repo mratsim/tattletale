@@ -231,3 +231,85 @@ void main() {
   }
 }
 """
+
+const kSoftmaxGlsl* = """
+#version 450
+layout(local_size_x = 256) in;
+layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
+layout(std430, set = 0, binding = 1) buffer XBuf { float x[]; } xbuf;
+layout(std430, set = 0, binding = 2) buffer SoftmaxSBuf {
+  int xOff;
+  int xShape[4];
+  int xs[4];
+  int d;
+  int rows;
+  int xStep;
+} p;
+void main() {
+  int r = int(gl_GlobalInvocationID.x);
+  if (r < p.rows) {
+    int i0 = r * p.d;
+    int c3 = i0 % p.xShape[3];
+    int t2 = i0 / p.xShape[3];
+    int c2 = t2 % p.xShape[2];
+    int t1 = t2 / p.xShape[2];
+    int c1 = t1 % p.xShape[1];
+    int c0 = t1 / p.xShape[1];
+    int base = p.xOff + (c0 * p.xs[0] + c1 * p.xs[1]) + c2 * p.xs[2] + c3 * p.xs[3];
+    float m = xbuf.x[base];
+    for (int c = 1; c < p.d; c++) {
+      m = max(m, xbuf.x[base + c * p.xStep]);
+    }
+    float s = 0.0;
+    for (int c = 0; c < p.d; c++) {
+      float e = exp(xbuf.x[base + c * p.xStep] - m);
+      outb.o[i0 + c] = e;
+      s += e;
+    }
+    for (int c = 0; c < p.d; c++) {
+      outb.o[i0 + c] /= s;
+    }
+  }
+}
+"""
+
+const kCrossEntropyGlsl* = """
+#version 450
+layout(local_size_x = 256) in;
+layout(std430, set = 0, binding = 0) buffer LossBuf { float l[]; } lossbuf;
+layout(std430, set = 0, binding = 1) buffer LogitsBuf { float g[]; } logitsbuf;
+layout(std430, set = 0, binding = 2) buffer TargetBuf { int t[]; } targetbuf;
+layout(std430, set = 0, binding = 3) buffer CrossEntropySBuf {
+  int logitsOff;
+  int targetOff;
+  int logitsShape[4];
+  int logitsStrides[4];
+  int v;
+  int rows;
+  int logitStep;
+} p;
+void main() {
+  int r = int(gl_GlobalInvocationID.x);
+  if (r < p.rows) {
+    int i0 = r * p.v;
+    int c3 = i0 % p.logitsShape[3];
+    int t2 = i0 / p.logitsShape[3];
+    int c2 = t2 % p.logitsShape[2];
+    int t1 = t2 / p.logitsShape[2];
+    int c1 = t1 % p.logitsShape[1];
+    int c0 = t1 / p.logitsShape[1];
+    int base = p.logitsOff + (c0 * p.logitsStrides[0] + c1 * p.logitsStrides[1]) +
+               c2 * p.logitsStrides[2] + c3 * p.logitsStrides[3];
+    float m = logitsbuf.g[base];
+    for (int c = 1; c < p.v; c++) {
+      m = max(m, logitsbuf.g[base + c * p.logitStep]);
+    }
+    float s = 0.0;
+    for (int c = 0; c < p.v; c++) {
+      s += exp(logitsbuf.g[base + c * p.logitStep] - m);
+    }
+    float lse = m + log(s);
+    lossbuf.l[r] = lse - logitsbuf.g[base + targetbuf.t[p.targetOff + r] * p.logitStep];
+  }
+}
+"""
