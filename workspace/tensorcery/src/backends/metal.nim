@@ -30,6 +30,7 @@ import
 import
   workspace/data_structures/src/small_seqs,
   workspace/tensorcery/src/raw/dtypes,
+  workspace/tensorcery/src/raw/bridge,
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
   workspace/tensorcery/src/tape,
@@ -493,12 +494,17 @@ proc layernorm*[T](s: TensorImpl[T, bkMetal], w, b: AnyTensorImpl, eps: float64)
 
 proc gelu*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
   ## Erased tanh-approximate gelu over `s`. The output requires grad when `s` does.
+  ## The input stages through the BridgeTensor boundary into the kernel image.
   let n = s.getNumel()
   let outMem = allocSharedMem(n * sizeof(T), n)
+  let staged = BridgeTensor[T](
+    base: cast[uint64](s.mem.handle), offset: s.offset,
+    shape: s.shape, strides: s.strides)
+  let view = staged.toView()
   let blob = packGeluArgs(GeluArgs(
     outAddr: cast[uint64](outMem.handle),
-    aAddr: cast[uint64](s.mem.handle),
-    scalars: GeluScalars(aOff: int32(s.offset), n: int32(n))))
+    aAddr: view.base,
+    scalars: GeluScalars(aOff: view.off, n: int32(n))))
   s.record(opGelu, blob, elementwiseCfg(n), outMem, s.shape,
       s.requiresGrad, false, s.tid, 0, 0).to(AnyTensorImpl)
 
