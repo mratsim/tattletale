@@ -25,7 +25,8 @@ import
   workspace/data_structures/src/small_seqs,
   workspace/tensorcery/src/raw/dtypes,
   workspace/tensorcery/src/ctx,
-  workspace/tensorcery/src/kernels/k_shape
+  workspace/tensorcery/src/kernels/k_shape,
+  workspace/tensorcery/src/kernels/k_sgd_adam
 
 iface *AnyTensorImpl:
   proc getTid(): int
@@ -44,6 +45,14 @@ iface *AnyTensorImpl:
   proc permuteDims(perm: SmallSeq[4, int32]): AnyTensorImpl
   proc sliceRange(start, count: SmallSeq[4, int32]): AnyTensorImpl
   proc aliasAs(other: AnyTensorImpl): AnyTensorImpl
+  proc gather(indices: AnyTensorImpl): AnyTensorImpl
+  proc layernorm(w, b: AnyTensorImpl, eps: float64): AnyTensorImpl
+  proc gelu(): AnyTensorImpl
+  proc softmax(): AnyTensorImpl
+  proc crossEntropy(targets: AnyTensorImpl): AnyTensorImpl
+  proc where(cond, other: AnyTensorImpl): AnyTensorImpl
+  proc sgdUpdate(grad: AnyTensorImpl, lr: float64): void
+  proc adamUpdate(grad, m, v: AnyTensorImpl, pack: AdamScalars): void
   proc readbackBytes(): seq[byte]
 
 type DeviceHandle* = distinct uint64
@@ -102,6 +111,32 @@ proc contiguousMeta*(shape: openArray[int]): tuple[shape, strides: SmallSeq[4, i
   result.shape = SmallSeq[4, int32].initFrom(extents.toOpenArray(0, shape.len - 1))
 
   result.strides = contiguousStrides(result.shape)
+
+proc appendDim*(shape: SmallSeq[4, int32], dim: int32): SmallSeq[4, int32] =
+  ## Appends one axis to a rank-checked shape, the gather output shape.
+  let rank = int(shape.len)
+  doAssert rank < 4, "gather: output rank " & $(rank + 1) & " refused, tensorcery supports rank 1 to 4"
+  var dims: array[4, int32]
+  for i in 0 ..< rank:
+    dims[i] = shape[i]
+  dims[rank] = dim
+  result = SmallSeq[4, int32].initFrom(dims.toOpenArray(0, rank))
+
+proc dropLastDim*(shape: SmallSeq[4, int32]): SmallSeq[4, int32] =
+  ## Removes the last axis of a rank-checked shape, the cross entropy loss shape.
+  let rank = int(shape.len)
+  doAssert rank > 1, "cross entropy: a rank 1 logit tensor has no class axis"
+  result = SmallSeq[4, int32].initFrom(
+    toArray4(shape).toOpenArray(0, rank - 2))
+
+proc sameMeta*(a, b: SmallSeq[4, int32]): bool =
+  ## Returns true when both axis lists match element for element.
+  if a.len != b.len:
+    return false
+  for i in 0 ..< int(a.len):
+    if a[i] != b[i]:
+      return false
+  result = true
 
 proc isContiguous*(shape, strides: SmallSeq[4, int32]): bool =
   ## Returns true when `strides` is the contiguous layout of `shape`.

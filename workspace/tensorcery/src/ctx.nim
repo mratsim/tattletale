@@ -28,7 +28,7 @@ type
     opPermute   ## pure-metadata dimension permutation, never dispatched
     opSlice     ## pure-metadata range selection, never dispatched
 
-    ## Microgpt op set:
+    # Microgpt op set
     opGather    ## embedding lookup via kernel k_gather
     opLayerNorm ## last-axis layernorm, kernel k_layernorm
     opGelu      ## tanh-approximate gelu, kernel k_gelu

@@ -15,6 +15,7 @@
 ## an output requires grad when any input does.
 ## The record evaluates on eval() or on read, toSeq and to() eval the context first when the tensor is pending.
 
+import std/math
 import pkg/iface
 
 import
@@ -23,6 +24,7 @@ import
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
   workspace/tensorcery/src/tape,
+  workspace/tensorcery/src/kernels/k_sgd_adam,
   workspace/tensorcery/src/backends/metal,
   workspace/tensorcery/src/backends/cpu
 
@@ -31,9 +33,13 @@ import
 # Without this re-export the mixin binds the erased signature and the conformance check fails.
 export metal.add, metal.mul, metal.mulScalar
 export metal.addNoGrad, metal.mulNoGrad, metal.mulScalarNoGrad, metal.onesNoGrad
+export metal.gather, metal.layernorm, metal.gelu, metal.softmax
+export metal.crossEntropy, metal.where, metal.sgdUpdate, metal.adamUpdate
 export metal.readbackBytes
 export cpu.add, cpu.mul, cpu.mulScalar
 export cpu.addNoGrad, cpu.mulNoGrad, cpu.mulScalarNoGrad, cpu.onesNoGrad
+export cpu.gather, cpu.layernorm, cpu.gelu, cpu.softmax
+export cpu.crossEntropy, cpu.where, cpu.sgdUpdate, cpu.adamUpdate
 export cpu.readbackBytes
 
 type Tensor* = object
@@ -52,10 +58,10 @@ proc toTensorShaped[T](ctx: Ctx, data: openArray[T], Hw: static BackendKind, sha
     let erasedImpl = toTensorImpl[T, Hw](ctx, data, shape, requiresGrad).toErased()
   elif Hw == bkMetal:
     ensureMetal(ctx)
-    when T is float32:
+    when T is float32 or T is int32:
       let erasedImpl = toMetalTensorImpl(ctx, data, shape, requiresGrad).toErased()
     else:
-      doAssert false, "Metal construction supports float32, got " & $toDtype(T)
+      {.error: "Metal construction supports float32 and int32 only, got " & $toDtype(T).}
 
   tape.register(ctx, erasedImpl.getTid(), erasedImpl)
   Tensor(
@@ -153,6 +159,8 @@ proc `+`*(a, b: Tensor): Tensor =
       "add: cross-device operands " & $a.device & " x " & $b.device & " refused, copy to one device first"
   doAssert a.dtype == b.dtype,
       "add: mixed dtypes " & $a.dtype & " x " & $b.dtype & " refused"
+  doAssert a.dtype == dtFloat32,
+      "add: " & $a.dtype & " operands refused, arithmetic ops support float32"
   doAssert sameShape(a.getShape(), b.getShape()),
       "add: shape mismatch " & $a.getShape() & " vs " & $b.getShape() &
       " refused, no broadcasting"
@@ -169,6 +177,8 @@ proc `*`*(a, b: Tensor): Tensor =
       "mul: cross-device operands " & $a.device & " x " & $b.device & " refused, copy to one device first"
   doAssert a.dtype == b.dtype,
       "mul: mixed dtypes " & $a.dtype & " x " & $b.dtype & " refused"
+  doAssert a.dtype == dtFloat32,
+      "mul: " & $a.dtype & " operands refused, arithmetic ops support float32"
   doAssert sameShape(a.getShape(), b.getShape()),
       "mul: shape mismatch " & $a.getShape() & " vs " & $b.getShape() &
       " refused, no broadcasting"
@@ -180,6 +190,10 @@ proc `*`*(a, b: Tensor): Tensor =
 proc `*`*(a: Tensor, scalar: float64): Tensor =
   ## Elementwise multiply by a scalar, recorded on the context.
   ## The scalar narrows to the tensor's dtype at enqueue.
+  ##
+  ## Raises AssertionDefect for non-float32 tensors.
+  doAssert a.dtype == dtFloat32,
+      "scalar mul: " & $a.dtype & " operands refused, arithmetic ops support float32"
   let outImpl = a.impl.mulScalar(scalar)
   tape.register(a.ctx, outImpl.getTid(), outImpl)
   Tensor(ctx: a.ctx, impl: outImpl, dtype: a.dtype, device: a.device)
@@ -283,3 +297,105 @@ proc slice*(t: Tensor, sel: varargs[Slice[int]]): Tensor =
   wrapView(t, t.impl.sliceRange(
     SmallSeq[4, int32].initFrom(start.toOpenArray(0, rank - 1)),
     SmallSeq[4, int32].initFrom(count.toOpenArray(0, rank - 1))))
+
+
+# Microgpt op set
+# ------------------------------------------------------------
+
+proc checkSameCtxDevice(a, b: Tensor, op: string) =
+  ## Refuses cross-context and cross-device operands, naming the combo.
+  doAssert a.ctx == b.ctx, op & ": operands from different contexts refused"
+  doAssert a.device == b.device,
+      op & ": cross-device operands " & $a.device & " x " & $b.device &
+      " refused, copy to one device first"
+
+proc checkFloat32(t: Tensor, op: string) =
+  ## Refuses non-float32 tensors on the differentiable op set.
+  doAssert t.dtype == dtFloat32, op & ": " & $t.dtype & " refused, float32 only"
+
+proc wrapOp(t: Tensor, outImpl: AnyTensorImpl): Tensor =
+  ## Face wrapper over a computed output: registers the tensor id and the producing op's dtype and device.
+  tape.register(t.ctx, outImpl.getTid(), outImpl)
+  Tensor(ctx: t.ctx, impl: outImpl, dtype: t.dtype, device: t.device)
+
+proc gather*(w: Tensor, indices: Tensor): Tensor =
+  ## Embedding lookup: the embedding vector at index `indices[i]` in the rank-2 table
+  ## `w` for each index, output shape indices.shape + [embedding dim], recorded on the context.
+  ##
+  ## Raises AssertionDefect for a float32 table with non-int32 indices or any
+  ## cross-context, cross-device, mixed-dtype combo.
+  checkSameCtxDevice(w, indices, "gather")
+  checkFloat32(w, "gather table")
+  doAssert indices.dtype == dtInt32,
+      "gather: int32 indices refused, got " & $indices.dtype
+  wrapOp(w, w.impl.gather(indices.impl))
+
+proc layernorm*(x, w, b: Tensor, eps: float64): Tensor =
+  ## Last-axis layernorm over `x` with the learned scale `w` and shift `b`,
+  ## recorded on the context.
+  checkSameCtxDevice(x, w, "layernorm")
+  checkSameCtxDevice(x, b, "layernorm")
+  checkFloat32(x, "layernorm input")
+  checkFloat32(w, "layernorm scale")
+  checkFloat32(b, "layernorm shift")
+  wrapOp(x, x.impl.layernorm(w.impl, b.impl, eps))
+
+proc gelu*(x: Tensor): Tensor =
+  ## Tanh-approximate gelu over `x`, recorded on the context.
+  checkFloat32(x, "gelu")
+  wrapOp(x, x.impl.gelu())
+
+proc softmax*(x: Tensor): Tensor =
+  ## Last-axis softmax over `x`, recorded on the context.
+  checkFloat32(x, "softmax")
+  wrapOp(x, x.impl.softmax())
+
+proc crossEntropy*(logits, targets: Tensor): Tensor =
+  ## Cross entropy over the last axis of `logits`, one loss element per logit set,
+  ## `targets` names the class per set, recorded on the context.
+  checkSameCtxDevice(logits, targets, "cross entropy")
+  checkFloat32(logits, "cross entropy logits")
+  doAssert targets.dtype == dtInt32,
+      "cross entropy: int32 targets refused, got " & $targets.dtype
+  wrapOp(logits, logits.impl.crossEntropy(targets.impl))
+
+proc where*(cond, a, b: Tensor): Tensor =
+  ## Elementwise select: `a` where `cond` is nonzero, `b` elsewhere, recorded on the context.
+  ## Same shape only, no broadcasting.
+  checkSameCtxDevice(cond, a, "where")
+  checkSameCtxDevice(cond, b, "where")
+  checkFloat32(cond, "where condition")
+  checkFloat32(a, "where true branch")
+  checkFloat32(b, "where false branch")
+  doAssert sameShape(cond.getShape(), a.getShape()) and
+      sameShape(cond.getShape(), b.getShape()),
+      "where: shape mismatch " & $cond.getShape() & " vs " & $a.getShape() &
+      " vs " & $b.getShape() & " refused, no broadcasting"
+  wrapOp(a, a.impl.where(cond.impl, b.impl))
+
+proc sgdUpdate*(p, g: Tensor, lr: float64): void =
+  ## In-place sgd parameter update: `p` moves by `-lr * g`, recorded on the context.
+  ## Reading the parameters materializes the update first (the MLX rule).
+  checkSameCtxDevice(p, g, "sgd update")
+  checkFloat32(p, "sgd update")
+  checkFloat32(g, "sgd update gradient")
+  p.impl.sgdUpdate(g.impl, lr)
+
+proc adamUpdate*(p, g, m, v: Tensor, lr, beta1, beta2, eps: float64, step: int): void =
+  ## In-place adam parameter update over `p` with gradient `g` and the persistent
+  ## moments `m` and `v`, recorded on the context. The bias corrections
+  ## bc1 = 1/(1 - beta1^step) and bc2 = 1/(1 - beta2^step) fold in at enqueue.
+  ## Reading the parameters materializes the update first (the MLX rule).
+  checkSameCtxDevice(p, g, "adam update")
+  checkSameCtxDevice(p, m, "adam update")
+  checkSameCtxDevice(p, v, "adam update")
+  checkFloat32(p, "adam update")
+  checkFloat32(g, "adam update gradient")
+  checkFloat32(m, "adam update first moment")
+  checkFloat32(v, "adam update second moment")
+  doAssert step >= 1, "adam update: step must count from 1, got " & $step
+  let bc1 = 1.0 / (1.0 - pow(beta1, float64(step)))
+  let bc2 = 1.0 / (1.0 - pow(beta2, float64(step)))
+  p.impl.adamUpdate(g.impl, m.impl, v.impl, AdamScalars(
+    lr: float32(lr), beta1: float32(beta1), beta2: float32(beta2), eps: float32(eps),
+    bc1: float32(bc1), bc2: float32(bc2)))

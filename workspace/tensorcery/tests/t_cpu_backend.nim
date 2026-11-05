@@ -64,10 +64,10 @@ proc main() =
     doAssert impl.seqNo != 0, "a computed tensor carries its producing op id"
 
   block rank4:
-    let a = toTensor(ctx, @[1'i64, 2, 3, 4, 5, 6, 7, 8], 1, 2, 2, 2)
-    let b = toTensor(ctx, @[10'i64, 20, 30, 40, 50, 60, 70, 80], 1, 2, 2, 2)
+    let a = toTensor(ctx, @[1.0'f32, 2, 3, 4, 5, 6, 7, 8], 1, 2, 2, 2)
+    let b = toTensor(ctx, @[10.0'f32, 20, 30, 40, 50, 60, 70, 80], 1, 2, 2, 2)
     let c = a + b
-    doAssert toSeq[int64](c) == @[11'i64, 22, 33, 44, 55, 66, 77, 88]
+    doAssert toSeq[float32](c) == @[11.0'f32, 22, 33, 44, 55, 66, 77, 88]
 
   stdout.writeLine "t_cpu_backend: OK"
 
