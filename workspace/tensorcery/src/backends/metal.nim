@@ -49,7 +49,10 @@ const metalSource* = kAddMsl & kMulMsl & kMul2Msl & kFillMsl
 
 const kernelNames: array[KernelId, string] =
   [opAdd: "k_add", opMul: "k_mul", opMul2: "k_mul2", opFill: "k_fill",
-   opReshape: "", opPermute: "", opSlice: ""]
+   opReshape: "", opPermute: "", opSlice: "",
+   opGather: "k_gather", opLayerNorm: "k_layernorm", opGelu: "k_gelu",
+   opSoftmax: "k_softmax", opCrossEntropy: "k_crossentropy", opWhere: "k_where",
+   opSgd: "k_sgd", opAdam: "k_adam"]
 
 var
   sessionDevice, sessionQueue, sessionLibrary: objc.ID
@@ -155,6 +158,9 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
       of opReshape, opPermute, opSlice:
         # pure metadata, skipped above
         discard
+      of opGather, opLayerNorm, opGelu, opSoftmax, opCrossEntropy, opWhere, opSgd, opAdam:
+        # the microgpt op set binds its kernels in the same stage that records them
+        doAssert false, "op " & $entry.kernel & " reached the Metal drain without a kernel binding"
       dispatchThreadgroups(encoder, entry.cfg)
     discard objc.msgSend(encoder, objc.`$$`("endEncoding"))
     discard objc.msgSend(cmdBuf, objc.`$$`("commit"))

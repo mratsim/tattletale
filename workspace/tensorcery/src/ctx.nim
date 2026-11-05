@@ -28,6 +28,16 @@ type
     opPermute   ## pure-metadata dimension permutation, never dispatched
     opSlice     ## pure-metadata range selection, never dispatched
 
+    ## Microgpt op set:
+    opGather    ## embedding lookup via kernel k_gather
+    opLayerNorm ## last-axis layernorm, kernel k_layernorm
+    opGelu      ## tanh-approximate gelu, kernel k_gelu
+    opSoftmax   ## last-axis softmax, kernel k_softmax
+    opCrossEntropy ## cross entropy loss, kernel k_crossentropy
+    opWhere     ## elementwise select via kernel k_where
+    opSgd       ## in-place sgd parameter update, kernel k_sgd_adam
+    opAdam      ## in-place adam parameter update, kernel k_sgd_adam
+
   LaunchCfg* = object
     ## Threadgroup dispatch of one recorded op.
     gridX*, gridY*, gridZ*: int32

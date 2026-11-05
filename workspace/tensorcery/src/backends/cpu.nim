@@ -44,14 +44,12 @@ type
     ## Runs one recorded op's kernel, instantiated per element type at enqueue.
 
   CpuOpWork = object
-    ## Decoded args of one recorded op plus its completion event.
-    ## Heap allocated at drain, freed by the op task after it fires the event.
+    ## Args of one recorded op plus its completion event.
+    ## The blob is the args object's flat image, so the drain heap-copies it once
+    ## and the runner casts it to the op's args type. Heap allocated at drain,
+    ## the args copy and the work block are freed by the op task after it fires the event.
     run: CpuOpRunner
-    outp, a, b: pointer
-    addScalars: AddScalars
-    mulScalars: MulScalars
-    mul2Scalars: Mul2Scalars
-    fillScalars: FillScalars
+    args: pointer
     event: FlowEvent
     completions: ptr Atomic[int32]
 
@@ -158,44 +156,49 @@ proc cpuOpTask(env: pointer) {.cdecl.} =
   work.run(work)
   flowEvent_trigger(work.event, workerContext(), scheduleFromEvent)
   discard work.completions[].fetchAdd(1)
+  dealloc(work.args)
   dealloc(work)
 
 proc runAddOp[T](work: ptr CpuOpWork) {.cdecl.} =
   ## Add kernel execution through the parallelFor wrapper.
+  let args = cast[ptr AddArgs](work.args)
   var env = StridedAddEnv[T](
-    outp: cast[ptr UncheckedArray[T]](work.outp),
-    a: cast[ptr UncheckedArray[T]](work.a),
-    b: cast[ptr UncheckedArray[T]](work.b),
-    scalars: work.addScalars)
+    outp: cast[ptr UncheckedArray[T]](args.outAddr),
+    a: cast[ptr UncheckedArray[T]](args.aAddr),
+    b: cast[ptr UncheckedArray[T]](args.bAddr),
+    scalars: args.scalars)
   syncScope:
-    parallelFor(0, work.addScalars.n, env, stridedAddBody[T])
+    parallelFor(0, args.scalars.n, env, stridedAddBody[T])
 
 proc runMulOp[T](work: ptr CpuOpWork) {.cdecl.} =
   ## Scalar-multiply kernel execution through the parallelFor wrapper.
+  let args = cast[ptr MulArgs](work.args)
   var env = StridedMulEnv[T](
-    outp: cast[ptr UncheckedArray[T]](work.outp),
-    a: cast[ptr UncheckedArray[T]](work.a),
-    scalars: work.mulScalars)
+    outp: cast[ptr UncheckedArray[T]](args.outAddr),
+    a: cast[ptr UncheckedArray[T]](args.aAddr),
+    scalars: args.scalars)
   syncScope:
-    parallelFor(0, work.mulScalars.n, env, stridedMulBody[T])
+    parallelFor(0, args.scalars.n, env, stridedMulBody[T])
 
 proc runMul2Op[T](work: ptr CpuOpWork) {.cdecl.} =
   ## Tensor-product kernel execution through the parallelFor wrapper.
+  let args = cast[ptr Mul2Args](work.args)
   var env = StridedMul2Env[T](
-    outp: cast[ptr UncheckedArray[T]](work.outp),
-    a: cast[ptr UncheckedArray[T]](work.a),
-    b: cast[ptr UncheckedArray[T]](work.b),
-    scalars: work.mul2Scalars)
+    outp: cast[ptr UncheckedArray[T]](args.outAddr),
+    a: cast[ptr UncheckedArray[T]](args.aAddr),
+    b: cast[ptr UncheckedArray[T]](args.bAddr),
+    scalars: args.scalars)
   syncScope:
-    parallelFor(0, work.mul2Scalars.n, env, stridedMul2Body[T])
+    parallelFor(0, args.scalars.n, env, stridedMul2Body[T])
 
 proc runFillOp[T](work: ptr CpuOpWork) {.cdecl.} =
   ## Ones-fill kernel execution through the parallelFor wrapper.
+  let args = cast[ptr FillArgs](work.args)
   var env = StridedFillEnv[T](
-    outp: cast[ptr UncheckedArray[T]](work.outp),
-    scalars: work.fillScalars)
+    outp: cast[ptr UncheckedArray[T]](args.outAddr),
+    scalars: args.scalars)
   syncScope:
-    parallelFor(0, work.fillScalars.n, env, stridedFillBody[T])
+    parallelFor(0, args.scalars.n, env, stridedFillBody[T])
 
 proc drainCpu(ctx: Ctx) {.nimcall.} =
   ## One synchronous drain of the record: one op task per pending entry.
@@ -219,31 +222,9 @@ proc drainCpu(ctx: Ctx) {.nimcall.} =
       work[].event = ev
       work[].completions = completionCount.addr
       work[].run = opRunners[cast[pointer](ctx)][entry.id]
-      case entry.kernel
-      of opAdd:
-        let args = decodeAddArgs(entry.blob)
-        work[].outp = cast[pointer](args.outAddr)
-        work[].a = cast[pointer](args.aAddr)
-        work[].b = cast[pointer](args.bAddr)
-        work[].addScalars = args.scalars
-      of opMul:
-        let args = decodeMulArgs(entry.blob)
-        work[].outp = cast[pointer](args.outAddr)
-        work[].a = cast[pointer](args.aAddr)
-        work[].mulScalars = args.scalars
-      of opMul2:
-        let args = decodeMul2Args(entry.blob)
-        work[].outp = cast[pointer](args.outAddr)
-        work[].a = cast[pointer](args.aAddr)
-        work[].b = cast[pointer](args.bAddr)
-        work[].mul2Scalars = args.scalars
-      of opFill:
-        let args = decodeFillArgs(entry.blob)
-        work[].outp = cast[pointer](args.outAddr)
-        work[].fillScalars = args.scalars
-      of opReshape, opPermute, opSlice:
-        # pure metadata, skipped above
-        discard
+      # the blob is the args object's flat image, the runner casts it back
+      work[].args = alloc0(entry.blob.len)
+      copyMem(work[].args, entry.blob[0].unsafeAddr, entry.blob.len)
 
       var taskEnv = CpuOpTaskEnv(work: work)
       let task = task_newSpawnEnv(wctx.currentTask, wctx.currentScope,
