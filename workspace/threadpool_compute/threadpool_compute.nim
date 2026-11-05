@@ -13,6 +13,7 @@ const tpcRoot = currentSourcePath.parentDir
 
 {.passc: "-I\"" & tpcRoot & "\"".}
 {.passc: "-I\"" & tpcRoot / "src" / "threadpool" & "\"".}
+{.passc: "-I\"" & tpcRoot / "include" & "\"".}
 
 # Every generated C file sees the C API declarations, emitted-C launch sites
 # call the runtime directly
@@ -134,3 +135,77 @@ proc spawn*[T](fn: TaskFn, env: var T): Flowvar =
 proc sync*[T](fv: Flowvar): T =
   ## Waits for the flowvar and yields its result
   flowvar_sync(result.addr, fv.unsafeAddr, csize_t sizeof T)
+
+# ################################################## #
+#                 flow events                        #
+# ################################################## #
+# Dataflow task dependencies, Nim wrapper over include/flow_events.h.
+# A flow event is a delayed input: consumer tasks defer until a producer
+# triggers the event.
+
+const tpcFlowEventsHeader = "include/flow_events.h"
+{.pragma: tpcev, importc, cdecl, header: tpcFlowEventsHeader.}
+
+type
+  FlowEvent* {.importc: "tpc_flow_event", header: tpcFlowEventsHeader.} = object
+    ## Reference-counted event handle, C `tpc_flow_event`
+    e*: ptr FlowEventObj
+
+  FlowEventObj* {.importc: "tpc_event", header: tpcFlowEventsHeader.} = object
+    ## Opaque event state behind a FlowEvent handle
+
+  FlowEventDep* {.importc: "tpc_flow_event_dep", header: tpcFlowEventsHeader.} = object
+    ## One dependency of a multi-dependency task: the awaited event,
+    ## and for an iteration event the iteration index
+    event*: FlowEvent
+    index*: int32
+
+  FlowEventEnqueue* = proc(queue: pointer, task: ptr Task) {.cdecl.}
+    ## Schedules a task drained from a triggered event's channel,
+    ## matching the C `tpc_flow_event_enqueue` signature
+
+const noIterDep* = int32(-1)
+  ## FlowEventDep.index of a single (non-iteration) event dependency,
+  ## TPC_NO_ITER in C
+
+proc flowEvent_initSingle*(ev: var FlowEvent) {.tpcev, importc: "tpc_flow_event_initSingle".}
+  ## Initializes a single event with reference count 1,
+  ## aborts when the event is already initialized
+
+proc flowEvent_initIter*(ev: var FlowEvent, start, stop, stride: int32) {.tpcev, importc: "tpc_flow_event_initIter".}
+  ## Initializes an iteration event over [start, stop) with one channel bucket
+  ## per iteration and reference count 1
+
+proc flowEvent_ref*(ev: FlowEvent) {.tpcev, importc: "tpc_flow_event_ref".}
+  ## Adds one reference to the event behind the handle
+
+proc flowEvent_unref*(ev: var FlowEvent) {.tpcev, importc: "tpc_flow_event_unref".}
+  ## Drops one reference and frees the event on the last one,
+  ## every dependent task must already be drained or re-deferred
+
+proc flowEvent_delayedUntil*(task: ptr Task, ev: FlowEvent): bool {.tpcev, importc: "tpc_flow_event_delayedUntil".}
+  ## Defers task until ev triggers
+  ##
+  ## Returns true when the task was delayed and the triggerer schedules it.
+  ## Returns false when the event already fired and the caller schedules the task.
+
+proc flowEvent_delayedUntilIter*(task: ptr Task, ev: FlowEvent, index: int32): bool {.tpcev, importc: "tpc_flow_event_delayedUntilIter".}
+  ## Defers task until iteration `index` of the iteration event ev triggers,
+  ## with the same contract as flowEvent_delayedUntil
+
+proc flowEvent_delayedUntilMulti*(task: ptr Task, deps: ptr UncheckedArray[FlowEventDep], n: int32): bool {.tpcev, importc: "tpc_flow_event_delayedUntilMulti".}
+  ## Defers task until every event in deps[0 ..< n] triggered
+  ##
+  ## Returns true when the task was delayed on some still-untriggered event.
+  ## Returns false when every dependency already fired.
+
+proc flowEvent_delayUntilMulti*(task: ptr Task, deps: openArray[FlowEventDep]): bool =
+  ## openArray convenience over flowEvent_delayedUntilMulti
+  flowEvent_delayedUntilMulti(task, cast[ptr UncheckedArray[FlowEventDep]](deps[0].unsafeAddr), int32 deps.len)
+
+proc flowEvent_trigger*(ev: FlowEvent, queue: pointer, enqueue: FlowEventEnqueue) {.tpcev, importc: "tpc_flow_event_trigger".}
+  ## Fires a single event, schedules every drained dependent task through
+  ## enqueue(queue, task). An event triggers once, a re-trigger aborts.
+
+proc flowEvent_triggerIter*(ev: FlowEvent, index: int32, queue: pointer, enqueue: FlowEventEnqueue) {.tpcev, importc: "tpc_flow_event_triggerIter".}
+  ## Fires iteration `index` of an iteration event, same contract as flowEvent_trigger
