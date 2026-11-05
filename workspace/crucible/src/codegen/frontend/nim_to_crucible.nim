@@ -144,10 +144,7 @@ func unwrapConv(n: NimNode): NimNode =
   while true:
     case result.kind
     of nnkHiddenStdConv:
-      if result.len >= 2:
-        result = result[1]
-      else:
-        return
+      result = result[1]
     of nnkStmtListExpr:
       if result.len == 2 and result[0].kind == nnkEmpty:
         result = result[1]
@@ -166,7 +163,6 @@ func resolveTypeSection(ctx: var CirFrontend, n: NimNode) =
   ## A generic definition registers nothing at declaration time,
   ## resolution of its instantiations happens at the use sites.
   for typeDef in n:
-    typeDef.expectKind(nnkTypeDef)
     let head = typeDef[0]
     if head.kind == nnkBracketExpr or head.typeKind == ntyGenericBody:
       continue
@@ -517,7 +513,7 @@ func lowerOperatorExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
       ctx.fail("prefix operator " & op & " is outside the supported set")
       return nil
   else:
-    doAssert false, "lowerOperatorExpr: unexpected node kind " & $n.kind
+    raiseAssert "lowerOperatorExpr: unexpected node kind " & $n.kind
 
 func isBuiltinScalar(ctx: var CirFrontend, n: NimNode): bool =
   let t = ctx.resolver.resolveCirType(n.getTypeInst())
@@ -662,9 +658,7 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
     of nskConst:
       if getPragmaItem(n, "builtin") != nil:
         return ctx.builtinSymExpr(n)
-      let impl = n.getImpl()
-      if impl.kind == nnkConstDef:
-        return ctx.lowerExpr(impl[2])
+      return ctx.lowerExpr(n.getImpl()[2])
     else:
       ctx.fail("symbol " & name & " (" & $n.symKind & ") is not a value")
       return nil
@@ -812,25 +806,32 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
       return nil
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
-    var fields: seq[CirKv] = @[]
+    var lowereds: seq[tuple[name: string, v: CirExpr, isNil: bool]] = @[]
     var valueSpaces = initTable[string, AddressSpace]()
     for i in 1 ..< n.len:
-      n[i].expectKind(nnkExprColonExpr)
+      let fieldName = sanitizeIdent(n[i][0].strVal)
       if n[i][1].kind == nnkEmpty:
-        # semantic analysis yields an Empty node for a nil field value, the zero-fill pass supplies the typed nil
+        lowereds.add((fieldName, nil, true))
         continue
       let v = ctx.lowerExpr(n[i][1])
       if ctx.resolver.err.len > 0:
         return nil
-      let fieldName = sanitizeIdent(n[i][0].strVal)
       # a pointer-typed field takes the address space its value proves
       valueSpaces[fieldName] = resolveAddressSpace(v)
-      fields.add(kv(fieldName, v))
+      lowereds.add((fieldName, v, false))
     let typ = ctx.resolver.resolveStructType(n.getTypeInst(), valueSpaces)
     if ctx.resolver.err.len > 0:
       return nil
-    # Nim binds constructor values by name while the target syntax binds positionally.
-    # Zero-fill reorders every constructor to the type's declaration order, omitted fields fill
+    # completeConstructors completes fields missing from the constructor
+    var fields: seq[CirKv] = @[]
+    for (name, v, isNil) in lowereds:
+      if isNil:
+        for f in typ.fields:
+          if f.name == name:
+            fields.add(kv(name, nilE(f.typ)))
+            break
+      else:
+        fields.add(kv(name, v))
     return oconstrE(typ, fields)
   of nnkExprColonExpr:
     # a named field outside a constructor: the identifier is compile-time
@@ -904,8 +905,7 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
       of nnkElse, nnkElseExpr:
         elseBody = c[0]
       else:
-        ctx.fail("if expression: unexpected branch " & $c.kind)
-        return nil
+        raiseAssert "if expression: unexpected branch " & $c.kind
     var simple = true
     for br in branches:
       if isStmtBody(getBranchValueExpr(br.body)):
@@ -1043,7 +1043,6 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   of nnkConstSection:
     # a const section emits no runtime code: the resolver registers the value's struct types
     for defs in n:
-      defs.expectKind(nnkConstDef)
       let typeNode = defs[1]
       let valueNode = defs[2]
       if typeNode.kind != nnkEmpty:
@@ -1112,8 +1111,7 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
       of nnkElse:
         elseBody = c[0]
       else:
-        ctx.fail("if statement: unexpected child " & $c.kind)
-        return @[]
+        raiseAssert "if statement: unexpected child " & $c.kind
     return ctx.lowerIfForm(branches, elseBody, nil)
   of nnkWhileStmt:
     # statements spliced by the condition drain to the front of the loop body,
@@ -1363,6 +1361,7 @@ func lowerForStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   preamble.add(varD(varName, varType))
   preamble.add(asgnS(varSym, startV))
   result = preamble & @[whileS(cmp, bodyHoists & body & incr)]
+
 func lowerAsmStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   ## Lowers an asm statement into verbatim parts and lowered operands.
   # a Nim `asm` statement: verbatim template text alternating with backtick

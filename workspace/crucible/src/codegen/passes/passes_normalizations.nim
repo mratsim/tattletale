@@ -23,11 +23,27 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerSettleExprForms*(reg: var PassRegistry) =
-  reg.register("settleExprForms", pkTransform,
-    "Settles expression forms over the typed IR: literal use-site types," &
-    " the bool operator domain, literal conversions, constructor field order",
-    run = settleExprFormsPass)
+func registerFoldLiteralConvs*(reg: var PassRegistry) =
+  reg.register("foldLiteralConvs", pkTransform,
+    "Folds a conversion over a literal into a literal of the conversion target's type",
+    run = foldLiteralConvsPass)
+
+func registerResolveBoolDomain*(reg: var PassRegistry) =
+  reg.register("resolveBoolDomain", pkTransform,
+    "Rewrites bitwise operators over bool operands to the logical form, xor as the != comparison",
+    run = resolveBoolDomainPass)
+
+func registerTypeLiterals*(reg: var PassRegistry) =
+  reg.register("typeLiterals", pkTransform,
+    "Retypes every literal operand to its use-site type across arithmetic, comparisons, assignments and call arguments",
+    run = typeLiteralsPass)
+
+func registerCompleteConstructors*(reg: var PassRegistry) =
+  reg.register("completeConstructors", pkTransform,
+    "Completes a partial object constructor. The pass reorders the written fields" &
+    " to the type's declaration order and writes the type's zero value into each" &
+    " field missing from the constructor",
+    run = completeConstructorsPass)
 
 func registerCompoundAssignTemps*(reg: var PassRegistry) =
   reg.register("bindCompoundAssignTemps", pkTransform,
@@ -42,16 +58,18 @@ func registerMarkExplicitUnrolls*(reg: var PassRegistry) =
     run = markExplicitUnrollsPass)
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
-  # settleExprForms decides the literal widths, the bool operator domain,
-  # constructor field order, before the later stages read them
-  reg.registerSettleExprForms()
+  # resolveBoolDomain runs before typeLiterals: the domain rewrite decides the operator shape before the literal retypes run
+  reg.registerFoldLiteralConvs()
+  reg.registerResolveBoolDomain()
+  reg.registerTypeLiterals()
+  reg.registerCompleteConstructors()
   # bindCompoundAssignTemps runs first among the reshaping passes:
   # shared-tree detection compares references
   reg.registerCompoundAssignTemps()
   reg.registerMarkExplicitUnrolls()
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Expression settling
+#  Expression concretization
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -126,54 +144,64 @@ proc fillOmittedFields(e: CirExpr) =
     ordered.add(kv(f.name, if value != nil: value else: zeroValue(f.typ)))
   e.kvFields = ordered
 
-proc settleExprFormsPass(m: CirModule): string =
+proc foldLiteralConvsPass(m: CirModule): string =
+  for fn in m.procs:
+    fn.body.walkStmts(nil, proc(e: CirExpr) =
+      if e.kind != eConv:
+        return
+      # a conversion over a literal is exact, the node folds to a literal
+      # at the conversion target
+      if e.castType == nil or e.castType.kind == ctBf16 or
+          e.castOperand.kind notin {eIntLit, eFloatLit}:
+        return
+      let typ = e.castType
+      let op = e.castOperand
+      if typ.kind == ctFloat and op.kind == eIntLit:
+        e.kind = eFloatLit
+        e.fValue = op.value.float
+        e.fLitType = typ
+      elif op.kind == eIntLit:
+        e.kind = eIntLit
+        e.value = op.value
+        e.litType = typ
+      else:
+        # Float-literal operand, the cast retypes it in place
+        e.kind = eFloatLit
+        e.fValue = op.fValue
+        e.fLitType = typ)
+
+proc resolveBoolDomainPass(m: CirModule): string =
+  for fn in m.procs:
+    fn.body.walkStmts(nil, proc(e: CirExpr) =
+      if e.kind notin {eBitAnd, eBitOr, eBitXor} or e.opType == nil or
+          e.opType.kind != ctBool:
+        return
+      # bool domain: the logical form, `xor` prints as the != comparison
+      let a = e.left
+      let b = e.right
+      let t = e.opType
+      case e.kind
+      of eBitAnd:
+        e.kind = eAnd
+        e.andLeft = a
+        e.andRight = b
+      of eBitOr:
+        e.kind = eOr
+        e.andLeft = a
+        e.andRight = b
+      else:
+        e.kind = eNeq
+        e.cmpType = t
+        e.a = a
+        e.b = b)
+
+proc typeLiteralsPass(m: CirModule): string =
   for fn in m.procs:
     let onExpr = proc(e: CirExpr) =
       case e.kind
-      of eConv:
-        # a conversion over a literal is exact, the node folds to a literal
-        # at the conversion target
-        if e.castType != nil and e.castType.kind != ctBf16 and
-            e.castOperand.kind in {eIntLit, eFloatLit}:
-          let typ = e.castType
-          let op = e.castOperand
-          if typ.kind == ctFloat and op.kind == eIntLit:
-            e.kind = eFloatLit
-            e.fValue = op.value.float
-            e.fLitType = typ
-          elif op.kind == eIntLit:
-            e.kind = eIntLit
-            e.value = op.value
-            e.litType = typ
-          else:
-            # Float-literal operand, the cast retypes it in place
-            e.kind = eFloatLit
-            e.fValue = op.fValue
-            e.fLitType = typ
       of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-        if e.kind in {eBitAnd, eBitOr, eBitXor} and e.opType != nil and
-            e.opType.kind == ctBool:
-          # bool domain: the logical form, `xor` prints as the != comparison
-          let a = e.left
-          let b = e.right
-          let t = e.opType
-          case e.kind
-          of eBitAnd:
-            e.kind = eAnd
-            e.andLeft = a
-            e.andRight = b
-          of eBitOr:
-            e.kind = eOr
-            e.andLeft = a
-            e.andRight = b
-          else:
-            e.kind = eNeq
-            e.cmpType = t
-            e.a = a
-            e.b = b
-        else:
-          e.left.retypeOperand(e.opType)
-          e.right.retypeOperand(e.opType)
+        e.left.retypeOperand(e.opType)
+        e.right.retypeOperand(e.opType)
       of eEq, eNeq, eLt, eLe:
         e.a.retypeOperand(e.cmpType)
         e.b.retypeOperand(e.cmpType)
@@ -183,8 +211,6 @@ proc settleExprFormsPass(m: CirModule): string =
           e.cmpType = getExprType(e.b)
       of eCall:
         e.callee.retypeCallArgs(e.args)
-      of eOconstr:
-        e.fillOmittedFields()
       else:
         discard
     let onStmt = proc(s: CirStmt) =
@@ -196,6 +222,12 @@ proc settleExprFormsPass(m: CirModule): string =
       else:
         discard
     fn.body.walkStmts(onStmt, onExpr)
+
+proc completeConstructorsPass(m: CirModule): string =
+  for fn in m.procs:
+    fn.body.walkStmts(nil, proc(e: CirExpr) =
+      if e.kind == eOconstr:
+        e.fillOmittedFields())
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Compound-assign temps
