@@ -36,8 +36,8 @@ const uintToZerosGlsl = glsl:
     outBuf[lane] = cast[float32](u)
 
 proc runTest() =
+  var engine = newEngine(runVulkan)
   block f32ToU32:
-    var engine = newEngine(runVulkan)
     engine.ingest(zerosToUintGlsl)
     let oDev = engine.allocDevice(uint32, 4)
     engine.launchKernel<<(grid: (1, 1, 1), blk: (4, 1, 1))>>("zerosToUintKernel", oDev, ())
@@ -51,7 +51,6 @@ proc runTest() =
     echo "  OK: f32 +0.0/-0.0 bitcast to 0x00000000/0x80000000, bf16 view of +0.0 is 0x0000"
 
   block u32ToF32:
-    var engine = newEngine(runVulkan)
     engine.ingest(uintToZerosGlsl)
     let oDev = engine.allocDevice(float32, 4)
     engine.launchKernel<<(grid: (1, 1, 1), blk: (4, 1, 1))>>("uintToZerosKernel", oDev, ())

@@ -7,6 +7,10 @@
 
 ## fp32 GEMM bench on Vulkan (MoltenVK): flops actually done / wall-clock.
 ##
+## The 8x4 variant falsifies a register-pressure hypothesis about spilled fragments.
+## A spill would shift the 8x4/4x8 ratio away from 1.0 as the A fragment doubles
+## and the B fragment halves per k-tile.
+##
 ## Run:
 ##   cd tattletale (worktree root)
 ##   nim c -r --hints:off --warnings:off -d:release \
@@ -117,6 +121,43 @@ proc benchOnce8x4(engine: VulkanEngine, m, n, k, iters: int): float64 =
   let wall = epochTime() - t0
   result = flops / wall / 1.0e12
 
+proc check8x4Agrees(engine: VulkanEngine) =
+  ## Ratio conclusions need the 8x4 variant to compute the same result
+  ## as the shipped 4x8 kernel. Both launch once on a small ragged shape,
+  ## their outputs must agree to fp32 reassociation slack.
+  const m = 97
+  const n = 53
+  const k = 45
+  var
+    aHost = makeHostTensor(float32, (m, k), (k, 1))
+    bHost = makeHostTensor(float32, (n, k), (k, 1))
+    d4 = makeHostTensor(float32, (m, n), (n, 1))
+    d8 = makeHostTensor(float32, (m, n), (n, 1))
+  for i in 0 ..< aHost.len:
+    aHost.data[i] = float32((i * 37 mod 19) - 9) * 0.125'f32
+  for i in 0 ..< bHost.len:
+    bHost.data[i] = float32((i * 53 mod 23) - 11) * 0.125'f32
+  for i in 0 ..< d4.len:
+    d4.data[i] = 0.0'f32
+    d8.data[i] = 0.0'f32
+  let
+    aDev = engine.bridge(aHost)
+    bDev = engine.bridge(bHost)
+    d4Dev = engine.bridge(d4)
+    d8Dev = engine.bridge(d8)
+  engine.launchDeviceFn gemmTileVulkan(d4Dev, aDev, bDev, 1.0'f32, 0.0'f32) do:
+    grid = (ceil_div(m, 32), ceil_div(n, 32))
+    blk = (32, 1)
+    lang = glsl
+  engine.launchDeviceFn gemmTileVulkan8x4(d8Dev, aDev, bDev, 1.0'f32, 0.0'f32) do:
+    grid = (ceil_div(m, 32), ceil_div(n, 32))
+    blk = (32, 1)
+    lang = glsl
+  engine.copyToHostFromDevice(addr d4.data[0], d4Dev.data, d4.len)
+  engine.copyToHostFromDevice(addr d8.data[0], d8Dev.data, d8.len)
+  assertAllClose(d8.view(), d4.view(), rtol = 1e-6, abstol = 1e-7,
+    msg = "8x4 variant must agree with the shipped 4x8 kernel")
+
 proc runTest() =
   var engine = newEngine(runVulkan)
   echo engine.deviceName()
@@ -130,15 +171,19 @@ proc runTest() =
   for r in 0 ..< 3:
     let tf = benchOnce(engine, M, N, K, 20)
     echo "round ", r, ": ", fmt"{tf:.3f}", " TFLOP/s"
-    if tf > best: best = tf
+    if tf > best:
+      best = tf
   echo "BEST 4x8: ", fmt"{best:.3f}", " TFLOP/s (fp32, 4096^3, MoltenVK)"
-  # falsifier: the 8x4 variant under the same harness
+  # falsifier: the 8x4 variant under the same harness, agreement first
+  check8x4Agrees(engine)
+  echo "8x4 agrees with 4x8 on a 97x53x45 ragged shape"
   discard benchOnce8x4(engine, M, N, K, 2)
   var best8x4 = 0.0
   for r in 0 ..< 3:
     let tf = benchOnce8x4(engine, M, N, K, 20)
     echo "round 8x4 ", r, ": ", fmt"{tf:.3f}", " TFLOP/s"
-    if tf > best8x4: best8x4 = tf
+    if tf > best8x4:
+      best8x4 = tf
   echo "BEST 8x4: ", fmt"{best8x4:.3f}", " TFLOP/s (fp32, 4096^3, MoltenVK)"
   echo "ratio 8x4/4x8: ", fmt"{best8x4/best:.3f}"
 

@@ -12,7 +12,7 @@
 ## k-tiles 2 deep, register fragments, no shared memory, no subgroup use.
 ##
 ## All fixed-shape loops unroll at the Nim level through the `staticFor` macro.
-## Fragment accesses then hold constant indices, the fragments stay in registers.
+## Fragment accesses then use constant indices and the compiler keeps the fragments in registers.
 ## `{.unroll.}` does not reach the emitted loop directives on this path.
 
 import workspace/crucible
