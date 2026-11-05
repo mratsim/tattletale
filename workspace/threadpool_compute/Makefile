@@ -14,7 +14,8 @@ LDLIBS   := -lpthread
 LIB      := build/libthreadpool_compute.a
 RUNTIME  := src/threadpool_runtime.c
 
-TESTS     := test_pool_fib test_parallel_for test_stress test_taskqueues test_deque_conc
+TESTS     := test_pool_fib test_parallel_for test_stress test_taskqueues test_deque_conc \
+            test_flow_events
 BENCHES   := fib nqueens
 TEST_BINS := $(addprefix build/,$(TESTS))
 BENCH_BINS:= $(addprefix build/bench_,$(BENCHES))
