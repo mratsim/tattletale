@@ -5,13 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Lead POC: a ceramic tile-algebra GEMM tile through the Vulkan GLSL route
+## Tile-algebra GEMM tile through the Metal MSL route
 ##
 ## Test that a register-fragment tile kernel computes D = alpha·A·Bᵀ
 ## correctly on Metal through the MSL route:
 ##
-## - thread->value map loads, tile-grid loop, `{.unroll.}` inner FMA body
-## - runtime tensor shapes (no static shape baked into the kernel)
+## - direct fragment addressing over runtime tensor shapes, `{.unroll.}`
+##   inner FMA body
 ## - both fixtures launch multi-workgroup grids in x and y, so the tile
 ##   addressing runs through gl_WorkGroupID and gl_NumWorkGroups
 ##
@@ -40,7 +40,7 @@ import workspace/ceramic/tests/ceramic_testutils
 #   (m_local, n_local), offset m_local + 32·n_local
 #
 # Fragment addressing is direct runtime arithmetic, the static-map substitution loses composed
-# coordinate strides in the CIRv2 frontend (J-15 in the op JOURNEY)
+# coordinate strides in the CIRv2 frontend when a static param contains them
 
 proc tileGemm(d: distinct TensorView, a: distinct TensorView, b: distinct TensorView, alpha: float32) =
   ## D = alpha·A·Bᵀ over 32x32 output tiles: one threadgroup per tile,
