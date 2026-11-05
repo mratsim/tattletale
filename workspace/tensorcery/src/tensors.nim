@@ -8,9 +8,11 @@
 ## Public Tensor face over the erased AnyTensorImpl implementation.
 ##
 ## Tensor is a thin value: context, erased implementation, runtime dtype, runtime device.
-## Creation copies host data into backend storage, reads dispatch through the erased vtable.
+## Creation copies host data into backend storage, registers the tensor for the backward walk and dispatches reads through the erased vtable.
 ##
 ## Compute ops refuse cross-context, cross-device, mixed-dtype and shape-mismatched operands naming the combo.
+## Ops propagate the grad flag:
+## an output requires grad when any input does.
 ## The record evaluates on eval() or on read, toSeq and to() eval the context first when the tensor is pending.
 
 import pkg/iface
@@ -20,14 +22,19 @@ import
   workspace/tensorcery/src/raw/dtypes,
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
+  workspace/tensorcery/src/tape,
   workspace/tensorcery/src/backends/metal,
   workspace/tensorcery/src/backends/cpu
 
 # iface resolves the vtable's mixins at the outermost instantiation scope,
 # so the typed conformant procs must be visible to module users of the Tensor face.
 # Without this re-export the mixin binds the erased signature and the conformance check fails.
-export metal.add, metal.mulScalar, metal.readbackBytes
-export cpu.add, cpu.mulScalar, cpu.readbackBytes
+export metal.add, metal.mul, metal.mulScalar
+export metal.addNoGrad, metal.mulNoGrad, metal.mulScalarNoGrad, metal.onesNoGrad
+export metal.readbackBytes
+export cpu.add, cpu.mul, cpu.mulScalar
+export cpu.addNoGrad, cpu.mulNoGrad, cpu.mulScalarNoGrad, cpu.onesNoGrad
+export cpu.readbackBytes
 
 type Tensor* = object
   ## Tensor handle: the erased implementation plus its runtime dtype and device.
@@ -36,20 +43,21 @@ type Tensor* = object
   dtype: Dtype
   device: DeviceKind
 
-proc toTensorShaped[T](ctx: Ctx, data: openArray[T], Hw: static BackendKind, shape: openArray[int]): Tensor =
+proc toTensorShaped[T](ctx: Ctx, data: openArray[T], Hw: static BackendKind, shape: openArray[int], requiresGrad: bool): Tensor =
   ## Creates a Tensor over `shape` holding a copy of `data`, contiguous, last dimension varying fastest, on the backend `Hw`.
   ##
   ## Raises AssertionDefect when `shape` spans more than 4 dimensions or when `data` does not hold exactly the element count of `shape`.
   when Hw == bkCpu:
     ensureCpu(ctx)
-    let erasedImpl = toTensorImpl[T, Hw](ctx, data, shape).toErased()
+    let erasedImpl = toTensorImpl[T, Hw](ctx, data, shape, requiresGrad).toErased()
   elif Hw == bkMetal:
     ensureMetal(ctx)
     when T is float32:
-      let erasedImpl = toMetalTensorImpl(ctx, data, shape).toErased()
+      let erasedImpl = toMetalTensorImpl(ctx, data, shape, requiresGrad).toErased()
     else:
       doAssert false, "Metal construction supports float32, got " & $toDtype(T)
 
+  tape.register(ctx, erasedImpl.getTid(), erasedImpl)
   Tensor(
     ctx: ctx,
     impl: erasedImpl,
@@ -63,13 +71,33 @@ proc toTensor*[T](
   ## Creates a Tensor over `shape` holding a copy of `data`, contiguous, last dimension varying fastest, on the backend `Hw`.
   ##
   ## Raises AssertionDefect under the same conditions as the openArray shape form.
-  toTensorShaped(ctx, data, Hw, shape)
+  toTensorShaped(ctx, data, Hw, shape, false)
 
 proc toTensor*[T](ctx: Ctx, data: openArray[T], shape: varargs[int]): Tensor =
   ## CPU form of `toTensor`: the backend defaults to CPU.
   ##
   ## Raises AssertionDefect under the same conditions as the backend form.
-  toTensorShaped[T](ctx, data, bkCpu, shape)
+  toTensorShaped[T](ctx, data, bkCpu, shape, false)
+
+proc toGradTensor*[T](
+    ctx: Ctx, data: openArray[T], Hw: static BackendKind, shape: varargs[int]
+): Tensor =
+  ## Creates a Tensor that requires grad: backward() accumulates its gradient.
+  ## Otherwise the backend form of `toTensor`.
+  ##
+  ## Raises AssertionDefect under the same conditions as `toTensor`.
+  toTensorShaped(ctx, data, Hw, shape, true)
+
+proc toGradTensor*[T](ctx: Ctx, data: openArray[T], shape: varargs[int]): Tensor =
+  ## CPU form of `toGradTensor`: the backend defaults to CPU.
+  ##
+  ## Raises AssertionDefect under the same conditions as `toTensor`.
+  toTensorShaped[T](ctx, data, bkCpu, shape, true)
+
+proc toTensor*(ctx: Ctx, impl: AnyTensorImpl, dtype: Dtype, device: DeviceKind): Tensor =
+  ## Wraps an already-created erased implementation into the Tensor face.
+  ## autograd.nim uses it to hand out gradients recorded on the tape.
+  Tensor(ctx: ctx, impl: impl, dtype: dtype, device: device)
 
 proc getNumel*(t: Tensor): int =
   ## Returns the element count as a product over all shape sizes.
@@ -90,6 +118,18 @@ proc getDtype*(t: Tensor): Dtype =
 proc getDevice*(t: Tensor): DeviceKind =
   ## Returns the runtime device, fixed at creation from the backend kind.
   t.device
+
+proc getCtx*(t: Tensor): Ctx =
+  ## Returns the recording context of the tensor.
+  t.ctx
+
+proc getImpl*(t: Tensor): AnyTensorImpl =
+  ## Returns the erased implementation behind the tensor.
+  t.impl
+
+proc getRequiresGrad*(t: Tensor): bool =
+  ## Returns the grad flag: true when backward() accumulates a gradient for the tensor.
+  t.impl.getRequiresGrad()
 
 func sameShape(a, b: SmallSeq[4, int32]): bool =
   if a.len != b.len:
@@ -118,12 +158,30 @@ proc `+`*(a, b: Tensor): Tensor =
       " refused, no broadcasting"
 
   let outImpl = a.impl.add(b.impl)
+  tape.register(a.ctx, outImpl.getTid(), outImpl)
+  Tensor(ctx: a.ctx, impl: outImpl, dtype: a.dtype, device: a.device)
+
+proc `*`*(a, b: Tensor): Tensor =
+  ## Elementwise product of same-shape tensors, recorded on the context.
+  ## Refusals match `+`: cross-context, cross-device, mixed dtypes, shape mismatches.
+  doAssert a.ctx == b.ctx, "mul: operands from different contexts refused"
+  doAssert a.device == b.device,
+      "mul: cross-device operands " & $a.device & " x " & $b.device & " refused, copy to one device first"
+  doAssert a.dtype == b.dtype,
+      "mul: mixed dtypes " & $a.dtype & " x " & $b.dtype & " refused"
+  doAssert sameShape(a.getShape(), b.getShape()),
+      "mul: shape mismatch " & $a.getShape() & " vs " & $b.getShape() &
+      " refused, no broadcasting"
+
+  let outImpl = a.impl.mul(b.impl)
+  tape.register(a.ctx, outImpl.getTid(), outImpl)
   Tensor(ctx: a.ctx, impl: outImpl, dtype: a.dtype, device: a.device)
 
 proc `*`*(a: Tensor, scalar: float64): Tensor =
   ## Elementwise multiply by a scalar, recorded on the context.
   ## The scalar narrows to the tensor's dtype at enqueue.
   let outImpl = a.impl.mulScalar(scalar)
+  tape.register(a.ctx, outImpl.getTid(), outImpl)
   Tensor(ctx: a.ctx, impl: outImpl, dtype: a.dtype, device: a.device)
 
 proc toSeq*[T](t: Tensor): seq[T] =
@@ -142,6 +200,9 @@ proc toSeq*[T](t: Tensor): seq[T] =
 proc to*(t: Tensor, Hw: static BackendKind): Tensor =
   ## Copies the tensor to backend `Hw`, materializing pending ops first.
   ## Same-device input returns unchanged.
+  ##
+  ## A copy is a materialization, not a record op, so gradient does not flow through it:
+  ## the copy never requires grad.
   ## Raises AssertionDefect for non-float32 tensors. This increment moves float32 only.
   if toDeviceKind(Hw) == t.device:
     return t
@@ -156,4 +217,4 @@ proc to*(t: Tensor, Hw: static BackendKind): Tensor =
   var shape: array[4, int]
   for i in 0 ..< int(sh.len):
     shape[i] = int(sh[i])
-  toTensorShaped(t.ctx, host, Hw, shape.toOpenArray(0, int(sh.len) - 1))
+  toTensorShaped(t.ctx, host, Hw, shape.toOpenArray(0, int(sh.len) - 1), false)

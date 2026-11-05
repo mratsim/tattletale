@@ -5,14 +5,14 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Tensorcery execution context: the deferred-execution record.
+## Tensorcery execution context: the deferred-execution record, which is also the autograd tape.
 ##
-## An op call marshals its arguments once into a flat byte blob, one OpEntry per op.
-## The record stores kernel id, blob bytes, output tensor id and launch config, data only.
-##
+## An op call marshals its arguments once into a flat byte blob, one OpEntry per op, data only.
 ## eval() drains every pending entry in ONE backend submission and waits for it.
-## The backend encodes each entry from its blob and dispatches once per op in record order.
 ## Reading a tensor materializes it, so eval also runs implicitly on read.
+##
+## The record persists across eval. backward() appends grad entries to it.
+## reset() clears it at the step boundary, and op ids and tensor ids keep counting across resets.
 
 import
   workspace/tensorcery/src/raw/dtypes
@@ -21,7 +21,9 @@ type
   KernelId* = enum
     ## Kernels the record can reference, one entry per recorded op.
     opAdd
-    opMul
+    opMul       ## scalar multiply, kernel k_mul
+    opMul2      ## elementwise product of two tensors, kernel k_mul2
+    opFill      ## fill with ones, kernel k_fill
 
   LaunchCfg* = object
     ## Threadgroup dispatch of one recorded op.
@@ -30,10 +32,13 @@ type
 
   OpEntry* = object
     ## One recorded op: data only, one dispatch unit at eval.
+    id*: int           ## op id of the entry, referenced by the drain frontier
     kernel*: KernelId
     backend*: BackendKind  ## owning backend of the entry's dispatch
     blob*: seq[byte]   ## flat image of the op's args object, marshaled at enqueue
-    output*: int       ## tensor id of the entry's output, equal to its producing op id
+    inputs*: array[2, int]  ## tensor ids of the op's tensor inputs, 0 for an absent input
+    output*: int       ## tensor id of the entry's output
+    isGrad*: bool      ## true when the entry belongs to a backward() grad segment
     cfg*: LaunchCfg
 
   DrainFn* = proc(ctx: Ctx) {.nimcall.}
@@ -43,37 +48,62 @@ type
 
   Ctx* = ref object
     ## Execution context: the op record plus the per-backend drain wiring.
-    record*: seq[OpEntry]  ## pending ops, in enqueue order
+    record*: seq[OpEntry]  ## ops in enqueue order, drained entries stay until reset
     drainedTo: int         ## op id of the last drained entry
     opSeq: int             ## op id of the last enqueued entry
+    tensorSeq: int         ## tensor id of the last created tensor
     drains*: array[BackendKind, DrainFn]  ## per-backend submission paths, nil until wired
 
-proc enqueue*(ctx: Ctx, kernel: KernelId, blob: seq[byte], cfg: LaunchCfg, backend: BackendKind): int =
+proc enqueue*(ctx: Ctx, kernel: KernelId, blob: seq[byte], cfg: LaunchCfg, backend: BackendKind,
+    output: int, inputA = 0, inputB = 0, isGrad = false): int =
   ## Appends one op entry to the record.
   ##
-  ## Returns the op id. The op id doubles as the tensor id of the entry's output.
+  ## - `output`: the tensor id of the entry's output, allocated through newTid before the call
+  ## - `inputA`, `inputB`: tensor ids of the op's tensor inputs, 0 for an absent input
+  ## - `isGrad`: marks entries appended by backward()
+  ##
+  ## Returns the op id of the entry.
   ctx.opSeq.inc
-  ctx.record.add OpEntry(kernel: kernel, backend: backend, blob: blob,
-      output: ctx.opSeq, cfg: cfg)
+  ctx.record.add OpEntry(id: ctx.opSeq, kernel: kernel, backend: backend, blob: blob,
+      inputs: [inputA, inputB], output: output, isGrad: isGrad, cfg: cfg)
   ctx.opSeq
+
+proc newTid*(ctx: Ctx): int =
+  ## Returns a fresh tensor id, unique within the context for the process lifetime.
+  ctx.tensorSeq.inc
+  ctx.tensorSeq
 
 proc isPending*(ctx: Ctx, opId: int): bool =
   ## Returns true when the op `opId` produced has not been drained yet.
   opId > ctx.drainedTo
 
+proc hasPending*(ctx: Ctx, backend: BackendKind): bool =
+  ## Returns true when the record contains an undrained entry owned by `backend`.
+  for entry in ctx.record:
+    if entry.backend == backend and ctx.isPending(entry.id):
+      return true
+
 proc getPendingCount*(ctx: Ctx): int =
-  ## Returns the number of ops waiting in the record since the last eval.
-  ctx.record.len
+  ## Returns the number of entries waiting in the record since the last eval, across all backends.
+  for entry in ctx.record:
+    if ctx.isPending(entry.id):
+      result.inc
+
+proc reset*(ctx: Ctx) =
+  ## Clears the record: the training-step boundary.
+  ##
+  ## - gradients already read stay valid
+  ## - the next step records into an empty record
+  ## - op ids and tensor ids are never reused
+  ctx.record.setLen(0)
 
 proc eval*(ctx: Ctx) =
-  ## Computes every recorded op synchronously, one submission per backend holding pending entries.
+  ## Computes every pending op synchronously, one submission per backend holding pending entries.
   ##
-  ## Contract: zero pending entries submit nothing.
-  ## After the drains return, every output in the record is readable and the record clears.
-  if ctx.record.len == 0:
-    return
+  ## Contract: zero pending entries submit nothing, on every backend.
+  ## After the drains return, every pending output is readable and the record stays
+  ## for backward() to walk; the next eval drains the grad entries appended after it.
   for backend in BackendKind:
-    if ctx.drains[backend] != nil:
+    if ctx.drains[backend] != nil and ctx.hasPending(backend):
       ctx.drains[backend](ctx)
   ctx.drainedTo = ctx.opSeq
-  ctx.record.setLen(0)

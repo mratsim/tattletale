@@ -33,7 +33,9 @@ import
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
   workspace/tensorcery/src/kernels/k_add,
-  workspace/tensorcery/src/kernels/k_mul
+  workspace/tensorcery/src/kernels/k_mul,
+  workspace/tensorcery/src/kernels/k_mul2,
+  workspace/tensorcery/src/kernels/k_fill
 
 const
   workgroupSize = 256
@@ -43,9 +45,10 @@ const
   cmdBufError = 5
     ## MTLCommandBufferStatus: the command buffer aborted with an error.
 
-const metalSource* = kAddMsl & kMulMsl
+const metalSource* = kAddMsl & kMulMsl & kMul2Msl & kFillMsl
 
-const kernelNames: array[KernelId, string] = [opAdd: "k_add", opMul: "k_mul"]
+const kernelNames: array[KernelId, string] =
+  [opAdd: "k_add", opMul: "k_mul", opMul2: "k_mul2", opFill: "k_fill"]
 
 var
   sessionDevice, sessionQueue, sessionLibrary: objc.ID
@@ -121,7 +124,7 @@ proc readbackDeviceMem*(mem: DeviceHandle, dst: pointer, nbytes: int) =
   copyMem(dst, contents(cast[objc.ID](mem)), nbytes)
 
 proc drainMetal(ctx: Ctx) {.nimcall.} =
-  ## One submission for the whole record: every pending entry encodes onto one
+  ## One submission for the pending entries: every entry encodes onto one
   ## persistent compute encoder of one command buffer, one dispatch per entry
   ## in record order, then commit, wait, status check.
   objc.withMemPool:
@@ -132,7 +135,7 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
     let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
     discard objc.msgSend(encoder, objc.`$$`("retain"))
     for entry in ctx.record:
-      if entry.backend != bkMetal:
+      if entry.backend != bkMetal or not ctx.isPending(entry.id):
         continue
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"),
           cachePso(kernelNames[entry.kernel]))
@@ -141,6 +144,10 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
         bindBlob(encoder, entry.blob, addBufferSlots, sizeof(AddScalars))
       of opMul:
         bindBlob(encoder, entry.blob, mulBufferSlots, sizeof(MulScalars))
+      of opMul2:
+        bindBlob(encoder, entry.blob, mul2BufferSlots, sizeof(Mul2Scalars))
+      of opFill:
+        bindBlob(encoder, entry.blob, fillBufferSlots, sizeof(FillScalars))
       dispatchThreadgroups(encoder, entry.cfg)
     discard objc.msgSend(encoder, objc.`$$`("endEncoding"))
     discard objc.msgSend(cmdBuf, objc.`$$`("commit"))
@@ -177,12 +184,14 @@ proc padTo4(v: SmallSeq[4, int32], pad: int32): array[4, int32] =
   for i in 0 ..< 4:
     result[i] = if i < int(v.len): v[i] else: pad
 
-proc toMetalTensorImpl*[T](ctx: Ctx, data: openArray[T], shape: openArray[int]): TensorImpl[T, bkMetal] =
+proc toMetalTensorImpl*[T](ctx: Ctx, data: openArray[T], shape: openArray[int], requiresGrad = false): TensorImpl[T, bkMetal] =
   ## Builds a Metal tensor from host data, contiguous, uploaded at construction.
   ## The upload memcpys into the shared buffer, it never submits.
   let meta = contiguousMeta(shape)
   result = TensorImpl[T, bkMetal](
     ctx: ctx,
+    tid: ctx.newTid(),
+    requiresGrad: requiresGrad,
     shape: meta.shape,
     strides: meta.strides,
     mem: allocDeviceMem(data.len * sizeof(T)))
@@ -190,6 +199,7 @@ proc toMetalTensorImpl*[T](ctx: Ctx, data: openArray[T], shape: openArray[int]):
 
 proc add*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
   ## Erased add: packs the op's args into one blob at enqueue, appends one record entry, returns the erased output tensor.
+  ## The output requires grad when either input does.
   let o = other.to(TensorImpl[T, bkMetal])
   let n = s.getNumel()
   let outMem = allocDeviceMem(n * sizeof(T))
@@ -202,16 +212,47 @@ proc add*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
       n: int32(n))))
-  let opId = s.ctx.enqueue(opAdd, blob, elementwiseCfg(n), bkMetal)
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opAdd, blob, elementwiseCfg(n), bkMetal, outTid, s.tid, o.tid)
   TensorImpl[T, bkMetal](
     ctx: s.ctx,
+    tid: outTid,
     seqNo: opId,
+    requiresGrad: s.requiresGrad or o.requiresGrad,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    mem: outMem).to(AnyTensorImpl)
+
+proc mul*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
+  ## Erased tensor product: packs the op's args into one blob at enqueue,
+  ## appends one record entry, returns the erased output tensor.
+  ## The output requires grad when either input does.
+  let o = other.to(TensorImpl[T, bkMetal])
+  let n = s.getNumel()
+  let outMem = allocDeviceMem(n * sizeof(T))
+  let blob = packMul2Args(Mul2Args(
+    outAddr: cast[uint64](outMem),
+    aAddr: cast[uint64](s.mem),
+    bAddr: cast[uint64](o.mem),
+    scalars: Mul2Scalars(
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      sb: padTo4(o.strides, 0),
+      n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opMul2, blob, elementwiseCfg(n), bkMetal, outTid, s.tid, o.tid)
+  TensorImpl[T, bkMetal](
+    ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    requiresGrad: s.requiresGrad or o.requiresGrad,
     shape: s.shape,
     strides: contiguousStrides(s.shape),
     mem: outMem).to(AnyTensorImpl)
 
 proc mulScalar*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorImpl =
   ## Erased scalar multiply: the scalar narrows to the storage element type at pack time.
+  ## The output requires grad when the input does.
   let n = s.getNumel()
   let outMem = allocDeviceMem(n * sizeof(T))
   let blob = packMulArgs(MulArgs(
@@ -222,9 +263,103 @@ proc mulScalar*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorImpl =
       sa: padTo4(s.strides, 0),
       scalar: float32(scalar),
       n: int32(n))))
-  let opId = s.ctx.enqueue(opMul, blob, elementwiseCfg(n), bkMetal)
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opMul, blob, elementwiseCfg(n), bkMetal, outTid, s.tid)
   TensorImpl[T, bkMetal](
     ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    requiresGrad: s.requiresGrad,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    mem: outMem).to(AnyTensorImpl)
+
+proc addNoGrad*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain add: runs the k_add record, grad flag off.
+  ## backward() adds fan-out accumulation through it.
+  let o = other.to(TensorImpl[T, bkMetal])
+  let n = s.getNumel()
+  let outMem = allocDeviceMem(n * sizeof(T))
+  let blob = packAddArgs(AddArgs(
+    outAddr: cast[uint64](outMem),
+    aAddr: cast[uint64](s.mem),
+    bAddr: cast[uint64](o.mem),
+    scalars: AddScalars(
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      sb: padTo4(o.strides, 0),
+      n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opAdd, blob, elementwiseCfg(n), bkMetal, outTid, s.tid, o.tid, isGrad = true)
+  TensorImpl[T, bkMetal](
+    ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    mem: outMem).to(AnyTensorImpl)
+
+proc mulNoGrad*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain tensor product: runs the k_mul2 record, grad flag off.
+  ## backward() builds the mul vjp from it.
+  let o = other.to(TensorImpl[T, bkMetal])
+  let n = s.getNumel()
+  let outMem = allocDeviceMem(n * sizeof(T))
+  let blob = packMul2Args(Mul2Args(
+    outAddr: cast[uint64](outMem),
+    aAddr: cast[uint64](s.mem),
+    bAddr: cast[uint64](o.mem),
+    scalars: Mul2Scalars(
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      sb: padTo4(o.strides, 0),
+      n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opMul2, blob, elementwiseCfg(n), bkMetal, outTid, s.tid, o.tid, isGrad = true)
+  TensorImpl[T, bkMetal](
+    ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    mem: outMem).to(AnyTensorImpl)
+
+proc mulScalarNoGrad*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorImpl =
+  ## Erased grad-chain scalar multiply: runs the k_mul record, grad flag off.
+  ## backward() builds the mulScalar vjp and the ones seed from it.
+  let n = s.getNumel()
+  let outMem = allocDeviceMem(n * sizeof(T))
+  let blob = packMulArgs(MulArgs(
+    outAddr: cast[uint64](outMem),
+    aAddr: cast[uint64](s.mem),
+    scalars: MulScalars(
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      scalar: float32(scalar),
+      n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opMul, blob, elementwiseCfg(n), bkMetal, outTid, s.tid, isGrad = true)
+  TensorImpl[T, bkMetal](
+    ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    mem: outMem).to(AnyTensorImpl)
+
+proc onesNoGrad*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
+  ## Erased grad-chain ones fill: runs the k_fill record, grad flag off.
+  ## backward() seeds the cotangent map from it.
+  let n = s.getNumel()
+  let outMem = allocDeviceMem(n * sizeof(T))
+  let blob = packFillArgs(FillArgs(
+    outAddr: cast[uint64](outMem),
+    scalars: FillScalars(shape: padTo4(s.shape, 1), n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opFill, blob, elementwiseCfg(n), bkMetal, outTid, isGrad = true)
+  TensorImpl[T, bkMetal](
+    ctx: s.ctx,
+    tid: outTid,
     seqNo: opId,
     shape: s.shape,
     strides: contiguousStrides(s.shape),

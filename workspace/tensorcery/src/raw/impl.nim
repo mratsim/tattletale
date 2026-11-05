@@ -7,11 +7,11 @@
 
 ## Typed tensor implementations behind the erased AnyTensorImpl face.
 ##
-## TensorImpl[T, Hw] stores the producing op id with runtime shape and strides plus the backend storage for element type T.
+## TensorImpl[T, Hw] stores the producing op id, tensor id, grad flag, runtime shape, strides and the backend storage for element type T.
 ## The erased face has no type parameters, calls dispatch through the generated vtable.
 ##
-## A backend module implements each op for its TensorImpl specialization.
-## The op packs its blob once at enqueue and appends one record entry.
+## A backend module implements each op for its TensorImpl specialization, packs the blob once at enqueue and appends one record entry.
+## The no-grad set (addNoGrad, mulNoGrad, mulScalarNoGrad, onesNoGrad) runs the same kernels, grad flag off, for backward().
 ##
 ## iface initializes each global vtable lazily on first use, single-threaded use only.
 ## Acceptable for this MVP, revisit when backends run on worker threads.
@@ -24,11 +24,18 @@ import
   workspace/tensorcery/src/ctx
 
 iface *AnyTensorImpl:
+  proc getTid(): int
+  proc getRequiresGrad(): bool
   proc getNumel(): int
   proc getShape(): SmallSeq[4, int32]
   proc getStrides(): SmallSeq[4, int32]
   proc add(other: AnyTensorImpl): AnyTensorImpl
+  proc mul(other: AnyTensorImpl): AnyTensorImpl
   proc mulScalar(scalar: float64): AnyTensorImpl
+  proc addNoGrad(other: AnyTensorImpl): AnyTensorImpl
+  proc mulNoGrad(other: AnyTensorImpl): AnyTensorImpl
+  proc mulScalarNoGrad(scalar: float64): AnyTensorImpl
+  proc onesNoGrad(): AnyTensorImpl
   proc readbackBytes(): seq[byte]
 
 type DeviceHandle* = distinct uint64
@@ -37,7 +44,9 @@ type DeviceHandle* = distinct uint64
 type TensorImpl*[T; Hw: static BackendKind] = ref object
   ## Typed tensor state behind one entry of the erased face.
   ctx*: Ctx
+  tid*: int       ## tensor id, unique within the context, referenced by record entries
   seqNo*: int     ## 0 when materialized at construction, else the op id of the record entry that produces this storage
+  requiresGrad*: bool
   shape*: SmallSeq[4, int32]
   strides*: SmallSeq[4, int32]
   when Hw == bkCpu:
@@ -75,7 +84,7 @@ proc contiguousMeta*(shape: openArray[int]): tuple[shape, strides: SmallSeq[4, i
   result.strides = contiguousStrides(result.shape)
 
 proc toTensorImpl*[T; Hw: static BackendKind](
-    ctx: Ctx, data: openArray[T], shape: openArray[int]
+    ctx: Ctx, data: openArray[T], shape: openArray[int], requiresGrad = false
 ): TensorImpl[T, Hw] =
   ## Builds a TensorImpl from host data over `shape`, contiguous, last dimension varying fastest.
   ##
@@ -89,10 +98,18 @@ proc toTensorImpl*[T; Hw: static BackendKind](
   doAssert data.len == numel,
       "data holds " & $data.len & " elements, shape " & $shape & " needs " & $numel
 
-  result = TensorImpl[T, Hw](ctx: ctx)
+  result = TensorImpl[T, Hw](ctx: ctx, tid: ctx.newTid(), requiresGrad: requiresGrad)
   result.shape = meta.shape
   result.strides = meta.strides
   result.storage = @data
+
+proc getTid*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): int =
+  ## Returns the tensor id that record entries and the tape registry reference.
+  s.tid
+
+proc getRequiresGrad*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): bool =
+  ## Returns the grad flag: true when backward() accumulates a gradient for the tensor.
+  s.requiresGrad
 
 proc getNumel*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): int =
   ## Returns the element count as a product over all shape sizes.
@@ -105,4 +122,3 @@ proc getShape*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): SmallSeq[4, int
 
 proc getStrides*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): SmallSeq[4, int32] =
   s.strides
-

@@ -72,3 +72,7 @@ proc packAddArgs*(args: AddArgs): seq[byte] =
   copyMem(result[8].addr, args.aAddr.unsafeAddr, 8)
   copyMem(result[16].addr, args.bAddr.unsafeAddr, 8)
   copyMem(result[addScalarsSlot].addr, args.scalars.unsafeAddr, sizeof(AddScalars))
+
+proc decodeAddArgs*(blob: openArray[byte]): AddArgs =
+  ## Inverse of packAddArgs: rebuilds the args object from the recorded blob.
+  copyMem(result.addr, blob[0].unsafeAddr, sizeof(AddArgs))

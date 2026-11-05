@@ -14,7 +14,7 @@
 ## - the task fires its event, chaining the next op task, and counts one completion
 ## - the root thread waits inside the drain scope, so eval returns with every output readable
 ##
-## Recorded blobs reuse the k_add/k_mul record format: 8-byte address slots.
+## Recorded blobs reuse the k_add/k_mul/k_mul2 record format: 8-byte address slots.
 ## For CPU the addresses are host pointers into the impl's seq storage.
 ## The scalar image of a multiply narrows the multiplier to float32, matching the k_mul record.
 
@@ -32,7 +32,9 @@ import
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
   workspace/tensorcery/src/kernels/k_add,
-  workspace/tensorcery/src/kernels/k_mul
+  workspace/tensorcery/src/kernels/k_mul,
+  workspace/tensorcery/src/kernels/k_mul2,
+  workspace/tensorcery/src/kernels/k_fill
 
 # Session state
 # ------------------------------------------------------------
@@ -48,6 +50,8 @@ type
     outp, a, b: pointer
     addScalars: AddScalars
     mulScalars: MulScalars
+    mul2Scalars: Mul2Scalars
+    fillScalars: FillScalars
     event: FlowEvent
     completions: ptr Atomic[int32]
 
@@ -59,7 +63,7 @@ var
     ## Pool of the CPU session, created once, worker 0 is the calling thread.
   opRunners: Table[pointer, Table[int, CpuOpRunner]]
     ## Typed kernel runner per recorded op id, keyed by owning context.
-    ## Registered at enqueue, dropped after the drain, the record stays data-only.
+    ## Registered at enqueue, dropped after the drain. The record stays data-only.
   completionCount*: Atomic[int32]
     ## Completed CPU ops since the last reset, one increment per executed op task.
     ## Tests reset it and assert the count after eval.
@@ -107,6 +111,34 @@ proc stridedMulBody[T](idx: int32, env: ptr StridedMulEnv[T]) {.cdecl.} =
   let ia = sc.aOff + (c0 * sc.sa[0] + c1 * sc.sa[1]) + c2 * sc.sa[2] + c3 * sc.sa[3]
   env.outp[][idx] = env.a[][ia] * T(sc.scalar)
 
+type StridedMul2Env[T] = object
+  ## Per-iteration env of the CPU tensor-product kernel.
+  outp, a, b: ptr UncheckedArray[T]
+  scalars: Mul2Scalars
+
+proc stridedMul2Body[T](idx: int32, env: ptr StridedMul2Env[T]) {.cdecl.} =
+  ## CPU port of the k_mul2 divmod chain:
+  ## output[i] = a[aOff + strided(i)] * b[bOff + strided(i)]
+  let sc = env.scalars
+  let c3 = idx mod sc.shape[3]
+  let t2 = idx div sc.shape[3]
+  let c2 = t2 mod sc.shape[2]
+  let t1 = t2 div sc.shape[2]
+  let c1 = t1 mod sc.shape[1]
+  let c0 = t1 div sc.shape[1]
+  let ia = sc.aOff + (c0 * sc.sa[0] + c1 * sc.sa[1]) + c2 * sc.sa[2] + c3 * sc.sa[3]
+  let ib = sc.bOff + (c0 * sc.sb[0] + c1 * sc.sb[1]) + c2 * sc.sb[2] + c3 * sc.sb[3]
+  env.outp[][idx] = env.a[][ia] * env.b[][ib]
+
+type StridedFillEnv[T] = object
+  ## Per-iteration env of the CPU ones-fill kernel.
+  outp: ptr UncheckedArray[T]
+  scalars: FillScalars
+
+proc stridedFillBody[T](idx: int32, env: ptr StridedFillEnv[T]) {.cdecl.} =
+  ## CPU port of the k_fill kernel: output[i] = 1
+  env.outp[][idx] = T(1)
+
 # Op task and drain
 # ------------------------------------------------------------
 
@@ -120,7 +152,7 @@ proc cpuOpTask(env: pointer) {.cdecl.} =
   ##
   ## - runs the kernel through the parallelFor wrapper
   ## - fires the op's flow event, counts one completion
-  # task->env layout is [task self-pointer][payload], the fn receives the header included
+  # task->env layout is [task self-pointer][payload]. The fn receives the header included
   # CpuOpTaskEnv payload sits behind the header
   let work = cast[ptr CpuOpTaskEnv](cast[int](env) + FlowvarHeaderSize)[].work
   work.run(work)
@@ -147,16 +179,26 @@ proc runMulOp[T](work: ptr CpuOpWork) {.cdecl.} =
   syncScope:
     parallelFor(0, work.mulScalars.n, env, stridedMulBody[T])
 
-proc decodeAddArgs(blob: openArray[byte]): AddArgs =
-  ## Inverse of packAddArgs: rebuilds the args object from the recorded blob.
-  copyMem(result.addr, blob[0].unsafeAddr, sizeof(AddArgs))
+proc runMul2Op[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Tensor-product kernel execution through the parallelFor wrapper.
+  var env = StridedMul2Env[T](
+    outp: cast[ptr UncheckedArray[T]](work.outp),
+    a: cast[ptr UncheckedArray[T]](work.a),
+    b: cast[ptr UncheckedArray[T]](work.b),
+    scalars: work.mul2Scalars)
+  syncScope:
+    parallelFor(0, work.mul2Scalars.n, env, stridedMul2Body[T])
 
-proc decodeMulArgs(blob: openArray[byte]): MulArgs =
-  ## Inverse of packMulArgs: rebuilds the args object from the recorded blob.
-  copyMem(result.addr, blob[0].unsafeAddr, sizeof(MulArgs))
+proc runFillOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Ones-fill kernel execution through the parallelFor wrapper.
+  var env = StridedFillEnv[T](
+    outp: cast[ptr UncheckedArray[T]](work.outp),
+    scalars: work.fillScalars)
+  syncScope:
+    parallelFor(0, work.fillScalars.n, env, stridedFillBody[T])
 
 proc drainCpu(ctx: Ctx) {.nimcall.} =
-  ## One synchronous drain of the record: one op task per entry.
+  ## One synchronous drain of the record: one op task per pending entry.
   ## Flow events chain the tasks in record order.
   ## The root thread waits inside the drain scope until the last op completes,
   ## then drops the events and the runners.
@@ -164,7 +206,7 @@ proc drainCpu(ctx: Ctx) {.nimcall.} =
   syncScope:
     let wctx = workerContext()
     for entry in ctx.record:
-      if entry.backend != bkCpu:
+      if entry.backend != bkCpu or not ctx.isPending(entry.id):
         continue
       var ev: FlowEvent
       flowEvent_initSingle(ev)
@@ -173,7 +215,7 @@ proc drainCpu(ctx: Ctx) {.nimcall.} =
       let work = cast[ptr CpuOpWork](alloc0(sizeof(CpuOpWork)))
       work[].event = ev
       work[].completions = completionCount.addr
-      work[].run = opRunners[cast[pointer](ctx)][entry.output]
+      work[].run = opRunners[cast[pointer](ctx)][entry.id]
       case entry.kernel
       of opAdd:
         let args = decodeAddArgs(entry.blob)
@@ -186,6 +228,16 @@ proc drainCpu(ctx: Ctx) {.nimcall.} =
         work[].outp = cast[pointer](args.outAddr)
         work[].a = cast[pointer](args.aAddr)
         work[].mulScalars = args.scalars
+      of opMul2:
+        let args = decodeMul2Args(entry.blob)
+        work[].outp = cast[pointer](args.outAddr)
+        work[].a = cast[pointer](args.aAddr)
+        work[].b = cast[pointer](args.bAddr)
+        work[].mul2Scalars = args.scalars
+      of opFill:
+        let args = decodeFillArgs(entry.blob)
+        work[].outp = cast[pointer](args.outAddr)
+        work[].fillScalars = args.scalars
 
       var taskEnv = CpuOpTaskEnv(work: work)
       let task = task_newSpawnEnv(wctx.currentTask, wctx.currentScope,
@@ -217,6 +269,7 @@ proc padTo4(v: SmallSeq[4, int32], pad: int32): array[4, int32] =
 
 proc add*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
   ## Erased add: packs the op's args into one blob at enqueue, appends one record entry, returns the erased output tensor.
+  ## The output requires grad when either input does.
   let o = other.to(TensorImpl[T, bkCpu])
   let n = s.getNumel()
   var outStorage = newSeq[T](n)
@@ -229,18 +282,49 @@ proc add*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
       n: int32(n))))
-  let opId = s.ctx.enqueue(opAdd, blob, LaunchCfg(), bkCpu)
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opAdd, blob, LaunchCfg(), bkCpu, outTid, s.tid, o.tid)
   opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] = runAddOp[T]
   TensorImpl[T, bkCpu](
     ctx: s.ctx,
+    tid: outTid,
     seqNo: opId,
+    requiresGrad: s.requiresGrad or o.requiresGrad,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    storage: outStorage).to(AnyTensorImpl)
+
+proc mul*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
+  ## Erased tensor product: packs the op's args into one blob at enqueue,
+  ## appends one record entry, returns the erased output tensor.
+  ## The output requires grad when either input does.
+  let o = other.to(TensorImpl[T, bkCpu])
+  let n = s.getNumel()
+  var outStorage = newSeq[T](n)
+  let blob = packMul2Args(Mul2Args(
+    outAddr: cast[uint64](outStorage[0].addr),
+    aAddr: cast[uint64](s.storage[0].unsafeAddr),
+    bAddr: cast[uint64](o.storage[0].unsafeAddr),
+    scalars: Mul2Scalars(
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      sb: padTo4(o.strides, 0),
+      n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opMul2, blob, LaunchCfg(), bkCpu, outTid, s.tid, o.tid)
+  opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] = runMul2Op[T]
+  TensorImpl[T, bkCpu](
+    ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    requiresGrad: s.requiresGrad or o.requiresGrad,
     shape: s.shape,
     strides: contiguousStrides(s.shape),
     storage: outStorage).to(AnyTensorImpl)
 
 proc mulScalar*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImpl =
-  ## Erased scalar multiply: the scalar narrows to float32 at pack time,
-  ## matching the k_mul record.
+  ## Erased scalar multiply: the scalar narrows to float32 at pack time, matching the k_mul record.
+  ## The output requires grad when the input does.
   let n = s.getNumel()
   var outStorage = newSeq[T](n)
   let blob = packMulArgs(MulArgs(
@@ -251,10 +335,108 @@ proc mulScalar*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImpl =
       sa: padTo4(s.strides, 0),
       scalar: float32(scalar),
       n: int32(n))))
-  let opId = s.ctx.enqueue(opMul, blob, LaunchCfg(), bkCpu)
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opMul, blob, LaunchCfg(), bkCpu, outTid, s.tid)
   opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] = runMulOp[T]
   TensorImpl[T, bkCpu](
     ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    requiresGrad: s.requiresGrad,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    storage: outStorage).to(AnyTensorImpl)
+
+proc addNoGrad*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain add: runs the k_add record, grad flag off.
+  ## backward() adds fan-out accumulation through it.
+  let o = other.to(TensorImpl[T, bkCpu])
+  let n = s.getNumel()
+  var outStorage = newSeq[T](n)
+  let blob = packAddArgs(AddArgs(
+    outAddr: cast[uint64](outStorage[0].addr),
+    aAddr: cast[uint64](s.storage[0].unsafeAddr),
+    bAddr: cast[uint64](o.storage[0].unsafeAddr),
+    scalars: AddScalars(
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      sb: padTo4(o.strides, 0),
+      n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opAdd, blob, LaunchCfg(), bkCpu, outTid, s.tid, o.tid, isGrad = true)
+  opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] = runAddOp[T]
+  TensorImpl[T, bkCpu](
+    ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    storage: outStorage).to(AnyTensorImpl)
+
+proc mulNoGrad*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain tensor product: runs the k_mul2 record, grad flag off.
+  ## backward() builds the mul vjp from it.
+  let o = other.to(TensorImpl[T, bkCpu])
+  let n = s.getNumel()
+  var outStorage = newSeq[T](n)
+  let blob = packMul2Args(Mul2Args(
+    outAddr: cast[uint64](outStorage[0].addr),
+    aAddr: cast[uint64](s.storage[0].unsafeAddr),
+    bAddr: cast[uint64](o.storage[0].unsafeAddr),
+    scalars: Mul2Scalars(
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      sb: padTo4(o.strides, 0),
+      n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opMul2, blob, LaunchCfg(), bkCpu, outTid, s.tid, o.tid, isGrad = true)
+  opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] = runMul2Op[T]
+  TensorImpl[T, bkCpu](
+    ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    storage: outStorage).to(AnyTensorImpl)
+
+proc mulScalarNoGrad*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImpl =
+  ## Erased grad-chain scalar multiply: runs the k_mul record, grad flag off.
+  ## backward() builds the mulScalar vjp and the ones seed from it.
+  let n = s.getNumel()
+  var outStorage = newSeq[T](n)
+  let blob = packMulArgs(MulArgs(
+    outAddr: cast[uint64](outStorage[0].addr),
+    aAddr: cast[uint64](s.storage[0].unsafeAddr),
+    scalars: MulScalars(
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      scalar: float32(scalar),
+      n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opMul, blob, LaunchCfg(), bkCpu, outTid, s.tid, isGrad = true)
+  opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] = runMulOp[T]
+  TensorImpl[T, bkCpu](
+    ctx: s.ctx,
+    tid: outTid,
+    seqNo: opId,
+    shape: s.shape,
+    strides: contiguousStrides(s.shape),
+    storage: outStorage).to(AnyTensorImpl)
+
+proc onesNoGrad*[T](s: TensorImpl[T, bkCpu]): AnyTensorImpl =
+  ## Erased grad-chain ones fill: runs the k_fill record, grad flag off.
+  ## backward() seeds the cotangent map from it.
+  let n = s.getNumel()
+  var outStorage = newSeq[T](n)
+  let blob = packFillArgs(FillArgs(
+    outAddr: cast[uint64](outStorage[0].addr),
+    scalars: FillScalars(shape: padTo4(s.shape, 1), n: int32(n))))
+  let outTid = s.ctx.newTid()
+  let opId = s.ctx.enqueue(opFill, blob, LaunchCfg(), bkCpu, outTid, isGrad = true)
+  opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] = runFillOp[T]
+  TensorImpl[T, bkCpu](
+    ctx: s.ctx,
+    tid: outTid,
     seqNo: opId,
     shape: s.shape,
     strides: contiguousStrides(s.shape),

@@ -67,3 +67,7 @@ proc packMulArgs*(args: MulArgs): seq[byte] =
   copyMem(result[0].addr, args.outAddr.unsafeAddr, 8)
   copyMem(result[8].addr, args.aAddr.unsafeAddr, 8)
   copyMem(result[mulScalarsSlot].addr, args.scalars.unsafeAddr, sizeof(MulScalars))
+
+proc decodeMulArgs*(blob: openArray[byte]): MulArgs =
+  ## Inverse of packMulArgs: rebuilds the args object from the recorded blob.
+  copyMem(result.addr, blob[0].unsafeAddr, sizeof(MulArgs))

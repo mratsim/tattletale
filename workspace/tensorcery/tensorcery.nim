@@ -9,6 +9,7 @@ import
   workspace/tensorcery/src/raw/dtypes,
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
-  workspace/tensorcery/src/tensors
+  workspace/tensorcery/src/tensors,
+  workspace/tensorcery/src/autograd
 
-export dtypes, impl, ctx, tensors
+export dtypes, impl, ctx, tensors, autograd
