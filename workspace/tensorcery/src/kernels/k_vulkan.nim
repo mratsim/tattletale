@@ -141,3 +141,93 @@ void main() {
   }
 }
 """
+
+const kGatherGlsl* = """
+#version 450
+layout(local_size_x = 256) in;
+layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
+layout(std430, set = 0, binding = 1) buffer WBuf { float w[]; } wbuf;
+layout(std430, set = 0, binding = 2) buffer IdxBuf { int idx[]; } idxbuf;
+layout(std430, set = 0, binding = 3) buffer GatherSBuf {
+  int wOff;
+  int idxOff;
+  int e;
+  int n;
+} p;
+void main() {
+  int i = int(gl_GlobalInvocationID.x);
+  if (i < p.n) {
+    int row = i / p.e;
+    int col = i - row * p.e;
+    int wrow = idxbuf.idx[p.idxOff + row];
+    outb.o[i] = wbuf.w[p.wOff + wrow * p.e + col];
+  }
+}
+"""
+
+const kLayerNormGlsl* = """
+#version 450
+layout(local_size_x = 256) in;
+layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
+layout(std430, set = 0, binding = 1) buffer XBuf { float x[]; } xbuf;
+layout(std430, set = 0, binding = 2) buffer WBuf { float w[]; } wbuf;
+layout(std430, set = 0, binding = 3) buffer BBuf { float b[]; } bbuf;
+layout(std430, set = 0, binding = 4) buffer LayerNormSBuf {
+  int xOff;
+  int wOff;
+  int bOff;
+  int xShape[4];
+  int xs[4];
+  int d;
+  int rows;
+  int xStep;
+  float eps;
+} p;
+void main() {
+  int r = int(gl_GlobalInvocationID.x);
+  if (r < p.rows) {
+    int i0 = r * p.d;
+    int c3 = i0 % p.xShape[3];
+    int t2 = i0 / p.xShape[3];
+    int c2 = t2 % p.xShape[2];
+    int t1 = t2 / p.xShape[2];
+    int c1 = t1 % p.xShape[1];
+    int c0 = t1 / p.xShape[1];
+    int base = p.xOff + (c0 * p.xs[0] + c1 * p.xs[1]) + c2 * p.xs[2] + c3 * p.xs[3];
+    float mean = 0.0;
+    for (int c = 0; c < p.d; c++) {
+      mean += xbuf.x[base + c * p.xStep];
+    }
+    mean /= float(p.d);
+    float var = 0.0;
+    for (int c = 0; c < p.d; c++) {
+      float dv = xbuf.x[base + c * p.xStep] - mean;
+      var += dv * dv;
+    }
+    var /= float(p.d);
+    float scale = 1.0 / sqrt(var + p.eps);
+    for (int c = 0; c < p.d; c++) {
+      outb.o[i0 + c] = (xbuf.x[base + c * p.xStep] - mean) * scale * wbuf.w[p.wOff + c] + bbuf.b[p.bOff + c];
+    }
+  }
+}
+"""
+
+const kGeluGlsl* = """
+#version 450
+layout(local_size_x = 256) in;
+layout(std430, set = 0, binding = 0) buffer OutBuf { float o[]; } outb;
+layout(std430, set = 0, binding = 1) buffer ABuf { float a[]; } abuf;
+layout(std430, set = 0, binding = 2) buffer GeluSBuf {
+  int aOff;
+  int n;
+} p;
+void main() {
+  int i = int(gl_GlobalInvocationID.x);
+  if (i < p.n) {
+    float x = abuf.a[p.aOff + i];
+    float u = 0.7978845608028654 * (x + 0.044715 * x * x * x);
+    outb.o[i] = 0.5 * x * (1.0 + tanh(u));
+  }
+}
+"""

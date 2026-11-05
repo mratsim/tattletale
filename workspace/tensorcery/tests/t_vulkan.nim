@@ -170,6 +170,79 @@ proc main() =
         expected.add float64(bdata[i])
     checkBand(toSeq[float32](sel), expected, "where")
 
+  block gather:
+    let ctx = Ctx()
+    let v, e = 3
+    var wdata: seq[float32]
+    for i in 0 ..< v * e:
+      wdata.add frandSigned(i + 3)
+    var idxData: seq[int32]
+    idxData.add 2'i32
+    idxData.add 0'i32
+    idxData.add 2'i32
+    let w = toTensor(ctx, wdata, bkVulkan, v, e)
+    let idx = toTensor(ctx, idxData, bkVulkan, 3)
+    let outT = gather(w, idx)
+    vulkan.resetSubmissionCount()
+    ctx.eval()
+    doAssert vulkan.submissionCount == 1, "one eval is one Vulkan submission"
+    var expected: seq[float64]
+    for row in 0 ..< 3:
+      for col in 0 ..< e:
+        expected.add float64(wdata[idxData[row] * e + col])
+    checkBand(toSeq[float32](outT), expected, "gather")
+
+  block layernorm:
+    let ctx = Ctx()
+    let rows, d = 7
+    var xdata, wdata, bdata: seq[float32]
+    for i in 0 ..< rows * d:
+      xdata.add frandSigned(i + 2)
+    for i in 0 ..< d:
+      wdata.add frandSigned(i + 41)
+      bdata.add frandSigned(i + 43)
+    let eps = 1e-5
+    let x = toTensor(ctx, xdata, bkVulkan, rows, d)
+    let w = toTensor(ctx, wdata, bkVulkan, d)
+    let b = toTensor(ctx, bdata, bkVulkan, d)
+    let outT = layernorm(x, w, b, eps)
+    vulkan.resetSubmissionCount()
+    ctx.eval()
+    doAssert vulkan.submissionCount == 1, "one eval is one Vulkan submission"
+    var expected: seq[float64]
+    for r in 0 ..< rows:
+      var mean = 0.0
+      for c in 0 ..< d:
+        mean += float64(xdata[r * d + c])
+      mean /= float64(d)
+      var vr = 0.0
+      for c in 0 ..< d:
+        let dv = float64(xdata[r * d + c]) - mean
+        vr += dv * dv
+      vr /= float64(d)
+      let scale = 1.0 / sqrt(vr + eps)
+      for c in 0 ..< d:
+        expected.add (float64(xdata[r * d + c]) - mean) * scale * float64(wdata[c]) + float64(bdata[c])
+    checkBand(toSeq[float32](outT), expected, "layernorm")
+
+  block gelu:
+    let ctx = Ctx()
+    let n = 300
+    var adata: seq[float32]
+    for i in 0 ..< n:
+      adata.add frandSigned(i + 9)
+    let a = toTensor(ctx, adata, bkVulkan, n)
+    let outT = gelu(a)
+    vulkan.resetSubmissionCount()
+    ctx.eval()
+    doAssert vulkan.submissionCount == 1, "one eval is one Vulkan submission"
+    var expected: seq[float64]
+    for i in 0 ..< n:
+      let v = float64(adata[i])
+      let u = 0.7978845608028654 * (v + 0.044715 * v * v * v)
+      expected.add 0.5 * v * (1.0 + tanh(u))
+    checkBand(toSeq[float32](outT), expected, "gelu")
+
   block vulkanRefusals:
     let ctx = Ctx()
     let a = toTensor(ctx, @[1.0'f32, 2.0], bkVulkan, 2)

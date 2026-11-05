@@ -28,6 +28,7 @@ import
   workspace/crucible/src/abis/vulkan_abi as vk,
   workspace/data_structures/src/small_seqs,
   workspace/tensorcery/src/raw/dtypes,
+  workspace/tensorcery/src/raw/bridge,
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
   workspace/tensorcery/src/tape,
@@ -86,7 +87,7 @@ const kernelNames: array[KernelId, string] =
 const kernelGlsl: array[KernelId, string] =
   [opAdd: kAddGlsl, opMul: kMulGlsl, opMul2: kMul2Glsl, opFill: kFillGlsl,
    opReshape: "", opPermute: "", opSlice: "",
-   opGather: "", opLayerNorm: "", opGelu: "",
+   opGather: kGatherGlsl, opLayerNorm: kLayerNormGlsl, opGelu: kGeluGlsl,
    opSoftmax: "", opCrossEntropy: "", opWhere: kWhereGlsl,
    opSgd: "", opAdam: "",
    opSoftmaxBwd: "", opGeluBwd: "", opLayerNormBwdDx: "", opLayerNormBwdW: "",
@@ -327,7 +328,13 @@ proc drainVulkan(ctx: Ctx) {.nimcall.} =
       bindAndDispatch(cmdBuf, entry, mul2BufferSlots, scalarBuf, pipe, pools)
     of opFill:
       bindAndDispatch(cmdBuf, entry, fillBufferSlots, scalarBuf, pipe, pools)
-    of opGather, opLayerNorm, opGelu, opSoftmax, opCrossEntropy,
+    of opGather:
+      bindAndDispatch(cmdBuf, entry, gatherBufferSlots, scalarBuf, pipe, pools)
+    of opLayerNorm:
+      bindAndDispatch(cmdBuf, entry, layerNormBufferSlots, scalarBuf, pipe, pools)
+    of opGelu:
+      bindAndDispatch(cmdBuf, entry, geluBufferSlots, scalarBuf, pipe, pools)
+    of opSoftmax, opCrossEntropy,
        opSgd, opAdam, opSoftmaxBwd, opGeluBwd,
        opLayerNormBwdDx, opLayerNormBwdW, opLayerNormBwdB, opCrossEntropyBwd,
        opGatherBwd, opSliceBwd:
@@ -541,19 +548,79 @@ proc onesNoGrad*[T](s: TensorImpl[T, bkVulkan]): AnyTensorImpl =
       sc.addr, sizeof(FillScalars)).to(AnyTensorImpl)
 
 proc gather*[T](s: TensorImpl[T, bkVulkan], indices: AnyTensorImpl): AnyTensorImpl =
-  ## Refusal: opGather has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: gather(tensor " & $s.tid & ", tensor " & $indices.getTid() & ") refused, opGather has no Vulkan kernel yet"
+  ## Erased embedding gather: one embedding vector per index over the rank-2 table.
+  ## The output requires grad when the table does. The int32 indices never do.
+  ##
+  ## Raises AssertionDefect for a non rank-2 table or any non-contiguous operand.
+  let idx = indices.to(TensorImpl[int32, bkVulkan])
+  doAssert int(s.shape.len) == 2,
+      "gather: the table must be rank 2 (vocabulary, embedding dim), got rank " & $s.shape.len
+  doAssert isContiguous(s.shape, s.strides), "gather: non-contiguous table refused"
+  doAssert isContiguous(idx.shape, idx.strides), "gather: non-contiguous index tensor refused"
+  let e = int32(s.shape[int(s.shape.len) - 1])
+  let n = idx.getNumel() * int(e)
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let sc = GatherScalars(
+    wOff: int32(s.offset), idxOff: int32(idx.offset), e: e, n: int32(n))
+  let blob = packGatherArgs(GatherArgs(
+    outAddr: cast[uint64](outMem.handle),
+    wAddr: cast[uint64](s.mem.handle),
+    idxAddr: cast[uint64](idx.mem.handle),
+    scalars: sc))
+  s.record(opGather, blob, elementwiseCfg(n), outMem, appendDim(idx.shape, e),
+      s.requiresGrad, false, s.tid, idx.tid, 0,
+      sc.addr, sizeof(GatherScalars)).to(AnyTensorImpl)
 
 proc layernorm*[T](s: TensorImpl[T, bkVulkan], w, b: AnyTensorImpl, eps: float64): AnyTensorImpl =
-  ## Refusal: opLayerNorm has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: layernorm(tensor " & $s.tid & ", tensor " & $w.getTid() & ", tensor " & $b.getTid() & ") refused, opLayerNorm has no Vulkan kernel yet"
+  ## Erased last-axis layernorm over `s` with the learned scale `w` and shift `b`.
+  ## The output requires grad when any operand does.
+  ##
+  ## Raises AssertionDefect when the scale or shift does not hold one element per
+  ## normalized axis or is non-contiguous.
+  let wImpl = w.to(TensorImpl[T, bkVulkan])
+  let bImpl = b.to(TensorImpl[T, bkVulkan])
+  let d = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div d
+  doAssert wImpl.getNumel() == d and bImpl.getNumel() == d,
+      "layernorm: scale and shift must hold one element per normalized axis, " &
+      $wImpl.getNumel() & " and " & $bImpl.getNumel() & " for axis size " & $d
+  doAssert isContiguous(wImpl.shape, wImpl.strides) and isContiguous(bImpl.shape, bImpl.strides),
+      "layernorm: non-contiguous scale or shift refused"
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let sc = LayerNormScalars(
+    xOff: int32(s.offset), wOff: int32(wImpl.offset), bOff: int32(bImpl.offset),
+    xShape: padTo4(s.shape, 1), xs: padTo4(s.strides, 0),
+    d: int32(d), rows: int32(rows), xStep: int32(s.strides[int(s.shape.len) - 1]),
+    eps: float32(eps))
+  let blob = packLayerNormArgs(LayerNormArgs(
+    outAddr: cast[uint64](outMem.handle),
+    xAddr: cast[uint64](s.mem.handle),
+    wAddr: cast[uint64](wImpl.mem.handle),
+    bAddr: cast[uint64](bImpl.mem.handle),
+    scalars: sc))
+  s.record(opLayerNorm, blob, elementwiseCfg(rows), outMem, s.shape,
+      s.requiresGrad or wImpl.requiresGrad or bImpl.requiresGrad, false,
+      s.tid, wImpl.tid, bImpl.tid,
+      sc.addr, sizeof(LayerNormScalars)).to(AnyTensorImpl)
 
 proc gelu*[T](s: TensorImpl[T, bkVulkan]): AnyTensorImpl =
-  ## Refusal: opGelu has no Vulkan kernel yet.
-  doAssert false,
-      "vulkan: gelu(tensor " & $s.tid & ") refused, opGelu has no Vulkan kernel yet"
+  ## Erased tanh-approximate gelu over `s`. The output requires grad when `s` does.
+  ## The input stages through the BridgeTensor boundary into the kernel image.
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let staged = BridgeTensor[T](
+    base: cast[uint64](s.mem.handle), offset: s.offset,
+    shape: s.shape, strides: s.strides)
+  let view = staged.toView()
+  let sc = GeluScalars(aOff: view.off, n: int32(n))
+  let blob = packGeluArgs(GeluArgs(
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: view.base,
+    scalars: sc))
+  s.record(opGelu, blob, elementwiseCfg(n), outMem, s.shape,
+      s.requiresGrad, false, s.tid, 0, 0,
+      sc.addr, sizeof(GeluScalars)).to(AnyTensorImpl)
 
 proc softmax*[T](s: TensorImpl[T, bkVulkan]): AnyTensorImpl =
   ## Refusal: opSoftmax has no Vulkan kernel yet.
