@@ -26,7 +26,8 @@ import
   workspace/tensorcery/src/tape,
   workspace/tensorcery/src/kernels/k_sgd_adam,
   workspace/tensorcery/src/backends/metal,
-  workspace/tensorcery/src/backends/cpu
+  workspace/tensorcery/src/backends/cpu,
+  workspace/tensorcery/src/backends/vulkan
 
 # iface resolves the vtable's mixins at the outermost instantiation scope,
 # so the typed conformant procs must be visible to module users of the Tensor face.
@@ -47,6 +48,14 @@ export cpu.softmaxBwdNoGrad, cpu.geluBwdNoGrad
 export cpu.layernormBwdDxNoGrad, cpu.layernormBwdWNoGrad, cpu.layernormBwdBNoGrad
 export cpu.crossEntropyBwdNoGrad, cpu.gatherBwdNoGrad, cpu.sliceBwdNoGrad
 export cpu.readbackBytes
+export vulkan.add, vulkan.mul, vulkan.mulScalar
+export vulkan.addNoGrad, vulkan.mulNoGrad, vulkan.mulScalarNoGrad, vulkan.onesNoGrad
+export vulkan.gather, vulkan.layernorm, vulkan.gelu, vulkan.softmax
+export vulkan.crossEntropy, vulkan.where, vulkan.sgdUpdate, vulkan.adamUpdate
+export vulkan.softmaxBwdNoGrad, vulkan.geluBwdNoGrad
+export vulkan.layernormBwdDxNoGrad, vulkan.layernormBwdWNoGrad, vulkan.layernormBwdBNoGrad
+export vulkan.crossEntropyBwdNoGrad, vulkan.gatherBwdNoGrad, vulkan.sliceBwdNoGrad
+export vulkan.readbackBytes
 
 # aliasStrided is an impl.nim proc: a metadata view over explicit shape and strides,
 # used by the backward walk to build shape-op cotangents
@@ -72,6 +81,12 @@ proc toTensorShaped[T](ctx: Ctx, data: openArray[T], Hw: static BackendKind, sha
       let erasedImpl = toMetalTensorImpl(ctx, data, shape, requiresGrad).toErased()
     else:
       {.error: "Metal construction supports float32 and int32 only, got " & $toDtype(T).}
+  elif Hw == bkVulkan:
+    ensureVulkan(ctx)
+    when T is float32 or T is int32:
+      let erasedImpl = toVulkanTensorImpl(ctx, data, shape, requiresGrad).toErased()
+    else:
+      {.error: "Vulkan construction supports float32 and int32 only, got " & $toDtype(T).}
 
   tape.register(ctx, erasedImpl.getTid(), erasedImpl)
   Tensor(

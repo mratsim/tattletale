@@ -81,7 +81,7 @@ type SharedStorage*[T] = ref object
   seqNo*: int
 
 type SharedMemory* = ref object
-  ## Metal storage one tensor and every shape-op view over it hold together.
+  ## Device storage one tensor and every shape-op view over it hold together (Metal and Vulkan).
   ##
   ## - `numel`: the allocation's element count in elements. The slice backward
   ##   scatters over it, and a view's parent can hold fewer elements than the storage
@@ -101,7 +101,7 @@ type TensorImpl*[T; Hw: static BackendKind] = ref object
   strides*: SmallSeq[4, int32]
   when Hw == bkCpu:
     storage*: SharedStorage[T]
-  elif Hw == bkMetal:
+  elif Hw != bkCpu:
     mem*: SharedMemory
 
 func numel*(shape: openArray[int]): int =
@@ -268,6 +268,10 @@ proc shapeEntry[T](s: TensorImpl[T, bkMetal], kernel: KernelId, img: ShapeBlob, 
   discard s.ctx.enqueue(kernel, packShapeBlob(int(img.rank), img.a, img.b),
       LaunchCfg(), bkMetal, outImpl.tid, s.tid)
 
+proc shapeEntry[T](s: TensorImpl[T, bkVulkan], kernel: KernelId, img: ShapeBlob, outImpl: TensorImpl[T, bkVulkan]) =
+  discard s.ctx.enqueue(kernel, packShapeBlob(int(img.rank), img.a, img.b),
+      LaunchCfg(), bkVulkan, outImpl.tid, s.tid)
+
 proc reshape*[T](s: TensorImpl[T, bkCpu], shape: SmallSeq[4, int32]): AnyTensorImpl =
   ## Erased reshape: a new contiguous view over the same storage.
   ## Raises AssertionDefect when the element count changes.
@@ -291,6 +295,20 @@ proc reshape*[T](s: TensorImpl[T, bkMetal], shape: SmallSeq[4, int32]): AnyTenso
   doAssert isContiguous(s.shape, s.strides),
       "reshape: non-contiguous view refused, a pure-metadata reshape needs contiguous storage"
   let outImpl = TensorImpl[T, bkMetal](
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
+    offset: s.offset, shape: shape, strides: contiguousStrides(shape), mem: s.mem)
+  shapeEntry(s, opReshape, ShapeBlob(rank: int32(shape.len), a: toArray4(shape)), outImpl)
+  outImpl.to(AnyTensorImpl)
+
+proc reshape*[T](s: TensorImpl[T, bkVulkan], shape: SmallSeq[4, int32]): AnyTensorImpl =
+  ## Erased reshape: a new contiguous view over the same device storage.
+  ## Raises AssertionDefect when the element count changes.
+  doAssert numel32(shape) == s.getNumel(),
+      "reshape: element count mismatch, shape " & $s.shape & " holds " & $s.getNumel() &
+      " elements, " & $shape & " needs " & $numel32(shape)
+  doAssert isContiguous(s.shape, s.strides),
+      "reshape: non-contiguous view refused, a pure-metadata reshape needs contiguous storage"
+  let outImpl = TensorImpl[T, bkVulkan](
     ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: shape, strides: contiguousStrides(shape), mem: s.mem)
   shapeEntry(s, opReshape, ShapeBlob(rank: int32(shape.len), a: toArray4(shape)), outImpl)
@@ -337,6 +355,29 @@ proc permuteDims*[T](s: TensorImpl[T, bkMetal], perm: SmallSeq[4, int32]): AnyTe
   let outShape = SmallSeq[4, int32].initFrom(newShape.toOpenArray(0, rank - 1))
   let outStrides = SmallSeq[4, int32].initFrom(newStrides.toOpenArray(0, rank - 1))
   let outImpl = TensorImpl[T, bkMetal](
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
+    offset: s.offset, shape: outShape, strides: outStrides, mem: s.mem)
+  shapeEntry(s, opPermute, ShapeBlob(rank: int32(rank), a: toArray4(perm)), outImpl)
+  outImpl.to(AnyTensorImpl)
+
+proc permuteDims*[T](s: TensorImpl[T, bkVulkan], perm: SmallSeq[4, int32]): AnyTensorImpl =
+  ## Erased dimension permutation: output axis i reads source axis perm[i].
+  ## Raises AssertionDefect when `perm` is not a permutation of the axes.
+  let rank = int(s.shape.len)
+  doAssert int(perm.len) == rank,
+      "permute: permutation holds " & $perm.len & " axes, the tensor has " & $rank
+  var seen: array[4, bool]
+  var newShape, newStrides: array[4, int32]
+  for i in 0 ..< rank:
+    let src = int(perm[i])
+    doAssert src in 0 ..< rank and not seen[src],
+        "permute: " & $perm & " is not a permutation of " & $rank & " axes"
+    seen[src] = true
+    newShape[i] = s.shape[src]
+    newStrides[i] = s.strides[src]
+  let outShape = SmallSeq[4, int32].initFrom(newShape.toOpenArray(0, rank - 1))
+  let outStrides = SmallSeq[4, int32].initFrom(newStrides.toOpenArray(0, rank - 1))
+  let outImpl = TensorImpl[T, bkVulkan](
     ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: outShape, strides: outStrides, mem: s.mem)
   shapeEntry(s, opPermute, ShapeBlob(rank: int32(rank), a: toArray4(perm)), outImpl)
@@ -390,6 +431,30 @@ proc sliceRange*[T](s: TensorImpl[T, bkMetal], start, count: SmallSeq[4, int32])
   shapeEntry(s, opSlice, ShapeBlob(rank: int32(rank), a: toArray4(start), b: toArray4(count)), outImpl)
   outImpl.to(AnyTensorImpl)
 
+proc sliceRange*[T](s: TensorImpl[T, bkVulkan], start, count: SmallSeq[4, int32]): AnyTensorImpl =
+  ## Erased range selection: axis i keeps `count[i]` elements from `start[i]`.
+  ## Raises AssertionDefect when a selection is empty or reaches beyond the axis end.
+  let rank = int(s.shape.len)
+  var offset = s.offset
+  var newShape, newStrides: array[4, int32]
+  for i in 0 ..< rank:
+    let dim = int(s.shape[i])
+    let lo = int(start[i])
+    let n = int(count[i])
+    doAssert n >= 1 and lo >= 0 and lo + n <= dim,
+        "slice: axis " & $i & " selection [" & $lo & ", " & $(lo + n) & ") of " & $dim &
+        " elements refused"
+    offset += lo * int(s.strides[i])
+    newShape[i] = count[i]
+    newStrides[i] = s.strides[i]
+  let outShape = SmallSeq[4, int32].initFrom(newShape.toOpenArray(0, rank - 1))
+  let outStrides = SmallSeq[4, int32].initFrom(newStrides.toOpenArray(0, rank - 1))
+  let outImpl = TensorImpl[T, bkVulkan](
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
+    offset: offset, shape: outShape, strides: outStrides, mem: s.mem)
+  shapeEntry(s, opSlice, ShapeBlob(rank: int32(rank), a: toArray4(start), b: toArray4(count)), outImpl)
+  outImpl.to(AnyTensorImpl)
+
 proc aliasAs*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
   ## Erased metadata view: `s`'s storage reinterpreted over `other`'s shape and strides.
   ## The backward walk builds shape-op cotangents with it, no op records.
@@ -418,6 +483,22 @@ proc aliasAs*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl
   ## Erased metadata view: `s`'s device storage reinterpreted over `other`'s shape and strides.
   ## The backward walk builds shape-op cotangents with it, no op records.
   let outImpl = TensorImpl[T, bkMetal](
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
+    offset: s.offset, shape: other.getShape(), strides: other.getStrides(), mem: s.mem)
+  outImpl.to(AnyTensorImpl)
+
+proc aliasStrided*[T](s: TensorImpl[T, bkVulkan], shape, strides: SmallSeq[4, int32]): AnyTensorImpl =
+  ## Erased metadata view: `s`'s device storage reinterpreted over `shape` and `strides`.
+  ## The backward walk builds shape-op cotangents with it, no op records.
+  let outImpl = TensorImpl[T, bkVulkan](
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
+    offset: s.offset, shape: shape, strides: strides, mem: s.mem)
+  outImpl.to(AnyTensorImpl)
+
+proc aliasAs*[T](s: TensorImpl[T, bkVulkan], other: AnyTensorImpl): AnyTensorImpl =
+  ## Erased metadata view: `s`'s device storage reinterpreted over `other`'s shape and strides.
+  ## The backward walk builds shape-op cotangents with it, no op records.
+  let outImpl = TensorImpl[T, bkVulkan](
     ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: other.getShape(), strides: other.getStrides(), mem: s.mem)
   outImpl.to(AnyTensorImpl)
