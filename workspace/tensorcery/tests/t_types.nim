@@ -9,7 +9,7 @@
 ##
 ## Test that a Tensor created from host data on CPU reads numel, shape, strides, dtype and device through the erased face.
 ## Test that the typed implementation is recovered from the erased value.
-## Test that rank-5 construction raises a TensorDefect naming rank 5.
+## Test that rank-5 construction raises an AssertionDefect naming rank 5.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" --nimcache:nimcache/t_types workspace/tensorcery/tests/t_types.nim

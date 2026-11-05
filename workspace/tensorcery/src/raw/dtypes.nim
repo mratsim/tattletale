@@ -46,7 +46,6 @@ func itemsize*(t: Dtype): int =
   of dtInt64, dtFloat64: result = 8
 
 func isFloat*(t: Dtype): bool =
-  ## Returns whether `t` is a floating-point dtype.
   case t
   of dtFloat16, dtFloat32, dtFloat64: result = true
   of dtBool, dtUint8, dtInt8, dtInt16, dtInt32, dtInt64: result = false
@@ -74,7 +73,7 @@ func toDtype*(T: typedesc): Dtype =
   else:
     {.error: "no Dtype for this Nim type, tensorcery supports bool, uint8, int8, int16, int32, int64, float32, float64".}
 
-func deviceKind*(bk: BackendKind): DeviceKind =
+func toDeviceKind*(bk: BackendKind): DeviceKind =
   ## Returns the runtime device of a backend specialization.
   case bk
   of bkCpu: result = devCpu

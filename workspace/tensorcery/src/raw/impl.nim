@@ -25,7 +25,7 @@ iface *AnyTensorImpl:
   proc getStrides(): SmallSeq[4, int32]
 
 type TensorImpl*[T; Hw: static BackendKind] = ref object
-  ## Typed tensor state: runtime shape and strides, backend storage for T.
+  ## Typed tensor state behind one entry of the erased face.
   shape*: SmallSeq[4, int32]
   strides*: SmallSeq[4, int32]
   when Hw == bkCpu:
@@ -37,7 +37,10 @@ proc toTensorImpl*[T; Hw: static BackendKind](
   ## Builds a TensorImpl from host data over `shape`, contiguous, last dimension varying fastest.
   ##
   ## Raises AssertionDefect when `shape` spans more than 4 dimensions or when `data` does not hold exactly the element count of `shape`.
-  doAssert shape.len <= 4,
+  when Hw != bkCpu:
+    {.error: "tensorcery implements CPU construction only in this increment".}
+
+  doAssert shape.len in 1 .. 4,
       "rank " & $shape.len & " construction refused, tensorcery supports rank 1 to 4"
 
   var numel = 1

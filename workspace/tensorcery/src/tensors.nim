@@ -35,7 +35,7 @@ proc toTensor*[T](
     ctx: ctx,
     impl: typedImpl.to(AnyTensorImpl),
     dtype: toDtype(T),
-    device: deviceKind(Hw),
+    device: toDeviceKind(Hw),
   )
 
 proc toTensor*[T](ctx: Ctx, data: openArray[T], shape: varargs[int]): Tensor =
@@ -45,15 +45,15 @@ proc toTensor*[T](ctx: Ctx, data: openArray[T], shape: varargs[int]): Tensor =
   toTensor[T](ctx, data, bkCpu, shape)
 
 proc getNumel*(t: Tensor): int =
-  ## Returns the element count, the product of the shape sizes, read through the erased implementation.
+  ## Returns the element count, the product of the shape sizes.
   t.impl.getNumel()
 
 proc getShape*(t: Tensor): SmallSeq[4, int32] =
-  ## Returns the shape, one size per dimension, read through the erased implementation.
+  ## Returns the shape, one size per dimension.
   t.impl.getShape()
 
 proc getStrides*(t: Tensor): SmallSeq[4, int32] =
-  ## Returns the strides, one step per dimension in elements, read through the erased implementation.
+  ## Returns the strides, one step per dimension in elements.
   t.impl.getStrides()
 
 proc getDtype*(t: Tensor): Dtype =
