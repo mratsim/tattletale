@@ -6,11 +6,10 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Microgpt end to end on tensorcery: train a small GPT on the Shakespeare
-## corpus and generate text, on CPU or Metal, with a Vulkan forward leg.
+## corpus and generate text on CPU or Metal, plus a Vulkan forward pass.
 ##
 ## One training step = one record = one backend submission:
-## the forward ops, the backward grad segment and the in-place adam updates
-## enqueue into a single record and drain in ONE eval.
+## forward ops, backward grads and in-place adam updates enqueue into one record and drain in ONE eval.
 ##
 ## Run from the worktree root (backend is the Backend const, one line):
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" --outdir:build/tests \
@@ -28,8 +27,8 @@ import workspace/tensorcery/examples/microgpt_model
 
 const
   # Backend switch: bkCpu or bkMetal for the full train + generate pipeline.
-  # bkVulkan has no backward or optimizer kernels yet; it runs the forward leg
-  # at the end (VulkanLeg) and is wired below as the generation demo.
+  # bkVulkan has no backward or optimizer kernels yet.
+  # VulkanLeg below runs the Vulkan forward pass as the generation demo.
   Backend = bkMetal
   VulkanLeg = true
 
@@ -77,7 +76,7 @@ proc sampleFrom(probs: seq[float64]): int =
   probs.len - 1
 
 proc rssKb(): int =
-  ## Rough cross-step memory probe: resident set size in KB via ps.
+  ## Resident set size in KB via ps, sampled once per training step.
   let outp = execProcess("ps -o rss= -p " & $getCurrentProcessId())
   parseInt(outp.strip())
 
@@ -159,7 +158,7 @@ proc main =
 
   var cfg = Cfg
   cfg.vocabSize = vocab.len
-  echo "corpus chars: ", corpus.len, "  vocab: ", cfg.vocabSize,
+  stdout.writeLine "corpus chars: ", corpus.len, "  vocab: ", cfg.vocabSize,
       "  dModel: ", cfg.dModel, "  layers: ", cfg.nLayer,
       "  block: ", cfg.blockSize, "  batch: ", cfg.batchSize
 
@@ -191,12 +190,12 @@ proc main =
       first5.add loss
     if step > steps - 5:
       last5.add loss
-    echo "step ", step, " / ", steps, "  loss ", loss.formatFloat(ffDecimal, 4),
+    stdout.writeLine "step ", step, " / ", steps, "  loss ", loss.formatFloat(ffDecimal, 4),
         "  rss_kb ", rssKb()
 
   let firstAvg = first5.sum() / 5.0
   let lastAvg = last5.sum() / 5.0
-  echo "loss trajectory: first5 avg ", firstAvg.formatFloat(ffDecimal, 4),
+  stdout.writeLine "loss trajectory: first5 avg ", firstAvg.formatFloat(ffDecimal, 4),
       "  last5 avg ", lastAvg.formatFloat(ffDecimal, 4)
   doAssert lastAvg < firstAvg,
       "loss did not decrease: first5 " & $firstAvg & " last5 " & $lastAvg
@@ -209,12 +208,12 @@ proc main =
   reRegister(ctx, params, genConsts, genCfg)
   let p0 = rand(corpus.len - cfg.blockSize - 1)
   let prompt = corpus[p0 ..< p0 + cfg.blockSize]
-  echo "\n--- generation (", $Backend, ", prompt: ", prompt.replace("\n", "\\n"), ") ---"
-  echo generateText(ctx, Backend, params, genConsts, genCfg, vocab, prompt, genChars, Temperature)
+  stdout.writeLine "\n--- generation (", $Backend, ", prompt: ", prompt.replace("\n", "\\n"), ") ---"
+  stdout.writeLine generateText(ctx, Backend, params, genConsts, genCfg, vocab, prompt, genChars, Temperature)
 
   when VulkanLeg:
-    # Vulkan forward-only pass: no backward or optimizer kernels exist for
-    # Vulkan yet, so this pass copies the trained weights and runs forward work.
+    # Vulkan forward-only pass: no backward or optimizer kernels exist yet.
+    # This pass copies the trained weights and runs forward work.
     ensureVulkan(ctx)
     vulkan.resetSubmissionCount()
     proc zeros(n: int): Tensor =
@@ -278,11 +277,11 @@ proc main =
     var s = 0.0
     for v in toSeq[float32](vLoss):
       s += float64(v)
-    echo "\nVulkan forward loss on the first batch: ",
+    stdout.writeLine "\nVulkan forward loss on the first batch: ",
         s.formatFloat(ffDecimal, 4), " (one submission)"
 
     let vPrompt = corpus[p0 ..< p0 + cfg.blockSize]
-    echo "--- generation (bkVulkan forward leg) ---"
-    echo generateText(ctx, bkVulkan, vp, vConsts, genCfg, vocab, vPrompt, genChars, Temperature)
+    stdout.writeLine "--- generation (bkVulkan forward leg) ---"
+    stdout.writeLine generateText(ctx, bkVulkan, vp, vConsts, genCfg, vocab, vPrompt, genChars, Temperature)
 
 main()

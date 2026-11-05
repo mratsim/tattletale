@@ -12,11 +12,9 @@
 ## bits of f32 +0.0 (the bf16 view) are 0x0000. The f16 and bf16 formats
 ## store zeros as these bit patterns.
 ##
-## Run:
-##   cd tattletale (worktree root)
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests/t_bitcast_zero_vulkan --nimcache:nimcache/tests/t_bitcast_zero_vulkan \
-##     workspace/tensorcery/tests/t_bitcast_zero_vulkan.nim
+## Run (from the worktree root):
+##   nim c -r --hints:off --warnings:off --outdir:build/tests/t_bitcast_zero_vulkan \
+##     --nimcache:nimcache/tests/t_bitcast_zero_vulkan workspace/tensorcery/tests/t_bitcast_zero_vulkan.nim
 
 import std/strutils
 import workspace/crucible

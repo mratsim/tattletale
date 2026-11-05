@@ -184,7 +184,7 @@ proc runLeg(Hw: static BackendKind) =
     tape.register(ctx, xDev.getImpl().getTid(), xDev.getImpl())
     tape.register(ctx, yDev.getImpl().getTid(), yDev.getImpl())
 
-  # training: the cyclic pattern is learnable, the loss must come down
+  # training: the cyclic pattern is learnable and the loss must come down
   when Hw == bkMetal:
     metal.resetSubmissionCount()
   var firstLoss, lastLoss: float64

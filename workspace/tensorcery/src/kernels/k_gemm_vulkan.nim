@@ -9,7 +9,7 @@
 ##
 ## `gemmVulkan(d, a, b, alpha, beta)` computes d = alpha·A·Bᵀ + beta·d
 ## on a Vulkan engine, one launch, no shared memory, no subgroup use.
-## The device body lives in `k_gemm_vulkan_impl.nim`, the import surface for callers.
+## The device body lives in `k_gemm_vulkan_impl.nim`, and this module is the import surface for callers.
 
 import workspace/ceramic/src/tile_algebra
 import ./k_gemm_vulkan_impl

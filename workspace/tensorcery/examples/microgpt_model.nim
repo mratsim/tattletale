@@ -14,7 +14,6 @@
 ##   wexp = gather(w, idxCol)                      # idxCol[b,t,o] = o
 ##   y = pairwiseSumAxis(xexp * wexp, 3)  # reduce the last axis
 ##
-## Notes:
 ## - gathers over constant index tensors broadcast both operands into one
 ##   rank-4 shape
 ## - strided views materialize through `x + (x * 0.0)` ahead of any reshape

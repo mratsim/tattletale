@@ -11,11 +11,9 @@
 ## A spill would shift the 8x4/4x8 ratio away from 1.0 as the A fragment doubles
 ## and the B fragment halves per k-tile.
 ##
-## Run:
-##   cd tattletale (worktree root)
-##   nim c -r --hints:off --warnings:off -d:release \
-##     --outdir:build/tests/bench_gemm_vulkan --nimcache:nimcache/tests/bench_gemm_vulkan \
-##     workspace/tensorcery/tests/manual_bench_gemm_vulkan.nim
+## Run (from the worktree root):
+##   nim c -r --hints:off --warnings:off -d:release --outdir:build/tests/bench_gemm_vulkan \
+##     --nimcache:nimcache/tests/bench_gemm_vulkan workspace/tensorcery/tests/manual_bench_gemm_vulkan.nim
 
 import std/[times, strformat]
 import workspace/crucible

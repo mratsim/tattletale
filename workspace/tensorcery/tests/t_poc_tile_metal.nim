@@ -7,19 +7,15 @@
 
 ## Tile-algebra GEMM tile through the Metal MSL route
 ##
-## Test that a register-fragment tile kernel computes D = alpha·A·Bᵀ
-## correctly on Metal through the MSL route:
+## Test that a register-fragment tile kernel computes D = alpha·A·Bᵀ correctly on Metal
+## through the MSL route:
 ##
-## - direct fragment addressing over runtime tensor shapes, `{.unroll.}`
-##   inner FMA body
-## - both fixtures launch multi-workgroup grids in x and y, so the tile
-##   addressing runs through gl_WorkGroupID and gl_NumWorkGroups
+## - direct fragment addressing over runtime tensor shapes with a `{.unroll.}` inner FMA body
+## - both fixtures launch multi-workgroup grids in x and y, so the tile addressing runs through gl_WorkGroupID and gl_NumWorkGroups
 ##
-## Run:
-##   cd tattletale (worktree root)
-##   nim c -r --hints:off --warnings:off \
-##     --outdir:build/tests/t_poc_tile_metal --nimcache:nimcache/tests/t_poc_tile_metal \
-##     workspace/tensorcery/tests/t_poc_tile_metal.nim
+## Run (from the worktree root):
+##   nim c -r --hints:off --warnings:off --outdir:build/tests/t_poc_tile_metal \
+##     --nimcache:nimcache/tests/t_poc_tile_metal workspace/tensorcery/tests/t_poc_tile_metal.nim
 
 import workspace/crucible
 import workspace/ceramic/src/tile_algebra
@@ -34,12 +30,12 @@ import workspace/ceramic/tests/ceramic_testutils
 #
 # Fragment maps of a 32-thread schedule over one (M32, K2) A tile,
 # one (N32, K2) B tile and one (M32, N32) D tile, int strides only:
-# - A: thread t addresses A coordinates 4·(t div 4) ..+3 for both k, the t mod 4 half reloads them (stride 0)
+# - A: thread t addresses A coordinates 4·(t div 4) ..+3 for both k, and the t mod 4 half reloads them (stride 0)
 # - B: thread t addresses B coordinates 8·(t mod 4) ..+7, both k
 # - D: thread t owns one disjoint 4x8 output cell, V col-major
 #   (m_local, n_local), offset m_local + 32·n_local
 #
-# Fragment addressing is direct runtime arithmetic, the static-map substitution loses composed
+# Fragment addressing is direct runtime arithmetic, and the static-map substitution loses composed
 # coordinate strides in the CIRv2 frontend when a static param contains them
 
 proc tileGemm(d: distinct TensorView, a: distinct TensorView, b: distinct TensorView, alpha: float32) =
@@ -114,8 +110,7 @@ proc fillPattern(ht: HostTensor) =
     ht.data[i] = float32((i * 37 mod 19) - 9) * 0.125'f32
 
 proc runTileGemmCase(engine: MetalEngine, m, n, k: int, msg: string) =
-  ## One launch with runtime tensor shapes, the result compared against
-  ## the float64 reference
+  ## One launch with runtime tensor shapes. The result is compared against the float64 reference
   var
     aHost = makeHostTensor(float32, (m, k), (k, 1))
     bHost = makeHostTensor(float32, (n, k), (k, 1))
