@@ -132,6 +132,8 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
     let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
     discard objc.msgSend(encoder, objc.`$$`("retain"))
     for entry in ctx.record:
+      if entry.backend != bkMetal:
+        continue
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"),
           cachePso(kernelNames[entry.kernel]))
       case entry.kernel
@@ -162,8 +164,7 @@ proc ensureMetal*(ctx: Ctx) =
       let opts = compileOptions()
       sessionLibrary = compileLibrary(sessionDevice, metalSource, opts)
       objc.release(opts)
-    if ctx.drain == nil:
-      ctx.drain = drainMetal
+    ctx.drains[bkMetal] = drainMetal
 
 proc elementwiseCfg(n: int): LaunchCfg =
   LaunchCfg(
@@ -201,7 +202,7 @@ proc add*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
       n: int32(n))))
-  let opId = s.ctx.enqueue(opAdd, blob, elementwiseCfg(n))
+  let opId = s.ctx.enqueue(opAdd, blob, elementwiseCfg(n), bkMetal)
   TensorImpl[T, bkMetal](
     ctx: s.ctx,
     seqNo: opId,
@@ -221,7 +222,7 @@ proc mulScalar*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorImpl =
       sa: padTo4(s.strides, 0),
       scalar: float32(scalar),
       n: int32(n))))
-  let opId = s.ctx.enqueue(opMul, blob, elementwiseCfg(n))
+  let opId = s.ctx.enqueue(opMul, blob, elementwiseCfg(n), bkMetal)
   TensorImpl[T, bkMetal](
     ctx: s.ctx,
     seqNo: opId,
@@ -236,3 +237,11 @@ proc readbackBytes*[T](s: TensorImpl[T, bkMetal]): seq[byte] =
     s.ctx.eval()
   result = newSeq[byte](s.getNumel() * sizeof(T))
   readbackDeviceMem(s.mem, result[0].addr, result.len)
+
+proc toErased*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
+  ## Returns the erased face over `s`.
+  ##
+  ## Contract: the vtable's mixins resolve at the outermost instantiation scope.
+  ## tensors.nim re-exports the typed conformant procs, so module users satisfy
+  ## the interface conformance check.
+  s.to(AnyTensorImpl)

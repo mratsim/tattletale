@@ -31,27 +31,30 @@ type
   OpEntry* = object
     ## One recorded op: data only, one dispatch unit at eval.
     kernel*: KernelId
+    backend*: BackendKind  ## owning backend of the entry's dispatch
     blob*: seq[byte]   ## flat image of the op's args object, marshaled at enqueue
     output*: int       ## tensor id of the entry's output, equal to its producing op id
     cfg*: LaunchCfg
 
   DrainFn* = proc(ctx: Ctx) {.nimcall.}
-    ## Backend submission path: encodes every pending entry from its blob, one submission total.
-    ## Wired once by the backend, never per op.
+    ## Backend submission path.
+    ## Contract: encodes the backend's own pending entries from their blobs,
+    ## one submission per backend total. Wired once by the backend, never per op.
 
   Ctx* = ref object
-    ## Execution context: the op record plus the drain wiring.
+    ## Execution context: the op record plus the per-backend drain wiring.
     record*: seq[OpEntry]  ## pending ops, in enqueue order
     drainedTo: int         ## op id of the last drained entry
     opSeq: int             ## op id of the last enqueued entry
-    drain*: DrainFn        ## backend submission path, nil until a backend wires it
+    drains*: array[BackendKind, DrainFn]  ## per-backend submission paths, nil until wired
 
-proc enqueue*(ctx: Ctx, kernel: KernelId, blob: seq[byte], cfg: LaunchCfg): int =
+proc enqueue*(ctx: Ctx, kernel: KernelId, blob: seq[byte], cfg: LaunchCfg, backend: BackendKind): int =
   ## Appends one op entry to the record.
   ##
   ## Returns the op id. The op id doubles as the tensor id of the entry's output.
   ctx.opSeq.inc
-  ctx.record.add OpEntry(kernel: kernel, blob: blob, output: ctx.opSeq, cfg: cfg)
+  ctx.record.add OpEntry(kernel: kernel, backend: backend, blob: blob,
+      output: ctx.opSeq, cfg: cfg)
   ctx.opSeq
 
 proc isPending*(ctx: Ctx, opId: int): bool =
@@ -63,11 +66,14 @@ proc getPendingCount*(ctx: Ctx): int =
   ctx.record.len
 
 proc eval*(ctx: Ctx) =
-  ## Computes every recorded op in ONE backend submission, synchronously.
+  ## Computes every recorded op synchronously, one submission per backend holding pending entries.
   ##
-  ## Zero pending entries submit nothing. After the drain returns every output in the record is readable and the record clears.
+  ## Contract: zero pending entries submit nothing.
+  ## After the drains return, every output in the record is readable and the record clears.
   if ctx.record.len == 0:
     return
-  ctx.drain(ctx)
+  for backend in BackendKind:
+    if ctx.drains[backend] != nil:
+      ctx.drains[backend](ctx)
   ctx.drainedTo = ctx.opSeq
   ctx.record.setLen(0)

@@ -41,7 +41,7 @@ type TensorImpl*[T; Hw: static BackendKind] = ref object
   shape*: SmallSeq[4, int32]
   strides*: SmallSeq[4, int32]
   when Hw == bkCpu:
-    storage: seq[T]
+    storage*: seq[T]
   elif Hw == bkMetal:
     mem*: DeviceHandle
 
@@ -106,14 +106,3 @@ proc getShape*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): SmallSeq[4, int
 proc getStrides*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): SmallSeq[4, int32] =
   s.strides
 
-proc add*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
-  doAssert false, "tensorcery: add on CPU is not implemented in this increment"
-
-proc mulScalar*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImpl =
-  doAssert false, "tensorcery: scalar multiply on CPU is not implemented in this increment"
-
-proc readbackBytes*[T](s: TensorImpl[T, bkCpu]): seq[byte] =
-  ## Copies the host storage to bytes, no materialization needed.
-  result = newSeq[byte](s.storage.len * sizeof(T))
-  if result.len > 0:
-    copyMem(result[0].addr, s.storage[0].unsafeAddr, result.len)

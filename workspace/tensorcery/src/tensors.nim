@@ -20,7 +20,14 @@ import
   workspace/tensorcery/src/raw/dtypes,
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
-  workspace/tensorcery/src/backends/metal
+  workspace/tensorcery/src/backends/metal,
+  workspace/tensorcery/src/backends/cpu
+
+# iface resolves the vtable's mixins at the outermost instantiation scope,
+# so the typed conformant procs must be visible to module users of the Tensor face.
+# Without this re-export the mixin binds the erased signature and the conformance check fails.
+export metal.add, metal.mulScalar, metal.readbackBytes
+export cpu.add, cpu.mulScalar, cpu.readbackBytes
 
 type Tensor* = object
   ## Tensor handle: the erased implementation plus its runtime dtype and device.
@@ -34,17 +41,18 @@ proc toTensorShaped[T](ctx: Ctx, data: openArray[T], Hw: static BackendKind, sha
   ##
   ## Raises AssertionDefect when `shape` spans more than 4 dimensions or when `data` does not hold exactly the element count of `shape`.
   when Hw == bkCpu:
-    let typedImpl = toTensorImpl[T, Hw](ctx, data, shape)
+    ensureCpu(ctx)
+    let erasedImpl = toTensorImpl[T, Hw](ctx, data, shape).toErased()
   elif Hw == bkMetal:
     ensureMetal(ctx)
     when T is float32:
-      let typedImpl = toMetalTensorImpl(ctx, data, shape)
+      let erasedImpl = toMetalTensorImpl(ctx, data, shape).toErased()
     else:
       doAssert false, "Metal construction supports float32, got " & $toDtype(T)
 
   Tensor(
     ctx: ctx,
-    impl: typedImpl.to(AnyTensorImpl),
+    impl: erasedImpl,
     dtype: toDtype(T),
     device: toDeviceKind(Hw),
   )
