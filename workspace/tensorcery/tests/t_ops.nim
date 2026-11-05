@@ -40,7 +40,7 @@ proc checkBand(actual: seq[float32], expected: seq[float64], label: string) =
     doAssert abs(float64(actual[i]) - expected[i]) <= band,
         label & ": element " & $i & " got " & $actual[i] & ", expected " & $expected[i]
 
-proc refGather(w: seq[float64], v, e: int, idx: seq[int]): seq[float64] =
+proc refGather(w: seq[float64], e: int, idx: seq[int]): seq[float64] =
   ## Host reference of the embedding lookup, one embedding vector per index.
   for row in 0 ..< idx.len:
     for col in 0 ..< e:
@@ -124,7 +124,7 @@ proc runLeg(Hw: static BackendKind) =
     var wref: seq[float64]
     for x in wdata:
       wref.add float64(x)
-    checkBand(toSeq[float32](outT), refGather(wref, v, e, @[2, 0, 2]), $Hw & " gather")
+    checkBand(toSeq[float32](outT), refGather(wref, e, @[2, 0, 2]), $Hw & " gather")
 
   block layernorm:
     let ctx = Ctx()

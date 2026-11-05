@@ -458,7 +458,7 @@ proc softmax*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
   ## Erased last-axis softmax over `s`. The output requires grad when `s` does.
   let d = s.getNumel() div int(s.shape[int(s.shape.len) - 1])
   let dAxis = int(s.shape[int(s.shape.len) - 1])
-  let rows = d
+  let rows = s.getNumel() div dAxis
   let n = s.getNumel()
   let outMem = allocDeviceMem(n * sizeof(T))
   let blob = packSoftmaxArgs(SoftmaxArgs(
@@ -499,9 +499,12 @@ proc where*[T](s: TensorImpl[T, bkMetal], cond, other: AnyTensorImpl): AnyTensor
   ## Raises AssertionDefect on a shape mismatch, no broadcasting.
   let c = cond.to(TensorImpl[T, bkMetal])
   let o = other.to(TensorImpl[T, bkMetal])
-  doAssert sameMeta(s.shape, c.shape) and sameMeta(s.shape, o.shape),
+  doAssert s.shape == c.shape and s.shape == o.shape,
       "where: shape mismatch " & $s.shape & " vs " & $c.shape & " vs " & $o.shape &
       " refused, no broadcasting"
+  doAssert isContiguous(c.shape, c.strides) and isContiguous(s.shape, s.strides) and
+      isContiguous(o.shape, o.strides),
+      "where: non-contiguous operands refused, the kernel reads them linearly from their offsets"
   let n = s.getNumel()
   let outMem = allocDeviceMem(n * sizeof(T))
   let blob = packWhereArgs(WhereArgs(
@@ -525,7 +528,7 @@ proc sgdUpdate*[T](s: TensorImpl[T, bkMetal], grad: AnyTensorImpl, lr: float64):
   let g = grad.to(TensorImpl[T, bkMetal])
   doAssert isContiguous(s.shape, s.strides) and isContiguous(g.shape, g.strides),
       "sgd: non-contiguous parameter or gradient view refused"
-  doAssert sameMeta(s.shape, g.shape),
+  doAssert s.shape == g.shape,
       "sgd: shape mismatch " & $s.shape & " vs " & $g.shape & " refused"
   let n = s.getNumel()
   let blob = packSgdArgs(SgdArgs(
@@ -547,8 +550,8 @@ proc adamUpdate*[T](s: TensorImpl[T, bkMetal], grad, m, v: AnyTensorImpl, pack: 
   let g = grad.to(TensorImpl[T, bkMetal])
   let mImpl = m.to(TensorImpl[T, bkMetal])
   let vImpl = v.to(TensorImpl[T, bkMetal])
-  doAssert sameMeta(s.shape, g.shape) and sameMeta(s.shape, mImpl.shape) and
-      sameMeta(s.shape, vImpl.shape),
+  doAssert s.shape == g.shape and s.shape == mImpl.shape and
+      s.shape == vImpl.shape,
       "adam: shape mismatch " & $s.shape & " vs " & $g.shape & " vs " & $mImpl.shape &
       " vs " & $vImpl.shape & " refused"
   doAssert isContiguous(s.shape, s.strides) and isContiguous(g.shape, g.strides) and

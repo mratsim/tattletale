@@ -7,7 +7,7 @@
 
 ## Elementwise select kernel: output[i] = cond[i] != 0 ? a[i] : b[i].
 ##
-## All operands are same-shape views read through their offsets and strides.
+## All operands are same-shape contiguous views read through their offsets.
 ## The output is freshly allocated contiguous. Causal masking builds on this op:
 ## the mask is 1 on kept elements and 0 on masked ones. The masked branch
 ## supplies the sentinel value.

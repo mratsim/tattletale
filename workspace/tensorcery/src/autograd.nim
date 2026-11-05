@@ -104,7 +104,7 @@ proc backward*(loss: Tensor) =
     of opSlice:
       doAssert false, "slice gradient arrives with the fused backward kernels"
     of opGather, opLayerNorm, opGelu, opSoftmax, opCrossEntropy, opWhere, opSgd, opAdam:
-      # the microgpt op set ships its vjps with its forward ops
+      # microgpt op set kernels ship their vjps with their forward ops
       doAssert false, "op " & $entry.kernel & " reached the backward walk without a vjp"
 
   for tid, g in cotan:

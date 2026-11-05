@@ -159,8 +159,6 @@ proc `+`*(a, b: Tensor): Tensor =
       "add: cross-device operands " & $a.device & " x " & $b.device & " refused, copy to one device first"
   doAssert a.dtype == b.dtype,
       "add: mixed dtypes " & $a.dtype & " x " & $b.dtype & " refused"
-  doAssert a.dtype == dtFloat32,
-      "add: " & $a.dtype & " operands refused, arithmetic ops support float32"
   doAssert sameShape(a.getShape(), b.getShape()),
       "add: shape mismatch " & $a.getShape() & " vs " & $b.getShape() &
       " refused, no broadcasting"
@@ -177,8 +175,6 @@ proc `*`*(a, b: Tensor): Tensor =
       "mul: cross-device operands " & $a.device & " x " & $b.device & " refused, copy to one device first"
   doAssert a.dtype == b.dtype,
       "mul: mixed dtypes " & $a.dtype & " x " & $b.dtype & " refused"
-  doAssert a.dtype == dtFloat32,
-      "mul: " & $a.dtype & " operands refused, arithmetic ops support float32"
   doAssert sameShape(a.getShape(), b.getShape()),
       "mul: shape mismatch " & $a.getShape() & " vs " & $b.getShape() &
       " refused, no broadcasting"
@@ -190,10 +186,6 @@ proc `*`*(a, b: Tensor): Tensor =
 proc `*`*(a: Tensor, scalar: float64): Tensor =
   ## Elementwise multiply by a scalar, recorded on the context.
   ## The scalar narrows to the tensor's dtype at enqueue.
-  ##
-  ## Raises AssertionDefect for non-float32 tensors.
-  doAssert a.dtype == dtFloat32,
-      "scalar mul: " & $a.dtype & " operands refused, arithmetic ops support float32"
   let outImpl = a.impl.mulScalar(scalar)
   tape.register(a.ctx, outImpl.getTid(), outImpl)
   Tensor(ctx: a.ctx, impl: outImpl, dtype: a.dtype, device: a.device)

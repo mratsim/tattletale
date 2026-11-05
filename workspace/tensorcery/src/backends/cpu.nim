@@ -664,9 +664,12 @@ proc where*[T](s: TensorImpl[T, bkCpu], cond, other: AnyTensorImpl): AnyTensorIm
   ## Raises AssertionDefect on a shape mismatch, no broadcasting.
   let c = cond.to(TensorImpl[T, bkCpu])
   let o = other.to(TensorImpl[T, bkCpu])
-  doAssert sameMeta(s.shape, c.shape) and sameMeta(s.shape, o.shape),
+  doAssert s.shape == c.shape and s.shape == o.shape,
       "where: shape mismatch " & $s.shape & " vs " & $c.shape & " vs " & $o.shape &
       " refused, no broadcasting"
+  doAssert isContiguous(c.shape, c.strides) and isContiguous(s.shape, s.strides) and
+      isContiguous(o.shape, o.strides),
+      "where: non-contiguous operands refused, the kernel reads them linearly from their offsets"
   let n = s.getNumel()
   var outStorage = newSeq[T](n)
   let blob = packWhereArgs(WhereArgs(
@@ -688,7 +691,7 @@ proc sgdUpdate*[T](s: TensorImpl[T, bkCpu], grad: AnyTensorImpl, lr: float64): v
   ##
   ## Raises AssertionDefect for a shape mismatch or a non-contiguous operand.
   let g = grad.to(TensorImpl[T, bkCpu])
-  doAssert sameMeta(s.shape, g.shape),
+  doAssert s.shape == g.shape,
       "sgd: shape mismatch " & $s.shape & " vs " & $g.shape & " refused"
   doAssert isContiguous(s.shape, s.strides) and isContiguous(g.shape, g.strides),
       "sgd: non-contiguous parameter or gradient view refused"
@@ -714,8 +717,8 @@ proc adamUpdate*[T](s: TensorImpl[T, bkCpu], grad, m, v: AnyTensorImpl, pack: Ad
   let g = grad.to(TensorImpl[T, bkCpu])
   let mImpl = m.to(TensorImpl[T, bkCpu])
   let vImpl = v.to(TensorImpl[T, bkCpu])
-  doAssert sameMeta(s.shape, g.shape) and sameMeta(s.shape, mImpl.shape) and
-      sameMeta(s.shape, vImpl.shape),
+  doAssert s.shape == g.shape and s.shape == mImpl.shape and
+      s.shape == vImpl.shape,
       "adam: shape mismatch " & $s.shape & " vs " & $g.shape & " vs " & $mImpl.shape &
       " vs " & $vImpl.shape & " refused"
   doAssert isContiguous(s.shape, s.strides) and isContiguous(g.shape, g.strides) and

@@ -7,17 +7,20 @@
 
 ## Shape-op record images: reshape, dimension permutation, range selection.
 ##
-## Shape ops are pure metadata: a new view (shape, strides, offset) over the
-## same storage. Their record entries exist for the backward walk only, so the
-## image carries the view parameters and no device addresses. Backends decode
-## the image nowhere: no kernel runs, submission counts stay untouched.
+## Shape ops are pure metadata: each builds a view over existing storage.
+## The view packs shape, strides and one element offset.
+##
+## - record entries exist for the backward walk only
+## - the image lists view parameters and no device addresses
+## - backends decode the image nowhere: no kernel runs
+## - submission counts stay untouched
 
 type ShapeBlob* = object
   ## Recorded view parameters of one shape op.
   ##
   ## - reshape: `a` lists the new dims
   ## - permute: `a` lists the source-axis read order of the output
-  ## - slice: `a` lists the first selected index per axis, `b` the selected count per axis
+  ## - slice: `a` lists the first selected index per axis and `b` the selected count per axis
   rank*: int32
   a*, b*: array[4, int32]
 

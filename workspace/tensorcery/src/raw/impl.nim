@@ -113,7 +113,7 @@ proc contiguousMeta*(shape: openArray[int]): tuple[shape, strides: SmallSeq[4, i
   result.strides = contiguousStrides(result.shape)
 
 proc appendDim*(shape: SmallSeq[4, int32], dim: int32): SmallSeq[4, int32] =
-  ## Appends one axis to a rank-checked shape, the gather output shape.
+  ## Appends one axis to a rank-checked shape, yielding the gather output shape.
   let rank = int(shape.len)
   doAssert rank < 4, "gather: output rank " & $(rank + 1) & " refused, tensorcery supports rank 1 to 4"
   var dims: array[4, int32]
@@ -123,20 +123,11 @@ proc appendDim*(shape: SmallSeq[4, int32], dim: int32): SmallSeq[4, int32] =
   result = SmallSeq[4, int32].initFrom(dims.toOpenArray(0, rank))
 
 proc dropLastDim*(shape: SmallSeq[4, int32]): SmallSeq[4, int32] =
-  ## Removes the last axis of a rank-checked shape, the cross entropy loss shape.
+  ## Removes the last axis of a rank-checked shape, yielding the cross entropy loss shape.
   let rank = int(shape.len)
   doAssert rank > 1, "cross entropy: a rank 1 logit tensor has no class axis"
   result = SmallSeq[4, int32].initFrom(
     toArray4(shape).toOpenArray(0, rank - 2))
-
-proc sameMeta*(a, b: SmallSeq[4, int32]): bool =
-  ## Returns true when both axis lists match element for element.
-  if a.len != b.len:
-    return false
-  for i in 0 ..< int(a.len):
-    if a[i] != b[i]:
-      return false
-  result = true
 
 proc isContiguous*(shape, strides: SmallSeq[4, int32]): bool =
   ## Returns true when `strides` is the contiguous layout of `shape`.
