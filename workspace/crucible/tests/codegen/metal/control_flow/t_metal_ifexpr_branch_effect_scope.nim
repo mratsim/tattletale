@@ -11,7 +11,7 @@ import std/unittest
 import workspace/crucible
 
 const ifExprBranchesMsl = metal:
-  proc ifExprBranches(o: ptr UncheckedArray[int32]x: ptr UncheckedArray[int32]) {.global.} =
+  proc ifExprBranches(o, x: ptr UncheckedArray[int32]) {.global.} =
     var a: int32 = 0
     var b: int32 = 0
     let v = (if x[0] == 0:

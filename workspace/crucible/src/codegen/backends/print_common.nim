@@ -633,6 +633,9 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
     return "(-" & ctx.printExpr(e.unOperand) & ")"
   of eSym, eDot, eCast, eConv, eSizeof, eOconstr, eAconstr, eCall:
     return ctx.printTargetExpr(e)
+  of eStmts:
+    ctx.fail("statement-expression survived elimination, the rewriteStmtsExprs pass must run before the printers")
+    return ""
 
 proc printRet*(ctx: var auto, s: CirStmt, pad: string): string =
   ## Return statement in the shared form: `return <expr>;` or `return;` without a value.

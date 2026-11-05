@@ -49,15 +49,9 @@ type
     resolver: CirTypeResolver
     module: ModuleScope
     locals: LocalScope
-    hoisted: seq[CirStmt]
-      # Statements hoisted in front of the statement being lowered.
 
 func fail(ctx: var CirFrontend, detail: string) =
   ctx.resolver.fail("at " & ctx.locals.fnName & ": " & detail)
-
-func drainHoisted(ctx: var CirFrontend): seq[CirStmt] =
-  result = ctx.hoisted
-  ctx.hoisted = @[]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Names and scopes
@@ -535,6 +529,30 @@ func isStmtBody(n: NimNode): bool =
   else:
     result = false
 
+# Nim 2.2.12's codeReordering does not defer calls.
+# lowerSplicedStmt keeps its forward declaration.
+func lowerSplicedStmt(ctx: var CirFrontend, c: NimNode): seq[CirStmt]
+
+func lowerBranchValue(ctx: var CirFrontend, body: NimNode): CirExpr =
+  let valueNode = getBranchValueExpr(body)
+  if not isStmtBody(valueNode):
+    return ctx.lowerExpr(valueNode)
+  var stmts: seq[CirStmt] = @[]
+  var value: CirExpr = nil
+  var list = valueNode
+  if list.kind != nnkStmtList:
+    list = nnkStmtList.newTree(valueNode)
+  for i, c in list:
+    if i == list.len - 1:
+      value = ctx.lowerExpr(c)
+    else:
+      stmts.add(ctx.lowerSplicedStmt(c))
+    if ctx.resolver.err.len > 0:
+      return nil
+  if stmts.len == 0:
+    return value
+  return stmtsE(stmts, value)
+
 func lowerNestedTernary(ctx: var CirFrontend,
     branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode, idx: int,
     resType: CirType): CirExpr =
@@ -544,13 +562,13 @@ func lowerNestedTernary(ctx: var CirFrontend,
   let cond = ctx.lowerExpr(branches[idx].cond)
   if ctx.resolver.err.len > 0:
     return nil
-  let thenV = ctx.lowerExpr(getBranchValueExpr(branches[idx].body))
+  let thenV = ctx.lowerBranchValue(branches[idx].body)
   if ctx.resolver.err.len > 0:
     return nil
   let elseV = if idx + 1 < branches.len:
                  lowerNestedTernary(ctx, branches, elseBody, idx + 1, resType)
                else:
-                 ctx.lowerExpr(getBranchValueExpr(elseBody))
+                 ctx.lowerBranchValue(elseBody)
   if ctx.resolver.err.len > 0:
     return nil
   return ternaryE(resType, cond, thenV, elseV)
@@ -559,55 +577,35 @@ func lowerNestedTernary(ctx: var CirFrontend,
 # not defer this call and the metal array-assign suite goes red without it
 func lowerStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt]
 
-func buildBranchBody(ctx: var CirFrontend, bodyNode: NimNode, dest: CirExpr): seq[CirStmt] =
+func lowerBranchBody(ctx: var CirFrontend, bodyNode: NimNode): seq[CirStmt] =
   ## A branch body nests one scope: a branch-local shadows an outer local only
   ## inside the branch.
   ctx.pushScope()
-  if dest.isNil:
-    result = ctx.lowerStmt(bodyNode)
-    ctx.popScope()
-    return
-  var body: NimNode = bodyNode
-  if body.kind != nnkStmtList:
-    body = nnkStmtList.newTree(bodyNode)
-  var stmts: seq[CirStmt] = @[]
-  var value: CirExpr = nil
-  for i, c in body:
-    if i == body.len - 1:
-      value = ctx.lowerExpr(c)
-    else:
-      stmts.add(ctx.lowerStmt(c))
-  if ctx.resolver.err.len > 0:
-    ctx.popScope()
-    return @[]
+  result = ctx.lowerStmt(bodyNode)
   ctx.popScope()
-  return stmts & ctx.drainHoisted() & @[asgnS(dest, value)]
 
-func lowerIfForm(ctx: var CirFrontend, branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode, dest: CirExpr): seq[CirStmt] =
-  ## An elif chain lowers to one `ite` per branch, first match wins.
-  ## Else statements sit innermost.
-  ## Every branch body of the expression form assigns `dest`.
+func lowerIfForm(ctx: var CirFrontend, branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode): seq[CirStmt] =
+  ## An elif chain lowers to one if-then-else per branch, first match wins.
+  ## Else statements sit innermost. The rewriteStmtsExprs pass places
+  ## a condition's statements before the test.
   var tail: seq[CirStmt] = @[]
   if not elseBody.isNil:
-    tail = ctx.buildBranchBody(elseBody, dest)
+    tail = ctx.lowerBranchBody(elseBody)
     if ctx.resolver.err.len > 0:
       return @[]
   for i in countdown(branches.len - 1, 0):
     let cond = ctx.lowerExpr(branches[i].cond)
     if ctx.resolver.err.len > 0:
       return @[]
-    # condition splices emit before the branch test, inside the else body
-    # of the previous branch, so a splice runs only when the test runs
-    let condHoists = ctx.drainHoisted()
-    let body = ctx.buildBranchBody(branches[i].body, dest)
+    let body = ctx.lowerBranchBody(branches[i].body)
     if ctx.resolver.err.len > 0:
       return @[]
-    tail = condHoists & @[iteS(cond, body, tail)]
+    tail = @[iteS(cond, body, tail)]
   result = tail
 
 func lowerSplicedStmt(ctx: var CirFrontend, c: NimNode): seq[CirStmt] =
-  ## One non-final child of an expression block, a statement of the spliced expansion,
-  ## hoisted in front of the enclosing statement.
+  ## One non-final child of an expression block, a statement running before
+  ## the block's value, wrapped by the block's statement-expression.
   ## An object or tuple construction with no call inside has no runtime code
   ## and is dropped.
   if c.kind == nnkStmtList:
@@ -863,6 +861,7 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
     if n.len == 1:
       return ctx.lowerExpr(n[0])
   of nnkStmtListExpr:
+    var stmts: seq[CirStmt] = @[]
     var value: CirExpr = nil
     for i, c in n:
       if c.kind == nnkEmpty:
@@ -870,29 +869,36 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
       if i == n.len - 1:
         value = ctx.lowerExpr(c)
       else:
-        ctx.hoisted.add(ctx.lowerSplicedStmt(c))
-        if ctx.resolver.err.len > 0:
-          return nil
-    return value
+        stmts.add(ctx.lowerSplicedStmt(c))
+      if ctx.resolver.err.len > 0:
+        return nil
+    if stmts.len == 0:
+      return value
+    return stmtsE(stmts, value)
   of nnkBlockExpr, nnkBlockStmt:
     let inner = n[^1]
     if inner.kind != nnkStmtList:
       # a single-statement body lowers unwrapped and the block value is the expression itself,
       # matching the shape `getProcBody` boxes for proc bodies
       return ctx.lowerExpr(inner)
+    var stmts: seq[CirStmt] = @[]
     var value: CirExpr = nil
     for i, c in inner:
       if i == inner.len - 1 and c.kind notin {nnkAsgn, nnkIfStmt, nnkForStmt,
           nnkWhileStmt, nnkDiscardStmt, nnkReturnStmt}:
         value = ctx.lowerExpr(c)
       else:
-        ctx.hoisted.add(ctx.lowerSplicedStmt(c))
-        if ctx.resolver.err.len > 0:
-          return nil
-    return value
+        stmts.add(ctx.lowerSplicedStmt(c))
+      if ctx.resolver.err.len > 0:
+        return nil
+    if value.isNil:
+      raiseAssert "block expression in expression position ends in a statement," &
+        " a semchecked block expression ends in an expression"
+    if stmts.len == 0:
+      return value
+    return stmtsE(stmts, value)
   of nnkIfExpr:
-    # an if-expression: single-expression branches nest into conditional values,
-    # statement-bearing branches hoist a temp that the statement form assigns
+    # an if-expression: branches nest into conditional values.
     let resType = ctx.resolver.resolveCirType(n.getTypeInst())
     if ctx.resolver.err.len > 0:
       return nil
@@ -906,20 +912,7 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
         elseBody = c[0]
       else:
         raiseAssert "if expression: unexpected branch " & $c.kind
-    var simple = true
-    for br in branches:
-      if isStmtBody(getBranchValueExpr(br.body)):
-        simple = false
-        break
-    if simple and not isStmtBody(getBranchValueExpr(elseBody)):
-      return lowerNestedTernary(ctx, branches, elseBody, 0, resType)
-    let tmpName = ctx.mintUniqueName("iftmp")
-    ctx.declareLocal(tmpName, sym(tmpName, resType))
-    let stmts = ctx.lowerIfForm(branches, elseBody, sym(tmpName, resType))
-    if ctx.resolver.err.len > 0:
-      return nil
-    ctx.hoisted.add(@[varD(tmpName, resType)] & stmts)
-    return sym(tmpName, resType)
+    return lowerNestedTernary(ctx, branches, elseBody, 0, resType)
   of nnkStrLit, nnkRStrLit, nnkTripleStrLit:
     # a string literal is C string text: nnkStrLit escapes it, the raw string
     # forms carry their text verbatim, the printers add the quotes
@@ -954,7 +947,7 @@ func lowerVoidCall(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   let args = ctx.lowerCallArgs(calleeSym, n)
   if ctx.resolver.err.len > 0:
     return @[]
-  return ctx.drainHoisted() & @[callS(calleeExpr, args)]
+  return @[callS(calleeExpr, args)]
 
 func collectAddressSpace(ctx: var CirFrontend, nameNode: NimNode): AddressSpace =
   result = caThread
@@ -1031,15 +1024,14 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
             # - the declaration takes the value's space
             # - `let q = cast[ptr T](addr scratch[0])` is a threadgroup pointer
             typ = getExprType(value)
-        let hoists = ctx.drainHoisted()
         let cirName = ctx.mintUniqueName(nimName)
         let lookupKey = if nameNode.kind == nnkPragmaExpr: nameNode[0].repr
                         else: nameNode.repr
         ctx.declareLocal(lookupKey, sym(cirName, typ), spc)
         if value.isNil:
-          result.add(hoists & @[varD(cirName, typ, nil, spc)])
+          result.add(varD(cirName, typ, nil, spc))
         else:
-          result.add(hoists & @[varD(cirName, typ, value, spc)])
+          result.add(varD(cirName, typ, value, spc))
   of nnkConstSection:
     # a const section emits no runtime code: the resolver registers the value's struct types
     for defs in n:
@@ -1058,7 +1050,7 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
     let rhs = ctx.lowerExpr(n[1])
     if ctx.resolver.err.len > 0:
       return @[]
-    return ctx.drainHoisted() & @[asgnS(lhs, rhs)]
+    return @[asgnS(lhs, rhs)]
   of nnkInfix:
     # compound assignment lowers in statement position as an infix:
     # a user-defined `op=` lowers as the proc's var-target call,
@@ -1099,7 +1091,7 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
         # a desugared `op=` left-hand side evaluates exactly once in Nim
         # temp-binding normalization splits the reads of a call-bearing target
         let arith = arithExpr(op[0 ..< op.len - 1], opType, lhs, rhs)
-        return ctx.drainHoisted() & @[asgnS(lhs, arith)]
+        return @[asgnS(lhs, arith)]
     return ctx.lowerVoidCall(n)
   of nnkIfStmt:
     var branches: seq[tuple[cond, body: NimNode]] = @[]
@@ -1112,10 +1104,9 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
         elseBody = c[0]
       else:
         raiseAssert "if statement: unexpected child " & $c.kind
-    return ctx.lowerIfForm(branches, elseBody, nil)
+    return ctx.lowerIfForm(branches, elseBody)
   of nnkWhileStmt:
-    # statements spliced by the condition drain to the front of the loop body,
-    # a splice runs once per iteration after the test that admits it
+    # rewriteStmtsExprs places a condition's statements before every test
     let cond = ctx.lowerExpr(n[0])
     if ctx.resolver.err.len > 0:
       return @[]
@@ -1168,7 +1159,7 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
       # literal runs alternate with spliced expressions: a computed splice
       # stores through a fresh temp that the emitted text references by name
       if emitArg.kind in {nnkStrLit, nnkRStrLit, nnkTripleStrLit}:
-        emitted.add(ctx.drainHoisted() & @[emitS(@[emitArg.strVal], @[])])
+        emitted.add(emitS(@[emitArg.strVal], @[]))
         continue
       var parts: seq[string] = @[""]
       var operands: seq[CirExpr] = @[]
@@ -1186,12 +1177,11 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
             let tmpName = ctx.mintUniqueName("emit_tmp")
             let tmpType = getExprType(e)
             op = sym(tmpName, tmpType)
-            ctx.hoisted.add(varD(tmpName, tmpType))
-            ctx.hoisted.add(asgnS(op, e))
+            emitted.add(@[varD(tmpName, tmpType), asgnS(op, e)])
             ctx.declareLocal(tmpName, op)
           parts.add("")
           operands.add(op)
-      emitted.add(ctx.drainHoisted() & @[emitS(parts, operands)])
+      emitted.add(emitS(parts, operands))
     return emitted
   of nnkTemplateDef, nnkMacroDef, nnkIteratorDef:
     # a definition left in a typed body is a compile-time artifact:
@@ -1204,16 +1194,20 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   of nnkObjConstr, nnkTupleConstr, nnkBracketExpr, nnkPar:
     # a discarded construction step of a macro expansion drops its value:
     # this lowering keeps the side effects only, as lowerSplicedStmt does for the spliced statements of an expression
-    discard ctx.lowerExpr(n)
+    let v = ctx.lowerExpr(n)
     if ctx.resolver.err.len > 0:
       return @[]
-    return ctx.drainHoisted()
+    if v.kind == eStmts:
+      return v.stmts
+    return @[]
   of nnkExprColonExpr:
     # a discarded named-field step of a macro expansion whose value is never read
-    discard ctx.lowerExpr(n[1])
+    let v = ctx.lowerExpr(n[1])
     if ctx.resolver.err.len > 0:
       return @[]
-    return ctx.drainHoisted()
+    if v.kind == eStmts:
+      return v.stmts
+    return @[]
   of nnkTryStmt, nnkRaiseStmt:
     ctx.fail($n.kind & ": exceptions are outside the supported set")
     return @[]
@@ -1231,7 +1225,7 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
     let value = ctx.lowerExpr(valueNode)
     if ctx.resolver.err.len > 0:
       return @[]
-    return ctx.drainHoisted() & @[retS(value)]
+    return @[retS(value)]
   of nnkDiscardStmt:
     if n[0].kind == nnkEmpty:
       return @[discardS(nil)]
@@ -1240,7 +1234,7 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
     let value = ctx.lowerExpr(n[0])
     if ctx.resolver.err.len > 0:
       return @[]
-    return ctx.drainHoisted() & @[discardS(value)]
+    return @[discardS(value)]
   of nnkCall, nnkCommand:
     return ctx.lowerVoidCall(n)
 
@@ -1334,13 +1328,10 @@ func lowerForStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   ctx.pushScope()
   ctx.declareLocal(vars.repr, sym(varName, varType))
   let varSym = sym(varName, varType)
-  # start/stop/step hoists queued so far belong to the preamble, while the body's own hoists drain per statement inside it
-  let startHoists = ctx.drainHoisted()
   let body = ctx.lowerStmtBody(n[^1])
   if ctx.resolver.err.len > 0:
     ctx.popScope()
     return @[]
-  let bodyHoists = ctx.drainHoisted()
   ctx.popScope()
   let cmp = if inclusive:
     leE(varSym, stopV)
@@ -1356,11 +1347,10 @@ func lowerForStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
     let stepNow = ctx.lowerExpr(unwrapConv(stepNode))
     if ctx.resolver.err.len > 0:
       return @[]
-    incr.add(ctx.drainHoisted() & @[asgnS(varSym, addE(varType, varSym, stepNow))])
-  var preamble = startHoists
-  preamble.add(varD(varName, varType))
+    incr.add(asgnS(varSym, addE(varType, varSym, stepNow)))
+  var preamble = @[varD(varName, varType)]
   preamble.add(asgnS(varSym, startV))
-  result = preamble & @[whileS(cmp, bodyHoists & body & incr)]
+  result = preamble & @[whileS(cmp, body & incr)]
 
 func lowerAsmStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   ## Lowers an asm statement into verbatim parts and lowered operands.
@@ -1384,14 +1374,14 @@ func lowerAsmStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
     else:
       ctx.fail("asm statement operand of kind " & $c.kind & " is outside the supported set")
       return @[]
-  return ctx.drainHoisted() & @[asmS(parts, operands)]
+  return @[asmS(parts, operands)]
 
 
 func lowerStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   let body = ctx.lowerStmtBody(n)
   if ctx.resolver.err.len > 0:
     return @[]
-  return ctx.drainHoisted() & body
+  return body
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Proc translation
@@ -1493,9 +1483,6 @@ func harvestProc(ctx: var CirFrontend, callee: NimNode, cirName: string) =
   let impl = callee.getImpl()
   let formals = getFormalParams(callee.getTypeInst())
   let savedProcsLen = ctx.module.procs.len
-  let savedHoisted = ctx.hoisted
-  # a callee body is lowered under its own hoist queue: the caller's pending hoists belong to the caller's statement, never to the callee's body
-  ctx.hoisted = @[]
   let save = ctx.enterProcBody(cirName, formals)
   if ctx.resolver.err.len > 0:
     return
@@ -1503,13 +1490,10 @@ func harvestProc(ctx: var CirFrontend, callee: NimNode, cirName: string) =
   let fnRet = ctx.locals.retType
   let body = ctx.lowerProcBody(formals, getProcBody(impl), params)
   ctx.exitProcBody(save)
-  # pending hoists of the callee append to its body first and the caller's own queue resumes after
-  let calleeHoists = ctx.drainHoisted()
-  ctx.hoisted = savedHoisted
   if ctx.resolver.err.len > 0:
     ctx.module.procs.setLen(savedProcsLen)
     return
-  let harvested = procD(cirName, params, fnRet, calleeHoists & body)
+  let harvested = procD(cirName, params, fnRet, body)
   let wgErr = impl.applyProcPragmas(harvested)
   if wgErr.len > 0:
     ctx.fail(wgErr)

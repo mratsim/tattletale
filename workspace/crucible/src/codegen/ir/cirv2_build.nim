@@ -174,6 +174,16 @@ proc aconstrE*(typ: CirType, elems: varargs[CirExpr]): CirExpr =
 proc callE*(callee: CirExpr, args: varargs[CirExpr]): CirExpr =
   CirExpr(kind: eCall, callee: callee, args: @args)
 
+proc stmtsE*(stmts: seq[CirStmt], value: CirExpr): CirExpr =
+  ## A transient expression node: statements before a value.
+  ##
+  ## Args:
+  ## - `stmts`: statements that run where the expression evaluates
+  ## - `value`: what the expression evaluates to after they run
+  ##
+  ## The rewriteStmtsExprs pass rewrites every occurrence away.
+  CirExpr(kind: eStmts, stmts: stmts, valueExpr: value)
+
 # Statement constructors
 
 proc varD*(name: string, typ: CirType, init: CirExpr = nil, addressSpace: AddressSpace = caThread): CirStmt =

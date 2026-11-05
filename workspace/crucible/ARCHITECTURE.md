@@ -95,12 +95,15 @@ flowchart LR
 
 ### Stages
 
-Every target registers the first two stages identically.
+Every target registers the first three stages in the same order:
+statement-expression rewriting, value normalizations, the reshaping passes.
 Divergence starts at the reserved-word rename.
 
 | Stage           | Registration                        | Passes                                                                                         |
 | ---             | ---                                 | ---                                                                                            |
-| Normalization   | `registerNormalizationPasses`       | `settleExprForms`, settles literal use-site types, the bool operator domain and constructor field order; `bindCompoundAssignTemps`, binds the call-bearing targets of compound assignments into temps |
+| Value normalization | `registerValueNormalizations`   | `resolveBoolDomain`, the bool operator domain; `typeLiterals`, literal use-site types; `completeConstructors`, constructor field order and zero fill |
+| Legalization    | `registerRewriteStmtsExprs`                 | `rewriteStmtsExprs`, rewrites statement-expressions into statement position, in front of the statement reading the value or inside the branch computing it |
+| Reshaping       | `registerReshapingPasses`           | `bindCompoundAssignTemps`, binds the call-bearing targets of compound assignments into temps |
 | Shared lowering | `registerSharedLoweringPasses`      | `lowerSpans`, splits `openArray` spans into pointer + length pairs                             |
 | Reserved rename | one table row per text target       | `registerRenameReservedIdentifiers` with the target's reserved-word set as data                |
 | Target lowering | one table row per pass              | the target's storage-model transforms, table below                                             |

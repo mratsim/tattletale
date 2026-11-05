@@ -119,6 +119,7 @@ type
     eOconstr
     eAconstr
     eCall
+    eStmts
 
   CirExpr* = ref object
     ## A CIRv2 expression tree. Comparisons and `and`/`or` yield `bool`.
@@ -185,6 +186,9 @@ type
     of eCall:
       callee*: CirExpr
       args*: seq[CirExpr]
+    of eStmts:
+      stmts*: seq[CirStmt]
+      valueExpr*: CirExpr
     of eTrue, eFalse:
       discard
 
@@ -510,6 +514,8 @@ proc getExprType*(e: CirExpr): CirType =
       let t = getExprType(e.callee)
       if t != nil and t.kind == ctProc:
         result = t.ret
+  of eStmts:
+    result = getExprType(e.valueExpr)
 
 proc getExprChildren*(e: CirExpr): seq[CirExpr] =
   ## Returns the child expressions of `e`, one entry per operand position.
@@ -536,6 +542,8 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
     result = @[e.callee]
     for a in e.args:
       result.add a
+  of eStmts:
+    result = @[e.valueExpr]
   of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSym, eSizeof:
     result = @[]
 

@@ -46,8 +46,12 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
   ##   and stops work once recorded, so the first refusal in walk order wins
 
   proc visitExprs(e: CirExpr) =
+    if e.isNil:
+      return
     if onExpr != nil:
       e.walkExprs(onExpr)
+    if e.kind == eStmts:
+      walkStmts(e.stmts, onStmt, onExpr)
   var walked: seq[CirStmt]
   for s in ss:
     walked.add s
@@ -161,6 +165,46 @@ proc scanStmtRefs*(ss: seq[CirStmt], onDecl: proc(s: CirStmt): bool, onExpr: pro
     of sAsm, sEmit:
       discard
 
+proc cloneExpr*(e: CirExpr): CirExpr
+
+proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
+  for s in stmts:
+    var c = CirStmt(kind: s.kind)
+    case s.kind
+    of sVar:
+      c.name = s.name
+      c.declType = s.declType
+      c.init = cloneExpr(s.init)
+      c.addressSpace = s.addressSpace
+    of sAsgn:
+      c.lhs = cloneExpr(s.lhs)
+      c.rhs = cloneExpr(s.rhs)
+    of sIte:
+      c.cond = cloneExpr(s.cond)
+      c.thenBody = cloneStmts(s.thenBody)
+      c.elseBody = cloneStmts(s.elseBody)
+    of sWhile:
+      c.whileCond = cloneExpr(s.whileCond)
+      c.whileBody = cloneStmts(s.whileBody)
+      c.whileUnroll = s.whileUnroll
+    of sRet:
+      c.retVal = cloneExpr(s.retVal)
+    of sCall:
+      c.callCallee = cloneExpr(s.callCallee)
+      for a in s.callArgs:
+        c.callArgs.add cloneExpr(a)
+    of sAsm:
+      c.asmParts = s.asmParts
+      for op in s.asmOperands:
+        c.asmOperands.add cloneExpr(op)
+    of sEmit:
+      c.emitParts = s.emitParts
+      for op in s.emitOperands:
+        c.emitOperands.add cloneExpr(op)
+    of sDiscard:
+      c.discardVal = cloneExpr(s.discardVal)
+    result.add c
+
 proc cloneExpr*(e: CirExpr): CirExpr =
   ## Deep copy: expressions are shared refs, a rewrite of the clone must not
   ## reach the source tree.
@@ -234,44 +278,9 @@ proc cloneExpr*(e: CirExpr): CirExpr =
     result.callee = cloneExpr(e.callee)
     for a in e.args:
       result.args.add cloneExpr(a)
-
-proc cloneStmts*(stmts: seq[CirStmt]): seq[CirStmt] =
-  for s in stmts:
-    var c = CirStmt(kind: s.kind)
-    case s.kind
-    of sVar:
-      c.name = s.name
-      c.declType = s.declType
-      c.init = cloneExpr(s.init)
-      c.addressSpace = s.addressSpace
-    of sAsgn:
-      c.lhs = cloneExpr(s.lhs)
-      c.rhs = cloneExpr(s.rhs)
-    of sIte:
-      c.cond = cloneExpr(s.cond)
-      c.thenBody = cloneStmts(s.thenBody)
-      c.elseBody = cloneStmts(s.elseBody)
-    of sWhile:
-      c.whileCond = cloneExpr(s.whileCond)
-      c.whileBody = cloneStmts(s.whileBody)
-      c.whileUnroll = s.whileUnroll
-    of sRet:
-      c.retVal = cloneExpr(s.retVal)
-    of sCall:
-      c.callCallee = cloneExpr(s.callCallee)
-      for a in s.callArgs:
-        c.callArgs.add cloneExpr(a)
-    of sAsm:
-      c.asmParts = s.asmParts
-      for op in s.asmOperands:
-        c.asmOperands.add cloneExpr(op)
-    of sEmit:
-      c.emitParts = s.emitParts
-      for op in s.emitOperands:
-        c.emitOperands.add cloneExpr(op)
-    of sDiscard:
-      c.discardVal = cloneExpr(s.discardVal)
-    result.add c
+  of eStmts:
+    result.stmts = cloneStmts(e.stmts)
+    result.valueExpr = cloneExpr(e.valueExpr)
 
 func containsPtrDeep*(t: CirType): bool =
   case t.kind
@@ -532,3 +541,34 @@ proc hoistConstMemLocals*(m: CirModule): string =
     if err.len > 0:
       return err
   return ""
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Temp names
+# ═══════════════════════════════════════════════════════════════════════
+
+type TempBinder* = object
+  used: HashSet[string]
+  fresh: int
+
+proc claimTempName*(b: var TempBinder, base: string): string =
+  while true:
+    let candidate = if b.fresh == 0: base else: base & "_" & $b.fresh
+    b.fresh.inc
+    if candidate notin b.used:
+      b.used.incl candidate
+      return candidate
+
+proc tempBinderFor*(fn: CirProc): TempBinder =
+  result.used.init
+  for p in fn.params:
+    result.used.incl p.name
+  var collected = result.used
+  let onExpr = proc(e: CirExpr) =
+    if e.kind == eSym:
+      collected.incl e.name
+  let onStmt = proc(s: CirStmt) =
+    if s.kind == sVar:
+      collected.incl s.name
+  fn.body.walkStmts(onStmt, onExpr)
+  result.used = collected
+

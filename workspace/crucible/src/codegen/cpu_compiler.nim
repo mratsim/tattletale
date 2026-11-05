@@ -27,6 +27,7 @@ import ./frontend/nim_to_crucible
 import ./ir/cirv2_lang
 import ./passes/pass_registry
 import ./passes/passes_normalizations
+import ./passes/passes_legalization
 import ./passes/passes_lowering
 import ./passes/passes_validations
 import ./passes/passes_lowering_cpu
@@ -44,7 +45,9 @@ proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   if lerr.len > 0:
     error(lerr)
   var reg = PassRegistry.new()
-  registerNormalizationPasses(reg)
+  registerRewriteStmtsExprs(reg)
+  registerValueNormalizations(reg)
+  registerReshapingPasses(reg)
   registerSharedLoweringPasses(reg)
   reg.registerCpuLoweringPasses()
   registerValidationPostPasses(reg)

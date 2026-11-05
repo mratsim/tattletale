@@ -114,6 +114,12 @@ proc renderExpr(e: CirExpr): string =
     for arg in e.args:
       result.add(" " & renderExpr(arg))
     result.add(")")
+  of eStmts:
+    var inner = RenderBuf()
+    inner.open("(stmts")
+    for stmt in e.stmts:
+      inner.renderStmt(stmt)
+    result = inner.lines.join("\n") & " " & renderExpr(e.valueExpr) & ")"
 
 proc renderStmtList*(b: var RenderBuf, body: seq[CirStmt], header: string) =
   ## A branch body list under `header`, `.` when empty.

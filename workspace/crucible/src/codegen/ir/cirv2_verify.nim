@@ -54,6 +54,9 @@ proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string]): string =
   ## A `{.builtin.}`-marked symbol is a target intrinsic, never a declaration.
   if e.isNil:
     return ""
+  if e.kind == eStmts:
+    return "statement-expression survived elimination," &
+      " the rewriteStmtsExprs pass must run before the printers"
   if e.kind == eSym:
     if e.builtin or e.name in IntrinsicCallees or e.name in visible or e.name in moduleNames:
       return ""

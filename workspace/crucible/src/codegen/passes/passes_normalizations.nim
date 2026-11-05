@@ -52,11 +52,13 @@ func registerMarkExplicitUnrolls*(reg: var PassRegistry) =
     " marker statement and drops every marker",
     run = markExplicitUnrollsPass)
 
-func registerNormalizationPasses*(reg: var PassRegistry) =
+func registerValueNormalizations*(reg: var PassRegistry) =
   # resolveBoolDomain runs before typeLiterals: the domain rewrite decides the operator shape before the literal retypes run
   reg.registerResolveBoolDomain()
   reg.registerTypeLiterals()
   reg.registerCompleteConstructors()
+
+func registerReshapingPasses*(reg: var PassRegistry) =
   # bindCompoundAssignTemps runs first among the reshaping passes:
   # shared-tree detection compares references
   reg.registerCompoundAssignTemps()
@@ -202,36 +204,10 @@ proc completeConstructorsPass(m: CirModule): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 
-type TempBinder = object
-  used: HashSet[string]
-  fresh: int
-
-proc claimTempName(b: var TempBinder): string =
-  while true:
-    let candidate = if b.fresh == 0: "lhs_val" else: "lhs_val_" & $b.fresh
-    b.fresh.inc
-    if candidate notin b.used:
-      b.used.incl candidate
-      return candidate
-
-proc tempBinderFor(fn: CirProc): TempBinder =
-  result.used.init
-  for p in fn.params:
-    result.used.incl p.name
-  var collected = result.used
-  let onExpr = proc(e: CirExpr) =
-    if e.kind == eSym:
-      collected.incl e.name
-  let onStmt = proc(s: CirStmt) =
-    if s.kind == sVar:
-      collected.incl s.name
-  fn.body.walkStmts(onStmt, onExpr)
-  result.used = collected
-
 proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
   ## One evaluation per operand, both use sites read the temp.
   let typ = getExprType(e)
-  let name = b.claimTempName()
+  let name = b.claimTempName("lhs_val")
   let tmp = sym(name, typ)
   hoists.add(varD(name, typ))
   hoists.add(asgnS(tmp, e))

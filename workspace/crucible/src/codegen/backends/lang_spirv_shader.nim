@@ -647,6 +647,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
   of eSizeof: result = cirUint32()
   of eOconstr: result = e.ocType
   of eAconstr: result = e.acType
+  of eStmts: result = getExprType(e.valueExpr)
   of eDeref:
     let t = ctx.resolveExprType(fn, e.derefOperand)
     if t != nil and t.kind in {ctPtr, ctAptr}:
@@ -982,6 +983,9 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     # a call value may sit in any operand position
     # value emission is the call itself
     ctx.emitCallValue(fn, e)
+  of eStmts:
+    ctx.failSpv("statement-expression survived elimination, the rewriteStmtsExprs pass must run before the printers")
+    0'u32
 
 proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     tuple[ptrId: uint32, pointee: CirType, isBda: bool, isPush: bool] =
