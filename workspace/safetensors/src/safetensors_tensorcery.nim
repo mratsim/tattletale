@@ -9,14 +9,18 @@ import
   std/memfiles,
   std/tables,
   std/importutils,
+  std/json,
+  std/strutils,
   workspace/tensorcery
 
 import ./safetensors {.all.}
 import ./collections {.all.}
+import workspace/data_structures/src/small_seqs
 import workspace/tensorcery/src/tape
 import workspace/tensorcery/src/backends/cpu
 privateAccess(SafetensorObj)
 privateAccess(SafetensorsCollectionObj)
+privateAccess(Tensor)
 
 # #######################################################################
 #
@@ -63,6 +67,46 @@ proc hasTensor*(st: Safetensor, tensorName: string): bool {.inline.} =
 proc hasTensor*(view: SafetensorsCollection, tensorName: string): bool {.inline.} =
   ## True when the collection weight map routes `tensorName` to a file.
   view.weightMap.hasKey(tensorName)
+
+proc toStDtypeString*(dtype: Dtype): string {.inline.} =
+  ## Convert tensorcery Dtype to the safetensors header dtype string.
+  ## Asserts naming the dtype when no string form exists.
+
+  case dtype:
+    of dtBool:     "BOOL"
+    of dtUint8:    "U8"
+    of dtInt8:     "I8"
+    of dtInt16:    "I16"
+    of dtInt32:    "I32"
+    of dtInt64:    "I64"
+    of dtFloat16:  "F16"
+    of dtFloat32:  "F32"
+    of dtFloat64:  "F64"
+
+proc hostBytes(t: Tensor): seq[byte] =
+  ## Reads tensor values in logical order and returns them as host bytes
+  ## in the safetensors little-endian layout.
+  ##
+  ## - Logical order: views gather through their strides
+  ## - Materialization: a pending tensor evals the context first
+  ## - Refusal: asserts naming the dtype when no Nim host type reads it
+  template readAs(T: typedesc) =
+    let s = toSeq[T](t)
+    result = newSeq[byte](s.len * sizeof(T))
+    if s.len > 0:
+      copyMem(result[0].addr, s[0].unsafeAddr, result.len)
+
+  case t.dtype:
+    of dtBool:    readAs(bool)
+    of dtUint8:   readAs(uint8)
+    of dtInt8:    readAs(int8)
+    of dtInt16:   readAs(int16)
+    of dtInt32:   readAs(int32)
+    of dtInt64:   readAs(int64)
+    of dtFloat32: readAs(float32)
+    of dtFloat64: readAs(float64)
+    of dtFloat16:
+      doAssert false, "no Nim host type reads back a " & $t.dtype & " tensor"
 
 func product(a: seq[int]): int =
   result = 1
@@ -134,3 +178,43 @@ proc getTensorOwned*(ctx: Ctx, view: SafetensorsCollection, tensorName: string, 
 proc getTensorOwned*(ctx: Ctx, view: SafetensorsCollection, tensorName: string): Tensor =
   ## CPU form of the collection-level `getTensorOwned`, backend CPU.
   loadCpuImpl(ctx, view.files[view.fileOf(tensorName)], tensorName)
+
+proc saveSafetensors*(path: string, tensors: openArray[tuple[name: string, t: Tensor]]) =
+  ## Writes `tensors` as one safetensors file at `path`, overwriting any previous file.
+  ## Values are read back through the Tensor face, so tensors on every backend serialize.
+  ##
+  ## - Header: u64 little-endian size, JSON, space-padded so the data
+  ##   section starts 8-byte aligned
+  ## - Payload: tensor bytes in header order, data section offsets
+  ## - Refusal: empty tensors assert naming the tensor, zero-byte
+  ##   entries are rejected by the validator
+  var header = newJObject()
+  var payload: seq[byte] = @[]
+  for (name, t) in tensors:
+    doAssert t.getNumel() > 0, "safetensors write refuses the empty tensor " & name
+    let bytes = hostBytes(t)
+    let start = payload.len
+    payload.add bytes
+    var shape = newJArray()
+    for i in 0 ..< t.getShape().len:
+      shape.add newJInt(int(t.getShape()[i]))
+    header[name] = %*{
+      "dtype": toStDtypeString(t.dtype),
+      "shape": shape,
+      "data_offsets": [start, start + bytes.len],
+    }
+  var headerStr = $header
+  let pad = (8 - ((sizeof(uint64) + headerStr.len) mod 8)) mod 8
+  headerStr.add repeat(' ', pad)
+
+  var f = syncio.open(path, fmWrite)
+  var headerSize = uint64(headerStr.len)
+  discard f.writeBuffer(headerSize.addr, sizeof(uint64))
+  discard f.writeBuffer(headerStr[0].addr, headerStr.len)
+  if payload.len > 0:
+    discard f.writeBuffer(payload[0].addr, payload.len)
+  f.close()
+
+proc saveSafetensors*(path: string, name: string, t: Tensor) =
+  ## Single-tensor form of `saveSafetensors`.
+  saveSafetensors(path, [(name, t)])

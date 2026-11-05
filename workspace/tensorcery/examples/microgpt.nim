@@ -23,6 +23,7 @@ import workspace/tensorcery/src/tape
 import workspace/tensorcery/src/backends/cpu
 import workspace/tensorcery/src/backends/metal
 import workspace/tensorcery/src/backends/vulkan
+import workspace/safetensors/src/safetensors_tensorcery
 import workspace/tensorcery/examples/microgpt_model
 
 const
@@ -50,8 +51,11 @@ const
     blockSize: 16,
     batchSize: 8)
 
+  CheckpointEvery = 5
+  CheckpointPath = "microgpt_checkpoint.safetensors"
+
   DefaultCorpus = currentSourcePath().parentDir() /
-    "../../../../../../_references_nim_libs/arraymancer/examples/ex06_shakespeare_input.txt"
+    "../../../../../_references_nim_libs/arraymancer/examples/ex06_shakespeare_input.txt"
 
 proc hostSoftmax(x: seq[float64]): seq[float64] =
   var m = -1e30
@@ -137,6 +141,46 @@ proc generateText(ctx: Ctx, Hw: static BackendKind, params: GptParams,
     reRegister(ctx, params, consts, cfg)
   text
 
+proc saveCheckpoint(params: GptParams, cfg: GptConfig, step: int) =
+  ## Writes every trainable weight and adam moment into one safetensors
+  ## file at `CheckpointPath` so the next run resumes from it.
+  var named: seq[tuple[name: string, t: Tensor]]
+  template named1(n: string, t: Tensor) =
+    named.add (n, t)
+  template layerSeq(prefix: string, xs: seq[Tensor]) =
+    for i in 0 ..< cfg.nLayer:
+      named.add (prefix & $i, xs[i])
+  named1("wte", params.wte)
+  named1("wpe", params.wpe)
+  named1("lm_head", params.lmHead)
+  named1("lnf.w", params.lnfW)
+  named1("lnf.b", params.lnfB)
+  layerSeq("layer.wq.", params.layerWq)
+  layerSeq("layer.wk.", params.layerWk)
+  layerSeq("layer.wv.", params.layerWv)
+  layerSeq("layer.wo.", params.layerWo)
+  layerSeq("layer.fc1.", params.layerFc1)
+  layerSeq("layer.fc2.", params.layerFc2)
+  layerSeq("layer.ln1.w.", params.layerLn1W)
+  layerSeq("layer.ln1.b.", params.layerLn1B)
+  layerSeq("layer.ln2.w.", params.layerLn2W)
+  layerSeq("layer.ln2.b.", params.layerLn2B)
+  named1("m.wte", params.mWte)
+  named1("v.wte", params.vWte)
+  named1("m.wpe", params.mWpe)
+  named1("v.wpe", params.vWpe)
+  named1("m.lm_head", params.mLmHead)
+  named1("v.lm_head", params.vLmHead)
+  named1("m.lnf.w", params.mLnfW)
+  named1("v.lnf.w", params.vLnfW)
+  named1("m.lnf.b", params.mLnfB)
+  named1("v.lnf.b", params.vLnfB)
+  for i in 0 ..< cfg.nLayer:
+    for j in 0 ..< 10:
+      named.add ("layer.m." & $i & "." & $j, params.layerM[i][j])
+      named.add ("layer.v." & $i & "." & $j, params.layerV[i][j])
+  saveSafetensors(CheckpointPath, named)
+
 proc main =
   randomize(Seed)
   let corpusPath = if paramCount() > 0: paramStr(1) else: DefaultCorpus
@@ -192,6 +236,8 @@ proc main =
       last5.add loss
     stdout.writeLine "step ", step, " / ", steps, "  loss ", loss.formatFloat(ffDecimal, 4),
         "  rss_kb ", rssKb()
+    if step mod CheckpointEvery == 0 or step == steps:
+      saveCheckpoint(params, cfg, step)
 
   let firstAvg = first5.sum() / 5.0
   let lastAvg = last5.sum() / 5.0

@@ -7,10 +7,14 @@
 
 ## Safetensors loading into tensorcery tensors (owned form).
 ##
+## Blocks:
 ## - CPU: load the F64 vandermonde fixture, check shape, dtype, device
 ##   and values through the erased face
 ## - Metal: transfer the F32 fixture, check devMetal as the device
 ## - BF16: check the refusal names the dtype
+## Save blocks:
+## - Roundtrip: F64+F32 through saveSafetensors, compare values
+## - Device: serialize a Metal-resident tensor, reload on CPU, compare
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" --nimcache:nimcache/t_st workspace/safetensors/tests/test_safetensors_tensorcery.nim
@@ -73,6 +77,51 @@ proc main() =
       doAssert false, "BF16 load should have raised"
     except AssertionDefect as e:
       doAssert "BF16" in e.msg, "refusal must name the dtype, got: " & e.msg
+
+  block saveLoadRoundtrip:
+    let ctx = Ctx()
+    var st = Safetensor.open(fixturePath)
+    let v64 = getTensorOwned(ctx, st, "F64_vandermonde_5x5")
+    let v32 = getTensorOwned(ctx, st, "F32_vandermonde_5x5")
+
+    let outPath = getTempDir() / "tensorcery_roundtrip.safetensors"
+    saveSafetensors(outPath, [("f64_v", v64), ("f32_v", v32)])
+    doAssert fileExists(outPath)
+
+    var rt = Safetensor.open(outPath)
+    doAssert rt.hasTensor("f64_v")
+    doAssert rt.hasTensor("f32_v")
+    let back64 = getTensorOwned(ctx, rt, "f64_v")
+    let back32 = getTensorOwned(ctx, rt, "f32_v")
+    doAssert back64.getShape() == [5'i32, 5'i32]
+    doAssert back32.getShape() == [5'i32, 5'i32]
+    doAssert back64.getDtype() == dtFloat64
+    doAssert back32.getDtype() == dtFloat32
+
+    let a = toSeq[float64](back64)
+    let b = toSeq[float64](v64)
+    for i in 0 ..< a.len:
+      doAssert a[i] == b[i], "roundtrip value mismatch at " & $i
+    let c = toSeq[float32](back32)
+    let d = toSeq[float32](v32)
+    for i in 0 ..< c.len:
+      doAssert c[i] == d[i], "roundtrip value mismatch at " & $i
+
+  block saveMetalWeights:
+    let ctx = Ctx()
+    ensureMetal(ctx)
+    var st = Safetensor.open(fixturePath)
+    let m = getTensorOwned(ctx, st, "F32_vandermonde_5x5", bkMetal)
+    let outPath = getTempDir() / "tensorcery_metal_save.safetensors"
+    saveSafetensors(outPath, "metal_w", m)
+
+    var rt = Safetensor.open(outPath)
+    let ctx2 = Ctx()
+    let back = getTensorOwned(ctx2, rt, "metal_w")
+    let a = toSeq[float32](back)
+    let b = toSeq[float32](getTensorOwned(ctx, st, "F32_vandermonde_5x5"))
+    for i in 0 ..< a.len:
+      doAssert a[i] == b[i], "metal save value mismatch at " & $i
 
   echo "test_safetensors_tensorcery: ALL GREEN"
 
