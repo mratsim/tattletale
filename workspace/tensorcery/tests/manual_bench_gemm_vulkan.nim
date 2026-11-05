@@ -15,10 +15,57 @@
 
 import std/[times, math, strformat]
 import workspace/crucible
+import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/layout_algebra
 import workspace/tensorcery/src/kernels/k_gemm_vulkan
 import workspace/ceramic/tests/ceramic_testutils
+
+proc gemmTileVulkan8x4(d: distinct TensorView, a: distinct TensorView, b: distinct TensorView, alpha, beta: float32) =
+  ## 8x4-cell schedule, each thread owns 8 m-lines x 4 n-columns instead
+  ## of 4x8. Same fragment sizes: the A fragment doubles and the B
+  ## fragment halves per k-tile. Bench-only, the kernel boundary ships 4x8.
+  let
+    thrID = getLocalThreadID()
+    rowBlock = thrID div 8
+    colBlock = thrID mod 8
+    m0 = 32 * get_group_id(0)
+    n0 = 32 * get_group_id(1)
+    kTiles = ceil_div(a.layout.shape[1], 2)
+  block:
+    var rD: tile(d.T, make_layout((32, (1, 1))))
+    staticFor i, 0, 32:
+      rD[i] = zero(d.T)
+    var rA: tile(a.T, make_layout((16, (1, 1))))
+    var rB: tile(b.T, make_layout((8, (1, 1))))
+    for kt in 0 ..< kTiles:
+      let k0 = 2 * kt
+      let aInterior = (m0 + 32 <= a.layout.shape[0]) and (k0 + 2 <= a.layout.shape[1])
+      let bInterior = (n0 + 32 <= b.layout.shape[0]) and (k0 + 2 <= b.layout.shape[1])
+      staticFor kk, 0, 2:
+        staticFor m, 0, 8:
+          rA[m + 8 * kk] = if aInterior:
+              a[(m0 + 8 * rowBlock + m, k0 + kk)]
+            else:
+              a.paddedLoad((m0 + 8 * rowBlock + m, k0 + kk), zero(a.T))
+      staticFor kk, 0, 2:
+        staticFor n, 0, 4:
+          rB[n + 4 * kk] = if bInterior:
+              b[(n0 + 4 * colBlock + n, k0 + kk)]
+            else:
+              b.paddedLoad((n0 + 4 * colBlock + n, k0 + kk), zero(b.T))
+      staticFor n, 0, 4:
+        staticFor m, 0, 8:
+          var acc = rD[m + 8 * n]
+          staticFor kk, 0, 2:
+            acc = acc + rA[m + 8 * kk] * rB[n + 4 * kk]
+          rD[m + 8 * n] = acc
+    staticFor n, 0, 4:
+      staticFor m, 0, 8:
+        let crd = (m0 + 8 * rowBlock + m, n0 + 4 * colBlock + n)
+        if crd.inBounds(d.layout.shape):
+          let dPrev = if beta != 0.0'f32: d.paddedLoad(crd, zero(d.T)) else: zero(d.T)
+          d[crd] = alpha * rD[m + 8 * n] + beta * dPrev
 
 proc benchOnce(engine: VulkanEngine, m, n, k, iters: int): float64 =
   ## Returns achieved TFLOP/s over `iters` back-to-back launches
@@ -45,6 +92,31 @@ proc benchOnce(engine: VulkanEngine, m, n, k, iters: int): float64 =
   let wall = epochTime() - t0
   result = flops / wall / 1.0e12
 
+proc benchOnce8x4(engine: VulkanEngine, m, n, k, iters: int): float64 =
+  ## Same harness as benchOnce over the 8x4 schedule
+  let
+    aHost = makeHostTensor(float32, (m, k), (k, 1))
+    bHost = makeHostTensor(float32, (n, k), (k, 1))
+    dHost = makeHostTensor(float32, (m, n), (n, 1))
+  for i in 0 ..< aHost.len:
+    aHost.data[i] = float32((i * 37 mod 19) - 9) * 0.125'f32
+  for i in 0 ..< bHost.len:
+    bHost.data[i] = float32((i * 53 mod 23) - 11) * 0.125'f32
+  let
+    aDev = engine.bridge(aHost)
+    bDev = engine.bridge(bHost)
+    dDev = engine.bridge(dHost)
+  let flops = 2.0 * float64(m) * float64(n) * float64(k) * float64(iters)
+  let t0 = epochTime()
+  for i in 0 ..< iters:
+    engine.launchDeviceFn gemmTileVulkan8x4(dDev, aDev, bDev, 1.0'f32, 0.0'f32) do:
+      grid = (ceil_div(m, 32), ceil_div(n, 32))
+      blk = (32, 1)
+      lang = glsl
+  engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, 1)
+  let wall = epochTime() - t0
+  result = flops / wall / 1.0e12
+
 proc runTest() =
   var engine = newEngine(runVulkan)
   echo engine.deviceName()
@@ -59,7 +131,16 @@ proc runTest() =
     let tf = benchOnce(engine, M, N, K, 20)
     echo "round ", r, ": ", fmt"{tf:.3f}", " TFLOP/s"
     if tf > best: best = tf
-  echo "BEST: ", fmt"{best:.3f}", " TFLOP/s (fp32, 4096^3, MoltenVK)"
+  echo "BEST 4x8: ", fmt"{best:.3f}", " TFLOP/s (fp32, 4096^3, MoltenVK)"
+  # falsifier: the 8x4 variant under the same harness
+  discard benchOnce8x4(engine, M, N, K, 2)
+  var best8x4 = 0.0
+  for r in 0 ..< 3:
+    let tf = benchOnce8x4(engine, M, N, K, 20)
+    echo "round 8x4 ", r, ": ", fmt"{tf:.3f}", " TFLOP/s"
+    if tf > best8x4: best8x4 = tf
+  echo "BEST 8x4: ", fmt"{best8x4:.3f}", " TFLOP/s (fp32, 4096^3, MoltenVK)"
+  echo "ratio 8x4/4x8: ", fmt"{best8x4/best:.3f}"
 
 when isMainModule:
   runTest()
