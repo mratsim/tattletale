@@ -10,11 +10,15 @@
 ## Schedule (proven on Metal in the C10D15 records, 5.5-5.8 TF fp32 class):
 ## 32 threads per threadgroup, each owning one disjoint 4x8 output cell,
 ## k-tiles 2 deep, register fragments, no shared memory, no subgroup use.
+##
+## All fixed-shape loops unroll at the Nim level through the `staticFor` macro.
+## Fragment accesses then hold constant indices, the fragments stay in registers.
+## `{.unroll.}` does not reach the emitted loop directives on this path.
 
 import workspace/crucible
+import workspace/ceramic/src/macros/static_for
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
 proc gemmTileVulkan*(d: distinct TensorView, a: distinct TensorView, b: distinct TensorView, alpha, beta: float32) =
   ## d = alpha·A·Bᵀ + beta·d, one threadgroup per 32x32 output tile,
@@ -42,32 +46,26 @@ proc gemmTileVulkan*(d: distinct TensorView, a: distinct TensorView, b: distinct
     kTiles = ceil_div(a.layout.shape[1], 2)
   block:
     var rD: tile(d.T, make_layout((32, (1, 1))))
-    rD.fillWith(zero(d.T))
+    staticFor i, 0, 32:
+      rD[i] = zero(d.T)
+    var rA: tile(a.T, make_layout((8, (1, 1))))
+    var rB: tile(b.T, make_layout((16, (1, 1))))
     for kt in 0 ..< kTiles:
       let k0 = 2 * kt
-      var rA: tile(a.T, make_layout((8, (1, 1))))
-      var rB: tile(b.T, make_layout((16, (1, 1))))
-      {.unroll.}
-      for kk in 0 ..< 2:
-        {.unroll.}
-        for m in 0 ..< 4:
+      staticFor kk, 0, 2:
+        staticFor m, 0, 4:
           rA[m + 4 * kk] = a.paddedLoad((m0 + 4 * rowBlock + m, k0 + kk), zero(a.T))
-      {.unroll.}
-      for kk in 0 ..< 2:
-        {.unroll.}
-        for n in 0 ..< 8:
+      staticFor kk, 0, 2:
+        staticFor n, 0, 8:
           rB[n + 8 * kk] = b.paddedLoad((n0 + 8 * colBlock + n, k0 + kk), zero(b.T))
-      {.unroll.}
-      for n in 0 ..< 8:
-        {.unroll.}
-        for m in 0 ..< 4:
+      staticFor n, 0, 8:
+        staticFor m, 0, 4:
           var acc = rD[m + 4 * n]
-          {.unroll.}
-          for kk in 0 ..< 2:
+          staticFor kk, 0, 2:
             acc = acc + rA[m + 4 * kk] * rB[n + 8 * kk]
           rD[m + 4 * n] = acc
-    for n in 0 ..< 8:
-      for m in 0 ..< 4:
+    staticFor n, 0, 8:
+      staticFor m, 0, 4:
         let crd = (m0 + 4 * rowBlock + m, n0 + 8 * colBlock + n)
         if crd.inBounds(d.layout.shape):
           let dPrev = if beta != 0.0'f32: d.paddedLoad(crd, zero(d.T)) else: zero(d.T)
