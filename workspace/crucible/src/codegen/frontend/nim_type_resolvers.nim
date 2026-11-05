@@ -26,9 +26,9 @@ type
     err*: string
     ## First refusal message, "" while the walk is clean.
 
-proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType
+func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType
 
-proc fail*(r: var CirTypeResolver, detail: string) =
+func fail*(r: var CirTypeResolver, detail: string) =
   ## Records the first refusal, later refusals are ignored while `err` is set.
   if r.err.len == 0:
     r.err = "cirv2 frontend: " & detail
@@ -102,7 +102,7 @@ func deriveStructName*(n: NimNode): string =
   else:
     result = "Object"
 
-proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
+func evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   ## Returns the compile-time integer value of `n`.
   ##
   ## - `..` reads as the array length `hi - lo + 1`
@@ -151,7 +151,7 @@ proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   else:
     refuse("compile-time value expected, got node kind " & $n.kind)
 
-proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
+func deriveStructFields(r: var CirTypeResolver, impl: NimNode,
     valueSpaces: Table[string, AddressSpace] = initTable[string, AddressSpace]()): seq[CirField] =
   ## `valueSpaces` maps each field name to the pointer space that the field's
   ## construction value proves, every other field resolves under `caDevice`.
@@ -227,7 +227,7 @@ func canonicalizeTypeNode(n: NimNode): NimNode =
   else:
     result = n
 
-proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
+func resolveStructType*(r: var CirTypeResolver, n: NimNode,
     valueSpaces: Table[string, AddressSpace] = initTable[string, AddressSpace]()): CirType =
   ## Identity key: the canonical text of the type node plus every non-device
   ## field address space.
@@ -307,7 +307,7 @@ func isCompileTimeFormal*(t: NimNode): bool =
     return true
   return false
 
-proc resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
+func resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
   procTy.expectKind(nnkProcTy)
   let formals = procTy[0]
   formals.expectKind(nnkFormalParams)
@@ -328,7 +328,7 @@ proc resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
     return nil
   result = tProcT(paramTypes, ret)
 
-proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType =
+func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType =
   ## Translates one Nim type node to CirType.
   ##
   ## `ptrSpace` names the memory class of the pointer kinds this type node contains:
