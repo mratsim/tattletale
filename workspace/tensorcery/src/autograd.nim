@@ -43,9 +43,6 @@ import
 proc accumulate(ctx: Ctx, cotan: var Table[int, AnyTensorImpl], tid: int, contribution: AnyTensorImpl) =
   ## Adds one vjp contribution into the cotangent of tensor id `tid`.
   ## The first contribution writes the entry, later ones add through addNoGrad.
-  let target = tapeGet(ctx, tid)
-  doAssert target.getRequiresGrad(),
-      "accumulate: tensor " & $tid & " does not require grad, the walk must not reach it"
   if tid in cotan:
     cotan[tid] = cotan[tid].addNoGrad(contribution)
   else:
@@ -55,7 +52,7 @@ proc backward*(loss: Tensor) =
   ## Appends the grad segment of `loss` to the context record.
   ##
   ## The cotangent of the loss tensor is all ones, so backward differentiates the sum
-  ## of the loss tensor's elements; a scalar loss gives the usual scalar semantics.
+  ## of the loss tensor's elements, a scalar loss gives the usual scalar semantics.
   ## Gradients materialize on the next eval, or on reading them through grad().
   ##
   ## Raises AssertionDefect when `loss` does not require grad.
@@ -79,11 +76,11 @@ proc backward*(loss: Tensor) =
       # vjp is the identity on both inputs. A tensor that both input slots consume
       # accumulates twice through the loop.
       for tid in entry.inputs:
-        if tid != 0 and tapeGet(ctx, tid).getRequiresGrad():
+        if tapeGet(ctx, tid).getRequiresGrad():
           accumulate(ctx, cotan, tid, g)
     of opMul:
       let tid = entry.inputs[0]
-      if tid != 0 and tapeGet(ctx, tid).getRequiresGrad():
+      if tapeGet(ctx, tid).getRequiresGrad():
         let args = decodeMulArgs(entry.blob)
         accumulate(ctx, cotan, tid, g.mulScalarNoGrad(float64(args.scalars.scalar)))
     of opMul2:

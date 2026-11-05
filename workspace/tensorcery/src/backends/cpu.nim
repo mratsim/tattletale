@@ -401,7 +401,7 @@ proc mulNoGrad*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl
 
 proc mulScalarNoGrad*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImpl =
   ## Erased grad-chain scalar multiply: runs the k_mul record, grad flag off.
-  ## backward() builds the mulScalar vjp and the ones seed from it.
+  ## backward() builds the mulScalar vjp from it.
   let n = s.getNumel()
   var outStorage = newSeq[T](n)
   let blob = packMulArgs(MulArgs(
@@ -430,7 +430,7 @@ proc onesNoGrad*[T](s: TensorImpl[T, bkCpu]): AnyTensorImpl =
   var outStorage = newSeq[T](n)
   let blob = packFillArgs(FillArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    scalars: FillScalars(shape: padTo4(s.shape, 1), n: int32(n))))
+    scalars: FillScalars(n: int32(n))))
   let outTid = s.ctx.newTid()
   let opId = s.ctx.enqueue(opFill, blob, LaunchCfg(), bkCpu, outTid, isGrad = true)
   opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] = runFillOp[T]

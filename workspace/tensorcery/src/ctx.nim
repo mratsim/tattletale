@@ -94,7 +94,6 @@ proc reset*(ctx: Ctx) =
   ##
   ## - gradients already read stay valid
   ## - the next step records into an empty record
-  ## - op ids and tensor ids are never reused
   ctx.record.setLen(0)
 
 proc eval*(ctx: Ctx) =
@@ -102,7 +101,7 @@ proc eval*(ctx: Ctx) =
   ##
   ## Contract: zero pending entries submit nothing, on every backend.
   ## After the drains return, every pending output is readable and the record stays
-  ## for backward() to walk; the next eval drains the grad entries appended after it.
+  ## for backward() to walk, the next eval drains the grad entries appended after it.
   for backend in BackendKind:
     if ctx.drains[backend] != nil and ctx.hasPending(backend):
       ctx.drains[backend](ctx)

@@ -34,11 +34,6 @@ proc register*(ctx: Ctx, tid: int, impl: AnyTensorImpl) =
   ## Records that tensor id `tid` resolves to `impl` for the backward walk.
   registries.mgetOrPut(cast[pointer](ctx), initTable[int, AnyTensorImpl]())[tid] = impl
 
-proc tapeHas*(ctx: Ctx, tid: int): bool =
-  ## Returns true when the registry resolves `tid`.
-  registries.hasKey(cast[pointer](ctx)) and
-      registries[cast[pointer](ctx)].hasKey(tid)
-
 proc tapeGet*(ctx: Ctx, tid: int): AnyTensorImpl =
   ## Returns the implementation registered under tensor id `tid`.
   registries[cast[pointer](ctx)][tid]

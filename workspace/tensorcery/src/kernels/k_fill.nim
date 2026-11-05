@@ -15,7 +15,6 @@
 
 const kFillMsl* = """
 struct FillParams {
-  int32_t shape[4];
   int32_t n;
 };
 
@@ -31,8 +30,7 @@ kernel void k_fill(device float* output [[buffer(0)]],
 """
 
 type FillScalars* = object
-  ## Scalar image of one fill op: shape padded to 4 axes, n the flat element count.
-  shape*: array[4, int32]
+  ## Scalar image of one fill op: n the flat element count.
   n*: int32
 
 type FillArgs* = object
