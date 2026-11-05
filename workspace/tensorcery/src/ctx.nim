@@ -38,6 +38,16 @@ type
     opSgd       ## in-place sgd parameter update, kernel k_sgd_adam
     opAdam      ## in-place adam parameter update, kernel k_sgd_adam
 
+    # Fused backward kernels, one record entry per output
+    opSoftmaxBwd       ## softmax backward dX, kernel k_softmax_bwd
+    opGeluBwd          ## gelu backward dX, kernel k_gelu_bwd
+    opLayerNormBwdDx   ## layernorm backward dX, kernel k_layernorm_bwd
+    opLayerNormBwdW    ## layernorm backward dW, kernel k_layernorm_bwd
+    opLayerNormBwdB    ## layernorm backward dB, kernel k_layernorm_bwd
+    opCrossEntropyBwd  ## cross entropy backward dlogits, kernel k_crossentropy_bwd
+    opGatherBwd        ## embedding gather backward scatter-add, kernel k_gather_bwd
+    opSliceBwd         ## slice backward scatter, kernel k_slice_bwd
+
   LaunchCfg* = object
     ## Threadgroup dispatch of one recorded op.
     gridX*, gridY*, gridZ*: int32

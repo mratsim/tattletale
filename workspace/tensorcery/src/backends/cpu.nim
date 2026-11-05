@@ -31,6 +31,7 @@ import
   workspace/tensorcery/src/raw/dtypes,
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
+  workspace/tensorcery/src/tape,
   workspace/tensorcery/src/kernels/k_add,
   workspace/tensorcery/src/kernels/k_mul,
   workspace/tensorcery/src/kernels/k_mul2,
@@ -41,7 +42,13 @@ import
   workspace/tensorcery/src/kernels/k_softmax,
   workspace/tensorcery/src/kernels/k_crossentropy,
   workspace/tensorcery/src/kernels/k_where,
-  workspace/tensorcery/src/kernels/k_sgd_adam
+  workspace/tensorcery/src/kernels/k_sgd_adam,
+  workspace/tensorcery/src/kernels/k_softmax_bwd,
+  workspace/tensorcery/src/kernels/k_gelu_bwd,
+  workspace/tensorcery/src/kernels/k_layernorm_bwd,
+  workspace/tensorcery/src/kernels/k_crossentropy_bwd,
+  workspace/tensorcery/src/kernels/k_gather_bwd,
+  workspace/tensorcery/src/kernels/k_slice_bwd
 
 # Session state
 # ------------------------------------------------------------
@@ -295,6 +302,95 @@ proc runAdamOp[T](work: ptr CpuOpWork) {.cdecl.} =
   syncScope:
     parallelFor(0, args.scalars.n, env, adamBody[T])
 
+proc runSoftmaxBwdOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Softmax backward execution through the parallelFor wrapper, one d-element set per iteration.
+  let args = cast[ptr SoftmaxBwdArgs](work.args)
+  var env = SoftmaxBwdEnv[T](
+    dx: cast[ptr UncheckedArray[T]](args.dxAddr),
+    g: cast[ptr UncheckedArray[T]](args.gAddr),
+    p: cast[ptr UncheckedArray[T]](args.pAddr),
+    scalars: args.scalars)
+  syncScope:
+    parallelFor(0, args.scalars.rows, env, softmaxBwdBody[T])
+
+proc runGeluBwdOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Gelu backward execution through the parallelFor wrapper.
+  let args = cast[ptr GeluBwdArgs](work.args)
+  var env = GeluBwdEnv[T](
+    dx: cast[ptr UncheckedArray[T]](args.dxAddr),
+    g: cast[ptr UncheckedArray[T]](args.gAddr),
+    x: cast[ptr UncheckedArray[T]](args.xAddr),
+    scalars: args.scalars)
+  syncScope:
+    parallelFor(0, args.scalars.n, env, geluBwdBody[T])
+
+proc runLayerNormBwdDxOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Layernorm backward dX execution through the parallelFor wrapper, one d-element set per iteration.
+  let args = cast[ptr LayerNormBwdDxArgs](work.args)
+  var env = LayerNormBwdDxEnv[T](
+    dx: cast[ptr UncheckedArray[T]](args.dxAddr),
+    g: cast[ptr UncheckedArray[T]](args.gAddr),
+    x: cast[ptr UncheckedArray[T]](args.xAddr),
+    w: cast[ptr UncheckedArray[T]](args.wAddr),
+    scalars: args.scalars)
+  syncScope:
+    parallelFor(0, args.scalars.rows, env, layernormBwdDxBody[T])
+
+proc runLayerNormBwdWOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Layernorm backward dW execution through the parallelFor wrapper, one parameter element per iteration.
+  let args = cast[ptr LayerNormBwdWArgs](work.args)
+  var env = LayerNormBwdWEnv[T](
+    dw: cast[ptr UncheckedArray[T]](args.dwAddr),
+    g: cast[ptr UncheckedArray[T]](args.gAddr),
+    x: cast[ptr UncheckedArray[T]](args.xAddr),
+    scalars: args.scalars)
+  syncScope:
+    parallelFor(0, args.scalars.d, env, layernormBwdWBody[T])
+
+proc runLayerNormBwdBOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Layernorm backward dB execution through the parallelFor wrapper, one parameter element per iteration.
+  let args = cast[ptr LayerNormBwdBArgs](work.args)
+  var env = LayerNormBwdBEnv[T](
+    db: cast[ptr UncheckedArray[T]](args.dbAddr),
+    g: cast[ptr UncheckedArray[T]](args.gAddr),
+    scalars: args.scalars)
+  syncScope:
+    parallelFor(0, args.scalars.d, env, layernormBwdBBody[T])
+
+proc runCrossEntropyBwdOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Cross entropy backward execution through the parallelFor wrapper, one logit set per iteration.
+  let args = cast[ptr CrossEntropyBwdArgs](work.args)
+  var env = CrossEntropyBwdEnv[T](
+    dlogits: cast[ptr UncheckedArray[T]](args.dlogitsAddr),
+    g: cast[ptr UncheckedArray[T]](args.gAddr),
+    logits: cast[ptr UncheckedArray[T]](args.logitsAddr),
+    target: cast[ptr UncheckedArray[int32]](args.targetAddr),
+    scalars: args.scalars)
+  syncScope:
+    parallelFor(0, args.scalars.rows, env, crossEntropyBwdBody[T])
+
+proc runGatherBwdOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Gather backward execution through the parallelFor wrapper, one table element
+  ## per iteration over the index entries naming its table entry.
+  let args = cast[ptr GatherBwdArgs](work.args)
+  var env = GatherBwdEnv[T](
+    dw: cast[ptr UncheckedArray[T]](args.dwAddr),
+    g: cast[ptr UncheckedArray[T]](args.gAddr),
+    idx: cast[ptr UncheckedArray[int32]](args.idxAddr),
+    scalars: args.scalars)
+  syncScope:
+    parallelFor(0, args.scalars.wNumel, env, gatherBwdBody[T])
+
+proc runSliceBwdOp[T](work: ptr CpuOpWork) {.cdecl.} =
+  ## Slice backward execution through the parallelFor wrapper, one cotangent element per iteration storing into the zeroed parent gradient.
+  let args = cast[ptr SliceBwdArgs](work.args)
+  var env = SliceBwdEnv[T](
+    dparent: cast[ptr UncheckedArray[T]](args.dparentAddr),
+    g: cast[ptr UncheckedArray[T]](args.gAddr),
+    scalars: args.scalars)
+  syncScope:
+    parallelFor(0, args.scalars.n, env, sliceBwdBody[T])
+
 proc cpuRunner[T](kernel: KernelId): CpuOpRunner =
   ## Typed kernel runner per recorded op, instantiated at enqueue.
   case kernel
@@ -333,6 +429,46 @@ proc cpuRunner[T](kernel: KernelId): CpuOpRunner =
   of opAdam:
     when T is SomeFloat:
       result = runAdamOp[T]
+    else:
+      result = nil
+  of opSoftmaxBwd:
+    when T is SomeFloat:
+      result = runSoftmaxBwdOp[T]
+    else:
+      result = nil
+  of opGeluBwd:
+    when T is SomeFloat:
+      result = runGeluBwdOp[T]
+    else:
+      result = nil
+  of opLayerNormBwdDx:
+    when T is SomeFloat:
+      result = runLayerNormBwdDxOp[T]
+    else:
+      result = nil
+  of opLayerNormBwdW:
+    when T is SomeFloat:
+      result = runLayerNormBwdWOp[T]
+    else:
+      result = nil
+  of opLayerNormBwdB:
+    when T is SomeFloat:
+      result = runLayerNormBwdBOp[T]
+    else:
+      result = nil
+  of opCrossEntropyBwd:
+    when T is SomeFloat:
+      result = runCrossEntropyBwdOp[T]
+    else:
+      result = nil
+  of opGatherBwd:
+    when T is SomeFloat:
+      result = runGatherBwdOp[T]
+    else:
+      result = nil
+  of opSliceBwd:
+    when T is SomeFloat:
+      result = runSliceBwdOp[T]
     else:
       result = nil
   of opReshape, opPermute, opSlice:
@@ -398,6 +534,10 @@ proc record[T](s: TensorImpl[T, bkCpu], kernel: KernelId, blob: seq[byte],
   ## that the blob packed stay the addresses that the impl owns. A borrowed parameter would
   ## deep-copy the seq into the impl and leave every packed address dangling
   ## once the caller's buffer is freed.
+  ##
+  ## The output registers in the tape registry: the record names its inputs and outputs
+  ## by address only, so every blob address's owner must stay alive until the step boundary,
+  ## including grad-segment intermediates that no caller references.
   let outTid = s.ctx.newTid()
   let opId = s.ctx.enqueue(kernel, blob, LaunchCfg(), bkCpu, outTid, inA, inB, inC, 0, isGrad)
   opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] =
@@ -409,6 +549,7 @@ proc record[T](s: TensorImpl[T, bkCpu], kernel: KernelId, blob: seq[byte],
     shape: outShape,
     strides: contiguousStrides(outShape),
     storage: SharedStorage[T](data: outStorage, seqNo: opId))
+  tape.register(s.ctx, outTid, result.to(AnyTensorImpl))
 
 proc padTo4(v: SmallSeq[4, int32], pad: int32): array[4, int32] =
   ## Pads to 4 axes with `pad`: shapes pad with 1s (the divmod chain stays safe), strides with 0s (padded axes contribute nothing).
@@ -741,6 +882,175 @@ proc adamUpdate*[T](s: TensorImpl[T, bkCpu], grad, m, v: AnyTensorImpl, pack: Ad
       cpuRunner[T](opAdam)
   s.storage.seqNo = opId
 
+
+# Fused backward kernels, CPU leg
+# ------------------------------------------------------------
+
+proc softmaxBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g, p: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain softmax backward: dX = p * (g - rowsum(g * p)) over the last axis.
+  ## - `s` is the softmax input: the output takes its shape.
+  ## - The grad flag stays off. The walk never differentiates a grad.
+  let gImpl = g.to(TensorImpl[T, bkCpu])
+  let pImpl = p.to(TensorImpl[T, bkCpu])
+  let dAxis = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div dAxis
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  var outStorage = newSeq[T](s.getNumel())
+  let blob = packSoftmaxBwdArgs(SoftmaxBwdArgs(
+    dxAddr: cast[uint64](outStorage[0].addr),
+    gAddr: cast[uint64](gImpl.storage.data[0].unsafeAddr),
+    pAddr: cast[uint64](pImpl.storage.data[0].unsafeAddr),
+    scalars: SoftmaxBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides, gStep: gi.step,
+      d: int32(dAxis), rows: int32(rows))))
+  s.record(opSoftmaxBwd, blob, outStorage, s.shape,
+      false, true, gImpl.tid, pImpl.tid, 0).to(AnyTensorImpl)
+
+proc geluBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain gelu backward: dX = g * gelu'(x) with the input reading linearly from its offset like the k_gelu forward.
+  let gImpl = g.to(TensorImpl[T, bkCpu])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  var outStorage = newSeq[T](s.getNumel())
+  let blob = packGeluBwdArgs(GeluBwdArgs(
+    dxAddr: cast[uint64](outStorage[0].addr),
+    gAddr: cast[uint64](gImpl.storage.data[0].unsafeAddr),
+    xAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    scalars: GeluBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
+      aOff: int32(s.offset), n: int32(s.getNumel()))))
+  s.record(opGeluBwd, blob, outStorage, s.shape,
+      false, true, gImpl.tid, 0, 0).to(AnyTensorImpl)
+
+proc layernormBwdDxNoGrad*[T](s: TensorImpl[T, bkCpu], g, w: AnyTensorImpl, eps: float64): AnyTensorImpl =
+  ## Erased grad-chain layernorm backward dX over the input `s` and the scale `w`, with the k_layernorm forward epsilon.
+  let gImpl = g.to(TensorImpl[T, bkCpu])
+  let wImpl = w.to(TensorImpl[T, bkCpu])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let d = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div d
+  var outStorage = newSeq[T](s.getNumel())
+  let blob = packLayerNormBwdDxArgs(LayerNormBwdDxArgs(
+    dxAddr: cast[uint64](outStorage[0].addr),
+    gAddr: cast[uint64](gImpl.storage.data[0].unsafeAddr),
+    xAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    wAddr: cast[uint64](wImpl.storage.data[0].unsafeAddr),
+    scalars: LayerNormBwdScalars(
+      gOff: gi.off, wOff: int32(wImpl.offset), xOff: int32(s.offset),
+      gShape: gi.shape, gStrides: gi.strides, gStep: gi.step,
+      xShape: padTo4(s.shape, 1), xs: padTo4(s.strides, 0),
+      xStep: int32(s.strides[int(s.shape.len) - 1]),
+      d: int32(d), rows: int32(rows), eps: float32(eps))))
+  s.record(opLayerNormBwdDx, blob, outStorage, s.shape,
+      false, true, gImpl.tid, wImpl.tid, 0).to(AnyTensorImpl)
+
+proc layernormBwdWNoGrad*[T](s: TensorImpl[T, bkCpu], g, x: AnyTensorImpl, eps: float64): AnyTensorImpl =
+  ## Erased grad-chain layernorm backward dW over the scale `s` and cotangent `g`,
+  ## with the layernorm input `x` and the k_layernorm forward epsilon (the xhat recomputation needs it).
+  let gImpl = g.to(TensorImpl[T, bkCpu])
+  let xImpl = x.to(TensorImpl[T, bkCpu])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let d = int(s.getNumel())
+  let rows = xImpl.getNumel() div d
+  var outStorage = newSeq[T](d)
+  let blob = packLayerNormBwdWArgs(LayerNormBwdWArgs(
+    dwAddr: cast[uint64](outStorage[0].addr),
+    gAddr: cast[uint64](gImpl.storage.data[0].unsafeAddr),
+    xAddr: cast[uint64](xImpl.storage.data[0].unsafeAddr),
+    scalars: LayerNormBwdScalars(
+      gOff: gi.off, wOff: int32(s.offset), xOff: int32(xImpl.offset),
+      gShape: gi.shape, gStrides: gi.strides, gStep: gi.step,
+      xShape: padTo4(xImpl.shape, 1), xs: padTo4(xImpl.strides, 0),
+      xStep: int32(xImpl.strides[int(xImpl.shape.len) - 1]),
+      d: int32(d), rows: int32(rows), eps: float32(eps))))
+  s.record(opLayerNormBwdW, blob, outStorage, s.shape,
+      false, true, gImpl.tid, xImpl.tid, 0).to(AnyTensorImpl)
+
+proc layernormBwdBNoGrad*[T](s: TensorImpl[T, bkCpu], g: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain layernorm backward dB over the shift `s` and the cotangent `g`.
+  let gImpl = g.to(TensorImpl[T, bkCpu])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let d = int(s.getNumel())
+  let rows = gImpl.getNumel() div d
+  var outStorage = newSeq[T](d)
+  let blob = packLayerNormBwdBArgs(LayerNormBwdBArgs(
+    dbAddr: cast[uint64](outStorage[0].addr),
+    gAddr: cast[uint64](gImpl.storage.data[0].unsafeAddr),
+    scalars: LayerNormBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides, gStep: gi.step,
+      d: int32(d), rows: int32(rows), eps: 0)))
+  s.record(opLayerNormBwdB, blob, outStorage, s.shape,
+      false, true, gImpl.tid, 0, 0).to(AnyTensorImpl)
+
+proc crossEntropyBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g, targets: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain cross entropy backward over the logits `s`, loss cotangent `g` and the int32 `targets`.
+  let gImpl = g.to(TensorImpl[T, bkCpu])
+  let tgt = targets.to(TensorImpl[int32, bkCpu])
+  doAssert isContiguous(tgt.shape, tgt.strides),
+      "cross entropy backward: non-contiguous target view refused"
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let v = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div v
+  var outStorage = newSeq[T](s.getNumel())
+  let blob = packCrossEntropyBwdArgs(CrossEntropyBwdArgs(
+    dlogitsAddr: cast[uint64](outStorage[0].addr),
+    gAddr: cast[uint64](gImpl.storage.data[0].unsafeAddr),
+    logitsAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    targetAddr: cast[uint64](tgt.storage.data[0].unsafeAddr),
+    scalars: CrossEntropyBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
+      logitsOff: int32(s.offset),
+      logitsShape: padTo4(s.shape, 1), logitsStrides: padTo4(s.strides, 0),
+      logitStep: int32(s.strides[int(s.shape.len) - 1]),
+      targetOff: int32(tgt.offset), v: int32(v), rows: int32(rows))))
+  s.record(opCrossEntropyBwd, blob, outStorage, s.shape,
+      false, true, gImpl.tid, tgt.tid, 0).to(AnyTensorImpl)
+
+proc gatherBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g, idx: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain embedding gather backward: each table element accumulates
+  ## the cotangent elements whose index names its table entry, so no atomics are needed.
+  ## Args: the rank-2 table `s` and cotangent `g`, with the int32 `idx`.
+  let gImpl = g.to(TensorImpl[T, bkCpu])
+  let idxImpl = idx.to(TensorImpl[int32, bkCpu])
+  doAssert isContiguous(idxImpl.shape, idxImpl.strides),
+      "gather backward: non-contiguous index tensor refused"
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let e = int32(s.shape[int(s.shape.len) - 1])
+  var outStorage = newSeq[T](s.getNumel())
+  let blob = packGatherBwdArgs(GatherBwdArgs(
+    dwAddr: cast[uint64](outStorage[0].addr),
+    gAddr: cast[uint64](gImpl.storage.data[0].unsafeAddr),
+    idxAddr: cast[uint64](idxImpl.storage.data[0].unsafeAddr),
+    scalars: GatherBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
+      idxOff: int32(idxImpl.offset), wOff: int32(s.offset),
+      e: e, n: int32(gImpl.getNumel()), wNumel: int32(s.getNumel()))))
+  s.record(opGatherBwd, blob, outStorage, s.shape,
+      false, true, gImpl.tid, idxImpl.tid, 0).to(AnyTensorImpl)
+
+proc sliceBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g, view: AnyTensorImpl, start: SmallSeq[4, int32]): AnyTensorImpl =
+  ## Erased grad-chain slice backward over the sliced tensor `s`: scatters the cotangent
+  ## `g` of the view into a fresh zeroed gradient over `s`'s shape.
+  ## - `start` lists the first selected index per axis as the slice record's image, so the scatter
+  ##   targets the parent's logical coordinates.
+  let gImpl = g.to(TensorImpl[T, bkCpu])
+  let viewImpl = view.to(TensorImpl[T, bkCpu])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let cs = contiguousStrides(s.shape)
+  var base = 0
+  var outStrides: array[4, int32]
+  for i in 0 ..< 4:
+    if i < int(cs.len):
+      base += int(start[i]) * int(cs[i])
+      outStrides[i] = cs[i]
+  var outStorage = newSeq[T](s.getNumel())
+  let blob = packSliceBwdArgs(SliceBwdArgs(
+    dparentAddr: cast[uint64](outStorage[0].addr),
+    gAddr: cast[uint64](gImpl.storage.data[0].unsafeAddr),
+    scalars: SliceBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
+      base: int32(base), outStrides: outStrides, n: int32(gImpl.getNumel()))))
+  s.record(opSliceBwd, blob, outStorage, s.shape,
+      false, true, gImpl.tid, viewImpl.tid, 0).to(AnyTensorImpl)
 
 proc toErased*[T](s: TensorImpl[T, bkCpu]): AnyTensorImpl =
   ## Returns the erased face over `s`.

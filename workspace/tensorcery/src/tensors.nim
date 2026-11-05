@@ -35,12 +35,22 @@ export metal.add, metal.mul, metal.mulScalar
 export metal.addNoGrad, metal.mulNoGrad, metal.mulScalarNoGrad, metal.onesNoGrad
 export metal.gather, metal.layernorm, metal.gelu, metal.softmax
 export metal.crossEntropy, metal.where, metal.sgdUpdate, metal.adamUpdate
+export metal.softmaxBwdNoGrad, metal.geluBwdNoGrad
+export metal.layernormBwdDxNoGrad, metal.layernormBwdWNoGrad, metal.layernormBwdBNoGrad
+export metal.crossEntropyBwdNoGrad, metal.gatherBwdNoGrad, metal.sliceBwdNoGrad
 export metal.readbackBytes
 export cpu.add, cpu.mul, cpu.mulScalar
 export cpu.addNoGrad, cpu.mulNoGrad, cpu.mulScalarNoGrad, cpu.onesNoGrad
 export cpu.gather, cpu.layernorm, cpu.gelu, cpu.softmax
 export cpu.crossEntropy, cpu.where, cpu.sgdUpdate, cpu.adamUpdate
+export cpu.softmaxBwdNoGrad, cpu.geluBwdNoGrad
+export cpu.layernormBwdDxNoGrad, cpu.layernormBwdWNoGrad, cpu.layernormBwdBNoGrad
+export cpu.crossEntropyBwdNoGrad, cpu.gatherBwdNoGrad, cpu.sliceBwdNoGrad
 export cpu.readbackBytes
+
+# aliasStrided is an impl.nim proc: a metadata view over explicit shape and strides,
+# used by the backward walk to build shape-op cotangents
+export impl.aliasStrided
 
 type Tensor* = object
   ## Tensor handle: the erased implementation plus its runtime dtype and device.

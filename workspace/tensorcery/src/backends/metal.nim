@@ -32,6 +32,7 @@ import
   workspace/tensorcery/src/raw/dtypes,
   workspace/tensorcery/src/raw/impl,
   workspace/tensorcery/src/ctx,
+  workspace/tensorcery/src/tape,
   workspace/tensorcery/src/kernels/k_add,
   workspace/tensorcery/src/kernels/k_mul,
   workspace/tensorcery/src/kernels/k_mul2,
@@ -42,7 +43,13 @@ import
   workspace/tensorcery/src/kernels/k_softmax,
   workspace/tensorcery/src/kernels/k_crossentropy,
   workspace/tensorcery/src/kernels/k_where,
-  workspace/tensorcery/src/kernels/k_sgd_adam
+  workspace/tensorcery/src/kernels/k_sgd_adam,
+  workspace/tensorcery/src/kernels/k_softmax_bwd,
+  workspace/tensorcery/src/kernels/k_gelu_bwd,
+  workspace/tensorcery/src/kernels/k_layernorm_bwd,
+  workspace/tensorcery/src/kernels/k_crossentropy_bwd,
+  workspace/tensorcery/src/kernels/k_gather_bwd,
+  workspace/tensorcery/src/kernels/k_slice_bwd
 
 const
   workgroupSize = 256
@@ -55,14 +62,20 @@ const
 const metalSource* = "#include <metal_stdlib>\nusing namespace metal;\n" &
     kAddMsl & kMulMsl & kMul2Msl & kFillMsl &
     kGatherMsl & kLayerNormMsl & kGeluMsl & kSoftmaxMsl & kCrossEntropyMsl &
-    kWhereMsl & kSgdMsl & kAdamMsl
+    kWhereMsl & kSgdMsl & kAdamMsl &
+    kSoftmaxBwdMsl & kGeluBwdMsl & kLayerNormBwdMsl & kCrossEntropyBwdMsl &
+    kGatherBwdMsl & kSliceBwdMsl
 
 const kernelNames: array[KernelId, string] =
   [opAdd: "k_add", opMul: "k_mul", opMul2: "k_mul2", opFill: "k_fill",
    opReshape: "", opPermute: "", opSlice: "",
    opGather: "k_gather", opLayerNorm: "k_layernorm", opGelu: "k_gelu",
    opSoftmax: "k_softmax", opCrossEntropy: "k_crossentropy", opWhere: "k_where",
-   opSgd: "k_sgd", opAdam: "k_adam"]
+   opSgd: "k_sgd", opAdam: "k_adam",
+   opSoftmaxBwd: "k_softmax_bwd", opGeluBwd: "k_gelu_bwd",
+   opLayerNormBwdDx: "k_layernorm_bwd_dx", opLayerNormBwdW: "k_layernorm_bwd_w",
+   opLayerNormBwdB: "k_layernorm_bwd_b", opCrossEntropyBwd: "k_crossentropy_bwd",
+   opGatherBwd: "k_gather_bwd", opSliceBwd: "k_slice_bwd"]
 
 var
   sessionDevice, sessionQueue, sessionLibrary: objc.ID
@@ -138,6 +151,12 @@ proc allocSharedMem*(nbytes, numel: int): SharedMemory =
 proc uploadDeviceMem*(mem: DeviceHandle, data: pointer, nbytes: int) =
   copyMem(contents(cast[objc.ID](mem)), data, nbytes)
 
+proc zeroSharedMem(mem: SharedMemory) =
+  ## Zero-fills a shared buffer through its host-visible contents.
+  ## The upload memcpys, it never submits.
+  var zeros = newSeq[float32](mem.numel)
+  uploadDeviceMem(mem.handle, cast[pointer](zeros[0].unsafeAddr), mem.numel * sizeof(float32))
+
 proc readbackDeviceMem*(mem: DeviceHandle, dst: pointer, nbytes: int) =
   copyMem(dst, contents(cast[objc.ID](mem)), nbytes)
 
@@ -188,6 +207,22 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
         bindBlob(encoder, entry.blob, sgdBufferSlots, sizeof(SgdScalars))
       of opAdam:
         bindBlob(encoder, entry.blob, adamBufferSlots, sizeof(AdamScalars))
+      of opSoftmaxBwd:
+        bindBlob(encoder, entry.blob, softmaxBwdBufferSlots, sizeof(SoftmaxBwdScalars))
+      of opGeluBwd:
+        bindBlob(encoder, entry.blob, geluBwdBufferSlots, sizeof(GeluBwdScalars))
+      of opLayerNormBwdDx:
+        bindBlob(encoder, entry.blob, layerNormBwdDxBufferSlots, sizeof(LayerNormBwdScalars))
+      of opLayerNormBwdW:
+        bindBlob(encoder, entry.blob, layerNormBwdWBufferSlots, sizeof(LayerNormBwdScalars))
+      of opLayerNormBwdB:
+        bindBlob(encoder, entry.blob, layerNormBwdBBufferSlots, sizeof(LayerNormBwdScalars))
+      of opCrossEntropyBwd:
+        bindBlob(encoder, entry.blob, crossEntropyBwdBufferSlots, sizeof(CrossEntropyBwdScalars))
+      of opGatherBwd:
+        bindBlob(encoder, entry.blob, gatherBwdBufferSlots, sizeof(GatherBwdScalars))
+      of opSliceBwd:
+        bindBlob(encoder, entry.blob, sliceBwdBufferSlots, sizeof(SliceBwdScalars))
       dispatchThreadgroups(encoder, entry.cfg)
     discard objc.msgSend(encoder, objc.`$$`("endEncoding"))
     discard objc.msgSend(cmdBuf, objc.`$$`("commit"))
@@ -243,16 +278,23 @@ proc record[T](s: TensorImpl[T, bkMetal], kernel: KernelId, blob: seq[byte], cfg
     inA, inB, inC: int): TensorImpl[T, bkMetal] =
   ## Enqueues one record entry and wraps the freshly allocated output storage.
   ## The storage epoch advances to the entry, so reads of the output materialize it first.
+  ##
+  ## The output registers in the tape registry. The record names inputs and outputs
+  ## by raw address.
+  ##
+  ## - every blob address's owner must stay alive until the step boundary
+  ## - grad-segment intermediates have no caller-side owner and depend on the registry
   let outTid = s.ctx.newTid()
   let opId = s.ctx.enqueue(kernel, blob, cfg, bkMetal, outTid, inA, inB, inC, 0, isGrad)
   outMem.seqNo = opId
-  TensorImpl[T, bkMetal](
+  result = TensorImpl[T, bkMetal](
     ctx: s.ctx,
     tid: outTid,
     requiresGrad: requiresGrad,
     shape: outShape,
     strides: contiguousStrides(outShape),
     mem: outMem)
+  tape.register(s.ctx, outTid, result.to(AnyTensorImpl))
 
 proc add*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
   ## Erased add: packs the op's args into one blob at enqueue, appends one record entry, returns the erased output tensor.
@@ -579,6 +621,205 @@ proc adamUpdate*[T](s: TensorImpl[T, bkMetal], grad, m, v: AnyTensorImpl, pack: 
   let opId = s.ctx.enqueue(opAdam, blob, elementwiseCfg(n), bkMetal, s.tid, s.tid, g.tid, mImpl.tid, vImpl.tid)
   s.mem.seqNo = opId
 
+
+# Fused backward kernels, Metal leg
+# ------------------------------------------------------------
+
+proc softmaxBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g, p: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain softmax backward: dX = p * (g - rowsum(g * p)) over the last axis.
+  ##
+  ## Args:
+  ## - `s`: the softmax input whose shape the output takes
+  ## - `g`: the loss cotangent and `p`: the softmax output
+  ##
+  ## The grad flag stays off. The walk never differentiates a grad.
+  let gImpl = g.to(TensorImpl[T, bkMetal])
+  let pImpl = p.to(TensorImpl[T, bkMetal])
+  let dAxis = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div dAxis
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let blob = packSoftmaxBwdArgs(SoftmaxBwdArgs(
+    dxAddr: cast[uint64](outMem.handle),
+    gAddr: cast[uint64](gImpl.mem.handle),
+    pAddr: cast[uint64](pImpl.mem.handle),
+    scalars: SoftmaxBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides, gStep: gi.step,
+      d: int32(dAxis), rows: int32(rows))))
+  s.record(opSoftmaxBwd, blob, elementwiseCfg(rows), outMem, s.shape,
+      false, true, gImpl.tid, pImpl.tid, 0).to(AnyTensorImpl)
+
+proc geluBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain gelu backward: dX = g * gelu'(x).
+  ##
+  ## The input reads linearly from its offset like the k_gelu forward.
+  let gImpl = g.to(TensorImpl[T, bkMetal])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let blob = packGeluBwdArgs(GeluBwdArgs(
+    dxAddr: cast[uint64](outMem.handle),
+    gAddr: cast[uint64](gImpl.mem.handle),
+    xAddr: cast[uint64](s.mem.handle),
+    scalars: GeluBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
+      aOff: int32(s.offset), n: int32(n))))
+  s.record(opGeluBwd, blob, elementwiseCfg(n), outMem, s.shape,
+      false, true, gImpl.tid, 0, 0).to(AnyTensorImpl)
+
+proc layernormBwdDxNoGrad*[T](s: TensorImpl[T, bkMetal], g, w: AnyTensorImpl, eps: float64): AnyTensorImpl =
+  ## Erased grad-chain layernorm backward dX over the input `s` with the scale `w`
+  ## and the k_layernorm forward epsilon.
+  let gImpl = g.to(TensorImpl[T, bkMetal])
+  let wImpl = w.to(TensorImpl[T, bkMetal])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let d = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div d
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let blob = packLayerNormBwdDxArgs(LayerNormBwdDxArgs(
+    dxAddr: cast[uint64](outMem.handle),
+    gAddr: cast[uint64](gImpl.mem.handle),
+    xAddr: cast[uint64](s.mem.handle),
+    wAddr: cast[uint64](wImpl.mem.handle),
+    scalars: LayerNormBwdScalars(
+      gOff: gi.off, wOff: int32(wImpl.offset), xOff: int32(s.offset),
+      gShape: gi.shape, gStrides: gi.strides, gStep: gi.step,
+      xShape: padTo4(s.shape, 1), xs: padTo4(s.strides, 0),
+      xStep: int32(s.strides[int(s.shape.len) - 1]),
+      d: int32(d), rows: int32(rows), eps: float32(eps))))
+  s.record(opLayerNormBwdDx, blob, elementwiseCfg(rows), outMem, s.shape,
+      false, true, gImpl.tid, wImpl.tid, 0).to(AnyTensorImpl)
+
+proc layernormBwdWNoGrad*[T](s: TensorImpl[T, bkMetal], g, x: AnyTensorImpl, eps: float64): AnyTensorImpl =
+  ## Erased grad-chain layernorm backward dW over the scale `s` with the cotangent
+  ## `g` and the layernorm input `x`.
+  ##
+  ## Args:
+  ## - `eps`: the k_layernorm forward epsilon that the xhat recomputation needs
+  let gImpl = g.to(TensorImpl[T, bkMetal])
+  let xImpl = x.to(TensorImpl[T, bkMetal])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let d = int(s.getNumel())
+  let rows = xImpl.getNumel() div d
+  let outMem = allocSharedMem(d * sizeof(T), d)
+  let blob = packLayerNormBwdWArgs(LayerNormBwdWArgs(
+    dwAddr: cast[uint64](outMem.handle),
+    gAddr: cast[uint64](gImpl.mem.handle),
+    xAddr: cast[uint64](xImpl.mem.handle),
+    scalars: LayerNormBwdScalars(
+      gOff: gi.off, wOff: int32(s.offset), xOff: int32(xImpl.offset),
+      gShape: gi.shape, gStrides: gi.strides, gStep: gi.step,
+      xShape: padTo4(xImpl.shape, 1), xs: padTo4(xImpl.strides, 0),
+      xStep: int32(xImpl.strides[int(xImpl.shape.len) - 1]),
+      d: int32(d), rows: int32(rows), eps: float32(eps))))
+  s.record(opLayerNormBwdW, blob, elementwiseCfg(d), outMem, s.shape,
+      false, true, gImpl.tid, xImpl.tid, 0).to(AnyTensorImpl)
+
+proc layernormBwdBNoGrad*[T](s: TensorImpl[T, bkMetal], g: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain layernorm backward dB over the shift `s` with cotangent `g`.
+  let gImpl = g.to(TensorImpl[T, bkMetal])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let d = int(s.getNumel())
+  let rows = gImpl.getNumel() div d
+  let outMem = allocSharedMem(d * sizeof(T), d)
+  let blob = packLayerNormBwdBArgs(LayerNormBwdBArgs(
+    dbAddr: cast[uint64](outMem.handle),
+    gAddr: cast[uint64](gImpl.mem.handle),
+    scalars: LayerNormBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides, gStep: gi.step,
+      d: int32(d), rows: int32(rows), eps: 0)))
+  s.record(opLayerNormBwdB, blob, elementwiseCfg(d), outMem, s.shape,
+      false, true, gImpl.tid, 0, 0).to(AnyTensorImpl)
+
+proc crossEntropyBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g, targets: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain cross entropy backward over the logits `s` with the loss
+  ## cotangent `g` and the int32 `targets`.
+  ##
+  ## Contract: the output takes the logits shape.
+  let gImpl = g.to(TensorImpl[T, bkMetal])
+  let tgt = targets.to(TensorImpl[int32, bkMetal])
+  doAssert isContiguous(tgt.shape, tgt.strides),
+      "cross entropy backward: non-contiguous target view refused"
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let v = int(s.shape[int(s.shape.len) - 1])
+  let rows = s.getNumel() div v
+  let n = s.getNumel()
+  let outMem = allocSharedMem(n * sizeof(T), n)
+  let blob = packCrossEntropyBwdArgs(CrossEntropyBwdArgs(
+    dlogitsAddr: cast[uint64](outMem.handle),
+    gAddr: cast[uint64](gImpl.mem.handle),
+    logitsAddr: cast[uint64](s.mem.handle),
+    targetAddr: cast[uint64](tgt.mem.handle),
+    scalars: CrossEntropyBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
+      logitsOff: int32(s.offset),
+      logitsShape: padTo4(s.shape, 1), logitsStrides: padTo4(s.strides, 0),
+      logitStep: int32(s.strides[int(s.shape.len) - 1]),
+      targetOff: int32(tgt.offset), v: int32(v), rows: int32(rows))))
+  s.record(opCrossEntropyBwd, blob, elementwiseCfg(rows), outMem, s.shape,
+      false, true, gImpl.tid, tgt.tid, 0).to(AnyTensorImpl)
+
+proc gatherBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g, idx: AnyTensorImpl): AnyTensorImpl =
+  ## Erased grad-chain embedding gather backward over the rank-2 table `s`,
+  ## cotangent `g` and index tensor `idx`.
+  ##
+  ## Contract:
+  ## - the table gradient zero-fills through its host-visible contents
+  ## - one thread per cotangent element fetch-adds an `atomic_float` at the table
+  ##   entry that the index names
+  let gImpl = g.to(TensorImpl[T, bkMetal])
+  let idxImpl = idx.to(TensorImpl[int32, bkMetal])
+  doAssert isContiguous(idxImpl.shape, idxImpl.strides),
+      "gather backward: non-contiguous index tensor refused"
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let e = int32(s.shape[int(s.shape.len) - 1])
+  let tableNumel = s.getNumel()
+  let outMem = allocSharedMem(tableNumel * sizeof(T), tableNumel)
+  zeroSharedMem(outMem)
+  let blob = packGatherBwdArgs(GatherBwdArgs(
+    dwAddr: cast[uint64](outMem.handle),
+    gAddr: cast[uint64](gImpl.mem.handle),
+    idxAddr: cast[uint64](idxImpl.mem.handle),
+    scalars: GatherBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
+      idxOff: int32(idxImpl.offset), wOff: int32(s.offset),
+      e: e, n: int32(gImpl.getNumel()), wNumel: int32(tableNumel))))
+  s.record(opGatherBwd, blob, elementwiseCfg(gImpl.getNumel()), outMem, s.shape,
+      false, true, gImpl.tid, idxImpl.tid, 0).to(AnyTensorImpl)
+
+proc sliceBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g, view: AnyTensorImpl, start: SmallSeq[4, int32]): AnyTensorImpl =
+  ## Erased grad-chain slice backward over the sliced tensor `s`.
+  ##
+  ## - scatters the view cotangent `g` into a fresh zeroed gradient
+  ## - the gradient takes the sliced tensor's shape
+  ##
+  ## Args:
+  ## - `start`: the first selected index per axis from the slice record's image
+  ##
+  ## The scatter targets the parent's logical coordinates.
+  let gImpl = g.to(TensorImpl[T, bkMetal])
+  let viewImpl = view.to(TensorImpl[T, bkMetal])
+  let gi = viewImage(gImpl.offset, gImpl.shape, gImpl.strides)
+  let cs = contiguousStrides(s.shape)
+  var base = 0
+  var outStrides: array[4, int32]
+  for i in 0 ..< 4:
+    if i < int(cs.len):
+      base += int(start[i]) * int(cs[i])
+      outStrides[i] = cs[i]
+  let parentNumel = s.getNumel()
+  let outMem = allocSharedMem(parentNumel * sizeof(T), parentNumel)
+  zeroSharedMem(outMem)
+  let blob = packSliceBwdArgs(SliceBwdArgs(
+    dparentAddr: cast[uint64](outMem.handle),
+    gAddr: cast[uint64](gImpl.mem.handle),
+    scalars: SliceBwdScalars(
+      gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
+      base: int32(base), outStrides: outStrides, n: int32(gImpl.getNumel()))))
+  s.record(opSliceBwd, blob, elementwiseCfg(gImpl.getNumel()), outMem, s.shape,
+      false, true, gImpl.tid, viewImpl.tid, 0).to(AnyTensorImpl)
 
 proc toErased*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
   ## Returns the erased face over `s`.

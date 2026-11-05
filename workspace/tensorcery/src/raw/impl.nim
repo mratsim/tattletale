@@ -45,6 +45,7 @@ iface *AnyTensorImpl:
   proc permuteDims(perm: SmallSeq[4, int32]): AnyTensorImpl
   proc sliceRange(start, count: SmallSeq[4, int32]): AnyTensorImpl
   proc aliasAs(other: AnyTensorImpl): AnyTensorImpl
+  proc aliasStrided(shape, strides: SmallSeq[4, int32]): AnyTensorImpl
   proc gather(indices: AnyTensorImpl): AnyTensorImpl
   proc layernorm(w, b: AnyTensorImpl, eps: float64): AnyTensorImpl
   proc gelu(): AnyTensorImpl
@@ -53,6 +54,14 @@ iface *AnyTensorImpl:
   proc where(cond, other: AnyTensorImpl): AnyTensorImpl
   proc sgdUpdate(grad: AnyTensorImpl, lr: float64): void
   proc adamUpdate(grad, m, v: AnyTensorImpl, pack: AdamScalars): void
+  proc softmaxBwdNoGrad(g, p: AnyTensorImpl): AnyTensorImpl
+  proc geluBwdNoGrad(g: AnyTensorImpl): AnyTensorImpl
+  proc layernormBwdDxNoGrad(g, w: AnyTensorImpl, eps: float64): AnyTensorImpl
+  proc layernormBwdWNoGrad(g, x: AnyTensorImpl, eps: float64): AnyTensorImpl
+  proc layernormBwdBNoGrad(g: AnyTensorImpl): AnyTensorImpl
+  proc crossEntropyBwdNoGrad(g, targets: AnyTensorImpl): AnyTensorImpl
+  proc gatherBwdNoGrad(g, idx: AnyTensorImpl): AnyTensorImpl
+  proc sliceBwdNoGrad(g, view: AnyTensorImpl, start: SmallSeq[4, int32]): AnyTensorImpl
   proc readbackBytes(): seq[byte]
 
 type DeviceHandle* = distinct uint64
@@ -151,6 +160,29 @@ proc dropLastDim*(shape: SmallSeq[4, int32]): SmallSeq[4, int32] =
   doAssert rank > 1, "cross entropy: a rank 1 logit tensor has no class axis"
   result = SmallSeq[4, int32].initFrom(
     toArray4(shape).toOpenArray(0, rank - 2))
+
+type ViewImage* = object
+  ## Padded address image of one strided view: offset, shape and strides
+  ## for the divmod chain, plus the last-axis stride for the inner loop.
+  off*: int32
+  shape*, strides*: array[4, int32]
+  step*: int32
+
+proc viewImage*(offset: int, shape, strides: SmallSeq[4, int32]): ViewImage =
+  ## Padded address image of one strided view over its storage:
+  ##
+  ## - shapes pad with 1s, keeping the divmod chain safe
+  ## - strides pad with 0s, so padded axes contribute nothing
+  ## - the step is the last real axis stride, never a padded 0
+  result.off = int32(offset)
+  for i in 0 ..< 4:
+    if i < int(shape.len):
+      result.shape[i] = shape[i]
+      result.strides[i] = strides[i]
+    else:
+      result.shape[i] = 1
+      result.strides[i] = 0
+  result.step = int32(strides[int(shape.len) - 1])
 
 proc isContiguous*(shape, strides: SmallSeq[4, int32]): bool =
   ## Returns true when `strides` is the contiguous layout of `shape`.
@@ -364,6 +396,22 @@ proc aliasAs*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
   let outImpl = TensorImpl[T, bkCpu](
     ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: other.getShape(), strides: other.getStrides(), storage: s.storage)
+  outImpl.to(AnyTensorImpl)
+
+proc aliasStrided*[T](s: TensorImpl[T, bkCpu], shape, strides: SmallSeq[4, int32]): AnyTensorImpl =
+  ## Erased metadata view: `s`'s storage reinterpreted over `shape` and `strides`.
+  ## The backward walk builds shape-op cotangents with it, no op records.
+  let outImpl = TensorImpl[T, bkCpu](
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
+    offset: s.offset, shape: shape, strides: strides, storage: s.storage)
+  outImpl.to(AnyTensorImpl)
+
+proc aliasStrided*[T](s: TensorImpl[T, bkMetal], shape, strides: SmallSeq[4, int32]): AnyTensorImpl =
+  ## Erased metadata view: `s`'s device storage reinterpreted over `shape` and `strides`.
+  ## The backward walk builds shape-op cotangents with it, no op records.
+  let outImpl = TensorImpl[T, bkMetal](
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
+    offset: s.offset, shape: shape, strides: strides, mem: s.mem)
   outImpl.to(AnyTensorImpl)
 
 proc aliasAs*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
