@@ -6,43 +6,27 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+# ############################################################
+#
+#            Public pragmas
+#
+# ############################################################
+
 template global*() {.pragma.}
 template workgroup*(size: untyped): untyped {.pragma.}
-  ## Workgroup size annotation for a kernel proc: `{.workgroup: (X, Y, Z).}`
-  ## sets the threads per threadgroup.
-  ## Backend syntax:
-  ##   `local_size_xyz` on Vulkan
-  ##   `@workgroup_size` on WebGPU
-  ## On Metal and CUDA the size is set host-side at dispatch, so the
-  ## annotation is not baked into the shader.
-  ## Without the annotation, the generated shader declares a default workgroup size:
-  ##   256×1×1 on Vulkan
-  ##   64×1×1 on WebGPU
+  ## Workgroup size for a kernel: `{.workgroup: (X, Y, Z).}` sets the threads per threadgroup.
+
 template device*() {.pragma.}
-template builtin*(kind: untyped = nil) {.pragma.}
-  ## Marks a function, type, or variable as a builtin provided by the
-  ## target backend. The compiler generates no code for it.
-  ##
-  ## Contract:
-  ## - `kind` is the family enum member from `builtins_catalog.nim`,
-  ##   example: `{.builtin: cbkThreadPositionInGrid.}`
-  ## - a `{.builtin.}` without a payload resolves every family kind at none
-  ## - the conv and math vocabulary dispatches on the canonical name
-  ##   through the registry tables
 template const_mem*(): untyped {.pragma.}
-  ## Constant memory pragma for a var declaration inside a GPU block.
-  ## Allocates the var in read-only constant memory:
-  ##   `constant` in MSL
-  ##   `uniform` in WGSL
-  ##   `__constant__` in CUDA
-  ## Useful for a constant defined without an initializer, then filled
-  ## before kernel launch (`cudaMemcpyToSymbol` / `copyToSymbol`).
+  ## Allocates a GPU-block var in read-only constant memory (`constant`/`uniform`/`__constant__`).
+
 template smem*(): untyped {.pragma.}
-  ## Shared memory (smem) pragma for a var declaration inside a GPU block.
-  ## Allocates the var in block/threadgroup-scope memory:
-  ##   `threadgroup` in MSL
-  ##   `workgroup` in WGSL
-  ##   `__shared__` in CUDA
-  ##
-  ## Usage:
-  ##   var scratch {.smem.}: array[64, uint32]
+  ## Allocates a GPU-block var in threadgroup-scope memory (`threadgroup`/`workgroup`/`__shared__`).
+
+# ############################################################
+#
+#            Private pragmas
+#
+# ############################################################
+
+template builtin*(kind: untyped = nil) {.pragma.}

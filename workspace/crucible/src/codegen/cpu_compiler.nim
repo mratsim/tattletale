@@ -8,17 +8,6 @@
 ## CPU kernel compiler: CIRv2 lowering + C emission for `launchCpuFn`.
 ##
 ##   kernel wrapper → lowerCpuKernel → emitCpuCalleesC + emitCpuWorkgroupLaunchC
-##
-## Launch macro (`runtime/launch/launch_cpu_fn`): drives the pipeline
-## at compile time:
-##
-## - it lowers the kernel wrapper, prints the callee procs and the kernel body
-##   into the generated launch unit. The launch macro assembles the two
-## - there is no `cpu:` standalone macro, a kernel body without a launch
-##   has no meaning on the CPU
-## - the compile target is `ctCpu`, the CPU pass stage registers the C
-##   reserved-word rename and the array-assign decomposition
-## - refusals and verifier violations surface as compile-time errors naming the construct
 
 import std/macros
 
