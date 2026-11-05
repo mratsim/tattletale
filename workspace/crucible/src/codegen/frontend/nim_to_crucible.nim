@@ -30,25 +30,30 @@ type
 
   SymbolTable = Table[string, tuple[sym: CirExpr, space: AddressSpace]]
 
-  CirFrontend = object
-    resolver: CirTypeResolver
-    fnName: string
-    retType: CirType
+  Stack[T] = seq[T]
+
+  ModuleScope = object
     procs: seq[CirProc]
     procRegistry: Table[uint64, ProcEntry]
     procNameMap: Table[string, uint64]
-    scopes: seq[SymbolTable]
-    globalVars: SymbolTable
-    globalDecls: seq[CirStmt]
-    nameCounts: HashSet[string]
-    ## Emitted names already issued in the proc under translation:
-    ## program-scope names, claimed proc names, a non-void proc's `result`.
-    ## The uniquer suffixes past every entry, live claims included.
+    vars: SymbolTable
+    decls: seq[CirStmt]
+
+  LocalScope = object
+    fnName: string
+    retType: CirType
+    layers: Stack[SymbolTable]
+    variablesInScope: HashSet[string]
+
+  CirFrontend = object
+    resolver: CirTypeResolver
+    module: ModuleScope
+    locals: LocalScope
     hoisted: seq[CirStmt]
-    ## Statements hoisted in front of the statement being lowered.
+      # Statements hoisted in front of the statement being lowered.
 
 func fail(ctx: var CirFrontend, detail: string) =
-  ctx.resolver.fail("at " & ctx.fnName & ": " & detail)
+  ctx.resolver.fail("at " & ctx.locals.fnName & ": " & detail)
 
 func drainHoisted(ctx: var CirFrontend): seq[CirStmt] =
   result = ctx.hoisted
@@ -64,20 +69,20 @@ func mintUniqueName(ctx: var CirFrontend, base: string): string =
   let clean = sanitizeIdent(base)
   var candidate = clean
   var suffix = 0
-  while candidate in ctx.nameCounts or ctx.procNameMap.hasKey(candidate):
+  while candidate in ctx.locals.variablesInScope or ctx.module.procNameMap.hasKey(candidate):
     inc suffix
     candidate = clean & "_" & $suffix
-  ctx.nameCounts.incl candidate
+  ctx.locals.variablesInScope.incl candidate
   result = candidate
 
 func pushScope(ctx: var CirFrontend) =
-  ctx.scopes.add(SymbolTable())
+  ctx.locals.layers.add(SymbolTable())
 
 func popScope(ctx: var CirFrontend) =
-  ctx.scopes.del(ctx.scopes.high)
+  ctx.locals.layers.del(ctx.locals.layers.high)
 
 func declareLocal(ctx: var CirFrontend, reprKey: string, sym: CirExpr, spc = caThread) =
-  ctx.scopes[^1][reprKey] = (sym, spc)
+  ctx.locals.layers[^1][reprKey] = (sym, spc)
 
 func getPragmaItem(n: NimNode, name: string): NimNode =
   ## Pragma item of `name` in the node's pragma list or in the pragma list
@@ -232,25 +237,25 @@ func getProcIdentity(callee: NimNode): uint64 =
 func claimProcName(ctx: var CirFrontend, identity: uint64, base: string): string =
   ## A claim by the owning identity returns the base: the module reservation
   ## pass reserves kernel names, so a kernel's own def re-claims its name.
-  if ctx.procNameMap.getOrDefault(base, identity) == identity:
-    ctx.procNameMap[base] = identity
+  if ctx.module.procNameMap.getOrDefault(base, identity) == identity:
+    ctx.module.procNameMap[base] = identity
     return base
   result = base & "_" & base58Short(identity)
-  while ctx.procNameMap.getOrDefault(result, identity) != identity:
+  while ctx.module.procNameMap.getOrDefault(result, identity) != identity:
     result.add("_")
-  ctx.procNameMap[result] = identity
+  ctx.module.procNameMap[result] = identity
 
 func registerOrGet(ctx: var CirFrontend, calleeSym: NimNode): ProcEntry =
   let id = getProcIdentity(calleeSym)
-  if ctx.procRegistry.hasKey(id):
-    result = ctx.procRegistry[id]
+  if ctx.module.procRegistry.hasKey(id):
+    result = ctx.module.procRegistry[id]
     if result.fnType.isNil:
       # a definition registers before its body lowers, so the type is read
       # once at the first call inside it
       result.fnType = ctx.resolver.resolveCirType(calleeSym.getTypeInst())
       if ctx.resolver.err.len > 0:
         return
-      ctx.procRegistry[id].fnType = result.fnType
+      ctx.module.procRegistry[id].fnType = result.fnType
     return
   let fnType = ctx.resolver.resolveCirType(calleeSym.getTypeInst())
   if ctx.resolver.err.len > 0:
@@ -258,7 +263,7 @@ func registerOrGet(ctx: var CirFrontend, calleeSym: NimNode): ProcEntry =
   let name = ctx.claimProcName(id,
     mangleOperatorName(calleeSym.strVal) & "_" & base58Short(id))
   result = ProcEntry(name: name, fnType: fnType)
-  ctx.procRegistry[id] = result
+  ctx.module.procRegistry[id] = result
 
 func harvestProc(ctx: var CirFrontend, callee: NimNode, cirName: string)
 
@@ -647,9 +652,9 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
       if getPragmaItem(n, "builtin") != nil:
         return ctx.builtinSymExpr(n)
       var found: CirExpr = nil
-      for i in countdown(ctx.scopes.high, 0):
-        if ctx.scopes[i].hasKey(n.repr):
-          found = ctx.scopes[i][n.repr].sym
+      for i in countdown(ctx.locals.layers.high, 0):
+        if ctx.locals.layers[i].hasKey(n.repr):
+          found = ctx.locals.layers[i][n.repr].sym
           break
       if found.isNil:
         ctx.fail("unknown local symbol " & n.repr)
@@ -754,9 +759,9 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
       of eSym:
         # a local's storage class comes from its declaration: a `{.smem.}` local
         # is threadgroup storage, an unannotated local is a register
-        for i in countdown(ctx.scopes.high, 0):
-          if ctx.scopes[i].hasKey(walk.name):
-            addressSpace = ctx.scopes[i][walk.name].space
+        for i in countdown(ctx.locals.layers.high, 0):
+          if ctx.locals.layers[i].hasKey(walk.name):
+            addressSpace = ctx.locals.layers[i][walk.name].space
             break
         break
       else:
@@ -1222,8 +1227,8 @@ func lowerStmtBody(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
     if valueNode.kind == nnkAsgn:
       valueNode = valueNode[1]
     if valueNode.kind == nnkEmpty:
-      if ctx.retType.kind != ctVoid:
-        return @[retS(sym("result", ctx.retType))]
+      if ctx.locals.retType.kind != ctVoid:
+        return @[retS(sym("result", ctx.locals.retType))]
       return @[retS(nil)]
     let value = ctx.lowerExpr(valueNode)
     if ctx.resolver.err.len > 0:
@@ -1412,10 +1417,10 @@ func lowerProcBody(ctx: var CirFrontend, formals: NimNode, body: NimNode, params
         varParam: ftype.kind == nnkVarTy,
         passByRef: isLargeStruct(typ)))
       ctx.declareLocal(formal[j].repr, psym)
-  let ret = ctx.retType
+  let ret = ctx.locals.retType
   if ret.kind != ctVoid:
     # Nim lets a non-void proc declare its own `result`, and the uniquer suffixes that local past it
-    ctx.nameCounts.incl "result"
+    ctx.locals.variablesInScope.incl "result"
     let rsym = sym("result", ret)
     ctx.declareLocal("result", rsym)
     result.add(varD("result", ret))
@@ -1432,31 +1437,19 @@ func lowerProcBody(ctx: var CirFrontend, formals: NimNode, body: NimNode, params
   else:
     result.add(retS(nil))
 
-type ProcCtxSave = object
-  name: string
-  ret: CirType
-  counts: HashSet[string]
-  scopes: seq[SymbolTable]
-
-func enterProcBody(ctx: var CirFrontend, cirName: string, formals: NimNode): ProcCtxSave =
-  result = ProcCtxSave(name: ctx.fnName, ret: ctx.retType,
-    counts: ctx.nameCounts, scopes: ctx.scopes)
-  ctx.fnName = cirName
-  ctx.nameCounts = initHashSet[string]()
+func enterProcBody(ctx: var CirFrontend, cirName: string, formals: NimNode): LocalScope =
+  result = ctx.locals
+  ctx.locals = LocalScope(layers: @[ctx.module.vars], fnName: cirName)
   # a local never takes a program-scope name, a claimed proc name,
   # a claim made while this body lowers, as the uniquer skips all three
-  for g in ctx.globalVars.keys:
-    ctx.nameCounts.incl g
-  for n in ctx.procNameMap.keys:
-    ctx.nameCounts.incl n
-  ctx.scopes = @[ctx.globalVars]
-  ctx.retType = ctx.resolver.resolveCirType(formals[0])
+  for g in ctx.module.vars.keys:
+    ctx.locals.variablesInScope.incl g
+  for n in ctx.module.procNameMap.keys:
+    ctx.locals.variablesInScope.incl n
+  ctx.locals.retType = ctx.resolver.resolveCirType(formals[0])
 
-func exitProcBody(ctx: var CirFrontend, save: ProcCtxSave) =
-  ctx.fnName = save.name
-  ctx.retType = save.ret
-  ctx.nameCounts = save.counts
-  ctx.scopes = save.scopes
+func exitProcBody(ctx: var CirFrontend, save: LocalScope) =
+  ctx.locals = save
 
 func lowerProcDef(ctx: var CirFrontend, fn: NimNode): CirProc =
   ## Generic definitions return nil here, their instantiations harvest at the calls that use them.
@@ -1470,37 +1463,37 @@ func lowerProcDef(ctx: var CirFrontend, fn: NimNode): CirProc =
   let base = if getPragmaItem(fn, "global") != nil: sanitizeIdent(fn[0].strVal)
              else: mangleOperatorName(fn[0].strVal)
   let cirName = ctx.claimProcName(id, base)
-  if id notin ctx.procRegistry:
-    ctx.procRegistry[id] = ProcEntry(name: cirName)
-  ctx.procRegistry[id].hasBody = true
+  if id notin ctx.module.procRegistry:
+    ctx.module.procRegistry[id] = ProcEntry(name: cirName)
+  ctx.module.procRegistry[id].hasBody = true
   let save = ctx.enterProcBody(cirName, formals)
   if ctx.resolver.err.len > 0:
     return nil
   var params: seq[CirParam] = @[]
-  let fnRet = ctx.retType
-  let fnName = ctx.fnName
+  let fnRet = ctx.locals.retType
+  let fnName = ctx.locals.fnName
   let body = ctx.lowerProcBody(formals, getProcBody(fn), params)
   result = procD(fnName, params, fnRet, body)
   var paramTypes: seq[CirType]
   for p in params:
     paramTypes.add(p.typ)
-  ctx.procRegistry[id].fnType = tProcT(paramTypes, fnRet)
+  ctx.module.procRegistry[id].fnType = tProcT(paramTypes, fnRet)
   let wgErr = fn.applyProcPragmas(result)
   if wgErr.len > 0:
     ctx.fail(wgErr)
   ctx.exitProcBody(save)
   if ctx.resolver.err.len > 0:
     return nil
-  ctx.procs.add(result)
+  ctx.module.procs.add(result)
 
 func harvestProc(ctx: var CirFrontend, callee: NimNode, cirName: string) =
   ## `hasBody` is set before the body lowers, so a recursive call inside it
   ## finds the entry marked and never re-harvests.
   let id = getProcIdentity(callee)
-  ctx.procRegistry[id].hasBody = true
+  ctx.module.procRegistry[id].hasBody = true
   let impl = callee.getImpl()
   let formals = getFormalParams(callee.getTypeInst())
-  let savedProcsLen = ctx.procs.len
+  let savedProcsLen = ctx.module.procs.len
   let savedHoisted = ctx.hoisted
   # a callee body is lowered under its own hoist queue: the caller's pending hoists belong to the caller's statement, never to the callee's body
   ctx.hoisted = @[]
@@ -1508,23 +1501,23 @@ func harvestProc(ctx: var CirFrontend, callee: NimNode, cirName: string) =
   if ctx.resolver.err.len > 0:
     return
   var params: seq[CirParam] = @[]
-  let fnRet = ctx.retType
+  let fnRet = ctx.locals.retType
   let body = ctx.lowerProcBody(formals, getProcBody(impl), params)
   ctx.exitProcBody(save)
   # pending hoists of the callee append to its body first and the caller's own queue resumes after
   let calleeHoists = ctx.drainHoisted()
   ctx.hoisted = savedHoisted
   if ctx.resolver.err.len > 0:
-    ctx.procs.setLen(savedProcsLen)
+    ctx.module.procs.setLen(savedProcsLen)
     return
   let harvested = procD(cirName, params, fnRet, calleeHoists & body)
   let wgErr = impl.applyProcPragmas(harvested)
   if wgErr.len > 0:
     ctx.fail(wgErr)
     # nested harvests inside the callee body roll back with it
-    ctx.procs.setLen(savedProcsLen)
+    ctx.module.procs.setLen(savedProcsLen)
     return
-  ctx.procs.add(harvested)
+  ctx.module.procs.add(harvested)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Entry points
@@ -1596,8 +1589,8 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
               if ctx.resolver.err.len > 0:
                 break topLevelSection
             let g = varD(name, t, init, addressSpace)
-            ctx.globalDecls.add(g)
-            ctx.globalVars[name] = (sym(name, t), addressSpace)
+            ctx.module.decls.add(g)
+            ctx.module.vars[name] = (sym(name, t), addressSpace)
       of nnkCommentStmt:
         discard
       of nnkBindStmt, nnkMixinStmt:
@@ -1605,7 +1598,7 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
       else:
         ctx.fail("top-level construct not supported: " & $c.kind & " " & c.repr)
         break moduleWalk
-  let m = moduleD("kernel", ctx.resolver.structs, ctx.procs)
-  m.globals = ctx.globalDecls
+  let m = moduleD("kernel", ctx.resolver.structs, ctx.module.procs)
+  m.globals = ctx.module.decls
   return (m, ctx.resolver.err)
 
