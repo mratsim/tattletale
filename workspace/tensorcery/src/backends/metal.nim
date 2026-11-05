@@ -131,6 +131,10 @@ proc allocDeviceMem*(nbytes: int): DeviceHandle =
   if cast[objc.ID](result).isNil:
     failLoud("allocDeviceMem: newBufferWithLength:options: returned nil (length " & $nbytes & ")")
 
+proc allocSharedMem*(nbytes, numel: int): SharedMemory =
+  ## Allocates a shared Metal buffer as a SharedMemory handle, contents uninitialized.
+  SharedMemory(handle: allocDeviceMem(nbytes), seqNo: 0, numel: numel)
+
 proc uploadDeviceMem*(mem: DeviceHandle, data: pointer, nbytes: int) =
   copyMem(contents(cast[objc.ID](mem)), data, nbytes)
 
@@ -230,19 +234,21 @@ proc toMetalTensorImpl*[T](ctx: Ctx, data: openArray[T], shape: openArray[int], 
     requiresGrad: requiresGrad,
     shape: meta.shape,
     strides: meta.strides,
-    mem: allocDeviceMem(data.len * sizeof(T)))
-  uploadDeviceMem(result.mem, unsafeAddr data[0], data.len * sizeof(T))
+    mem: SharedMemory(handle: allocDeviceMem(data.len * sizeof(T)),
+        seqNo: 0, numel: data.len))
+  uploadDeviceMem(result.mem.handle, unsafeAddr data[0], data.len * sizeof(T))
 
 proc record[T](s: TensorImpl[T, bkMetal], kernel: KernelId, blob: seq[byte], cfg: LaunchCfg,
-    outMem: DeviceHandle, outShape: SmallSeq[4, int32], requiresGrad, isGrad: bool,
+    outMem: SharedMemory, outShape: SmallSeq[4, int32], requiresGrad, isGrad: bool,
     inA, inB, inC: int): TensorImpl[T, bkMetal] =
   ## Enqueues one record entry and wraps the freshly allocated output storage.
+  ## The storage epoch advances to the entry, so reads of the output materialize it first.
   let outTid = s.ctx.newTid()
   let opId = s.ctx.enqueue(kernel, blob, cfg, bkMetal, outTid, inA, inB, inC, 0, isGrad)
+  outMem.seqNo = opId
   TensorImpl[T, bkMetal](
     ctx: s.ctx,
     tid: outTid,
-    seqNo: opId,
     requiresGrad: requiresGrad,
     shape: outShape,
     strides: contiguousStrides(outShape),
@@ -253,11 +259,11 @@ proc add*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
   ## The output requires grad when either input does.
   let o = other.to(TensorImpl[T, bkMetal])
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packAddArgs(AddArgs(
-    outAddr: cast[uint64](outMem),
-    aAddr: cast[uint64](s.mem),
-    bAddr: cast[uint64](o.mem),
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
+    bAddr: cast[uint64](o.mem.handle),
     scalars: AddScalars(
       aOff: int32(s.offset),
       bOff: int32(o.offset),
@@ -274,11 +280,11 @@ proc mul*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
   ## The output requires grad when either input does.
   let o = other.to(TensorImpl[T, bkMetal])
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packMul2Args(Mul2Args(
-    outAddr: cast[uint64](outMem),
-    aAddr: cast[uint64](s.mem),
-    bAddr: cast[uint64](o.mem),
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
+    bAddr: cast[uint64](o.mem.handle),
     scalars: Mul2Scalars(
       aOff: int32(s.offset),
       bOff: int32(o.offset),
@@ -293,10 +299,10 @@ proc mulScalar*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorImpl =
   ## Erased scalar multiply: the scalar narrows to the storage element type at pack time.
   ## The output requires grad when the input does.
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packMulArgs(MulArgs(
-    outAddr: cast[uint64](outMem),
-    aAddr: cast[uint64](s.mem),
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
     scalars: MulScalars(
       aOff: int32(s.offset),
       shape: padTo4(s.shape, 1),
@@ -311,11 +317,11 @@ proc addNoGrad*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorIm
   ## backward() adds fan-out accumulation through it.
   let o = other.to(TensorImpl[T, bkMetal])
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packAddArgs(AddArgs(
-    outAddr: cast[uint64](outMem),
-    aAddr: cast[uint64](s.mem),
-    bAddr: cast[uint64](o.mem),
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
+    bAddr: cast[uint64](o.mem.handle),
     scalars: AddScalars(
       aOff: int32(s.offset),
       bOff: int32(o.offset),
@@ -331,11 +337,11 @@ proc mulNoGrad*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorIm
   ## backward() builds the mul vjp from it.
   let o = other.to(TensorImpl[T, bkMetal])
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packMul2Args(Mul2Args(
-    outAddr: cast[uint64](outMem),
-    aAddr: cast[uint64](s.mem),
-    bAddr: cast[uint64](o.mem),
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
+    bAddr: cast[uint64](o.mem.handle),
     scalars: Mul2Scalars(
       aOff: int32(s.offset),
       bOff: int32(o.offset),
@@ -350,10 +356,10 @@ proc mulScalarNoGrad*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorI
   ## Erased grad-chain scalar multiply: runs the k_mul record, grad flag off.
   ## backward() builds the mulScalar vjp from it.
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packMulArgs(MulArgs(
-    outAddr: cast[uint64](outMem),
-    aAddr: cast[uint64](s.mem),
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
     scalars: MulScalars(
       aOff: int32(s.offset),
       shape: padTo4(s.shape, 1),
@@ -367,9 +373,9 @@ proc onesNoGrad*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
   ## Erased grad-chain ones fill: runs the k_fill record, grad flag off.
   ## backward() seeds the cotangent map from it.
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packFillArgs(FillArgs(
-    outAddr: cast[uint64](outMem),
+    outAddr: cast[uint64](outMem.handle),
     scalars: FillScalars(n: int32(n))))
   s.record(opFill, blob, elementwiseCfg(n), outMem, s.shape,
       false, true, 0, 0, 0).to(AnyTensorImpl)
@@ -380,11 +386,11 @@ proc readbackBytes*[T](s: TensorImpl[T, bkMetal]): seq[byte] =
   ##
   ## A view gathers through its strides and offset. Reading a pending tensor
   ## evals the context first (the MLX rule).
-  if s.ctx.isPending(s.seqNo):
+  if s.ctx.isPending(s.mem.seqNo):
     s.ctx.eval()
   if s.getNumel() == 0:
     return newSeq[byte](0)
-  let base = cast[ptr T](cast[int](contents(cast[objc.ID](s.mem))) + s.offset * sizeof(T))
+  let base = cast[ptr T](cast[int](contents(cast[objc.ID](s.mem.handle))) + s.offset * sizeof(T))
   stridedBytes[T](base, s.shape, s.strides)
 
 # Microgpt op set, Metal leg
@@ -402,11 +408,11 @@ proc gather*[T](s: TensorImpl[T, bkMetal], indices: AnyTensorImpl): AnyTensorImp
   doAssert isContiguous(idx.shape, idx.strides), "gather: non-contiguous index tensor refused"
   let e = int32(s.shape[int(s.shape.len) - 1])
   let n = idx.getNumel() * int(e)
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packGatherArgs(GatherArgs(
-    outAddr: cast[uint64](outMem),
-    wAddr: cast[uint64](s.mem),
-    idxAddr: cast[uint64](idx.mem),
+    outAddr: cast[uint64](outMem.handle),
+    wAddr: cast[uint64](s.mem.handle),
+    idxAddr: cast[uint64](idx.mem.handle),
     scalars: GatherScalars(
       wOff: int32(s.offset), idxOff: int32(idx.offset), e: e, n: int32(n))))
   s.record(opGather, blob, elementwiseCfg(n), outMem, appendDim(idx.shape, e),
@@ -428,12 +434,12 @@ proc layernorm*[T](s: TensorImpl[T, bkMetal], w, b: AnyTensorImpl, eps: float64)
   doAssert isContiguous(wImpl.shape, wImpl.strides) and isContiguous(bImpl.shape, bImpl.strides),
       "layernorm: non-contiguous scale or shift refused"
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packLayerNormArgs(LayerNormArgs(
-    outAddr: cast[uint64](outMem),
-    xAddr: cast[uint64](s.mem),
-    wAddr: cast[uint64](wImpl.mem),
-    bAddr: cast[uint64](bImpl.mem),
+    outAddr: cast[uint64](outMem.handle),
+    xAddr: cast[uint64](s.mem.handle),
+    wAddr: cast[uint64](wImpl.mem.handle),
+    bAddr: cast[uint64](bImpl.mem.handle),
     scalars: LayerNormScalars(
       xOff: int32(s.offset), wOff: int32(wImpl.offset), bOff: int32(bImpl.offset),
       xShape: padTo4(s.shape, 1), xs: padTo4(s.strides, 0),
@@ -446,10 +452,10 @@ proc layernorm*[T](s: TensorImpl[T, bkMetal], w, b: AnyTensorImpl, eps: float64)
 proc gelu*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
   ## Erased tanh-approximate gelu over `s`. The output requires grad when `s` does.
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packGeluArgs(GeluArgs(
-    outAddr: cast[uint64](outMem),
-    aAddr: cast[uint64](s.mem),
+    outAddr: cast[uint64](outMem.handle),
+    aAddr: cast[uint64](s.mem.handle),
     scalars: GeluScalars(aOff: int32(s.offset), n: int32(n))))
   s.record(opGelu, blob, elementwiseCfg(n), outMem, s.shape,
       s.requiresGrad, false, s.tid, 0, 0).to(AnyTensorImpl)
@@ -460,10 +466,10 @@ proc softmax*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
   let dAxis = int(s.shape[int(s.shape.len) - 1])
   let rows = s.getNumel() div dAxis
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packSoftmaxArgs(SoftmaxArgs(
-    outAddr: cast[uint64](outMem),
-    xAddr: cast[uint64](s.mem),
+    outAddr: cast[uint64](outMem.handle),
+    xAddr: cast[uint64](s.mem.handle),
     scalars: SoftmaxScalars(
       xOff: int32(s.offset),
       xShape: padTo4(s.shape, 1), xs: padTo4(s.strides, 0),
@@ -480,11 +486,11 @@ proc crossEntropy*[T](s: TensorImpl[T, bkMetal], targets: AnyTensorImpl): AnyTen
   doAssert isContiguous(tgt.shape, tgt.strides), "cross entropy: non-contiguous target view refused"
   let v = int(s.shape[int(s.shape.len) - 1])
   let rows = s.getNumel() div v
-  let outMem = allocDeviceMem(rows * sizeof(T))
+  let outMem = allocSharedMem(rows * sizeof(T), rows)
   let blob = packCrossEntropyArgs(CrossEntropyArgs(
-    lossAddr: cast[uint64](outMem),
-    logitsAddr: cast[uint64](s.mem),
-    targetAddr: cast[uint64](tgt.mem),
+    lossAddr: cast[uint64](outMem.handle),
+    logitsAddr: cast[uint64](s.mem.handle),
+    targetAddr: cast[uint64](tgt.mem.handle),
     scalars: CrossEntropyScalars(
       logitsOff: int32(s.offset), targetOff: int32(tgt.offset),
       logitsShape: padTo4(s.shape, 1), logitsStrides: padTo4(s.strides, 0),
@@ -506,12 +512,12 @@ proc where*[T](s: TensorImpl[T, bkMetal], cond, other: AnyTensorImpl): AnyTensor
       isContiguous(o.shape, o.strides),
       "where: non-contiguous operands refused, the kernel reads them linearly from their offsets"
   let n = s.getNumel()
-  let outMem = allocDeviceMem(n * sizeof(T))
+  let outMem = allocSharedMem(n * sizeof(T), n)
   let blob = packWhereArgs(WhereArgs(
-    outAddr: cast[uint64](outMem),
-    condAddr: cast[uint64](c.mem),
-    aAddr: cast[uint64](s.mem),
-    bAddr: cast[uint64](o.mem),
+    outAddr: cast[uint64](outMem.handle),
+    condAddr: cast[uint64](c.mem.handle),
+    aAddr: cast[uint64](s.mem.handle),
+    bAddr: cast[uint64](o.mem.handle),
     scalars: WhereScalars(
       condOff: int32(c.offset), aOff: int32(s.offset), bOff: int32(o.offset),
       n: int32(n))))
@@ -521,8 +527,8 @@ proc where*[T](s: TensorImpl[T, bkMetal], cond, other: AnyTensorImpl): AnyTensor
 
 proc sgdUpdate*[T](s: TensorImpl[T, bkMetal], grad: AnyTensorImpl, lr: float64): void =
   ## Erased in-place sgd update: `s` moves by `-lr * grad`.
-  ## The entry's output id is `s`'s tensor id and `s`'s seqNo advances to the entry,
-  ## so reading the parameters materializes the update first (the MLX rule).
+  ## The entry's output id is `s`'s tensor id and the storage epoch advances to the entry,
+  ## so reading the parameters or any view over them materializes the update first (the MLX rule).
   ##
   ## Raises AssertionDefect for a non-contiguous parameter or gradient view.
   let g = grad.to(TensorImpl[T, bkMetal])
@@ -532,19 +538,19 @@ proc sgdUpdate*[T](s: TensorImpl[T, bkMetal], grad: AnyTensorImpl, lr: float64):
       "sgd: shape mismatch " & $s.shape & " vs " & $g.shape & " refused"
   let n = s.getNumel()
   let blob = packSgdArgs(SgdArgs(
-    pAddr: cast[uint64](s.mem),
-    gAddr: cast[uint64](g.mem),
+    pAddr: cast[uint64](s.mem.handle),
+    gAddr: cast[uint64](g.mem.handle),
     scalars: SgdScalars(lr: float32(lr), pOff: int32(s.offset), gOff: int32(g.offset), n: int32(n))))
   let opId = s.ctx.enqueue(opSgd, blob, elementwiseCfg(n), bkMetal, s.tid, s.tid, g.tid)
-  s.seqNo = opId
+  s.mem.seqNo = opId
 
 proc adamUpdate*[T](s: TensorImpl[T, bkMetal], grad, m, v: AnyTensorImpl, pack: AdamScalars): void =
   ## Erased in-place adam update over `s` with gradient `grad` and the persistent moments `m` and `v`.
   ##
   ## The pack lists the learning rate, decay rates, epsilon and bias corrections for the current step, all folded in by the caller.
   ##
-  ## The entry's output id is `s`'s tensor id and `s`'s seqNo advances to the entry,
-  ## so reading the parameters materializes the update first (the MLX rule).
+  ## The entry's output id is `s`'s tensor id and the storage epoch advances to the entry,
+  ## so reading the parameters or any view over them materializes the update first (the MLX rule).
   ##
   ## Raises AssertionDefect for a shape mismatch or a non-contiguous operand.
   let g = grad.to(TensorImpl[T, bkMetal])
@@ -565,13 +571,13 @@ proc adamUpdate*[T](s: TensorImpl[T, bkMetal], grad, m, v: AnyTensorImpl, pack: 
   scalars.vOff = int32(vImpl.offset)
   scalars.n = int32(n)
   let blob = packAdamArgs(AdamArgs(
-    pAddr: cast[uint64](s.mem),
-    gAddr: cast[uint64](g.mem),
-    mAddr: cast[uint64](mImpl.mem),
-    vAddr: cast[uint64](vImpl.mem),
+    pAddr: cast[uint64](s.mem.handle),
+    gAddr: cast[uint64](g.mem.handle),
+    mAddr: cast[uint64](mImpl.mem.handle),
+    vAddr: cast[uint64](vImpl.mem.handle),
     scalars: scalars))
   let opId = s.ctx.enqueue(opAdam, blob, elementwiseCfg(n), bkMetal, s.tid, s.tid, g.tid, mImpl.tid, vImpl.tid)
-  s.seqNo = opId
+  s.mem.seqNo = opId
 
 
 proc toErased*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =

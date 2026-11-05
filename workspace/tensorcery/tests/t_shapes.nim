@@ -22,6 +22,10 @@ import
   workspace/tensorcery/src/backends/cpu,
   workspace/tensorcery/src/backends/metal
 
+func toFloat64(a: seq[float32]): seq[float64] =
+  for x in a:
+    result.add float64(x)
+
 func frand(i: int): float32 =
   ## Deterministic host input in [0, 1) from the golden-ratio low-discrepancy sequence.
   let x = float64(i) * 0.6180339887498949
@@ -178,6 +182,60 @@ proc main() =
       for c in 0 ..< d2:
         expected.add float64(data[(1 * d1 + b) * d2 + c])
     checkSeq(toSeq[float32](s), expected, "metal slice")
+
+  block cpuSharedViewStorage:
+    # D-6: a view shares the parent storage. A view created before an in-place
+    # update sees the update on read, and an update through the view reaches the parent.
+    let ctx = Ctx()
+    let w = toGradTensor(ctx, data, d0 * d1 * d2)
+    let v = w.reshape(d1, d2, d0)
+    var xdata: seq[float32]
+    for i in 0 ..< d0 * d1 * d2:
+      xdata.add frand(i + 200)
+    let x = toTensor(ctx, xdata, d0 * d1 * d2)
+    let loss = w * x
+    backward(loss)
+    ctx.eval()
+    checkSeq(toSeq[float32](v), toFloat64(data), "view before update keeps the parent values")
+
+    sgdUpdate(w, grad(w), -0.5)
+    var expectUpdated: seq[float64]
+    for i in 0 ..< d0 * d1 * d2:
+      expectUpdated.add float64(data[i]) + float64(xdata[i]) * 0.5
+    # reading the view must materialize the pending update first (the MLX rule)
+    checkSeq(toSeq[float32](v), expectUpdated, "view reads through the parent's in-place update")
+    checkSeq(toSeq[float32](w), expectUpdated, "parent reads its own update")
+
+    # update through the contiguous view, parent sees it
+    let v2 = w.reshape(4, 2)
+    let loss2 = v2 * x.reshape(4, 2)
+    backward(loss2)
+    sgdUpdate(v2, grad(v2), 0.25)
+    ctx.eval()
+    var expectV2: seq[float64]
+    for i in 0 ..< d0 * d1 * d2:
+      expectV2.add expectUpdated[i] - float64(xdata[i]) * 0.25
+    checkSeq(toSeq[float32](w), expectV2, "parent reads an update made through the view")
+    checkSeq(toSeq[float32](v), expectV2, "earlier view reads an update made through another view")
+
+  block metalSharedViewStorage:
+    let ctx = Ctx()
+    let w = toGradTensor(ctx, data, bkMetal, d0 * d1 * d2)
+    let v = w.reshape(d1, d2, d0)
+    var xdata: seq[float32]
+    for i in 0 ..< d0 * d1 * d2:
+      xdata.add frand(i + 200)
+    let x = toTensor(ctx, xdata, bkMetal, d0 * d1 * d2)
+    let loss = w * x
+    backward(loss)
+    ctx.eval()
+    checkSeq(toSeq[float32](v), toFloat64(data), "metal view before update keeps the parent values")
+
+    sgdUpdate(w, grad(w), -0.5)
+    var expectUpdated: seq[float64]
+    for i in 0 ..< d0 * d1 * d2:
+      expectUpdated.add float64(data[i]) + float64(xdata[i]) * 0.5
+    checkSeq(toSeq[float32](v), expectUpdated, "metal view reads through the parent's in-place update")
 
   block metalViewThroughAdd:
     let ctx = Ctx()

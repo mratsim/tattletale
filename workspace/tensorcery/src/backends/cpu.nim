@@ -405,11 +405,10 @@ proc record[T](s: TensorImpl[T, bkCpu], kernel: KernelId, blob: seq[byte],
   result = TensorImpl[T, bkCpu](
     ctx: s.ctx,
     tid: outTid,
-    seqNo: opId,
     requiresGrad: requiresGrad,
     shape: outShape,
     strides: contiguousStrides(outShape),
-    storage: outStorage)
+    storage: SharedStorage[T](data: outStorage, seqNo: opId))
 
 proc padTo4(v: SmallSeq[4, int32], pad: int32): array[4, int32] =
   ## Pads to 4 axes with `pad`: shapes pad with 1s (the divmod chain stays safe), strides with 0s (padded axes contribute nothing).
@@ -424,8 +423,8 @@ proc add*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
   var outStorage = newSeq[T](n)
   let blob = packAddArgs(AddArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    aAddr: cast[uint64](s.storage[0].unsafeAddr),
-    bAddr: cast[uint64](o.storage[0].unsafeAddr),
+    aAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    bAddr: cast[uint64](o.storage.data[0].unsafeAddr),
     scalars: AddScalars(
       aOff: int32(s.offset),
       bOff: int32(o.offset),
@@ -445,8 +444,8 @@ proc mul*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
   var outStorage = newSeq[T](n)
   let blob = packMul2Args(Mul2Args(
     outAddr: cast[uint64](outStorage[0].addr),
-    aAddr: cast[uint64](s.storage[0].unsafeAddr),
-    bAddr: cast[uint64](o.storage[0].unsafeAddr),
+    aAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    bAddr: cast[uint64](o.storage.data[0].unsafeAddr),
     scalars: Mul2Scalars(
       aOff: int32(s.offset),
       bOff: int32(o.offset),
@@ -464,7 +463,7 @@ proc mulScalar*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImpl =
   var outStorage = newSeq[T](n)
   let blob = packMulArgs(MulArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    aAddr: cast[uint64](s.storage[0].unsafeAddr),
+    aAddr: cast[uint64](s.storage.data[0].unsafeAddr),
     scalars: MulScalars(
       aOff: int32(s.offset),
       shape: padTo4(s.shape, 1),
@@ -482,8 +481,8 @@ proc addNoGrad*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl
   var outStorage = newSeq[T](n)
   let blob = packAddArgs(AddArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    aAddr: cast[uint64](s.storage[0].unsafeAddr),
-    bAddr: cast[uint64](o.storage[0].unsafeAddr),
+    aAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    bAddr: cast[uint64](o.storage.data[0].unsafeAddr),
     scalars: AddScalars(
       aOff: int32(s.offset),
       bOff: int32(o.offset),
@@ -502,8 +501,8 @@ proc mulNoGrad*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl
   var outStorage = newSeq[T](n)
   let blob = packMul2Args(Mul2Args(
     outAddr: cast[uint64](outStorage[0].addr),
-    aAddr: cast[uint64](s.storage[0].unsafeAddr),
-    bAddr: cast[uint64](o.storage[0].unsafeAddr),
+    aAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    bAddr: cast[uint64](o.storage.data[0].unsafeAddr),
     scalars: Mul2Scalars(
       aOff: int32(s.offset),
       bOff: int32(o.offset),
@@ -521,7 +520,7 @@ proc mulScalarNoGrad*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImp
   var outStorage = newSeq[T](n)
   let blob = packMulArgs(MulArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    aAddr: cast[uint64](s.storage[0].unsafeAddr),
+    aAddr: cast[uint64](s.storage.data[0].unsafeAddr),
     scalars: MulScalars(
       aOff: int32(s.offset),
       shape: padTo4(s.shape, 1),
@@ -548,11 +547,11 @@ proc readbackBytes*[T](s: TensorImpl[T, bkCpu]): seq[byte] =
   ##
   ## A view gathers through its strides and offset. Reading a pending tensor
   ## evals the context first (the MLX rule).
-  if s.ctx.isPending(s.seqNo):
+  if s.ctx.isPending(s.storage.seqNo):
     s.ctx.eval()
   if s.getNumel() == 0:
     return newSeq[byte](0)
-  let base = cast[ptr T](cast[int](s.storage[0].unsafeAddr) + s.offset * sizeof(T))
+  let base = cast[ptr T](cast[int](s.storage.data[0].unsafeAddr) + s.offset * sizeof(T))
   stridedBytes[T](base, s.shape, s.strides)
 
 # Microgpt op set, CPU leg
@@ -573,8 +572,8 @@ proc gather*[T](s: TensorImpl[T, bkCpu], indices: AnyTensorImpl): AnyTensorImpl 
   var outStorage = newSeq[T](n)
   let blob = packGatherArgs(GatherArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    wAddr: cast[uint64](s.storage[0].unsafeAddr),
-    idxAddr: cast[uint64](idx.storage[0].unsafeAddr),
+    wAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    idxAddr: cast[uint64](idx.storage.data[0].unsafeAddr),
     scalars: GatherScalars(
       wOff: int32(s.offset), idxOff: int32(idx.offset), e: e, n: int32(n))))
   s.record(opGather, blob, outStorage, appendDim(idx.shape, e),
@@ -598,9 +597,9 @@ proc layernorm*[T](s: TensorImpl[T, bkCpu], w, b: AnyTensorImpl, eps: float64): 
   var outStorage = newSeq[T](s.getNumel())
   let blob = packLayerNormArgs(LayerNormArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    xAddr: cast[uint64](s.storage[0].unsafeAddr),
-    wAddr: cast[uint64](wImpl.storage[0].unsafeAddr),
-    bAddr: cast[uint64](bImpl.storage[0].unsafeAddr),
+    xAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    wAddr: cast[uint64](wImpl.storage.data[0].unsafeAddr),
+    bAddr: cast[uint64](bImpl.storage.data[0].unsafeAddr),
     scalars: LayerNormScalars(
       xOff: int32(s.offset), wOff: int32(wImpl.offset), bOff: int32(bImpl.offset),
       xShape: padTo4(s.shape, 1), xs: padTo4(s.strides, 0),
@@ -616,7 +615,7 @@ proc gelu*[T](s: TensorImpl[T, bkCpu]): AnyTensorImpl =
   var outStorage = newSeq[T](n)
   let blob = packGeluArgs(GeluArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    aAddr: cast[uint64](s.storage[0].unsafeAddr),
+    aAddr: cast[uint64](s.storage.data[0].unsafeAddr),
     scalars: GeluScalars(aOff: int32(s.offset), n: int32(n))))
   s.record(opGelu, blob, outStorage, s.shape,
       s.requiresGrad, false, s.tid, 0, 0).to(AnyTensorImpl)
@@ -628,7 +627,7 @@ proc softmax*[T](s: TensorImpl[T, bkCpu]): AnyTensorImpl =
   var outStorage = newSeq[T](s.getNumel())
   let blob = packSoftmaxArgs(SoftmaxArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    xAddr: cast[uint64](s.storage[0].unsafeAddr),
+    xAddr: cast[uint64](s.storage.data[0].unsafeAddr),
     scalars: SoftmaxScalars(
       xOff: int32(s.offset),
       xShape: padTo4(s.shape, 1), xs: padTo4(s.strides, 0),
@@ -648,8 +647,8 @@ proc crossEntropy*[T](s: TensorImpl[T, bkCpu], targets: AnyTensorImpl): AnyTenso
   var outStorage = newSeq[T](rows)
   let blob = packCrossEntropyArgs(CrossEntropyArgs(
     lossAddr: cast[uint64](outStorage[0].addr),
-    logitsAddr: cast[uint64](s.storage[0].unsafeAddr),
-    targetAddr: cast[uint64](tgt.storage[0].unsafeAddr),
+    logitsAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    targetAddr: cast[uint64](tgt.storage.data[0].unsafeAddr),
     scalars: CrossEntropyScalars(
       logitsOff: int32(s.offset), targetOff: int32(tgt.offset),
       logitsShape: padTo4(s.shape, 1), logitsStrides: padTo4(s.strides, 0),
@@ -674,9 +673,9 @@ proc where*[T](s: TensorImpl[T, bkCpu], cond, other: AnyTensorImpl): AnyTensorIm
   var outStorage = newSeq[T](n)
   let blob = packWhereArgs(WhereArgs(
     outAddr: cast[uint64](outStorage[0].addr),
-    condAddr: cast[uint64](c.storage[0].unsafeAddr),
-    aAddr: cast[uint64](s.storage[0].unsafeAddr),
-    bAddr: cast[uint64](o.storage[0].unsafeAddr),
+    condAddr: cast[uint64](c.storage.data[0].unsafeAddr),
+    aAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    bAddr: cast[uint64](o.storage.data[0].unsafeAddr),
     scalars: WhereScalars(
       condOff: int32(c.offset), aOff: int32(s.offset), bOff: int32(o.offset),
       n: int32(n))))
@@ -686,8 +685,8 @@ proc where*[T](s: TensorImpl[T, bkCpu], cond, other: AnyTensorImpl): AnyTensorIm
 
 proc sgdUpdate*[T](s: TensorImpl[T, bkCpu], grad: AnyTensorImpl, lr: float64): void =
   ## Erased in-place sgd update: `s` moves by `-lr * grad`.
-  ## The entry's output id is `s`'s tensor id and `s`'s seqNo advances to the entry,
-  ## so reading the parameters materializes the update first (the MLX rule).
+  ## The entry's output id is `s`'s tensor id and the storage epoch advances to the entry,
+  ## so reading the parameters or any view over them materializes the update first (the MLX rule).
   ##
   ## Raises AssertionDefect for a shape mismatch or a non-contiguous operand.
   let g = grad.to(TensorImpl[T, bkCpu])
@@ -697,21 +696,21 @@ proc sgdUpdate*[T](s: TensorImpl[T, bkCpu], grad: AnyTensorImpl, lr: float64): v
       "sgd: non-contiguous parameter or gradient view refused"
   let n = s.getNumel()
   let blob = packSgdArgs(SgdArgs(
-    pAddr: cast[uint64](s.storage[0].unsafeAddr),
-    gAddr: cast[uint64](g.storage[0].unsafeAddr),
+    pAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    gAddr: cast[uint64](g.storage.data[0].unsafeAddr),
     scalars: SgdScalars(lr: float32(lr), pOff: int32(s.offset), gOff: int32(g.offset), n: int32(n))))
   let opId = s.ctx.enqueue(opSgd, blob, LaunchCfg(), bkCpu, s.tid, s.tid, g.tid)
   opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] =
       cpuRunner[T](opSgd)
-  s.seqNo = opId
+  s.storage.seqNo = opId
 
 proc adamUpdate*[T](s: TensorImpl[T, bkCpu], grad, m, v: AnyTensorImpl, pack: AdamScalars): void =
   ## Erased in-place adam update over `s` with gradient `grad` and the persistent moments `m` and `v`.
   ##
   ## The pack lists the learning rate, decay rates, epsilon and bias corrections for the current step, all folded in by the caller.
   ##
-  ## The entry's output id is `s`'s tensor id and `s`'s seqNo advances to the entry,
-  ## so reading the parameters materializes the update first (the MLX rule).
+  ## The entry's output id is `s`'s tensor id and the storage epoch advances to the entry,
+  ## so reading the parameters or any view over them materializes the update first (the MLX rule).
   ##
   ## Raises AssertionDefect for a shape mismatch or a non-contiguous operand.
   let g = grad.to(TensorImpl[T, bkCpu])
@@ -732,15 +731,15 @@ proc adamUpdate*[T](s: TensorImpl[T, bkCpu], grad, m, v: AnyTensorImpl, pack: Ad
   scalars.vOff = int32(vImpl.offset)
   scalars.n = int32(n)
   let blob = packAdamArgs(AdamArgs(
-    pAddr: cast[uint64](s.storage[0].unsafeAddr),
-    gAddr: cast[uint64](g.storage[0].unsafeAddr),
-    mAddr: cast[uint64](mImpl.storage[0].unsafeAddr),
-    vAddr: cast[uint64](vImpl.storage[0].unsafeAddr),
+    pAddr: cast[uint64](s.storage.data[0].unsafeAddr),
+    gAddr: cast[uint64](g.storage.data[0].unsafeAddr),
+    mAddr: cast[uint64](mImpl.storage.data[0].unsafeAddr),
+    vAddr: cast[uint64](vImpl.storage.data[0].unsafeAddr),
     scalars: scalars))
   let opId = s.ctx.enqueue(opAdam, blob, LaunchCfg(), bkCpu, s.tid, s.tid, g.tid, mImpl.tid, vImpl.tid)
   opRunners.mgetOrPut(cast[pointer](s.ctx), initTable[int, CpuOpRunner]())[opId] =
       cpuRunner[T](opAdam)
-  s.seqNo = opId
+  s.storage.seqNo = opId
 
 
 proc toErased*[T](s: TensorImpl[T, bkCpu]): AnyTensorImpl =

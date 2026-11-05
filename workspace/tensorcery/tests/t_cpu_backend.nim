@@ -60,8 +60,8 @@ proc main() =
     let impl = c.impl.to(TensorImpl[float32, bkCpu])
     doAssert impl != nil
     doAssert impl.shape == [2'i32]
-    doAssert impl.storage == @[2.0'f32, 4.0]
-    doAssert impl.seqNo != 0, "a computed tensor carries its producing op id"
+    doAssert impl.storage.data == @[2.0'f32, 4.0]
+    doAssert impl.storage.seqNo != 0, "a computed tensor carries its producing op id"
 
   block rank4:
     let a = toTensor(ctx, @[1'i64, 2, 3, 4, 5, 6, 7, 8], 1, 2, 2, 2)

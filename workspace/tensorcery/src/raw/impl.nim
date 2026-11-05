@@ -58,19 +58,42 @@ iface *AnyTensorImpl:
 type DeviceHandle* = distinct uint64
   ## Opaque 8-byte device-buffer handle, owned by the device backend.
 
+type SharedStorage*[T] = ref object
+  ## CPU storage one tensor and every shape-op view over it hold together.
+  ##
+  ## ORC shares no seq between two owners:
+  ##
+  ## - a borrowed constructor argument deep-copies the buffer
+  ## - a moved-out argument empties the source
+  ##
+  ## Reads materialize through `seqNo`, which names the op id that last wrote
+  ## the buffer. A read of a pending write evals the record first.
+  data*: seq[T]
+  seqNo*: int
+
+type SharedMemory* = ref object
+  ## Metal storage one tensor and every shape-op view over it hold together.
+  ##
+  ## - `numel`: the allocation's element count in elements. The slice backward
+  ##   scatters over it, and a view's parent can hold fewer elements than the storage
+  ## - `seqNo`: the op id that last wrote the buffer. A read of a pending
+  ##   write evals the record first
+  handle*: DeviceHandle
+  seqNo*: int
+  numel*: int
+
 type TensorImpl*[T; Hw: static BackendKind] = ref object
   ## Typed tensor state behind one entry of the erased face.
   ctx*: Ctx
   tid*: int       ## tensor id, unique within the context, referenced by record entries
-  seqNo*: int     ## 0 when materialized at construction, else the op id of the record entry that produces this storage
   requiresGrad*: bool
   offset*: int    ## element offset of the view origin into the storage
   shape*: SmallSeq[4, int32]
   strides*: SmallSeq[4, int32]
   when Hw == bkCpu:
-    storage*: seq[T]
+    storage*: SharedStorage[T]
   elif Hw == bkMetal:
-    mem*: DeviceHandle
+    mem*: SharedMemory
 
 func numel*(shape: openArray[int]): int =
   ## Returns the element count as a product over all shape sizes.
@@ -179,7 +202,7 @@ proc toTensorImpl*[T; Hw: static BackendKind](
   result = TensorImpl[T, Hw](ctx: ctx, tid: ctx.newTid(), requiresGrad: requiresGrad)
   result.shape = meta.shape
   result.strides = meta.strides
-  result.storage = @data
+  result.storage = SharedStorage[T](data: @data, seqNo: 0)
 
 proc getTid*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): int =
   ## Returns the tensor id that record entries and the tape registry reference.
@@ -222,7 +245,7 @@ proc reshape*[T](s: TensorImpl[T, bkCpu], shape: SmallSeq[4, int32]): AnyTensorI
   doAssert isContiguous(s.shape, s.strides),
       "reshape: non-contiguous view refused, a pure-metadata reshape needs contiguous storage"
   let outImpl = TensorImpl[T, bkCpu](
-    ctx: s.ctx, tid: s.ctx.newTid(), seqNo: s.seqNo, requiresGrad: s.requiresGrad,
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: shape, strides: contiguousStrides(shape), storage: s.storage)
   shapeEntry(s, opReshape, ShapeBlob(rank: int32(shape.len), a: toArray4(shape)), outImpl)
   outImpl.to(AnyTensorImpl)
@@ -236,7 +259,7 @@ proc reshape*[T](s: TensorImpl[T, bkMetal], shape: SmallSeq[4, int32]): AnyTenso
   doAssert isContiguous(s.shape, s.strides),
       "reshape: non-contiguous view refused, a pure-metadata reshape needs contiguous storage"
   let outImpl = TensorImpl[T, bkMetal](
-    ctx: s.ctx, tid: s.ctx.newTid(), seqNo: s.seqNo, requiresGrad: s.requiresGrad,
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: shape, strides: contiguousStrides(shape), mem: s.mem)
   shapeEntry(s, opReshape, ShapeBlob(rank: int32(shape.len), a: toArray4(shape)), outImpl)
   outImpl.to(AnyTensorImpl)
@@ -259,7 +282,7 @@ proc permuteDims*[T](s: TensorImpl[T, bkCpu], perm: SmallSeq[4, int32]): AnyTens
   let outShape = SmallSeq[4, int32].initFrom(newShape.toOpenArray(0, rank - 1))
   let outStrides = SmallSeq[4, int32].initFrom(newStrides.toOpenArray(0, rank - 1))
   let outImpl = TensorImpl[T, bkCpu](
-    ctx: s.ctx, tid: s.ctx.newTid(), seqNo: s.seqNo, requiresGrad: s.requiresGrad,
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: outShape, strides: outStrides, storage: s.storage)
   shapeEntry(s, opPermute, ShapeBlob(rank: int32(rank), a: toArray4(perm)), outImpl)
   outImpl.to(AnyTensorImpl)
@@ -282,7 +305,7 @@ proc permuteDims*[T](s: TensorImpl[T, bkMetal], perm: SmallSeq[4, int32]): AnyTe
   let outShape = SmallSeq[4, int32].initFrom(newShape.toOpenArray(0, rank - 1))
   let outStrides = SmallSeq[4, int32].initFrom(newStrides.toOpenArray(0, rank - 1))
   let outImpl = TensorImpl[T, bkMetal](
-    ctx: s.ctx, tid: s.ctx.newTid(), seqNo: s.seqNo, requiresGrad: s.requiresGrad,
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: outShape, strides: outStrides, mem: s.mem)
   shapeEntry(s, opPermute, ShapeBlob(rank: int32(rank), a: toArray4(perm)), outImpl)
   outImpl.to(AnyTensorImpl)
@@ -306,7 +329,7 @@ proc sliceRange*[T](s: TensorImpl[T, bkCpu], start, count: SmallSeq[4, int32]): 
   let outShape = SmallSeq[4, int32].initFrom(newShape.toOpenArray(0, rank - 1))
   let outStrides = SmallSeq[4, int32].initFrom(newStrides.toOpenArray(0, rank - 1))
   let outImpl = TensorImpl[T, bkCpu](
-    ctx: s.ctx, tid: s.ctx.newTid(), seqNo: s.seqNo, requiresGrad: s.requiresGrad,
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: offset, shape: outShape, strides: outStrides, storage: s.storage)
   shapeEntry(s, opSlice, ShapeBlob(rank: int32(rank), a: toArray4(start), b: toArray4(count)), outImpl)
   outImpl.to(AnyTensorImpl)
@@ -330,7 +353,7 @@ proc sliceRange*[T](s: TensorImpl[T, bkMetal], start, count: SmallSeq[4, int32])
   let outShape = SmallSeq[4, int32].initFrom(newShape.toOpenArray(0, rank - 1))
   let outStrides = SmallSeq[4, int32].initFrom(newStrides.toOpenArray(0, rank - 1))
   let outImpl = TensorImpl[T, bkMetal](
-    ctx: s.ctx, tid: s.ctx.newTid(), seqNo: s.seqNo, requiresGrad: s.requiresGrad,
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: offset, shape: outShape, strides: outStrides, mem: s.mem)
   shapeEntry(s, opSlice, ShapeBlob(rank: int32(rank), a: toArray4(start), b: toArray4(count)), outImpl)
   outImpl.to(AnyTensorImpl)
@@ -339,7 +362,7 @@ proc aliasAs*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
   ## Erased metadata view: `s`'s storage reinterpreted over `other`'s shape and strides.
   ## The backward walk builds shape-op cotangents with it, no op records.
   let outImpl = TensorImpl[T, bkCpu](
-    ctx: s.ctx, tid: s.ctx.newTid(), seqNo: s.seqNo, requiresGrad: s.requiresGrad,
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: other.getShape(), strides: other.getStrides(), storage: s.storage)
   outImpl.to(AnyTensorImpl)
 
@@ -347,6 +370,6 @@ proc aliasAs*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl
   ## Erased metadata view: `s`'s device storage reinterpreted over `other`'s shape and strides.
   ## The backward walk builds shape-op cotangents with it, no op records.
   let outImpl = TensorImpl[T, bkMetal](
-    ctx: s.ctx, tid: s.ctx.newTid(), seqNo: s.seqNo, requiresGrad: s.requiresGrad,
+    ctx: s.ctx, tid: s.ctx.newTid(), requiresGrad: s.requiresGrad,
     offset: s.offset, shape: other.getShape(), strides: other.getStrides(), mem: s.mem)
   outImpl.to(AnyTensorImpl)

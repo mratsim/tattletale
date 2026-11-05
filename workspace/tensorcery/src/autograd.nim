@@ -103,7 +103,10 @@ proc backward*(loss: Tensor) =
         accumulate(ctx, cotan, tid, g.aliasAs(tapeGet(ctx, tid)))
     of opSlice:
       doAssert false, "slice gradient arrives with the fused backward kernels"
-    of opGather, opLayerNorm, opGelu, opSoftmax, opCrossEntropy, opWhere, opSgd, opAdam:
+    of opSgd, opAdam:
+      # terminal ops: in-place parameter updates have no vjp, parameters are leaves
+      discard
+    of opGather, opLayerNorm, opGelu, opSoftmax, opCrossEntropy, opWhere:
       # microgpt op set kernels ship their vjps with their forward ops
       doAssert false, "op " & $entry.kernel & " reached the backward walk without a vjp"
 
