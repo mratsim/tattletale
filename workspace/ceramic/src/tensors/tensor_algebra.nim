@@ -44,7 +44,12 @@ template logical_divide*[T, Sh, St](t: TensorOwned[T, Sh, St], tiler: Layout): a
   make_view(addr t.data[0], t.getLayout().logical_divide(tiler))
 
 func logical_divide*[T, Sh, St](t: TensorView[T, Sh, St], tiler: Layout): auto {.inline.} =
-  make_view(addr t.data[0], t.getLayout().logical_divide(tiler))
+  ## A view aliasing the caller's storage, built from the data field.
+  ##
+  ## - `t.data` already is the pointer, the view reuses it. `addr
+  ##   t.data[0]` has no GLSL lowering, a buffer reference does not
+  ##   construct from an element read
+  make_view(t.data, t.getLayout().logical_divide(tiler))
 
 func getIdentityLayout*[T, Sh, St](t: TensorView[T, Sh, St]): auto {.inline.} =
   ## Identity layout over the tensor's shape, its coordinate space.

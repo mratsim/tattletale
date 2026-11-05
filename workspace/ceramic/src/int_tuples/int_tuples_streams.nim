@@ -341,6 +341,19 @@ func tupleFlatten*(s: NimNode): seq[tuple[leaf, leafTy: NimNode]] =
 #  Zip
 # ═══════════════════════════════════════════════════════════════════════
 
+proc drainSubtree*(s: var TupleStream) =
+  ## Consumes events through the close of the subtree that the caller just opened.
+  ##
+  ## - the caller consumed the kOpen event
+  ## - this walks events to the matching kClose
+  var depth = 1
+  while depth > 0:
+    let ev = s.next()
+    case ev.kind
+    of kOpen: depth.inc
+    of kClose: depth.dec
+    else: discard
+
 type
   TupleZip* = object
     a, b: TupleStream

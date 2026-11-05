@@ -139,8 +139,7 @@ proc scanPerMode(container, seed, seedTy: NimNode, reverse: bool): tuple[val, ty
       modeB.append(ev)
       collecting = true
     else:
-      doAssert seed[modeIdx].kind != nnkTupleConstr,
-        "prefixProductScan: tuple seed leaf under a scalar shape mode"
+      # a runtime-scaled coordinate stride evaluates to a coefficient tuple, one stride value, it passes through like a scalar leaf
       r.append((seed[modeIdx], seedTy[modeIdx]))
       modeIdx.inc
   r.append(TupleStreamEvent(path: @[], kind: kClose))
