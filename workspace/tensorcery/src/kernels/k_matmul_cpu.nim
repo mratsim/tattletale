@@ -25,6 +25,7 @@ proc matmulStrided*[T: SomeNumber](
   ## - A is MxK, B is KxN, C is MxN
   ## - `rowStride`/`colStride` are element steps, a stride of 1 selects contiguous storage along that axis
   ## - C accumulates in the element type T, the caller owns C's initial contents
+  ## - zero B elements skip their outer-product contribution, degenerate IEEE inputs (Inf, NaN) do not propagate
   for j in 0 ..< N:
     for i in 0 ..< M:
       let ci = i * rowStrideC + j * colStrideC

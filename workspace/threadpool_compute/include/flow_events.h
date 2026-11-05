@@ -41,9 +41,6 @@
  * unref frees the event. Caller contract: every dependent task was
  * drained or re-deferred, so the channels are empty at unref time.
  * unref must not race an in-flight trigger.
- *
- * Requires GNU-compatible compilers (GCC and Clang): the pool frontend uses
- * typeof and statement expressions.
  */
 #ifndef TPC_FLOW_EVENTS_H
 #define TPC_FLOW_EVENTS_H

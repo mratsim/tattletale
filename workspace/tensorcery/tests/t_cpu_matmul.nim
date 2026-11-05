@@ -62,7 +62,8 @@ proc runCase(rng: var Rand, M, N, K: int, alpha, beta: float32, rsA, csA, rsB, c
     for i in 0 ..< actual.len:
       let d = abs(float64(actual[i]) - expected[i])
       if d > worstD:
-        worstD = d; worst = i
+        worstD = d
+        worst = i
     echo "worst at flat ", worst, " (i=", worst div N, " j=", worst mod N, ") actual=", actual[worst], " expected=", expected[worst]
   doAssert diff < 1e-3, "matmul diverged (M=" & $M & " N=" & $N & " K=" & $K &
       "), max abs diff " & $diff

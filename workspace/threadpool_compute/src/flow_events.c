@@ -143,7 +143,6 @@ bool tpc_flow_event_delayedUntilMulti(tpc_task* task, const tpc_flow_event_dep* 
             bucketID = tpc_event_bucket(e, deps[i].index);
         }
         tpc_tasknode* node = tpc_tasknode_new(task, deps[i].event, bucketID);
-        node->nextDep = NULL;
         if (tail == NULL) {
             head = node;
         } else {
@@ -154,7 +153,7 @@ bool tpc_flow_event_delayedUntilMulti(tpc_task* task, const tpc_flow_event_dep* 
 
     /* Defer on the first still-untriggered dependency. The node of an already
      * triggered dependency frees during the walk and the remaining chain
-     * travels with the re-deferred node.
+     * re-defers with the remaining chain.
      */
     tpc_tasknode* node = head;
     while (node != NULL) {
@@ -187,7 +186,7 @@ static void tpc_event_drain(tpc_single_event* se, void* queue, tpc_flow_event_en
         /* Re-delay attempt on every chain node. The anchor of a single-dependency
          * delay has a NULL event and counts as fired.
          * Only a chain with every dependency fired enqueues its task.
-         * A successful re-delay parks the remaining chain on that channel.
+         * A successful re-delay queues the remaining chain on that channel.
          */
         while (node != NULL && node->event.e != NULL) {
             if (tpc_event_delayNode(node->event.e, node->bucketID, node)) {

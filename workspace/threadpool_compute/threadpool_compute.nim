@@ -201,6 +201,7 @@ proc flowEvent_delayedUntilMulti*(task: ptr Task, deps: ptr UncheckedArray[FlowE
 
 proc flowEvent_delayUntilMulti*(task: ptr Task, deps: openArray[FlowEventDep]): bool =
   ## openArray convenience over flowEvent_delayedUntilMulti
+  doAssert deps.len > 0, "flowEvent_delayUntilMulti: empty dependency list"
   flowEvent_delayedUntilMulti(task, cast[ptr UncheckedArray[FlowEventDep]](deps[0].unsafeAddr), int32 deps.len)
 
 proc flowEvent_trigger*(ev: FlowEvent, queue: pointer, enqueue: FlowEventEnqueue) {.tpcev, importc: "tpc_flow_event_trigger".}
@@ -221,8 +222,8 @@ proc parallelForRunner*(ctx: ptr WorkerContext, task: ptr Task, body: RangeFn) {
   ## workers with lazy binary splitting
 
 type ParforShell[E] = object
-  ## Env block of a parallelFor chunk: the range body travels inside
-  ## the shell so the C runner copies it whole to every split
+  ## Env block of a parallelFor chunk.
+  ## The shell contains the range body, the C runner copies it whole to every split
   body: proc(idx: int32, env: ptr E) {.cdecl.}
   user: E
 

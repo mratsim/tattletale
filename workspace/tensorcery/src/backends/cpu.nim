@@ -160,48 +160,41 @@ proc drainCpu(ctx: Ctx) {.nimcall.} =
   ## Flow events chain the tasks in record order.
   ## The root thread waits inside the drain scope until the last op completes,
   ## then drops the events and the runners.
-  let wctx = workerContext()
-  var scopeBarrier: ScopedBarrier
-  scoped_barrier_initialize(scopeBarrier.addr)
-  let suspendedScope = wctx.currentScope
-  wctx.currentScope = scopeBarrier.addr
-
   var events: seq[FlowEvent]
-  for entry in ctx.record:
-    if entry.backend != bkCpu:
-      continue
-    var ev: FlowEvent
-    flowEvent_initSingle(ev)
-    events.add(ev)
+  syncScope:
+    let wctx = workerContext()
+    for entry in ctx.record:
+      if entry.backend != bkCpu:
+        continue
+      var ev: FlowEvent
+      flowEvent_initSingle(ev)
+      events.add(ev)
 
-    let work = cast[ptr CpuOpWork](alloc0(sizeof(CpuOpWork)))
-    work[].event = ev
-    work[].completions = completionCount.addr
-    work[].run = opRunners[cast[pointer](ctx)][entry.output]
-    case entry.kernel
-    of opAdd:
-      let args = decodeAddArgs(entry.blob)
-      work[].outp = cast[pointer](args.outAddr)
-      work[].a = cast[pointer](args.aAddr)
-      work[].b = cast[pointer](args.bAddr)
-      work[].addScalars = args.scalars
-    of opMul:
-      let args = decodeMulArgs(entry.blob)
-      work[].outp = cast[pointer](args.outAddr)
-      work[].a = cast[pointer](args.aAddr)
-      work[].mulScalars = args.scalars
+      let work = cast[ptr CpuOpWork](alloc0(sizeof(CpuOpWork)))
+      work[].event = ev
+      work[].completions = completionCount.addr
+      work[].run = opRunners[cast[pointer](ctx)][entry.output]
+      case entry.kernel
+      of opAdd:
+        let args = decodeAddArgs(entry.blob)
+        work[].outp = cast[pointer](args.outAddr)
+        work[].a = cast[pointer](args.aAddr)
+        work[].b = cast[pointer](args.bAddr)
+        work[].addScalars = args.scalars
+      of opMul:
+        let args = decodeMulArgs(entry.blob)
+        work[].outp = cast[pointer](args.outAddr)
+        work[].a = cast[pointer](args.aAddr)
+        work[].mulScalars = args.scalars
 
-    var taskEnv = CpuOpTaskEnv(work: work)
-    let task = task_newSpawnEnv(wctx.currentTask, scopeBarrier.addr,
-                                cpuOpTask, taskEnv.addr, int32 sizeof CpuOpTaskEnv)
-    if events.len == 1:
-      schedule(wctx, task, false)
-    elif not flowEvent_delayedUntil(task, events[^2]):
-      # previous op already fired, schedule directly
-      schedule(wctx, task, false)
-
-  syncScopeWait(scopeBarrier.addr)
-  wctx.currentScope = suspendedScope
+      var taskEnv = CpuOpTaskEnv(work: work)
+      let task = task_newSpawnEnv(wctx.currentTask, wctx.currentScope,
+                                  cpuOpTask, taskEnv.addr, int32 sizeof CpuOpTaskEnv)
+      if events.len == 1:
+        schedule(wctx, task, false)
+      elif not flowEvent_delayedUntil(task, events[^2]):
+        # previous op already fired, schedule directly
+        schedule(wctx, task, false)
 
   for ev in events.mitems:
     flowEvent_unref(ev)
