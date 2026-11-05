@@ -101,9 +101,7 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
         var strideLeafTy =
           if strideEvent.kind == kLeaf: strideEvent.leafTy else: nil
         if strideEvent.kind != kLeaf:
-          # a coordinate-vector stride value, a runtime-scaled coordinate
-          # stride evaluated to a coefficient tuple, one stride value
-          # sits under the scalar shape mode
+          # a coordinate-vector stride value
           strideStream.drainSubtree()
           strideLeaf = strideNodeAt(stride, strideEvent.path)
           strideLeafTy = nil
@@ -113,9 +111,7 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
         let shapeLeaf = shapeEvent.leaf
         let oldRemaining = remaining
         if isStaticZeroStride(strideLeaf, strideLeafTy):
-          # a statically-zero stride contributes nothing to the offset,
-          # a scalar zero never joins the coordinate-tuple sum
-          # (Int[0] + tuple does not typecheck)
+          # a statically-zero stride contributes nothing
           if zeroSum == nil:
             zeroSum = oldRemaining mod shapeLeaf * strideLeaf
           pending = nil
@@ -157,9 +153,7 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
     var strideLeafTy =
       if strideEvent.kind == kLeaf: strideEvent.leafTy else: nil
     if strideEvent.kind != kLeaf and coordEvent.kind == kLeaf:
-      # a coordinate-vector stride value, a runtime-scaled coordinate
-      # stride evaluated to a coefficient tuple, one stride value
-      # sits under the scalar shape mode
+      # a coordinate-vector stride value
       strideStream.drainSubtree()
       strideLeaf = strideNodeAt(stride, strideEvent.path)
       strideLeafTy = nil
@@ -171,9 +165,7 @@ macro crd2idxImpl*(coord, shape, stride: typed): untyped =
         continue
       let prod = coordEvent.leaf * strideLeaf
       if isStaticZeroStride(strideLeaf, strideLeafTy):
-        # a statically-zero stride contributes nothing to the offset,
-        # a scalar zero never joins the coordinate-tuple sum
-        # (Int[0] + tuple does not typecheck)
+        # a statically-zero stride contributes nothing
         if zeroSum == nil:
           zeroSum = prod
         continue
