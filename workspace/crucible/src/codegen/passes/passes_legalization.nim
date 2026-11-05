@@ -42,8 +42,6 @@ func containsStmtsDeep(e: CirExpr): bool =
       return true
   return false
 
-# forward declarations: Nim 2.2.12's codeReordering does not defer these
-# mutually recursive calls
 proc rewriteStmt(el: var TempBinder, s: CirStmt): seq[CirStmt]
 proc rewriteBody(el: var TempBinder, body: seq[CirStmt]): seq[CirStmt]
 proc rewriteExpr(el: var TempBinder, e: CirExpr): seq[CirStmt]

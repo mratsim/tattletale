@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
-import std/[macros, monotimes, os, strutils, tables, times]
+import std/[monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
 
@@ -56,7 +56,7 @@ proc newWebgpuEngine*(): WebgpuEngine =
 # ▸ PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════
 
-template check*(status: WGPUBufferMapAsyncStatus) =
+template check(status: WGPUBufferMapAsyncStatus) =
   let code = status
   if code != wgpuBufferMapAsyncStatusSuccess:
     failLoud("WGPUBufferMapAsyncStatus " & $code)
@@ -160,7 +160,7 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
     else:
       inc j
   if result.x == 0:
-    return Dim3(x: 0, y: 0, z: 0)   # absent or non-literal
+    return Dim3(x: 0, y: 0, z: 0)
   if result.y == 0:
     result.y = 1
   if result.z == 0:

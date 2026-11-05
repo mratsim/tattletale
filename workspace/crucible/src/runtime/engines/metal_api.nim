@@ -131,7 +131,7 @@ when defined(macosx):
   # ════════════════════════════════════════════════════════════════════════
   # ▸ PRIVATE run path
   # ════════════════════════════════════════════════════════════════════════
-  proc bufferContents(h: objc.ID): pointer =
+  proc readBufferContents(h: objc.ID): pointer =
     result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
     if result == nil:
       failLoud("contents() returned nil for a shared buffer")
@@ -147,15 +147,15 @@ when defined(macosx):
   proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
     if n <= 0:
       failLoud("copyToDeviceFromHost: n must be positive, got " & $n)
-    copyMem(bufferContents(dst), src, n)
+    copyMem(readBufferContents(dst), src, n)
 
   proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
     if n <= 0:
       failLoud("copyToHostFromDevice: n must be positive, got " & $n)
-    copyMem(dst, bufferContents(src), n)
+    copyMem(dst, readBufferContents(src), n)
 
   proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
-    ## Runs `kernel`.
+    ## Compiles the kernel's pipeline state on first use.
     ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
       if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:

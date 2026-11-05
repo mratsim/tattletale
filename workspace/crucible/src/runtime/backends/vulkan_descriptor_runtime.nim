@@ -15,7 +15,7 @@ proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32, unifor
   ##   in declaration order, matching the printer's register(tN/uN, space0) numbering
   ## - bindings bindingCount ..< bindingCount + uniformCount: UNIFORM_BUFFER,
   ##   matching the printer's register(bN, space0) ordinals for the scalar
-  ##   ConstantBuffer blocks, and the first block sits after all buffers
+  ##   ConstantBuffer blocks, and the first block binds after all buffer bindings
   let vkCreateDescriptorSetLayout = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkDescriptorSetLayoutCreateInfo,
          pAllocator: pointer,

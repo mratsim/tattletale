@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
-import std/[macros, tables]
+import std/tables
 
 import workspace/crucible/src/abis/opencl_abi
 

@@ -14,7 +14,7 @@ import workspace/crucible/src/abis/objc_abi as objc
 # ═══════════════════════════════════════════════════════════════════════
 
 const
-  ## Shared + untracked storage, Apple's MLX allocator mode: contents() needs no staging.
+  ## Shared + untracked storage, Apple's MLX allocator mode: the host reads contents() directly.
   MTLResourceStorageModeShared = 0
   MTLResourceHazardTrackingModeUntracked = 1 shl 8
   SharedUntrackedOptions* = objc.NSUInteger(MTLResourceStorageModeShared or
@@ -41,8 +41,8 @@ proc `=copy`(dst: var MetalContextObj, src: MetalContextObj) {.error:
     "MetalContext owns its device and queue handles, copy the MetalEngine ref not the ctx".}
 
 when defined(macosx):
-  # objc_abi's withMemPool/release are macOS-only, Linux builds of the engines layer
-  # fail to compile this destructor without the guard
+  # objc_abi's withMemPool/release are macOS-only: Linux builds of the engines layer
+  # fail to compile this destructor when the `when defined(macosx)` check omits it.
   proc `=destroy`(ctx: var MetalContextObj) =
       objc.withMemPool:
         objc.release(ctx.queue)
@@ -100,7 +100,7 @@ when defined(macosx):
     if objc.isNil(cls):
       failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
     result = objc.msgSend(objc.ID(cls), objc.`$$`("alloc"))
-    # `init` may return a different object than `alloc`, keep the init result.
+    # ObjC `init` may return a different object than `alloc`.
     result = objc.msgSend(result, objc.`$$`("init"))
     discard objc.msgSend(result, objc.`$$`("setFastMathEnabled:"), objc.BOOL(0))
     discard objc.msgSend(result, objc.`$$`("setLanguageVersion:"), getMslLanguageVersion())

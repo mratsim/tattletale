@@ -76,9 +76,9 @@ proc countKernels(glsl: string): int =
 
 proc ingestGlsl(engine: VulkanEngine, glsl: string) =
   engine.entryPoint = findFirstFunctionName(glsl, "layout(local_size_x", "void ")
-  # A member's offset in the deduped push block must be launch-invariant.
-  # Only scalar members can violate it, so multi-kernel sources refuse at ingest.
   if countKernels(glsl) > 1:
+    # A member's offset in the deduped push block must be launch-invariant.
+    # Only scalar members can violate it, so multi-kernel sources refuse at ingest.
     var inPush = false
     for line in glsl.splitLines():
       if "layout(push_constant" in line:
@@ -109,9 +109,9 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
              "magic as word 0 and the 5-word header, got " &
              (if spirv.len == 0: "an empty module"
               else: $spirv.len & " words, word 0 = " & spirv[0].toHex()))
-  let sq = getSpirvSquadron(spirv)
+  let sq = parseSpirvEntryInfo(spirv)
   if sq.entryPoints != 1:
-    failLoud("Vulkan ingest: a direct SPIR-V module carries exactly one " &
+    failLoud("Vulkan ingest: a direct SPIR-V module must declare exactly one " &
              "OpEntryPoint, got " & $sq.entryPoints)
   engine.source = ""
   engine.spirv = spirv
@@ -120,7 +120,7 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   engine.isHlsl = false
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
-  ## Ingested GLSL source for the ingest-if-differs identity
+  ## Returns the most recently ingested source, empty after direct SPIR-V ingest.
   engine.source
 
 func getSpirV*(engine: VulkanEngine): seq[uint32] {.inline.} =
@@ -154,10 +154,10 @@ proc write8(ctx: var SerializationCtx, x: uint64) =
   copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
   inc ctx.pn, 8
 
-proc store(ctx: var SerializationCtx, v: VulkanBuffer, argIdx: int) =
+proc store(ctx: var SerializationCtx, v: VulkanBuffer, _: int) =
   ctx.write8(deviceAddress(v, ctx.vctx))
 
-proc store[T](ctx: var SerializationCtx, v: T, argIdx: int) =
+proc store[T](ctx: var SerializationCtx, v: T, _: int) =
   when T is ptr|pointer:
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   const lay = computeDeviceLayout(T, cgGlsl)
@@ -276,12 +276,11 @@ proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args:
   var spirv: seq[uint32]
   if engine.isHlsl:
     spirv = engine.spirv
-    entry = engine.entryPoint
   elif kernel == engine.entryPoint:
     spirv = engine.spirv
   else:
     if engine.source.len == 0:
-      failLoud("Vulkan: a direct SPIR-V module carries exactly one entry point, " &
+      failLoud("Vulkan: a direct SPIR-V module must declare exactly one entry point, " &
                "launch it as \"" & engine.entryPoint & "\", got \"" & kernel & "\"")
     if not engine.caches.spirvCache.hasKey(kernel):
       engine.caches.spirvCache[kernel] = compileGlslToSpirvViaGlslang(engine.source, kernel)
@@ -334,9 +333,9 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[
 proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
                            output: auto, args: tuple, cfg: LaunchConfig, squadron: Dim3) =
   var bufs: seq[VulkanBuffer]
-  template collectBuffer(ctx: var auto, v: VulkanBuffer, argIdx: int) =
+  template collectBuffer(ctx: var auto, v: VulkanBuffer, _: int) =
     bufs.add v
-  template collectBuffer[T](ctx: var auto, v: T, argIdx: int) =
+  template collectBuffer[T](ctx: var auto, v: T, _: int) =
     failLoud("descriptor route: scalar kernel args are not supported, " &
              "the uniform-block layout model does not exist yet")
   bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, cgGlsl)

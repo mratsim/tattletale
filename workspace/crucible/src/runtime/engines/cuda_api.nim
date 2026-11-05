@@ -32,7 +32,6 @@ type
 
   CudaEngine* = ref object
     source: string
-    ptx: string
     nvrtc: NVRTC
 
 
@@ -55,9 +54,8 @@ proc newCudaEngine*(): CudaEngine =
 proc ingest*(engine: CudaEngine, source: string) =
   engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
-  engine.nvrtc.getPtx()
+  engine.nvrtc.extractPtx()
   engine.source = source
-  engine.ptx = engine.nvrtc.ptx
 
 proc getArtifact*(engine: CudaEngine): string {.inline.} =
   engine.source
@@ -162,7 +160,7 @@ proc createProgram(nvrtc: var NVRTC, source: string) =
 
   check nvrtcCreateProgram(nvrtc.prog, cstring source, "kernel.cu", 0, nil, nil)
 
-proc log(nvrtc: var NVRTC) =
+proc readLog(nvrtc: var NVRTC) =
   var logSize: csize_t
   check nvrtcGetProgramLogSize(nvrtc.prog, logSize)
 
@@ -181,13 +179,13 @@ proc compile(nvrtc: var NVRTC, compute_capability = cudaGetComputeCapability()) 
   let compileResult =  nvrtcCompileProgram(nvrtc.prog, numberOfOptions,
                                            cast[cstringArray](addr options[0]))
   if compileResult != NVRTC_SUCCESS:
-    nvrtc.log()
+    nvrtc.readLog()
     echo "Compilation log:\n------------------------------"
     echo nvrtc.log
     echo "------------------------------"
   check compileResult
 
-proc getPtx(nvrtc: var NVRTC) =
+proc extractPtx(nvrtc: var NVRTC) =
   var ptxSize: csize_t
   check nvrtcGetPTXSize(nvrtc.prog, ptxSize)
 

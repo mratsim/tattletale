@@ -108,7 +108,7 @@ proc `=destroy`(c: var VulkanContextObj) =
   if c.device != nil and vkDestroyDevicePtr != nil:
     vkDestroyDevicePtr(c.device, nil)
     c.device = nil
-  if c.instance != nil and vkDestroyInstancePtr != nil:
+  if vkDestroyInstancePtr != nil:
     vkDestroyInstancePtr(c.instance, nil)
     c.instance = nil
   if c.vkLib != nil:
@@ -118,8 +118,8 @@ proc `=destroy`(c: var VulkanContextObj) =
 
 proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
   # macOS: dyld's default search path omits /opt/homebrew/lib, so a dlopen
-  # by name misses the Homebrew loader. Try the name first, then the Homebrew
-  # path (LunarG SDK installs are handled later if needed).
+  # by name misses the Homebrew loader. Try the library name first, then the Homebrew
+  # path (LunarG SDK installs are untested).
   when defined(macosx):
     result.lib = loadLib(vk.VulkanLib)
     if result.lib == nil:
@@ -168,7 +168,6 @@ proc newVulkanContext*(): VulkanContext =
     proc(instance: VkInstance, pName: cstring): pointer {.cdecl.}
   ](gpaRaw)
 
-  # Load vkCreateInstance via GPA(NULL, name), pre-instance
   let vkCreateInstance = cast[proc(pCreateInfo: ptr VkInstanceCreateInfo,
     pAllocator: pointer, pInstance: ptr VkInstance): VkResult {.cdecl.}
   ](gpaFn(nil, "vkCreateInstance"))
@@ -249,15 +248,17 @@ proc newVulkanContext*(): VulkanContext =
 
   var bestIdx = 0
   var bestScore = -1
+  var bestName = ""
   for i, dev in devices:
-    let (score, _) = scoreDevice(dev)
+    let (score, name) = scoreDevice(dev)
     if score > bestScore:
       bestScore = score
       bestIdx = i
+      bestName = name
   if bestScore < 0:
     failLoud("No Vulkan device with a compute-capable queue family found")
   result.physicalDevice = devices[bestIdx]
-  echo "  Vulkan device: ", scoreDevice(result.physicalDevice).name
+  echo "  Vulkan device: ", bestName
 
   var qfCount: uint32 = 0
   gpqfp(result.physicalDevice, qfCount.addr, nil)
@@ -369,7 +370,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
   var memProps: VkPhysicalDeviceMemoryProperties
   vkGetPhysicalDeviceMemoryProperties(ctx.physicalDevice, memProps.addr)
 
-  # Find memory type: an inline loop, no closure (avoids Nim capture issues).
+  # Inline loop on purpose: Nim closures over these locals are error-prone.
   # Preference:
   #  1. DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT (integrated/ReBAR)
   #  2. HOST_VISIBLE | HOST_COHERENT (discrete via PCIe BAR)
@@ -440,7 +441,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
 proc dealloc*(buffer: var VulkanBuffer) =
   if buffer.handle == nil:
     return
-  if buffer.handle != nil and buffer.destroyBuffer != nil:
+  if buffer.destroyBuffer != nil:
     buffer.destroyBuffer(buffer.device, buffer.handle, nil)
     buffer.handle = nil
   if buffer.memory != nil and buffer.freeMemory != nil:
@@ -583,11 +584,9 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
                 globalWorkSize, localWorkSize: openArray[uint32],
                 pushConstData: pointer = nil, pushConstSize: int = 0,
                 descriptorSet: VkDescriptorSet = nil) =
-  ## One dispatch: bind pipeline, push constants, dispatch, fence wait.
-  ##
   ## With `descriptorSet` that set binds as set 0 against the pipeline layout, which must carry the matching set layout.
   ##
-  ## Returns nothing. The fence wait blocks until the dispatch completes.
+  ## The fence wait blocks until the dispatch completes.
   ##
   ## Precondition: `descriptorSet` is given iff the pipeline was created with a setLayout,
   ## and `pushConstSize` matches the pipeline's recorded push-constant range.

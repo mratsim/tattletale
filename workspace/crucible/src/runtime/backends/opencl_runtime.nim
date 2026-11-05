@@ -38,7 +38,6 @@ proc `=copy`(dst: var OpenCLKernelObj, src: OpenCLKernelObj) {.error:
     "OpenCLKernel is ref-only, copy the ref not the object".}
 
 proc `=destroy`(ctx: var OpenCLContextObj) =
-  ## Releases the OpenCL context and command queue, nil-guarded against double teardown.
   if ctx.context != nil:
     discard releaseCommandQueue(ctx.commands)
     discard releaseContext(ctx.context)
