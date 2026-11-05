@@ -88,8 +88,8 @@ proc main() =
     # record tensor ids: leaves 1 and 2, op outputs 3 and 4
     doAssert ctx.record[0].output == 3
     doAssert ctx.record[1].output == 4
-    doAssert ctx.record[0].inputs == [1, 2]
-    doAssert ctx.record[1].inputs == [3, 0]
+    doAssert ctx.record[0].inputs == [1, 2, 0, 0]
+    doAssert ctx.record[1].inputs == [3, 0, 0, 0]
     doAssert ctx.record[0].blob.len == addScalarsSlot + sizeof(AddScalars)
     doAssert ctx.record[1].blob.len == mulScalarsSlot + sizeof(MulScalars)
     var outAddr: uint64

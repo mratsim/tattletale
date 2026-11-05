@@ -73,10 +73,10 @@ proc backward*(loss: Tensor) =
 
     case entry.kernel
     of opAdd:
-      # vjp is the identity on both inputs. A tensor that both input slots consume
-      # accumulates twice through the loop.
+      # vjp is the identity on each input slot. A tensor that several slots consume
+      # accumulates once per slot through the loop.
       for tid in entry.inputs:
-        if tapeGet(ctx, tid).getRequiresGrad():
+        if tid != 0 and tapeGet(ctx, tid).getRequiresGrad():
           accumulate(ctx, cotan, tid, g)
     of opMul:
       let tid = entry.inputs[0]
@@ -95,6 +95,14 @@ proc backward*(loss: Tensor) =
     of opFill:
       # a fill output feeds only the cotangent map, no vjp runs on it
       discard
+    of opReshape, opPermute:
+      # vjp is the identity as a metadata view: the cotangent storage reinterpreted
+      # over the input's layout. No op records, no enqueue.
+      let tid = entry.inputs[0]
+      if tapeGet(ctx, tid).getRequiresGrad():
+        accumulate(ctx, cotan, tid, g.aliasAs(tapeGet(ctx, tid)))
+    of opSlice:
+      doAssert false, "slice gradient arrives with the fused backward kernels"
 
   for tid, g in cotan:
     ctx.setGrad(tid, g)

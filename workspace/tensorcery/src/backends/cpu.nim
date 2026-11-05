@@ -208,6 +208,9 @@ proc drainCpu(ctx: Ctx) {.nimcall.} =
     for entry in ctx.record:
       if entry.backend != bkCpu or not ctx.isPending(entry.id):
         continue
+      if isShapeOp(entry.kernel):
+        # pure metadata, never dispatches
+        continue
       var ev: FlowEvent
       flowEvent_initSingle(ev)
       events.add(ev)
@@ -238,6 +241,9 @@ proc drainCpu(ctx: Ctx) {.nimcall.} =
         let args = decodeFillArgs(entry.blob)
         work[].outp = cast[pointer](args.outAddr)
         work[].fillScalars = args.scalars
+      of opReshape, opPermute, opSlice:
+        # pure metadata, skipped above
+        discard
 
       var taskEnv = CpuOpTaskEnv(work: work)
       let task = task_newSpawnEnv(wctx.currentTask, wctx.currentScope,
@@ -278,6 +284,8 @@ proc add*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
     aAddr: cast[uint64](s.storage[0].unsafeAddr),
     bAddr: cast[uint64](o.storage[0].unsafeAddr),
     scalars: AddScalars(
+      aOff: int32(s.offset),
+      bOff: int32(o.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
@@ -306,6 +314,8 @@ proc mul*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl =
     aAddr: cast[uint64](s.storage[0].unsafeAddr),
     bAddr: cast[uint64](o.storage[0].unsafeAddr),
     scalars: Mul2Scalars(
+      aOff: int32(s.offset),
+      bOff: int32(o.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
@@ -331,6 +341,7 @@ proc mulScalar*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImpl =
     outAddr: cast[uint64](outStorage[0].addr),
     aAddr: cast[uint64](s.storage[0].unsafeAddr),
     scalars: MulScalars(
+      aOff: int32(s.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       scalar: float32(scalar),
@@ -358,6 +369,8 @@ proc addNoGrad*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl
     aAddr: cast[uint64](s.storage[0].unsafeAddr),
     bAddr: cast[uint64](o.storage[0].unsafeAddr),
     scalars: AddScalars(
+      aOff: int32(s.offset),
+      bOff: int32(o.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
@@ -384,6 +397,8 @@ proc mulNoGrad*[T](s: TensorImpl[T, bkCpu], other: AnyTensorImpl): AnyTensorImpl
     aAddr: cast[uint64](s.storage[0].unsafeAddr),
     bAddr: cast[uint64](o.storage[0].unsafeAddr),
     scalars: Mul2Scalars(
+      aOff: int32(s.offset),
+      bOff: int32(o.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
@@ -408,6 +423,7 @@ proc mulScalarNoGrad*[T](s: TensorImpl[T, bkCpu], scalar: float64): AnyTensorImp
     outAddr: cast[uint64](outStorage[0].addr),
     aAddr: cast[uint64](s.storage[0].unsafeAddr),
     scalars: MulScalars(
+      aOff: int32(s.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       scalar: float32(scalar),
@@ -443,13 +459,15 @@ proc onesNoGrad*[T](s: TensorImpl[T, bkCpu]): AnyTensorImpl =
     storage: outStorage).to(AnyTensorImpl)
 
 proc readbackBytes*[T](s: TensorImpl[T, bkCpu]): seq[byte] =
-  ## Copies the tensor's storage to host bytes, materializing pending ops first.
+  ## Copies the tensor to host bytes in logical order, last axis fastest,
+  ## materializing pending ops first. A view gathers through its strides and offset.
   ## Reading a pending tensor evals the context (the MLX rule).
   if s.ctx.isPending(s.seqNo):
     s.ctx.eval()
-  result = newSeq[byte](s.getNumel() * sizeof(T))
-  if result.len > 0:
-    copyMem(result[0].addr, s.storage[0].unsafeAddr, result.len)
+  if s.getNumel() == 0:
+    return newSeq[byte](0)
+  let base = cast[ptr T](cast[int](s.storage[0].unsafeAddr) + s.offset * sizeof(T))
+  stridedBytes[T](base, s.shape, s.strides)
 
 proc toErased*[T](s: TensorImpl[T, bkCpu]): AnyTensorImpl =
   ## Returns the erased face over `s`.

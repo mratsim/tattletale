@@ -185,7 +185,7 @@ proc `*`*(a: Tensor, scalar: float64): Tensor =
   Tensor(ctx: a.ctx, impl: outImpl, dtype: a.dtype, device: a.device)
 
 proc toSeq*[T](t: Tensor): seq[T] =
-  ## Values in storage order, last axis fastest.
+  ## Values in logical order, last axis fastest, views gathered through their strides.
   ##
   ## Reading materializes: a pending tensor evals the context first (the MLX rule).
   ## Raises AssertionDefect when T does not match the tensor's dtype.
@@ -218,3 +218,68 @@ proc to*(t: Tensor, Hw: static BackendKind): Tensor =
   for i in 0 ..< int(sh.len):
     shape[i] = int(sh[i])
   toTensorShaped(t.ctx, host, Hw, shape.toOpenArray(0, int(sh.len) - 1), false)
+
+# Shape ops: pure metadata, never enqueue, never touch submission counts.
+# ------------------------------------------------------------
+
+proc toShapeSeq(dims: openArray[int]): SmallSeq[4, int32] =
+  ## Rank-checked dims as a SmallSeq.
+  ##
+  ## Raises AssertionDefect when the rank leaves 1 to 4.
+  doAssert dims.len in 1 .. 4,
+      "rank " & $dims.len & " refused, tensorcery supports rank 1 to 4"
+  var extents: array[4, int32]
+  for i in 0 ..< dims.len:
+    extents[i] = int32(dims[i])
+  result = SmallSeq[4, int32].initFrom(extents.toOpenArray(0, dims.len - 1))
+
+proc wrapView(t: Tensor, outImpl: AnyTensorImpl): Tensor =
+  ## Face wrapper over a metadata view: registers the new tensor id and keeps the parent's dtype and device.
+  tape.register(t.ctx, outImpl.getTid(), outImpl)
+  Tensor(ctx: t.ctx, impl: outImpl, dtype: t.dtype, device: t.device)
+
+proc reshape*(t: Tensor, shape: varargs[int]): Tensor =
+  ## Reshape as a pure-metadata view over the same storage, never enqueues.
+  ##
+  ## Raises AssertionDefect when the element count changes or the rank leaves 1 to 4.
+  wrapView(t, t.impl.reshape(toShapeSeq(shape)))
+
+proc flatten*(t: Tensor): Tensor =
+  ## Collapses to one axis over the same storage, a reshape to the element count.
+  wrapView(t, t.impl.reshape(toShapeSeq([t.getNumel()])))
+
+proc permute*(t: Tensor, perm: varargs[int]): Tensor =
+  ## Dimension permutation as a pure-metadata view: output axis i reads source axis perm[i].
+  ##
+  ## Raises AssertionDefect when `perm` is not a permutation of the axes.
+  wrapView(t, t.impl.permuteDims(toShapeSeq(perm)))
+
+proc transpose*(t: Tensor): Tensor =
+  ## Rank-2 transpose as a pure-metadata view.
+  ##
+  ## Raises AssertionDefect when the tensor is not rank 2.
+  doAssert int(t.getShape().len) == 2,
+      "transpose: rank " & $t.getShape().len & " refused, rank 2 only"
+  wrapView(t, t.impl.permuteDims(toShapeSeq([1, 0])))
+
+proc slice*(t: Tensor, sel: varargs[Slice[int]]): Tensor =
+  ## Range selection as a pure-metadata view: axis i keeps `sel[i]`.
+  ## Unselected trailing axes keep every element.
+  ##
+  ## Raises AssertionDefect when a selection is empty or reaches beyond the axis end.
+  let rank = int(t.getShape().len)
+  doAssert sel.len <= rank,
+      "slice: " & $sel.len & " selections on a rank " & $rank & " tensor refused"
+  var start, count: array[4, int32]
+  for i in 0 ..< rank:
+    if i < sel.len:
+      let lo = sel[i].a
+      let hi = sel[i].b
+      start[i] = int32(lo)
+      count[i] = int32(hi - lo + 1)
+    else:
+      start[i] = 0
+      count[i] = t.getShape()[i]
+  wrapView(t, t.impl.sliceRange(
+    SmallSeq[4, int32].initFrom(start.toOpenArray(0, rank - 1)),
+    SmallSeq[4, int32].initFrom(count.toOpenArray(0, rank - 1))))

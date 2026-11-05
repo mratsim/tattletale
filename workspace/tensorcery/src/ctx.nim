@@ -24,6 +24,9 @@ type
     opMul       ## scalar multiply, kernel k_mul
     opMul2      ## elementwise product of two tensors, kernel k_mul2
     opFill      ## fill with ones, kernel k_fill
+    opReshape   ## pure-metadata reshape, never dispatched
+    opPermute   ## pure-metadata dimension permutation, never dispatched
+    opSlice     ## pure-metadata range selection, never dispatched
 
   LaunchCfg* = object
     ## Threadgroup dispatch of one recorded op.
@@ -36,7 +39,7 @@ type
     kernel*: KernelId
     backend*: BackendKind  ## owning backend of the entry's dispatch
     blob*: seq[byte]   ## flat image of the op's args object, marshaled at enqueue
-    inputs*: array[2, int]  ## tensor ids of the op's tensor inputs, 0 for an absent input
+    inputs*: array[4, int]  ## tensor ids of the op's tensor inputs, 0 for an absent input
     output*: int       ## tensor id of the entry's output
     isGrad*: bool      ## true when the entry belongs to a backward() grad segment
     cfg*: LaunchCfg
@@ -55,18 +58,23 @@ type
     drains*: array[BackendKind, DrainFn]  ## per-backend submission paths, nil until wired
 
 proc enqueue*(ctx: Ctx, kernel: KernelId, blob: seq[byte], cfg: LaunchCfg, backend: BackendKind,
-    output: int, inputA = 0, inputB = 0, isGrad = false): int =
+    output: int, inputA = 0, inputB = 0, inputC = 0, inputD = 0, isGrad = false): int =
   ## Appends one op entry to the record.
   ##
   ## - `output`: the tensor id of the entry's output, allocated through newTid before the call
-  ## - `inputA`, `inputB`: tensor ids of the op's tensor inputs, 0 for an absent input
+  ## - `inputA` to `inputD`: tensor ids of the op's tensor inputs, 0 for an absent input
   ## - `isGrad`: marks entries appended by backward()
   ##
   ## Returns the op id of the entry.
   ctx.opSeq.inc
   ctx.record.add OpEntry(id: ctx.opSeq, kernel: kernel, backend: backend, blob: blob,
-      inputs: [inputA, inputB], output: output, isGrad: isGrad, cfg: cfg)
+      inputs: [inputA, inputB, inputC, inputD], output: output, isGrad: isGrad, cfg: cfg)
   ctx.opSeq
+
+proc isShapeOp*(kernel: KernelId): bool =
+  ## Returns true for the pure-metadata kernels: their entries record the view change
+  ## for the backward walk and every backend drain skips them.
+  kernel in {opReshape, opPermute, opSlice}
 
 proc newTid*(ctx: Ctx): int =
   ## Returns a fresh tensor id, unique within the context for the process lifetime.
@@ -78,9 +86,11 @@ proc isPending*(ctx: Ctx, opId: int): bool =
   opId > ctx.drainedTo
 
 proc hasPending*(ctx: Ctx, backend: BackendKind): bool =
-  ## Returns true when the record contains an undrained entry owned by `backend`.
+  ## Returns true when the record contains an undrained entry owned by `backend`
+  ## that a drain can dispatch. Shape-op entries never dispatch, so a record
+  ## holding only them submits nothing.
   for entry in ctx.record:
-    if entry.backend == backend and ctx.isPending(entry.id):
+    if entry.backend == backend and ctx.isPending(entry.id) and not isShapeOp(entry.kernel):
       return true
 
 proc getPendingCount*(ctx: Ctx): int =

@@ -48,7 +48,8 @@ const
 const metalSource* = kAddMsl & kMulMsl & kMul2Msl & kFillMsl
 
 const kernelNames: array[KernelId, string] =
-  [opAdd: "k_add", opMul: "k_mul", opMul2: "k_mul2", opFill: "k_fill"]
+  [opAdd: "k_add", opMul: "k_mul", opMul2: "k_mul2", opFill: "k_fill",
+   opReshape: "", opPermute: "", opSlice: ""]
 
 var
   sessionDevice, sessionQueue, sessionLibrary: objc.ID
@@ -137,6 +138,9 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
     for entry in ctx.record:
       if entry.backend != bkMetal or not ctx.isPending(entry.id):
         continue
+      if isShapeOp(entry.kernel):
+        # pure metadata, never dispatches
+        continue
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"),
           cachePso(kernelNames[entry.kernel]))
       case entry.kernel
@@ -148,6 +152,9 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
         bindBlob(encoder, entry.blob, mul2BufferSlots, sizeof(Mul2Scalars))
       of opFill:
         bindBlob(encoder, entry.blob, fillBufferSlots, sizeof(FillScalars))
+      of opReshape, opPermute, opSlice:
+        # pure metadata, skipped above
+        discard
       dispatchThreadgroups(encoder, entry.cfg)
     discard objc.msgSend(encoder, objc.`$$`("endEncoding"))
     discard objc.msgSend(cmdBuf, objc.`$$`("commit"))
@@ -208,6 +215,8 @@ proc add*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
     aAddr: cast[uint64](s.mem),
     bAddr: cast[uint64](o.mem),
     scalars: AddScalars(
+      aOff: int32(s.offset),
+      bOff: int32(o.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
@@ -235,6 +244,8 @@ proc mul*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
     aAddr: cast[uint64](s.mem),
     bAddr: cast[uint64](o.mem),
     scalars: Mul2Scalars(
+      aOff: int32(s.offset),
+      bOff: int32(o.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
@@ -259,6 +270,7 @@ proc mulScalar*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorImpl =
     outAddr: cast[uint64](outMem),
     aAddr: cast[uint64](s.mem),
     scalars: MulScalars(
+      aOff: int32(s.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       scalar: float32(scalar),
@@ -285,6 +297,8 @@ proc addNoGrad*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorIm
     aAddr: cast[uint64](s.mem),
     bAddr: cast[uint64](o.mem),
     scalars: AddScalars(
+      aOff: int32(s.offset),
+      bOff: int32(o.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
@@ -310,6 +324,8 @@ proc mulNoGrad*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorIm
     aAddr: cast[uint64](s.mem),
     bAddr: cast[uint64](o.mem),
     scalars: Mul2Scalars(
+      aOff: int32(s.offset),
+      bOff: int32(o.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       sb: padTo4(o.strides, 0),
@@ -333,6 +349,7 @@ proc mulScalarNoGrad*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorI
     outAddr: cast[uint64](outMem),
     aAddr: cast[uint64](s.mem),
     scalars: MulScalars(
+      aOff: int32(s.offset),
       shape: padTo4(s.shape, 1),
       sa: padTo4(s.strides, 0),
       scalar: float32(scalar),
@@ -366,12 +383,15 @@ proc onesNoGrad*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
     mem: outMem).to(AnyTensorImpl)
 
 proc readbackBytes*[T](s: TensorImpl[T, bkMetal]): seq[byte] =
-  ## Copies the tensor's storage to host bytes, materializing pending ops first.
+  ## Copies the tensor to host bytes in logical order, last axis fastest,
+  ## materializing pending ops first. A view gathers through its strides and offset.
   ## Reading a pending tensor evals the context (the MLX rule).
   if s.ctx.isPending(s.seqNo):
     s.ctx.eval()
-  result = newSeq[byte](s.getNumel() * sizeof(T))
-  readbackDeviceMem(s.mem, result[0].addr, result.len)
+  if s.getNumel() == 0:
+    return newSeq[byte](0)
+  let base = cast[ptr T](cast[int](contents(cast[objc.ID](s.mem))) + s.offset * sizeof(T))
+  stridedBytes[T](base, s.shape, s.strides)
 
 proc toErased*[T](s: TensorImpl[T, bkMetal]): AnyTensorImpl =
   ## Returns the erased face over `s`.
