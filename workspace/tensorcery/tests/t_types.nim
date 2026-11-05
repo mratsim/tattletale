@@ -22,6 +22,7 @@ import workspace/data_structures/src/small_seqs
 import workspace/tensorcery
 
 privateAccess(Tensor)
+privateAccess(TensorImpl[float32, bkCpu])
 
 proc main() =
   let ctx = Ctx()
@@ -38,6 +39,7 @@ proc main() =
     doAssert back != nil
     doAssert back.shape == [2'i32, 3'i32]
     doAssert back.strides == [3'i32, 1'i32]
+    doAssert back.storage == @[1.0'f32, 2.0, 3.0, 4.0, 5.0, 6.0]
 
   block rank4:
     let t4 = toTensor(ctx, @[1, 2, 3, 4, 5, 6, 7, 8], 1, 2, 2, 2)

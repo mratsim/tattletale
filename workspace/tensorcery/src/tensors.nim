@@ -45,7 +45,7 @@ proc toTensor*[T](ctx: Ctx, data: openArray[T], shape: varargs[int]): Tensor =
   toTensor[T](ctx, data, bkCpu, shape)
 
 proc getNumel*(t: Tensor): int =
-  ## Returns the element count, the product of the shape sizes.
+  ## Returns the element count as a product over all shape sizes.
   t.impl.getNumel()
 
 proc getShape*(t: Tensor): SmallSeq[4, int32] =

@@ -63,8 +63,11 @@ proc toTensorImpl*[T; Hw: static BackendKind](
     stride *= shape[i]
   result.strides = SmallSeq[4, int32].initFrom(strides.toOpenArray(0, shape.len - 1))
 
+  when Hw == bkCpu:
+    result.storage = @data
+
 proc getNumel*[T; Hw: static BackendKind](s: TensorImpl[T, Hw]): int =
-  ## Returns the element count, the product of the shape sizes.
+  ## Returns the element count as a product over all shape sizes.
   result = 1
   for i in 0 ..< int(s.shape.len):
     result *= int(s.shape[i])
