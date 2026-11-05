@@ -1,5 +1,6 @@
 # Run: nim c -r --hints:off --warnings:off --outdir:build/wip --nimcache:nimcache/wip workspace/ceramic/tests/layout_algebra/t_complement.nim
 
+import workspace/math
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 
@@ -226,9 +227,40 @@ proc runMultiDimensionStaticTests =
     check r.shape, (2, 1), (Int[2], Int[1])
     check r.stride, (4, 100), (Int[4], Int[100])
 
+# ── runtime shapes, aligned coordinate-block tiler ────────────
+proc runRuntimeBlockComplementTests =
+  # Thread->value map of one (32, 2) A tile: a static tiler whose image is
+  # one aligned coordinate block, complemented against a runtime (m, k) box.
+  # logical_divide computes the rest as `complement(make_layout(tiler.shape, tiler.stride), src.shape)`.
+  # - the rest shape is (ceil(m/32), ceil(k/2))
+  # - the rest strides are the coordinate strides 32@0, 2@1
+  const
+    fragA = make_layout(((4, 8), (4, 2)), ((0, 4), (1, 32)))
+    blockTiler = compose(make_identity_layout((32, 2)),
+      compose(make_layout((32, 2), (1, 32)), fragA))
+  block:
+    # ragged box: 4 blocks cover m in 3 full + 1 partial, 23 cover k
+    var m = 97
+    var k = 45
+    let src = make_identity_layout((m, k))
+    let r = complement(make_layout(blockTiler.shape, blockTiler.stride), src.shape)
+    doAssert r.shape == (ceil_div(m, 32), ceil_div(k, 2))
+    doAssert r.stride[0] === E(32, 0)
+    doAssert r.stride[1] === E(2, 1)
+  block:
+    # divisible box: the block sizes divide both axes exactly
+    var m = 64
+    var k = 8
+    let src = make_identity_layout((m, k))
+    let r = complement(make_layout(blockTiler.shape, blockTiler.stride), src.shape)
+    doAssert r.shape == (ceil_div(m, 32), ceil_div(k, 2))
+    doAssert r.stride[0] === E(32, 0)
+    doAssert r.stride[1] === E(2, 1)
+
 proc runTests =
   runRank1StaticTests()
   runMultiDimensionStaticTests()
+  runRuntimeBlockComplementTests()
 
 runTests()
 echo "ALL TESTS PASSED"
