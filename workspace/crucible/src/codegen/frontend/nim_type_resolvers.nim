@@ -307,7 +307,7 @@ func isCompileTimeFormal*(t: NimNode): bool =
     return true
   return false
 
-func phantomStaticArg*(n: NimNode): NimNode =
+func getPhantomStaticArg*(n: NimNode): NimNode =
   ## Static argument of a phantom value type, nil when absent.
   ##
   ## - a phantom value type is an object with no fields whose value is
@@ -425,7 +425,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
   of ntyAlias:
     result = r.resolveCirType(n.getTypeImpl(), ptrSpace)
   of ntyObject, ntyTuple, ntyGenericInst:
-    if phantomStaticArg(n).isNil:
+    if getPhantomStaticArg(n).isNil:
       result = r.resolveStructType(n)
     else:
       # a phantom value type's value is its static argument, an int

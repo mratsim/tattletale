@@ -806,7 +806,7 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
-    let phantomArg = phantomStaticArg(n.getTypeInst())
+    let phantomArg = getPhantomStaticArg(n.getTypeInst())
     if not phantomArg.isNil:
       # a phantom value's value is its static argument, an int
       return intLit(phantomArg.intVal, tInt(32))
