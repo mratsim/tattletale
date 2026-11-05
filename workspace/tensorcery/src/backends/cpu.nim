@@ -121,7 +121,7 @@ proc cpuOpTask(env: pointer) {.cdecl.} =
   ## - runs the kernel through the parallelFor wrapper
   ## - fires the op's flow event, counts one completion
   # task->env layout is [task self-pointer][payload], the fn receives the header included
-  # the CpuOpTaskEnv payload follows it
+  # CpuOpTaskEnv payload sits behind the header
   let work = cast[ptr CpuOpTaskEnv](cast[int](env) + FlowvarHeaderSize)[].work
   work.run(work)
   flowEvent_trigger(work.event, workerContext(), scheduleFromEvent)
