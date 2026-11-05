@@ -85,10 +85,12 @@ proc gradcheck(n: int, adata, bdata: seq[float32],
 
 proc main() =
   let n = 4
-  var adata, bdata: seq[float32]
+  var adata, bdata, wdata, xdata: seq[float32]
   for i in 0 ..< n:
     adata.add frand(i + 11)
     bdata.add frand(i + 23)
+    wdata.add frand(i + 37)
+    xdata.add frand(i + 41)
 
   block gradcheckAdd:
     let f = proc(x, y: seq[float64]): float64 = sumF64(x) + sumF64(y)
@@ -152,6 +154,24 @@ proc main() =
         expected.add centralDiff(f, a64, b64, which, i)
       let got = if which == 0: toSeq[float32](grad(a)) else: toSeq[float32](grad(b))
       checkBand(got, expected, "fanout finite differences, input " & $which)
+
+  block paramUpdateStep:
+    # forward + backward + parameter update in ONE record, ONE eval
+    let ctx = Ctx()
+    let w = toGradTensor(ctx, wdata, n)
+    let x = toTensor(ctx, xdata, n)
+    let loss = (w * x) * 0.5
+    backward(loss)
+    let lr = -0.5
+    let updated = w + grad(w) * lr
+    doAssert ctx.getPendingCount() > 0, "forward, backward and update wait in one record"
+    ctx.eval()
+    var expectW: seq[float64]
+    for i in 0 ..< n:
+      expectW.add float64(wdata[i]) + float64(xdata[i]) * 0.5 * lr
+    for i in 0 ..< n:
+      doAssert abs(float64(toSeq[float32](updated)[i]) - expectW[i]) < 1e-5,
+          "paramUpdateStep w'[" & $i & "]"
 
   block evalThenBackward:
     # forward, eval, backward, eval: the walk reads the drained forward entries

@@ -87,10 +87,12 @@ proc gradcheck(n: int, adata, bdata: seq[float32],
 
 proc main() =
   let n = 4
-  var adata, bdata: seq[float32]
+  var adata, bdata, wdata, xdata: seq[float32]
   for i in 0 ..< n:
     adata.add frand(i + 11)
     bdata.add frand(i + 23)
+    wdata.add frand(i + 37)
+    xdata.add frand(i + 41)
 
   block gradcheckAdd:
     let f = proc(x, y: seq[float64]): float64 = sumF64(x) + sumF64(y)
@@ -135,6 +137,24 @@ proc main() =
       expectB.add float64(adata[i]) * 0.5
     checkBand(toSeq[float32](grad(a)), expectA, "oneEvalPerStep d/da")
     checkBand(toSeq[float32](grad(b)), expectB, "oneEvalPerStep d/db")
+
+  block paramUpdateStep:
+    # forward + backward + parameter update in ONE record, ONE eval, ONE submission
+    let ctx = Ctx()
+    let w = toGradTensor(ctx, wdata, bkMetal, n)
+    let x = toTensor(ctx, xdata, bkMetal, n)
+    let loss = (w * x) * 0.5
+    backward(loss)
+    let lr = -0.5
+    let updated = w + grad(w) * lr
+    resetSubmissionCount()
+    ctx.eval()
+    doAssert submissionCount == 1,
+        "forward, backward and update must drain as ONE submission, got " & $submissionCount
+    var expectW: seq[float64]
+    for i in 0 ..< n:
+      expectW.add float64(wdata[i]) + float64(xdata[i]) * 0.5 * lr
+    checkBand(toSeq[float32](updated), expectW, "paramUpdateStep w'")
 
   block evalThenBackward:
     # forward, eval, backward, eval: exactly one submission per eval
