@@ -23,11 +23,6 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerFoldLiteralConvs*(reg: var PassRegistry) =
-  reg.register("foldLiteralConvs", pkTransform,
-    "Folds a conversion over a literal into a literal of the conversion target's type",
-    run = foldLiteralConvsPass)
-
 func registerResolveBoolDomain*(reg: var PassRegistry) =
   reg.register("resolveBoolDomain", pkTransform,
     "Rewrites bitwise operators over bool operands to the logical form, xor as the != comparison",
@@ -59,7 +54,6 @@ func registerMarkExplicitUnrolls*(reg: var PassRegistry) =
 
 func registerNormalizationPasses*(reg: var PassRegistry) =
   # resolveBoolDomain runs before typeLiterals: the domain rewrite decides the operator shape before the literal retypes run
-  reg.registerFoldLiteralConvs()
   reg.registerResolveBoolDomain()
   reg.registerTypeLiterals()
   reg.registerCompleteConstructors()
@@ -143,32 +137,6 @@ proc fillOmittedFields(e: CirExpr) =
         break
     ordered.add(kv(f.name, if value != nil: value else: zeroValue(f.typ)))
   e.kvFields = ordered
-
-proc foldLiteralConvsPass(m: CirModule): string =
-  for fn in m.procs:
-    fn.body.walkStmts(nil, proc(e: CirExpr) =
-      if e.kind != eConv:
-        return
-      # a conversion over a literal is exact, the node folds to a literal
-      # at the conversion target
-      if e.castType == nil or e.castType.kind == ctBf16 or
-          e.castOperand.kind notin {eIntLit, eFloatLit}:
-        return
-      let typ = e.castType
-      let op = e.castOperand
-      if typ.kind == ctFloat and op.kind == eIntLit:
-        e.kind = eFloatLit
-        e.fValue = op.value.float
-        e.fLitType = typ
-      elif op.kind == eIntLit:
-        e.kind = eIntLit
-        e.value = op.value
-        e.litType = typ
-      else:
-        # Float-literal operand, the cast retypes it in place
-        e.kind = eFloatLit
-        e.fValue = op.fValue
-        e.fLitType = typ)
 
 proc resolveBoolDomainPass(m: CirModule): string =
   for fn in m.procs:
