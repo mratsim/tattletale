@@ -889,7 +889,7 @@ proc adamUpdate*[T](s: TensorImpl[T, bkCpu], grad, m, v: AnyTensorImpl, pack: Ad
 proc softmaxBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g, p: AnyTensorImpl): AnyTensorImpl =
   ## Erased grad-chain softmax backward: dX = p * (g - rowsum(g * p)) over the last axis.
   ## - `s` is the softmax input: the output takes its shape.
-  ## - The grad flag stays off. The walk never differentiates a grad.
+  ## - The grad flag is off. The walk never differentiates a grad.
   let gImpl = g.to(TensorImpl[T, bkCpu])
   let pImpl = p.to(TensorImpl[T, bkCpu])
   let dAxis = int(s.shape[int(s.shape.len) - 1])
@@ -1007,7 +1007,7 @@ proc crossEntropyBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g, targets: AnyTensorImp
 
 proc gatherBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g, idx: AnyTensorImpl): AnyTensorImpl =
   ## Erased grad-chain embedding gather backward: each table element accumulates
-  ## the cotangent elements whose index names its table entry, so no atomics are needed.
+  ## the cotangent elements whose index selects its table entry, so no atomics are needed.
   ## Args: the rank-2 table `s` and cotangent `g`, with the int32 `idx`.
   let gImpl = g.to(TensorImpl[T, bkCpu])
   let idxImpl = idx.to(TensorImpl[int32, bkCpu])
@@ -1022,7 +1022,7 @@ proc gatherBwdNoGrad*[T](s: TensorImpl[T, bkCpu], g, idx: AnyTensorImpl): AnyTen
     idxAddr: cast[uint64](idxImpl.storage.data[0].unsafeAddr),
     scalars: GatherBwdScalars(
       gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
-      idxOff: int32(idxImpl.offset), wOff: int32(s.offset),
+      idxOff: int32(idxImpl.offset),
       e: e, n: int32(gImpl.getNumel()), wNumel: int32(s.getNumel()))))
   s.record(opGatherBwd, blob, outStorage, s.shape,
       false, true, gImpl.tid, idxImpl.tid, 0).to(AnyTensorImpl)

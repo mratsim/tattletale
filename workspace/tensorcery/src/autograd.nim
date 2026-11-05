@@ -26,7 +26,7 @@
 ##
 ## - softmax, gelu, layernorm, cross entropy: fused backward kernels, one output per entry
 ## - where: composed from the erased primitives, branch indicators mask the operand cotangents
-##   and the float mask takes the straight-through subgradient (a - b) * g
+##   and the float mask subgradient is the straight-through value (a - b) * g
 ##
 ## - sgd, adam: terminal, in-place parameter updates have no vjp
 ## - seed: a fill of ones over the loss shape
@@ -108,7 +108,7 @@ proc backward*(loss: Tensor) =
       discard
     of opReshape:
       # vjp is the identity as a metadata view over the input's layout.
-      # A reshape keeps the logical element order and its input is contiguous, so the view
+      # A reshape preserves the logical element order and its input is contiguous, so the view
       # reinterprets the cotangent buffer over the input's shape and strides.
       # A strided cotangent (a shape op consumed the reshape output) has no stride
       # image for the regrouped axes and materializes first. A zero add copies it
@@ -191,7 +191,7 @@ proc backward*(loss: Tensor) =
       # vjp composed from the erased primitives. The select branches on cond != 0,
       # so each operand cotangent is masked by its branch indicator: da = g * step(cond),
       # db = g * (1 - step(cond)) with step(cond) built through a where over a ones fill
-      # and its zero. The cotangent of the float mask takes the straight-through value (a - b) * g.
+      # and its zero. The float mask cotangent is the straight-through value (a - b) * g.
       let condTid = entry.inputs[0]
       let aTid = entry.inputs[1]
       let bTid = entry.inputs[2]

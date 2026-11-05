@@ -7,20 +7,16 @@
 
 ## Embedding gather backward kernel: scatter-add of the cotangent into the rank-2 embedding table gradient.
 ##
-## With out[r, c] = weight[idx[r], c] as the gather forward, g the cotangent of the gather output
-## and dw the zero-initialized table gradient (vocabulary, e):
-##   dw[idx[r], c] += g[r, c]
+## Forward: out[r, c] = weight[idx[r], c]. Backward accumulates dw[idx[r], c] += g[r, c] over every index entry r.
 ##
-## Several indices can name the same table entry, so the scatter adds:
+## Backends | strategy
+## -------- | --------
+## Metal | one thread per cotangent element, `atomic_float` fetch-add
+## CPU | one thread per table element, atomic-free per-entry accumulation
 ##
-## - Metal: one thread per cotangent element, `atomic_float` fetch-add
-## - CPU: one thread per table element, accumulating over the index entries
-##   (atomic-free: each thread owns one output element)
-##
-## - The cotangent `g` may be an arbitrary view: element i resolves through the padded 4-axis divmod chain on the cotangent shape.
-## - `idx` is a contiguous int32 view. The output is freshly allocated contiguous.
-##
-## GatherBwdScalars matches the MSL `GatherBwdParams` struct field for field, so one setBytes binds the whole scalar image.
+## - the cotangent `g` may be an arbitrary view read through the padded divmod chain
+## - `idx` is contiguous int32 and the output is freshly allocated
+
 
 const kGatherBwdMsl* = """
 struct GatherBwdParams {
@@ -28,7 +24,6 @@ struct GatherBwdParams {
   int32_t gShape[4];
   int32_t gStrides[4];
   int32_t idxOff;
-  int32_t wOff;
   int32_t e;
   int32_t n;
 };
@@ -52,7 +47,7 @@ kernel void k_gather_bwd(device atomic_float* dw [[buffer(0)]],
     int entry = i / p.e;
     int col = i - entry * p.e;
     int wrow = idx[p.idxOff + entry];
-    atomic_fetch_add_explicit(&dw[p.wOff + wrow * p.e + col], g[gi],
+    atomic_fetch_add_explicit(&dw[wrow * p.e + col], g[gi],
                               memory_order_relaxed);
   }
 }
@@ -63,11 +58,11 @@ type GatherBwdScalars* = object
   ##
   ## - gOff: the cotangent offset in elements
   ## - gShape, gStrides: the padded cotangent shape and strides
-  ## - idxOff, wOff: the index and table gradient offsets in elements
+  ## - idxOff: the index offset in elements
   ## - e: the embedding dim, n: the flat element count of the cotangent
   gOff*: int32
   gShape*, gStrides*: array[4, int32]
-  idxOff*, wOff*: int32
+  idxOff*: int32
   e*, n*: int32
   wNumel*: int32
     ## Flat element count of the table gradient and the CPU iteration count

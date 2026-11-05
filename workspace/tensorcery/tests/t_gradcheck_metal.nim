@@ -47,7 +47,6 @@ type F64Fn = proc(xs: seq[seq[float64]]): float64 {.closure.}
   ## Host reference: the scalar value of the op graph over the f64 leaf images.
 
 proc centralDiff(f: F64Fn, xs: seq[seq[float64]], leaf, i: int): float64 =
-  ## Central finite difference of `f` at element `i` of leaf `leaf`, step 1e-4.
   const h = 1e-4
   var xp = xs
   xp[leaf][i] += h
@@ -56,8 +55,6 @@ proc centralDiff(f: F64Fn, xs: seq[seq[float64]], leaf, i: int): float64 =
   result = (plus - f(xp)) / (2 * h)
 
 proc expectGrad(leaf: Tensor, f: F64Fn, xs: seq[seq[float64]], li: int, label: string, maxDeltas: var seq[string]) =
-  ## Compares one leaf gradient against the finite differences of the host
-  ## reference and records the max delta under `label`.
   var expected: seq[float64]
   for i in 0 ..< xs[li].len:
     expected.add centralDiff(f, xs, li, i)
@@ -261,6 +258,51 @@ proc main() =
           total += xs[0][(1 * d1 + b) * d2 + c]
       total
     expectGrad(x, f, @[toF64(xdata)], 0, "metal slice d/dx", maxDeltas)
+
+  block permuteGrad:
+    # weighted loss: a uniform cotangent cannot expose a stride error
+    let (d0, d1, d2) = (2, 3, 4)
+    var xdata, wdata: seq[float32]
+    for i in 0 ..< d0 * d1 * d2:
+      xdata.add frand(i + 151)
+      wdata.add frand(i + 301)
+    let ctx = Ctx()
+    let x = toGradTensor(ctx, xdata, bkMetal, d0, d1, d2)
+    let wts = toTensor(ctx, wdata, bkMetal, d2, d0, d1)
+    let loss = x.permute(2, 0, 1) * wts
+    backward(loss)
+    drainOneSubmission(ctx, "metal permute")
+
+    let f = proc(xs: seq[seq[float64]]): float64 =
+      # out axis i reads x axis perm[i], so out[a, b, c] = x[b, c, a]
+      var total = 0.0
+      for a in 0 ..< d2:
+        for b in 0 ..< d0:
+          for c in 0 ..< d1:
+            total += float64(wdata[a * d0 * d1 + b * d1 + c]) *
+                xs[0][b * d1 * d2 + c * d2 + a]
+      total
+    expectGrad(x, f, @[toF64(xdata)], 0, "metal permute d/dx", maxDeltas)
+
+  block reshapeGrad:
+    let (d0, d1, d2) = (2, 3, 4)
+    var xdata, wdata: seq[float32]
+    for i in 0 ..< d0 * d1 * d2:
+      xdata.add frand(i + 161)
+      wdata.add frand(i + 311)
+    let ctx = Ctx()
+    let x = toGradTensor(ctx, xdata, bkMetal, d0, d1, d2)
+    let wts = toTensor(ctx, wdata, bkMetal, d0 * d1 * d2)
+    let loss = x.reshape(d0 * d1, d2).flatten() * wts
+    backward(loss)
+    drainOneSubmission(ctx, "metal reshape")
+
+    let f = proc(xs: seq[seq[float64]]): float64 =
+      var total = 0.0
+      for i in 0 ..< d0 * d1 * d2:
+        total += float64(wdata[i]) * xs[0][i]
+      total
+    expectGrad(x, f, @[toF64(xdata)], 0, "metal reshape d/dx", maxDeltas)
 
   for line in maxDeltas:
     stdout.writeLine line

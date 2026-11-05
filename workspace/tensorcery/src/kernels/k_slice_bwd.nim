@@ -7,15 +7,15 @@
 
 ## Range-selection backward kernel: scatter of the cotangent into the zeroed gradient of the sliced tensor.
 ##
-## The slice forward keeps count[i] elements from start[i] per axis, and its vjp
+## The slice forward selects count[i] elements from start[i] per axis, and its vjp
 ## scatters the cotangent g of the view into a fresh zeroed buffer over the parent's shape:
 ##   dparent[start + c] = g[c]   per view coordinate c, all axes
 ##
 ## - output element for view coordinate c: base + sum_c[d] * outStrides[d]
 ##   with base = sum start[d] * outStrides[d] over the parent shape strides
-## - cotangent element for c: the padded 4-axis divmod chain on the cotangent shape (one cotangent element per parent element)
+## - cotangent element for c: the padded 4-axis divmod chain on the cotangent shape (one thread per cotangent element)
 ## - The output is freshly allocated contiguous and zero-filled before the kernel runs.
-##   The untouched parent elements keep their zero gradient.
+##   The untouched parent elements retain their zero gradient.
 ##
 ## SliceBwdScalars matches the MSL `SliceBwdParams` struct field for field, so one setBytes binds the whole scalar image.
 

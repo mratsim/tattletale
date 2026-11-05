@@ -49,7 +49,7 @@ type F64Fn = proc(xs: seq[seq[float64]]): float64 {.closure.}
 proc centralDiff(f: F64Fn, xs: seq[seq[float64]], leaf, i: int): float64 =
   ## Central finite difference of `f` at element `i` of leaf `leaf`, step 1e-4:
   ## the h^2 truncation of the smooth op set sits under the comparison band,
-  ## while f64 rounding at this step stays orders of magnitude below it.
+  ## while f64 rounding at this step remains orders of magnitude below it.
   const h = 1e-4
   var xp = xs
   xp[leaf][i] += h
@@ -58,18 +58,11 @@ proc centralDiff(f: F64Fn, xs: seq[seq[float64]], leaf, i: int): float64 =
   result = (plus - f(xp)) / (2 * h)
 
 proc expectGrad(leaf: Tensor, f: F64Fn, xs: seq[seq[float64]], li: int, label: string, maxDeltas: var seq[string]) =
-  ## Compares one leaf gradient against the finite differences of the host
-  ## reference and records the max delta under `label`.
   var expected: seq[float64]
   for i in 0 ..< xs[li].len:
     expected.add centralDiff(f, xs, li, i)
   let delta = checkBand(toSeq[float32](grad(leaf)), expected, label)
   maxDeltas.add label & ": max delta " & $delta
-
-proc sumRef(xs: seq[seq[float64]], li: int): float64 =
-  ## Host reference for a loss that sums one leaf's elements.
-  for v in xs[li]:
-    result += v
 
 proc main() =
   var maxDeltas: seq[string]
@@ -378,7 +371,7 @@ proc main() =
     ctx.eval()
 
     let f = proc(xs: seq[seq[float64]]): float64 =
-      # q[i, j, k] = p[i, k, j] = x[j, i, k] with p = x.permute(2, 0, 1),
+      # q[i, j, k] = p[i, k, j] = x[k, j, i] with p = x.permute(2, 0, 1),
       # q shaped (d2, d1, d0)
       var total = 0.0
       for i in 0 ..< d2:

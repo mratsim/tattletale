@@ -632,7 +632,7 @@ proc softmaxBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g, p: AnyTensorImpl): AnyTe
   ## - `s`: the softmax input whose shape the output takes
   ## - `g`: the loss cotangent and `p`: the softmax output
   ##
-  ## The grad flag stays off. The walk never differentiates a grad.
+  ## The grad flag is off. The walk never differentiates a grad.
   let gImpl = g.to(TensorImpl[T, bkMetal])
   let pImpl = p.to(TensorImpl[T, bkMetal])
   let dAxis = int(s.shape[int(s.shape.len) - 1])
@@ -737,7 +737,7 @@ proc crossEntropyBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g, targets: AnyTensorI
   ## Erased grad-chain cross entropy backward over the logits `s` with the loss
   ## cotangent `g` and the int32 `targets`.
   ##
-  ## Contract: the output takes the logits shape.
+  ## Contract: the output has the logits shape.
   let gImpl = g.to(TensorImpl[T, bkMetal])
   let tgt = targets.to(TensorImpl[int32, bkMetal])
   doAssert isContiguous(tgt.shape, tgt.strides),
@@ -784,7 +784,7 @@ proc gatherBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g, idx: AnyTensorImpl): AnyT
     idxAddr: cast[uint64](idxImpl.mem.handle),
     scalars: GatherBwdScalars(
       gOff: gi.off, gShape: gi.shape, gStrides: gi.strides,
-      idxOff: int32(idxImpl.offset), wOff: int32(s.offset),
+      idxOff: int32(idxImpl.offset),
       e: e, n: int32(gImpl.getNumel()), wNumel: int32(tableNumel))))
   s.record(opGatherBwd, blob, elementwiseCfg(gImpl.getNumel()), outMem, s.shape,
       false, true, gImpl.tid, idxImpl.tid, 0).to(AnyTensorImpl)
@@ -793,7 +793,7 @@ proc sliceBwdNoGrad*[T](s: TensorImpl[T, bkMetal], g, view: AnyTensorImpl, start
   ## Erased grad-chain slice backward over the sliced tensor `s`.
   ##
   ## - scatters the view cotangent `g` into a fresh zeroed gradient
-  ## - the gradient takes the sliced tensor's shape
+  ## - the gradient has the sliced tensor's shape
   ##
   ## Args:
   ## - `start`: the first selected index per axis from the slice record's image
