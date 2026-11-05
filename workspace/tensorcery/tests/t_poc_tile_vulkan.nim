@@ -29,69 +29,70 @@ import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 import workspace/ceramic/tests/ceramic_testutils
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Thread->value maps of the 4x8-cell schedule
+#  Fragment maps of the 4x8-cell schedule
 # ═══════════════════════════════════════════════════════════════════════
 #
-# Fragment layouts of a 32-thread schedule over one (M32, K2) A tile,
+# Fragment maps of a 32-thread schedule over one (M32, K2) A tile,
 # one (N32, K2) B tile and one (M32, N32) D tile, int strides only:
 # - A: thread t addresses A coordinates 4·(t div 4) ..+3 for both k, the t mod 4 half reloads them (stride 0)
 # - B: thread t addresses B coordinates 8·(t mod 4) ..+7, both k
 # - D: thread t owns one disjoint 4x8 output cell, V col-major
 #   (m_local, n_local), offset m_local + 32·n_local
-
-const
-  fragA = make_layout(((4, 8), (4, 2)), ((0, 4), (1, 32)))
-  fragB = make_layout(((4, 8), (8, 2)), ((8, 0), (1, 32)))
-  fragD = make_layout(((4, 8), (4, 8)), ((256, 4), (1, 32)))
+#
+# Fragment addressing is direct runtime arithmetic, the static-map substitution loses composed
+# coordinate strides in the CIRv2 frontend (J-15 in the op JOURNEY)
 
 proc tileGemm(d: distinct TensorView, a: distinct TensorView, b: distinct TensorView, alpha: float32) =
   ## D = alpha·A·Bᵀ over 32x32 output tiles: one threadgroup per tile,
-  ## 32 threads each owning one 4x8 output cell, k-tiles 2 deep,
-  ## per-thread register fragments loaded through the thread->value maps.
-  const
-    # (T, V) -> flat tile offset: fragment layouts folded through the flat tile layout, no cell repetitions
-    mapA = compose(make_layout((32, 2), (1, 32)), fragA)
-    mapB = compose(make_layout((32, 2), (1, 32)), fragB)
-    mapD = compose(make_layout((32, 32), (1, 32)), fragD)
-    tvmA = toThreadValueMap(mapA, (32, 2))
-    tvmB = toThreadValueMap(mapB, (32, 2))
-    tvmD = toThreadValueMap(mapD, (32, 32))
-    regA = make_layout((8, (1, 1)))
-    regB = make_layout((16, (1, 1)))
-    regD = make_layout((32, (1, 1)))
-
-  let thrID = getLocalThreadID()
-  if thrID < getLaneWidth():
-    let
-      dGeom = d.tileWith((32, 32))
-      aGeom = a.tileWith((32, 2))
-      dGrid = dGeom.getTileGrid()
-      (_, kTiles) = aGeom.getTileGrid()
-      gridStride = getGridSize()
-    for tileID in countup(dGrid.getLocalTileID(), dGrid.size() - 1, gridStride):
-      let (m0, n0) = idx2crd(dGrid, tileID)
-      var rD: tile(d.T, regD)
-      rD.fillWith(zero(d.T))
-      for k in 0 ..< kTiles:
-        var rA: tile(a.T, regA)
-        var rB: tile(b.T, regB)
-        rA.load(a, tvmA, thrID, (m0, k))
-        rB.load(b, tvmB, thrID, (n0, k))
-        # register order is the fragment layouts' V axis, first mode fastest:
-        # a[m + 4·k], b[n + 8·k], d[m + 4·n], 64 FMA per k-tile
+  ## 32 threads each owning one disjoint 4x8 output cell, k-tiles 2 deep.
+  ##
+  ## Fragment addressing of the 4x8-cell schedule, thread t:
+  ##
+  ## - D cell: tile m-lines 4*(t div 4) ..+3, tile n-columns 8*(t mod 4) ..+7
+  ## - A fragment: the thread's 4 cell m-lines x 2 k, rA[m + 4*kk]
+  ## - B fragment: the thread's 8 cell n-columns x 2 k, rB[n + 8*kk]
+  ## - cell value (m, n) = sum over kk of A(m, kk) * B(n, kk), rD[m + 4*n]
+  ##
+  ## Runtime params only: shapes, strides and the tile grid are runtime values.
+  ## Ragged edges read padWith and drop out-of-bounds stores.
+  let
+    thrID = getLocalThreadID()
+    rowBlock = thrID div 4
+    colBlock = thrID mod 4
+    m0 = 32 * get_group_id(0)
+    n0 = 32 * get_group_id(1)
+    kTiles = ceil_div(a.layout.shape[1], 2)
+  block:
+    var rD: tile(d.T, make_layout((32, (1, 1))))
+    rD.fillWith(zero(d.T))
+    for kt in 0 ..< kTiles:
+      let k0 = 2 * kt
+      var rA: tile(a.T, make_layout((8, (1, 1))))
+      var rB: tile(b.T, make_layout((16, (1, 1))))
+      {.unroll.}
+      for kk in 0 ..< 2:
+        {.unroll.}
+        for m in 0 ..< 4:
+          rA[m + 4 * kk] = a.paddedLoad((m0 + 4 * rowBlock + m, k0 + kk), zero(a.T))
+      {.unroll.}
+      for kk in 0 ..< 2:
         {.unroll.}
         for n in 0 ..< 8:
+          rB[n + 8 * kk] = b.paddedLoad((n0 + 8 * colBlock + n, k0 + kk), zero(b.T))
+      {.unroll.}
+      for n in 0 ..< 8:
+        {.unroll.}
+        for m in 0 ..< 4:
+          var acc = rD[m + 4 * n]
           {.unroll.}
-          for m in 0 ..< 4:
-            var acc = rD[m + 4 * n]
-            {.unroll.}
-            for kk in 0 ..< 2:
-              acc = acc + rA[m + 4 * kk] * rB[n + 8 * kk]
-            rD[m + 4 * n] = acc
-      if alpha != 1.0'f32:
-        for i in 0 ..< 32:
-          rD[i] = alpha * rD[i]
-      d.store(rD, tvmD, thrID, (m0, n0))
+          for kk in 0 ..< 2:
+            acc = acc + rA[m + 4 * kk] * rB[n + 8 * kk]
+          rD[m + 4 * n] = acc
+    for n in 0 ..< 8:
+      for m in 0 ..< 4:
+        let crd = (m0 + 4 * rowBlock + m, n0 + 8 * colBlock + n)
+        if crd.inBounds(d.layout.shape):
+          d[crd] = alpha * rD[m + 4 * n]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  CPU f64 reference and fixtures
