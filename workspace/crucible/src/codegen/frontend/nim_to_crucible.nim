@@ -806,6 +806,10 @@ proc lowerExpr(ctx: var FrontendCtx, n: NimNode): CirExpr =
       return nil
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
+    let phantomArg = phantomStaticArg(n.getTypeInst())
+    if not phantomArg.isNil:
+      # a phantom value's value is its static argument, an int
+      return intLit(phantomArg.intVal, tInt(32))
     var fields: seq[CirKv] = @[]
     var valueSpaces = initTable[string, AddressSpace]()
     for i in 1 ..< n.len:
