@@ -52,12 +52,20 @@ proc gemmTileVulkan*(d: distinct TensorView, a: distinct TensorView, b: distinct
     var rB: tile(b.T, make_layout((16, (1, 1))))
     for kt in 0 ..< kTiles:
       let k0 = 2 * kt
+      let aInterior = (m0 + 32 <= a.layout.shape[0]) and (k0 + 2 <= a.layout.shape[1])
+      let bInterior = (n0 + 32 <= b.layout.shape[0]) and (k0 + 2 <= b.layout.shape[1])
       staticFor kk, 0, 2:
         staticFor m, 0, 4:
-          rA[m + 4 * kk] = a.paddedLoad((m0 + 4 * rowBlock + m, k0 + kk), zero(a.T))
+          rA[m + 4 * kk] = if aInterior:
+              a[(m0 + 4 * rowBlock + m, k0 + kk)]
+            else:
+              a.paddedLoad((m0 + 4 * rowBlock + m, k0 + kk), zero(a.T))
       staticFor kk, 0, 2:
         staticFor n, 0, 8:
-          rB[n + 8 * kk] = b.paddedLoad((n0 + 8 * colBlock + n, k0 + kk), zero(b.T))
+          rB[n + 8 * kk] = if bInterior:
+              b[(n0 + 8 * colBlock + n, k0 + kk)]
+            else:
+              b.paddedLoad((n0 + 8 * colBlock + n, k0 + kk), zero(b.T))
       staticFor n, 0, 8:
         staticFor m, 0, 4:
           var acc = rD[m + 4 * n]
