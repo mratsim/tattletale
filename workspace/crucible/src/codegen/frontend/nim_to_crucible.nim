@@ -34,9 +34,7 @@ type
     retType: CirType
     procs: seq[CirProc]
     procRegistry: Table[uint64, ProcEntry]
-    ## Keyed by proc identity hash, one entry per distinct proc.
-    claimedNames: Table[string, uint64]
-    ## Emitted proc name to the owning identity: definitions and harvests share one name space, a second claimant of a base suffixes.
+    procNameMap: Table[string, uint64]
     scopes: seq[Table[string, CirExpr]]
     localSpaces: seq[Table[string, AddressSpace]]
     ## Nim symbol name to CIRv2 symbol, innermost scope last.
@@ -69,7 +67,7 @@ proc mintUniqueName(ctx: var FrontendCtx, base: string): string =
   let clean = sanitizeIdent(base)
   var candidate = clean
   var suffix = 0
-  while candidate in ctx.nameCounts or ctx.claimedNames.hasKey(candidate):
+  while candidate in ctx.nameCounts or ctx.procNameMap.hasKey(candidate):
     inc suffix
     candidate = clean & "_" & $suffix
   ctx.nameCounts.incl candidate
@@ -228,7 +226,6 @@ proc isGenericDef(fn: NimNode): bool =
   return false
 
 func getProcIdentity(callee: NimNode): uint64 =
-  ## A generic's body hash joins the signature key, so its instantiations share one identity.
   let impl = callee.getImpl()
   let generic = impl.kind in [nnkProcDef, nnkFuncDef] and
     (impl[2].kind == nnkGenericParams or
@@ -241,13 +238,13 @@ func getProcIdentity(callee: NimNode): uint64 =
 proc claimProcName(ctx: var FrontendCtx, identity: uint64, base: string): string =
   ## A claim by the owning identity returns the base: the module reservation
   ## pass reserves kernel names, so a kernel's own def re-claims its name.
-  if ctx.claimedNames.getOrDefault(base, identity) == identity:
-    ctx.claimedNames[base] = identity
+  if ctx.procNameMap.getOrDefault(base, identity) == identity:
+    ctx.procNameMap[base] = identity
     return base
   result = base & "_" & base58Short(identity)
-  while ctx.claimedNames.getOrDefault(result, identity) != identity:
+  while ctx.procNameMap.getOrDefault(result, identity) != identity:
     result.add("_")
-  ctx.claimedNames[result] = identity
+  ctx.procNameMap[result] = identity
 
 proc registerOrGet(ctx: var FrontendCtx, calleeSym: NimNode): ProcEntry =
   let id = getProcIdentity(calleeSym)
@@ -1433,7 +1430,7 @@ proc enterProcBody(ctx: var FrontendCtx, cirName: string, formals: NimNode): Pro
   # a claim made while this body lowers, as the uniquer skips all three
   for g in ctx.moduleScope.keys:
     ctx.nameCounts.incl g
-  for n in ctx.claimedNames.keys:
+  for n in ctx.procNameMap.keys:
     ctx.nameCounts.incl n
   ctx.scopes = @[ctx.moduleScope]
   ctx.localSpaces = @[ctx.moduleSpaces]
@@ -1559,9 +1556,10 @@ proc lowerCirv2*(bodyIn: NimNode): tuple[m: CirModule, err: string] =
       of nnkTypeSection:
         ctx.resolveTypeSection(c)
       of nnkVarSection, nnkConstSection:
-        # program-scope storage whose pragma list picks the memory class,
-        # unannotated is constant. Kernels must appear after the declarations they read
         block topLevelSection:
+          # Module-level variables shared by all functions in the module
+          # Annotated by address space {.const_mem.}, {.smem.}
+          # TODO: Unnannoted = read-only (yes even if `var` in Nim, we can't have thread-local globals on GPU)
           for def in c:
             let nameN = def[0]
             let bareName = if nameN.kind == nnkPragmaExpr: nameN[0] else: nameN
