@@ -51,6 +51,15 @@ func numel*(shape: openArray[int]): int =
   for dim in shape:
     result *= dim
 
+proc contiguousStrides*(shape: SmallSeq[4, int32]): SmallSeq[4, int32] =
+  ## Returns the contiguous strides of an already rank-checked shape, one step per dimension in elements.
+  var stride = 1
+  var strides: array[4, int32]
+  for i in countdown(int(shape.len) - 1, 0):
+    strides[i] = int32(stride)
+    stride *= int(shape[i])
+  result = SmallSeq[4, int32].initFrom(strides.toOpenArray(0, int(shape.len) - 1))
+
 proc contiguousMeta*(shape: openArray[int]): tuple[shape, strides: SmallSeq[4, int32]] =
   ## Rank-checked contiguous layout, last dimension varying fastest.
   ##
@@ -63,21 +72,7 @@ proc contiguousMeta*(shape: openArray[int]): tuple[shape, strides: SmallSeq[4, i
     extents[i] = int32(shape[i])
   result.shape = SmallSeq[4, int32].initFrom(extents.toOpenArray(0, shape.len - 1))
 
-  var stride = 1
-  var strides: array[4, int32]
-  for i in countdown(shape.len - 1, 0):
-    strides[i] = int32(stride)
-    stride *= shape[i]
-  result.strides = SmallSeq[4, int32].initFrom(strides.toOpenArray(0, shape.len - 1))
-
-proc contiguousStrides*(shape: SmallSeq[4, int32]): SmallSeq[4, int32] =
-  ## Returns the contiguous strides of an already rank-checked shape, one step per dimension in elements.
-  var stride = 1
-  var strides: array[4, int32]
-  for i in countdown(int(shape.len) - 1, 0):
-    strides[i] = int32(stride)
-    stride *= int(shape[i])
-  result = SmallSeq[4, int32].initFrom(strides.toOpenArray(0, int(shape.len) - 1))
+  result.strides = contiguousStrides(result.shape)
 
 proc toTensorImpl*[T; Hw: static BackendKind](
     ctx: Ctx, data: openArray[T], shape: openArray[int]

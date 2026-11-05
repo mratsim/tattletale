@@ -10,11 +10,11 @@
 ## One session owns the default device, one command queue and one library.
 ## The library ingests the kernel sandbox source once, pipeline states cache per kernel name.
 ##
-## eval() encodes every pending entry onto ONE persistent compute encoder of ONE command buffer.
+## eval() encodes every pending entry onto one persistent compute encoder of one command buffer.
 ## One dispatch per entry runs in record order, one commit, one wait, one submission.
 ## Uploads and readback memcpy through the shared buffer's contents, they never submit.
 ##
-## Device buffers leak, tensorcery frees no device memory in this increment.
+## Device buffers leak, tensorcery frees no device memory yet.
 
 when not defined(macosx):
   {.error: "the Metal backend requires macOS".}
@@ -52,11 +52,9 @@ var
   sessionPsos: Table[string, objc.ID]
   submissionCount*: int
     ## Metal submissions since the last reset, one per committed command buffer.
-    ## The assertion mechanism: tests reset it and assert the exact count,
-    ## never a timing window.
+    ## Tests reset it and assert the exact count.
 
 proc resetSubmissionCount*() =
-  ## Zeroes `submissionCount`, for test isolation between measured sequences.
   submissionCount = 0
 
 proc contents(h: objc.ID): pointer =
@@ -101,7 +99,7 @@ proc checkCmdBuf(cmdBuf: objc.ID) =
     failLoud("Metal run: command buffer failed (status " & $status & ", " &
         $cmdBufError & "=error): " & detail)
 
-proc lookupPso(kernel: string): objc.ID =
+proc cachePso(kernel: string): objc.ID =
   ## Session pipeline states: one per kernel name, cached on first use.
   ## Alternating kernels in one record reuse the cached states.
   if not sessionPsos.hasKey(kernel):
@@ -117,11 +115,9 @@ proc allocDeviceMem*(nbytes: int): DeviceHandle =
     failLoud("allocDeviceMem: newBufferWithLength:options: returned nil (length " & $nbytes & ")")
 
 proc uploadDeviceMem*(mem: DeviceHandle, data: pointer, nbytes: int) =
-  ## Copies host bytes into a shared buffer. memcpy, never a submission.
   copyMem(contents(cast[objc.ID](mem)), data, nbytes)
 
 proc readbackDeviceMem*(mem: DeviceHandle, dst: pointer, nbytes: int) =
-  ## Copies a shared buffer's contents to host bytes. memcpy, never a submission.
   copyMem(dst, contents(cast[objc.ID](mem)), nbytes)
 
 proc drainMetal(ctx: Ctx) {.nimcall.} =
@@ -137,7 +133,7 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
     discard objc.msgSend(encoder, objc.`$$`("retain"))
     for entry in ctx.record:
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"),
-          lookupPso(kernelNames[entry.kernel]))
+          cachePso(kernelNames[entry.kernel]))
       case entry.kernel
       of opAdd:
         bindBlob(encoder, entry.blob, addBufferSlots, sizeof(AddScalars))
@@ -154,11 +150,7 @@ proc drainMetal(ctx: Ctx) {.nimcall.} =
 
 proc ensureMetal*(ctx: Ctx) =
   ## One-time session setup plus ctx wiring.
-  ##
-  ## The session owns the default device, one command queue and one library ingest of the kernel sandbox source.
-  ##
-  ## - idempotent, later calls are no-ops
-  ## - wires ctx.drain to the batched submission path
+  ## The session owns the default device, one command queue and one library ingest of the kernel sandbox source, idempotent.
   objc.withMemPool:
     if sessionDevice.isNil:
       sessionDevice = objc.MTLCreateSystemDefaultDevice()
@@ -179,15 +171,10 @@ proc elementwiseCfg(n: int): LaunchCfg =
     gridY: 1, gridZ: 1,
     blkX: workgroupSize, blkY: 1, blkZ: 1)
 
-proc padDims(shape: SmallSeq[4, int32]): array[4, int32] =
-  ## Shape padded to 4 axes with 1s, keeps the kernel divmod chain safe.
+proc padTo4(v: SmallSeq[4, int32], pad: int32): array[4, int32] =
+  ## Pads to 4 axes with `pad`: shapes pad with 1s (the divmod chain stays safe), strides with 0s (padded axes contribute nothing).
   for i in 0 ..< 4:
-    result[i] = if i < int(shape.len): shape[i] else: 1'i32
-
-proc padStrides(strides: SmallSeq[4, int32]): array[4, int32] =
-  ## Strides padded to 4 axes with 0s, contributions vanish on padded axes.
-  for i in 0 ..< 4:
-    result[i] = if i < int(strides.len): strides[i] else: 0'i32
+    result[i] = if i < int(v.len): v[i] else: pad
 
 proc toMetalTensorImpl*[T](ctx: Ctx, data: openArray[T], shape: openArray[int]): TensorImpl[T, bkMetal] =
   ## Builds a Metal tensor from host data, contiguous, uploaded at construction.
@@ -210,9 +197,9 @@ proc add*[T](s: TensorImpl[T, bkMetal], other: AnyTensorImpl): AnyTensorImpl =
     aAddr: cast[uint64](s.mem),
     bAddr: cast[uint64](o.mem),
     scalars: AddScalars(
-      shape: padDims(s.shape),
-      sa: padStrides(s.strides),
-      sb: padStrides(o.strides),
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
+      sb: padTo4(o.strides, 0),
       n: int32(n))))
   let opId = s.ctx.enqueue(opAdd, blob, elementwiseCfg(n))
   TensorImpl[T, bkMetal](
@@ -230,8 +217,8 @@ proc mulScalar*[T](s: TensorImpl[T, bkMetal], scalar: float64): AnyTensorImpl =
     outAddr: cast[uint64](outMem),
     aAddr: cast[uint64](s.mem),
     scalars: MulScalars(
-      shape: padDims(s.shape),
-      sa: padStrides(s.strides),
+      shape: padTo4(s.shape, 1),
+      sa: padTo4(s.strides, 0),
       scalar: float32(scalar),
       n: int32(n))))
   let opId = s.ctx.enqueue(opMul, blob, elementwiseCfg(n))

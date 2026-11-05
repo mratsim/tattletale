@@ -83,14 +83,6 @@ proc getDevice*(t: Tensor): DeviceKind =
   ## Returns the runtime device, fixed at creation from the backend kind.
   t.device
 
-func shapeText(s: SmallSeq[4, int32]): string =
-  result = "["
-  for i in 0 ..< int(s.len):
-    if i > 0:
-      result.add ", "
-    result.add $s[i]
-  result.add "]"
-
 func sameShape(a, b: SmallSeq[4, int32]): bool =
   if a.len != b.len:
     return false
@@ -114,7 +106,7 @@ proc `+`*(a, b: Tensor): Tensor =
   doAssert a.dtype == b.dtype,
       "add: mixed dtypes " & $a.dtype & " x " & $b.dtype & " refused"
   doAssert sameShape(a.getShape(), b.getShape()),
-      "add: shape mismatch " & shapeText(a.getShape()) & " vs " & shapeText(b.getShape()) &
+      "add: shape mismatch " & $a.getShape() & " vs " & $b.getShape() &
       " refused, no broadcasting"
 
   let outImpl = a.impl.add(b.impl)
