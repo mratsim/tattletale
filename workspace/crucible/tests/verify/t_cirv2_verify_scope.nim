@@ -14,7 +14,7 @@ import workspace/crucible/src/codegen/ir/cirv2_build
 import workspace/crucible/src/codegen/passes/pass_datatypes
 
 proc runPipeline(m: CirModule) =
-  var reg = PassRegistry.new()
+  var reg = PassRegistry()
   reg.register("identity", pkTransform, "Leaves the module untouched",
     run = proc(m: CirModule) = discard)
   reg.runPasses(m)
@@ -195,7 +195,7 @@ proc runTest() =
     # An analysis-only registry has no transform boundary: builder-produced IR is
     # final by definition and still verifies.
     let m = kernelModule(@[asgnS(sym("out", tPtr(caDevice, tInt(32))), sym("ghost", tInt(32)))])
-    var reg = PassRegistry.new()
+    var reg = PassRegistry()
     reg.register("scan", pkAnalysis, "Computes metadata",
       run = proc(m: CirModule) = discard)
     let err = block:

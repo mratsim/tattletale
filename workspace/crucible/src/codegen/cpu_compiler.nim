@@ -14,7 +14,7 @@ import std/macros
 import ../builtins/builtins_compilermagic
 import ./frontend/nim_to_crucible
 import ./ir/cirv2_lang
-import ./passes/pass_registry
+import ./passes/pass_datatypes
 import ./passes/passes_normalizations
 import ./passes/passes_legalization
 import ./passes/passes_lowering
@@ -31,7 +31,7 @@ proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   let savedTarget = crucibleCompileTarget
   crucibleCompileTarget = ctCpu
   let m = lowerCirv2(wrapper)
-  var reg = PassRegistry.new()
+  var reg = PassRegistry()
   registerRewriteStmtsExprs(reg)
   registerResolveBoolDomain(reg)
   registerValueNormalizations(reg)

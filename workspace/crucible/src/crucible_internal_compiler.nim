@@ -11,7 +11,6 @@ import
   ./codegen/frontend/nim_to_crucible,
   ./codegen/frontend/nim_type_resolvers,
   ./codegen/passes/pass_datatypes,
-  ./codegen/passes/pass_registry,
   ./codegen/passes/passes_validations,
   ./codegen/passes/passes_normalizations,
   ./codegen/passes/passes_lowering,
@@ -27,7 +26,7 @@ import
 
 export gpu_compiler, ast_datatypes,
        nim_to_crucible, nim_type_resolvers,
-       pass_datatypes, pass_registry,
+       pass_datatypes,
        passes_validations, passes_normalizations,
        passes_lowering,
        passes_lowering_msl, passes_lowering_cuda, passes_lowering_glsl,

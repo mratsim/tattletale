@@ -18,31 +18,26 @@ from ./lang_hlsl import HlslFlavor, fvD3D12
 #
 # ############################################################
 
-proc codegen*(m: CirModule, B: static CodegenKind, flavor: static HlslFlavor = fvD3D12): string =
-  ## Prints `m` as the source text that `B` names.
-  ##
-  ## - the `metal:`-family macros call this proc after the pass registry
-  ## - `m` is never mutated
-  ## - `flavor` selects the HLSL resource-binding flavor, `cgHlsl` only:
-  ##   any other backend refuses a non-default flavor
-  when B == cgSpirv:
-    {.error: "codegen: cgSpirv prints through codegenSpirvShader".}
-  when B == cgCpu:
-    {.error: "codegen: cgCpu prints through the cpu launch emitters".}
-  when B == cgHlsl:
-    lang_hlsl.codegen(m, flavor)
-  else:
-    when flavor != fvD3D12:
-      {.error: "codegen: `flavor` applies only to cgHlsl".}
-    case B
-    of cgCuda: lang_cuda.codegen(m)
-    of cgWebGPU: lang_wgsl.codegen(m)
-    of cgOpenCL: lang_opencl.codegen(m)
-    of cgGlsl: lang_glsl.codegen(m)
-    of cgMetal: lang_msl.codegen(m)
-    of cgHlsl: lang_hlsl.codegen(m, flavor)
-    of cgSpirv: ""
-    of cgCpu: ""
+proc codegenSource*(m: CirModule, B: static CodegenKind): string =
+  case B
+  of cgCuda: lang_cuda.codegen(m)
+  of cgWebGPU: lang_wgsl.codegen(m)
+  of cgOpenCL: lang_opencl.codegen(m)
+  of cgGlsl: lang_glsl.codegen(m)
+  of cgMetal: lang_msl.codegen(m)
+  of cgHlsl: lang_hlsl.codegen(m)
+  of cgSpirv:
+    raiseAssert("codegenSource: cgSpirv is SPIR-V words through codegenIR, not text")
+  of cgCpu:
+    raiseAssert("codegenSource: cgCpu does not codegen a module, it lowers through launchCpuFn")
 
-proc codegenSpirvShader*(m: CirModule): seq[uint32] =
-  lang_spirv_shader.codegen(m)
+proc codegenSource*(m: CirModule, B: static CodegenKind, flavor: static HlslFlavor): string =
+  when B != cgHlsl:
+    raiseAssert("codegenSource: the flavor overload prints cgHlsl only, got " & $B)
+  lang_hlsl.codegen(m, flavor)
+
+proc codegenIR*(m: CirModule, B: static CodegenKind): seq[uint32] =
+  case B
+  of cgSpirv: lang_spirv_shader.codegen(m)
+  else:
+    raiseAssert("codegenIR: cgSpirv is the only IR artifact, " & $B & " prints through codegenSource")

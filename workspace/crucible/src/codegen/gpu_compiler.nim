@@ -14,7 +14,7 @@ import ../crucible_codegen
 export builtins_compilermagic
 
 import ./frontend/nim_to_crucible
-import ./passes/pass_registry
+import ./passes/pass_datatypes
 import ./passes/passes_normalizations
 import ./passes/passes_legalization
 import ./passes/passes_lowering
@@ -52,139 +52,147 @@ proc registerFrontendPasses(reg: var PassRegistry) =
   registerValueNormalizations(reg)
   registerReshapingPasses(reg)
 
-macro codegenMetal(body: typed): string =
-  var reg = PassRegistry.new()
+proc registerGpuPasses*(reg: var PassRegistry, B: CodegenKind) {.compileTime.} =
+  ## Registers `B`'s per-target passes on top of the shared passes.
   registerFrontendPasses(reg)
   registerSharedLoweringPasses(reg)
-  reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
-  registerDecomposeArrayAssign(reg)
-  registerExplodeStructWithPtrFields(reg)
-  registerSmemInitRewrite(reg)
-  registerMslHoistProgramScopeConstants(reg)
-  registerMslHoistDeviceFnSmem(reg)
-  registerMslRewriteSmemLocals(reg)
-  registerMslThreadCoordinateBuiltins(reg)
-  registerInstantiateAddressSpaceGenerics(reg)
-  registerValidationPostPasses(reg)
+  case B
+  of cgMetal:
+    reg.registerRenameReservedIdentifiers("metalReservedIdentifiers", MetalReserved)
+    registerDecomposeArrayAssign(reg)
+    registerExplodeStructWithPtrFields(reg)
+    registerSmemInitRewrite(reg)
+    registerMslHoistProgramScopeConstants(reg)
+    registerMslHoistDeviceFnSmem(reg)
+    registerMslRewriteSmemLocals(reg)
+    registerMslThreadCoordinateBuiltins(reg)
+    registerInstantiateAddressSpaceGenerics(reg)
+    registerValidationPostPasses(reg)
+  of cgCuda:
+    reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
+    registerDecomposeArrayAssign(reg)
+    registerSmemInitRewrite(reg)
+    registerInstantiateAddressSpaceGenerics(reg)
+    registerCudaFeatureScan(reg)
+    registerValidationPostPasses(reg)
+  of cgOpenCL:
+    reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
+    registerDecomposeArrayAssign(reg)
+    registerExplodeStructWithPtrFields(reg)
+    registerSmemInitRewrite(reg)
+    registerOpenclHoistProgramScopeConstants(reg)
+    registerOpenclLowerByrefParams(reg)
+    registerInstantiateAddressSpaceGenerics(reg)
+    registerOpenclFeatureScan(reg)
+    registerValidationPostPasses(reg)
+  of cgGlsl:
+    reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
+    registerGlslQualifyVarParams(reg)
+    registerSmemInitRewrite(reg)
+    registerGlslHoistProgramScopeLocals(reg)
+    registerInstantiateAddressSpaceGenerics(reg)
+    registerGlslRefBlockPass(reg)
+    registerGlslFeatureScan(reg)
+    registerValidationPostPasses(reg)
+  of cgSpirv:
+    registerValidationPostPasses(reg)
+  of cgWebGPU:
+    registerFoldMaxMinToBuiltins(reg)
+    reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
+    registerExplodeStructWithPtrFields(reg)
+    registerWgslExplodePointerLocals(reg)
+    registerSmemInitRewrite(reg)
+    registerWgslHoistProgramScopeLocals(reg)
+    registerInstantiateAddressSpaceGenerics(reg)
+    registerWgslInlinePointerParamCalls(reg)
+    registerWgslFeatureScan(reg)
+    registerValidationPostPasses(reg)
+  of cgHlsl:
+    registerFoldMaxMinToBuiltins(reg)
+    registerHlslMaterializeNumWorkgroups(reg)
+    registerHlslExplodePointerLocals(reg)
+    reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
+    registerHlslHoistProgramScopeConstants(reg)
+    registerInstantiateAddressSpaceGenerics(reg)
+    registerHlslCallGraphPass(reg)
+    registerValidationPostPasses(reg)
+  else:
+    raiseAssert("registerGpuPasses: no pass pipeline for " & $B)
+
+macro codegenMetal(body: typed): string =
+  var reg = PassRegistry()
+  reg.registerGpuPasses(cgMetal)
   let m = lowerCirv2(body)
   reg.runPasses(m)
-  result = newLit(codegen(m, cgMetal))
+  result = newLit(codegenSource(m, cgMetal))
 
 macro metal*(body: untyped): string =
   crucibleCompileTarget = ctMetal
   result = newCall(bindSym"codegenMetal", body)
 
 macro codegenCuda(body: typed): string =
-  var reg = PassRegistry.new()
-  registerFrontendPasses(reg)
-  registerSharedLoweringPasses(reg)
-  registerDecomposeArrayAssign(reg)
-  reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
-  registerSmemInitRewrite(reg)
-  registerInstantiateAddressSpaceGenerics(reg)
-  registerCudaFeatureScan(reg)
-  registerValidationPostPasses(reg)
+  var reg = PassRegistry()
+  reg.registerGpuPasses(cgCuda)
   let m = lowerCirv2(body)
   reg.runPasses(m)
-  result = newLit(codegen(m, cgCuda))
+  result = newLit(codegenSource(m, cgCuda))
 
 macro cuda*(body: untyped): string =
   crucibleCompileTarget = ctCuda
   result = newCall(bindSym"codegenCuda", body)
 
 macro codegenOpenCL(body: typed): string =
-  var reg = PassRegistry.new()
-  registerFrontendPasses(reg)
-  registerSharedLoweringPasses(reg)
-  reg.registerRenameReservedIdentifiers("openclReservedIdentifiers", OpenclReserved)
-  registerDecomposeArrayAssign(reg)
-  registerExplodeStructWithPtrFields(reg)
-  registerSmemInitRewrite(reg)
-  registerOpenclHoistProgramScopeConstants(reg)
-  registerOpenclLowerByrefParams(reg)
-  registerInstantiateAddressSpaceGenerics(reg)
-  registerOpenclFeatureScan(reg)
-  registerValidationPostPasses(reg)
+  var reg = PassRegistry()
+  reg.registerGpuPasses(cgOpenCL)
   let m = lowerCirv2(body)
   reg.runPasses(m)
-  result = newLit(codegen(m, cgOpenCL))
+  result = newLit(codegenSource(m, cgOpenCL))
 
 macro opencl*(body: untyped): string =
   crucibleCompileTarget = ctOpenCL
   result = newCall(bindSym"codegenOpenCL", body)
 
 macro codegenGLSL(body: typed): string =
-  var reg = PassRegistry.new()
-  registerFrontendPasses(reg)
-  registerSharedLoweringPasses(reg)
-  reg.registerRenameReservedIdentifiers("glslReservedIdentifiers", GlslReserved)
-  registerGlslQualifyVarParams(reg)
-  registerSmemInitRewrite(reg)
-  registerGlslHoistProgramScopeLocals(reg)
-  registerInstantiateAddressSpaceGenerics(reg)
-  registerGlslRefBlockPass(reg)
-  registerGlslFeatureScan(reg)
-  registerValidationPostPasses(reg)
+  var reg = PassRegistry()
+  reg.registerGpuPasses(cgGlsl)
   let m = lowerCirv2(body)
   reg.runPasses(m)
-  result = newLit(codegen(m, cgGlsl))
+  result = newLit(codegenSource(m, cgGlsl))
 
 macro glsl*(body: untyped): string =
   crucibleCompileTarget = ctGlsl
   result = newCall(bindSym"codegenGLSL", body)
 
-macro codegenSpirvShader(body: typed): seq[uint32] =
-  var reg = PassRegistry.new()
-  registerFrontendPasses(reg)
-  registerSharedLoweringPasses(reg)
-  registerValidationPostPasses(reg)
+macro codegenSpirv(body: typed): seq[uint32] =
+  var reg = PassRegistry()
+  reg.registerGpuPasses(cgSpirv)
   let m = lowerCirv2(body)
   reg.runPasses(m)
-  result = newLit(codegenSpirvShader(m))
+  result = newLit(codegenIR(m, cgSpirv))
 
 macro spirv*(body: untyped): seq[uint32] =
   crucibleCompileTarget = ctSpirvShader
-  result = newCall(bindSym"codegenSpirvShader", body)
+  result = newCall(bindSym"codegenSpirv", body)
 
 macro codegenWebGpu(body: typed): string =
-  var reg = PassRegistry.new()
-  registerFrontendPasses(reg)
-  registerSharedLoweringPasses(reg)
-  registerFoldMaxMinToBuiltins(reg)
-  reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
-  registerExplodeStructWithPtrFields(reg)
-  registerWgslExplodePointerLocals(reg)
-  registerSmemInitRewrite(reg)
-  registerWgslHoistProgramScopeLocals(reg)
-  registerInstantiateAddressSpaceGenerics(reg)
-  registerWgslInlinePointerParamCalls(reg)
-  registerWgslFeatureScan(reg)
-  registerValidationPostPasses(reg)
+  var reg = PassRegistry()
+  reg.registerGpuPasses(cgWebGPU)
   let m = lowerCirv2(body)
   reg.runPasses(m)
-  result = newLit(codegen(m, cgWebGPU))
+  result = newLit(codegenSource(m, cgWebGPU))
 
 macro webgpu*(body: untyped): string =
   crucibleCompileTarget = ctWebGPU
   result = newCall(bindSym"codegenWebGpu", body)
 
 macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
-  var reg = PassRegistry.new()
-  registerFrontendPasses(reg)
-  registerSharedLoweringPasses(reg)
-  registerFoldMaxMinToBuiltins(reg)
-  registerHlslMaterializeNumWorkgroups(reg)
-  registerHlslExplodePointerLocals(reg)
-  reg.registerRenameReservedIdentifiers("hlslReservedIdentifiers", HlslReserved)
-  registerHlslHoistProgramScopeConstants(reg)
-  registerInstantiateAddressSpaceGenerics(reg)
-  registerHlslCallGraphPass(reg)
-  registerValidationPostPasses(reg)
+  var reg = PassRegistry()
+  reg.registerGpuPasses(cgHlsl)
   let m = lowerCirv2(body)
   reg.runPasses(m)
   let printed = case flavor
-    of fvD3D12: codegen(m, cgHlsl, fvD3D12)
-    of fvVulkan: codegen(m, cgHlsl, fvVulkan)
+    of fvD3D12: codegenSource(m, cgHlsl)
+    of fvVulkan: codegenSource(m, cgHlsl, fvVulkan)
   result = newLit(printed)
 
 macro hlsl*(flavor: untyped, body: untyped): string =

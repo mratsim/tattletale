@@ -11,7 +11,7 @@ import std/[sets, tables]
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
 import ./pass_datatypes
-import ./pass_registry
+import ./pass_datatypes
 import ./pass_helpers
 
 # ############################################################
