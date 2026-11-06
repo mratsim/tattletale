@@ -255,6 +255,7 @@ proc cloneExpr*(e: CirExpr): CirExpr =
   of eNot:
     result.notOperand = cloneExpr(e.notOperand)
   of eNeg:
+    result.unType = e.unType
     result.unOperand = cloneExpr(e.unOperand)
   of eCast, eConv:
     result.castType = e.castType
