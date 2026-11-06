@@ -138,42 +138,40 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
     of sAsm, sEmit:
       discard
 
-proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, procs: Table[string, CirProc]): string
+proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, procs: Table[string, CirProc])
   ## Forward declaration, nested statement lists recurse into each other.
 
-proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]): string =
+proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]) =
   ## A call in value position cannot inline.
   ## Only a void callee splices into statement position, a call whose result
   ## feeds an expression has no destination for the inlined body's writes,
   ## so the pass refuses the call.
   if e.isNil:
-    return ""
+    return
   if e.kind == eCall and e.callee.kind == eSym:
     let callee = procs.getOrDefault(e.callee.name)
     if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
-      return refuseAt(fn, "value-position call of " & callee.name & ", its pointer parameter cannot cross a WGSL signature")
+      raiseAssert("value-position call of " & callee.name & ", its pointer parameter cannot cross a WGSL signature")
   for ch in getExprChildren(e):
-    let err = refuseValuePositionCalls(fn, ch, procs)
-    if err.len > 0:
-      return err
-  return ""
+    refuseValuePositionCalls(fn, ch, procs)
 
-proc inlineCallSite(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, i: int, procs: Table[string, CirProc]): tuple[err: string, spliced: bool] =
+proc inlineCallSite(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, i: int, procs: Table[string, CirProc]): bool =
+  ## Returns whether the statement spliced, refusing calls the splice cannot host.
   let s = ss[i]
   let callee = procs.getOrDefault(s.callCallee.name)
   if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
     if callee.ret.kind != ctVoid:
-      return (refuseAt(fn, "inlining " & callee.name & " needs a void return, its pointer parameter cannot cross a WGSL signature"), false)
+      raiseAssert("inlining " & callee.name & " needs a void return, its pointer parameter cannot cross a WGSL signature")
     var body = cloneStmts(callee.body)
     if body.len > 0 and body[^1].kind == sRet and body[^1].retVal == nil:
       # an implicit fall-through return of the frontend, dropping it is
       # semantics-preserving at the splice position
       body.setLen(body.len - 1)
     if body.containsReturn:
-      return (refuseAt(fn, "inlining " & callee.name & " needs a return-free body, its pointer parameter cannot cross a WGSL signature"), false)
+      raiseAssert("inlining " & callee.name & " needs a return-free body, its pointer parameter cannot cross a WGSL signature")
     var seen: HashSet[string]
     if callsCrossingCalleeTransitively(seen, callee, procs):
-      return (refuseAt(fn, "inlining " & callee.name & " reaches a crossing call cycle, its pointer parameter cannot cross a WGSL signature"), false)
+      raiseAssert("inlining " & callee.name & " reaches a crossing call cycle, its pointer parameter cannot cross a WGSL signature")
     # substitution onto fresh aliases evaluates a call argument once
     var bindings: seq[CirStmt]
     var subst = initTable[string, CirExpr]()
@@ -191,74 +189,47 @@ proc inlineCallSite(ss: var seq[CirStmt], used: var HashSet[string], fresh: var 
       subst[p.name] = sym(alias, p.typ)
     body.substituteArgsStmts(subst)
     ss = ss[0 ..< i] & bindings & body & ss[i + 1 .. ^1]
-    return ("", true)
+    return true
   for a in s.callArgs:
-    let aerr = refuseValuePositionCalls(fn, a, procs)
-    if aerr.len > 0:
-      return (aerr, false)
-  return ("", false)
+    refuseValuePositionCalls(fn, a, procs)
+  return false
 
-proc walkValuePositions(used: var HashSet[string], fresh: var int, fn: CirProc, s: CirStmt, procs: Table[string, CirProc]): string =
+proc walkValuePositions(used: var HashSet[string], fresh: var int, fn: CirProc, s: CirStmt, procs: Table[string, CirProc]) =
   ## One non-call statement: its subexpressions refuse value-position calls,
   ## nested statement lists recurse through `inlineInStmts`.
   case s.kind
   of sVar:
-    let err = refuseValuePositionCalls(fn, s.init, procs)
-    if err.len > 0:
-      return err
+    refuseValuePositionCalls(fn, s.init, procs)
   of sAsgn:
-    let lerr = refuseValuePositionCalls(fn, s.lhs, procs)
-    if lerr.len > 0:
-      return lerr
-    let rerr = refuseValuePositionCalls(fn, s.rhs, procs)
-    if rerr.len > 0:
-      return rerr
+    refuseValuePositionCalls(fn, s.lhs, procs)
+    refuseValuePositionCalls(fn, s.rhs, procs)
   of sIte:
-    let cerr = refuseValuePositionCalls(fn, s.cond, procs)
-    if cerr.len > 0:
-      return cerr
-    let terr = inlineInStmts(s.thenBody, used, fresh, fn, procs)
-    if terr.len > 0:
-      return terr
-    let eerr = inlineInStmts(s.elseBody, used, fresh, fn, procs)
-    if eerr.len > 0:
-      return eerr
+    refuseValuePositionCalls(fn, s.cond, procs)
+    inlineInStmts(s.thenBody, used, fresh, fn, procs)
+    inlineInStmts(s.elseBody, used, fresh, fn, procs)
   of sWhile:
-    let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
-    if cerr.len > 0:
-      return cerr
-    let werr = inlineInStmts(s.whileBody, used, fresh, fn, procs)
-    if werr.len > 0:
-      return werr
+    refuseValuePositionCalls(fn, s.whileCond, procs)
+    inlineInStmts(s.whileBody, used, fresh, fn, procs)
   of sRet:
-    let rerr = refuseValuePositionCalls(fn, s.retVal, procs)
-    if rerr.len > 0:
-      return rerr
+    refuseValuePositionCalls(fn, s.retVal, procs)
   of sDiscard:
-    let derr = refuseValuePositionCalls(fn, s.discardVal, procs)
-    if derr.len > 0:
-      return derr
+    refuseValuePositionCalls(fn, s.discardVal, procs)
   of sCall, sAsm, sEmit:
     discard
 
-proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, procs: Table[string, CirProc]): string =
+proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, procs: Table[string, CirProc]) =
   var i = 0
   while i < ss.len:
     let s = ss[i]
     if s.kind == sCall and s.callCallee.kind == eSym:
-      let (r, spliced) = inlineCallSite(ss, used, fresh, fn, i, procs)
-      if r.len > 0:
-        return r
+      let spliced = inlineCallSite(ss, used, fresh, fn, i, procs)
       if not spliced:
         i.inc
       continue
-    let r = walkValuePositions(used, fresh, fn, s, procs)
-    if r.len > 0:
-      return r
+    walkValuePositions(used, fresh, fn, s, procs)
     i.inc
-  return ""
 
-proc inlinePointerParamCalls(m: CirModule): string =
+proc inlinePointerParamCalls(m: CirModule) =
   ## Placement contract:
   ## - the pass runs after the pointer-local explosion pass, so the spliced
   ##   bodies carry no pointer locals
@@ -277,9 +248,7 @@ proc inlinePointerParamCalls(m: CirModule): string =
       used.incl(p.name)
     var fresh = 0
     while true:
-      let err = inlineInStmts(fn.body, used, fresh, fn, procs)
-      if err.len > 0:
-        return err
+      inlineInStmts(fn.body, used, fresh, fn, procs)
       var changed = false
       var targets: HashSet[string]
       collectCallTargets(targets, fn.body)
@@ -296,5 +265,4 @@ proc inlinePointerParamCalls(m: CirModule): string =
       continue
     kept.add fn
   m.procs = kept
-  return ""
 

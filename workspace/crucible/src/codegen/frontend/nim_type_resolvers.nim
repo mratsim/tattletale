@@ -19,13 +19,8 @@ type
   CirTypeResolver* = object
     structIdentityCache: Table[string, CirType]
     resolvedStructs*: seq[CirType]
-    err*: string
 
 func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType
-
-func fail*(r: var CirTypeResolver, detail: string) =
-  if r.err.len == 0:
-    r.err = "cirv2 frontend: " & detail
 
 func getBuiltinDistinctScalar(n: NimNode): CirType =
   if n.kind != nnkSym or n.symKind != nskType:
@@ -98,8 +93,7 @@ func evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   ##
   ## - `..` yields the array length `hi - lo + 1`
   template refuse(detail: string) =
-    r.fail(detail)
-    return 0
+    raiseAssert(detail)
   case n.kind
   of nnkIntLit .. nnkUInt64Lit:
     result = n.intVal
@@ -122,8 +116,6 @@ func evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   of nnkInfix:
     let a = r.evalConstInt(n[1])
     let b = r.evalConstInt(n[2])
-    if r.err.len > 0:
-      return 0
     case n[0].strVal
     of "..":
       result = b - a + 1
@@ -151,14 +143,11 @@ func deriveStructFields(r: var CirTypeResolver, impl: NimNode,
     if impl.len > 2 and impl[2].kind == nnkRecList:
       for ch in impl[2]:
         if ch.kind == nnkRecCase:
-          r.fail("case object: variant records have no C representation")
-          return @[]
+          raiseAssert("case object: variant records have no C representation")
         for j in 0 ..< ch.len - 2:
           result.add(fld(sanitizeIdent(ch[j].strVal),
             r.resolveCirType(ch[ch.len - 2],
               valueSpaces.getOrDefault(sanitizeIdent(ch[j].strVal), caDevice))))
-        if r.err.len > 0:
-          return @[]
   of nnkTupleTy, nnkTupleConstr:
     for i, ch in impl:
       case ch.kind
@@ -173,16 +162,13 @@ func deriveStructFields(r: var CirTypeResolver, impl: NimNode,
       else:
         result.add(fld("F" & $i, r.resolveCirType(ch.getTypeInst(),
           valueSpaces.getOrDefault("F" & $i, caDevice))))
-      if r.err.len > 0:
-        return @[]
   of nnkBracketExpr:
     # `tuple[A, B]` is the bracket form of an anonymous tuple type
     for i in 1 ..< impl.len:
       result.add(fld("F" & $(i - 1), r.resolveCirType(impl[i].getTypeInst(),
         valueSpaces.getOrDefault("F" & $(i - 1), caDevice))))
   else:
-    r.fail("struct fields: unexpected type implementation " & $impl.kind)
-    return @[]
+    raiseAssert("struct fields: unexpected type implementation " & $impl.kind)
 
 func followAliasHead(n: NimNode): NimNode =
   ## `Tile[float32, Sh, St]` where `Tile[T, Sh, St] = TensorOwned[T, Sh, St]`
@@ -237,8 +223,6 @@ func resolveStructType*(r: var CirTypeResolver, n: NimNode,
     return r.structIdentityCache[nameKey]
   let impl = n.getTypeImpl()
   let fields = r.deriveStructFields(impl, valueSpaces)
-  if r.err.len > 0:
-    return nil
   let candidate = tStruct(deriveStructName(canon) & "_" &
     base58Short(typeIdentityHash(nameKey)), fields)
   # A second dedup runs over structure: an alias instantiation
@@ -309,14 +293,10 @@ func resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
     if isCompileTimeFormal(ftype):
       continue
     let ptyp = r.resolveCirType(ftype)
-    if r.err.len > 0:
-      return nil
     if ptyp.isNil:
       continue
     paramTypes.add(ptyp)
   let ret = r.resolveCirType(formals[0])
-  if r.err.len > 0:
-    return nil
   result = tProcT(paramTypes, ret)
 
 func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType =
@@ -325,8 +305,6 @@ func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
   ## `ptrSpace` is the memory class of the pointer kinds this type node contains:
   ## kernel parameters pass `caDevice`, a body-side `addr` result constructs
   ## its own `caThread` pointer.
-  if r.err.len > 0:
-    return nil
   if n.kind == nnkEmpty:
     # a missing return type is void
     return tVoid()
@@ -394,8 +372,6 @@ func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
       arr = arr.getTypeInst()
       arr.expectKind(nnkBracketExpr)
     let len = r.evalConstInt(arr[1])
-    if r.err.len > 0:
-      return nil
     result = tArray(int(len), r.resolveCirType(arr[2], ptrSpace))
   of ntyEnum:
     # C enums are int
@@ -430,5 +406,4 @@ func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     rng.expectKind(nnkBracketExpr)
     result = r.resolveCirType(rng[1][1], ptrSpace)
   else:
-    r.fail("type not supported: " & n.repr & " (" & $n.typeKind & ")")
-    return nil
+    raiseAssert("type not supported: " & n.repr & " (" & $n.typeKind & ")")

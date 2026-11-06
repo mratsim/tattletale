@@ -11,7 +11,6 @@ import std/[strutils, tables]
 import workspace/crucible/src/abis/objc_abi as objc
 
 import workspace/crucible/src/crucible_codegen
-import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/metal_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
@@ -48,10 +47,10 @@ when defined(macosx):
     result = MetalContext()
     result.device = objc.MTLCreateSystemDefaultDevice()
     if objc.isNil(result.device):
-      failLoud("no Metal device")
+      raiseAssert("no Metal device")
     result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
     if objc.isNil(result.queue):
-      failLoud("newCommandQueue returned nil")
+      raiseAssert("newCommandQueue returned nil")
 
   proc `=destroy`(cache: var MetalCache) =
     objc.withMemPool:
@@ -134,24 +133,24 @@ when defined(macosx):
   proc readBufferContents(h: objc.ID): pointer =
     result = cast[pointer](objc.msgSend(h, objc.`$$`("contents")))
     if result == nil:
-      failLoud("contents() returned nil for a shared buffer")
+      raiseAssert("contents() returned nil for a shared buffer")
 
   proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID =
     if n <= 0:
-      failLoud("allocDevice: size must be positive, got " & $n)
+      raiseAssert("allocDevice: size must be positive, got " & $n)
     result = objc.msgSend(engine.ctx.device, objc.`$$`("newBufferWithLength:options:"),
                           objc.NSUInteger(n), SharedUntrackedOptions)
     if objc.isNil(result):
-      failLoud("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
+      raiseAssert("allocDevice: newBufferWithLength:options: returned nil (length " & $n & ")")
 
   proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int) =
     if n <= 0:
-      failLoud("copyToDeviceFromHost: n must be positive, got " & $n)
+      raiseAssert("copyToDeviceFromHost: n must be positive, got " & $n)
     copyMem(readBufferContents(dst), src, n)
 
   proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
     if n <= 0:
-      failLoud("copyToHostFromDevice: n must be positive, got " & $n)
+      raiseAssert("copyToHostFromDevice: n must be positive, got " & $n)
     copyMem(dst, readBufferContents(src), n)
 
   proc launchKernelImpl*(engine: MetalEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
@@ -159,11 +158,11 @@ when defined(macosx):
     ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:
       if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
-        failLoud("Metal run: cfg.grid must be ≥ 1 per axis, got " & $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
+        raiseAssert("Metal run: cfg.grid must be ≥ 1 per axis, got " & $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
       if cfg.blk.x < 1 or cfg.blk.y < 1 or cfg.blk.z < 1:
-        failLoud("Metal run: cfg.blk must be ≥ 1 per axis, got " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
+        raiseAssert("Metal run: cfg.blk must be ≥ 1 per axis, got " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
       if cfg.blk.x * cfg.blk.y * cfg.blk.z > 1024:
-        failLoud("Metal run: cfg.blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z & " exceeds the 1024 threads-per-threadgroup max")
+        raiseAssert("Metal run: cfg.blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z & " exceeds the 1024 threads-per-threadgroup max")
 
       var pso: objc.ID
       if engine.cache.psos.hasKey(kernel):
@@ -201,11 +200,11 @@ when defined(macosx):
         let err = objc.msgSend(cmdBuf, objc.`$$`("error"))
         if not objc.isNil(err):
           detail = objc.nsStringToNimString(objc.msgSend(err, objc.`$$`("localizedDescription")))
-        failLoud("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
+        raiseAssert("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Non-macOS entry point
 # ═══════════════════════════════════════════════════════════════════════
 else:
   proc newMetalEngine*(): MetalEngine =
-    failLoud("cgMetal requires macOS")
+    raiseAssert("cgMetal requires macOS")

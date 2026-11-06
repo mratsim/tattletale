@@ -117,20 +117,19 @@ type
     ## Span names of the proc under rewrite with a length binding:
     ## split parameters and decomposed view bindings.
 
-proc splitSpanCall(ctx: var SpanCtx, args: var seq[CirExpr], err: var string, callee: CirExpr) =
+proc splitSpanCall(ctx: var SpanCtx, args: var seq[CirExpr], callee: CirExpr) =
   ## A `toOpenArray` argument expands into `base + first` and `last - first + 1`,
   ## a span symbol into the pointer and length bindings of its name.
   ## The rewrite refuses a callee outside the module, its span parameter would reach the printer unsplit.
-  if callee.kind != eSym or err.len > 0:
+  if callee.kind != eSym:
     return
   let sigs = ctx.sigs.getOrDefault(callee.name)
   if sigs.len == 0:
     return
   let def = ctx.procs.getOrDefault(callee.name)
   if def.isNil:
-    err = "span argument to " & callee.name &
-      ", a callee outside the module has no split signature"
-    return
+    raiseAssert("span argument to " & callee.name &
+      ", a callee outside the module has no split signature")
   var newArgs: seq[CirExpr]
   var argIdx = 0
   var sigIdx = 0
@@ -156,94 +155,83 @@ proc splitSpanCall(ctx: var SpanCtx, args: var seq[CirExpr], err: var string, ca
     paramTypes.add p.typ
   callee.typ = CirType(kind: ctProc, params: paramTypes, ret: def.ret)
 
-proc rewriteSpanUsesExpr(ctx: var SpanCtx, e: var CirExpr, err: var string)
+proc rewriteSpanUsesExpr(ctx: var SpanCtx, e: var CirExpr)
   ## Forward declaration, statement lists recurse into their expressions.
 
-proc rewriteSpanUsesExpr(ctx: var SpanCtx, e: var CirExpr, err: var string) =
+proc rewriteSpanUsesExpr(ctx: var SpanCtx, e: var CirExpr) =
   ## Surviving `toOpenArray` calls: the pass refuses one, the frontend emits one only in a view binding, a call argument, or a `len` read.
   ##
   ## A folded node replaces the node slot its parent references (`e` is a `var` param).
-  if err.len > 0 or e.isNil:
+  if e.isNil:
     return
   case e.kind
   of eSym:
     if e.typ != nil and e.typ.kind == ctSpan:
       if e.name notin ctx.lenNames:
-        err = "span symbol " & e.name & " has no split length binding"
-        return
+        raiseAssert("span symbol " & e.name & " has no split length binding")
       e.typ = tAptr(e.typ.sSpace, e.typ.sElem)
   of eCall:
     let calleeName = if e.callee.kind == eSym: e.callee.name else: ""
     if calleeName == "toOpenArray":
-      err = "toOpenArray result used outside a span argument, a len read," &
-        " or a view binding"
-      return
+      raiseAssert("toOpenArray result used outside a span argument, a len read," &
+        " or a view binding")
     if calleeName == "len" and e.args.len == 1:
       let arg = e.args[0]
       if arg.kind == eSym and arg.typ != nil and arg.typ.kind == ctSpan:
         if arg.name notin ctx.lenNames:
-          err = "span symbol " & arg.name & " has no split length binding"
-          return
+          raiseAssert("span symbol " & arg.name & " has no split length binding")
         e = sym(arg.name & "_len", tInt(32))
         return
       if arg.isToOpenArrayCall:
         e = spanPtrLenParts(arg.args[0], arg.args[1], arg.args[2]).lenExpr
         return
     else:
-      ctx.splitSpanCall(e.args, err, e.callee)
-      if err.len > 0:
-        return
-    ctx.rewriteSpanUsesExpr(e.callee, err)
-    if err.len > 0:
-      return
+      ctx.splitSpanCall(e.args, e.callee)
+    ctx.rewriteSpanUsesExpr(e.callee)
     for a in e.args.mitems:
-      ctx.rewriteSpanUsesExpr(a, err)
+      ctx.rewriteSpanUsesExpr(a)
   of eCast, eConv:
     # a conversion over a span read retains the read's fold: the operand is
     # a settable field, a folded read replaces it in the conversion
-    ctx.rewriteSpanUsesExpr(e.castOperand, err)
+    ctx.rewriteSpanUsesExpr(e.castOperand)
   else:
     # children are shared refs: the walk retypes span symbols in place
     # and no child position replaces its node
     var children = getExprChildren(e)
     for i in 0 ..< children.len:
-      ctx.rewriteSpanUsesExpr(children[i], err)
+      ctx.rewriteSpanUsesExpr(children[i])
 
-proc rewriteSpanUsesStmts(ctx: var SpanCtx, err: var string, ss: seq[CirStmt]) =
+proc rewriteSpanUsesStmts(ctx: var SpanCtx, ss: seq[CirStmt]) =
   for s in ss:
     case s.kind
     of sVar:
-      ctx.rewriteSpanUsesExpr(s.init, err)
+      ctx.rewriteSpanUsesExpr(s.init)
     of sAsgn:
-      ctx.rewriteSpanUsesExpr(s.lhs, err)
-      ctx.rewriteSpanUsesExpr(s.rhs, err)
+      ctx.rewriteSpanUsesExpr(s.lhs)
+      ctx.rewriteSpanUsesExpr(s.rhs)
     of sIte:
-      ctx.rewriteSpanUsesExpr(s.cond, err)
-      ctx.rewriteSpanUsesStmts(err, s.thenBody)
-      ctx.rewriteSpanUsesStmts(err, s.elseBody)
+      ctx.rewriteSpanUsesExpr(s.cond)
+      ctx.rewriteSpanUsesStmts(s.thenBody)
+      ctx.rewriteSpanUsesStmts(s.elseBody)
     of sWhile:
-      ctx.rewriteSpanUsesExpr(s.whileCond, err)
-      ctx.rewriteSpanUsesStmts(err, s.whileBody)
+      ctx.rewriteSpanUsesExpr(s.whileCond)
+      ctx.rewriteSpanUsesStmts(s.whileBody)
     of sRet:
-      ctx.rewriteSpanUsesExpr(s.retVal, err)
+      ctx.rewriteSpanUsesExpr(s.retVal)
     of sDiscard:
-      ctx.rewriteSpanUsesExpr(s.discardVal, err)
+      ctx.rewriteSpanUsesExpr(s.discardVal)
     of sCall:
-      ctx.splitSpanCall(s.callArgs, err, s.callCallee)
-      if err.len > 0:
-        return
+      ctx.splitSpanCall(s.callArgs, s.callCallee)
       for a in s.callArgs.mitems:
-        ctx.rewriteSpanUsesExpr(a, err)
+        ctx.rewriteSpanUsesExpr(a)
     of sAsm, sEmit:
       discard
-    if err.len > 0:
-      return
 
 # ═══════════════════════════════════════════════════════════════════════
 #  View binding decomposition
 # ═══════════════════════════════════════════════════════════════════════
 
-proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
+proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx) =
   ## A `toOpenArray(p, a, b)` assignment to a preceding `var v: span T`
   ## declaration retypes the binding to `p + a` and appends the matching
   ## `v_len` declaration bound to `b - a + 1`.
@@ -253,15 +241,10 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
     let s = ss[i]
     case s.kind
     of sIte:
-      var thenErr = decomposeSpanBindings(s.thenBody, ctx)
-      if thenErr.len == 0:
-        thenErr = decomposeSpanBindings(s.elseBody, ctx)
-      if thenErr.len > 0:
-        return thenErr
+      decomposeSpanBindings(s.thenBody, ctx)
+      decomposeSpanBindings(s.elseBody, ctx)
     of sWhile:
-      let loopErr = decomposeSpanBindings(s.whileBody, ctx)
-      if loopErr.len > 0:
-        return loopErr
+      decomposeSpanBindings(s.whileBody, ctx)
     else:
       discard
     if s.kind == sVar and s.declType != nil and s.declType.kind == ctSpan and
@@ -284,7 +267,6 @@ proc decomposeSpanBindings(ss: var seq[CirStmt], ctx: var SpanCtx): string =
     lowered.add s
     i.inc
   ss = lowered
-  return ""
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Survivor guard
@@ -317,34 +299,27 @@ proc typeHoldsSpan(t: CirType): bool =
   else:
     result = false
 
-proc survivingSpanRejection(fn: CirProc): string =
-  ## Contract:
-  ## - the guard checks every position, including the ones the rewrite skips
-  ##   (`sAsm` and `sEmit` operands)
+proc refuseSurvivingSpan(fn: CirProc) =
+  ## Raises when any position of `fn` still names a span type,
+  ## `sAsm` and `sEmit` operands included.
   for p in fn.params:
     if typeHoldsSpan(p.typ):
-      return "parameter " & p.name & " keeps an openArray span"
+      raiseAssert("parameter " & p.name & " keeps an openArray span")
   if typeHoldsSpan(fn.ret):
-    return "return type keeps an openArray span"
-  var err = ""
+    raiseAssert("return type keeps an openArray span")
   let checkStmt = proc(s: CirStmt) =
-    if err.len > 0:
-      return
     if s.kind == sVar and typeHoldsSpan(s.declType):
-      err = "declaration " & s.name & " keeps an openArray span"
+      raiseAssert("declaration " & s.name & " keeps an openArray span")
   let checkExpr = proc(e: CirExpr) =
-    if err.len > 0:
-      return
     if typeHoldsSpan(e.getExprType):
-      err = "an expression resolves to an openArray span type"
+      raiseAssert("an expression resolves to an openArray span type")
   fn.body.walkStmts(checkStmt, checkExpr)
-  return err
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Pass runner
 # ═══════════════════════════════════════════════════════════════════════
 
-proc lowerSpansPass(m: CirModule): string =
+proc lowerSpansPass(m: CirModule) =
   ## Parameter splits run before the body rewrites, which rebuild call-site
   ## callee types from the split signatures.
   let sigs = collectSpanSigs(m)
@@ -359,15 +334,9 @@ proc lowerSpansPass(m: CirModule): string =
     var ctx = SpanCtx(sigs: sigs, procs: procs)
     for s in sigs.getOrDefault(fn.name):
       ctx.lenNames.incl fn.params[s.paramIdx].name
-    var err = decomposeSpanBindings(fn.body, ctx)
-    if err.len == 0:
-      ctx.rewriteSpanUsesStmts(err, fn.body)
-    if err.len > 0:
-      return "in proc " & fn.name & ": " & err
-    let spanErr = fn.survivingSpanRejection()
-    if spanErr.len > 0:
-      return "in proc " & fn.name & ": " & spanErr
+    decomposeSpanBindings(fn.body, ctx)
+    ctx.rewriteSpanUsesStmts(fn.body)
+    fn.refuseSurvivingSpan()
   for g in m.globals:
     if g.kind == sVar and typeHoldsSpan(g.declType):
-      return "in global scope: declaration " & g.name & " keeps an openArray span"
-  return ""
+      raiseAssert("global declaration " & g.name & " keeps an openArray span")

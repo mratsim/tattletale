@@ -183,8 +183,7 @@ proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   if s.addressSpace == caConstant:
-    ctx.fail("local " & s.name & " in constant addressSpace, the MSL lowering pass hoists const_mem locals to program scope")
-    return false
+    raiseAssert("local " & s.name & " in constant addressSpace, the MSL lowering pass hoists const_mem locals to program scope")
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
@@ -272,7 +271,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
     decl = emitMslPtr(s.declType, s.name)
   return "constant " & decl & " = " & ctx.printExpr(s.init) & ";"
 
-proc printMslModule*(m: CirModule): tuple[src: string, err: string] =
+proc printMslModule*(m: CirModule): string =
   var ctx = initPrintCtx(mslWalkPolicy, mslVectorRule, mslEmit, cgMetal)
   printModule(ctx, m, getModuleKernels(m), mslModuleShape)
 

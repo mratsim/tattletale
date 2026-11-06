@@ -192,9 +192,8 @@ proc rewriteBody(el: var TempBinder, body: seq[CirStmt]): seq[CirStmt] =
   for s in body:
     result.add(el.rewriteStmt(s))
 
-proc rewriteStmtsExprsPass(m: CirModule): string =
+proc rewriteStmtsExprsPass(m: CirModule) =
   for fn in m.procs:
     var el = tempBinderFor(fn)
     fn.body = el.rewriteBody(fn.body)
-  return ""
 

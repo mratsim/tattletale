@@ -119,22 +119,19 @@ proc classifyRwBuffers(stored: HashSet[string], edges: seq[tuple[caller, arg, ca
         result.incl(src)
         grew = true
 
-proc checkDeviceFnRecursion(procs: Table[string, CirProc]): string =
-  ## Returns the recursion refusal over the device-function call graph,
-  ## "" when the graph is acyclic.
+proc checkDeviceFnRecursion(procs: Table[string, CirProc]) =
+  ## Raises on a cycle in the device-function call graph.
   var state = initTable[string, int]() # fn name: 1 = on the visit stack, 2 = fully visited
 
-  proc visit(state: var Table[string, int], calleesOf: Table[string, seq[string]], fn: string): string =
+  proc visit(state: var Table[string, int], calleesOf: Table[string, seq[string]], fn: string) =
     state[fn] = 1
     for callee in calleesOf.getOrDefault(fn, @[]):
       case state.getOrDefault(callee, 0)
       of 1:
-        return "recursive device function `" & callee &
-          "` would not terminate, recursion is rejected"
+        raiseAssert("recursive device function `" & callee &
+          "` would not terminate, recursion is rejected")
       of 0:
-        result = visit(state, calleesOf, callee)
-        if result.len > 0:
-          return
+        visit(state, calleesOf, callee)
       else:
         discard
     state[fn] = 2
@@ -149,15 +146,13 @@ proc checkDeviceFnRecursion(procs: Table[string, CirProc]): string =
         calleesOf.mgetOrPut(fn.name, @[]).add(c.callee.name)
   for fn in procs.values:
     if not fn.isKernel and state.getOrDefault(fn.name, 0) == 0:
-      result = visit(state, calleesOf, fn.name)
-      if result.len > 0:
-        return
+      visit(state, calleesOf, fn.name)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-proc hlslRun(m: CirModule): string {.nimcall.} =
+proc hlslRun(m: CirModule) {.nimcall.} =
   var procs: Table[string, CirProc]
   for fn in m.procs:
     procs[fn.name] = fn
@@ -168,7 +163,7 @@ proc hlslRun(m: CirModule): string {.nimcall.} =
     scanCallStmts(edges, procs, fn, fn.body)
   m.callGraph = CallGraph(stored: stored,
     reached: classifyRwBuffers(stored, edges))
-  result = checkDeviceFnRecursion(procs)
+  checkDeviceFnRecursion(procs)
 
 proc registerHlslCallGraphPass*(reg: var PassRegistry) =
   reg.register("hlslCallGraphAnalysis", pkAnalysis,

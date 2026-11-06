@@ -190,15 +190,10 @@ type
     fnDeadLocals*: Table[string, HashSet[string]]
       ## Proc name -> locals that the planning pass proved unread.
       ## Filled only in the dry pass, consumed by the real pass.
-    err*: string
 
 proc initSpvLangCtx(): SpvLangCtx =
   result.builder = initSpvBuilder()
   result.caps.incl capShader
-
-proc failSpv(ctx: var SpvLangCtx, what: string) =
-  if ctx.err.len == 0:
-    ctx.err = "SPIR-V backend does not support: " & what
 
 proc resolveScalarId(ctx: var SpvLangCtx, t: CirType): uint32 =
   case t.kind
@@ -210,22 +205,21 @@ proc resolveScalarId(ctx: var SpvLangCtx, t: CirType): uint32 =
     of 16: ctx.caps.incl capInt16; ctx.builder.tyInt(16, false)
     of 32: ctx.builder.tyInt(32, false)
     of 64: ctx.caps.incl capInt64; ctx.builder.tyInt(64, false)
-    else: ctx.failSpv("uint width " & $t.bits); return 0
+    else: raiseAssert("uint width " & $t.bits)
   of ctInt:
     case t.bits
     of 16: ctx.caps.incl capInt16; ctx.builder.tyInt(16, true)
     of 32: ctx.builder.tyInt(32, true)
     of 64: ctx.caps.incl capInt64; ctx.builder.tyInt(64, true)
-    else: ctx.failSpv("int width " & $t.bits); return 0
+    else: raiseAssert("int width " & $t.bits)
   of ctFloat:
     case t.bits
     of 16: ctx.caps.incl capFloat16; ctx.builder.tyFloat(16)
     of 32: ctx.builder.tyFloat(32)
     of 64: ctx.caps.incl capFloat64; ctx.builder.tyFloat(64)
-    else: ctx.failSpv("float width " & $t.bits); return 0
+    else: raiseAssert("float width " & $t.bits)
   else:
-    ctx.failSpv("scalar id of " & $t.kind)
-    return 0
+    raiseAssert("scalar id of " & $t.kind)
 
 
 proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
@@ -247,11 +241,9 @@ proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
     spvPointer(scFunction, ctx.valueTy(t.pElem))
   of ctAptr:
     if t.addressSpace != caDevice:
-      ctx.failSpv("array pointer in " & $t.addressSpace & " addressSpace")
-      return nil
+      raiseAssert("array pointer in " & $t.addressSpace & " addressSpace")
     if t.pElem == nil or not isSpvScalarKind(t.pElem):
-      ctx.failSpv("array pointer to a non-scalar element")
-      return nil
+      raiseAssert("array pointer to a non-scalar element")
     ctx.caps.incl capPhysicalStorageBufferAddresses
     # buffer reference shape: a Block struct over a runtime array
     # element access chains through member 0 and the index
@@ -260,8 +252,7 @@ proc valueTy(ctx: var SpvLangCtx, t: CirType): SpvTy =
     wrapper.blockDecorated = true
     spvPointer(scPhysicalStorageBuffer, wrapper)
   else:
-    ctx.failSpv("CirType outside the SPIR-V subset: " & $t.kind)
-    return nil
+    raiseAssert("CirType outside the SPIR-V subset: " & $t.kind)
 
 proc resolveTyId(ctx: var SpvLangCtx, t: SpvTy): uint32 =
   ## SPIR-V type id of a value type, cached on the structural key.
@@ -354,11 +345,11 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
   for p in params:
     if p.typ.kind == ctAptr:
       if p.typ.addressSpace != caDevice:
-        ctx.failSpv("kernel parameter " & p.name & " in " & $p.typ.addressSpace &
+        raiseAssert("kernel parameter " & p.name & " in " & $p.typ.addressSpace &
           " addressSpace, only device buffers carry a push address")
       members.add spvScalar(cirUint64())
     elif p.typ.kind in {ctPtr, ctAptr}:
-      ctx.failSpv("kernel parameter " & p.name & " of pointer type")
+      raiseAssert("kernel parameter " & p.name & " of pointer type")
     else:
       var m = ctx.pushMemberTy(p)
       if p.typ.kind == ctStruct:
@@ -369,15 +360,15 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
           if f.typ.kind == ctBool:
             m.members[i] = spvScalar(cirUint32())
           elif f.typ.kind == ctStruct and f.typ.hasBoolLeaf:
-            ctx.failSpv("push member " & p.name & " field " & f.name &
+            raiseAssert("push member " & p.name & " field " & f.name &
               " nests a bool inside a struct, only a direct bool field maps" &
               " to a u32 push word")
           elif f.typ.kind == ctArray and f.typ.aElem.kind == ctBool:
-            ctx.failSpv("push member " & p.name & " field " & f.name &
+            raiseAssert("push member " & p.name & " field " & f.name &
               " is a bool array, only a direct bool field maps to a u32 push word")
       let l = std430Layout(m)
       if l.align < 4:
-        ctx.failSpv("push member " & p.name & " is narrower than 32 bits (" &
+        raiseAssert("push member " & p.name & " is narrower than 32 bits (" &
           $l.size & " bytes), narrow members need SPIR-V 1.5 storage capabilities")
       members.add m
   result.members = members
@@ -417,8 +408,7 @@ proc getCoordBuiltinEnumerant(ctx: var SpvLangCtx, k: CirCoordBuiltinKind): uint
   of cbkThreadgroupsPerGrid: result = biNumWorkgroups
   of cbkThreadIndexInThreadgroup: result = biLocalInvocationIndex
   else:
-    ctx.failSpv("not a coordinate builtin kind")
-
+    raiseAssert("not a coordinate builtin kind")
 proc declareScalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   if ctx.scalarBuiltins.hasKey(builtin):
     return ctx.scalarBuiltins[builtin]
@@ -496,7 +486,7 @@ proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
     case s.kind
     of sVar:
       if s.addressSpace != caThread:
-        ctx.failSpv("local " & s.name & " in " & $s.addressSpace &
+        raiseAssert("local " & s.name & " in " & $s.addressSpace &
           " addressSpace, shared/constant locals are outside the SPIR-V subset")
       if s.declType.kind == ctPtr:
         # a pointer-typed local resolves to its pointee variable, no storage
@@ -540,8 +530,7 @@ proc resolveConstId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
     let boolTy = ctx.resolveTyId(spvScalar(CirType(kind: ctBool)))
     ctx.builder.constBool(boolTy, false)
   else:
-    ctx.failSpv("literal expected, got expression kind " & $e.kind)
-    0
+    raiseAssert("literal expected, got expression kind " & $e.kind)
 
 proc getScalarBits(t: CirType): int =
   if t == nil:
@@ -554,8 +543,7 @@ proc getScalarBits(t: CirType): int =
 proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32 =
   ## Scalar conversion opcode between two value types.
   if source == nil or to == nil:
-    ctx.failSpv("scalar conversion with a missing operand type")
-    return 0
+    raiseAssert("scalar conversion with a missing operand type")
   if source.kind == to.kind and getScalarBits(source) == getScalarBits(to):
     return v
   let fFloat = source.kind == ctFloat
@@ -590,9 +578,8 @@ proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32 =
     return ctx.builder.freshInst(OpConvertFToU, @[ctx.resolveScalarId(to), v])
   if fFloat and tFloat:
     return ctx.builder.freshInst(OpFConvert, @[ctx.resolveScalarId(to), v])
-  ctx.failSpv("no scalar conversion " & $source.kind & $getScalarBits(source) &
+  raiseAssert("no scalar conversion " & $source.kind & $getScalarBits(source) &
     " -> " & $to.kind & $getScalarBits(to))
-  0
 
 proc findMemberIndex(t: CirType, name: string): int =
   ## Member index of a named struct field or a vector component
@@ -639,7 +626,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
     if t != nil and t.kind in {ctPtr, ctAptr}:
       result = t.pElem
     else:
-      ctx.failSpv("deref of a non-pointer operand")
+      raiseAssert("deref of a non-pointer operand")
   of eAt:
     let t = ctx.resolveExprType(fn, e.atBase)
     if t != nil and t.kind == ctArray:
@@ -647,13 +634,13 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
     elif t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil:
       result = t.pElem
     else:
-      ctx.failSpv("index of a non-array operand")
+      raiseAssert("index of a non-array operand")
   of ePat:
     let t = ctx.resolveExprType(fn, e.patBase)
     if t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil:
       result = t.pElem
     else:
-      ctx.failSpv("pattern access on a non-pointer operand")
+      raiseAssert("pattern access on a non-pointer operand")
   of eDot:
     let t = ctx.resolveExprType(fn, e.dotBase)
     if t != nil and t.kind == ctStruct:
@@ -661,15 +648,15 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
       if i >= 0:
         result = t.fields[i].typ
       else:
-        ctx.failSpv("no field " & e.fieldName & " on " & t.name)
+        raiseAssert("no field " & e.fieldName & " on " & t.name)
     elif t != nil and t.kind == ctVector:
       let i = findMemberIndex(t, e.fieldName)
       if i >= 0:
         result = t.vElem
       else:
-        ctx.failSpv("no component " & e.fieldName & " on the vector")
+        raiseAssert("no component " & e.fieldName & " on the vector")
     else:
-      ctx.failSpv("field access on a non-struct operand")
+      raiseAssert("field access on a non-struct operand")
   of eCall:
     if e.callee.kind == eSym and ctx.fnTypes.hasKey(e.callee.name):
       result = ctx.fnTypes[e.callee.name]
@@ -683,12 +670,11 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
         if t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil:
           result = t.pElem
           return
-      ctx.failSpv("atomicFetchAdd address is not the address of an element")
+      raiseAssert("atomicFetchAdd address is not the address of an element")
     elif e.callee.kind == eSym and e.args.len > 0:
             result = ctx.resolveExprType(fn, e.args[0])
     else:
-      ctx.failSpv("call result type of " & (if e.callee.kind == eSym: e.callee.name else: "non-symbol callee"))
-
+      raiseAssert("call result type of " & (if e.callee.kind == eSym: e.callee.name else: "non-symbol callee"))
 proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): tuple[ptrId: uint32, pointee: CirType, isBda: bool, isPush: bool]
 
 proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
@@ -746,15 +732,12 @@ proc getCmpInst(ctx: var SpvLangCtx, name: string, operandTy: CirType): SpvOp =
 
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   ## One expression, the SPIR-V id of its value.
-  if ctx.err.len > 0:
-    return 0
   case e.kind
   of eNil:
     let t = ctx.resolveTyId(ctx.valueTy(e.nilType))
     ctx.builder.freshInst(OpUndef, @[t])
   of eStrLit:
-    ctx.failSpv("a string literal has no SPIR-V value")
-    return 0'u32
+    raiseAssert("a string literal has no SPIR-V value")
   of eIntLit, eFloatLit, eTrue, eFalse:
     ctx.resolveConstId(fn, e)
   of eSym:
@@ -780,8 +763,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     if fn.addrParams.hasKey(e.name):
       let t = ctx.resolveExprType(fn, e)
       return ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(t)), fn.addrParams[e.name])
-    ctx.failSpv("unknown symbol " & e.name & " in " & fn.name)
-    0
+    raiseAssert("unknown symbol " & e.name & " in " & fn.name)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let opTy = e.opType
     let l = ctx.emitExpr(fn, e.left)
@@ -801,8 +783,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       else: "xor"
     let inst = ctx.getBinopInst(opName, opTy)
     if inst == OpNop:
-      ctx.failSpv("binary operator " & opName)
-      return 0
+      raiseAssert("binary operator " & opName)
     ctx.builder.freshInst(inst, @[ctx.resolveTyId(ctx.valueTy(opTy)), li, ri])
   of eEq, eNeq, eLt, eLe:
     let opTy = e.cmpType
@@ -817,8 +798,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       else: "<="
     let inst = ctx.getCmpInst(name, opTy)
     if inst == OpNop:
-      ctx.failSpv("comparison operator " & name)
-      return 0
+      raiseAssert("comparison operator " & name)
     ctx.builder.freshInst(inst,
       @[ctx.resolveTyId(spvScalar(CirType(kind: ctBool))), li, ri])
   of eNot:
@@ -888,8 +868,7 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
         of "y": 1
         of "z": 2
         else:
-          ctx.failSpv("coordinate component " & e.fieldName)
-          -1
+          raiseAssert("coordinate component " & e.fieldName)
       if comp < 0:
         return 0
       let compTy = ctx.resolveExprType(fn, e)
@@ -899,15 +878,13 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     if baseTy != nil and baseTy.kind == ctVector:
       let i = findMemberIndex(baseTy, e.fieldName)
       if i < 0:
-        ctx.failSpv("no component " & e.fieldName & " on the vector")
-        return 0
+        raiseAssert("no component " & e.fieldName & " on the vector")
       let v = ctx.emitExpr(fn, e.dotBase)
       ctx.builder.opCompositeExtract(ctx.resolveTyId(ctx.valueTy(baseTy.vElem)), v, @[i])
     elif baseTy != nil and baseTy.kind == ctStruct:
       let i = findMemberIndex(baseTy, e.fieldName)
       if i < 0:
-        ctx.failSpv("no field " & e.fieldName & " on " & baseTy.name)
-        return 0
+        raiseAssert("no field " & e.fieldName & " on " & baseTy.name)
       # dot base is a value: composite extract, no storage
       let v = ctx.emitExpr(fn, e.dotBase)
       let fieldTy = baseTy.fields[i].typ
@@ -923,16 +900,13 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     else:
       # dot base is a pointer-valued symbol: access chain through it
       if e.dotBase.kind != eSym:
-        ctx.failSpv("field access base outside the supported set: " & $e.dotBase.kind)
-        return 0
+        raiseAssert("field access base outside the supported set: " & $e.dotBase.kind)
       let rootTy = ctx.resolveExprType(fn, e.dotBase)
       if rootTy == nil or rootTy.kind != ctPtr:
-        ctx.failSpv("field access through a non-pointer: " & e.dotBase.name)
-        return 0
+        raiseAssert("field access through a non-pointer: " & e.dotBase.name)
       let i = findMemberIndex(rootTy.pElem, e.fieldName)
       if i < 0:
-        ctx.failSpv("no field " & e.fieldName & " on " & rootTy.pElem.name)
-        return 0
+        raiseAssert("no field " & e.fieldName & " on " & rootTy.pElem.name)
       let ptrVal = ctx.emitExpr(fn, e.dotBase)
       let memberPtrTy = ctx.builder.tyPointer(scFunction,
         ctx.resolveTyId(ctx.valueTy(rootTy.pElem.fields[i].typ)))
@@ -969,14 +943,11 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     # value emission is the call itself
     ctx.emitCallValue(fn, e)
   of eStmts:
-    ctx.failSpv("statement-expression survived elimination, the rewriteStmtsExprs pass must run before the printers")
-    0'u32
+    raiseAssert("statement-expression survived elimination, the rewriteStmtsExprs pass must run before the printers")
 
 proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     tuple[ptrId: uint32, pointee: CirType, isBda: bool, isPush: bool] =
   ## Pointer of an addressable expression, the OpStore/OpAccessChain target.
-  if ctx.err.len > 0:
-    return
   var e = e
   if e.kind == ePat:
     # a pattern write is an element write through a pointer value.
@@ -984,8 +955,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     # A base resolving to no pointer errors before the normalization
     let baseTy = ctx.resolveExprType(fn, e.patBase)
     if baseTy == nil or baseTy.kind notin {ctPtr, ctAptr}:
-      ctx.failSpv("pattern write base is not a pointer")
-      return
+      raiseAssert("pattern write base is not a pointer")
     e = CirExpr(kind: eAt, atBase: e.patBase, atIndex: e.patIndex)
   case e.kind
   of eSym:
@@ -997,7 +967,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       return (fn.locals[e.name], t, false, false)
     if fn.addrParams.hasKey(e.name):
       return (fn.addrParams[e.name], fn.addrPointee[e.name], false, false)
-    ctx.failSpv("assignment target is not a local: " & e.name)
+    raiseAssert("assignment target is not a local: " & e.name)
   of eDeref:
     # store through a pointer value held in an expression
     let ptrVal = ctx.emitExpr(fn, e.derefOperand)
@@ -1006,16 +976,13 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
   of eDot:
     # field write on a local struct: access chain, member write
     if e.dotBase.kind != eSym or not fn.locals.hasKey(e.dotBase.name):
-      ctx.failSpv("field write outside a local struct")
-      return
+      raiseAssert("field write outside a local struct")
     let rootTy = ctx.resolveExprType(fn, e.dotBase)
     if rootTy == nil or rootTy.kind != ctStruct:
-      ctx.failSpv("field write on a non-struct local")
-      return
+      raiseAssert("field write on a non-struct local")
     let i = findMemberIndex(rootTy, e.fieldName)
     if i < 0:
-      ctx.failSpv("no field " & e.fieldName & " on " & rootTy.name)
-      return
+      raiseAssert("no field " & e.fieldName & " on " & rootTy.name)
     fn.localLoads.mgetOrPut(e.dotBase.name, 0).inc
     let memberPtrTy = ctx.builder.tyPointer(scFunction,
       ctx.resolveTyId(ctx.valueTy(rootTy.fields[i].typ)))
@@ -1076,8 +1043,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       return
     let baseTy = ctx.resolveExprType(fn, e.atBase)
     if baseTy == nil or baseTy.kind notin {ctArray, ctAptr, ctPtr}:
-      ctx.failSpv("array element access on a non-array base")
-      return
+      raiseAssert("array element access on a non-array base")
     let idxVal = ctx.emitExpr(fn, e.atIndex)
     let idxInt = ctx.convertValue(idxVal, ctx.resolveExprType(fn, e.atIndex), cirInt32())
     let elemTy =
@@ -1085,8 +1051,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       else: baseTy.pElem
     if baseTy.kind == ctArray:
       if e.atBase.kind != eSym or not fn.locals.hasKey(e.atBase.name):
-        ctx.failSpv("array element write outside a local array")
-        return
+        raiseAssert("array element write outside a local array")
       fn.localLoads.mgetOrPut(e.atBase.name, 0).inc
       let elemPtrTy = ctx.builder.tyPointer(scFunction,
         ctx.resolveTyId(ctx.valueTy(elemTy)))
@@ -1095,8 +1060,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       result = (ptrId, elemTy, false, false)
     elif baseTy.kind == ctAptr:
       if baseTy.addressSpace != caDevice:
-        ctx.failSpv("array element access through a " & $baseTy.addressSpace & " pointer")
-        return
+        raiseAssert("array element access through a " & $baseTy.addressSpace & " pointer")
       let devElemPtrTy = ctx.builder.tyPointer(scPhysicalStorageBuffer,
         ctx.resolveTyId(ctx.valueTy(elemTy)))
       let idx0 = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), 0)
@@ -1111,8 +1075,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       let ptrId = ctx.builder.opAccessChain(elemPtrTy, basePtr, @[idxInt])
       result = (ptrId, elemTy, false, false)
   else:
-    ctx.failSpv("assignment target " & $e.kind)
-
+    raiseAssert("assignment target " & $e.kind)
 proc emitBarrier(ctx: var SpvLangCtx) =
   let scope = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeWorkgroup))
   let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()),
@@ -1122,8 +1085,6 @@ proc emitBarrier(ctx: var SpvLangCtx) =
 proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   ## Value of a call: builtin vocabulary maps to native instructions
   ## and a device function emits an OpFunctionCall.
-  if ctx.err.len > 0:
-    return 0
   doAssert e.callee.kind == eSym, "call callee is not a symbol"
   let name = e.callee.name
   if e.callee.reductionBuiltin == cbkReduceAdd:
@@ -1131,8 +1092,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let v = ctx.emitExpr(fn, e.args[0])
     let resTy = ctx.resolveExprType(fn, e.args[0])
     if resTy.kind != ctFloat or resTy.bits != 32:
-      ctx.failSpv("reduceAdd lowers f32 only")
-      return 0
+      raiseAssert("reduceAdd lowers f32 only")
     ctx.caps.incl capGroupNonUniformArithmetic
     let scopeSub = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeSubgroup))
     return ctx.builder.freshInst(OpGroupNonUniformFAdd,
@@ -1143,8 +1103,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let lane = ctx.emitExpr(fn, e.args[1])
     let resTy = ctx.resolveExprType(fn, e.args[0])
     if resTy == nil or resTy.kind notin {ctInt, ctUint, ctFloat, ctBool}:
-      ctx.failSpv("simd_shuffle lowers scalars only")
-      return 0
+      raiseAssert("simd_shuffle lowers scalars only")
     # Invocation Id and Mask use the unsigned width the grammar demands
     let laneU = ctx.convertValue(lane, ctx.resolveExprType(fn, e.args[1]), cirUint32())
     ctx.caps.incl capGroupNonUniformShuffle
@@ -1155,17 +1114,14 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   if e.callee.atomicsBuiltin == cbkAtomicFetchAdd:
     doAssert e.args.len == 2, "atomicFetchAdd takes a pointer and a value"
     if e.args[0].kind != eAddr or e.args[0].addrOperand.kind != ePat:
-      ctx.failSpv("atomicFetchAdd address is not the address of an element")
-      return 0
+      raiseAssert("atomicFetchAdd address is not the address of an element")
     let pat = e.args[0].addrOperand
     let baseTy = ctx.resolveExprType(fn, pat.patBase)
     if baseTy == nil or baseTy.kind != ctAptr or baseTy.addressSpace != caDevice:
-      ctx.failSpv("atomicFetchAdd lowers through a device buffer element only")
-      return 0
+      raiseAssert("atomicFetchAdd lowers through a device buffer element only")
     let elemTy = baseTy.pElem
     if elemTy.kind != ctFloat or elemTy.bits != 32:
-      ctx.failSpv("atomicFetchAdd lowers f32 only")
-      return 0
+      raiseAssert("atomicFetchAdd lowers f32 only")
     let (ptrId, _, _, _) = ctx.emitLhsPtr(fn, pat)
     let v = ctx.emitExpr(fn, e.args[1])
     let value = ctx.convertValue(v, ctx.resolveExprType(fn, e.args[1]), elemTy)
@@ -1198,8 +1154,7 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     return ctx.builder.opSelect(ctx.resolveTyId(spvScalar(opTy)), cond, a, b)
   # a device function call
   if not ctx.emittedFns.hasKey(name):
-    ctx.failSpv("callee " & name & " was not pre-emitted")
-    return 0
+    raiseAssert("callee " & name & " was not pre-emitted")
   let fnId = ctx.emittedFns[name]
   let retTy = ctx.fnTypes[name]
   var args: seq[uint32]
@@ -1221,8 +1176,7 @@ proc emitLoopTail(ctx: var SpvLangCtx, fn: var SpvFnCtx, body: seq[CirStmt],
   fn.loopMerge = savedMerge
   fn.loopCont = savedCont
   if fn.terminated:
-    ctx.failSpv("return inside a loop body, the continue target would be unreachable")
-    return
+    raiseAssert("return inside a loop body, the continue target would be unreachable")
   ctx.builder.opBranch(contLbl)
   ctx.builder.opLabelAt(contLbl)
   fn.terminated = false
@@ -1233,8 +1187,6 @@ proc emitLoopTail(ctx: var SpvLangCtx, fn: var SpvFnCtx, body: seq[CirStmt],
 proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
   ## One statement list into the current basic block.
   for s in ss:
-    if ctx.err.len > 0:
-      return
     case s.kind
     of sVar:
       # storage hoisted to the entry block, the initializer stores here
@@ -1255,9 +1207,8 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
           # pointee is a hoisted local, binding is symbolic
           if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym or
               not fn.locals.hasKey(s.rhs.addrOperand.name):
-            ctx.failSpv("pointer local " & s.lhs.name &
+            raiseAssert("pointer local " & s.lhs.name &
               " binds an address outside a local")
-            return
           fn.ptrTargets[s.lhs.name] = fn.locals[s.rhs.addrOperand.name]
           continue
         if s.lhs.name in fn.elided:
@@ -1269,8 +1220,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       let rhs = ctx.emitExpr(fn, s.rhs)
       let (ptrId, pointee, isBda, isPush) = ctx.emitLhsPtr(fn, s.lhs)
       if isPush:
-        ctx.failSpv("assignment through push-constant storage, push constants are read-only")
-        return
+        raiseAssert("assignment through push-constant storage, push constants are read-only")
       let rhsTy = ctx.resolveExprType(fn, s.rhs)
       let value = ctx.convertValue(rhs, rhsTy, pointee)
       if s.lhs.kind == eSym and fn.locals.hasKey(s.lhs.name):
@@ -1337,8 +1287,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       fn.fwd.clear()
     of sRet:
       if fn.terminated:
-        ctx.failSpv("a second return in one basic block")
-        return
+        raiseAssert("a second return in one basic block")
       if s.retVal != nil and s.retVal.kind != eNil:
         let v = ctx.emitExpr(fn, s.retVal)
         ctx.builder.opReturnValue(v)
@@ -1350,8 +1299,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
     of sCall:
       # statement-position call: the call instruction emits, a value call's result id is unused
       if s.callCallee.kind != eSym:
-        ctx.failSpv("statement call without a symbol callee, no destination binding")
-        return
+        raiseAssert("statement call without a symbol callee, no destination binding")
       if s.callCallee.synchroBuiltin == cbkThreadgroupBarrier:
         ctx.emitBarrier()
       else:
@@ -1360,7 +1308,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
         callE.args = s.callArgs
         discard ctx.emitCallValue(fn, callE)
     of sAsm, sEmit:
-      ctx.failSpv("statement construct " & $s.kind &
+      raiseAssert("statement construct " & $s.kind &
         " outside the SPIR-V subset, it must lower earlier")
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1503,7 +1451,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
 #  Driver
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
+proc printSpirvModule*(m: CirModule): seq[uint32] =
   ## Returns the SPIR-V words of one CIRv2 module for the Vulkan environment.
   ##
   ## Exactly one `{.global.}` kernel per module, the device functions it
@@ -1514,8 +1462,7 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
     if fn.isKernel:
       kernels.add fn
   if kernels.len != 1:
-    lang.failSpv("exactly one kernel per module, found " & $kernels.len)
-    return (@[], lang.err)
+    raiseAssert("exactly one kernel per module, found " & $kernels.len)
   lang.fnProcs = initTable[string, CirProc]()
   for fn in m.procs:
     if not fn.isKernel:
@@ -1529,9 +1476,7 @@ proc printSpirvModule*(m: CirModule): tuple[words: seq[uint32], err: string] =
   discard dry.emitKernel(kernels[0])
   lang.fnDeadLocals = dry.fnDeadLocals
   discard lang.emitKernel(kernels[0])
-  if lang.err.len > 0:
-    return (@[], lang.err)
-  (lang.builder.module.finalize(), "")
+  lang.builder.module.finalize()
 
 
 proc codegen*(m: CirModule): seq[uint32] =

@@ -153,7 +153,7 @@ const CReserved* = [
 template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: string, reserved: untyped, doubleUnderscorePrefix: string = "") =
   reg.register(passName, pkTransform,
     "Renames identifiers colliding with backend reserved words: fn names, call sites, params, locals, struct fields, field accesses",
-    run = proc(m: CirModule): string {.nimcall.} =
+    run = proc(m: CirModule) {.nimcall.} =
       renameReservedIdentifiers(m, reserved, doubleUnderscorePrefix)
   )
 

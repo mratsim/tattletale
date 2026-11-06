@@ -46,11 +46,9 @@ proc bindConstrLocal(tmpCount: var int, rhs: CirExpr, lhsType: CirType): tuple[d
   result.decl = varD(name, lhsType, rhs)
   result.local = sym(name, lhsType)
 
-proc decomposeArrayAssignStmts(body: var seq[CirStmt], tmpCount: var int): string =
-  ## Rewrites the whole-array copies of one statement sequence in place.
-  ##
-  ## Returns "" on success, else the refusal text naming the first shape
-  ## the pass cannot lower:
+proc decomposeArrayAssignStmts(body: var seq[CirStmt], tmpCount: var int) =
+  ## Rewrites the whole-array copies of one statement sequence in place,
+  ## refusing the first shape the pass cannot lower:
   ##
   ## - a declaration or assignment binding a call result: C-family targets
   ##   cannot take the address of a call result, bind the call to a local first
@@ -65,8 +63,8 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt], tmpCount: var int): strin
     of sVar:
       if s.declType.kind == ctArray and s.init != nil and s.init.kind != eAconstr:
         if s.init.kind == eCall:
-          return "array declaration binds a call result, C-family targets" &
-            " cannot take the address of a call result; bind the call to a local first"
+          raiseAssert("array declaration binds a call result, C-family targets" &
+            " cannot take the address of a call result; bind the call to a local first")
         lowered.add varD(s.name, s.declType, nil, s.addressSpace)
         lowered.add memcpyAssign(sym(s.name, s.declType), s.init, s.declType)
       else:
@@ -75,11 +73,11 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt], tmpCount: var int): strin
       let lhsType = getExprType(s.lhs)
       if lhsType != nil and lhsType.kind == ctArray:
         if s.rhs.kind == eCall:
-          return "whole-array assignment binds a call result, C-family targets" &
-            " cannot take the address of a call result; bind the call to a local first"
+          raiseAssert("whole-array assignment binds a call result, C-family targets" &
+            " cannot take the address of a call result; bind the call to a local first")
         if s.rhs.kind notin {eAconstr, eOconstr} and not isLvalue(s.rhs):
-          return "whole-array assignment right-hand side is not an lvalue, the" &
-            " memcpy form copies through storage"
+          raiseAssert("whole-array assignment right-hand side is not an lvalue, the" &
+            " memcpy form copies through storage")
         if s.rhs.kind in {eAconstr, eOconstr}:
           let bound = bindConstrLocal(tmpCount, s.rhs, lhsType)
           lowered.add bound.decl
@@ -89,25 +87,17 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt], tmpCount: var int): strin
       else:
         lowered.add s
     of sIte:
-      var err = decomposeArrayAssignStmts(s.thenBody, tmpCount)
-      if err.len > 0:
-        return err
-      err = decomposeArrayAssignStmts(s.elseBody, tmpCount)
-      if err.len > 0:
-        return err
+      decomposeArrayAssignStmts(s.thenBody, tmpCount)
+      decomposeArrayAssignStmts(s.elseBody, tmpCount)
       lowered.add s
     of sWhile:
-      let err = decomposeArrayAssignStmts(s.whileBody, tmpCount)
-      if err.len > 0:
-        return err
+      decomposeArrayAssignStmts(s.whileBody, tmpCount)
       lowered.add s
     else:
       lowered.add s
   body = lowered
 
-proc decomposeArrayAssignPass(m: CirModule): string =
+proc decomposeArrayAssignPass(m: CirModule) =
   for fn in m.procs:
     var tmpCount = 0
-    let err = decomposeArrayAssignStmts(fn.body, tmpCount)
-    if err.len > 0:
-      return "in proc " & fn.name & ": " & err
+    decomposeArrayAssignStmts(fn.body, tmpCount)

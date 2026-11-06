@@ -3,9 +3,9 @@
 ## v1 emitted `__builtin_memcpy(&a, &f(), sizeof(a))`: the address of an rvalue is invalid C++.
 ##
 ## Test that an array assignment whose right side is a device call
-## dies in the array-assign decomposition before any shader is emitted, naming the pass:
+## dies in the array-assign decomposition before any shader is emitted:
 ##
-##   Error: pass decomposeArrayAssign: in proc kern: whole-array assignment binds a call result
+##   Error: whole-array assignment binds a call result
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

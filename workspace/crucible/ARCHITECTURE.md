@@ -206,7 +206,7 @@ The runtime layer turns it into an executing kernel:
 | Platform sessions | `src/runtime/backends/`  | Library loading, device discovery, source to artifact compilation, raw dispatch                         |
 | Launch            | `src/runtime/launch/`    | `launchKernel` with chevron sugar, `launchDeviceFn` with a typed `do:` schedule block, argument packing |
 | Bindings          | `src/abis/`              | Raw C FFI: CUDA driver + NVRTC, OpenCL, Vulkan, Objective-C                                             |
-| Errors            | `src/runtime/errors.nim` | `failLoud`: stacktrace, stderr, exit 1                                                                  |
+| Errors            | runtime-wide             | Runtime refusals call `raiseAssert` immediately: the stacktrace is the location record                 |
 
 ## Enforcement map
 

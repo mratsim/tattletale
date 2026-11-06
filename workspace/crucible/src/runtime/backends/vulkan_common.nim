@@ -6,7 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/dynlib
-import ../errors
 import workspace/crucible/src/abis/vulkan_abi as vk
 import ./runtime_utils
 
@@ -58,12 +57,9 @@ proc `=destroy`(p: var VulkanPipelineObj) =
     p.vkDestroyPipelineLayout(p.device, p.layout, nil)
 
 template check*(res: VkResult) =
-  ## A template so instantiationInfo() reports the caller's location.
   let code = res
   if code != VK_SUCCESS:
-    writeStackTrace()
-    stderr.write($instantiationInfo() & " exited with error: Vulkan error " & $code & '\n')
-    quit 1
+    raiseAssert("Vulkan error " & $code)
 
 proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer =
   ## `instance = nil` requests instance-level functions before the instance exists.
@@ -121,10 +117,10 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
   else:
     result.lib = loadLib(vk.VulkanLib)
   if result.lib == nil:
-    failLoud("Cannot load " & vk.VulkanLib & " — install a Vulkan loader (e.g. libvulkan1)")
+    raiseAssert("Cannot load " & vk.VulkanLib & " — install a Vulkan loader (e.g. libvulkan1)")
   result.gpa = result.lib.symAddr("vkGetInstanceProcAddr")
   if result.gpa == nil:
-    failLoud(vk.VulkanLib & " missing vkGetInstanceProcAddr")
+    raiseAssert(vk.VulkanLib & " missing vkGetInstanceProcAddr")
 
 # ═══════════════════════════════════════════════════════════════════════
 # Physical device queries
@@ -163,7 +159,7 @@ proc newVulkanContext*(): VulkanContext =
     pAllocator: pointer, pInstance: ptr VkInstance): VkResult {.cdecl.}
   ](gpaFn(nil, "vkCreateInstance"))
   if vkCreateInstance == nil:
-    failLoud("Cannot load vkCreateInstance")
+    raiseAssert("Cannot load vkCreateInstance")
 
   var appInfo = VkApplicationInfo(
     sType: VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -193,7 +189,7 @@ proc newVulkanContext*(): VulkanContext =
   var devCount: uint32 = 0
   check ep(result.instance, devCount.addr, nil)
   if devCount == 0:
-    failLoud("No Vulkan devices found")
+    raiseAssert("No Vulkan devices found")
   var devices = newSeq[VkPhysicalDevice](devCount.int)
   check ep(result.instance, devCount.addr, devices[0].addr)
 
@@ -247,14 +243,14 @@ proc newVulkanContext*(): VulkanContext =
       bestIdx = i
       bestName = name
   if bestScore < 0:
-    failLoud("No Vulkan device with a compute-capable queue family found")
+    raiseAssert("No Vulkan device with a compute-capable queue family found")
   result.physicalDevice = devices[bestIdx]
   echo "  Vulkan device: ", bestName
 
   var qfCount: uint32 = 0
   gpqfp(result.physicalDevice, qfCount.addr, nil)
   if qfCount == 0:
-    failLoud("No queue families found")
+    raiseAssert("No queue families found")
   var qfProps = newSeq[VkQueueFamilyProperties](qfCount.int)
   gpqfp(result.physicalDevice, qfCount.addr, qfProps[0].addr)
   result.queueFamilyIndex = 0
@@ -399,7 +395,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
     for i in 0'u32 ..< memProps.memoryTypeCount:
       details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
-    failLoud("No suitable memory type found — " & details)
+    raiseAssert("No suitable memory type found — " & details)
   if (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
       cast[uint32](VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) == 0 and
      (cast[uint32](memProps.memoryTypes[memTypeIdx].propertyFlags) and
@@ -411,7 +407,7 @@ proc allocBuffer*(ctx: var VulkanContext, size: int): VulkanBuffer =
     var details = "memoryTypeBits=" & $memReq.memoryTypeBits & " memTypeCount=" & $memProps.memoryTypeCount
     for i in 0'u32 ..< memProps.memoryTypeCount:
       details &= " [" & $i & ": flags=" & $(cast[int](memProps.memoryTypes[i].propertyFlags)) & " heap=" & $memProps.memoryTypes[i].heapIndex & "]"
-    failLoud("No host-visible memory type available (vkMapMemory would fail) — " & details)
+    raiseAssert("No host-visible memory type available (vkMapMemory would fail) — " & details)
 
   when defined(debug):
     echo "  [allocBuffer] size=", size, " memTypeBits=", memReq.memoryTypeBits,
@@ -440,7 +436,7 @@ proc dealloc*(buffer: var VulkanBuffer) =
     buffer.memory = nil
 proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size: int) =
   if size > buf.size:
-    failLoud("writeBuffer overflow")
+    raiseAssert("writeBuffer overflow")
   let vkMapMemory = cast[
     proc(device: VkDevice, memory: VkDeviceMemory,
          offset: VkDeviceSize, size: VkDeviceSize,
@@ -452,13 +448,13 @@ proc writeBuffer*(ctx: VulkanContext, buf: var VulkanBuffer, data: pointer, size
   var mapped: pointer
   let mres = vkMapMemory(buf.device, buf.memory, 0, VkDeviceSize(size), 0, mapped.addr)
   if mres != VK_SUCCESS:
-    failLoud("vkMapMemory failed (" & $mres & ")")
+    raiseAssert("vkMapMemory failed (" & $mres & ")")
   copyMem(mapped, data, size)
   vkUnmapMemory(buf.device, buf.memory)
 
 proc readBuffer*[T](ctx: VulkanContext, buf: VulkanBuffer): seq[T] =
   if buf.size mod sizeof(T) != 0:
-    failLoud("Buffer size not divisible by type size")
+    raiseAssert("Buffer size not divisible by type size")
   if buf.size > 0:
     let vkMapMemory = cast[
       proc(device: VkDevice, memory: VkDeviceMemory,
@@ -584,11 +580,11 @@ proc runKernel*(ctx: VulkanContext, pipeline: VulkanPipeline,
   ## A violation is silent on the device (stale descriptor state, wrong push-constant bytes):
   ## the checks quit loudly instead.
   if (descriptorSet != nil) != (pipeline.setLayout != nil):
-    failLoud("Vulkan runKernel: descriptorSet and the pipeline's set layout must be given together, got " &
+    raiseAssert("Vulkan runKernel: descriptorSet and the pipeline's set layout must be given together, got " &
       (if descriptorSet != nil: "a descriptor set" else: "no descriptor set") & " against " &
       (if pipeline.setLayout != nil: "a set layout" else: "no set layout"))
   if pushConstSize != pipeline.pushConstSize:
-    failLoud("Vulkan runKernel: pushConstSize " & $pushConstSize &
+    raiseAssert("Vulkan runKernel: pushConstSize " & $pushConstSize &
       " does not match the pipeline's recorded push-constant range " & $pipeline.pushConstSize)
   let vkAllocateCommandBuffers = cast[
     proc(device: VkDevice, pAllocateInfo: ptr VkCommandBufferAllocateInfo, pCommandBuffers: ptr VkCommandBuffer): VkResult {.cdecl.}

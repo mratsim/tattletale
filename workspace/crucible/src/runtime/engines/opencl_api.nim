@@ -11,7 +11,6 @@ import std/tables
 import workspace/crucible/src/abis/opencl_abi
 
 import workspace/crucible/src/crucible_codegen
-import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
@@ -86,7 +85,7 @@ proc launchKernelImpl*(engine: OpenCLEngine, output: auto, args: tuple, cfg: Lau
   ## Runs `kernel` on the engine's device, building the program on first use.
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
   if cfg.sharedMem != 0 or cfg.stream != 0:
-    failLoud("OpenCL run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
+    raiseAssert("OpenCL run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   if kernel notin engine.kernelCache.kernels:
     engine.kernelCache.kernels[kernel] = engine.ctx.compileKernel(kernel, engine.source)
   let kern = engine.kernelCache.kernels[kernel]

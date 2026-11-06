@@ -6,7 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/os
-import ../errors
 import workspace/crucible/src/abis/objc_abi as objc
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -73,7 +72,7 @@ when defined(macosx):
     ## < 24 → 3.1, 24 → 3.2, ≥ 25 → 4.0 (NSProcessInfo is sret, UB via msgSend).
     var uts: UtSName
     if uname(addr uts) != 0:
-      failLoud("uname failed, cannot determine the MSL language version")
+      raiseAssert("uname failed, cannot determine the MSL language version")
     var major = 0
     for c in uts.release:
       if c in {'0' .. '9'}:
@@ -81,7 +80,7 @@ when defined(macosx):
       else:
         break
     if major == 0:
-      failLoud("uname release '" & $cast[cstring](addr uts.release[0]) &
+      raiseAssert("uname release '" & $cast[cstring](addr uts.release[0]) &
                "' has no leading digit, cannot determine the MSL language version")
     if major < 24:
       result = MTLLanguageVersion3_1
@@ -97,7 +96,7 @@ when defined(macosx):
   proc compileOptions*(): objc.ID =
     let cls = objc.getClass("MTLCompileOptions")
     if objc.isNil(cls):
-      failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
+      raiseAssert("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
     result = objc.msgSend(objc.ID(cls), objc.`$$`("alloc"))
     # ObjC `init` may return a different object than `alloc`.
     result = objc.msgSend(result, objc.`$$`("init"))
@@ -112,13 +111,13 @@ when defined(macosx):
       var detail = "no NSError object provided"
       if not objc.isNil(compileError):
         detail = objc.nsStringToNimString(objc.msgSend(compileError, objc.`$$`("localizedDescription")))
-      failLoud("Metal library compilation failed: " & detail)
+      raiseAssert("Metal library compilation failed: " & detail)
 
   proc compilePipelineState*(device, library: objc.ID, kernel: string): objc.ID =
     ## Creates the +1 compute pipeline state for `kernel`.
     let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"), objc.nsStringFromNimString(kernel))
     if objc.isNil(fn):
-      failLoud("newFunctionWithName(" & kernel & ") returned nil")
+      raiseAssert("newFunctionWithName(" & kernel & ") returned nil")
     defer:
       objc.release(fn)
     var psoError: objc.ID = objc.ID(nil)
@@ -128,5 +127,5 @@ when defined(macosx):
       var detail = "no NSError object provided"
       if not objc.isNil(psoError):
         detail = objc.nsStringToNimString(objc.msgSend(psoError, objc.`$$`("localizedDescription")))
-      failLoud("compute pipeline state creation failed for " & kernel & ": " & detail)
+      raiseAssert("compute pipeline state creation failed for " & kernel & ": " & detail)
 

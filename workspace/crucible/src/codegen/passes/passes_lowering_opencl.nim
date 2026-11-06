@@ -108,7 +108,7 @@ proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int, byref: Table
       i.inc
     i.inc
 
-proc openclLowerByrefParams(m: CirModule): string =
+proc openclLowerByrefParams(m: CirModule) =
   ## Large by-value struct formals pass as hidden `const T*` pointers.
   ##
   ## Contract:
@@ -135,4 +135,3 @@ proc openclLowerByrefParams(m: CirModule): string =
   for fn in m.procs:
     var tmpCount = 0
     addrWrapByrefStmts(fn.body, tmpCount, byref)
-  return ""

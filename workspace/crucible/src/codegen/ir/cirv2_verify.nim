@@ -47,25 +47,27 @@ const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
 proc getEmittedName(fn: CirProc): string =
   result = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
 
-proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string]): string =
-  ## Returns "" while every symbol in `e` resolves, else the violation.
+proc refuseProc(fn: CirProc, violation: string) =
+  raiseAssert(violation)
+
+proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string], where = "") =
   ## A `{.builtin.}`-marked symbol is a target intrinsic, never a declaration.
+  ## `where` prefixes the violation, the global checks name the offending global with it.
   if e.isNil:
-    return ""
+    return
   if e.kind == eStmts:
-    return "statement-expression survived elimination," &
-      " the rewriteStmtsExprs pass must run before the printers"
+    raiseAssert(where & "statement-expression survived elimination," &
+      " the rewriteStmtsExprs pass must run before the printers")
   if e.kind == eSym:
     if e.builtin or e.name in IntrinsicCallees or e.name in visible or e.name in moduleNames:
-      return ""
-    return "symbol '" & e.name & "' resolves to no declaration in scope"
-  for ch in e.getExprChildren():
-    result = checkScopeExpr(ch, visible, moduleNames)
-    if result.len > 0:
       return
+    raiseAssert(where & "symbol '" & e.name & "' resolves to no declaration in scope")
+  for ch in e.getExprChildren():
+    checkScopeExpr(ch, visible, moduleNames, where)
 
-proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames: HashSet[string], outermost = false): string =
-  ## Returns "" while every symbol in `ss` resolves in statement order, else the first violation.
+proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames: HashSet[string], outermost = false, where = "") =
+  ## `where` prefixes every violation raised below the call, the proc check names
+  ## the offending proc with it.
   ##
   ## A `sVar` joins `visible` after its own initializer checks, so a declaration never resolves its own initializer.
   ##
@@ -78,85 +80,54 @@ proc checkScopeStmts(ss: seq[CirStmt], visible: var HashSet[string], moduleNames
   var declared: HashSet[string]
   for s in ss:
     if s.isNil:
-      return "nil statement in body"
+      raiseAssert(where & "nil statement in body")
     case s.kind
     of sVar:
-      result = checkScopeExpr(s.init, visible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeExpr(s.init, visible, moduleNames, where)
       if s.name in declared:
-        return "duplicate local name '" & s.name & "'"
+        raiseAssert(where & "duplicate local name '" & s.name & "'")
       if outermost and s.name in visible:
-        return "local '" & s.name & "' shadows a parameter"
+        raiseAssert(where & "local '" & s.name & "' shadows a parameter")
       declared.incl s.name
       visible.incl s.name
     of sAsgn:
-      result = checkScopeExpr(s.lhs, visible, moduleNames)
-      if result.len > 0:
-        return
-      result = checkScopeExpr(s.rhs, visible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeExpr(s.lhs, visible, moduleNames, where)
+      checkScopeExpr(s.rhs, visible, moduleNames, where)
     of sIte:
-      result = checkScopeExpr(s.cond, visible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeExpr(s.cond, visible, moduleNames, where)
       var thenVisible = visible
-      result = checkScopeStmts(s.thenBody, thenVisible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeStmts(s.thenBody, thenVisible, moduleNames, where = where)
       var elseVisible = visible
-      result = checkScopeStmts(s.elseBody, elseVisible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeStmts(s.elseBody, elseVisible, moduleNames, where = where)
     of sWhile:
-      result = checkScopeExpr(s.whileCond, visible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeExpr(s.whileCond, visible, moduleNames, where)
       var loopVisible = visible
-      result = checkScopeStmts(s.whileBody, loopVisible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeStmts(s.whileBody, loopVisible, moduleNames, where = where)
     of sRet:
-      result = checkScopeExpr(s.retVal, visible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeExpr(s.retVal, visible, moduleNames, where)
     of sDiscard:
-      result = checkScopeExpr(s.discardVal, visible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeExpr(s.discardVal, visible, moduleNames, where)
     of sCall:
-      result = checkScopeExpr(s.callCallee, visible, moduleNames)
-      if result.len > 0:
-        return
+      checkScopeExpr(s.callCallee, visible, moduleNames, where)
       for a in s.callArgs:
-        result = checkScopeExpr(a, visible, moduleNames)
-        if result.len > 0:
-          return
+        checkScopeExpr(a, visible, moduleNames, where)
     of sAsm:
       for op in s.asmOperands:
-        result = checkScopeExpr(op, visible, moduleNames)
-        if result.len > 0:
-          return
+        checkScopeExpr(op, visible, moduleNames, where)
     of sEmit:
       for op in s.emitOperands:
-        result = checkScopeExpr(op, visible, moduleNames)
-        if result.len > 0:
-          return
+        checkScopeExpr(op, visible, moduleNames, where)
 
-proc checkUniqueNames(names: seq[string]): string =
+proc checkUniqueParamNames(fn: CirProc, names: seq[string]) =
   var seen: HashSet[string]
   for n in names:
     if n in seen:
-      return n
+      refuseProc(fn, "at " & fn.name & ": duplicate parameter name '" & n & "'")
     seen.incl n
 
-proc renderProcRefusal(fn: CirProc, violation: string): string =
-  violation & "\n" & renderProc(fn)
-
-proc verifyModule*(m: CirModule): string =
-  ## Returns "" while the module upholds the pass-boundary contracts (catalogue in the module header),
-  ## else the first violation rendered as a refusal line plus the offending proc for context.
+proc verifyModule*(m: CirModule) =
+  ## Raises on the first violation of the pass-boundary contracts (catalogue in the module header),
+  ## rendered with the offending proc for context.
   var moduleNames: HashSet[string]
   var emittedNames: HashSet[string]
   for fn in m.procs:
@@ -166,37 +137,32 @@ proc verifyModule*(m: CirModule): string =
   for g in m.globals:
     # Globals come from the lowering passes, which hoist `var` statements only.
     if g.isNil:
-      return "nil statement in module globals"
+      raiseAssert("nil statement in module globals")
     if g.kind != sVar:
-      return "unsupported global kind '" & $g.kind & "', only sVar globals are supported"
+      raiseAssert("unsupported global kind '" & $g.kind & "', only sVar globals are supported")
     if g.name in seenGlobals:
-      return "duplicate global name '" & g.name & "'"
+      raiseAssert("duplicate global name '" & g.name & "'")
     if g.name in moduleNames or g.name in emittedNames:
-      return "global name '" & g.name & "' collides with a proc name"
+      raiseAssert("global name '" & g.name & "' collides with a proc name")
     seenGlobals.incl g.name
     # Printers emit globals in declaration order at file scope: an initializer resolves only
     # against the names collected before it, never the global's own name.
-    result = checkScopeExpr(g.init, moduleNames, moduleNames)
-    if result.len > 0:
-      return "at global '" & g.name & "': " & result
+    checkScopeExpr(g.init, moduleNames, moduleNames, where = "at global '" & g.name & "': ")
     moduleNames.incl g.name
   var seenProcs: HashSet[string]
   for fn in m.procs:
     let emitted = fn.getEmittedName()
     if emitted in seenProcs:
-      return renderProcRefusal(fn, "duplicate emitted name '" & emitted & "'")
+      refuseProc(fn, "duplicate emitted name '" & emitted & "'")
     seenProcs.incl emitted
     var paramNames: seq[string]
     var visible: HashSet[string]
     for p in fn.params:
       if p.name.len == 0:
-        # checkUniqueNames reports "" for a clean scan, an empty name would pass it
-        return renderProcRefusal(fn, "at " & fn.name & ": empty parameter name")
+        # an empty parameter name would pass checkUniqueParamNames, it refuses here
+        refuseProc(fn, "at " & fn.name & ": empty parameter name")
       paramNames.add p.name
       visible.incl p.name
-    result = checkUniqueNames(paramNames)
-    if result.len > 0:
-      return renderProcRefusal(fn, "at " & fn.name & ": duplicate parameter name '" & result & "'")
-    result = checkScopeStmts(fn.body, visible, moduleNames, outermost = true)
-    if result.len > 0:
-      return renderProcRefusal(fn, "at " & fn.name & ": " & result)
+    checkUniqueParamNames(fn, paramNames)
+    checkScopeStmts(fn.body, visible, moduleNames, outermost = true,
+      where = "at " & fn.name & ": ")

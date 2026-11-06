@@ -51,10 +51,9 @@ proc runRefBlockPass(m: CirModule) =
   ## Runs the registered ref-block pass alone over the module.
   var reg = PassRegistry.new()
   registerGlslRefBlockPass(reg)
-  let err = reg.runPasses(m)
-  doAssert err.len == 0, "ref-block pass refused: " & err
+  reg.runPasses(m)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block: # pass output: one entry per distinct pointee, first-surface order
     let m = buildRefBlockModule()
     m.runRefBlockPass()

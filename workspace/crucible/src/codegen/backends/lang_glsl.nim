@@ -126,15 +126,13 @@ proc emitGlslRefBlockMember(ctx: var PrintCtx, pointee: CirType): string =
       base = base.aElem
     result = emitGlslScalar(base) & " x[]" & dims & ";"
   of ctVoid, ctProc:
-    ctx.fail("buffer reference to " & $pointee.kind)
-    result = ""
+    raiseAssert("buffer reference to " & $pointee.kind)
   else:
     result = emitGlslScalar(pointee) & " x[];"
 
 proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
   if t.addressSpace != caDevice:
-    ctx.fail("buffer pointer in " & $t.addressSpace & " addressSpace")
-    return ""
+    raiseAssert("buffer pointer in " & $t.addressSpace & " addressSpace")
   result = refTypeName(t.pElem) & ' ' & ident
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
@@ -192,8 +190,7 @@ proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr
   ctx.printGlslAtomicFetchAdd(argExprs)
 
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
-  ctx.fail(getUnhandledExprRejection(e.kind))
-  ""
+  raiseAssert(getUnhandledExprRejection(e.kind))
 
 proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## GLSL routes the addressing kinds itself: subscript, dereference and address-of over buffer references.
@@ -207,29 +204,23 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
     if bt != nil and bt.kind == ctArray:
       return baseTxt & "[" & idxTxt & "]"
     if bt != nil and bt.kind == ctPtr:
-      ctx.fail("index through a pointer is outside the GLSL subset")
-      return ""
-    ctx.fail("index of a " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the GLSL subset")
-    return ""
+      raiseAssert("index through a pointer is outside the GLSL subset")
+    raiseAssert("index of a " & (if bt == nil: "untyped" else: $bt.kind) & " base is outside the GLSL subset")
   of eDeref:
     let op = e.derefOperand
     let ot = getExprType(op)
     if ot != nil and ot.kind == ctAptr:
       return ctx.printExpr(op) & ".x[0]"
     if ot != nil and ot.kind == ctPtr:
-      ctx.fail("deref of a pointer is outside the GLSL subset")
-      return ""
-    ctx.fail("deref of a " & (if ot == nil: "untyped" else: $ot.kind) & " operand is outside the GLSL subset")
-    return ""
+      raiseAssert("deref of a pointer is outside the GLSL subset")
+    raiseAssert("deref of a " & (if ot == nil: "untyped" else: $ot.kind) & " operand is outside the GLSL subset")
   of eAddr:
     # a buffer element's address is its indexed reference access
     if e.addrOperand.kind == ePat:
       return ctx.printExpr(e.addrOperand)
-    ctx.fail("address of a local is outside the GLSL subset")
-    return ""
+    raiseAssert("address of a local is outside the GLSL subset")
   else:
-    ctx.fail(getUnhandledExprRejection(e.kind))
-    ""
+    raiseAssert(getUnhandledExprRejection(e.kind))
 
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string =
   case s.callCallee.synchroBuiltin
@@ -253,17 +244,13 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## GLSL has no pointer values, buffer access goes through BDA address values.
   ## A pointer local therefore has no lowering and the printer refuses it.
   if s.declType.kind == ctPtr:
-    ctx.fail("pointer local " & s.name & ", GLSL has no pointer values")
-    return false
+    raiseAssert("pointer local " & s.name & ", GLSL has no pointer values")
   if s.addressSpace == caThreadgroup:
-    ctx.fail("local " & s.name & " in threadgroup addressSpace, the GLSL lowering pass hoists threadgroup locals to program scope")
-    return false
+    raiseAssert("local " & s.name & " in threadgroup addressSpace, the GLSL lowering pass hoists threadgroup locals to program scope")
   if s.addressSpace == caConstant:
-    ctx.fail("local " & s.name & " in constant addressSpace, the GLSL lowering pass hoists const_mem locals to program scope")
-    return false
+    raiseAssert("local " & s.name & " in constant addressSpace, the GLSL lowering pass hoists const_mem locals to program scope")
   if s.addressSpace == caDevice:
-    ctx.fail("local " & s.name & " in device addressSpace, GLSL locals are private")
-    return false
+    raiseAssert("local " & s.name & " in device addressSpace, GLSL locals are private")
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
@@ -358,8 +345,6 @@ proc printRefBlocks(ctx: var PrintCtx, m: CirModule): string =
     let member = ctx.emitGlslRefBlockMember(pointee)
     result &= "layout(buffer_reference, std430) buffer " & name &
       " { " & member & " };\n"
-    if ctx.failing():
-      return ""
   if m.refBlocks.len > 0:
     result &= "\n"
 
@@ -379,26 +364,22 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
       of ctAptr, ctPtr:
         decl = ctx.emitGlslPtrDecl(p.typ, p.name)
       of ctArray:
-        ctx.fail("kernel parameter " & p.name & " of array type, arrays do not pack into the push block")
-        decl = ""
+        raiseAssert("kernel parameter " & p.name & " of array type, arrays do not pack into the push block")
       else:
         decl = ctx.emitTypeName(p.typ) & ' ' & p.name
       if decl notin pushDecls:
         pushDecls.add decl
-  if ctx.failing():
-    return ""
   if pushDecls.len > 0:
     result &= "layout(push_constant, std430) uniform KernelParams {\n"
     for decl in pushDecls:
       result &= "  " & decl & ";\n"
     result &= "};\n\n"
 
-proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
+proc printGlslModule*(m: CirModule): string =
   var ctx = initPrintCtx(glslWalkPolicy, glslVectorRule, glslEmit, cgGlsl)
   let kernels = getModuleKernels(m)
   if kernels.len == 0:
-    ctx.fail("module declares no kernel")
-    return ("", ctx.err)
+    raiseAssert("module declares no kernel")
   printModule(ctx, m, kernels, glslModuleShape)
 
 proc codegen*(m: CirModule): string =

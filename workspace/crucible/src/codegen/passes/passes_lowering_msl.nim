@@ -71,10 +71,10 @@ type
     ##   arena takes an `aptr` over the element, an object arena a `ptr` over
     ##   the object
 
-proc hoistSmemLocal(arenas: var seq[SmemArena], fn: CirProc, s: CirStmt): string =
+proc hoistSmemLocal(arenas: var seq[SmemArena], fn: CirProc, s: CirStmt) =
   if s.init != nil:
-    return "at " & fn.name & ": smem local " & s.name &
-      " with an initializer, a hoisted {.smem.} arena takes no initializer"
+    raiseAssert("smem local " & s.name &
+      " with an initializer, a hoisted {.smem.} arena takes no initializer")
   let typ = if s.declType.kind == ctArray:
     tAptr(caThreadgroup, s.declType.aElem)
   else:
@@ -82,18 +82,15 @@ proc hoistSmemLocal(arenas: var seq[SmemArena], fn: CirProc, s: CirStmt): string
   fn.params.add(param(s.name, typ))
   arenas.add((s.name, s.declType, typ))
 
-proc hoistSmemLocals(arenas: var seq[SmemArena], fn: CirProc): string =
+proc hoistSmemLocals(arenas: var seq[SmemArena], fn: CirProc) =
   var i = 0
   while i < fn.body.len:
     let s = fn.body[i]
     if s.kind == sVar and s.addressSpace == caThreadgroup:
-      let err = hoistSmemLocal(arenas, fn, s)
-      if err.len > 0:
-        return err
+      hoistSmemLocal(arenas, fn, s)
       fn.body.delete i
       continue
     i.inc
-  return ""
 
 proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
   if e.kind == eSym and arenaTypes.hasKey(e.name):
@@ -120,7 +117,7 @@ proc ownedSmemNames(fn: CirProc): HashSet[string] =
 
 proc bindSmemArgs(args: var seq[CirExpr], owned: var HashSet[string],
                   fn: CirProc, calleeProc: CirProc, callee: CirExpr,
-                  arenas: seq[SmemArena]): string =
+                  arenas: seq[SmemArena]) =
   ## - a matching-name `{.smem.}` local in the caller supplies the argument,
   ##   an array arena decays to its element pointer in the emitted source,
   ##   an object arena binds by reference
@@ -145,40 +142,33 @@ proc bindSmemArgs(args: var seq[CirExpr], owned: var HashSet[string],
       owned.incl(arena.name)
       args.add(sym(arena.name, arena.typ))
       continue
-    return "at " & fn.name & ": device fn '" & callee.name &
+    raiseAssert("device fn '" & callee.name &
       "' owns the {.smem.} arena '" & arena.name &
-      "', the caller must declare a matching {.smem.} var"
-  return ""
+      "', the caller must declare a matching {.smem.} var")
 
-proc bindSmemCallSiteStmts(fn: CirProc, ss: seq[CirStmt], procs: Table[string, CirProc], hoisted: Table[string, seq[SmemArena]]): string =
+proc bindSmemCallSiteStmts(fn: CirProc, ss: seq[CirStmt], procs: Table[string, CirProc], hoisted: Table[string, seq[SmemArena]]) =
   ## Binding a kernel call site synthesizes its arena declaration into `fn.body`.
   ## The synthesized declaration binds no call, so the walk need not visit it.
   var owned = fn.ownedSmemNames()
-  var err = ""
   let bindCall = proc(callee: CirExpr, args: var seq[CirExpr]) =
     if callee.kind == eSym and hoisted.hasKey(callee.name):
-      err = bindSmemArgs(args, owned, fn, procs[callee.name], callee,
+      bindSmemArgs(args, owned, fn, procs[callee.name], callee,
         hoisted[callee.name])
   let onStmt = proc(s: CirStmt) =
-    if err.len > 0:
-      return
     if s.kind == sCall:
       s.callCallee.bindCall(s.callArgs)
     elif s.kind == sAsgn and s.rhs.kind == eCall:
       s.rhs.callee.bindCall(s.rhs.args)
   ss.walkStmts(onStmt, nil)
-  return err
 
-proc mslHoistDeviceFnSmem(m: CirModule): string =
+proc mslHoistDeviceFnSmem(m: CirModule) =
   ## Runs before `mslRewriteSmemLocals`, which keeps the kernel-owned arenas in-body.
   var hoisted = initTable[string, seq[SmemArena]]()
   for fn in m.procs:
     if fn.isKernel:
       continue
     var arenas: seq[SmemArena]
-    let hoistErr = hoistSmemLocals(arenas, fn)
-    if hoistErr.len > 0:
-      return hoistErr
+    hoistSmemLocals(arenas, fn)
     if arenas.len == 0:
       continue
     hoisted[fn.name] = arenas
@@ -188,13 +178,10 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
         arenaTypes[arena.name] = arena.typ
     fn.body.rewriteArenaReadsStmts(arenaTypes)
   if hoisted.len == 0:
-    return ""
+    return
   let procs = procsByName(m)
   for fn in m.procs:
-    let err = bindSmemCallSiteStmts(fn, fn.body, procs, hoisted)
-    if err.len > 0:
-      return err
-  return ""
+    bindSmemCallSiteStmts(fn, fn.body, procs, hoisted)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Device-function coordinate builtins
@@ -235,27 +222,26 @@ proc orderedCoordKinds(kinds: HashSet[CirCoordBuiltinKind]): seq[CirCoordBuiltin
     if k in kinds:
       result.add(k)
 
-proc appendCoordParam(fn: CirProc, k: CirCoordBuiltinKind): string =
+proc appendCoordParam(fn: CirProc, k: CirCoordBuiltinKind) =
   ## A parameter uses the builtin's canonical identifier so the body's
   ## builtin-marked reads print it unchanged, in a kernel the identifier
   ## binds to the attributed parameter, in a device function to this parameter.
   let name = $k
   for p in fn.params:
     if p.name == name:
-      return "at " & fn.name & ": parameter " & name &
+      raiseAssert("parameter " & name &
         " is named like the coordinate builtin the function needs," &
-        " the call sites cannot supply both"
+        " the call sites cannot supply both")
   fn.params.add(param(name, getBuiltinParamType(k)))
-  return ""
 
 proc appendCoordCallArgs(args: var seq[CirExpr], fn: CirProc, calleeProc: CirProc, callee: CirExpr,
-                         needs: Table[string, HashSet[CirCoordBuiltinKind]]): string =
+                         needs: Table[string, HashSet[CirCoordBuiltinKind]]) =
   ## One argument per needed builtin in the callee's parameter order, the callee symbol's proc type grows to match.
   ##
   ## - a kernel forwards the builtin-marked symbol with its kind included
   ## - a device function forwards its own parameter, printed as its own name
   if callee.kind != eSym or not needs.hasKey(callee.name):
-    return ""
+    return
   let calleeKinds = orderedCoordKinds(needs[callee.name])
   if callee.typ.kind == ctProc and
       callee.typ.params.len == calleeProc.params.len - calleeKinds.len:
@@ -268,28 +254,21 @@ proc appendCoordCallArgs(args: var seq[CirExpr], fn: CirProc, calleeProc: CirPro
     let arg = sym($k, getBuiltinParamType(k), builtin = true)
     arg.coordBuiltin = k
     args.add(arg)
-  return ""
 
 proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
                                     procs: Table[string, CirProc],
-                                    needs: Table[string, HashSet[CirCoordBuiltinKind]]): string =
-  var err = ""
+                                    needs: Table[string, HashSet[CirCoordBuiltinKind]]) =
   let onExpr = proc(e: CirExpr) =
-    if err.len > 0:
-      return
     if e.kind == eCall:
-      err = appendCoordCallArgs(e.args, fn, procs.getOrDefault(e.callee.name), e.callee,
+      appendCoordCallArgs(e.args, fn, procs.getOrDefault(e.callee.name), e.callee,
         needs)
   let onStmt = proc(s: CirStmt) =
-    if err.len > 0:
-      return
     if s.kind == sCall:
-      err = appendCoordCallArgs(s.callArgs, fn, procs.getOrDefault(s.callCallee.name),
+      appendCoordCallArgs(s.callArgs, fn, procs.getOrDefault(s.callCallee.name),
         s.callCallee, needs)
   ss.walkStmts(onStmt, onExpr)
-  return err
 
-proc mslThreadCoordinateBuiltins(m: CirModule): string =
+proc mslThreadCoordinateBuiltins(m: CirModule) =
   ## - every device function gains one parameter per transitively needed coordinate builtin in builtin-kind declaration order
   ## - a kernel body is untouched, it reads the builtins it forwards directly
   ## - Metal only: the builtins are legal reads inside device functions
@@ -314,33 +293,28 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
         changed = true
     rounds.inc
     if rounds > m.procs.len + 1:
-      return "at " & m.name & ": coordinate-builtin needs do not converge"
+      raiseAssert("coordinate-builtin needs do not converge")
   var anyNeeds = false
   for fn in m.procs:
     if needs[fn.name].len > 0:
       anyNeeds = true
       break
   if not anyNeeds:
-    return ""
+    return
   for fn in m.procs:
     if fn.isKernel:
       continue
     for k in orderedCoordKinds(needs[fn.name]):
-      let err = fn.appendCoordParam(k)
-      if err.len > 0:
-        return err
+      fn.appendCoordParam(k)
   let procs = procsByName(m)
   for fn in m.procs:
-    let err = appendCoordForwardingArgsStmts(fn, fn.body, procs, needs)
-    if err.len > 0:
-      return err
-  return ""
+    appendCoordForwardingArgsStmts(fn, fn.body, procs, needs)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Kernel threadgroup storage
 # ═══════════════════════════════════════════════════════════════════════
 
-proc mslRewriteSmemLocals(m: CirModule): string =
+proc mslRewriteSmemLocals(m: CirModule) =
   ## A kernel keeps its `{.smem.}` local in its body, top-level or nested:
   ##
   ## - the printer emits kernel-scope `threadgroup` storage, allocated per
@@ -352,17 +326,12 @@ proc mslRewriteSmemLocals(m: CirModule): string =
   ## - the initializer rewrite ran earlier, a surviving local has no initializer
   ## - the pass runs after the reserved-word rename, so the kept locals use the renamed names their body already references
   for fn in m.procs:
-    var err = ""
     let kernel = fn.isKernel
-    let procName = fn.name
     let onStmt = proc(s: CirStmt) =
       if s.kind != sVar or s.addressSpace != caThreadgroup:
         return
       if not kernel:
-        err = "at " & procName & ": smem local " & s.name &
+        raiseAssert("smem local " & s.name &
           " in a device function, only a kernel allocates" &
-          " threadgroup storage"
+          " threadgroup storage")
     fn.body.walkStmts(onStmt, nil)
-    if err.len > 0:
-      return err
-  return ""

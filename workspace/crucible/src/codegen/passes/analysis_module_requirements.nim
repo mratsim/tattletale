@@ -158,25 +158,25 @@ proc registerGlslFeatureScan*(reg: var PassRegistry) =
   reg.register("glslScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the GLSL extension block maps:" &
     " float and integer widths, subgroups, shuffles, atomic float, unroll loops",
-    run = proc(m: CirModule): string {.nimcall.} =
+    run = proc(m: CirModule) {.nimcall.} =
       scanModuleRequirements(m.features, m, glslProfile))
 
 proc registerOpenclFeatureScan*(reg: var PassRegistry) =
   reg.register("openclScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the OpenCL pragma block maps:" &
     " float widths, subgroups, atomic float",
-    run = proc(m: CirModule): string {.nimcall.} =
+    run = proc(m: CirModule) {.nimcall.} =
       scanModuleRequirements(m.features, m, openclProfile))
 
 proc registerWgslFeatureScan*(reg: var PassRegistry) =
   reg.register("wgslScanModuleFeatures", pkAnalysis,
     "Scans the module once for 16-bit float values, the WGSL `enable f16` trigger",
-    run = proc(m: CirModule): string {.nimcall.} =
+    run = proc(m: CirModule) {.nimcall.} =
       scanModuleRequirements(m.features, m, wgslProfile))
 
 proc registerCudaFeatureScan*(reg: var PassRegistry) =
   reg.register("cudaScanModuleFeatures", pkAnalysis,
     "Scans the proc bodies once for the reduction kinds the warp-reduction" &
     " templates emit",
-    run = proc(m: CirModule): string {.nimcall.} =
+    run = proc(m: CirModule) {.nimcall.} =
       scanModuleRequirements(m.features, m, cudaProfile))

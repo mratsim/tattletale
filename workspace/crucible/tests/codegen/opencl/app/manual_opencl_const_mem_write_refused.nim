@@ -4,9 +4,9 @@
 ## global and died in the OpenCL toolchain with no crucible diagnostic.
 ##
 ## Test that an assignment to a `{.const_mem.}` local in a kernel body
-## dies in the constant-write validation before any shader is emitted, naming the kernel and the target:
+## dies in the constant-write validation before any shader is emitted, naming the target:
 ##
-##   Error: pass validateConstantWrites: at kern: assignment into constant storage: the target c lives in read-only program-scope memory.
+##   Error: assignment into constant storage: the target c lives in read-only program-scope memory.
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

@@ -6,7 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible/src/runtime/backends/vulkan_common
-import ../errors
 import workspace/crucible/src/abis/vulkan_abi as vk
 
 proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32, uniformCount: uint32 = 0): VkDescriptorSetLayout =
@@ -113,7 +112,7 @@ proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffer
   ##
   ## A mismatched order is silent on the device: reads and writes reach the wrong buffers, no validation error.
   if buffers.len != bindingCount.int:
-    failLoud("Vulkan updateDescriptorSet: " & $buffers.len & " buffers for a set layout of " &
+    raiseAssert("Vulkan updateDescriptorSet: " & $buffers.len & " buffers for a set layout of " &
       $bindingCount & " bindings, unwritten or undeclared bindings read stale device state")
   let vkUpdateDescriptorSets = cast[
     proc(device: VkDevice, descriptorWriteCount: uint32,

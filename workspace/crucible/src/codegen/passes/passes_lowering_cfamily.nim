@@ -33,7 +33,7 @@ func registerSmemInitRewrite*(reg: var PassRegistry) =
 #  Program-scope hoisting
 # ═══════════════════════════════════════════════════════════════════════
 
-proc hoistProgramScopeLocalsCore(m: CirModule): string =
+proc hoistProgramScopeLocalsCore(m: CirModule) =
   ## Relocates the `{.smem.}` and `{.const_mem.}` locals of every proc into
   ## `m.globals`, in encounter order, dropping them from their bodies.
   ##
@@ -58,31 +58,23 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
         fn.body.delete i
       elif s.kind == sVar and s.addressSpace == caConstant:
         if s.init == nil:
-          return "at " & fn.name & ": const_mem local " & s.name &
-            " without an initializer"
+          raiseAssert("const_mem local " & s.name & " without an initializer")
         m.globals.add s
         fn.body.delete i
       else:
         case s.kind
         of sIte:
-          let thenErr = hoistConstMemStmts(s.thenBody, m, fn)
-          if thenErr.len > 0:
-            return thenErr
-          let elseErr = hoistConstMemStmts(s.elseBody, m, fn)
-          if elseErr.len > 0:
-            return elseErr
+          hoistConstMemStmts(s.thenBody, m, fn)
+          hoistConstMemStmts(s.elseBody, m, fn)
         of sWhile:
-          let loopErr = hoistConstMemStmts(s.whileBody, m, fn)
-          if loopErr.len > 0:
-            return loopErr
+          hoistConstMemStmts(s.whileBody, m, fn)
         else:
           discard
         i.inc
-  return ""
 
 template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName: string, description: string) =
   reg.register(passName, pkTransform, description,
-    run = proc(m: CirModule): string {.nimcall.} =
+    run = proc(m: CirModule) {.nimcall.} =
       hoistProgramScopeLocalsCore(m)
   )
 
@@ -101,16 +93,16 @@ proc buildSmemInitStores(name: string, declType: CirType, init: CirExpr): seq[Ci
   else:
     result.add asgnS(base, init)
 
-proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
+proc splitSmemInits(ss: var seq[CirStmt]) =
   var i = 0
   while i < ss.len:
     let s = ss[i]
     if s.kind == sVar and s.addressSpace == caThreadgroup and s.init != nil:
       if s.declType.kind in {ctArray, ctStruct} and
           s.init.kind notin {eAconstr, eOconstr}:
-        return "at " & fnName & ": smem local " & s.name &
+        raiseAssert("smem local " & s.name &
           " with an initializer that is not a constructor, no" &
-          " element-wise store form exists"
+          " element-wise store form exists")
       let stores = buildSmemInitStores(s.name, s.declType, s.init)
       s.init = nil
       var grown: seq[CirStmt]
@@ -120,19 +112,13 @@ proc splitSmemInits(ss: var seq[CirStmt], fnName: string): string =
       ss = grown
       i.inc stores.len
     elif s.kind == sIte:
-      var err = splitSmemInits(s.thenBody, fnName)
-      if err.len == 0:
-        err = splitSmemInits(s.elseBody, fnName)
-      if err.len > 0:
-        return err
+      splitSmemInits(s.thenBody)
+      splitSmemInits(s.elseBody)
     elif s.kind == sWhile:
-      let err = splitSmemInits(s.whileBody, fnName)
-      if err.len > 0:
-        return err
+      splitSmemInits(s.whileBody)
     i.inc
-  return ""
 
-proc rewriteSmemInits(m: CirModule): string =
+proc rewriteSmemInits(m: CirModule) =
   ## Kernel-body storage:
   ##
   ## - a local at any depth: initializer-free declaration plus stores
@@ -151,9 +137,7 @@ proc rewriteSmemInits(m: CirModule): string =
   ##   observes the declared values
   for fn in mitems(m.procs):
     if fn.isKernel:
-      let err = splitSmemInits(fn.body, fn.name)
-      if err.len > 0:
-        return err
+      splitSmemInits(fn.body)
   var entryStores: seq[CirStmt]
   for g in mitems(m.globals):
     if g.kind == sVar and g.addressSpace == caThreadgroup and g.init != nil:
@@ -166,5 +150,4 @@ proc rewriteSmemInits(m: CirModule): string =
         grown.add entryStores
         grown.add fn.body
         fn.body = grown
-  return ""
 

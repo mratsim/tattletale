@@ -19,14 +19,6 @@ export targets_registry
 #
 # ############################################################
 
-template failing*(ctx: auto): bool =
-  ctx.err.len > 0
-
-template fail*(ctx: auto, detail: string) =
-  mixin printerTarget
-  if ctx.err.len == 0:
-    ctx.err = "cirv2 printer " & printerTarget & ": at " & ctx.fnName & ": " & detail
-
 ## Refusal text for a nil literal in a target whose kind section refuses nil.
 const nilLiteralRejection* = "nil literal is outside the target subset"
 
@@ -89,11 +81,8 @@ type WalkCtx* {.inheritable.} = object
   ##
   ## - the per-target derivation gives the shared procs one instantiation per target
   ## - the overlay procs resolve per target at that instantiation
-  fnName*: string
   backend*: CodegenKind
-  ## Name of the proc in flight, named by the refusal messages.
-  err*: string
-  ## First refusal of the walk, "" while clean.
+  ## Kind of the backend in flight.
   indent*: int
   policy*: WalkPolicy
   ## Walk policy of the target as the shared walk reads it.
@@ -111,7 +100,7 @@ type WalkCtx* {.inheritable.} = object
   ## Workgroup sizes of the entry in flight.
 
 template initPrintCtx*(walkPolicy: WalkPolicy, rule: VectorRule, targetEmit: TargetEmit, bk: CodegenKind): untyped =
-  PrintCtx(fnName: "<module>", policy: walkPolicy, vectorRule: rule,
+  PrintCtx(policy: walkPolicy, vectorRule: rule,
     emit: targetEmit, backend: bk)
 
 proc roundUpMultiple*(v, multiple: int): int =
@@ -136,8 +125,7 @@ proc emitVectorComponent*(name: string): string =
 proc resolveVectorComponent*(ctx: var auto, field: string): string =
   result = emitVectorComponent(field)
   if result.len == 0:
-    ctx.fail("no vector component " & field)
-
+    raiseAssert("no vector component " & field)
 proc printSubscriptParts*(ctx: var auto, e: CirExpr): tuple[base, idx: string] =
   let idx = if e.kind == eAt: e.atIndex else: e.patIndex
   let base = if e.kind == eAt: e.atBase else: e.patBase
@@ -152,8 +140,6 @@ proc printVectorDot*(ctx: var auto, e: CirExpr): string =
   if bt == nil or bt.kind != ctVector:
     return ""
   let comp = ctx.resolveVectorComponent(e.fieldName)
-  if ctx.failing():
-    return ""
   return ctx.printExpr(e.dotBase) & "." & comp
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -319,9 +305,7 @@ proc matchCastRule(rules: openArray[CastRule], src: CirType, dst: CirType): int 
 
 template refuseUninitializedConstMem*(ctx: var auto, name: string): untyped =
   ## Target compilers reject constant storage without an initializer.
-  mixin fail
-  ctx.fail("const_mem local " & name & " without an initializer")
-
+  raiseAssert("const_mem local " & name & " without an initializer")
 template printCast*(ctx: var auto, e: CirExpr, rules: openArray[CastRule], dstName: untyped): string =
   ## One bit reinterpret `e` through the target's cast rules.
   ## The first matching rule decides, no match keeps `ctx.printConv`.
@@ -333,8 +317,7 @@ template printCast*(ctx: var auto, e: CirExpr, rules: openArray[CastRule], dstNa
       if rules[i].conv.len > 0:
         rules[i].conv % [ctx.printExpr(e.castOperand), dstName]
       else:
-        ctx.fail("no bit cast to " & dstName)
-        ""
+        raiseAssert("no bit cast to " & dstName)
     else:
       ctx.printConv(e)
 
@@ -483,9 +466,7 @@ proc printSizeof*(ctx: var auto, e: CirExpr): string =
   "sizeof(" & ctx.emitTypeName(e.ofType) & ")"
 
 proc printExtraExpr*(ctx: var auto, e: CirExpr): string =
-  mixin printerTarget
-  ctx.fail(getUnhandledExprRejection(e.kind))
-  result = ""
+  raiseAssert(getUnhandledExprRejection(e.kind))
 
 proc printTargetExpr*(ctx: var auto, e: CirExpr): string =
   ## Universal expression variants of the text printers: the eight kinds
@@ -505,15 +486,14 @@ proc printTargetExpr*(ctx: var auto, e: CirExpr): string =
       return ctx.coordRef(e)
     if e.typ != nil and e.typ.kind == ctPtr and
         e.typ.addressSpace in ctx.emit.noPointerValues.spaces:
-      ctx.fail(ctx.emit.noPointerValues.text % e.name)
-      return ""
+      raiseAssert(ctx.emit.noPointerValues.text % e.name)
     return ctx.getSymbolText(e)
   of eDot:
     if e.dotBase.kind == eSym and e.dotBase.coordBuiltin != cbkNone:
       return ctx.coordDot(e)
     if ctx.emit.vectorDots:
       let vecDot = ctx.printVectorDot(e)
-      if vecDot.len > 0 or ctx.failing():
+      if vecDot.len > 0:
         return vecDot
     let base = ctx.printExpr(e.dotBase)
     if e.dotBase.kind == eDeref and ctx.emit.dotDerefParens:
@@ -556,13 +536,10 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   ## - a printer's own kinds route to `printTargetExpr`
   ## - a target that lists `eNil` refuses the nil literal here
   mixin printExpr, printTargetExpr
-  if ctx.failing():
-    return ""
   case e.kind
   of eNil:
     if e.kind in ctx.policy.targetExprKinds:
-      ctx.fail(nilLiteralRejection)
-      return ""
+      raiseAssert(nilLiteralRejection)
     return emitLiteral(e, TargetVocabs[ctx.backend].lit, TargetVocabs[ctx.backend].scalarNames)
   of eTrue, eFalse, eIntLit, eFloatLit, eStrLit:
     if e.kind in ctx.policy.targetExprKinds:
@@ -610,8 +587,8 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
   of eSym, eDot, eCast, eConv, eSizeof, eOconstr, eAconstr, eCall:
     return ctx.printTargetExpr(e)
   of eStmts:
-    ctx.fail("statement-expression survived elimination, the rewriteStmtsExprs pass must run before the printers")
-    return ""
+    raiseAssert("statement-expression survived elimination, the rewriteStmtsExprs pass must run before the printers")
+
 
 proc printRet*(ctx: var auto, s: CirStmt, pad: string): string =
   mixin printExpr
@@ -637,8 +614,6 @@ proc printStmt(ctx: var auto, s: CirStmt): string =
   ## - `printAsm`: inline assembly form, refusal text or raw splice
   mixin printStmts, printExpr, printVar, printAsgn, printCall, printAsm,
         printIteElse, printEmitOperand, printRet, printDiscard
-  if ctx.failing():
-    return ""
   let pad = spaces(ctx.indent * 2)
   case s.kind
   of sVar: result = ctx.printVar(s)
@@ -682,8 +657,7 @@ proc asmSpliceText*(s: CirStmt): string =
 
 proc printAsm*(ctx: var auto, s: CirStmt): string =
   mixin printerTarget
-  ctx.fail("inline assembly has no " & printerTarget & " form")
-  result = ""
+  raiseAssert("inline assembly has no " & printerTarget & " form")
 
 proc printDeclStmt*(pad: string, decl: string, initTxt: string): string =
   result = pad & decl
@@ -703,7 +677,7 @@ proc printVar*(ctx: var auto, s: CirStmt): string =
     return ""
   let pad = spaces(ctx.indent * 2)
   let decl = ctx.emitLocalDecl(s)
-  if decl.len == 0 or ctx.failing():
+  if decl.len == 0:
     return ""
   let init = if s.init != nil: ctx.getInitText(s) else: ""
   printDeclStmt(pad, decl, init)
@@ -713,8 +687,7 @@ proc printAsgn*(ctx: var auto, s: CirStmt): string =
   let pad = spaces(ctx.indent * 2)
   if ctx.emit.noPointerRebind.len > 0 and s.lhs.kind == eSym and
       s.lhs.typ != nil and s.lhs.typ.kind == ctPtr:
-    ctx.fail(ctx.emit.noPointerRebind % s.lhs.name)
-    return ""
+    raiseAssert(ctx.emit.noPointerRebind % s.lhs.name)
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
 proc getStmtBuiltinText*(ctx: var auto, s: CirStmt, pad: string, args: seq[string]): string =
@@ -769,8 +742,7 @@ proc getModuleKernels*(m: CirModule): seq[CirProc] =
 proc getEntryKernel*(ctx: var auto, m: CirModule): CirProc =
   let kernels = getModuleKernels(m)
   if kernels.len != 1:
-    ctx.fail("exactly one kernel per module, found " & $kernels.len)
-    return
+    raiseAssert("exactly one kernel per module, found " & $kernels.len)
   result = kernels[0]
 
 proc getModuleDeviceFns*(m: CirModule): seq[CirProc] =
@@ -859,11 +831,8 @@ proc emitComputePrefix*(ctx: var auto, fn: CirProc): string =
 
 proc printSig*(ctx: var auto, fn: CirProc): string =
   mixin emitComputeParams, emitComputePrefix, emitTypeName
-  ctx.fnName = fn.name
   let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
   let params = ctx.emitComputeParams(fn)
-  if ctx.failing():
-    return ""
   result = ctx.emitComputePrefix(fn) & ctx.emitTypeName(fn.ret) & ' ' & name &
     '(' & params.join(", ") & ")"
 
@@ -888,8 +857,6 @@ proc printStructDecl(ctx: var auto, outp: var string, emitted: var HashSet[strin
       ft = if ft.kind == ctArray: ft.aElem else: ft.pElem
     if ft != nil and ft.kind == ctStruct:
       ctx.printStructDecl(outp, emitted, byName, ft.name, shape)
-  if ctx.failing():
-    return
   if shape.structTypedef:
     outp.add "typedef struct {\n"
   else:
@@ -917,7 +884,7 @@ proc seedStructType(byName: var Table[string, CirType], t: CirType) =
     byName[t.name] = t
 
 proc printStructs*(ctx: var auto, m: CirModule, shape: static ModuleShape): string =
-  ## Struct declarations of the module, "" once the walk refused.
+  ## Struct declarations of the module.
   ##
   ## Collection covers:
   ##
@@ -936,21 +903,16 @@ proc printStructs*(ctx: var auto, m: CirModule, shape: static ModuleShape): stri
     ctx.printStructDecl(result, emitted, byName, name, shape)
 
 proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
-  ## One device function or kernel, "" once the walk refused.
+  ## One device function or kernel as target text.
   ## - the body prints before the head assembles
   ## - a shader entry head lists the coordinate-builtin inputs
   ##   that the body walk collected
   mixin prepProc, printProcHead, printStmts
-  ctx.fnName = fn.name
   ctx.indent = 0
   ctx.prepProc(fn)
   let bodyTxt = ctx.printStmts(fn.body)
-  if ctx.failing():
-    return ""
   let head = when shape.customProcHead: ctx.printProcHead(fn)
              else: printSig(ctx, fn) & (if fn.isKernel: " {\n" else: "")
-  if ctx.failing():
-    return ""
   if fn.isKernel:
     return head & bodyTxt & '\n' & '}'
   return head & " {\n" & bodyTxt & '\n' & '}'
@@ -973,60 +935,36 @@ proc printProgramScopeDecls*(ctx: var auto, m: CirModule, spaces: set[AddressSpa
   if result.len > 0:
     result &= '\n'
 
-proc printModule*(ctx: var auto, m: CirModule, kernels: seq[CirProc], shape: static ModuleShape): tuple[src: string, err: string] =
+proc printModule*(ctx: var auto, m: CirModule, kernels: seq[CirProc], shape: static ModuleShape): string =
   ## Full module assembly over the shared section skeleton:
   ## - prelude, ref blocks, structs, parameter bindings
   ## - program-scope declarations, reduction templates, the proc set
-  ## - a refusal anywhere records once and returns
   mixin printPrelude, printRefBlocks, printParamBindings, printReduceTemplates
-  result.src = ctx.printPrelude(m)
-  if ctx.failing():
-    return ("", ctx.err)
+  result = ctx.printPrelude(m)
   when shape.printsRefBlocks:
-    result.src &= ctx.printRefBlocks(m)
-    if ctx.failing():
-      return ("", ctx.err)
-  result.src &= printStructs(ctx, m, shape)
-  if ctx.failing():
-    return ("", ctx.err)
+    result &= ctx.printRefBlocks(m)
+  result &= printStructs(ctx, m, shape)
   when shape.printsParamBindings:
-    result.src &= ctx.printParamBindings(kernels)
-    if ctx.failing():
-      return ("", ctx.err)
-  result.src &= printProgramScopeDecls(ctx, m, shape.spaces)
-  if ctx.failing():
-    return ("", ctx.err)
+    result &= ctx.printParamBindings(kernels)
+  result &= printProgramScopeDecls(ctx, m, shape.spaces)
   when shape.printsReduceTemplates:
-    result.src &= ctx.printReduceTemplates(m)
-    if ctx.failing():
-      return ("", ctx.err)
+    result &= ctx.printReduceTemplates(m)
   if shape.moduleOrderProcs:
     for fn in m.procs:
-      result.src &= ctx.printProc(fn, shape) & "\n\n"
-      if ctx.failing():
-        return ("", ctx.err)
+      result &= ctx.printProc(fn, shape) & "\n\n"
   else:
     let fns = getModuleDeviceFns(m)
     if shape.fwdDecls:
       for fn in fns:
         when shape.customProcHead:
-          result.src &= ctx.printProcHead(fn) & ";\n"
+          result &= ctx.printProcHead(fn) & ";\n"
         else:
-          result.src &= printSig(ctx, fn) & ";\n"
-        if ctx.failing():
-          return ("", ctx.err)
+          result &= printSig(ctx, fn) & ";\n"
       if fns.len > 0:
-        result.src &= "\n"
+        result &= "\n"
     for fn in fns:
-      result.src &= ctx.printProc(fn, shape) & "\n\n"
-    if ctx.failing():
-      return ("", ctx.err)
+      result &= ctx.printProc(fn, shape) & "\n\n"
     for kernel in kernels:
-      result.src &= ctx.printProc(kernel, shape) & shape.kernelSep
-      if ctx.failing():
-        return ("", ctx.err)
-
-proc codegenModule*[R](printed: (R, string)): R =
-  if printed[1].len > 0:
-    error(printed[1])
-  result = printed[0]
+      result &= ctx.printProc(kernel, shape) & shape.kernelSep
+proc codegenModule*[R](printed: R): R =
+  printed

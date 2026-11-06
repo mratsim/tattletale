@@ -8,7 +8,6 @@
 
 import std/[os, osproc, streams, strutils, tempfiles]
 import ../../codegen/backends/spirv_encoder
-import ../errors
 import ../engines/engines_common
 import ./runtime_utils
 
@@ -25,7 +24,7 @@ proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): se
   ## - every other source remains on the SPIR-V 1.0 default
   let glslang = findExe("glslangValidator")
   if glslang.len == 0:
-    failLoud("glslangValidator not found on PATH, the Vulkan engine needs it to compile GLSL sources")
+    raiseAssert("glslangValidator not found on PATH, the Vulkan engine needs it to compile GLSL sources")
   let tmpDir = getKernelDir("vulkan")
   # Private temp dir: 0700 so other local users cannot plant symlinks
   # at deterministic paths (TOCTOU), and unique names so concurrent compiles
@@ -53,7 +52,7 @@ proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): se
   let exitCode = p.waitForExit()
   defer: p.close()
   if exitCode != 0:
-    failLoud("glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
+    raiseAssert("glslangValidator failed (exit=" & $exitCode & "):\n" & compOut)
 
   let raw = readFile(spvPath)
   result = newSeq[uint32](raw.len div 4)
@@ -65,7 +64,7 @@ proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): seq[ui
   ## It becomes the OpEntryPoint Name operand the Vulkan pipeline looks up.
   let dxc = findExe("dxc")
   if dxc.len == 0:
-    failLoud("dxc not found on PATH, the Vulkan engine needs it to compile HLSL sources")
+    raiseAssert("dxc not found on PATH, the Vulkan engine needs it to compile HLSL sources")
   let tmpDir = getKernelDir("vulkan")
   setFilePermissions(tmpDir, {fpUserExec, fpUserWrite, fpUserRead})
   let srcPath = genTempPath(sanitizePath(entryPoint) & "_", ".hlsl", tmpDir)
@@ -83,7 +82,7 @@ proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): seq[ui
   let exitCode = p.waitForExit()
   defer: p.close()
   if exitCode != 0:
-    failLoud("dxc failed (exit=" & $exitCode & "):\n" & compOut)
+    raiseAssert("dxc failed (exit=" & $exitCode & "):\n" & compOut)
 
   let raw = readFile(spvPath)
   result = newSeq[uint32](raw.len div 4)

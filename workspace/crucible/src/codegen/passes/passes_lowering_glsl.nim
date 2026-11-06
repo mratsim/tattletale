@@ -75,12 +75,12 @@ proc unwrapVarDerefsStmts(ss: seq[CirStmt], varParams: HashSet[string]) =
   ss.walkStmts(nil, proc(e: CirExpr) =
     e.unwrapVarDerefsExpr(varParams))
 
-proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]): string =
+proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]) =
   ## Anything at a `var` parameter position that is neither an address-of
   ## wrapper nor the enclosing proc's own `var` parameter must be an lvalue,
   ## the rewrite refuses otherwise.
   if e.isNil:
-    return ""
+    return
   if e.kind == eCall and e.callee.kind == eSym:
     let callee = procs.getOrDefault(e.callee.name)
     if callee != nil and e.args.len == callee.params.len:
@@ -96,75 +96,44 @@ proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string],
             arg.typ != nil and arg.typ.kind == ctPtr:
           arg.typ = arg.typ.pElem
         elif arg.kind notin {eSym, eAt, ePat, eDot}:
-          return refuseAt(fn, "var parameter call argument must be an lvalue, got " & $arg.kind)
+          raiseAssert("var parameter call argument must be an lvalue, got " & $arg.kind)
       if hasVarParams:
         # a call site's callee type still states the pre-lowering signature, so the rewrite re-types it to the retyped parameters
         var ps: seq[CirType]
         for p in callee.params:
           ps.add p.typ
         e.callee.typ = freshProcType(ps, callee.ret)
-    for ch in getExprChildren(e):
-      let err = rewriteVarCallArgsExpr(fn, ch, varParams, procs)
-      if err.len > 0:
-        return err
-    return ""
   for ch in getExprChildren(e):
-    let err = rewriteVarCallArgsExpr(fn, ch, varParams, procs)
-    if err.len > 0:
-      return err
-  return ""
+    rewriteVarCallArgsExpr(fn, ch, varParams, procs)
 
-proc rewriteVarCallArgsStmts(ss: var seq[CirStmt], fn: CirProc, varParams: HashSet[string], procs: Table[string, CirProc]): string =
+proc rewriteVarCallArgsStmts(ss: var seq[CirStmt], fn: CirProc, varParams: HashSet[string], procs: Table[string, CirProc]) =
   for s in mitems(ss):
     case s.kind
     of sVar:
-      let err = rewriteVarCallArgsExpr(fn, s.init, varParams, procs)
-      if err.len > 0:
-        return err
+      rewriteVarCallArgsExpr(fn, s.init, varParams, procs)
     of sAsgn:
-      let lerr = rewriteVarCallArgsExpr(fn, s.lhs, varParams, procs)
-      if lerr.len > 0:
-        return lerr
-      let rerr = rewriteVarCallArgsExpr(fn, s.rhs, varParams, procs)
-      if rerr.len > 0:
-        return rerr
+      rewriteVarCallArgsExpr(fn, s.lhs, varParams, procs)
+      rewriteVarCallArgsExpr(fn, s.rhs, varParams, procs)
     of sIte:
-      let cerr = rewriteVarCallArgsExpr(fn, s.cond, varParams, procs)
-      if cerr.len > 0:
-        return cerr
-      let terr = rewriteVarCallArgsStmts(s.thenBody, fn, varParams, procs)
-      if terr.len > 0:
-        return terr
-      let eerr = rewriteVarCallArgsStmts(s.elseBody, fn, varParams, procs)
-      if eerr.len > 0:
-        return eerr
+      rewriteVarCallArgsExpr(fn, s.cond, varParams, procs)
+      rewriteVarCallArgsStmts(s.thenBody, fn, varParams, procs)
+      rewriteVarCallArgsStmts(s.elseBody, fn, varParams, procs)
     of sWhile:
-      let cerr = rewriteVarCallArgsExpr(fn, s.whileCond, varParams, procs)
-      if cerr.len > 0:
-        return cerr
-      let werr = rewriteVarCallArgsStmts(s.whileBody, fn, varParams, procs)
-      if werr.len > 0:
-        return werr
+      rewriteVarCallArgsExpr(fn, s.whileCond, varParams, procs)
+      rewriteVarCallArgsStmts(s.whileBody, fn, varParams, procs)
     of sRet:
-      let rerr = rewriteVarCallArgsExpr(fn, s.retVal, varParams, procs)
-      if rerr.len > 0:
-        return rerr
+      rewriteVarCallArgsExpr(fn, s.retVal, varParams, procs)
     of sDiscard:
-      let derr = rewriteVarCallArgsExpr(fn, s.discardVal, varParams, procs)
-      if derr.len > 0:
-        return derr
+      rewriteVarCallArgsExpr(fn, s.discardVal, varParams, procs)
     of sCall:
       let tmp = CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
-      let err = rewriteVarCallArgsExpr(fn, tmp, varParams, procs)
+      rewriteVarCallArgsExpr(fn, tmp, varParams, procs)
       s.callCallee = tmp.callee
       s.callArgs = tmp.args
-      if err.len > 0:
-        return err
     of sAsm, sEmit:
       discard
-  return ""
 
-proc qualifyVarParams(m: CirModule): string =
+proc qualifyVarParams(m: CirModule) =
   ## Marked parameters print with the `inout` qualifier.
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
@@ -177,17 +146,14 @@ proc qualifyVarParams(m: CirModule): string =
         if p.typ != nil and p.typ.kind == ctPtr:
           p.typ = p.typ.pElem
         else:
-          return refuseAt(fn, "var parameter " & p.name & " without a pointer type")
+          raiseAssert("var parameter " & p.name & " without a pointer type")
   for fn in m.procs:
     var varParams: HashSet[string]
     for p in fn.params:
       if p.varParam:
         varParams.incl(p.name)
     fn.body.unwrapVarDerefsStmts(varParams)
-    let err = rewriteVarCallArgsStmts(fn.body, fn, varParams, procs)
-    if err.len > 0:
-      return err
-  return ""
+    rewriteVarCallArgsStmts(fn.body, fn, varParams, procs)
 
 proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirType) =
   let name = refTypeName(pointee)
@@ -222,7 +188,7 @@ proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[Ci
   ss.scanStmtRefs(onDecl, onExpr)
   blocks = found
 
-proc glslRegisterRefBlocks(m: CirModule): string =
+proc glslRegisterRefBlocks(m: CirModule) =
   ## Runs after the last transform: the walked declarations and bodies are
   ## final and the registry never invalidates the record.
   for t in m.types:
@@ -232,4 +198,3 @@ proc glslRegisterRefBlocks(m: CirModule): string =
       if p.typ.kind in {ctAptr, ctPtr}:
         registerRefBlock(m.refBlocks, p.typ.pElem)
     registerStmtRefBlocks(m.refBlocks, fn.body)
-  return ""

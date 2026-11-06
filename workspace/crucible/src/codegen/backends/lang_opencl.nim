@@ -123,8 +123,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
     return emitOpenclArrayDecl(f.typ, f.name)
   if f.typ.kind in {ctAptr, ctPtr}:
     if f.typ.kind == ctAptr and f.typ.addressSpace != caDevice:
-      ctx.fail("struct field " & t.name & "." & f.name & " in " & $f.typ.addressSpace & " addressSpace, only device pointers nest in structs")
-      return ""
+      raiseAssert("struct field " & t.name & "." & f.name & " in " & $f.typ.addressSpace & " addressSpace, only device pointers nest in structs")
     return emitOpenclPtrField(f.typ, f.name)
   return ctx.emitTypeName(f.typ) & ' ' & f.name
 
@@ -161,14 +160,12 @@ const OpenclFlatThreadIndex =
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   if e.coordBuiltin == cbkThreadIndexInThreadgroup:
     return OpenclFlatThreadIndex
-  ctx.fail("whole-vector coordinate read " & $e.coordBuiltin & " has no OpenCL C vector form, read the components")
-  ""
+  raiseAssert("whole-vector coordinate read " & $e.coordBuiltin & " has no OpenCL C vector form, read the components")
 
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   let mapped = getOpenclCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
   if mapped.len == 0:
-    ctx.fail("no coordinate component " & e.fieldName)
-    return ""
+    raiseAssert("no coordinate component " & e.fieldName)
   mapped
 
 proc getAtomicOperandPtr(e: CirExpr): CirType =
@@ -198,15 +195,13 @@ proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr
   ## pointer casts at the call site.
   let pt = getAtomicOperandPtr(argExprs[0])
   if pt == nil or pt.pElem == nil:
-    ctx.fail("atomicFetchAdd on an operand with no pointee type")
-    return ""
+    raiseAssert("atomicFetchAdd on an operand with no pointee type")
   let qualifier = case pt.addressSpace
     of caDevice: "__global"
     of caThreadgroup: "__local"
     of caConstant: "__constant"
     of caThread:
-      ctx.fail("atomicFetchAdd on thread-private storage")
-      return ""
+      raiseAssert("atomicFetchAdd on thread-private storage")
   let atomicTy = case pt.pElem.kind
     of ctFloat:
       if pt.pElem.bits == 32: "atomic_float"
@@ -219,8 +214,7 @@ proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr
       else: ""
     else: ""
   if atomicTy.len == 0:
-    ctx.fail("atomicFetchAdd on " & emitOpenclScalar(pt.pElem) & ", only 32-bit int/uint/float pointees")
-    return ""
+    raiseAssert("atomicFetchAdd on " & emitOpenclScalar(pt.pElem) & ", only 32-bit int/uint/float pointees")
   "atomic_fetch_add((volatile " & qualifier & " " & atomicTy & "*)" &
     ctx.printExpr(argExprs[0]) & ", " & ctx.printExpr(argExprs[1]) & ")"
 
@@ -237,15 +231,12 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## Kernel-only storage classes: `__local` and `__constant`. Relocation moves const_mem locals out and rejects a device function's smem local.
   if s.addressSpace == caThreadgroup:
     if not ctx.inKernel:
-      ctx.fail("smem local " & s.name & " in a device function, __local is kernel storage")
-      return false
+      raiseAssert("smem local " & s.name & " in a device function, __local is kernel storage")
     return true
   if s.addressSpace == caConstant:
-    ctx.fail("local " & s.name & " in constant addressSpace, the OpenCL lowering pass already relocated it")
-    return false
+    raiseAssert("local " & s.name & " in constant addressSpace, the OpenCL lowering pass already relocated it")
   if s.addressSpace == caDevice:
-    ctx.fail(s.name & " needs a function/workgroup home in OpenCL")
-    return false
+    raiseAssert(s.name & " needs a function/workgroup home in OpenCL")
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
@@ -291,8 +282,7 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
     result = qualifier &
       printCDecl(TargetVocabs[cgOpenCL].scalarNames, openclVectorRule, printerTarget, p.typ, ident, true)
   of ctArray:
-    ctx.fail("array parameter " & p.name & ", OpenCL C array parameters decay to pointers")
-    return ""
+    raiseAssert("array parameter " & p.name & ", OpenCL C array parameters decay to pointers")
   else:
     result = ctx.emitTypeName(p.typ) & ' ' & p.name
 
@@ -319,13 +309,12 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
     result = "__constant " & ctx.emitTypeName(s.declType) & ' ' & s.name
   result &= " = " & ctx.printExpr(s.init) & ";"
 
-proc printOpenclModule*(m: CirModule): tuple[src: string, err: string] =
+proc printOpenclModule*(m: CirModule): string =
   var ctx = initPrintCtx(openclWalkPolicy, openclVectorRule, openclEmit, cgOpenCL)
   ctx.mathNames = openclMathBuiltinNames
   let kernels = getModuleKernels(m)
   if kernels.len == 0:
-    ctx.fail("no kernel in the module")
-    return ("", ctx.err)
+    raiseAssert("no kernel in the module")
   printModule(ctx, m, kernels, openclModuleShape)
 
 proc codegen*(m: CirModule): string =

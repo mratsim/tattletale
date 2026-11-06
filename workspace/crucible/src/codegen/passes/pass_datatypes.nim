@@ -27,17 +27,17 @@ type
     name*: string
     kind*: PassKind
     description*: string
-    run*: proc(m: CirModule): string {.nimcall.}
-      ## One pass over the module, "" when clean, else the first refusal
+    run*: proc(m: CirModule) {.nimcall.}
+      ## One pass over the module, refusal is immediate via raiseAssert
 
   PassRegistry* = ref object
     passes*: seq[CirPass]
     donePasses*: HashSet[string]
 
-func register*(reg: var PassRegistry, name: string, kind: PassKind, description: string, run: proc(m: CirModule): string {.nimcall.}) =
+func register*(reg: var PassRegistry, name: string, kind: PassKind, description: string, run: proc(m: CirModule) {.nimcall.}) =
   reg.passes.add CirPass(name: name, kind: kind, description: description, run: run)
 
-proc runPasses*(reg: var PassRegistry, m: CirModule): string =
+proc runPasses*(reg: var PassRegistry, m: CirModule) =
   ## Runs the registered passes in registration order.
   ##
   ## Contract:
@@ -50,7 +50,6 @@ proc runPasses*(reg: var PassRegistry, m: CirModule): string =
   ##   and consumers read only the final boundary
   ## - a registry with no transform pass verifies after the last pass runs clean,
   ##   builder-produced IR is final by definition
-  ## - returns "" when the whole pipeline is clean, else the first refusal
   var lastTransform = -1
   for i, p in reg.passes:
     if p.kind == pkTransform:
@@ -60,17 +59,11 @@ proc runPasses*(reg: var PassRegistry, m: CirModule): string =
     if p.kind == pkAnalysis:
       sawAnalysis = true
     elif p.kind == pkTransform and sawAnalysis:
-      return "pass \"" & p.name & "\" transforms after an analysis pass," &
-        " the analysis records would go stale"
-    let err = p.run(m)
-    if err.len > 0:
-      return "pass " & p.name & ": " & err
+      raiseAssert("pass \"" & p.name & "\" transforms after an analysis pass," &
+        " the analysis records would go stale")
+    p.run(m)
     reg.donePasses.incl p.name
     if i == lastTransform and m.verifyIR:
-      let verr = verifyModule(m)
-      if verr.len > 0:
-        return "verify: " & verr
+      verifyModule(m)
   if lastTransform == -1 and m.verifyIR:
-    let verr = verifyModule(m)
-    if verr.len > 0:
-      return "verify: " & verr
+    verifyModule(m)

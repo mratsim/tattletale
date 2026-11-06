@@ -95,7 +95,7 @@ proc foldMinMax(e: CirExpr): bool =
   e[] = callE(sym(name, tProcT([tThen, tElse], e.ternType)), e.thenE, e.elseE)[]
   return true
 
-proc foldMaxMinToBuiltins(m: CirModule): string {.nimcall.} =
+proc foldMaxMinToBuiltins(m: CirModule) {.nimcall.} =
   let fold = proc(e: CirExpr) =
     discard foldMinMax(e)
   for fn in m.procs:

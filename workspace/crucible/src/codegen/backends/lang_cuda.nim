@@ -187,12 +187,10 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## CUDA C++ forbids initializing shared variables.
   if s.addressSpace == caThreadgroup:
     if s.init != nil and not ctx.inKernel:
-      ctx.fail("smem local " & s.name & " with an initializer, CUDA C++ forbids initializing __shared__ variables")
-      return false
+      raiseAssert("smem local " & s.name & " with an initializer, CUDA C++ forbids initializing __shared__ variables")
     return true
   if s.addressSpace == caConstant:
-    ctx.fail("local " & s.name & " in constant addressSpace, CUDA constant storage is program scope only")
-    return false
+    raiseAssert("local " & s.name & " in constant addressSpace, CUDA constant storage is program scope only")
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
@@ -260,7 +258,7 @@ proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
   if "reduceMax" in reduceKinds:
     result &= emitWarpReduceTemplate("reduceMax")
 
-proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
+proc printCudaModule*(m: CirModule): string =
   var ctx = initPrintCtx(cudaWalkPolicy, cudaVectorRule, cudaEmit, cgCuda)
   ctx.mathNames = cudaMathBuiltinNames
   printModule(ctx, m, getModuleKernels(m), cudaModuleShape)

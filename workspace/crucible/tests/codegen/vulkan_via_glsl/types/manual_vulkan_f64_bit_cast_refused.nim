@@ -3,7 +3,7 @@
 ## Test that a `cast[uint64]` over a float64 value in a glsl: kernel dies in the GLSL printer before any shader source is emitted.
 ## The refusal names the pass:
 ##
-##   Error: cirv2 printer glsl: at kern: no native 64-bit float bit cast
+##   Error: no native 64-bit float bit cast
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

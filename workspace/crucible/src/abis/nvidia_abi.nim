@@ -1844,29 +1844,17 @@ proc cudaGetDeviceProperties*(prop: var cudaDeviceProp; device: cint): cudaError
 ################################ Utilities ###########################
 ######################################################################
 
-template check*(status: CUresult, quitOnFailure = true) =
-  ## Check the status code of a CUDA operation
-  ## Exit program with error if failure
-
-  let code = status # ensure that the input expression is evaluated once only
+template check*(status: CUresult) =
+  let code = status
   if code != CUDA_SUCCESS:
-    writeStackTrace()
-    stderr.write(astToStr(status) & " " & $instantiationInfo() & " exited with error: " & $code & '\n')
-    if quitOnFailure:
-      quit 1
+    raiseAssert("CUDA error " & $code)
 
-template check*(a: sink nvrtcResult, quitOnFailure = true) =
-  let code = a
+template check*(status: sink nvrtcResult) =
+  let code = status
   if code != NVRTC_SUCCESS:
-    writeStackTrace()
-    stderr.write(astToStr(status) & " " & $instantiationInfo() & " exited with error: " & $code & '\n')
-    if quitOnFailure:
-      quit 1
+    raiseAssert("NVRTC error " & $code)
 
-template check*(a: sink cudaError_t, quitOnFailure = true) =
-  let code = a
+template check*(status: sink cudaError_t) =
+  let code = status
   if code != cudaSuccess:
-    writeStackTrace()
-    stderr.write(astToStr(status) & " " & $instantiationInfo() & " exited with error: " & $code & '\n')
-    if quitOnFailure:
-      quit 1
+    raiseAssert("CUDA error " & $code)

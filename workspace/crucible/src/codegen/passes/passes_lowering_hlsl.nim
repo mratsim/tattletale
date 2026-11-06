@@ -113,7 +113,7 @@ proc rewriteNumWorkgroupsExpr(e: CirExpr, coordTy: CirType) =
 proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
   ss.walkStmts(nil, proc(e: CirExpr) = rewriteNumWorkgroupsExpr(e, coordTy))
 
-proc materializeNumWorkgroups(m: CirModule): string =
+proc materializeNumWorkgroups(m: CirModule) =
   ## Kernels without such reads stay untouched, device functions never see one,
   ## the printer refuses a coordinate builtin in a device function.
   for fn in m.procs:
@@ -123,8 +123,8 @@ proc materializeNumWorkgroups(m: CirModule): string =
     if not findNumWorkgroupsStmts(coordTy, fn.body):
       continue
     if coordTy.isNil:
-      return "kernel " & fn.name & " reads threadgroups_per_grid through an" &
-        " untyped expression, the materialized parameter has no type"
+      raiseAssert("kernel " & fn.name & " reads threadgroups_per_grid through an" &
+        " untyped expression, the materialized parameter has no type")
     var taken: seq[string]
     for p in fn.params:
       taken.add p.name
@@ -133,9 +133,8 @@ proc materializeNumWorkgroups(m: CirModule): string =
     for l in locals:
       taken.add l.name
     if NumWorkgroupsParam in taken:
-      return "kernel " & fn.name & ": the materialized parameter name '" &
-        NumWorkgroupsParam & "' is taken"
+      raiseAssert("kernel " & fn.name & ": the materialized parameter name '" &
+        NumWorkgroupsParam & "' is taken")
     fn.params.add CirParam(name: NumWorkgroupsParam, typ: coordTy)
     rewriteNumWorkgroupsStmts(fn.body, coordTy)
-  return ""
 

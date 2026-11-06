@@ -3,9 +3,9 @@
 ## v1 flattened struct leaves with no name check: colliding C names reached the emitted source.
 ##
 ## Test that a kernel whose struct parameter explodes to a leaf name a local already uses
-## dies in the struct explosion before any shader source is emitted, naming the pass, kernel, and leaf:
+## dies in the struct explosion before any shader source is emitted, naming the leaf:
 ##
-##   Error: pass explodeGlobalStructWithPtrFields: kernel kern: leaf 'view_p' collides with an existing kernel parameter or local
+##   Error: leaf 'view_p' collides with an existing kernel parameter or local
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

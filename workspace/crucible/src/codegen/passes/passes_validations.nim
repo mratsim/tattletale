@@ -103,27 +103,22 @@ proc resolveConstStorageTarget(e: CirExpr, storage: ConstStorage): string =
     discard
   return ""
 
-proc constWriteRejection(lhs: CirExpr, fnName: string, storage: ConstStorage): string =
+proc refuseConstWrite(lhs: CirExpr, storage: ConstStorage) =
+  ## Raises when the lvalue designates constant storage, the message names the target.
   let target = resolveConstStorageTarget(lhs, storage)
-  if target.len == 0:
-    return ""
-  result = "at " & fnName & ": assignment into constant storage: the target " &
-    target & " lives in read-only program-scope memory. Globals are " &
-    "read-only; pass mutable state as a pointer parameter"
+  if target.len > 0:
+    raiseAssert("assignment into constant storage: the target " &
+      target & " lives in read-only program-scope memory. Globals are " &
+      "read-only; pass mutable state as a pointer parameter")
 
-proc checkConstWritesStmts(ss: seq[CirStmt], fnName: string, storage: ConstStorage): string =
-  var err = ""
+proc checkConstWritesStmts(ss: seq[CirStmt], storage: ConstStorage) =
   let check = proc(s: CirStmt) =
-    if err.len > 0:
-      return
     if s.kind == sAsgn:
-      err = constWriteRejection(s.lhs, fnName, storage)
+      refuseConstWrite(s.lhs, storage)
   ss.walkStmts(check, nil)
-  return err
 
-proc validateConstantWritesPass(m: CirModule): string =
-  ## Rejects writes into constant storage across every module proc and every
-  ## program-scope statement. Returns "" when clean, else the first refusal.
+proc validateConstantWritesPass(m: CirModule) =
+  ## Rejects writes into constant storage: module procs and program-scope statements.
   ##
   ## Reachability: Nim sem refuses any assignment to a `const`, so no producer
   ## emits a write to a `const`-space target.
@@ -133,9 +128,5 @@ proc validateConstantWritesPass(m: CirModule): string =
     if g.kind == sVar and g.addressSpace == caConstant:
       constGlobals.incl g.name
   for fn in m.procs:
-    let err = fn.body.checkConstWritesStmts(fn.name,
-      fn.collectConstStorage(constGlobals))
-    if err.len > 0:
-      return err
-  return m.globals.checkConstWritesStmts("global scope",
-    ConstStorage(constGlobals: constGlobals))
+    fn.body.checkConstWritesStmts(fn.collectConstStorage(constGlobals))
+  m.globals.checkConstWritesStmts(ConstStorage(constGlobals: constGlobals))

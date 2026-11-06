@@ -30,9 +30,7 @@ export lang_c.kernelRuntimeParams
 proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   let savedTarget = crucibleCompileTarget
   crucibleCompileTarget = ctCpu
-  let (m, lerr) = lowerCirv2(wrapper)
-  if lerr.len > 0:
-    error(lerr)
+  let m = lowerCirv2(wrapper)
   var reg = PassRegistry.new()
   registerRewriteStmtsExprs(reg)
   registerValueNormalizations(reg)
@@ -40,8 +38,6 @@ proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   registerSharedLoweringPasses(reg)
   reg.registerCpuLoweringPasses()
   registerValidationPostPasses(reg)
-  let perr = reg.runPasses(m)
-  if perr.len > 0:
-    error(perr)
+  reg.runPasses(m)
   crucibleCompileTarget = savedTarget
   m

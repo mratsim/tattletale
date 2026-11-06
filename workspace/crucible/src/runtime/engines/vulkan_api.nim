@@ -11,7 +11,6 @@ import std/[strutils, tables]
 import workspace/crucible/src/abis/vulkan_abi as vk
 
 import workspace/crucible/src/crucible_codegen
-import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/runtime/backends/vulkan_compile {.all.}
 import workspace/crucible/src/runtime/backends/vulkan_address_runtime {.all.}
@@ -63,7 +62,7 @@ proc ingest*(engine: VulkanEngine, source: string) =
   elif "[numthreads(" in source:
     ingestHlsl(engine, source)
   else:
-    failLoud("Vulkan ingest: unrecognized source language, expected GLSL " &
+    raiseAssert("Vulkan ingest: unrecognized source language, expected GLSL " &
              "(a `#version` first line) or HLSL (`[numthreads(`), got: " &
              source.splitLines()[0])
 
@@ -88,7 +87,7 @@ proc ingestGlsl(engine: VulkanEngine, glsl: string) =
       elif inPush:
         let t = line.strip()
         if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
-          failLoud("Vulkan: multi-kernel source with scalar params is unsupported, " &
+          raiseAssert("Vulkan: multi-kernel source with scalar params is unsupported, " &
                    "use one kernel per source when passing by-value scalars")
   engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
   engine.shaderSquadron = parseShaderSquadron(glsl)
@@ -105,13 +104,13 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   const spvMagic = 0x07230203'u32
   resetCaches(engine)
   if spirv.len < 5 or spirv[0] != spvMagic:
-    failLoud("Vulkan ingest: not a SPIR-V module, expected the 0x07230203 " &
+    raiseAssert("Vulkan ingest: not a SPIR-V module, expected the 0x07230203 " &
              "magic as word 0 and the 5-word header, got " &
              (if spirv.len == 0: "an empty module"
               else: $spirv.len & " words, word 0 = " & spirv[0].toHex()))
   let sq = parseSpirvEntryInfo(spirv)
   if sq.entryPoints != 1:
-    failLoud("Vulkan ingest: a direct SPIR-V module must declare exactly one " &
+    raiseAssert("Vulkan ingest: a direct SPIR-V module must declare exactly one " &
              "OpEntryPoint, got " & $sq.entryPoints)
   engine.source = ""
   engine.spirv = spirv
@@ -149,7 +148,7 @@ type SerializationCtx = object
 proc write8(ctx: var SerializationCtx, x: uint64) =
   ctx.pn = round_multiple_up(ctx.pn, 8)
   if ctx.pn + 8 > 128:
-    failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+    raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
   inc ctx.pn, 8
 
@@ -163,7 +162,7 @@ proc store[T](ctx: var SerializationCtx, v: T, _: int) =
   if lay.align > 1:
     ctx.pn = round_multiple_up(ctx.pn, lay.align)
   if ctx.pn + lay.size > 128:
-    failLoud("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+    raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   var blob: array[lay.size, byte]
   var off = 0
   when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
@@ -257,7 +256,7 @@ proc findFirstFunctionName(src: string, preamble, marker: string): string =
 
 proc launchKernelImpl*(engine: VulkanEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
-    failLoud("Vulkan run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
+    raiseAssert("Vulkan run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
               engine.shaderSquadron
             else:
@@ -266,7 +265,7 @@ proc launchKernelImpl*(engine: VulkanEngine, output: auto, args: tuple, cfg: Lau
   if engine.shaderSquadron.x == 0 or
      squadron.x != engine.shaderSquadron.x or squadron.y != engine.shaderSquadron.y or
      squadron.z != engine.shaderSquadron.z:
-    failLoud("Vulkan run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
+    raiseAssert("Vulkan run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
          " != baked squadron " & $engine.shaderSquadron.x & "x" & $engine.shaderSquadron.y &
          "x" & $engine.shaderSquadron.z &
          ": launch config mismatch, squadron is shader-baked on Vulkan)")
@@ -279,7 +278,7 @@ proc launchKernelImpl*(engine: VulkanEngine, output: auto, args: tuple, cfg: Lau
     spirv = engine.spirv
   else:
     if engine.source.len == 0:
-      failLoud("Vulkan: a direct SPIR-V module must declare exactly one entry point, " &
+      raiseAssert("Vulkan: a direct SPIR-V module must declare exactly one entry point, " &
                "launch it as \"" & engine.entryPoint & "\", got \"" & kernel & "\"")
     if not engine.caches.spirvCache.hasKey(kernel):
       engine.caches.spirvCache[kernel] = compileGlslToSpirvViaGlslang(engine.source, kernel)
@@ -335,7 +334,7 @@ proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: s
   template collectBuffer(ctx: var auto, v: VulkanBuffer, _: int) =
     bufs.add v
   template collectBuffer[T](ctx: var auto, v: T, _: int) =
-    failLoud("descriptor route: scalar kernel args are not supported, " &
+    raiseAssert("descriptor route: scalar kernel args are not supported, " &
              "the uniform-block layout model does not exist yet")
   bindArgs(bufs, output, args, collectBuffer, VulkanBuffer, cgGlsl)
 

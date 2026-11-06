@@ -137,7 +137,7 @@ proc fillOmittedFields(e: CirExpr) =
     ordered.add(kv(f.name, if value != nil: value else: zeroValue(f.typ)))
   e.kvFields = ordered
 
-proc resolveBoolDomainPass(m: CirModule): string =
+proc resolveBoolDomainPass(m: CirModule) =
   for fn in m.procs:
     fn.body.walkStmts(nil, proc(e: CirExpr) =
       if e.kind notin {eBitAnd, eBitOr, eBitXor} or e.opType == nil or
@@ -162,7 +162,7 @@ proc resolveBoolDomainPass(m: CirModule): string =
         e.a = a
         e.b = b)
 
-proc typeLiteralsPass(m: CirModule): string =
+proc typeLiteralsPass(m: CirModule) =
   for fn in m.procs:
     let onExpr = proc(e: CirExpr) =
       case e.kind
@@ -190,7 +190,7 @@ proc typeLiteralsPass(m: CirModule): string =
         discard
     fn.body.walkStmts(onStmt, onExpr)
 
-proc completeConstructorsPass(m: CirModule): string =
+proc completeConstructorsPass(m: CirModule) =
   for fn in m.procs:
     fn.body.walkStmts(nil, proc(e: CirExpr) =
       if e.kind == eOconstr:
@@ -263,7 +263,7 @@ proc bindStmtTemps(b: var TempBinder, body: var seq[CirStmt]) =
       lowered.add(s)
   body = lowered
 
-proc bindCompoundAssignTempsPass(m: CirModule): string =
+proc bindCompoundAssignTempsPass(m: CirModule) =
   for fn in m.procs:
     var b = tempBinderFor(fn)
     b.bindStmtTemps(fn.body)
@@ -304,7 +304,6 @@ proc markExplicitUnrolls(ss: var seq[CirStmt]) =
         kept.add s
   ss = kept
 
-proc markExplicitUnrollsPass(m: CirModule): string =
+proc markExplicitUnrollsPass(m: CirModule) =
   for fn in m.procs:
     markExplicitUnrolls(fn.body)
-  return ""

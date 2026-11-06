@@ -10,7 +10,6 @@ import workspace/crucible/src/abis/c_abi
 import workspace/crucible/src/abis/nvidia_abi
 
 import workspace/crucible/src/crucible_codegen
-import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/cuda_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 import workspace/crucible/src/runtime/engines/engines_common
@@ -200,6 +199,6 @@ proc load(nvrtc: var NVRTC) =
   if status != CUDA_SUCCESS:
     var error_str: cstring
     check cuGetErrorString(status, error_str)
-    failLoud("Module load failed: " & $error_str)
+    raiseAssert("Module load failed: " & $error_str)
 
   nvrtc.moduleLoaded = true

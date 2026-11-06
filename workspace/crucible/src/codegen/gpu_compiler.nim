@@ -65,12 +65,8 @@ macro codegenMetal(body: typed): string =
   registerMslThreadCoordinateBuiltins(reg)
   registerInstantiateAddressSpaceGenerics(reg)
   registerValidationPostPasses(reg)
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  let perr = reg.runPasses(m)
-  if perr.len > 0:
-    error(perr)
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
   result = newLit(codegen(m, cgMetal))
 
 macro metal*(body: untyped): string =
@@ -87,12 +83,8 @@ macro codegenCuda(body: typed): string =
   registerInstantiateAddressSpaceGenerics(reg)
   registerCudaFeatureScan(reg)
   registerValidationPostPasses(reg)
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  let perr = reg.runPasses(m)
-  if perr.len > 0:
-    error(perr)
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
   result = newLit(codegen(m, cgCuda))
 
 macro cuda*(body: untyped): string =
@@ -112,12 +104,8 @@ macro codegenOpenCL(body: typed): string =
   registerInstantiateAddressSpaceGenerics(reg)
   registerOpenclFeatureScan(reg)
   registerValidationPostPasses(reg)
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  let perr = reg.runPasses(m)
-  if perr.len > 0:
-    error(perr)
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
   result = newLit(codegen(m, cgOpenCL))
 
 macro opencl*(body: untyped): string =
@@ -136,12 +124,8 @@ macro codegenGLSL(body: typed): string =
   registerGlslRefBlockPass(reg)
   registerGlslFeatureScan(reg)
   registerValidationPostPasses(reg)
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  let perr = reg.runPasses(m)
-  if perr.len > 0:
-    error(perr)
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
   result = newLit(codegen(m, cgGlsl))
 
 macro glsl*(body: untyped): string =
@@ -153,12 +137,8 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   registerFrontendPasses(reg)
   registerSharedLoweringPasses(reg)
   registerValidationPostPasses(reg)
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  let perr = reg.runPasses(m)
-  if perr.len > 0:
-    error(perr)
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
   result = newLit(codegenSpirvShader(m))
 
 macro spirv*(body: untyped): seq[uint32] =
@@ -179,12 +159,8 @@ macro codegenWebGpu(body: typed): string =
   registerWgslInlinePointerParamCalls(reg)
   registerWgslFeatureScan(reg)
   registerValidationPostPasses(reg)
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  let perr = reg.runPasses(m)
-  if perr.len > 0:
-    error(perr)
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
   result = newLit(codegen(m, cgWebGPU))
 
 macro webgpu*(body: untyped): string =
@@ -203,12 +179,8 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   registerInstantiateAddressSpaceGenerics(reg)
   registerHlslCallGraphPass(reg)
   registerValidationPostPasses(reg)
-  let (m, lerr) = lowerCirv2(body)
-  if lerr.len > 0:
-    error(lerr)
-  let perr = reg.runPasses(m)
-  if perr.len > 0:
-    error(perr)
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
   let printed = case flavor
     of fvD3D12: codegen(m, cgHlsl, fvD3D12)
     of fvVulkan: codegen(m, cgHlsl, fvVulkan)

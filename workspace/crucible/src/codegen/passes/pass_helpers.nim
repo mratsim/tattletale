@@ -38,8 +38,7 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
   ## Contract:
   ## - `onStmt` runs last for a statement, after the expression visits and after the nested bodies recurse
   ## - the walk iterates a shallow copy of the list, insertions made by `onStmt` do not disturb the iteration
-  ## - visitors return nothing: a refusing visitor records its refusal itself
-  ##   and stops work once recorded, so the first refusal in walk order wins
+  ## - visitors return nothing: a refusing visitor raises
 
   proc visitExprs(e: CirExpr) =
     if e.isNil:
@@ -368,9 +367,6 @@ type
       ## Module procs by name: targets that check call-site argument shapes against
       ## callee parameter types read them here.
 
-proc refuseAt*(fn: CirProc, detail: string): string =
-  "at " & fn.name & ": " & detail
-
 proc getDottedPath*(e: CirExpr): string =
   if e.kind == eSym:
     return e.name
@@ -390,7 +386,7 @@ proc getStructRoot*(e: CirExpr): CirExpr =
 proc spliceSym*(e: CirExpr, name: string, typ: CirType) =
   e[] = sym(name, typ)[]
 
-proc registerExplodedStruct*(ctx: var ExplodeCtx, fn: CirProc, path: string, t: CirType, c: CirExpr, target: string): string =
+proc registerExplodedStruct*(ctx: var ExplodeCtx, fn: CirProc, path: string, t: CirType, c: CirExpr, target: string) =
   ## Records the field rewrites of one pointer-holding struct local whose
   ## object construction binds leaf symbols, nested constructions recurse.
   ##
@@ -399,9 +395,9 @@ proc registerExplodedStruct*(ctx: var ExplodeCtx, fn: CirProc, path: string, t: 
   ## - `t`: the declared type of the local, `c` must construct it
   ## - `target`: the target's name in the refusal texts, `WGSL` or `HLSL`
   if c.kind != eOconstr:
-    return refuseAt(fn, "struct local " & path & " initializer is not a construction, " & target & " has no pointer struct members")
+    raiseAssert("struct local " & path & " initializer is not a construction, " & target & " has no pointer struct members")
   if c.ocType.name != t.name:
-    return refuseAt(fn, "struct local " & path & " initializer has type " & c.ocType.name & ", expected " & t.name)
+    raiseAssert("struct local " & path & " initializer has type " & c.ocType.name & ", expected " & t.name)
   var bound: seq[string]
   for kvv in c.kvFields:
     bound.add kvv.name
@@ -410,32 +406,26 @@ proc registerExplodedStruct*(ctx: var ExplodeCtx, fn: CirProc, path: string, t: 
       if f.name == kvv.name:
         ft = f.typ
     if ft.isNil:
-      return refuseAt(fn, "field " & kvv.name & " is not on " & t.name)
+      raiseAssert("field " & kvv.name & " is not on " & t.name)
     if kvv.value.kind == eOconstr:
-      let err = ctx.registerExplodedStruct(fn, path & "." & kvv.name, ft, kvv.value, target)
-      if err.len > 0:
-        return err
+      ctx.registerExplodedStruct(fn, path & "." & kvv.name, ft, kvv.value, target)
     elif kvv.value.kind == eSym:
       ctx.leafOf[path & "." & kvv.name] = (kvv.value.name, ft)
     else:
-      return refuseAt(fn, "field " & path & "." & kvv.name & " initializer is not a leaf symbol, " & target & " has no pointer struct members")
+      raiseAssert("field " & path & "." & kvv.name & " initializer is not a leaf symbol, " & target & " has no pointer struct members")
   for f in t.fields:
     if f.name notin bound:
-      return refuseAt(fn, "field " & f.name & " of " & path & " is missing from the construction")
-  return ""
+      raiseAssert("field " & f.name & " of " & path & " is missing from the construction")
 
-proc explodeStructVarDecl*(ctx: var ExplodeCtx, fn: CirProc, s: CirStmt, target: string): string =
+proc explodeStructVarDecl*(ctx: var ExplodeCtx, fn: CirProc, s: CirStmt, target: string) =
   if s.init == nil or s.init.kind != eOconstr:
-    return refuseAt(fn, "struct local " & s.name & " without a construction, " & target & " has no pointer struct members")
-  let err = ctx.registerExplodedStruct(fn, s.name, s.declType, s.init, target)
-  if err.len > 0:
-    return err
+    raiseAssert("struct local " & s.name & " without a construction, " & target & " has no pointer struct members")
+  ctx.registerExplodedStruct(fn, s.name, s.declType, s.init, target)
   ctx.structLocals.incl(s.name)
-  return ""
 
 proc rewritePointerExprShared*(ctx: var ExplodeCtx, fn: CirProc, e: CirExpr,
     target: string,
-    ownArm: proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string): string =
+    ownArm: proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr)) =
   ## Shared skeleton of the WGSL and HLSL pointer-local expression rewrites.
   ##
   ## A deref operand stands for its pointee:
@@ -445,16 +435,15 @@ proc rewritePointerExprShared*(ctx: var ExplodeCtx, fn: CirProc, e: CirExpr,
   ## `ownArm` handles every shape outside the skeleton, refusal set and recursion included.
   ## `target` is interpolated into the refusal texts.
   if e.isNil:
-    return ""
+    return
   case e.kind
   of eSym:
     if e.name in ctx.structLocals:
-      return refuseAt(fn, "struct local " & e.name & " reads whole, " & target & " dissolves it to its fields")
+      raiseAssert("struct local " & e.name & " reads whole, " & target & " dissolves it to its fields")
     if e.name in ctx.pendingPtrs:
-      return refuseAt(fn, "pointer local " & e.name & " reads before any address-of binding")
+      raiseAssert("pointer local " & e.name & " reads before any address-of binding")
     if e.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & e.name & " reads as a value, the rewrite covers derefs only")
-    return ""
+      raiseAssert("pointer local " & e.name & " reads as a value, the rewrite covers derefs only")
   of eDot:
     let root = getStructRoot(e)
     if root != nil and root.name in ctx.structLocals:
@@ -462,20 +451,20 @@ proc rewritePointerExprShared*(ctx: var ExplodeCtx, fn: CirProc, e: CirExpr,
       if ctx.leafOf.hasKey(path):
         let leaf = ctx.leafOf[path]
         e.spliceSym(leaf.sym, leaf.typ)
-        return ""
-    return ownArm(fn, ctx, e)
+        return
+    ownArm(fn, ctx, e)
   of eDeref:
     let op = e.derefOperand
     if op.kind == eSym:
       if op.name in ctx.aliasOf:
         e.spliceSym(ctx.aliasOf[op.name], op.typ.pElem)
-        return ""
+        return
       if op.name in ctx.byRefParams:
         e.spliceSym(op.name, op.typ.pElem)
-        return ""
-    return ownArm(fn, ctx, e)
+        return
+    ownArm(fn, ctx, e)
   else:
-    return ownArm(fn, ctx, e)
+    ownArm(fn, ctx, e)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Const_mem hoisting
@@ -486,7 +475,7 @@ proc freshProcType*(params: seq[CirType], ret: CirType): CirType =
   result.params = params
   result.ret = ret
 
-proc hoistConstMemStmts*(ss: var seq[CirStmt], m: CirModule, fn: CirProc): string =
+proc hoistConstMemStmts*(ss: var seq[CirStmt], m: CirModule, fn: CirProc) =
   ## Relocates the `{.const_mem.}` locals of one statement list into `m.globals`, deleting the declarations from the list.
   ##
   ## Contract:
@@ -501,35 +490,24 @@ proc hoistConstMemStmts*(ss: var seq[CirStmt], m: CirModule, fn: CirProc): strin
     let s = ss[i]
     if s.kind == sVar and s.addressSpace == caConstant:
       if s.init == nil:
-        return "at " & fn.name & ": const_mem local " & s.name &
-          " without an initializer"
+        raiseAssert("const_mem local " & s.name & " without an initializer")
       m.globals.add s
       ss.delete i
       continue
     case s.kind
     of sIte:
-      let thenErr = hoistConstMemStmts(s.thenBody, m, fn)
-      if thenErr.len > 0:
-        return thenErr
-      let elseErr = hoistConstMemStmts(s.elseBody, m, fn)
-      if elseErr.len > 0:
-        return elseErr
+      hoistConstMemStmts(s.thenBody, m, fn)
+      hoistConstMemStmts(s.elseBody, m, fn)
     of sWhile:
-      let loopErr = hoistConstMemStmts(s.whileBody, m, fn)
-      if loopErr.len > 0:
-        return loopErr
+      hoistConstMemStmts(s.whileBody, m, fn)
     else:
       discard
     i.inc
-  return ""
 
-proc hoistConstMemLocals*(m: CirModule): string =
+proc hoistConstMemLocals*(m: CirModule) =
   ## Runs after the reserved-word rename so the relocated names match the renamed body references.
   for fn in m.procs:
-    let err = hoistConstMemStmts(fn.body, m, fn)
-    if err.len > 0:
-      return err
-  return ""
+    hoistConstMemStmts(fn.body, m, fn)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Temp names
