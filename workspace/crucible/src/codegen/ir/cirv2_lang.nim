@@ -602,6 +602,9 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
     result = resolveAddressSpace(e.left)
     if result == caDevice:
       result = resolveAddressSpace(e.right)
+  of eStmts:
+    if e.valueExpr != nil:
+      result = resolveAddressSpace(e.valueExpr)
   else:
     discard
 
