@@ -125,20 +125,6 @@ proc rewriteExpr(el: var TempBinder, e: CirExpr): seq[CirStmt] =
       pre.add(el.rewriteExpr(ch))
     return pre
 
-proc perTestClone(s: CirStmt): CirStmt =
-  ## One condition statement cloned for the re-run at the end of a loop body.
-  ##
-  ## A condition declaration's scope ends at the condition:
-  ## - a declaration with an initial value assigns the pre-loop binding,
-  ##   the next test reads the recomputed value
-  ## - a declaration without an initial value recomputes nothing and drops
-  ## - any other statement clones as is
-  if s.kind == sVar:
-    if s.init.isNil:
-      return nil
-    return asgnS(sym(s.name, s.declType), cloneExpr(s.init))
-  return cloneStmts(@[s])[0]
-
 proc rewriteStmt(el: var TempBinder, s: CirStmt): seq[CirStmt] =
   ## One statement with its expressions eliminated.
   ## The statements run in front, the statement last.
@@ -178,7 +164,16 @@ proc rewriteStmt(el: var TempBinder, s: CirStmt): seq[CirStmt] =
     if condPre.len == 0:
       return @[s]
     for pre in condPre:
-      let replay = perTestClone(pre)
+      # A condition declaration's scope ends at the condition.
+      # Loop-body statements assign the recomputed value to that variable.
+      let replay =
+        if pre.kind == sVar:
+          if pre.init.isNil:
+            nil
+          else:
+            asgnS(sym(pre.name, pre.declType), cloneExpr(pre.init))
+        else:
+          cloneStmts(@[pre])[0]
       if replay != nil:
         s.whileBody.add(replay)
     return condPre & @[s]
