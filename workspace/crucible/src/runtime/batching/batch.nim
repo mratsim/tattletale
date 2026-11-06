@@ -67,7 +67,6 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
   if not wg.isNil:
     procdef[4].add(wg)
 
-  procdef[0] = ident($procdef[0] & "_" & base58(int(hash(blkN.repr))))
   procdef[6][0][0] = kernel
   let known = $procdef[0].strVal in ctgStashNames
   if not known:
@@ -119,19 +118,10 @@ type
     ## Chevron stage between `batch.enqueue` and `<<`, wrapping the batch.
     batch: Batch[E]
 
-  EnqueueProxy*[BX, BY, BZ: static int, E] = object
+  EnqueueProxy*[E] = object
     ## Chevron stage between `<<` and the `>>` call
     batch: Batch[E]
     config: LaunchConfig
-
-func dims3(n: NimNode): array[3, NimNode] =
-  if n.kind in {nnkPar, nnkTupleConstr, nnkBracket} and n.len > 3:
-    error("batch enqueue: a launch dim takes at most 3 axes, got " & $n.len)
-  if n.kind in {nnkPar, nnkTupleConstr, nnkBracket}:
-    for i in 0 ..< 3:
-      result[i] = if i < n.len: n[i] else: newLit(1)
-  else:
-    result = [n, newLit(1), newLit(1)]
 
 proc enqueue*[E](batch: Batch[E]): EnqueueSugar[E] {.inline.} =
   ## batch.enqueue<<(4, 16)>> saxpy(out, x, y, 2.0)
@@ -165,19 +155,14 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
         pos.inc
   else:
     error("batch enqueue: chevron schedule expects (grid, blk), got " & cfg.repr)
-  let b = dims3(blkN)
   let E = r.getTypeInst()[1]
-  let g = dims3(gridN)
-  let bx = b[0]
-  let by = b[1]
-  let bz = b[2]
-  let gridCall = bindSym"dim3".newCall(g[0], g[1], g[2])
-  let blkCall = bindSym"dim3".newCall(bx, by, bz)
+  let gridCall = bindSym"dim3".newCall(gridN)
+  let blkCall = bindSym"dim3".newCall(blkN)
   let configCall = nnkObjConstr.newTree(bindSym"LaunchConfig",
     nnkExprColonExpr.newTree(ident"grid", gridCall),
     nnkExprColonExpr.newTree(ident"blk", blkCall))
   result = quote do:
-    EnqueueProxy[`bx`, `by`, `bz`, `E`](batch: `r`.batch, config: `configCall`)
+    EnqueueProxy[`E`](batch: `r`.batch, config: `configCall`)
 
 macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
   let t = sugar.getTypeInst()
@@ -187,7 +172,7 @@ macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
   doAssert callNode.kind == nnkCall,
     "batch enqueue RHS must be a kernel call, got: " & callNode.repr
   let gridN = quote do: `sugar`.config.grid
-  let blkN = nnkPar.newTree(t[1], t[2], t[3])
+  let blkN = quote do: `sugar`.config.blk
   result = bindSym"recordDeviceCall".newCall(
     sugar.newDotExpr(ident"batch"),
     callNode[0],
