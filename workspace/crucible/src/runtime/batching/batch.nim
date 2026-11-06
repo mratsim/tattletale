@@ -138,7 +138,7 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
             batchRecStore(ctx, f, pos)
         else:
           const w = computeDeviceLayout(typeof(v), `cgN`)
-          ctx.off = round_multiple_up(ctx.off, w.align)
+          ctx.off = ctx.off.round_multiple_up(w.align)
           let start = ctx.off
           ctx.entry.bytes.packFrom(ctx.off, v, `cgN`)
           ctx.entry.slots.add BatchSlot[`H`](kind: bskBytes, off: start, size: w.size)
