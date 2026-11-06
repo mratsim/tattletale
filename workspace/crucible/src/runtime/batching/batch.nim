@@ -97,7 +97,6 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
     stashWrapper(procdef)
 
   let H = batch.getTypeInst()[2]
-  let entryT = nnkBracketExpr.newTree(bindSym"BatchEntry", H)
   let kname = newLit($procdef[0])
   let configCall = nnkObjConstr.newTree(bindSym"LaunchConfig",
     nnkExprColonExpr.newTree(ident"grid", bindSym"dim3".newCall(gridN)),
@@ -107,8 +106,6 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
     argsTuple.add(values[i])
   let cgN = ident"batchCg"
   let recN = ident"batchRec"
-  let recT = ident"BatchRec"
-  let storeN = ident"batchRecStore"
   let layoutN = ident"batchBlobLayout"
   let batchCodegenKindS = bindSym("batchCodegenKind", brForceOpen)
   let outN = values[0]
@@ -116,11 +113,11 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
     block:
       const `cgN` = `batchCodegenKindS`(typeof(`batch`.engine))
       const `layoutN` = computeDeviceLayout(typeof(`argsTuple`), `cgN`)
-      type `recT` = object
-        entry: `entryT`
+      type BatchRec = object
+        entry: BatchEntry[`H`]
         blob: array[`layoutN`.size, byte]
         off: int
-      template `storeN`(ctx: var `recT`, v: auto, pos: int) =
+      template batchRecStore(ctx: var BatchRec, v: auto, pos: int) =
         when typeof(v) is `H`:
           ctx.entry.buffers.add v
         elif typeof(v) is ptr:
@@ -128,12 +125,14 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
             "pass the DeviceMem handle from allocDevice".}
         elif hasBufferLeaf(typeof(v), typedesc[`H`]):
           for f in fields(v):
-            `storeN`(ctx, f, pos)
+            batchRecStore(ctx, f, pos)
         else:
           packFrom(ctx.blob, ctx.off, v, `cgN`)
-      var `recN` = `recT`(entry: `entryT`(entrypoint: `kname`, config: `configCall`))
-      bindArgs(`recN`, `outN`, `argsTuple`, `storeN`, typedesc[`H`], `cgN`)
-      `recN`.entry.scalars = `recN`.blob[0 ..< `recN`.off]
+      var `recN` = BatchRec(entry: BatchEntry[`H`](entrypoint: `kname`, config: `configCall`))
+      bindArgs(`recN`, `outN`, `argsTuple`, batchRecStore, typedesc[`H`], `cgN`)
+      `recN`.entry.scalars = newSeq[byte](`recN`.off)
+      if `recN`.off > 0:
+        copyMem(`recN`.entry.scalars[0].addr, `recN`.blob[0].addr, `recN`.off)
       `recN`.entry.scalarAlign = `layoutN`.align
       `batch`.entries.add `recN`.entry
 
