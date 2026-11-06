@@ -453,22 +453,25 @@ func isStmtBody(n: NimNode): bool =
 func lowerSplicedStmt(ctx: var CirFrontend, c: NimNode): seq[CirStmt]
 
 func lowerBranchValue(ctx: var CirFrontend, body: NimNode): CirExpr =
+  ctx.pushScope()
   let valueNode = getBranchValueExpr(body)
+  var value: CirExpr
   if not isStmtBody(valueNode):
-    return ctx.lowerExpr(valueNode)
-  var stmts: seq[CirStmt] = @[]
-  var value: CirExpr = nil
-  var list = valueNode
-  if list.kind != nnkStmtList:
-    list = nnkStmtList.newTree(valueNode)
-  for i, c in list:
-    if i == list.len - 1:
-      value = ctx.lowerExpr(c)
-    else:
-      stmts.add(ctx.lowerSplicedStmt(c))
-  if stmts.len == 0:
-    return value
-  return stmtsE(stmts, value)
+    value = ctx.lowerExpr(valueNode)
+  else:
+    var stmts: seq[CirStmt] = @[]
+    var list = valueNode
+    if list.kind != nnkStmtList:
+      list = nnkStmtList.newTree(valueNode)
+    for i, c in list:
+      if i == list.len - 1:
+        value = ctx.lowerExpr(c)
+      else:
+        stmts.add(ctx.lowerSplicedStmt(c))
+    if stmts.len > 0:
+      value = stmtsE(stmts, value)
+  ctx.popScope()
+  return value
 
 func lowerNestedTernary(ctx: var CirFrontend,
     branches: seq[tuple[cond, body: NimNode]], elseBody: NimNode, idx: int,
