@@ -25,9 +25,10 @@ term of art), harness, smoke.
 | `oracle` | "reference implementation" |
 | `probe` | "test". Test files are `test_*.nim`, never "probes" |
 | `deviation class` | describe the actual difference (ulps, bytes, layout) |
-| `load-bearing` | "essential", "critical", "necessary" ("the load-bearing guard" → "the essential guard") |
+| `load-bearing` | every `-bearing` compound is banned ("load-bearing" → "essential", "necessary"; "value-bearing" → "containing values") |
 | `seam` | "boundary", "interface", "edge" ("the seam between tiles" → "the boundary between tiles") |
-| `physics` / `physics-bearing` (for numerical behavior) | "honest rounding", "rounding", "drift behavior", "value-bearing" ("the physics-bearing slices" → "the value-bearing slices") |
+| `-bearing` (any compound: "value-bearing", "call-bearing", "physics-bearing") | "containing X" or the construct's name ("the value-bearing slices" → "the slices containing values") |
+| `physics` / `physics-bearing` (for numerical behavior) | "honest rounding", "rounding", "drift behavior" ("the physics-bearing slices" → "the slices with honest rounding") |
 | `committed bytes` / `committed blob hashes` (invented compounds) | "recorded inputs", "recorded files", "recorded checksums" ("pure functions of committed bytes" → "deterministic ops on recorded inputs"). The plain word blob is fine, "frozen blobs" reads correctly |
 | `tail-mass` / `tail mass` | "tail probability" (the standard statistics term for the scalar, probability beyond the top ranks; "tail distribution" would suggest a shape comparison). Applied to the on-disk key and identifiers too: "tail_probability", tailProbability, fkTailProbability |
 | `arm` (test-variant sense: "CPU arm", "MPS arm", "forced-first-step arm") | "variant" or rephrase ("the CPU variant (reference device)", "the forced first step") |
@@ -37,11 +38,12 @@ term of art), harness, smoke.
 | `donor` (fixture-source sense: "fixture donor", "the same donor") | "recorded family", "recorded source" |
 | `law` / `laws` (set-of-rules sense: "harness law", "fixture law") | "rule", "rule set", "contract" ("harness law" → "harness contract") |
 | `lineage` | "from X", "descends from X", "the X-era form of the technique" ("ATM lineage" → "from ATM networks") |
-| `substrate` | "base", "foundation", or name the component ("continuation substrate" → "continuation base") |
+| `substrate` | "base", "foundation", or the component's name ("continuation substrate" → "continuation base") |
 | `extent` (shape/launch sense) | "size", "dims", or "bounds" ("padded extent" → "padded size", "launch extents" → "launch dims"). Vulkan `VkExtent3D` and CUDA API doc quotes keep the ABI's own name |
 | `mode` (tuple/layout sense, ceramic only) | "dimension" — tuples and tensors have dimensions ("per-mode contribution" → "per-dimension contribution"). CuTe vocabulary leak; crucible and positron keep their own vocabulary |
 | `recon` / `reconstructed` (bridge-arg sense) | "rebuilt argument", "the struct literal", "rebuilt from the leaf params" — say what the object is, not the operation that made it |
 | `spell` / `spelled` (type-declaration sense) | "declared with type X", "typed as X" |
+| `not name(s)` (the "X, not Y" justification: "compare types through the type system, not names") | state the required form plainly ("compare types through the type system; the string form is the banned shape"). The contrast clause narrates the design instead of stating the contract |
 
 ## Line-end hazards from the reflow scanner
 
@@ -109,5 +111,5 @@ From actual slop seen in this repo:
 | "a sentinel row marks the tile end" | "a marker row ends the tile" |
 | "the tail-mass check catches the drift" | "the tail-probability check catches the drift" |
 | "a pure function of committed bytes" | "a deterministic op on recorded inputs" |
-| "the physics-bearing slices of the family" | "the value-bearing slices of the family" |
+| "the physics-bearing slices of the family" | "the slices of the family containing values" |
 | "record-time drift physics differ per row class" | "drift behavior differs per row class" |

@@ -42,7 +42,7 @@ type
     layers: seq[SymbolTable]
     variablesInScope: HashSet[string]
 
-  CirFrontend = object
+  CirFrontend* = object
     resolver: CirTypeResolver
     module: ModuleScope
     locals: LocalScope
@@ -1256,71 +1256,64 @@ func harvestProc(ctx: var CirFrontend, callee: NimNode, cirName: string) =
 #  Entry points
 # ═══════════════════════════════════════════════════════════════════════
 
+proc init*(T: typedesc[CirFrontend]): CirFrontend =
+  result.pushScope()
+
+proc update*(frontend: var CirFrontend, item: NimNode) =
+  case item.kind
+  of nnkProcDef, nnkFuncDef:
+    discard frontend.lowerProcDef(item)
+  of nnkTypeSection:
+    frontend.resolveTypeSection(item)
+  of nnkVarSection, nnkConstSection:
+    for def in item:
+      let nameN = def[0]
+      let bareName = if nameN.kind == nnkPragmaExpr: nameN[0] else: nameN
+      let name = bareName.repr
+      let addressSpace = frontend.collectAddressSpace(nameN)
+      if addressSpace != caConstant:
+        raiseAssert("module-level variable " & name & " needs {.const_mem.}, got " & $addressSpace)
+      let valN = def[2]
+      let typN = if def[1].kind == nnkEmpty: valN.getTypeInst() else: def[1]
+      let t = frontend.resolver.resolveCirType(typN, addressSpace)
+      var init: CirExpr = nil
+      if valN.kind != nnkEmpty:
+        init = frontend.lowerExpr(valN)
+      let g = varD(name, t, init, addressSpace)
+      frontend.module.decls.add(g)
+      frontend.module.vars[name] = (sym(name, t), addressSpace)
+  of nnkCommentStmt:
+    discard
+  of nnkBindStmt, nnkMixinStmt:
+    discard
+  else:
+    raiseAssert("top-level construct not supported: " & $item.kind & " " & item.repr)
+
+proc finish*(frontend: var CirFrontend): CirModule =
+  result = moduleD("kernel", frontend.resolver.resolvedStructs, frontend.module.procs)
+  result.globals = frontend.module.decls
+
 proc lowerCirv2*(bodyIn: NimNode): CirModule =
-  ## Lowers the typed macro body to CIRv2.
-  ##
-  ## `bodyIn` is a block of kernel proc defs, or the single `{.global.}` wrapper
-  ## proc of a launchDeviceFn call. A refusal raises immediately.
-  var ctx = CirFrontend()
-  ctx.pushScope()
+  var ctx = CirFrontend.init()
   var body = bodyIn
-  block moduleWalk:
-    if body.kind == nnkStmtListExpr and body.len == 1:
-      # typed evaluator wraps a single-expression body in a one-child list
-      body = body[0]
-    if body.kind == nnkProcDef or body.kind == nnkFuncDef:
-      discard ctx.lowerProcDef(body)
-      break moduleWalk
-    if body.kind == nnkSym:
-      let impl = body.getImpl()
-      if impl.kind notin {nnkProcDef, nnkFuncDef}:
-        raiseAssert(body.strVal & " does not name a proc")
-      discard ctx.lowerProcDef(impl)
-      break moduleWalk
+  if body.kind == nnkStmtListExpr and body.len == 1:
+    # typed evaluator wraps a single-expression body in a one-child list
+    body = body[0]
+  if body.kind == nnkSym:
+    let impl = body.getImpl()
+    if impl.kind notin {nnkProcDef, nnkFuncDef}:
+      raiseAssert(body.strVal & " does not name a proc")
+    ctx.update(impl)
+  elif body.kind in {nnkProcDef, nnkFuncDef}:
+    ctx.update(body)
+  else:
     if body.kind != nnkStmtList:
       raiseAssert("expected kernel proc definitions, got " & $body.kind)
-    # kernels are ABI: every {.global.} def's own name is claimed before any body lowers,
-    # a same-named device proc takes the suffix
     for c in body:
       if c.kind in {nnkProcDef, nnkFuncDef} and not isGenericDef(c) and
           getPragmaItem(c, "global") != nil:
         discard ctx.claimProcName(getProcIdentity(c[0]), sanitizeIdent(c[0].strVal))
     for c in body:
-      case c.kind
-      of nnkProcDef, nnkFuncDef:
-        discard ctx.lowerProcDef(c)
-      of nnkTypeSection:
-        ctx.resolveTypeSection(c)
-      of nnkVarSection, nnkConstSection:
-        block topLevelSection:
-          # Module-level variables: {.const_mem.} or {.smem.} picks the address space, an unannotated variable is constant storage
-          # TODO: unannotated variables are read-only once thread-local globals
-          # have a device representation
-          for def in c:
-            let nameN = def[0]
-            let bareName = if nameN.kind == nnkPragmaExpr: nameN[0] else: nameN
-            let name = bareName.repr
-            let addressSpace =
-              block:
-                var spc = ctx.collectAddressSpace(nameN)
-                if spc == caThread:
-                  spc = caConstant
-                spc
-            let valN = def[2]
-            let typN = if def[1].kind == nnkEmpty: valN.getTypeInst() else: def[1]
-            let t = ctx.resolver.resolveCirType(typN, addressSpace)
-            var init: CirExpr = nil
-            if valN.kind != nnkEmpty:
-              init = ctx.lowerExpr(valN)
-            let g = varD(name, t, init, addressSpace)
-            ctx.module.decls.add(g)
-            ctx.module.vars[name] = (sym(name, t), addressSpace)
-      of nnkCommentStmt:
-        discard
-      of nnkBindStmt, nnkMixinStmt:
-        discard
-      else:
-        raiseAssert("top-level construct not supported: " & $c.kind & " " & c.repr)
-  result = moduleD("kernel", ctx.resolver.resolvedStructs, ctx.module.procs)
-  result.globals = ctx.module.decls
+      ctx.update(c)
+  return ctx.finish()
 

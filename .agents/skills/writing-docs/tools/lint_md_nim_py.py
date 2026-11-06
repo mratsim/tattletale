@@ -34,7 +34,7 @@ Rule table (rule | trigger | severity):
 | table-mispadding     | a table row with a different cell count than the header, or a doc table row with an unpadded cell | counted  |
 | table-cell-wall      | a table cell over 30 words                                                                        | counted  |
 | scratch-filename    | a changed file named with tmp, debug, or probe, scratch files are never checked in (base mode only)              | counted  |
-| extensionless-file  | a changed file with no extension, name the format or add one, .githooks/pre-commit exempt (base mode only)        | counted  |
+| extensionless-file  | a changed file with no extension, state the format or add one, .githooks/pre-commit exempt (base mode only)        | counted  |
 | table-alignment      | a table whose pipe separators do not line up (pad each cell to the column width)                  | counted  |
 | escape-noise         | an escape sequence used as a prose word                                                           | counted  |
 | narration            | temporal or history narration: currently, as of, once X lands                                     | counted  |
@@ -63,7 +63,7 @@ Rule table (rule | trigger | severity):
 | one-line-refusal    | a refusal message literal spanning more than one physical line or over 110 characters, keep the refusal on one line | counted  |
 | duplicate-refusal-coverage | a refusal message fingerprint refused at 2 or more sites (refusal calls plus genTargets refusal row literals), the human disposes the duplicate | counted  |
 | refusal-essay       | a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses | counted  |
-| refusal-density     | 6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory | counted  |
+| refusal-density     | 6 or more refusal calls in one proc, split the sites or use the validator carve-out, a carve-out reports as an advisory | counted  |
 | agent-verb          | a comment gives a type, a value, a text, or a name an agent verb (refuses, keeps, stays, pairs, travels, carries, takes, meets, names no), a file, a row, a module, or a doc never states its contents | counted  |
 
 Golden rules:
@@ -90,7 +90,7 @@ Usage:
     python3 lint_md_nim_py.py --base <commit> <files-or-dirs>...
     python3 lint_md_nim_py.py --fix <path>...
 
-When --base <commit> is set (or DOC_LINT_BASE env names the commit), findings
+When --base <commit> is set (or DOC_LINT_BASE env states the commit), findings
 are scoped to the lines a diff from that commit adds, so pre-existing
 violations a change did not touch stay out of the report. The diff is read
 from the staged index relative to the base commit, falling back to the
@@ -341,7 +341,7 @@ NARRATION = [
      "history narration (state the behavior, not the fix)"),
     (r"\bworkaround for\b", "workaround narration (state the behavior instead)"),
     (r"\bonce\b[^.;]*\b(?:lands?|merges?|ships?|arrives?)\b",
-     "future-promise narration (name the dependency by path or name instead)"),
+     "future-promise narration (state the dependency by path or file instead)"),
     (r"\bhas been (?:fixed|moved|renamed|removed|deleted|replaced)\b",
      "history narration (describe the code as it is now)"),
     (r"\bwill be (?:removed|replaced|deleted)\b",
@@ -418,23 +418,27 @@ def _probe_exempt(line):
 
 
 BANNED = [
+    (r"\bnot names?\b",
+     None, "state the required form, the 'not X' contrast narrates the design"),
+    (r"\bnames?\s+(?:the|a|an|its|their|this|that|these|those|every|each|one|your|our)\b",
+     None, "the verb 'name' hides the action, state the domain verb (states, declares, lists) or use the possessive 'X's name'"),
     (r"\boff-contract\b",
      None, "'off-contract' hides who checks what, state the precondition and the checker, the consequence follows from the code"),
     (r"\b\w+[ -]bearing\b",
-     None, "'X-bearing' says nothing, write 'containing X' or name the construct"),
+     None, "'X-bearing' says nothing, write 'containing X' or the construct's name"),
     (r"maxloopiterationsvm",
      None, "the VM loop-cap flag is banned tree-wide, no VM iteration cap exists or is configurable"),
     (r"\bmint(s|ed)?\b",
-     None, "minting jargon, name the actor that defines or writes the specialized type"),
+     None, "minting jargon, state the actor that defines or writes the specialized type"),
     (r"\bpast the\b",
-     None, "say the concrete amount or name the dimension, 'past the' hides the reference"),
+     None, "say the concrete amount or state the dimension, 'past the' hides the reference"),
     (r"\blegacy\b|\bhistorically\b|\bpreviously\b|\bformerly\b"
      r"|\boutdated\b|\bobsolete\b|\bcurrently\b"
      r"|\bno longer\b|\bused to \b|\bas of \b",
      None, "historical and temporal prose is banned, state the present contract "
            "(the schema before X, absent keys, the pre-005 frames)"),
     (r"\brows?\b",
-     None, "'row' says nothing, name the section, the entry, the mapping or the line"),
+     None, "'row' says nothing, state the section, the entry, the mapping or the line"),
     (r"\bpin\b|\bpins\b|\bpinned\b|\bpinning\b",
      None, "use verified against, checked by, locked"),
     (r"\bgate\b|\bgates\b|\bgating\b",
@@ -445,19 +449,25 @@ BANNED = [
     (r"\bfacts?\b", None,
      "state the claim directly, the word fact adds nothing"),
     (r"\bcomposes\b", None,
-     "name the actor with an active verb, builds or joins the parts"),
+     "state the actor with an active verb, builds or joins the parts"),
+    (r"\bsuffix(?:es|ing|ed)\b", None,
+     "the uniquer appends the suffix or assigns it, 'suffixes' is not a verb"),
+    (r"\bsame-named\b|\bsame named\b", None,
+     "state the collision: a duplicate identifier, the same identifier, or the two definitions"),
+    (r"\btakes?\s+(?:its\s+(?:own\s+)?|the\s+|a\s+|an\s+)?(?:name|suffix)\b", None,
+     "an object does not take a name or a suffix, state what assigns it (the uniquer suffixes, the claim registers)"),
     (r"\bplain\b", None,
-     "plain says nothing, name the form: ordinary, scalar, direct, or the symbol itself"),
+     "plain says nothing, state the form: ordinary, scalar, direct, or the symbol itself"),
     (r"\bcarries\b", None,
-     "a type or a value carries nothing, name the actor that attaches or holds it"),
+     "a type or a value carries nothing, state the actor that attaches or holds it"),
     (r"\bthe name\b", None,
-     "name the identifier directly, the type name, the vector name, the kernel name"),
-    (r"\bdraw\b|\bdraws\b", None, "use read, take, or use"),
+     "state the identifier directly, the type name, the vector name, the kernel name"),
+    (r"\bdraw\b|\bdraws\b", None, "use read or use"),
     (r"\bride\b|\brides\b|\briding\b|\bridden\b|\brode\b", None,
      "use sit on, carry, or restate the mechanism"),
     (r"\bbite\b|\bbites\b", None, "use chunk, step, or case"),
     (r"\bmissions?\b", None, "use the module's real name or path"),
-    (r"\blegs?\b", None, "name the compilation stage or the artifact directly"),
+    (r"\blegs?\b", None, "state the compilation stage or the artifact directly"),
     (r"\bdigests?\b",
      lambda l: bool(re.search(r"\bsha|hash|checksum|blake|md5", l)),
      "use summary or report (the cryptographic sense stays exempt)"),
@@ -670,6 +680,8 @@ RULES = {
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "emitted-text-assert": Rule("emitted-text-assert", True,
                                 "a string literal containment, scan, or equality in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
+    "handbuilt-ir-test": Rule("handbuilt-ir-test", True,
+                              "hand-built IR construction in a tests/codegen or tests/runtime Nim file, the test dies on every IR change; drive the public API or the verifier under tests/verify"),
     "method-call-syntax": Rule("method-call-syntax", True,
                                "a tile_algebra view method written in dst-first free-call syntax, the receiver is the first argument, write receiver.method(...)"),
     "stmt-inline": Rule("stmt-inline", True,
@@ -685,7 +697,7 @@ RULES = {
     "refusal-essay": Rule("refusal-essay", True,
                           "a refusal message carrying an essay marker (because, instead of, rather than, which means) or chaining 3 or more clauses, state the fact"),
     "refusal-density": Rule("refusal-density", True,
-                            "6 or more refusal calls in one proc, split the sites or take the validator carve-out, a carve-out reports as an advisory"),
+                            "6 or more refusal calls in one proc, split the sites or use the validator carve-out, a carve-out reports as an advisory"),
     "agent-verb": Rule("agent-verb", True,
                        "a comment gives a type, a value, a text, or a name an agent verb (refuses, keeps, stays, pairs, travels, names no), the code that acts or the specification names the actor"),
 }
@@ -2354,6 +2366,23 @@ def _logical_code_lines(text):
     return [(start, buf) for start, buf, _spans in _logical_code_lines_spanned(text)]
 
 
+def nim_handbuilt_ir_checks(path, text, findings):
+    """Flags hand-built IR construction in tests/codegen and tests/runtime.
+
+    - `moduleD` and `CirModule` name the IR builders; a test constructing
+      modules by hand dies on every IR change, the public API is the tested
+      surface (t_cirv2_verify_scope under tests/verify is the sole exception)
+    """
+    if "tests" not in path.parts or not ({"codegen", "runtime"} & set(path.parts)):
+        return
+    for no, code in enumerate(text.splitlines(), 1):
+        if re.search(r"\bmoduleD\b|\bCirModule\b", code):
+            findings.append(Finding(path, no, "handbuilt-ir-test",
+                "hand-built IR in a codegen or runtime test, the test dies on "
+                "every IR change; drive the public API (lowerCirv2) or the "
+                "verifier under tests/verify"))
+
+
 def nim_emitted_text_assert_checks(path, text, findings):
     """Flags string literal containments, scans, and equalities over emitted
     source in tests/codegen.
@@ -3294,6 +3323,7 @@ def scan(path, text, findings):
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
             nim_emitted_text_assert_checks(path, text, findings)
+            nim_handbuilt_ir_checks(path, text, findings)
             nim_method_call_syntax_checks(path, text, findings)
             nim_callable_semicolon_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
@@ -4406,7 +4436,8 @@ TILE_RULES = {
     "layout-dot-field": "a hand-built .shape/.stride field read; "
                         "destructureLayout is the required form",
     "eqident-layout": "a string-named Layout type check; compare "
-                      "types through the type system, not names",
+                      "types through the type system, the string form is the "
+                      "banned shape",
     "bindsym-arithmetic": "an arithmetic, comparison, or boolean builtin "
                           "spelled through bindSym/ident; use the "
                           "compile-time NimNode operators or infix source",

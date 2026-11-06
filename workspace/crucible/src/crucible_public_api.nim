@@ -12,6 +12,7 @@
 ## | Engines       | `newEngine`, `CodegenKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                                        |
 ## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                                           |
 ## | Launch sugar  | `launchKernel`, `launchDeviceFn`, `launchCpuFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
+## | Batch         | `recordBatch`, `enqueue`, `submit`, chevrons `<<`/`>>`, `Batch`, `BatchEntry`, `EnqueueSugar`, `EnqueueProxy`                        |
 ## | Geometry      | `Dim3`, `dim3`                                                                                                                       |
 ## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                                        |
 
@@ -20,7 +21,8 @@ import
   ./runtime/engines/engines_api,
   ./runtime/launch/launch_kernel,
   ./runtime/launch/launch_device_fn,
-  ./runtime/launch/launch_cpu_fn
+  ./runtime/launch/launch_cpu_fn,
+  ./runtime/batching/batch
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Engines
@@ -42,6 +44,9 @@ export launch_device_fn.DeviceFnSugar,
        launch_device_fn.DeviceFnProxy,
        launch_device_fn.`<<`, launch_device_fn.`>>`
 
+export batch.recordBatch, batch.enqueue, batch.`<<`, batch.`>>`, batch.submit
+export batch.Batch, batch.BatchEntry, batch.EnqueueSugar, batch.EnqueueProxy
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Codegen
@@ -50,7 +55,7 @@ export launch_device_fn.DeviceFnSugar,
 export gpu_compiler.cuda, gpu_compiler.opencl, gpu_compiler.glsl,
        gpu_compiler.webgpu, gpu_compiler.metal, gpu_compiler.hlsl,
        gpu_compiler.spirv
-# exporting the type also exports the non-pure enum's members by bare name,
+# exporting the type also exports the non-pure enum's members by name,
 # individual enum fields cannot be exported ("enum field cannot be exported individually")
 from ./codegen/backends/lang_hlsl import HlslFlavor
 export HlslFlavor

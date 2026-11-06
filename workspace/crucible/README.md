@@ -34,7 +34,7 @@ not just `engine.ingest()` (see [`AGENTS.md`](AGENTS.md)).
   Each backend under [`src/codegen/backends/`](src/codegen/backends/) prints it:
   `cuda_lang.nim`, `opencl_lang.nim`, `glsl_lang.nim`, `hlsl_lang.nim`, `wgsl_lang.nim`, `msl_lang.nim`.
 - **A pass pipeline.** Semantic work lives in named passes under [`src/codegen/passes/`](src/codegen/passes/),
-  run through a [`PassRegistry`](src/codegen/passes/pass_registry.nim).
+  run through a `PassRegistry`.
   Pass families: normalizations, preprocessing, lowering, and validations.
 - **Compile-time codegen.** The `cuda`/`opencl`/`glsl`/`hlsl`/`webgpu`/`metal` macros emit
   source at compile time through [`src/codegen/gpu_compiler.nim`](src/codegen/gpu_compiler.nim).
@@ -135,7 +135,6 @@ workspace/crucible/
         ast_type_constructors.nim Type constructors
       passes/
         pass_datatypes.nim        Pass/registry types, walk, runPasses
-        pass_registry.nim         PassRegistry
         passes_normalizations.nim  Frontend-extraction passes
         passes_preprocessing.nim  Preprocessing (incl. mangleNames, backend phases)
         passes_lowering.nim       Lowering (gtSpan -> ptr+len, etc.)
