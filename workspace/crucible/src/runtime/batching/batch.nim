@@ -31,13 +31,8 @@ type
     engine*: E
     entries*: seq[BatchEntry[E]]
 
-proc makeBatch[E](engine: E): Batch[E] {.inline.} =
+proc recordBatch*[E: HwEngine](engine: E): Batch[E] {.inline.} =
   Batch[E](engine: engine)
-
-macro recordBatch*(engine: HwEngine): untyped =
-  let makeS = bindSym"makeBatch"
-  result = quote do:
-    `makeS`(`engine`)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Compile-time stream
