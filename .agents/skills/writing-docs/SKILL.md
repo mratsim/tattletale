@@ -48,6 +48,21 @@ kernel docs, Lean comments, test file headers, and commit messages.
    Titles, headers, and label bullets are exempt. Code and data never act: name the actor.
    Style exemplars: Physically-Based Rendering, Crafting Interpreters, The Art of Multiprocessor
    Programming, PMPP. Plain subjects, active verbs, no marketing or lawyer speech.
+6b. **No filler.** Every clause must delete information if removed.
+   Filler restates its own sentence, hedges a rule, or echoes a consequence
+   the reader already inferred:
+   - "prints INVALID, never a number" becomes "prints INVALID"
+   - "in order to": the infinitive needs "to" alone
+   - "note that", "it should be noted that", "simply", "just",
+     "obviously" die
+   - the trailing "etc." dies after a closed enumeration
+
+6c. **No invented actions.** Objects do not perform actions the domain
+   does not have. Banned for buffers, values, types, and kernels:
+   "survives", "serves", "wants", "remembers".
+   Write in the domain's vocabulary:
+   - "the kernel loads the buffer"
+   - "the buffer is released"
 
 ## Quick start
 

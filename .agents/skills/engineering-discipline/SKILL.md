@@ -114,6 +114,49 @@ A comment earns its place by giving exactly one of these three things:
 For the third kind prefer a lifecycle or dataflow diagram over prose once
 the flow exceeds a handful of states.
 
+## No filler
+
+Every clause must delete information if removed.
+Filler restates its own sentence, hedges a rule, or repeats a consequence
+the reader already inferred.
+
+Bad:
+
+```nim
+# A computed bandwidth over the peak prints INVALID, never a number.
+```
+
+"never a number" restates what INVALID means.
+
+Good:
+
+```nim
+# A computed bandwidth over the peak prints INVALID.
+```
+
+The same test kills:
+
+- "in order to" (use "to" instead)
+- "it should be noted that" and "note that" openers
+- "simply", "just", "obviously"
+- the trailing "etc." after a closed enumeration
+
+## No invented actions
+
+Objects do not perform actions the domain does not have:
+
+- "The buffer survives the launch" invents endurance.
+- "The temporary serves a launch" invents service.
+
+Write in the domain's own vocabulary:
+
+- the kernel loads the buffer
+- the buffer is released
+- the temporary is readable after the launch
+
+A verb is correct when the action exists in the domain.
+The test is existence, not vividness.
+
 ## Big comments that earn their size
 
 Density scales with complexity in BOTH directions: a deslop or review must

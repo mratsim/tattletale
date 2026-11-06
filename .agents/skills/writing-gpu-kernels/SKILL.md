@@ -54,6 +54,16 @@ Detection and loop-shape rules:
 - `xor` reduction is parity, not OR: a mask test written with xor-reduce passes half its cases (caught by the fixture suite).
 - Negative slot indices are legal (reversed views): the invariant is *logical index within the domain*, never sign.
 
+## int is the backend int
+
+Kernel and launch signatures take `int`, never `int32`/`int64`:
+
+- the `int` type lowers to the backend default (int32 on GPUs),
+  so no conversion is needed
+- the signature reads the same on every backend
+- narrow explicitly only at an actual ABI boundary. State the narrowing
+  in one sentence
+
 ## Test discipline
 
 - **The fixture suite is non-negotiable**: every merged change reruns the fixture suite before its TFLOPS entry counts as evidence.
