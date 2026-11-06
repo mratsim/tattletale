@@ -26,11 +26,22 @@ import workspace/crucible/src/runtime/launch/launch_serialization
 # ═══════════════════════════════════════════════════════════════════════
 
 type
+  BatchSlotKind* = enum
+    bskBuffer
+    bskBytes
+
+  BatchSlot*[H] = object
+    case kind*: BatchSlotKind
+    of bskBuffer:
+      handle*: H
+    of bskBytes:
+      off*: int
+      size*: int
+
   BatchEntry*[H] = object
     entrypoint*: string
-    scalars*: seq[byte]
-    scalarAlign*: int
-    buffers*: seq[H]
+    slots*: seq[BatchSlot[H]]
+    bytes*: seq[byte]
     config*: LaunchConfig
 
   Batch*[E, H] = ref object
@@ -119,7 +130,7 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
         off: int
       template batchRecStore(ctx: var BatchRec, v: auto, pos: int) =
         when typeof(v) is `H`:
-          ctx.entry.buffers.add v
+          ctx.entry.slots.add BatchSlot[`H`](kind: bskBuffer, handle: v)
         elif typeof(v) is ptr:
           {.error: "batch enqueue: pointer kernel args are not supported, " &
             "pass the DeviceMem handle from allocDevice".}
@@ -127,13 +138,16 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
           for f in fields(v):
             batchRecStore(ctx, f, pos)
         else:
+          const w = computeDeviceLayout(typeof(v), `cgN`)
+          ctx.off = round_multiple_up(ctx.off, w.align)
+          let start = ctx.off
           packFrom(ctx.blob, ctx.off, v, `cgN`)
+          ctx.entry.slots.add BatchSlot[`H`](kind: bskBytes, off: start, size: w.size)
       var `recN` = BatchRec(entry: BatchEntry[`H`](entrypoint: `kname`, config: `configCall`))
       bindArgs(`recN`, `outN`, `argsTuple`, batchRecStore, typedesc[`H`], `cgN`)
-      `recN`.entry.scalars = newSeq[byte](`recN`.off)
+      `recN`.entry.bytes = newSeq[byte](`recN`.off)
       if `recN`.off > 0:
-        copyMem(`recN`.entry.scalars[0].addr, `recN`.blob[0].addr, `recN`.off)
-      `recN`.entry.scalarAlign = `layoutN`.align
+        copyMem(`recN`.entry.bytes[0].addr, `recN`.blob[0].addr, `recN`.off)
       `batch`.entries.add `recN`.entry
 
 macro recordDeviceCall(batch: Batch, kernel: typed, gridN, blkN: untyped, args: varargs[untyped]): untyped =
