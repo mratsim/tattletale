@@ -14,53 +14,30 @@
 ##   batch.submit()
 ##   ```
 import std/[hashes, macros, sets]
-import workspace/crucible/src/abis/objc_abi as objc
-import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
-import workspace/crucible/src/runtime/backends/runtime_utils
-import workspace/crucible/src/runtime/launch/launch_serialization
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Record
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  BatchSlotKind* = enum
-    bskBuffer
-    bskBytes
-
-  BatchSlot*[H] = object
-    case kind*: BatchSlotKind
-    of bskBuffer:
-      handle*: H
-    of bskBytes:
-      size*: int
-    off*: int
-
-  BatchEntry*[H] = object
+  BatchEntry*[E] = object
     entrypoint*: string
-    slots*: seq[BatchSlot[H]]
-    bytes*: seq[byte]
     config*: LaunchConfig
+    launch*: proc(engine: E) {.closure.}
 
-  Batch*[E, H] = ref object
+  Batch*[E] = ref object
     engine*: E
-    entries*: seq[BatchEntry[H]]
+    entries*: seq[BatchEntry[E]]
 
-template devHandle(E: typedesc[MetalEngine]): typedesc[objc.ID] = objc.ID
-
-template devHandle(E: typedesc[VulkanEngine]): typedesc[VulkanBuffer] = VulkanBuffer
-
-proc makeBatch[E, H](engine: E, _: typedesc[H]): Batch[E, H] {.inline.} =
-  Batch[E, H](engine: engine)
+proc makeBatch[E](engine: E): Batch[E] {.inline.} =
+  Batch[E](engine: engine)
 
 macro recordBatch*(engine: HwEngine): untyped =
-  let E = engine.getTypeInst()
-  let devH = bindSym("devHandle", brForceOpen).newCall(ident($E))
   let makeS = bindSym"makeBatch"
   result = quote do:
-    `makeS`(`engine`, `devH`)
+    `makeS`(`engine`)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Compile-time stream
@@ -87,12 +64,6 @@ func batchCodegenKind(E: typedesc[VulkanEngine]): CodegenKind {.compileTime.} =
   cgSpirv
 
 macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, blkN: untyped, values: varargs[typed]): untyped =
-  doAssert values.len > 0,
-    "batch enqueue: the kernel needs a runtime parameter as output"
-  doAssert getDeviceMemFields(values[0]).len > 0,
-    "batch enqueue: the output must hold a DeviceMem buffer, got " &
-    values[0].getTypeInst().repr
-
   let wg = getWorkgroupPragma(blkN)
   var valuesN = nnkBracket.newTree()
   for v in values:
@@ -107,7 +78,8 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
   if not known:
     stashWrapper(procdef)
 
-  let H = batch.getTypeInst()[2]
+  let E = batch.getTypeInst()[1]
+  let entryN = ident"batchEntry"
   let kname = newLit($procdef[0])
   let configCall = nnkObjConstr.newTree(bindSym"LaunchConfig",
     nnkExprColonExpr.newTree(ident"grid", bindSym"dim3".newCall(gridN)),
@@ -115,39 +87,13 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
   let argsTuple = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
     argsTuple.add(values[i])
-  let valuesTuple = nnkTupleConstr.newTree()
-  for v in values:
-    valuesTuple.add(v)
-  let cgN = ident"batchCg"
-  let recN = ident"batchRec"
-  let layoutN = ident"batchBlobLayout"
-  let batchCodegenKindS = bindSym("batchCodegenKind", brForceOpen)
   let outN = values[0]
   result = quote do:
     block:
-      const `cgN` = `batchCodegenKindS`(typeof(`batch`.engine))
-      const `layoutN` = computeDeviceLayout(typeof(`valuesTuple`), `cgN`)
-      type BatchRec = object
-        entry: BatchEntry[`H`]
-        off: int
-      template batchRecStore(ctx: var BatchRec, v: auto, pos: int) =
-        when typeof(v) is `H`:
-          ctx.entry.slots.add BatchSlot[`H`](kind: bskBuffer, handle: v, off: ctx.off)
-          ctx.off.inc 8
-        elif typeof(v) is ptr:
-          {.error: "batch enqueue: pointer kernel args are not supported, " &
-            "pass the DeviceMem handle from allocDevice".}
-        else:
-          const w = computeDeviceLayout(typeof(v), `cgN`)
-          ctx.off = ctx.off.round_multiple_up(w.align)
-          let start = ctx.off
-          ctx.entry.bytes.packFrom(ctx.off, v, `cgN`)
-          ctx.entry.slots.add BatchSlot[`H`](kind: bskBytes, off: start, size: w.size)
-      var `recN` = BatchRec(entry: BatchEntry[`H`](entrypoint: `kname`, config: `configCall`))
-      `recN`.entry.bytes = newSeq[byte](`layoutN`.size)
-      bindArgs(`recN`, `outN`, `argsTuple`, batchRecStore, typedesc[`H`], `cgN`)
-      `recN`.entry.bytes.setLen(`recN`.off)
-      `batch`.entries.add `recN`.entry
+      var `entryN` = BatchEntry[`E`](entrypoint: `kname`, config: `configCall`)
+      `entryN`.launch = proc(e: `E`) =
+        e.launchKernelImpl(`outN`, `argsTuple`, `configCall`, `kname`)
+      `batch`.entries.add `entryN`
 
 macro recordDeviceCall(batch: Batch, kernel: typed, gridN, blkN: untyped, args: varargs[untyped]): untyped =
   for a in args:
@@ -174,13 +120,13 @@ macro recordDeviceCall(batch: Batch, kernel: typed, gridN, blkN: untyped, args: 
       result.add(a)
 
 type
-  EnqueueSugar*[E, H] = object
+  EnqueueSugar*[E] = object
     ## Chevron stage between `batch.enqueue` and `<<`, wrapping the batch.
-    batch: Batch[E, H]
+    batch: Batch[E]
 
-  EnqueueProxy*[BX, BY, BZ: static int, E, H] = object
+  EnqueueProxy*[BX, BY, BZ: static int, E] = object
     ## Chevron stage between `<<` and the `>>` call
-    batch: Batch[E, H]
+    batch: Batch[E]
     config: LaunchConfig
 
 func dims3(n: NimNode): array[3, NimNode] =
@@ -192,11 +138,11 @@ func dims3(n: NimNode): array[3, NimNode] =
   else:
     result = [n, newLit(1), newLit(1)]
 
-proc enqueue*[E, H](batch: Batch[E, H]): EnqueueSugar[E, H] {.inline.} =
+proc enqueue*[E](batch: Batch[E]): EnqueueSugar[E] {.inline.} =
   ## batch.enqueue<<(4, 16)>> saxpy(out, x, y, 2.0)
-  EnqueueSugar[E, H](batch: batch)
+  EnqueueSugar[E](batch: batch)
 
-macro `<<`*[E, H](r: EnqueueSugar[E, H], cfg: untyped): untyped =
+macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   var c = cfg
@@ -226,7 +172,6 @@ macro `<<`*[E, H](r: EnqueueSugar[E, H], cfg: untyped): untyped =
     error("batch enqueue: chevron schedule expects (grid, blk), got " & cfg.repr)
   let b = dims3(blkN)
   let E = r.getTypeInst()[1]
-  let H = r.getTypeInst()[2]
   let g = dims3(gridN)
   let bx = b[0]
   let by = b[1]
@@ -237,7 +182,7 @@ macro `<<`*[E, H](r: EnqueueSugar[E, H], cfg: untyped): untyped =
     nnkExprColonExpr.newTree(ident"grid", gridCall),
     nnkExprColonExpr.newTree(ident"blk", blkCall))
   result = quote do:
-    EnqueueProxy[`bx`, `by`, `bz`, `E`, `H`](batch: `r`.batch, config: `configCall`)
+    EnqueueProxy[`bx`, `by`, `bz`, `E`](batch: `r`.batch, config: `configCall`)
 
 macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
   let t = sugar.getTypeInst()
