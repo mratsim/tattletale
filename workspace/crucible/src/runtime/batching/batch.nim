@@ -165,7 +165,6 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
     EnqueueProxy[`E`](batch: `r`.batch, config: `configCall`)
 
 macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
-  let t = sugar.getTypeInst()
   var callNode = call
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]

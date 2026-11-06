@@ -356,10 +356,6 @@ macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN
 macro launchDeviceFn*[E](engine: E): DeviceFnSugar[E] =
   result = newCall(bindSym"makeDeviceFnSugar", engine)
 
-func makeDeviceFnProxy[E: HwEngine](engine: E, grid, blk: Dim3, sharedMem: int,
-    lang: static string = "spirv"): DeviceFnProxy[E, lang] {.inline.} =
-  DeviceFnProxy[E, lang](engine: engine, grid: grid, blk: blk, sharedMem: sharedMem)
-
 macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
   ## Chevron schedule: `(grid, blk)` or `(grid, blk, sharedMem)`, positional or named
   ## (`grid: ..., blk: ...`). The `lang = glsl / hlsl / spirv` extra selects
@@ -392,11 +388,12 @@ macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
         pos.inc
   else:
     error("launchDeviceFn: chevron schedule expects (grid, blk), got " & cfg.repr)
+  let E = r.getTypeInst()[1]
   let langLit = newLit(lang)
   let gridD = bindSym"dim3".newCall(gridN)
   let blkD = bindSym"dim3".newCall(blkN)
   result = quote do:
-    makeDeviceFnProxy(`r`.engine, `gridD`, `blkD`, `sharedMemN`, `langLit`)
+    DeviceFnProxy[`E`, `langLit`](engine: `r`.engine, grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemN`)
 
 macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   ## Launches a device function with whole values, the schedule is a `do:` block.
