@@ -11,7 +11,7 @@ type
   LargeStruct = object
     data: array[8, uint32]  # 32 bytes > 24 threshold
 
-# Test 1: inline constructor arg to device function
+# inline constructor arg to device function
 const code1 = webgpu:
   proc takeLarge(s: LargeStruct): uint32 {.device.} =
     result = s.data[0] + s.data[1]
@@ -21,9 +21,7 @@ const code1 = webgpu:
 echo "=== Test 1: Inline constructor arg ===\n"
 echo code1
 
-# Should compile without crashing — generated code should use by-value struct params
-
-# Test 2: function return value arg
+# function return value arg
 const code2 = webgpu:
   proc makeLarge(val: uint32): LargeStruct {.device.} =
     result.data[0] = val

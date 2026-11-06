@@ -25,7 +25,6 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(sideEffectMsl)
       let oDev = engine.allocDevice(uint32, 1)
-      # Sentinel: nonzero init proves the write came from the kernel call
       let sentinel: uint32 = 41
       engine.copyToDeviceFromHost(oDev, addr sentinel, 1)
       engine.launchKernel("sideEffectKernel", oDev, ())

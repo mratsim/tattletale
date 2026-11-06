@@ -31,7 +31,7 @@ const kernelLocalBool = webgpu:
     if f.on:
       output[0] = f.count
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - struct bool field marshalling":
 
     test "bool field on a struct kernel param (u32 word in storage)":

@@ -23,7 +23,7 @@ const helperVk = glsl:
     helper(41'u32)
     output[0] = 42'u32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== Vulkan: entry point with void-returning device helper ===\n"
 
   echo helperVk
@@ -33,8 +33,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
   engine.ingest(helperVk)
 
   # A wrong entry point fails ingest (glslang `-e helper`) or silently
-  # recompiles per launch. Correct output proves that entry-point parsing
-  # picked the kernel name.
+  # recompiles per launch.
   var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
   let oDev = engine.allocDevice(uint32, 1)
   engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)

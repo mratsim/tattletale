@@ -27,7 +27,7 @@ proc assertU32(got: openArray[uint32], want: openArray[uint32], label: string) =
     doAssert got[i] == want[i],
       label & ": slot " & $i & " got " & $got[i] & " want " & $want[i]
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   const N = 256
 
   block: # addKernel: two buffers read, one written, descriptors in parameter order

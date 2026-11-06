@@ -15,7 +15,7 @@ proc axpy(y: AxpyView, alpha: float32, x: AxpyView) =
   for i in 0 ..< y.n:
     y.p[i] = alpha * x.p[i] + y.p[i]
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCpu)
   defer: engine.destroyCpuEngine()
   const N = 7

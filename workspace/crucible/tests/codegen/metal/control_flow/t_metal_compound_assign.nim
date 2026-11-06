@@ -40,7 +40,7 @@ const blitMsl = metal:
           let j = i * 2
           j] += 3
 
-proc runTest() =   # private, tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - compound assignment (+=, *=) with C-like LHS semantics":
     test "read-modify-write accumulates over the stored element":
       # Host-initialized values are copied H->D before launch, so the kernel's

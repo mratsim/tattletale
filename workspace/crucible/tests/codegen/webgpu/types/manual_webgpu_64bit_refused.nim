@@ -14,7 +14,7 @@ const code = webgpu:
   proc k(output: ptr UncheckedArray[float64]) {.global, workgroup: (1, 1, 1).} =
     output[0] = 1.0'f64
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runWebGPU)
   engine.ingest(code)
   let oDev = engine.allocDevice(float64, 1)

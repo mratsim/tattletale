@@ -40,7 +40,7 @@ proc ifWithFor(cond: bool; n: uint32): uint32 =
     result = n * n
 
 # Host verification
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   block:
     doAssert plain(5) == 10
     doAssert ifElse(true, 10, 20) == 10

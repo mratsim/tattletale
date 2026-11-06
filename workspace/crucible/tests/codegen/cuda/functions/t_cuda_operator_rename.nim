@@ -68,7 +68,7 @@ const kernelRec = cuda:
       acc + it_a * it_b
     C[0] = float32(toIntVal x)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "═══════════════════════════════════════════════════════════════════"
   echo kernelRec
   echo "═══════════════════════════════════════════════════════════════════"

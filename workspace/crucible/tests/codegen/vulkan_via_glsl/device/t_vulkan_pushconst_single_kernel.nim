@@ -19,7 +19,7 @@ const codeWithVal = glsl:
   proc kernelWithVal(output: ptr UncheckedArray[uint32], val: uint32) {.global.} =
     output[0] = val
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== Vulkan: single-kernel push-constant scalars ===\n"
 
   block:  # kernelB(3, 4) gives 7

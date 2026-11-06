@@ -48,7 +48,7 @@ proc runNoElse(x: int32): array[1, int32] =
   engine.launchKernel("ifNoElse", oDev, (xDev,))
   engine.copyToHostFromDevice(addr result[0], oDev, 1)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - if/elif/else statement lowering":
     test "elif chain reaches the device: all four branches distinct":
       check runDispatch(0'i32)[0] == 10

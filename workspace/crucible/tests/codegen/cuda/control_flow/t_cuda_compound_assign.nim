@@ -33,7 +33,7 @@ const callLhsKernel = cuda:
       x.at(i.int32) = 7
       x.at(i.int32) += 5
 
-proc runTest() =   # private, engines are destroyed at proc return
+proc runTest() =
   suite "compound assignment (a[i] += v) with C-like LHS semantics":
     test "accumulates and stores back (read-modify-write)":
       # Host-initialized values are copied H->D before launch: the kernel's `+=`

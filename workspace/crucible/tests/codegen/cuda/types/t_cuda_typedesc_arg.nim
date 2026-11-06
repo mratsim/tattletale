@@ -27,7 +27,7 @@ const kernelCode = cuda:
     output[2] = mixArgs(2.0'f32, float32, 2.5'f32, 1.5'f32)
     output[3] = mixArgs(0.0'f32, float32, 3.0'f32, 2.0'f32)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[4, float32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

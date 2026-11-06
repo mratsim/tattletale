@@ -33,7 +33,7 @@ proc widthKernel(outBuf: ptr UncheckedArray[int64]) =
   let small: int32 = int32(lane) * 3
   outBuf[lane] = int64(small) * 1000'i64
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCpu)
   defer: engine.destroyCpuEngine()
 

@@ -35,7 +35,7 @@ const attrSemMsl = metal:
                      gy == tgy * tpty + ty and
                      gz == tgz * tptz + tz: 0'u32 else: 1'u32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo attrSemMsl
 
   suite "Metal - attribute-param semantics":

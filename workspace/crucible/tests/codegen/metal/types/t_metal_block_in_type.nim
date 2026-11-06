@@ -40,7 +40,7 @@ const kernel = metal:
 
 # ── Harness ─────────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernel
 
   suite "Metal - block-in-type":

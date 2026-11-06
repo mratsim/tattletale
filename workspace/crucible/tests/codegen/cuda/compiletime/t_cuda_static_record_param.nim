@@ -26,7 +26,7 @@ const kernelCode = cuda:
     mini_ukernel(MiniAtom(dtype: mdtTF32, k: 8), c)
     output[0] = c[0]
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[1, float32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

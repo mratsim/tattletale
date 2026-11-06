@@ -22,7 +22,7 @@ const code = webgpu:
       p = y.addr
     dst[0] = p[]
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runWebGPU)
   engine.ingest(code)
   echo "UNREACHABLE — a rebinding of a pointer local must refuse at compile time"

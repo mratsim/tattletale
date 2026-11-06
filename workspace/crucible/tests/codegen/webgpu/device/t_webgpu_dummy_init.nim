@@ -21,7 +21,7 @@ const kernelCode2 = webgpu:
     const tup {.genSym.} = (FixMe[1](), FixMe[8]())
     C[0] = 1'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - dummy-field initializers":
     test "single dummy struct const":
       var engine = newEngine(runWebGPU)

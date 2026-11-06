@@ -74,7 +74,7 @@ const kernelCode = cuda:
                                 104'u32, 105'u32, 106'u32, 107'u32])
     output[10] = perWarp.data[0]
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[11, uint32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

@@ -50,7 +50,7 @@ const kernel2 = cuda:
 # ─────────────────────────────────────────────────────────────────
 
 # Kernel 1
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var fullIn = [1.0'f32, 2.0, 3.0, 4.0]
   var fullBuf: array[4, float32]
   var engine1 = newEngine(runCuda)

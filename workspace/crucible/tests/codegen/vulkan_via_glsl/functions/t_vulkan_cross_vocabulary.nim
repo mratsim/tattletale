@@ -27,7 +27,7 @@ const kernel2d = glsl:
       C[64 + thread_index_in_threadgroup] = 99'u32
     syncthreads()
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernel2d
 
   suite "Vulkan - cross-vocabulary coordinates + barrier":
@@ -41,9 +41,8 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       engine.copyToHostFromDevice(addr res[0], oDev, 72)
       for i in 0 ..< 64:
         check res[i] == uint32(i)
-      # The flat-local values are position-derived, so they pin the x-major
-      # order: blk (4,2) maps (tx, ty) -> ty*4 + tx, and each slot holds
-      # tx + 10*ty for the (tx, ty) at that slot.
+      # Flat-local values are position-derived, so they distinguish the x-major order:
+      # blk (4,2) maps (tx, ty) -> ty*4 + tx, each slot contains its own tx + 10*ty.
       let expectedFlat = [0'u32, 1, 2, 3, 10, 11, 12, 13]
       for i in 0 ..< 8:
         check res[64 + i] == expectedFlat[i]

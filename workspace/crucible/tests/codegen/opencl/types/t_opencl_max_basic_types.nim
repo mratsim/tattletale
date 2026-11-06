@@ -29,14 +29,14 @@ const kernelCode = opencl:
     # uint32 min — generic not-SomeFloat overload
     res[8] = float32(min(uint32(x), uint32(y)))
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernelCode   # show the emitted OpenCL C
 
   suite "OpenCL — max on basic types":
 
     test "float32/uint32/int max compile, run, and produce the right values":
       # max/min are integer-only in OpenCL C and silently compute wrong
-      # values on float args. The readback below catches a wrong fold.
+      # values on float args.
       var dynArr: array[2, float32] = [2.5'f32, 9.0'f32]
       var engine = newEngine(runOpenCL)
       engine.ingest(kernelCode)

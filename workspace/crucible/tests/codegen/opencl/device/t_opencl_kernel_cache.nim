@@ -18,7 +18,7 @@ const kernelCode2 = opencl:
                  b: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = a[0] + b[0] + 1000'u32
 
-proc runTest() =   # private - tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== OpenCL kernel cache ===\n"
 
   block: # same kernel, two runs with different data (cache hit on second run)

@@ -25,7 +25,7 @@ const kernelBasic = cuda:
     C[8] = a or b
     C[9] = a xor b
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Operator codegen":
     test "basic types (int32) — all operators on GPU":
       var output: array[10, int32]

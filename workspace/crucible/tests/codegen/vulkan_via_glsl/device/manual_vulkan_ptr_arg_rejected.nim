@@ -12,7 +12,7 @@ const code = glsl:
   proc k(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = 1'u32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(code)
   let oDev = engine.allocDevice(uint32, 1)

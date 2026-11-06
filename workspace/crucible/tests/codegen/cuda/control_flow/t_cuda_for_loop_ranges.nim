@@ -5,7 +5,6 @@
 import std/strformat
 import workspace/crucible
 
-# ── Test 1: Basic infix range (0 .. N) ──
 # Note: codegen uses `i < N`, so Nim's inclusive `..` is off by one.
 # Use upper bound = desired_count to compensate.
 
@@ -14,7 +13,7 @@ const kInfix = cuda:
     for i in 0 .. 3:
       output[i] = uint32(i) + 10'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf1: array[4, uint32]
   block:
     var engine = newEngine(runCuda)
@@ -26,7 +25,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   doAssert buf1[1] == 11, &"range [1]: got {buf1[1]}"
   doAssert buf1[2] == 12, &"range [2]: got {buf1[2]}"
   doAssert buf1[3] == 13, &"range [3]: got {buf1[3]}"
-  # ── Test 2: Loop with body access via node[^1] ──
 
   const kBodyAccess = cuda:
     proc bodyAccessKernel(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -43,7 +41,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   doAssert buf2[0] == 200, &"body access [0]: got {buf2[0]}"
   doAssert buf2[1] == 201, &"body access [1]: got {buf2[1]}"
   doAssert buf2[2] == 202, &"body access [2]: got {buf2[2]}"
-  # ── Test 3: Loop where range uses a variable
 
   const kVarBound = cuda:
     proc varBoundKernel(output: ptr UncheckedArray[uint32]) {.global.} =

@@ -20,7 +20,7 @@ const letInitHlsl = hlsl:
     let old = bump(counts, 0u32)
     outBuf[0] = old
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # `counts` reaches the device fn only as a call argument inside a let initializer,
   # read-write classification flows to the kernel's buffer over the argument-flow edge.
   # Binding reflection below asserts the read-write (non-NonWritable) binding.

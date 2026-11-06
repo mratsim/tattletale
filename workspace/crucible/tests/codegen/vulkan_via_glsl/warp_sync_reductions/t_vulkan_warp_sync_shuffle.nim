@@ -23,7 +23,7 @@ const butterflyVk = glsl:
     # xor-1 butterfly: lane i exchanges with lane i xor 1
     outBuf[lane] = subgroupShuffleXor(uint32(lane), 1)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Vulkan (GLSL) - cross-lane shuffles":
 
 

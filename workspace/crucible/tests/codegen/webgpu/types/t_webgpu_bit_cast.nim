@@ -15,7 +15,7 @@ const bitsToUintWgsl = webgpu:
     let lane = thread_index_in_threadgroup
     output[lane] = cast[uint32](inBuf[lane])
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runWebGPU)
   engine.ingest(bitsToUintWgsl)
   var inp: array[8, float32]

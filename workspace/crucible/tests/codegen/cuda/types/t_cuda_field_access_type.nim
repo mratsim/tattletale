@@ -34,7 +34,7 @@ const kernelTypeof = cuda:
     let w = Wrapper[F]()
     C[0] = 1'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Crucible - type resolver edge cases":
     test "Case 1 — generic call with DotExpr arg":
       let code = kernelRank

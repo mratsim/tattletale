@@ -13,7 +13,7 @@ proc coordProbe(C: ptr UncheckedArray[uint32]) =
   C[gid + 8] = uint32(threadgroup_position_in_grid.x)
   C[gid + 16] = uint32(thread_index_in_threadgroup)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCpu)
   defer: engine.destroyCpuEngine()
   const N = 24

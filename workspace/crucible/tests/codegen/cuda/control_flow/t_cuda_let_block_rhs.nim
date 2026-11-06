@@ -39,7 +39,7 @@ const kernelBlock = cuda:
       tmp
     C[0] = 1'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Crucible - TensorView codegen repro":
     test "Pattern A — direct tuple let":
       var output: array[1, uint32]

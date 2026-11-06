@@ -28,7 +28,7 @@ const kernel = cuda:
     # Passing it as a call arg leaks `;` into the parens.
     let a = passthrough(obj(0))
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Call-op argument semicolon":
     test "compiles via NVRTC":
       var buf: array[8, float32]

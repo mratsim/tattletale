@@ -37,7 +37,7 @@ const cmpSpv = spirv:
       r = 6'u32
     o[5] = r
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(cmpSpv)
   let oDev = engine.allocDevice(uint32, 6)

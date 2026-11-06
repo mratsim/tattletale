@@ -20,7 +20,7 @@ proc tagWorkgroups(outBuf: ptr UncheckedArray[uint32], n: int32) =
   if gid < n:
     outBuf[gid] = uint32(wg)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   # Odd sizes stress the workgroup decomposition: no pool count or block size divides N.
   const N = 257
   const BLK = 8

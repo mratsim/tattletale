@@ -6,13 +6,12 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## HLSL: a whole-vector coordinate read inside the kernel body fails the compile
-## with the refusal. A gutted module never compiles: the kernel body is the module's
-## last printed section, where a swallowed refusal once produced one.
+## with the refusal.
 ##
 ## Run (must FAIL to compile):
 ##   nim c --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
-##     workspace/crucible/tests/codegen/vulkan_via_hlsl/functions/manual_hlsl_kernel_body_refusal.nim
+##     workspace/crucible/tests/codegen/vulkan_via_hlsl/functions/manual_hlsl_whole_vector_read_in_kernel_body.nim
 
 import workspace/crucible
 

@@ -15,7 +15,7 @@ proc incKernel(dst: ptr UncheckedArray[uint32], src: ptr UncheckedArray[uint32],
   for i in 0 ..< n:
     dst[i] = src[i] + 1'u32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runWebGPU)
   var y = [10'u32, 20, 30, 40]
   var x = [1'u32, 2, 3, 4]

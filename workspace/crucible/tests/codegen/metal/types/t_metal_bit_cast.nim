@@ -21,7 +21,7 @@ const uintToBitsMsl = metal:
     let lane = thread_index_in_threadgroup
     outBuf[lane] = cast[float32](inBuf[lane])
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - bit-reinterpret cast":
 
     test "cast[uint32](float) stores the exact bit pattern":

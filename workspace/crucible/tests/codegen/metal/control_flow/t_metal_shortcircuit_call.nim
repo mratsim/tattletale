@@ -49,7 +49,7 @@ proc runOr(cmd: uint32): array[2, uint32] =
   engine.launchKernel("orKernel", oDev, (cDev,))
   engine.copyToHostFromDevice(addr result[0], oDev, 2)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - short-circuit of call operands under statement-position and/or":
     test "and skips the call operand when the left side is false":
       let skipped = runAnd(0'u32)

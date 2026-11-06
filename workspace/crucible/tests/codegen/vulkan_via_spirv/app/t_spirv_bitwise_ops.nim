@@ -57,12 +57,10 @@ const wrong = toHashSet([146'u32, 147'u32, 148'u32, 149'u32,
   202'u32, 203'u32, 204'u32])
 
 proc runTest() =
-  doAssert emission.err.len == 0,
-    "SPIR-V emission refused the bit-ops kernel: " & emission.err
-  doAssert emission.words.len > 0 and emission.words[0] == 0x07230203'u32,
+  doAssert emission.len > 0 and emission[0] == 0x07230203'u32,
     "SPIR-V magic number missing"
 
-  let opcodes = collectOpcodes(emission.words)
+  let opcodes = collectOpcodes(emission)
   let missing = expected - opcodes
   doAssert missing.len == 0,
     "emitted opcodes miss the bit/shift instructions " & $missing &
@@ -79,7 +77,7 @@ proc runTest() =
   let outDir = "build/tests"
   createDir(outDir)
   let spvPath = outDir / "t_spirv_bitwise_ops.spv"
-  let words = emission.words
+  let words = emission
   block:
     var f = open(spvPath, fmWrite)
     defer: f.close()

@@ -41,7 +41,7 @@ const kernelCode = glsl:
     # both-Int template — folded to Int[V op U]() at Nim level
     let e = Int[2]() + Int[3]()  # Int[5]
     let f = Int[2]() * Int[3]()  # Int[6]
-    # runtime templates — plain int arithmetic (value substituted at Nim semantic analysisantic analysis)
+    # runtime templates: int arithmetic, the value substitutes at Nim semantic analysis
     let g = Int[10]() + h        # 10 + h
     let i = h + Int[10]()        # h + 10
     let j = Int[10]() * h        # 10 * h
@@ -57,7 +57,7 @@ const kernelCode = glsl:
     res[8] = int32(j)            # 1000
     res[9] = int32(k)            # 1000
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Vulkan — static-int +/* overload set":
 
     test "all five overload shapes compile, run, and produce the right values":

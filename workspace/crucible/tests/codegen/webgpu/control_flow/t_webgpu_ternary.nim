@@ -39,7 +39,7 @@ proc runTernary(a, b: uint32): array[3, uint32] =
   engine.launchKernel("ternaryKernel", oDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr result[0], oDev, 3)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - ternary lowering":
     test "data-dependent, constant, and block-expression ternaries":
       let sel = runTernary(7'u32, 3'u32)

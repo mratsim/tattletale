@@ -16,7 +16,7 @@ const kernelCode = cuda:
   proc addKernel(c, a, b: ptr UncheckedArray[uint32]) {.global.} =
     addArrays(c, a, b, 8)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCuda)
 
   engine.ingest(kernelCode)

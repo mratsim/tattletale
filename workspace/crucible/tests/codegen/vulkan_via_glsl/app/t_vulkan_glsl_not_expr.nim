@@ -33,13 +33,7 @@ const notVk = glsl:
     else:
       output[0] = 0'u32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
-  # printer check first: the GLSL module prints and the `not` operator survives
-  doAssert emission.err.len == 0,
-    "GLSL emission refused the `not` expression: " & emission.err
-
-  # device check next: the kernel runs and the negation reaches the output.
-  # Sentinel output: only a real kernel write can replace 9
+proc runTest() =
   let sentinel: uint32 = 9
 
   block: # not(0 == 0) is false

@@ -19,7 +19,7 @@ const code = metal:
       i = i + 1'u32
     output[0] = i
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runMetal)
   engine.ingest(code)
   echo "UNREACHABLE — break in device code must refuse at compile time"

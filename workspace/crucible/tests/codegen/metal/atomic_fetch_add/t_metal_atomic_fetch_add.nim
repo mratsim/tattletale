@@ -28,7 +28,7 @@ const addMultiTgMsl = metal:
   proc addMultiTg(counter: ptr float32) {.global.} =
     discard atomicFetchAdd(counter, 1.0'f32)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - atomicFetchAdd":
 
     test "fp: 32 lanes add 1.0, each reads a distinct old value 0..31":

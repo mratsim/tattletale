@@ -20,7 +20,7 @@ const emitWriteHlsl = hlsl:
     {.emit: "output[0] = 42;".}
     {.emit: ["output[1] = ", z, " + 1;"].}
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   let bindings: seq[BindingExpectation] =
     @[("output", 0, false)]
   discard compileCheck("emit_write", emitWriteHlsl, bindings)

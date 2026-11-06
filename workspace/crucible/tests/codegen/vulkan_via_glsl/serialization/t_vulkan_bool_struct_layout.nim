@@ -39,14 +39,13 @@ const arrayCode = glsl:
     outP[3] = uint32(s.flags[3])
     outP[4] = uint32(s.x == 2.5'f32)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== Vulkan/GLSL: bool members inside struct kernel params ===\n"
 
   block:
     var engine = newEngine(runVulkan)
     engine.ingest(scalarCode)
     let oDev = engine.allocDevice(uint32, 3)
-    # Sentinels: a wrong-offset pack leaves some words untouched
     var gpuOut: array[3, uint32] = [0xDEADBEEF'u32, 0xDEADBEEF'u32, 0xDEADBEEF'u32]
     engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 3)
     engine.launchKernel("kernelBoolPair", oDev, (BoolPair(a: true, b: false, c: 1.0'f32),))

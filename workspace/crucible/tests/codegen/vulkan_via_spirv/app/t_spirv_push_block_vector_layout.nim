@@ -33,9 +33,7 @@ const vecEmission = static:
   printSpirvModule(buildVecLayoutModule())
 
 proc runTest() =
-  doAssert vecEmission.err.len == 0,
-    "SPIR-V emission refused the vector push block: " & vecEmission.err
-  doAssert vecEmission.words.len > 0 and vecEmission.words[0] == 0x07230203'u32,
+  doAssert vecEmission.len > 0 and vecEmission[0] == 0x07230203'u32,
     "SPIR-V magic number missing"
 
   let spirvVal = findExe("spirv-val")
@@ -45,7 +43,7 @@ proc runTest() =
   createDir(outDir)
   let spvPath = outDir / "t_spirv_push_block_vector_layout.spv"
   # files close at block exit, before the subprocesses read them
-  let words = vecEmission.words
+  let words = vecEmission
   block:
     var f = open(spvPath, fmWrite)
     defer: f.close()

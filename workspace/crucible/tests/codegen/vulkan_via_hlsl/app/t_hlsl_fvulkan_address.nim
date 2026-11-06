@@ -16,7 +16,7 @@ const addVulkanHlsl = hlsl(fvVulkan):
     output[0] = a[0] + b[0] + z
     output[1] = a[1] + b[1] + z
 
-proc runTest() =   # private: the engine is destroyed at return
+proc runTest() =
   # fvVulkan binds no descriptor resources: every parameter sits in the push block,
   # buffers as device addresses, so the compile check needs no binding expectations.
   let words = compileFvVulkanSpirV("fvvulkan_add", addVulkanHlsl)

@@ -13,14 +13,14 @@ type
   LargeStruct = object
     data: array[8, uint32]  # 32 bytes > 24 threshold
 
-# Test 1: inline constructor arg
+# inline constructor arg
 const kernelInline = cuda:
   proc takeLarge(s: LargeStruct): uint32 {.device.} =
     result = s.data[0] + s.data[1]
   proc kernelMain(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = takeLarge(LargeStruct(data: [10'u32, 20, 30, 40, 50, 60, 70, 80]))
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   block:
     var buf: array[1, uint32]
     var engine = newEngine(runCuda)
@@ -31,7 +31,7 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
     doAssert buf[0] == 30, &"inline constructor: expected 30, got {buf[0]}"
     echo "  ✅ Test 1 — inline constructor arg: ", buf[0]
 
-  # Test 2: function return value arg
+  # function return value arg
   const kernelFnRet = cuda:
     proc makeLarge(val: uint32): LargeStruct {.device.} =
       result.data[0] = val

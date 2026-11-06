@@ -60,7 +60,6 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(arrayAssignMsl)
       let oDev = engine.allocDevice(float32, N)
-      # sentinel: every element must be overwritten by the kernel
       var sentinel: array[N, float32]
       for i in 0 ..< N:
         sentinel[i] = -7.0'f32

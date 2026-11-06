@@ -29,7 +29,7 @@ const noElseMsl = metal:
     elif x[0] == 1:
       output[0] = 2
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo elifMsl
 
   suite "Metal - if/elif/else statement lowering":

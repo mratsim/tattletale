@@ -41,7 +41,7 @@ const kernelBlock = metal:
       tmp
     C[0] = uint32(toIntVal L.f0)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - let-block-RHS":
     test "Pattern A — direct tuple let":
       var engine = newEngine(runMetal)

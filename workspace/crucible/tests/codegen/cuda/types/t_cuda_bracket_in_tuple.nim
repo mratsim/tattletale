@@ -23,7 +23,7 @@ const kernelCode = cuda:
     let v = Vec2[uint32](x: 5'u32, y: 6'u32)
     output[3] = v.x + v.y
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[4, uint32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

@@ -12,7 +12,7 @@ const kernelCode = opencl:
                    beta: int32) {.global.} =
     output[0] = a[0] * alpha + float32(beta)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernelCode
 
   block:

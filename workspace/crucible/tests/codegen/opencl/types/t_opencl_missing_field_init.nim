@@ -24,7 +24,7 @@ const kernelCode = opencl:
     else:
       output[3] = 0'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernelCode
 
   # Omitted fields must zero-initialize: braced zeros for the array field,

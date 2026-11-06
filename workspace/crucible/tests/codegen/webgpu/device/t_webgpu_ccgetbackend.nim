@@ -28,7 +28,7 @@ const kernelCode = webgpu:
     else:
       output[0] = 9
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - ccGetBackend compile-target detection":
     test "the launched kernel writes the ctWebGPU dispatch constant":
       var engine = newEngine(runWebGPU)

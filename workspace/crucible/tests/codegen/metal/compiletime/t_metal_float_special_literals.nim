@@ -28,7 +28,7 @@ proc bits32(x: float32): uint32 =
   var y = x
   result = cast[ptr uint32](addr y)[]
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - float special-value literals":
     test "device values carry the true ±Inf bit patterns":
       var engine = newEngine(runMetal)

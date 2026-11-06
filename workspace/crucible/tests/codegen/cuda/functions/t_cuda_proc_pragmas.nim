@@ -12,7 +12,7 @@ const kernelCode = cuda:
   proc pragmaKernel(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = withPragmas(21'u32)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[1, uint32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

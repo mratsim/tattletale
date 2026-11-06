@@ -66,7 +66,7 @@ proc runTest() =
   # No-collision variant: the callee's params share no name with any
   # caller variable. The per-variable lookup misses, so both fields
   # resolve through the single-slot type-keyed fallback, whose answer
-  # is the last-constructed buffer. The value betrays the wrong source.
+  # is the last-constructed buffer.
   block:
     let xDev = engine.allocDevice(float32, N)
     let yDev = engine.allocDevice(float32, N)

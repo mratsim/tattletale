@@ -23,7 +23,7 @@ const sumHlsl = hlsl:
       acc += x[first + i]
     output[0] = acc
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # Bindings take buffer parameter order: `output` is written, `x` is read-only
   let sumBindings: seq[BindingExpectation] = @[("output", 0, false), ("x", 1, true)]
   discard compileCheck("sum", sumHlsl, sumBindings, "gid.x")

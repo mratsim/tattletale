@@ -36,7 +36,7 @@ const kernel = glsl:
     # 3 + 1 = 4 through the pass-through bump, arr[1] = 8, acc = 2 * outBuf[2]
     outBuf[0] = float32(v) + arr[1] + acc
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernel
 
   suite "Vulkan - var-parameter device functions":

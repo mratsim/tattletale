@@ -20,7 +20,7 @@ const kernel3d = opencl:
     let gz = get_global_id(2)
     C[gz * 16 + gy * 4 + gx] = uint32(gz * 16 + gy * 4 + gx)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "OpenCL - multi-axis NDRange work sizes":
 
     test "2D: grid (2, 4) × blk (4, 2) = 8×8 work-items":

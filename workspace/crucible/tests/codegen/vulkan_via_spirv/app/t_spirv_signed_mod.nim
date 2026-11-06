@@ -14,7 +14,7 @@ const modSpv = spirv:
     o[0] = a mod b
     o[1] = (-a) mod b
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(modSpv)
   let oDev = engine.allocDevice(int32, 2)

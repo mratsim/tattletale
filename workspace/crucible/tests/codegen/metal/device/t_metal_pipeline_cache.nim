@@ -32,7 +32,7 @@ const kernelTriple = metal:
 
 # ── Host side ─────────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - pipeline cache":
 
     test "same kernel, different input arrays (byte-exact outputs)":

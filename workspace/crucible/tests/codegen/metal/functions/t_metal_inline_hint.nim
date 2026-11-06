@@ -25,8 +25,6 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(inlineHintMsl)
       let oDev = engine.allocDevice(int32, 2)
-      # sentinel init: the kernel must overwrite every slot, a stale zero
-      # would hide a missing write
       let sentinels: array[2, int32] = [-7, -7]
       engine.copyToDeviceFromHost(oDev, addr sentinels[0], 2)
       engine.launchKernel("scaleKernel", oDev, ())

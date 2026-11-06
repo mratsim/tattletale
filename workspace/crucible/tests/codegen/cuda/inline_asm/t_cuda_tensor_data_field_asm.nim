@@ -47,7 +47,7 @@ const varArrayKernelCode = cuda:
     addAsmOpenArray(o, 1.0'f32)
     output[2] = o[0]
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[6, float32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

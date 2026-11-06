@@ -32,7 +32,7 @@ const intrinsicsHlsl = hlsl:
     # DXC constant-folds it to undef and the DXIL validator rejects the UAV store
     output[4] = uint32(min(0.5'f32, 1.5'f32))
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # Bindings take buffer parameter order, each kernel writes its single `output` buffer
   let coordBindings: seq[BindingExpectation] = @[("output", 0, false)]
   discard compileCheck("coord", coordHlsl, coordBindings, "uint3 gid : SV_DispatchThreadID")

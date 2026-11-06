@@ -32,10 +32,7 @@ const chainHlsl = hlsl:
     let y = middle(10)
     output[0] = clampHi(y)
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
-  # Fn names carry the mangler's hash suffix:
-  # the definition, the forward declaration and the call site must agree on it
-  # Bindings take buffer parameter order, the device fns take no buffers
+proc runTest() =
   let kBindings: seq[BindingExpectation] = @[("output", 0, false)]
   discard compileCheck("device_fn_call", chainHlsl, kBindings)
 

@@ -29,7 +29,7 @@ const scratchSumVk = glsl:
         acc += scratch[i]
       output[0] = acc
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Vulkan - address-addressSpace semantics":
     test "an unannotated local and a shared scratch store and load":
       var engine = newEngine(runVulkan)

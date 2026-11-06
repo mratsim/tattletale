@@ -21,7 +21,7 @@ proc initBuffer(engine: MetalEngine, v: uint32): auto =
   var host: array[1, uint32] = [v]
   engine.copyToDeviceFromHost(result, addr host[0], 1)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - same buffer relaunched with readback between launches":
 
     test "one buffer launched twice, readback between launches":

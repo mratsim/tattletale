@@ -29,7 +29,7 @@ const abs64Cuda = cuda:
     let x = output[0]
     output[1] = abs(x)
 
-proc runTest() =   # private, tests run in a proc so engines are destroyed at return
+proc runTest() =
   var bufF32: array[3, float32]
   var engine = newEngine(runCuda)
   engine.ingest(absExp2Cuda)

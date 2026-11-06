@@ -31,7 +31,7 @@ const kernelComplement = cuda:
     let r = complementLike(l)   # crucible pulls body -> max(1, IntN1{})
     Buf[0] = int32(r)           # concrete value when the static Int is lowered
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "crucible — complement via a static Int stride (max emission)":
 
     test "NVRTC compiles and runs a complement with a static Int stride":

@@ -15,7 +15,7 @@ const arrayParamMetal = metal:
   proc arrKernel(o: ptr UncheckedArray[float32], a: array[4, float32]) {.global.} =
     o[0] = a[0] + a[3]
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runMetal)
   engine.ingest(arrayParamMetal)
   let oDev = engine.allocDevice(float32, 1)

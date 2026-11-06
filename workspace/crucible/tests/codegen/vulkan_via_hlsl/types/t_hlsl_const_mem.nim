@@ -30,7 +30,7 @@ const constMemHlsl = hlsl:
       output[0] = cmBias
     output[1] = cmScale(a[1])
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # No HLSL engine exists on this route: a DXC + spirv-val compile check
   # stands in for the launch, per the house exception for backends without
   # runtime support. Compile only: the kernel declares no buffer resources.

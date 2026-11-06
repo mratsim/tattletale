@@ -15,7 +15,7 @@ const kernelCode = cuda:
     output[0] = p.x
     output[1] = p.y
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[2, uint32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

@@ -33,7 +33,7 @@ const flowHlsl = hlsl:
     output[2] = x[2].uint32
     output[3] = picked.lo + picked.hi
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # Bindings take buffer parameter order: `output` is written, `x` is read-only
   let flowBindings: seq[BindingExpectation] = @[("output", 0, false), ("x", 1, true)]
   discard compileCheck("control_flow", flowHlsl, flowBindings)

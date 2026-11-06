@@ -24,7 +24,7 @@ const kernelCode = cuda:
     # Large static value (test that big arrays compile)
     output[1] = 1'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[2, uint32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

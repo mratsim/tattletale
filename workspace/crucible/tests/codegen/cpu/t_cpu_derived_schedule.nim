@@ -12,7 +12,7 @@ proc scaleAll(outBuf: ptr UncheckedArray[float32], factor: float32) =
   for i in 0 ..< 8:
     outBuf[i] = outBuf[i] * factor
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCpu)
   defer: engine.destroyCpuEngine()
 

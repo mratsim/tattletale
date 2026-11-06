@@ -29,7 +29,7 @@ const kernelCode = cuda:
 
 # ── Test ──────────────────────────────────────────────────────────────
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCuda)
 
   engine.ingest(kernelCode)

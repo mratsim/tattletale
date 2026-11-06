@@ -36,7 +36,6 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(chainWhileMsl)
       let oDev = engine.allocDevice(uint32, 4)
-      # Sentinel start: both guards read the buffer before any write.
       # Iteration counts must not depend on allocDevice's initial contents.
       let start: array[4, uint32] = [1'u32, 1'u32, 1'u32, 1'u32]
       engine.copyToDeviceFromHost(oDev, unsafeAddr start[0], 4)

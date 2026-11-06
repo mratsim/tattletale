@@ -67,7 +67,7 @@ proc runTest() =
   engine.copyToDeviceFromHost(bDev, addr B[0], N)
   engine.launchKernel("f16MulKernel", cDev, (aDev, bDev))
   engine.copyToHostFromDevice(addr C[0], cDev, N)
-  # Products ≤ 225 are exact in f16 and f32: the gate is bit-exact.
+  # Products ≤ 225 are exact in f16 and f32. The check is bit-exact.
   for i in 0 ..< N:
     let refVal = f16ToF32(A[i]) * f16ToF32(B[i])
     doAssert f16ToF32(C[i]) == refVal,

@@ -41,7 +41,7 @@ const stmtCondMsl = metal:
     else:
       output[0] = 22'u32
 
-proc runTest() =   # private: engines are destroyed at proc return
+proc runTest() =
   suite "Metal - statement splices in conditions":
     test "a while-condition splice fires before every test, the failing one included":
       var engine = newEngine(runMetal)

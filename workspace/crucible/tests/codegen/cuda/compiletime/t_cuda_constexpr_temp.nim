@@ -67,7 +67,7 @@ const kernelF = cuda:
     let first = tup[0]
     C[0] = float32(toIntVal first)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Crucible - constexpr tuple init in expression slots":
     test "Pattern A — constexpr tuple in let RHS (block-unwrapped)":
       var output: array[1, float32]

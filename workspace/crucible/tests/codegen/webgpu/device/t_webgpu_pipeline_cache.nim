@@ -31,7 +31,7 @@ const kernelTriple = webgpu:
 
 # ── Host side ─────────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - pipeline cache":
 
     test "same kernel, different input arrays (cache reuse)":

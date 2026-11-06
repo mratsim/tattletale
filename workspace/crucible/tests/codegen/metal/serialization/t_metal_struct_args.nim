@@ -98,7 +98,7 @@ type
     big*: int64
     f*: float32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - whole-value struct args (direct runs)":
 
     test "positional binding: args bind in launch order":

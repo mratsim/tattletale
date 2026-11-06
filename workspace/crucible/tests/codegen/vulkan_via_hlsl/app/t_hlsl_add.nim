@@ -21,7 +21,7 @@ const addHlslZ = hlsl:
     output[0] = a[0] + b[0] + z
     output[1] = a[1] + b[1] + z
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # Bindings take buffer parameter order: `output` is written, `a` and `b` are read-only
   let addBindings: seq[BindingExpectation] =
     @[("output", 0, false), ("a", 1, true), ("b", 2, true)]

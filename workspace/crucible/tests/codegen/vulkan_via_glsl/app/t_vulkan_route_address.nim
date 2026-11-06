@@ -16,7 +16,7 @@ const addVk = glsl:
     output[0] = a[0] + b[0] + z
     output[1] = a[1] + b[1] + z
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(addVk)
 

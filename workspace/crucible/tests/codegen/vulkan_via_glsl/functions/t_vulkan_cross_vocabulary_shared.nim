@@ -18,13 +18,12 @@ const kernelCode = glsl:
     # Read a slot written by a different work-item of the same group.
     C[tid] = scratch[(tid + 1) mod 8]
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, 8)
-  # 2 work-groups of (4, 2). Each group stages identical values, so the
-  # group count is not pinned by this test; the neighbor-slot dependency
-  # is within-group.
+  # 2 work-groups of (4, 2). Every group stages identical values, so the assertions
+  # do not depend on the group count. The neighbor-slot dependency is within-group.
   engine.launchKernel<<(grid: (2, 1), blk: (4, 2))>>("crossVocabSharedKernel", oDev, ())
   var res: array[8, uint32]
   engine.copyToHostFromDevice(addr res[0], oDev, 8)

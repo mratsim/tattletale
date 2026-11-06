@@ -49,7 +49,7 @@ const kernelCode = cuda:
                                               99'u32, 99'u32, 99'u32, 99'u32])
     output[3] = gemm.data[0]
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[4, uint32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

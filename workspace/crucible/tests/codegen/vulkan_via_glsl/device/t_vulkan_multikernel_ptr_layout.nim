@@ -16,7 +16,7 @@ const code = glsl:
   proc k2(output, extra: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = extra[0]
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== Vulkan: multi-kernel pointer-only push-constant sharing ===\n"
 
   var engine = newEngine(runVulkan)

@@ -26,15 +26,13 @@ const code2 = glsl:
                          a: uint32; b: uint32) {.global.} =
     output[0] = a + b
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== Vulkan: scalar by-value param via push constants ===\n"
 
   var engine = newEngine(runVulkan)
   engine.ingest(code1)
 
   let oDev = engine.allocDevice(uint32, 1)
-  # Sentinel: with the misbinding regression the kernel never writes this
-  # buffer and the runtime reads it back unchanged — silent wrong result.
   var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
   engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
   engine.launchKernel("kernelWithVal", oDev, (7'u32,))

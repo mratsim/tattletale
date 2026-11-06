@@ -14,7 +14,7 @@ const kernelCode = glsl:
     ps[0][1] = ps[2][3] + 1
     sink[0] = ps[0][1]
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block:
     var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)

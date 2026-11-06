@@ -15,7 +15,7 @@ const kernelCode = cuda:
     if tid < 8:
       c[tid] = a[tid] + b[tid]
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCuda)
 
   engine.ingest(kernelCode)

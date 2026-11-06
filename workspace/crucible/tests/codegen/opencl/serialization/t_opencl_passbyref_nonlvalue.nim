@@ -38,7 +38,7 @@ const codeCall = opencl:
     let v = takeLarge(makeLarge(42'u32))
     output[0] = v
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block:  # inline constructor arg: 10 + 20
     var engine = newEngine(runOpenCL)
     engine.ingest(codeCtor)

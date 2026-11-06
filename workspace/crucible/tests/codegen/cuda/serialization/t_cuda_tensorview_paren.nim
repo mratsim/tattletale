@@ -46,7 +46,7 @@ const kernel = cuda:
     let pos = Int[0]() + D[0] * P[0] + D[1] * P[1]
     C[0] = float32(toIntVal pos)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Crucible - DotExpr in generic type resolution":
     test "crd2idx with DotExpr arg inside cuda:":
       let code = kernel

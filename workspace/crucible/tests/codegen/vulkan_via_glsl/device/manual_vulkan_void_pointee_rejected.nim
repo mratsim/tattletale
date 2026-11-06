@@ -14,7 +14,7 @@ const code = glsl:
   proc k(output: ptr void) {.global.} =
     discard
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(code)
   echo "UNREACHABLE — void pointee refs must be rejected at compile time"

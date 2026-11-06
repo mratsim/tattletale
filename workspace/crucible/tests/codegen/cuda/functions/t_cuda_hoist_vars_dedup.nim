@@ -115,7 +115,7 @@ const kernelGensym = cuda:
       let _ = tv(0, 0, kTile)(0)
     output[0] = 42.0f
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
 
   echo "═══════════════════════════════════════════════════════════════════"
   echo kernel

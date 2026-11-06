@@ -33,7 +33,7 @@ proc compoundKernel(C: ptr UncheckedArray[int32]) =
     C[i] += 5
     C[i] *= 2
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCpu)
   defer: engine.destroyCpuEngine()
 

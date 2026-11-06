@@ -70,7 +70,7 @@ const kernelF = metal:
     let first = tup[0]
     C[0] = uint32(toIntVal first)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernelA
 
   suite "Metal - constexpr tuple init":

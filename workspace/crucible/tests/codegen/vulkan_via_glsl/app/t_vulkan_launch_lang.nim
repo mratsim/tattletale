@@ -29,7 +29,7 @@ proc addSlots(y: AddView, z: uint32, a: AddView, b: AddView) =
   for i in 0 ..< y.n:
     y.p[i] = a.p[i] + b.p[i] + z
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   var aHost: array[2, uint32] = [10'u32, 20'u32]
   var bHost: array[2, uint32] = [1'u32, 2'u32]

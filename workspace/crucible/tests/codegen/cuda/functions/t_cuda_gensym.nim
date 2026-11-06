@@ -6,7 +6,7 @@
 import std/[unittest, strformat]
 import workspace/crucible
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Crucible - gensym temporaries":
     ## gensym'd constant with {.genSym.} pragma — core pattern from evalOnceAs
     ## Generates: const ct_tmp {.genSym.} = 42

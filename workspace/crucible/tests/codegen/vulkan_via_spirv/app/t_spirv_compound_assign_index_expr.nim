@@ -19,7 +19,7 @@ const convSpv = spirv:
   proc convKernel(o: ptr UncheckedArray[float32], y: float32, k: uint32) {.global.} =
     o[int32(k)] += y
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block binopIndex:
     # 2x2 row-major: slot i*2 + j gains x, one += per element
     var engine = newEngine(runVulkan)

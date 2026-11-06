@@ -19,7 +19,7 @@ const dissolveWgsl = webgpu:
     for i in 0 ..< v.n:
       output[i] = v.p[i] + 1.0'f32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runWebGPU)
   engine.ingest(dissolveWgsl)
   let oDev = engine.allocDevice(float32, 4)

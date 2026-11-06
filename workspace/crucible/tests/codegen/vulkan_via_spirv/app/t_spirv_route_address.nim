@@ -33,7 +33,7 @@ const structBoolSpv = spirv:
     else:
       output[0] = 0'u32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   # spirv-val the module before it reaches the engine: a mis-encoded word
   # sequence must fail here, not as a driver-side opaque launch error
   let spirvVal = findExe("spirv-val")

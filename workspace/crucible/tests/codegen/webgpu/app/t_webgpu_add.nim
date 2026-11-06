@@ -49,7 +49,7 @@ const maxWgsl = webgpu:
 
 # ── Host code ───────────────────────────────────────────────────────────────
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== WebGPU WGSL generation tests ===\n"
 
   echo "--- addWgsl ---"

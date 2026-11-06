@@ -23,7 +23,7 @@ const kernelCode = metal:
 
 # ── Host side ────────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - direct contents() readback":
 
     test "multi-element uint32 output readback":

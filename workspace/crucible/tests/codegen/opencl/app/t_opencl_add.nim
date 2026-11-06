@@ -47,7 +47,7 @@ const maxCl = opencl:
 
 # ── Codegen tests (always runs) ─────────────────────────────────────────────
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== OpenCL generation tests ===\n"
 
   echo "--- addKernel ---"
