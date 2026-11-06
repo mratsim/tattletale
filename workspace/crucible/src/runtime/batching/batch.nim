@@ -35,8 +35,8 @@ type
     of bskBuffer:
       handle*: H
     of bskBytes:
-      off*: int
       size*: int
+    off*: int
 
   BatchEntry*[H] = object
     entrypoint*: string
@@ -115,6 +115,9 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
   let argsTuple = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
     argsTuple.add(values[i])
+  let valuesTuple = nnkTupleConstr.newTree()
+  for v in values:
+    valuesTuple.add(v)
   let cgN = ident"batchCg"
   let recN = ident"batchRec"
   let layoutN = ident"batchBlobLayout"
@@ -123,19 +126,17 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
   result = quote do:
     block:
       const `cgN` = `batchCodegenKindS`(typeof(`batch`.engine))
-      const `layoutN` = computeDeviceLayout(typeof(`argsTuple`), `cgN`)
+      const `layoutN` = computeDeviceLayout(typeof(`valuesTuple`), `cgN`)
       type BatchRec = object
         entry: BatchEntry[`H`]
         off: int
       template batchRecStore(ctx: var BatchRec, v: auto, pos: int) =
         when typeof(v) is `H`:
-          ctx.entry.slots.add BatchSlot[`H`](kind: bskBuffer, handle: v)
+          ctx.entry.slots.add BatchSlot[`H`](kind: bskBuffer, handle: v, off: ctx.off)
+          ctx.off.inc 8
         elif typeof(v) is ptr:
           {.error: "batch enqueue: pointer kernel args are not supported, " &
             "pass the DeviceMem handle from allocDevice".}
-        elif hasBufferLeaf(typeof(v), typedesc[`H`]):
-          for f in fields(v):
-            batchRecStore(ctx, f, pos)
         else:
           const w = computeDeviceLayout(typeof(v), `cgN`)
           ctx.off = ctx.off.round_multiple_up(w.align)
