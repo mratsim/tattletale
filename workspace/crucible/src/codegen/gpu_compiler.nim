@@ -119,7 +119,7 @@ proc registerGpuPasses*(reg: var PassRegistry, B: CodegenKind) {.compileTime.} =
   else:
     raiseAssert("registerGpuPasses: no pass pipeline for " & $B)
 
-macro codegenMetal(body: typed): string =
+macro metalImpl(body: typed): string =
   var reg = PassRegistry()
   reg.registerGpuPasses(cgMetal)
   let m = lowerCirv2(body)
@@ -128,9 +128,9 @@ macro codegenMetal(body: typed): string =
 
 macro metal*(body: untyped): string =
   crucibleCompileTarget = ctMetal
-  result = newCall(bindSym"codegenMetal", body)
+  result = newCall(bindSym"metalImpl", body)
 
-macro codegenCuda(body: typed): string =
+macro cudaImpl(body: typed): string =
   var reg = PassRegistry()
   reg.registerGpuPasses(cgCuda)
   let m = lowerCirv2(body)
@@ -139,9 +139,9 @@ macro codegenCuda(body: typed): string =
 
 macro cuda*(body: untyped): string =
   crucibleCompileTarget = ctCuda
-  result = newCall(bindSym"codegenCuda", body)
+  result = newCall(bindSym"cudaImpl", body)
 
-macro codegenOpenCL(body: typed): string =
+macro openclImpl(body: typed): string =
   var reg = PassRegistry()
   reg.registerGpuPasses(cgOpenCL)
   let m = lowerCirv2(body)
@@ -150,9 +150,9 @@ macro codegenOpenCL(body: typed): string =
 
 macro opencl*(body: untyped): string =
   crucibleCompileTarget = ctOpenCL
-  result = newCall(bindSym"codegenOpenCL", body)
+  result = newCall(bindSym"openclImpl", body)
 
-macro codegenGLSL(body: typed): string =
+macro glslImpl(body: typed): string =
   var reg = PassRegistry()
   reg.registerGpuPasses(cgGlsl)
   let m = lowerCirv2(body)
@@ -161,9 +161,9 @@ macro codegenGLSL(body: typed): string =
 
 macro glsl*(body: untyped): string =
   crucibleCompileTarget = ctGlsl
-  result = newCall(bindSym"codegenGLSL", body)
+  result = newCall(bindSym"glslImpl", body)
 
-macro codegenSpirv(body: typed): seq[uint32] =
+macro spirvImpl(body: typed): seq[uint32] =
   var reg = PassRegistry()
   reg.registerGpuPasses(cgSpirv)
   let m = lowerCirv2(body)
@@ -172,9 +172,9 @@ macro codegenSpirv(body: typed): seq[uint32] =
 
 macro spirv*(body: untyped): seq[uint32] =
   crucibleCompileTarget = ctSpirvShader
-  result = newCall(bindSym"codegenSpirv", body)
+  result = newCall(bindSym"spirvImpl", body)
 
-macro codegenWebGpu(body: typed): string =
+macro webgpuImpl(body: typed): string =
   var reg = PassRegistry()
   reg.registerGpuPasses(cgWebGPU)
   let m = lowerCirv2(body)
@@ -183,9 +183,9 @@ macro codegenWebGpu(body: typed): string =
 
 macro webgpu*(body: untyped): string =
   crucibleCompileTarget = ctWebGPU
-  result = newCall(bindSym"codegenWebGpu", body)
+  result = newCall(bindSym"webgpuImpl", body)
 
-macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
+macro hlslImpl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   var reg = PassRegistry()
   reg.registerGpuPasses(cgHlsl)
   let m = lowerCirv2(body)
@@ -210,8 +210,8 @@ macro hlsl*(flavor: untyped, body: untyped): string =
   else:
     error("unknown flavor `" & name & "`, expected fvD3D12/fvVulkan")
   crucibleCompileTarget = ctHlsl
-  result = newCall(bindSym"codegenHlsl", body, newLit(flav))
+  result = newCall(bindSym"hlslImpl", body, newLit(flav))
 
 macro hlsl*(body: untyped): string =
   crucibleCompileTarget = ctHlsl
-  result = newCall(bindSym"codegenHlsl", body)
+  result = newCall(bindSym"hlslImpl", body)
