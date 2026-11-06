@@ -58,7 +58,7 @@ extra: [10'u32])
     # Chain of `.inner` through all 10 layers to reach L0.val
     output[0] = l.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.val
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[1, uint32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

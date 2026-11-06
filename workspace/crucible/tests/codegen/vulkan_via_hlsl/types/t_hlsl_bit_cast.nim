@@ -16,7 +16,7 @@ const bitsToUintHlsl = hlsl:
   proc bitsToUintKernel(output, inBuf: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = cast[uint32](cast[float32](inBuf[0])) + inBuf[1]
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # Bindings take buffer parameter order: `output` is written, `inBuf` is read-only
   let bindings: seq[BindingExpectation] =
     @[("output", 0, false), ("inBuf", 1, true)]

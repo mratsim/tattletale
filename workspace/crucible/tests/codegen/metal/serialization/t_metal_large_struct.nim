@@ -10,7 +10,7 @@
 import std/unittest
 import workspace/crucible
 
-# Test 1: inline constructor arg to device function
+# inline constructor arg to device function
 const code1 = metal:
   type LargeStruct = object
     data: array[8, uint32]  # 32 bytes > 24 threshold
@@ -19,7 +19,7 @@ const code1 = metal:
   proc kernelMain(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = takeLarge(LargeStruct(data: [10'u32, 20, 30, 40, 50, 60, 70, 80]))
 
-# Test 2: function return value arg
+# function return value arg
 const code2 = metal:
   type LargeStruct = object
     data: array[8, uint32]
@@ -30,7 +30,7 @@ const code2 = metal:
   proc kernelMain(output: ptr UncheckedArray[uint32]) {.global.} =
     output[0] = takeLarge(makeLarge(42'u32))
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo code1
 
   suite "Metal - large struct by value":

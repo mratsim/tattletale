@@ -56,7 +56,7 @@ const kernel = cuda:
     var tv = TensorView[float32, (Int[8], Int[16]), (Int[1], Int[8])](data: C, layout: L)
     fillWith(tv, 42.0'f32)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "NVRTC callop assign":
     test "fillWith via NVRTC":
       var buf: array[128, float32]

@@ -37,7 +37,7 @@ const blitCl = opencl:
 
 # ── Execution via OpenCL runtime ───────────────────────────────────────────
 
-proc runTest() =   # private, tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== OpenCL compound-assign execution ===\n"
 
   block: # accKernel: output[i] = a[i] + acc(0..3) + 1, acc(k) = 0+1+2+3 = 6

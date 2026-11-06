@@ -19,7 +19,7 @@ const minMaxWgsl = webgpu:
     output[3] = max(3.5'f32, 7.25'f32)
     output[4] = min(3.5'f32, 7.25'f32)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runWebGPU)
   engine.ingest(minMaxWgsl)
   let oDev = engine.allocDevice(float32, 5)

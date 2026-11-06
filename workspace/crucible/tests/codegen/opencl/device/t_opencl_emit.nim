@@ -112,7 +112,7 @@ const t16Cl = opencl:
 
 # ── Host code ────────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "OpenCL - {.emit.} raw OpenCL C injection":
 
     test "single string literal emits the sum":

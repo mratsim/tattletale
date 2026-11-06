@@ -43,7 +43,7 @@ proc validateSpirv(spv: seq[uint32], name: string) =
   let (valOut, valCode) = execCmdEx(spirvVal & " --target-env vulkan1.4 " & spvPath)
   doAssert valCode == 0, "spirv-val rejected the executed module:\n" & valOut
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block scalarCompound:
     validateSpirv(scalarSpv, "t_spirv_compound_assign_scalar")
 

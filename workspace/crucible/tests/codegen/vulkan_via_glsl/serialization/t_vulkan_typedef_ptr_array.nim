@@ -24,7 +24,7 @@ const kernelCode = glsl:
     output[0] = takeBands(Bands(edges: [10'u32, 20'u32],
                                band: Band(lo: 1'u32, hi: 2'u32), m: 5'u32))
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block:
     var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)

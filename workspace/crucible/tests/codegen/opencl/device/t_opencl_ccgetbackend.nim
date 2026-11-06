@@ -26,7 +26,7 @@ const kernelCode = opencl:
     else:
       output[0] = 5
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "OpenCL - ccGetBackend compile-target detection":
     test "the launched kernel writes the ctOpenCL dispatch constant":
       var engine = newEngine(runOpenCL)

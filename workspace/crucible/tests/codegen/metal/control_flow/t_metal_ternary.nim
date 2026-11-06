@@ -57,7 +57,7 @@ proc runTernCall(cmd: uint32): array[2, uint32] =
   engine.launchKernel("ternCallKernel", oDev, (cDev,))
   engine.copyToHostFromDevice(addr result[0], oDev, 2)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - ternary lowering":
     test "data-dependent, constant, and block-expression ternaries":
       let sel = runTernary(7'u32, 3'u32)

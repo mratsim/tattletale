@@ -18,7 +18,7 @@ const code = metal:
       continue
     output[0] = acc
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runMetal)
   engine.ingest(code)
   echo "UNREACHABLE — continue in device code must refuse at compile time"

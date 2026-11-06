@@ -16,7 +16,7 @@ const kernelTerminates = webgpu:
     syncthreads()
     C[4 + thread_index_in_threadgroup] = 2'u32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - statement calls terminate":
     test "barrier statement compiles and executes":
       var engine = newEngine(runWebGPU)

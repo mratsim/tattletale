@@ -13,7 +13,7 @@ import workspace/crucible
 proc addKernel(output: ptr UncheckedArray[uint32]) =
   output[0] = 1'u32
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runMetal)
   let oDev = engine.allocDevice(uint32, 1)
   # lang only selects the Vulkan SPIR-V ingestion language:

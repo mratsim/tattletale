@@ -20,7 +20,7 @@ const stepSpv = spirv:
       k = k + 1
     output[0] = uint32(count)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(stepSpv)
   let outDev = engine.allocDevice(uint32, 1)

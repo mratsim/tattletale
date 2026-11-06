@@ -39,7 +39,7 @@ const codeMul = glsl:
     output[0] = a[0] * b[0]
     output[1] = a[1] * b[1]
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== Vulkan: pipeline / SPIR-V cache ===\n"
 
   var engine = newEngine(runVulkan)

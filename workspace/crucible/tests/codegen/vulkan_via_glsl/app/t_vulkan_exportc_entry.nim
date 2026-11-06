@@ -20,7 +20,7 @@ const bareGlsl = glsl:
   proc bareKernel(C, A: ptr UncheckedArray[uint32]) {.global, exportc.} =
     C[0] = A[0] + 2
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Vulkan (GLSL) - {.exportc.} entry-point name override":
 
     test "exportc: \"name\" launches the kernel under the override name":

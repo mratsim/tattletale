@@ -37,7 +37,7 @@ proc validateSpirv(spv: seq[uint32], name: string) =
   let (valOut, valCode) = execCmdEx(spirvVal & " --target-env vulkan1.4 " & spvPath)
   doAssert valCode == 0, "spirv-val rejected the emitted module:\n" & valOut
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block renamedEntry:
     validateSpirv(renamedSpv, "t_spirv_exportc_entry_renamed")
     # OpEntryPoint Name is the operand the host launcher looks up

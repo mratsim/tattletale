@@ -40,7 +40,7 @@ const kernelCode = cuda:
     # both-Int template — folded to Int[max(V,U)]() at Nim level
     let e = max(Int[2](), Int[3]())  # Int[3]
     let f = max(Int[3](), Int[2]())  # Int[3]
-    # runtime templates — plain int max (value substituted at Nim semantic analysisantic analysis)
+    # runtime templates: int max, the value substitutes at Nim semantic analysis
     let g = max(Int[5](), h)    # max(5, h)
     let i = max(h, Int[5]())    # max(h, 5)
     res[0] = int32(toIntVal a)  # 7
@@ -52,7 +52,7 @@ const kernelCode = cuda:
     res[6] = int32(g)           # 100
     res[7] = int32(i)           # 100
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "NVRTC — static-int ambiguous-builtin (max) overload set":
 
     test "all five overload shapes compile, run, and produce the right values":

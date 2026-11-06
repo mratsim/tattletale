@@ -68,7 +68,7 @@ const kernelF = opencl:
     let first = tup[0]
     C[0] = uint32(toIntVal first)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "OpenCL - constexpr tuple init":
     test "Pattern A — constexpr tuple in let RHS":
       var engine = newEngine(runOpenCL)

@@ -67,7 +67,7 @@ proc runTest() =
       inc i
     doAssert i == expected.len,
       "refBlocks holds " & $i & " entries, expected " & $expected.len
-  block: # device check: the kernel runs and every pointee surface reads back
+  block:
     var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)
     let oDev = engine.allocDevice(uint32, 3)

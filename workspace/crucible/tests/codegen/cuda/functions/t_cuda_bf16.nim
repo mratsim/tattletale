@@ -24,7 +24,7 @@ const bf16RoundTripCuda = cuda:
     var b: bfloat16 = toBf16(i[k])
     o[k] = toBf32(b)
 
-proc runTest() =   # private, tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCuda)
 
   # every product and sum here is exact in bf16: the check is bit-exact

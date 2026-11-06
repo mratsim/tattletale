@@ -58,7 +58,7 @@ const maxMsl = metal:
 
 # ── Host code ───────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - add":
 
     test "addKernel: [10,20] + [1,2] = [11,22]":

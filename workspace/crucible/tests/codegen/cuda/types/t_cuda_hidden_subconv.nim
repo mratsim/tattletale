@@ -10,7 +10,7 @@ const kernelCode = cuda:
     let a: uint32 = 42
     output[0] = int64(a)   # may produce HiddenSubConv
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[1, int64]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)

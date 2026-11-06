@@ -22,7 +22,7 @@ import workspace/crucible
 proc probe(outBuf: ptr UncheckedArray[uint32]) =
   outBuf[0] = 1
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCpu)
   defer: engine.destroyCpuEngine()
   var k = 4

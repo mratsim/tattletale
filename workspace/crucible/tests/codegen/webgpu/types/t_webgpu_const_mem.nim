@@ -29,7 +29,7 @@ const constMemWgsl = webgpu:
       output[0] = cmBias
     output[1] = cmScale(a[1])
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block:  # taken branch reads the nested and the top-level constant
     var engine = newEngine(runWebGPU)
     engine.ingest(constMemWgsl)

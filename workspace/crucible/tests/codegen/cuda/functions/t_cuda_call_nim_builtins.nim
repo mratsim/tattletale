@@ -61,7 +61,7 @@ const wrapperKernel = cuda:
       let c = `*`(a, b)
       C[i] = float32(c.val)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "NVRTC - call nim builtins":
 
     test "system.`*` (int32) as nnkCall":

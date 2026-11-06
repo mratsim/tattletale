@@ -19,7 +19,7 @@ const bareWgsl = webgpu:
   proc bareKernel(o, a: ptr UncheckedArray[uint32]) {.global, exportc.} =
     o[0] = a[0] + 2
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - {.exportc.} entry-point name override":
 
     test "both kernels launch under their exportc entry names":

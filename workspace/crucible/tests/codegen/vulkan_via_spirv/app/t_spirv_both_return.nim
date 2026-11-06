@@ -20,7 +20,7 @@ const bothRetSpv = spirv:
       output[0] = 2
       return
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(bothRetSpv)
   let outDev = engine.allocDevice(uint32, 1)

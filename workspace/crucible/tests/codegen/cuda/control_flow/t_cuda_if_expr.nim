@@ -19,23 +19,15 @@ proc runKernel(kernelCode: string; buf: var auto; kernelName: string) =
   engine.launchKernel(kernelName, oDev, ())
   engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
 
-# ═════════════════════════════════════════════════════════════════════
-# Test 1: Basic if-else expression via let binding
-# ═════════════════════════════════════════════════════════════════════
-
 const kIfExprLet = cuda:
   proc ifExprLetKernel(output: ptr UncheckedArray[uint32]) {.global.} =
     let x = if true: 42'u32 else: 0'u32
     output[0] = x
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf1: array[1, uint32]
   runKernel(kIfExprLet, buf1, "ifExprLetKernel")
   doAssert buf1[0] == 42, &"if-expr let (true): got {buf1[0]}, expected 42"
-
-  # ═════════════════════════════════════════════════════════════════════
-  # Test 2: If-expr else-branch taken (false condition)
-  # ═════════════════════════════════════════════════════════════════════
 
   const kIfExprElse = cuda:
     proc ifExprElseKernel(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -46,10 +38,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   runKernel(kIfExprElse, buf2, "ifExprElseKernel")
   doAssert buf2[0] == 100, &"if-expr else-branch (false): got {buf2[0]}, expected 100"
 
-  # ═════════════════════════════════════════════════════════════════════
-  # Test 3: If-expr on RHS of assignment
-  # ═════════════════════════════════════════════════════════════════════
-
   const kIfExprAsgn = cuda:
     proc ifExprAsgnKernel(output: ptr UncheckedArray[uint32]) {.global.} =
       output[0] = if true: 10'u32 else: 20'u32
@@ -58,10 +46,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   runKernel(kIfExprAsgn, buf3, "ifExprAsgnKernel")
   doAssert buf3[0] == 10, &"if-expr asgn (true): got {buf3[0]}, expected 10"
 
-  # ═════════════════════════════════════════════════════════════════════
-  # Test 4: If-expr on RHS of assignment — else branch
-  # ═════════════════════════════════════════════════════════════════════
-
   const kIfExprAsgnElse = cuda:
     proc ifExprAsgnElseKernel(output: ptr UncheckedArray[uint32]) {.global.} =
       output[0] = if false: 10'u32 else: 20'u32
@@ -69,10 +53,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   var buf4: array[1, uint32]
   runKernel(kIfExprAsgnElse, buf4, "ifExprAsgnElseKernel")
   doAssert buf4[0] == 20, &"if-expr asgn else (false): got {buf4[0]}, expected 20"
-
-  # ═════════════════════════════════════════════════════════════════════
-  # Test 5: If-expr with computed condition
-  # ═════════════════════════════════════════════════════════════════════
 
   const kIfExprCond = cuda:
     proc ifExprCondKernel(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -92,10 +72,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   doAssert buf5[2] == 200, &"if-expr cond (tid=2): got {buf5[2]}, expected 200"
   doAssert buf5[3] == 200, &"if-expr cond (tid=3): got {buf5[3]}, expected 200"
 
-  # ═════════════════════════════════════════════════════════════════════
-  # Test 6: Multiple if-expr assignments in one kernel
-  # ═════════════════════════════════════════════════════════════════════
-
   const kIfExprMulti = cuda:
     proc ifExprMultiKernel(output: ptr UncheckedArray[uint32]) {.global.} =
       output[0] = if true: 10'u32 else: 20'u32
@@ -105,10 +81,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   runKernel(kIfExprMulti, buf6, "ifExprMultiKernel")
   doAssert buf6[0] == 10, &"if-expr multi (0): got {buf6[0]}, expected 10"
   doAssert buf6[1] == 40, &"if-expr multi (1): got {buf6[1]}, expected 40"
-
-  # ═════════════════════════════════════════════════════════════════════
-  # Test 7: If-elif-else chain
-  # ═════════════════════════════════════════════════════════════════════
 
   const kIfElifElse = cuda:
     proc ifElifElseKernel(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -130,8 +102,6 @@ proc runTest() =   # private — tests run in a proc so engines are destroyed at
   doAssert buf7[1] == 200, &"if-elif-else (tid=1): got {buf7[1]}, expected 200"
   doAssert buf7[2] == 300, &"if-elif-else (tid=2): got {buf7[2]}, expected 300"
   doAssert buf7[3] == 999, &"if-elif-else (tid=3): got {buf7[3]}, expected 999"
-
-  # ═════════════════════════════════════════════════════════════════════
 
   echo "  OK — all if-expression tests pass"
 

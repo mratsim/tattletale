@@ -20,7 +20,7 @@ const bareCl = opencl:
   proc bareKernel(C, A: ptr UncheckedArray[uint32]) {.global, exportc.} =
     C[0] = A[0] + 2
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "OpenCL - {.exportc.} entry-point name override":
 
     test "exportc: \"name\" launches the kernel under the override name":

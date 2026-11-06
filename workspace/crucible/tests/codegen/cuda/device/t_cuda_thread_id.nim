@@ -88,7 +88,7 @@ const kernel3d = cuda:
     rec[base + 9] = uint32(blockDim.z)
 # ---------------------------------------------------------------------------
 
-proc runTest() =   # private — engines are destroyed at proc return (F2 discipline)
+proc runTest() =
   block: # 1D scalar: single block, single thread (field-read baseline)
     var engine = cgCuda.init(kernelScalar)
     echo "PTX: ", engine.getArtifact().len, " bytes"

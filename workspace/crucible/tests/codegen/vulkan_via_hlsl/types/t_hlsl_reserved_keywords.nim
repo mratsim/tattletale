@@ -31,7 +31,7 @@ proc assertU32(got: seq[uint32], want: openArray[uint32], label: string) =
     doAssert got[i] == want[i],
       label & ": slot " & $i & " got " & $got[i] & " want " & $want[i]
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # Bindings take buffer parameter order. The scalar block takes the first
   # ordinal after the buffers: `output` binds 0, `uniform` binds 1
   let reservedBindings: seq[BindingExpectation] = @[("output", 0, false)]

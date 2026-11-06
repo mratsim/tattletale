@@ -21,7 +21,7 @@ const kernel = cuda:
     for i in 0 ..< n:
       C[i] = 1.0'f32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "For-loop with Slice[int] range":
     test "compiles and runs via NVRTC":
       var buf: array[128, float32]

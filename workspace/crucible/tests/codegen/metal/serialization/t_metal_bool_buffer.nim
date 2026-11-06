@@ -25,7 +25,7 @@ const kernelBoolWrite = metal:
 
 # ── Host side ───────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - bool buffer marshalling":
 
     test "array[bool] input reads 1-byte elements":

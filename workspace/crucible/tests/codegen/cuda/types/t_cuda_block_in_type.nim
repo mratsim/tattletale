@@ -42,7 +42,5 @@ const kernel = cuda:
     deviceFn(v)
 
 when isMainModule:
-  # The `cuda:` macro expansion is the test: reaching runtime means
-  # the type resolver handled the block expression
   echo kernel
   echo "  OK — compiled"

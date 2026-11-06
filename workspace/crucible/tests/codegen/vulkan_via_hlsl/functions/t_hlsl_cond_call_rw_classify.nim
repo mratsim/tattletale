@@ -27,7 +27,7 @@ const condCallHlsl = hlsl:
     output[0] = i
     output[1] = if storeUntil(a) < 10'u32: 11'u32 else: 22'u32
 
-proc runTest() =   # private: the compile checks run in a proc so build artifacts stay scoped
+proc runTest() =
   # Bindings take buffer parameter order: `output` and `a` are both written.
   let bindings: seq[BindingExpectation] = @[("output", 0, false), ("a", 1, false)]
   discard compileCheck("cond_call_rw_classify", condCallHlsl, bindings)

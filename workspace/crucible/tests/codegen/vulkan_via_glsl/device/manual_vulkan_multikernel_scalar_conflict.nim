@@ -15,7 +15,7 @@ const code = glsl:
   proc kernelB(output: ptr UncheckedArray[uint32], a: uint32, b: uint32) {.global.} =
     output[0] = a + b
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(code)
   echo "UNREACHABLE — differing multi-kernel push-constant layouts must be rejected at engine ingest"

@@ -32,7 +32,7 @@ const kernel = cuda:
     let v = makeView(input, n)
     deviceFn(v, output)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "════════ kernel ═══════════════════════════════════════════════════════"
   echo kernel
   echo "═══════════════════════════════════════════════════════════════════════"

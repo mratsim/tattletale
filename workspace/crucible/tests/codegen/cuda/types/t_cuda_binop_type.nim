@@ -1,4 +1,7 @@
 ## gpuBinOp self-carried result type (bType): end-to-end NVRTC test
+##
+## Test that a do-block folded into device procs compiles and runs.
+## Its fold element is the parameter, so the kernel result depends on its input.
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests workspace/crucible/tests/codegen/cuda/types/t_cuda_binop_type.nim
@@ -13,10 +16,8 @@ template foldDo(body: untyped): untyped =
     let it_b {.inject.} = int32(2)
     body
 
-# Fold bodies pulled into procs from OUTSIDE the cuda block —
-# this is the crash path: the proc body lowers to
-# `result = gpuBlock(isExpr: true, @[..., gpuBinOp])`.
-# The fold element is the parameter, so the kernel result depends on its input.
+# Fold bodies pulled into procs from OUTSIDE the cuda block lower to `result = gpuBlock(isExpr: true, @[..., gpuBinOp])`.
+# Each fold element is a parameter: the kernel result depends on its input.
 proc foldedMul(x: int32): int32 =
   foldDo:
     acc * x

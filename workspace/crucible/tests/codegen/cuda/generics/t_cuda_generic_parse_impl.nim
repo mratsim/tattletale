@@ -52,7 +52,7 @@ const kernelCode = cuda:
     let y = MyInt[64]()
     output[0] = 1'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var bufImpl: array[2, uint32]
   var bufFallback: array[2, uint32]
   var bufInt: array[1, uint32]

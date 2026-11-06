@@ -127,7 +127,7 @@ const t16Msl = metal:
 
 # ── Host code ────────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal - {.emit.} raw MSL injection":
 
     test "single string literal emits the sum":

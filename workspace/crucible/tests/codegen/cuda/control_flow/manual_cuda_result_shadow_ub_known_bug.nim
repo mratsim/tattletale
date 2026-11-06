@@ -17,9 +17,9 @@ import workspace/crucible
 const kernelCode = cuda:
   proc shadowIfElse(cond: bool; a, b: uint32): uint32 {.device.} =
     if cond:
-      var result = a # The outer implicit result is not modified here and stays 0
+      var result = a # shadows the implicit outer result
     else:
-      var result = b # The outer implicit result is not modified here and stays 0
+      var result = b
     return result
 
   proc shadowKernel(output: ptr UncheckedArray[uint32]) {.global.} =
@@ -30,8 +30,6 @@ var buf: array[2, uint32]
 var engine = newEngine(runCuda)
 engine.ingest(kernelCode)
 engine.launchKernel<<(1, 1)>>("shadowKernel", buf, ())
-# Expected: 0 (outer implicit result, never assigned).
-# Currently works on Blackwell but relies on `return ;` UB.
 doAssert buf[0] == 0, &"shadowIfElse(true): {buf[0]} (expected 0)"
 doAssert buf[1] == 0, &"shadowIfElse(false): {buf[1]} (expected 0)"
 echo "  OK — shadowIfElse test"

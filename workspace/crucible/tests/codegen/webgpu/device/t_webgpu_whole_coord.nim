@@ -17,7 +17,7 @@ const kernelWhole = webgpu:
     let flat = uint32(p.y * 4 + p.x)
     C[flat] = flat
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - whole-value coordinate":
 
     test "let p = thread_position_in_grid keeps the i32 domain":

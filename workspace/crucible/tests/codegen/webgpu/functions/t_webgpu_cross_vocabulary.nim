@@ -19,7 +19,7 @@ const kernel2d = webgpu:
     C[64 + thread_index_in_threadgroup] = uint32(thread_index_in_threadgroup)
     syncthreads()
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernel2d
 
   suite "WebGPU - cross-vocabulary coordinates + barrier":

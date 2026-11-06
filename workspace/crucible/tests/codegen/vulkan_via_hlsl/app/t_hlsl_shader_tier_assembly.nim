@@ -40,7 +40,7 @@ const structVulkanHlsl = hlsl(fvVulkan):
     if i == 0:
       output[0] = uint32(p.a + p.b) + widen(3)
 
-proc runTest() =   # private: engines run in a proc so resources release at return
+proc runTest() =
   # fvD3D12: dxc DXIL + SPIR-V + spirv-val over the struct kernel, the struct on the Push block behind the buffer.
   # descriptor route: the engine refuses scalar and struct kernel args (pre-existing at base), so the launch runs the struct-free kernel
   # struct-free kernel: the readback covers the device-function chain over the entry semantics.

@@ -13,7 +13,7 @@ import workspace/crucible
 
 const userRsqrtWgsl = webgpu:
   proc rsqrt(x: float32): float32 =
-    # deliberately not the inverse square root, its value betrays a reroute
+    # deliberately not the inverse square root, a rerouted builtin changes the result
     0.5'f32 / x
 
   proc rsqrtKernel(output: ptr UncheckedArray[float32]) {.global, workgroup: (1, 1, 1).} =

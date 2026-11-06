@@ -69,7 +69,7 @@ kernel void scalarKernel(device uint* output [[buffer(0)]],
 
 # ── Host side ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Metal engine":
 
     test "ingest-once run-many keeps producing correct results across runs":

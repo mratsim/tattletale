@@ -40,7 +40,7 @@ proc runCond(n: int32): array[3, int32] =
   engine.launchKernel("condKernel", oDev, (n,))
   engine.copyToHostFromDevice(addr result[0], oDev, 3)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - device calls in conditions":
     test "if, while, and ternary conditions carry the call and evaluate in place":
       # square(3) = 9: if takes the > 4 branch, while steps i = 0, 1

@@ -17,7 +17,7 @@ const inlineWgsl = webgpu:
     writeAt(output, 0'u32, 42'u32)
     writeAt(output, 1'u32, 7'u32)
 
-proc runTest() =   # private: engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runWebGPU)
   engine.ingest(inlineWgsl)
   let oDev = engine.allocDevice(uint32, 2)

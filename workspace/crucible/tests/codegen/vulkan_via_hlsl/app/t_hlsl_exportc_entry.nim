@@ -19,7 +19,7 @@ const bareHlsl = hlsl:
   proc bareKernel(output, a: ptr UncheckedArray[uint32]) {.global, exportc.} =
     output[0] = a[0] + 2
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   # Renamed HLSL compiles through dxc and launches under the exportc name
   var engine = newEngine(runVulkan)
   engine.ingest(renamedHlsl)

@@ -16,7 +16,7 @@ const code = glsl:
            xf: ptr UncheckedArray[float32], yf: ptr UncheckedArray[float32]) {.global.} =
     outp[0] = a + b * c + uint32(xf[0]) + uint32(yf[0])
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo "=== Vulkan: multi-arg kernel, scalars and two pointers ===\n"
 
   var engine = newEngine(runVulkan)

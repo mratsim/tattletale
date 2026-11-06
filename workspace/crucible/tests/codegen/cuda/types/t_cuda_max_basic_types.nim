@@ -26,7 +26,7 @@ const kernelCode = cuda:
     # int — magic MaxI -> plain native max call
     res[5] = float32(max(int(x), int(y)))
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernelCode   # show the emitted CUDA
 
   suite "NVRTC — max on basic types":

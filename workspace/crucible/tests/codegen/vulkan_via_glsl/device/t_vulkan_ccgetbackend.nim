@@ -19,11 +19,10 @@ const kernelCode = glsl:
 
 proc runTest() =
   # GLSL kernel entry points must be named `main`, since glslang links against `main`.
-  # The pin renames the kernel in its copy of the source.
   block:
     let exe = findExe("glslangValidator")
     doAssert exe.len > 0,
-      "glslangValidator not found on PATH (the GLSL pin needs it)"
+      "glslangValidator not found on PATH (the GLSL compile check needs it)"
     let src = kernelCode.replace("void backendProbe()", "void main()")
     let (tmpFile, tmpPath) = createTempFile("vk_ccgetbackend", ".comp")
     defer: tmpFile.close()

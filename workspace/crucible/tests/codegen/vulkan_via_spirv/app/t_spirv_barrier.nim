@@ -64,7 +64,7 @@ proc controlBarrierOperands(dis: string): array[3, int] =
         n.inc
   doAssert n == 3, "no OpControlBarrier in the disassembly"
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   let dis = validateSpirv(barrierSpv, "t_spirv_barrier")
   # Operand order: execution scope, memory scope, memory semantics.
   # 2 = Workgroup: a Device execution scope deadlocks any multi-workgroup launch.

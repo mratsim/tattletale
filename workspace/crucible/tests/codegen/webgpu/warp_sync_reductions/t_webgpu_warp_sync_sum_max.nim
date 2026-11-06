@@ -38,7 +38,6 @@ const maxPartialsWgsl = webgpu:
       let v = float32(lane) + float32(j)
       outBuf[lane * 4 + j] = reduceMax(v)
 
-
   # Worked example with 4 threads and 2 partials per thread
   # (the kernels below use 32 threads and 4 partials):
   #
@@ -50,18 +49,9 @@ const maxPartialsWgsl = webgpu:
   #   partial 1 summed across threads: 1+2+3+4 = 10
   #   every thread ends holding both totals.
 
-  # Worked example with 4 threads and 2 partials per thread
-  # (the kernels below use 32 threads and 4 partials):
-  #
-  #   thread:      t0   t1   t2   t3
-  #   partial 0:    0    1    2    3      thread t holds t + 0
-  #   partial 1:    1    2    3    4      thread t holds t + 1
-  #
-  #   partial 0 maxed across threads: max(0, 1, 2, 3) = 3
-  #   partial 1 maxed across threads: max(1, 2, 3, 4) = 4
-  #   every thread ends holding both maxima.
+  # Max reduction: the same schedule applies, max in place of the sum.
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - warp-synchronous sum and max":
 
     test "scalar reduce sums the 32 lanes and broadcasts to each":

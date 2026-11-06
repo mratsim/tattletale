@@ -25,7 +25,7 @@ const kernel = cuda:
       let x = Int[8]()
     C[0] = 1'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Crucible - mixin/bind statements":
     test "template with mixin inside cuda: compiles":
       var output: array[1, uint32]

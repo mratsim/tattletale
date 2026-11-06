@@ -33,7 +33,7 @@ const kernel = cuda:
       acc = acc + it_a.val * it_b.val
     C[0] = acc
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Inject variable dedup":
     test "no duplicate declarations after block flattening":
       var output: array[1, int32]

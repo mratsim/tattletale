@@ -42,7 +42,7 @@ template runFloatMulKernel(t: typedesc; expected0, expected1: float32) =
     check res[0] == expected0
     check res[1] == expected1
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "OpenCL - call nim builtins":
 
     test "system.`*` (int32) as nnkCall":

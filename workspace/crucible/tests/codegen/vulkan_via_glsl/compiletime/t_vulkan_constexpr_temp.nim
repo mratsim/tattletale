@@ -65,7 +65,7 @@ const kernelF = glsl:
     const tup {.genSym.} = (Int[8](), Int[16]())
     let first = tup[0]; C[0] = uint32(toIntVal first)
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernelA
   echo "\n---"
   echo kernelB

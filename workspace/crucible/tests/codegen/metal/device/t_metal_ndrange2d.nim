@@ -14,7 +14,7 @@ const kernel2d = metal:
     let flat = thread_position_in_grid.y * 8 + thread_position_in_grid.x
     C[flat] = uint32(flat)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernel2d
 
   suite "Metal - multi-axis dispatch":

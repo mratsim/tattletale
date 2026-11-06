@@ -23,7 +23,7 @@ const passbyrefOpencl = opencl:
     let v = takeLarge(s)
     output[0] = v
 
-proc runTest() =   # private: engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runOpenCL)
   engine.ingest(passbyrefOpencl)
   let oDev = engine.allocDevice(uint32, 1)

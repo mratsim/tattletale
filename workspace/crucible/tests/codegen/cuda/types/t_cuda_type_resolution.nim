@@ -12,7 +12,7 @@ type
   MyBox*[V: static int] = object
     val: uint32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "Crucible - type resolution edge cases":
     test "ObjConstr empty child (generic type in const)":
       const kernelCode = cuda:

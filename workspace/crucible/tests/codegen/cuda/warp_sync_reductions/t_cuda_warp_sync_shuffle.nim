@@ -24,7 +24,7 @@ const butterflyCuda = cuda:
     # xor-1 butterfly: lane i exchanges with lane i xor 1
     outBuf[lane] = shfl_xor_sync(uint32(lane), 1)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "CUDA - cross-lane shuffles":
 
     test "shfl_sync broadcasts lane 0 to every lane":

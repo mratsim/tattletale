@@ -18,7 +18,7 @@ const discardScanGlsl = glsl:
     discard 0.0'f32 + reduceAdd(v)
     outBuf[lane] = v
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "GLSL - feature scan under discard":
 
     test "the discarded reduction does not stop the store, the kernel runs on the device":

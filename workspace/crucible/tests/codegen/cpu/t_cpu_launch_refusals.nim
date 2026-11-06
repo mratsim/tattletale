@@ -15,7 +15,7 @@ import workspace/crucible
 proc probe(outBuf: ptr UncheckedArray[uint32]) =
   outBuf[0] = 1
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCpu)
   defer: engine.destroyCpuEngine()
 
@@ -65,6 +65,6 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
         blk = (1, 1)
         workgroupsPerTask = 3
       doAssert outBuf[0] == 1, "a literal knob is accepted but ignored, the launch covers the whole grid"
-      echo "[OK] workgroupsPerTask: the serial launch ignores a literal knob, the non-literal refusal is pinned by manual_cpu_serial_knob_refused.nim"
+      echo "[OK] workgroupsPerTask: the serial launch ignores a literal knob, the non-literal refusal is verified by manual_cpu_serial_knob_refused.nim"
 
 runTest()

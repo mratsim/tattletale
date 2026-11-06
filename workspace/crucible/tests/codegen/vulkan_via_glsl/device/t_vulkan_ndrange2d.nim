@@ -17,7 +17,7 @@ const kernel2d = glsl:
     C[gl_GlobalInvocationID[1] * 8 + gl_GlobalInvocationID[0]] =
       uint32(gl_GlobalInvocationID[1] * 8 + gl_GlobalInvocationID[0])
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernel2d
 
   suite "Vulkan - multi-axis dispatch":

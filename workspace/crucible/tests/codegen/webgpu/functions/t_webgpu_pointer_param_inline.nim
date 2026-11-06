@@ -33,7 +33,7 @@ const kernel = webgpu:
     bump(v)
     outBuf[1] = float32(v)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernel
 
   suite "WebGPU - pointer-param call inlining":

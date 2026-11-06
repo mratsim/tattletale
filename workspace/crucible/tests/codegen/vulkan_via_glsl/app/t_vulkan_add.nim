@@ -48,7 +48,7 @@ const maxVk = glsl:
 
 # ── Codegen tests (always runs) ─────────────────────────────────────────────
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
 
   # ── Execution via Vulkan runtime ────────────────────────────────────────────
 

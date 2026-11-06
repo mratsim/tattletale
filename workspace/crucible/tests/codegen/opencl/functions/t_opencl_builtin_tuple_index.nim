@@ -20,7 +20,7 @@ const tupleIndexCl = opencl:
     C[gy * 3 + 1] = uint32(get_global_id(1))
     C[gy * 3 + 2] = uint32(get_global_id(2))
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   # grid (1, 3) x blk (1, 2): six work-items, global y = 0..5, z = 0,
   # workgroup id y = global y div 2
   var engine = newEngine(runOpenCL)

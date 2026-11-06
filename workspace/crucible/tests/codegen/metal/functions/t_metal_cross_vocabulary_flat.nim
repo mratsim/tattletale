@@ -17,7 +17,7 @@ const kernel1d = metal:
     C[64 + thread_index_in_threadgroup] = uint32(thread_index_in_threadgroup)
     syncthreads()
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   echo kernel1d
 
   suite "Metal - cross-vocabulary coordinates + barrier":

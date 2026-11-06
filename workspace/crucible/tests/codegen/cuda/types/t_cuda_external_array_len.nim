@@ -30,9 +30,7 @@ const kernelCode = cuda:
     let b = initBigInt(1'u32)
     outp[0] = bigIntSum(b)
 
-# If compilation succeeds, the nnkSym+allowArrayIdent=true path
-# did not crash (getImpl.intVal was not called unconditionally).
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)
   echo "PTX: ", engine.getArtifact().len, " bytes"

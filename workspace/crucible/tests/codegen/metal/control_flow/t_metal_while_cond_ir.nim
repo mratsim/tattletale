@@ -35,9 +35,7 @@ const condMsl = block:
   kern.isKernel = true
 
   let m = moduleD("probe", @[], @[limitOf, kern])
-  let (src, err) = printMslModule(m)
-  doAssert err.len == 0, "MSL printer refused the hand-built module: " & err
-  src
+  printMslModule(m)
 
 proc runTest() =
   suite "Metal - conditioned loop from hand-built IR":

@@ -18,7 +18,7 @@ const kernelCode2 = cuda:
     const tup {.genSym.} = (FixMe[1](), FixMe[8]())
     C[0] = 1'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "CUDA - dummy-field initializers":
     test "single dummy struct const":
       var buf: array[1, uint32]

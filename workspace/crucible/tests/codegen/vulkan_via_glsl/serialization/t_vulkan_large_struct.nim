@@ -11,7 +11,7 @@ type
   LargeStruct = object
     data: array[8, uint32]  # 32 bytes > 24 threshold
 
-# Test 1: inline constructor arg to device function
+# inline constructor arg to device function
 const code1 = glsl:
   proc takeLarge(s: LargeStruct): uint32 {.device.} =
     result = s.data[0] + s.data[1]
@@ -21,10 +21,7 @@ const code1 = glsl:
 echo "=== Test 1: Inline constructor arg ===\n"
 echo code1
 
-# Should compile without crashing (no raiseAssert from gpuMaterialize).
-# Generated code should use by-value struct params.
-
-# Test 2: function return value arg
+# function return value arg
 type
   OtherLarge = object
     x: array[8, float32]

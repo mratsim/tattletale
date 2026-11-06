@@ -21,7 +21,7 @@ const uintToBitsGlsl = glsl:
     let u = 0xC0000000'u32 + uint32(lane)
     outBuf[lane] = cast[float32](u)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "GLSL - bit-reinterpret cast emission":
 
     test "cast[uint32](float) reinterprets the bits on the device":

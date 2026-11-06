@@ -36,7 +36,7 @@ proc launchAndRead(flag: uint32): array[2, uint32] =
   engine.launchKernel("boolRoundTrip", oDev, (fDev,))
   engine.copyToHostFromDevice(addr result[0], oDev, 2)
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block:  # a set flag: b true, c false
     let res = launchAndRead(1'u32)
     doAssert res[0] == 111'u32, "set flag branch: got " & $res[0] & ", want 111"

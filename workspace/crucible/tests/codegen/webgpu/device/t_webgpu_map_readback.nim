@@ -20,7 +20,7 @@ const kernelCode = webgpu:
 
 # ── Host side ────────────────────────────────────────────────────────────────
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   suite "WebGPU - staging-buffer map readback":
 
     test "multi-element uint32 output readback":

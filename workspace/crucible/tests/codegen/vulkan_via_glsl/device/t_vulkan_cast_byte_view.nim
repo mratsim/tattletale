@@ -18,7 +18,7 @@ const kernelCode = glsl:
     bytes[3] = uint8(outP[0] + 1)
     outP[0] = outP[0] + 1
 
-proc runTest() =   # private: tests run in a proc so engines are destroyed at return
+proc runTest() =
   block:
     var engine = newEngine(runVulkan)
     engine.ingest(kernelCode)

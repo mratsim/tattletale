@@ -18,7 +18,7 @@ const kernelCode = cuda:
     # Actual tensor core MMA: mma.sync.aligned.m16n8k16...
     output[1] = 42'u32
 
-proc runTest() =   # private — tests run in a proc so engines are destroyed at return
+proc runTest() =
   var buf: array[2, uint32]
   var engine = newEngine(runCuda)
   engine.ingest(kernelCode)
