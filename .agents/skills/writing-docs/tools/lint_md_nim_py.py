@@ -670,6 +670,8 @@ RULES = {
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
     "emitted-text-assert": Rule("emitted-text-assert", True,
                                 "a string literal containment, scan, or equality in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
+    "handbuilt-ir-test": Rule("handbuilt-ir-test", True,
+                              "hand-built IR construction in a tests/codegen or tests/runtime Nim file, the test dies on every IR change; drive the public API or the verifier under tests/verify"),
     "method-call-syntax": Rule("method-call-syntax", True,
                                "a tile_algebra view method written in dst-first free-call syntax, the receiver is the first argument, write receiver.method(...)"),
     "stmt-inline": Rule("stmt-inline", True,
@@ -2354,6 +2356,23 @@ def _logical_code_lines(text):
     return [(start, buf) for start, buf, _spans in _logical_code_lines_spanned(text)]
 
 
+def nim_handbuilt_ir_checks(path, text, findings):
+    """Flags hand-built IR construction in tests/codegen and tests/runtime.
+
+    - `moduleD` and `CirModule` name the IR builders; a test constructing
+      modules by hand dies on every IR change, the public API is the tested
+      surface (t_cirv2_verify_scope under tests/verify is the sole exception)
+    """
+    if "tests" not in path.parts or not ({"codegen", "runtime"} & set(path.parts)):
+        return
+    for no, code in enumerate(text.splitlines(), 1):
+        if re.search(r"\bmoduleD\b|\bCirModule\b", code):
+            findings.append(Finding(path, no, "handbuilt-ir-test",
+                "hand-built IR in a codegen or runtime test, the test dies on "
+                "every IR change; drive the public API (lowerCirv2) or the "
+                "verifier under tests/verify"))
+
+
 def nim_emitted_text_assert_checks(path, text, findings):
     """Flags string literal containments, scans, and equalities over emitted
     source in tests/codegen.
@@ -3294,6 +3313,7 @@ def scan(path, text, findings):
             nim_try_block_checks(path, text, findings)
             nim_design_narration_checks(path, text, findings)
             nim_emitted_text_assert_checks(path, text, findings)
+            nim_handbuilt_ir_checks(path, text, findings)
             nim_method_call_syntax_checks(path, text, findings)
             nim_callable_semicolon_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
