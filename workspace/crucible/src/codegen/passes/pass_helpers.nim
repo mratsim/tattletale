@@ -44,9 +44,11 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
     if e.isNil:
       return
     if onExpr != nil:
-      e.walkExprs(onExpr)
+      onExpr(e)
     if e.kind == eStmts:
       walkStmts(e.stmts, onStmt, onExpr)
+    for ch in e.getExprChildren():
+      visitExprs(ch)
   var walked: seq[CirStmt]
   for s in ss:
     walked.add s
