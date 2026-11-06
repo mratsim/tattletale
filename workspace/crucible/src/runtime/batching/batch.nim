@@ -126,7 +126,6 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
       const `layoutN` = computeDeviceLayout(typeof(`argsTuple`), `cgN`)
       type BatchRec = object
         entry: BatchEntry[`H`]
-        blob: array[`layoutN`.size, byte]
         off: int
       template batchRecStore(ctx: var BatchRec, v: auto, pos: int) =
         when typeof(v) is `H`:
@@ -141,13 +140,12 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
           const w = computeDeviceLayout(typeof(v), `cgN`)
           ctx.off = round_multiple_up(ctx.off, w.align)
           let start = ctx.off
-          packFrom(ctx.blob, ctx.off, v, `cgN`)
+          packFrom(ctx.entry.bytes, ctx.off, v, `cgN`)
           ctx.entry.slots.add BatchSlot[`H`](kind: bskBytes, off: start, size: w.size)
       var `recN` = BatchRec(entry: BatchEntry[`H`](entrypoint: `kname`, config: `configCall`))
+      `recN`.entry.bytes = newSeq[byte](`layoutN`.size)
       bindArgs(`recN`, `outN`, `argsTuple`, batchRecStore, typedesc[`H`], `cgN`)
-      `recN`.entry.bytes = newSeq[byte](`recN`.off)
-      if `recN`.off > 0:
-        copyMem(`recN`.entry.bytes[0].addr, `recN`.blob[0].addr, `recN`.off)
+      `recN`.entry.bytes.setLen(`recN`.off)
       `batch`.entries.add `recN`.entry
 
 macro recordDeviceCall(batch: Batch, kernel: typed, gridN, blkN: untyped, args: varargs[untyped]): untyped =
