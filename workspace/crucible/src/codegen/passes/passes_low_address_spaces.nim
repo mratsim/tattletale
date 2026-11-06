@@ -24,9 +24,7 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
-  ## Registration position: after the target's other lowering transforms,
-  ## whose rewrites append parameters and call-site arguments by callee name
-  ## over the declared call graph.
+  ## Registers after the target's other lowering transforms, whose rewrites append parameters and call-site arguments by callee name.
   reg.register("instantiateAddressSpaceGenerics", pkTransform,
     "Instantiates module callees whose pointer arguments name another" &
     " address addressSpace than the formal",
@@ -36,7 +34,7 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
 #  Instantiation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc resolveWantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirType]): bool =
+proc resolveWantedParamTypes(wanted: var seq[CirType], callee: CirProc, args: seq[CirExpr]): bool =
   # Precondition: `args` covers every formal, `args.len == callee.params.len`.
   wanted.setLen(callee.params.len)
   for i in 0 ..< callee.params.len:
@@ -57,15 +55,6 @@ proc buildInstKey(callee: CirProc, wanted: seq[CirType]): string =
       result.add "\x1f" & $i & "\x1f" & $wanted[i].addressSpace
 
 proc retypeCloneBody(e: CirExpr, retyped: Table[string, CirType]) =
-  ## Retypes one clone body against the symbols recorded in `retyped` --
-  ## re-spaced formals and locals whose declaration adopted a re-spaced
-  ## initializer -- post-order: expressions are refs, so the retyping applies
-  ## to every sharer of the symbol.
-  ##
-  ## - a read of a retyped symbol adopts its type
-  ## - a pointer cast re-derives its target space from its operand,
-  ##   children first: a cast over a cast reads the inner cast's re-derived
-  ##   target
   for c in e.getExprChildren():
     c.retypeCloneBody(retyped)
   if e.kind == eSym and retyped.hasKey(e.name):
@@ -106,21 +95,18 @@ type
     ## - `clones` keys one instantiation per argument-space combination
     ## - `byBase` groups clones under their base callee for the placement loop
     ## - `queue` lists the procs whose bodies still need the call-site walk
-    ##
-    ## `err` is the first refusal, empty while the walk is clean.
     procs: Table[string, CirProc]
     clones: Table[string, CirProc]
     byBase: Table[string, seq[CirProc]]
     queue: seq[CirProc]
-    err: string
 
 proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirProc, ctx: InstantiateCtx) =
   ## Rewrites one call site onto the instantiation its argument spaces select.
   ## The rewrite touches the `calleeExpr` and the `ctx` only, nothing returned.
-  ## The pass refuses a name collision, `ctx.err` receives the refusal text and the call site remains untouched.
+  ## The pass refuses a name collision.
   var wanted: seq[CirType]
   var instantiation: CirProc
-  if not calleeProc.resolveWantedParamTypes(args, wanted):
+  if not resolveWantedParamTypes(wanted, calleeProc, args):
     return
   let key = calleeProc.buildInstKey(wanted)
   if ctx.clones.hasKey(key):
@@ -128,8 +114,7 @@ proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirPro
   else:
     var name = calleeProc.name & "_" & base58Short(typeIdentityHash(key))
     if ctx.procs.hasKey(name):
-      ctx.err = "instantiation name '" & name & "' is already taken by another proc of the module"
-      return
+      raiseAssert("instantiation name '" & name & "' is already taken by another proc of the module")
     instantiation = cloneCallee(calleeProc, wanted, name)
     ctx.procs[name] = instantiation
     ctx.clones[key] = instantiation
@@ -142,32 +127,30 @@ proc instantiateCallSitesStmts(ss: seq[CirStmt], ctx: InstantiateCtx) =
   ## Unspecialized call sites stay untouched: the printers judge whatever survives.
   ## Unspecialized means a callee outside the module or an arity mismatch against the module callee.
   let onExpr = proc(e: CirExpr) =
-    if ctx.err.len > 0 or e.kind != eCall or e.callee.kind != eSym:
+    if e.kind != eCall or e.callee.kind != eSym:
       return
     let calleeProc = ctx.procs.getOrDefault(e.callee.name)
     if calleeProc.isNil or e.args.len != calleeProc.params.len:
       return
     e.callee.rewriteCallSite(e.args, calleeProc, ctx)
   let onStmt = proc(s: CirStmt) =
-    if ctx.err.len > 0 or s.kind != sCall:
+    if s.kind != sCall:
       return
     let calleeProc = ctx.procs.getOrDefault(s.callCallee.name)
     if calleeProc != nil and s.callArgs.len == calleeProc.params.len:
       s.callCallee.rewriteCallSite(s.callArgs, calleeProc, ctx)
   ss.walkStmts(onStmt, onExpr)
 
-proc instantiateAddressSpaceGenericsPass(m: CirModule): string =
+proc instantiateAddressSpaceGenericsPass(m: CirModule) =
   ## Clones join the walk, their bodies scanned like any other proc's body.
   var ctx = InstantiateCtx()
   for fn in m.procs:
     ctx.procs[fn.name] = fn
     ctx.queue.add fn
   var i = 0
-  while i < ctx.queue.len and ctx.err.len == 0:
+  while i < ctx.queue.len:
     ctx.queue[i].body.instantiateCallSitesStmts(ctx)
     i.inc
-  if ctx.err.len > 0:
-    return ctx.err
   # Clones insert after their base callee so the emitted proc order compiles declaration before use
   var placed: seq[CirProc]
   for fn in m.procs:

@@ -8,7 +8,6 @@
 import std/os
 
 proc sanitizePath*(name: string): string =
-  ## Strips directory components, raises on path traversal.
   result = extractFilename(name)
   if result != name or result in [".", ".."]:
     raiseAssert "Path traversal detected — name contains directory separators: \"" & name & "\""

@@ -5,7 +5,7 @@
 ## Test that an array declaration whose initializer is a device call
 ## dies in the array-assign decomposition before any shader is emitted, naming the pass:
 ##
-##   Error: pass decomposeArrayAssign: in proc kern: array declaration binds a call result
+##   Error: array declaration binds a call result
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

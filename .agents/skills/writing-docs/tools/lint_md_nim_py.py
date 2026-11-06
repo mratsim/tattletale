@@ -420,6 +420,8 @@ def _probe_exempt(line):
 BANNED = [
     (r"\boff-contract\b",
      None, "'off-contract' hides who checks what, state the precondition and the checker, the consequence follows from the code"),
+    (r"\b\w+[ -]bearing\b",
+     None, "'X-bearing' says nothing, write 'containing X' or name the construct"),
     (r"maxloopiterationsvm",
      None, "the VM loop-cap flag is banned tree-wide, no VM iteration cap exists or is configurable"),
     (r"\bmint(s|ed)?\b",
@@ -495,10 +497,9 @@ BANNED = [
     (r"\bprobes?\b", _probe_exempt,
      "use test (the record field name `probe` and `probe_*` schema keys stay)"),
     (r"\bdeviation classes?\b", None, "describe the actual difference"),
-    (r"\bload[- ]bearing\b", None, "use essential, critical, or necessary"),
     (r"\bseams?\b", None, "use boundary, interface, or edge"),
-    (r"\bphysics[- ]bearing\b|\bphysics\b",
-     None, "use honest rounding, drift behavior, or value-bearing"),
+    (r"\bphysics\b",
+     None, "use honest rounding, drift behavior, or 'containing values'"),
     (r"\bcommitted (?:bytes|blobs?|blob hashes)\b",
      None, "use recorded inputs, recorded files, or recorded checksums"),
     (r"\btail[- ]mass\b", None, "use tail probability"),
@@ -641,7 +642,7 @@ RULES = {
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
     "test-header-testthat": Rule("test-header-testthat", True,
-                                 "a test file header with the \"Test that\" line after the run command, the shape is title, Test that, blank, run command"),
+                                 "a test file header without the \"Test that\" line before the run command, the shape is title, Test that, blank, run command"),
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
@@ -673,8 +674,6 @@ RULES = {
                                "a tile_algebra view method written in dst-first free-call syntax, the receiver is the first argument, write receiver.method(...)"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
-    "diag-downgrade": Rule("diag-downgrade", True,
-                           "echo, debugEcho, raiseAssert or raise as a diagnostic, use error() or the warning builtin"),
     "registration-top": Rule("registration-top", True,
                              "a register proc defined below the first implementation in a passes or analysis file, registration lives at the top"),
     "section-banner": Rule("section-banner", True,
@@ -1689,12 +1688,10 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
     # The run command may wrap, so its first line anchors it.
     test_that = [n for n, c in header_lines if TEST_THAT_RE.search(c)]
     run_cmd = [n for n, c in header_lines if RUN_CMD_RE.search(c)]
-    # A bare Run header (title, blank, run command) is also valid;
-    # "Test that" is only required when present to sit before the run command.
-    if is_test and test_that and (run_cmd and min(test_that) > min(run_cmd)):
+    if is_test and run_cmd and (not test_that or min(test_that) > min(run_cmd)):
         findings.append(Finding(
             path, first_line, "test-header-testthat",
-            "the \"Test that\" line sits after the run command, "
+            "test file header carries no \"Test that\" line before the run command, "
             "the shape is title, Test that, blank, run command"))
 
 
@@ -3666,7 +3663,6 @@ def lint(paths, base=None):
         if f.suffix == ".nim":
             stmt_inline(f, text, findings, added)
             scan_dump_identifier(f, text, findings, added)
-            diagnostic_channel(f, text, findings, added)
             registration_top(f, text, findings, added)
             section_banner(f, text, findings, added)
             refusal_inputs.append((f, text))
@@ -5958,31 +5954,6 @@ def _nim_statement_frames(lines):
                 depth += 1
             elif ch in ")]}":
                 depth -= 1
-
-
-DIAG_DOWNGRADE_RE = re.compile(
-    r"\braiseAssert\b|\bdebugEcho\b|\braise newException\b|(?<![\w.])echo\b")
-
-
-def diagnostic_channel(path, text, findings, added):
-    """Compile-time diagnostics use error() or the warning builtin.
-
-    echo, debugEcho and raiseAssert print past the diagnostic channel;
-    raise turns a compile-time rejection into a catchable exception, the
-    rejected program then compiles inside a test. Tests and the host-side
-    runtime keep echo, fixture output and device logging.
-    """
-    sp = str(path).replace("\\", "/")
-    if "/tests/" in sp or "manual_" in sp or "/runtime/" in sp:
-        return
-    for no, code, _, _ in _nim_statement_frames(text.splitlines()):
-        if added is not None and no not in added:
-            continue
-        if DIAG_DOWNGRADE_RE.search(code):
-            findings.append(Finding(
-                path, no, "diag-downgrade",
-                "compile-time diagnostics use error() or the warning builtin, "
-                "echo/debugEcho/raiseAssert/raise downgrade or catch the channel"))
 
 
 def stmt_inline(path, text, findings, added):

@@ -1,11 +1,8 @@
-## Metal: statement splices in loop and branch conditions evaluate in place.
+## Metal: statement splices in loop and branch conditions
 ##
-## Test that a `block:` splice in a `while` condition fires once per iteration
-## at the front of the loop body. A splice in an `if` condition fires once
-## before the branch test.
-##
-## Nim runs a while-condition splice on every test, including the failing test
-## that exits the loop. The released lowering never does.
+## Test that a `block:` splice in a `while` condition fires
+## before every condition evaluation, the failing test included.
+## An `if`-condition splice fires once before the branch test.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -46,30 +43,31 @@ const stmtCondMsl = metal:
 
 proc runTest() =   # private: engines are destroyed at proc return
   suite "Metal - statement splices in conditions":
-    test "a while-condition splice runs once per iteration, never on the failing test":
+    test "a while-condition splice fires before every test, the failing one included":
       var engine = newEngine(runMetal)
       engine.ingest(stmtCondMsl)
       let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel("countKernel", oDev, ())
       var output: array[2, uint32]
       engine.copyToHostFromDevice(addr output[0], oDev, 2)
-      # 3 condition-splice firings, one per iteration, none on the failing test
-      # i counts the iterations in the loop body, so it also stops at 3
-      check output[0] == 3
+      # 4 condition-splice firings, one before each condition evaluation.
+      # i counts the admitted iterations in the loop body, so it stops at 3
+      check output[0] == 4
       check output[1] == 3
 
-    test "a while-condition splice feeding the test stops the loop one splice short of Nim":
+    test "a while-condition splice feeding the test matches the Nim firing count":
       var engine = newEngine(runMetal)
       engine.ingest(stmtCondMsl)
       let oDev = engine.allocDevice(uint32, 3)
       engine.launchKernel("feedKernel", oDev, ())
       var output: array[3, uint32]
       engine.copyToHostFromDevice(addr output[0], oDev, 3)
-      # Boundary: Nim increments n on the failing test too,
-      # n = 4 under Nim and n = 3 under the released host
+      # Nim fires the splice before the failing test too: n = 3 at the failing test.
+      # A pre-splice n = 0 admits no iteration on the first test.
+      # i counts 2 admitted iterations
       check output[0] == 3
       check output[1] == 3
-      check output[2] == 3
+      check output[2] == 2
 
     test "an if-condition splice runs once, before the branch test":
       var engine = newEngine(runMetal)

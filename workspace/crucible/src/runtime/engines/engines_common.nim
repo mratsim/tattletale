@@ -6,8 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Shared leaf. Launch modules, engines, and the public API import it.
-## DeviceMem and the per-backend buffer release share this module.
-## Type and allocator live in one scope, like the stdlib's memalloc and seqs_v2.
+## DeviceMem and its per-backend release procs share one scope, like the stdlib's memalloc and seqs_v2.
 ## Each release proc is private and never re-exported.
 
 import workspace/crucible/src/crucible_codegen
@@ -16,7 +15,6 @@ export crucible_codegen.CodegenKind
 import workspace/crucible/src/abis/nvidia_abi
 import workspace/crucible/src/abis/objc_abi as objc
 import workspace/crucible/vendor/wgpu
-import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/backends/vulkan_common
 
@@ -37,7 +35,6 @@ template dim3*(t: tuple[a, b, c: SomeInteger]): Dim3 = Dim3(x: int(t[0]), y: int
 template dim3*(d: Dim3): Dim3 = d
 
 proc freeDeviceImpl(h: CUdeviceptr) {.inline.} =
-  # cuMemFree rejects the zero handle a moved-from DeviceMem leaves behind
   if culonglong(h) != 0:
     check cuMemFree(h)
 
@@ -50,7 +47,6 @@ proc freeDeviceImpl(h: VulkanBuffer) {.inline.} =
   h.dealloc()
 
 proc freeDeviceImpl(h: WGPUBuffer) {.inline.} =
-  # wgpuBufferRelease aborts the process on the nil handle a moved-from DeviceMem leaves behind
   if not h.isNil:
     wgpuBufferRelease(h)
 

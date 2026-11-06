@@ -37,11 +37,6 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc defaultConstr(t: CirType): CirExpr =
-  ## Construction of a static struct from nothing.
-  ##
-  ## - a static struct has no runtime bytes
-  ## - every field is itself static and constructs recursively
-  ## - fields naming a leaf symbol stay constructed by `buildLeafConstr`
   var fields: seq[CirKv]
   for f in t.fields:
     if f.typ.kind == ctVoid:
@@ -70,7 +65,7 @@ proc buildLeafConstr(t: CirType, name: string): CirExpr =
       fields.add kv(f.name, sym(name & "_" & f.name, f.typ))
   result = oconstrE(t, fields)
 
-proc explodeGlobalStructWithPtrFields(m: CirModule): string =
+proc explodeGlobalStructWithPtrFields(m: CirModule) =
   ## Contract:
   ## - buffer leaves name the device address space, value leaves the thread space
   ## - the kernel body opens with the rebuilt struct local
@@ -82,7 +77,7 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
     for p in fn.params:
       taken.add p.name
     var locals: seq[tuple[name: string, typ: CirType]]
-    fn.body.collectDeclaredLocals(locals)
+    collectDeclaredLocals(locals, fn.body)
     for l in locals:
       taken.add l.name
     var params: seq[CirParam]
@@ -92,8 +87,8 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
         let leaves = p.typ.kernelParamLeaves(p.name)
         for leaf in leaves:
           if leaf.name in taken:
-            return "kernel " & fn.name & ": leaf '" & leaf.name &
-              "' collides with an existing kernel parameter or local"
+            raiseAssert("leaf '" & leaf.name &
+              "' collides with an existing kernel parameter or local")
           taken.add leaf.name
           let typ =
             if leaf.isBuffer:
@@ -113,73 +108,62 @@ proc explodeGlobalStructWithPtrFields(m: CirModule): string =
     if preamble.len > 0:
       fn.params = params
       fn.body = preamble & fn.body
-  return ""
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Pointer-local explosion
 # ═══════════════════════════════════════════════════════════════════════
 
-proc defaultRewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, target: string): string
+proc defaultRewritePointerExpr(ctx: var ExplodeCtx, fn: CirProc, e: CirExpr, target: string)
 
-proc defaultPointerArm(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, target: string): string =
+proc defaultPointerArm(ctx: var ExplodeCtx, fn: CirProc, e: CirExpr, target: string) =
   case e.kind
   of eDot:
-    let err = defaultRewritePointerExpr(fn, ctx, e.dotBase, target)
-    if err.len > 0:
-      return err
-    return ""
+    ctx.defaultRewritePointerExpr(fn, e.dotBase, target)
   of eDeref:
     let op = e.derefOperand
     if op.kind == eSym:
       if op.name in ctx.pendingPtrs:
-        return refuseAt(fn, "pointer local " & op.name & " reads ahead of its address-of binding")
+        raiseAssert("pointer local " & op.name & " reads ahead of its address-of binding")
       if op.name in ctx.structLocals:
-        return refuseAt(fn, "deref of exploded struct local " & op.name & ", " & target & " has no pointer struct members")
-    return defaultRewritePointerExpr(fn, ctx, op, target)
+        raiseAssert("deref of exploded struct local " & op.name & ", " & target & " has no pointer struct members")
+    ctx.defaultRewritePointerExpr(fn, op, target)
   else:
     for ch in getExprChildren(e):
-      let err = defaultRewritePointerExpr(fn, ctx, ch, target)
-      if err.len > 0:
-        return err
-    return ""
+      ctx.defaultRewritePointerExpr(fn, ch, target)
 
-proc defaultRewritePointerExpr(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr, target: string): string =
-  rewritePointerExprShared(fn, ctx, e, target, proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string =
-    defaultPointerArm(fn, ctx, e, target))
+proc defaultRewritePointerExpr(ctx: var ExplodeCtx, fn: CirProc, e: CirExpr, target: string) =
+  ctx.rewritePointerExprShared(fn, e, target, proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr) =
+    ctx.defaultPointerArm(fn, e, target))
 
-proc defaultExplodeVarDecl(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt, target: string): string =
+proc defaultExplodeVarDecl(ctx: var ExplodeCtx, fn: CirProc, s: CirStmt, target: string) =
   if s.declType.kind in {ctPtr, ctAptr}:
     if s.init == nil:
       ctx.pendingPtrs.incl(s.name)
     elif s.init.kind == eAddr and s.init.addrOperand.kind == eSym:
       ctx.aliasOf[s.name] = s.init.addrOperand.name
     else:
-      return refuseAt(fn, "pointer local " & s.name & " binds no address, " & target & " locals are values")
-    return ""
+      raiseAssert("pointer local " & s.name & " binds no address, " & target & " locals are values")
+    return
   if s.declType.kind == ctStruct and s.declType.containsPtrDeep:
-    return explodeStructVarDecl(fn, ctx, s, target)
-  return defaultRewritePointerExpr(fn, ctx, s.init, target)
+    ctx.explodeStructVarDecl(fn, s, target)
+    return
+  ctx.defaultRewritePointerExpr(fn, s.init, target)
 
-proc defaultExplodeAsgn(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt, target: string): string =
+proc defaultExplodeAsgn(ctx: var ExplodeCtx, fn: CirProc, s: CirStmt, target: string) =
   if s.lhs.kind == eSym and s.lhs.typ != nil and
       s.lhs.typ.kind in {ctPtr, ctAptr}:
     if s.lhs.name notin ctx.pendingPtrs and s.lhs.name notin ctx.aliasOf:
       # a pointer parameter of the proc in flight, never touched by the pass
-      let rerr = defaultRewritePointerExpr(fn, ctx, s.rhs, target)
-      if rerr.len > 0:
-        return rerr
-      return ""
+      ctx.defaultRewritePointerExpr(fn, s.rhs, target)
+      return
     if s.lhs.name in ctx.aliasOf:
-      return refuseAt(fn, "pointer local " & s.lhs.name & " rebinds, " & target & " keeps one binding")
+      raiseAssert("pointer local " & s.lhs.name & " rebinds, " & target & " keeps one binding")
     if s.rhs.kind != eAddr or s.rhs.addrOperand.kind != eSym:
-      return refuseAt(fn, "pointer local " & s.lhs.name & " rebinds to a non-address value, " & target & " keeps one binding")
+      raiseAssert("pointer local " & s.lhs.name & " rebinds to a non-address value, " & target & " keeps one binding")
     ctx.pendingPtrs.excl(s.lhs.name)
     ctx.aliasOf[s.lhs.name] = s.rhs.addrOperand.name
-    return ""
-  let lerr = defaultRewritePointerExpr(fn, ctx, s.lhs, target)
-  if lerr.len > 0:
-    return lerr
-  return defaultRewritePointerExpr(fn, ctx, s.rhs, target)
+    return
+  ctx.defaultRewritePointerExpr(fn, s.lhs, target)
+  ctx.defaultRewritePointerExpr(fn, s.rhs, target)
 
 proc defaultExplodeDropsVar(s: CirStmt, ctx: ExplodeCtx): bool =
   s.declType.kind in {ctPtr, ctAptr} or
@@ -213,79 +197,51 @@ template registerExplodePointerLocalsImpl(reg: var PassRegistry, passName,
   # proc placed after its machinery, one that passes the module-local procs
   # as explicit template arguments.
   # Nim's codeReordering keeps the registration call at the module top
-  proc explodeWalk(fn: CirProc, ctx: var ExplodeCtx, ss: var seq[CirStmt]): string =
+  proc explodeWalk(ctx: var ExplodeCtx, fn: CirProc, ss: var seq[CirStmt]) =
     var i = 0
     while i < ss.len:
       let s = ss[i]
       var drops = false
       case s.kind
       of sVar:
-        let err = explodeVarDecl(fn, ctx, s)
-        if err.len > 0:
-          return err
+        explodeVarDecl(fn, ctx, s)
         drops = explodeDropsVar(s, ctx)
       of sAsgn:
-        let err = explodeAsgn(fn, ctx, s)
-        if err.len > 0:
-          return err
+        explodeAsgn(fn, ctx, s)
         drops = explodeDropsAsgn(s, ctx)
       of sIte:
-        let cerr = rewritePointerExpr(fn, ctx, s.cond)
-        if cerr.len > 0:
-          return cerr
-        let terr = explodeWalk(fn, ctx, s.thenBody)
-        if terr.len > 0:
-          return terr
-        let eerr = explodeWalk(fn, ctx, s.elseBody)
-        if eerr.len > 0:
-          return eerr
+        rewritePointerExpr(fn, ctx, s.cond)
+        ctx.explodeWalk(fn, s.thenBody)
+        ctx.explodeWalk(fn, s.elseBody)
       of sWhile:
-        let cerr = rewritePointerExpr(fn, ctx, s.whileCond)
-        if cerr.len > 0:
-          return cerr
-        let werr = explodeWalk(fn, ctx, s.whileBody)
-        if werr.len > 0:
-          return werr
+        rewritePointerExpr(fn, ctx, s.whileCond)
+        ctx.explodeWalk(fn, s.whileBody)
       of sRet:
-        let rerr = rewritePointerExpr(fn, ctx, s.retVal)
-        if rerr.len > 0:
-          return rerr
+        rewritePointerExpr(fn, ctx, s.retVal)
       of sDiscard:
-        let derr = rewritePointerExpr(fn, ctx, s.discardVal)
-        if derr.len > 0:
-          return derr
+        rewritePointerExpr(fn, ctx, s.discardVal)
       of sCall:
         let tmp = CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
-        let err = rewritePointerExpr(fn, ctx, tmp)
+        rewritePointerExpr(fn, ctx, tmp)
         s.callCallee = tmp.callee
         s.callArgs = tmp.args
-        if err.len > 0:
-          return err
       of sAsm, sEmit:
         discard
       if drops:
         ss.delete(i)
         continue
       i.inc
-    return ""
-  proc explodePointerLocals(m: CirModule): string {.nimcall.} =
+  proc explodePointerLocals(m: CirModule) {.nimcall.} =
     for fn in m.procs:
       var ctx = newExplodeCtx(m, fn)
-      let err = explodeWalk(fn, ctx, fn.body)
-      if err.len > 0:
-        return err
-    return ""
+      ctx.explodeWalk(fn, fn.body)
   reg.register(passName, pkTransform, description,
     run = explodePointerLocals)
 
 template registerExplodePointerLocals*(reg: var PassRegistry, passName, description: string, target: string) =
-  ## Registers the pointer-local explosion pass with the built-in semantics:
-  ## - a pointer local is a value with one address-of binding
-  ## - reads rewrite to the pointee
-  ## - struct locals with pointer fields dissolve
   registerExplodePointerLocalsImpl(reg, passName, description,
     proc(m: CirModule, fn: CirProc): ExplodeCtx = ExplodeCtx(),
-    proc(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string = defaultExplodeVarDecl(fn, ctx, s, target),
-    proc(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string = defaultExplodeAsgn(fn, ctx, s, target),
+    proc(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt) = ctx.defaultExplodeVarDecl(fn, s, target),
+    proc(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt) = ctx.defaultExplodeAsgn(fn, s, target),
     defaultExplodeDropsVar, defaultExplodeDropsAsgn,
-    proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string = defaultRewritePointerExpr(fn, ctx, e, target))
+    proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr) = ctx.defaultRewritePointerExpr(fn, e, target))

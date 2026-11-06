@@ -31,7 +31,7 @@ proc runTest() =   # private: tests run in a proc so engines are destroyed at re
       result.y[i] = float32(10 * (i + 1))
       result.expected[i] = 2.5'f32 * result.x[i] + result.y[i]
 
-  proc launchAxpy(engine: var CpuEngine, y, x: ptr UncheckedArray[float32]) =
+  proc launchAxpy(engine: CpuEngine, y, x: ptr UncheckedArray[float32]) =
     engine.launchCpuFn axpyPar(y, 2.5'f32, x, int32(N)) do:
       grid = ((N + BLK - 1) div BLK, 1)
       blk = (BLK, 1)

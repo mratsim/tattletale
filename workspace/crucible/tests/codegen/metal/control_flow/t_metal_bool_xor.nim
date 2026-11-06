@@ -1,4 +1,4 @@
-## Metal: boolean `xor` in a condition with a call-bearing right operand.
+## Metal: boolean `xor` in a condition whose right operand contains a call.
 ##
 ## Test that `xor` evaluates the right operand's side effects and value
 ## before the comparison, on the device.

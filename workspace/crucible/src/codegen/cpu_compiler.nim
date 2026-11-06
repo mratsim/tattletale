@@ -8,17 +8,6 @@
 ## CPU kernel compiler: CIRv2 lowering + C emission for `launchCpuFn`.
 ##
 ##   kernel wrapper → lowerCpuKernel → emitCpuCalleesC + emitCpuWorkgroupLaunchC
-##
-## Launch macro (`runtime/launch/launch_cpu_fn`): drives the pipeline
-## at compile time:
-##
-## - it lowers the kernel wrapper, prints the callee procs and the kernel body
-##   into the generated launch unit. The launch macro assembles the two
-## - there is no `cpu:` standalone macro, a kernel body without a launch
-##   has no meaning on the CPU
-## - the compile target is `ctCpu`, the CPU pass stage registers the C
-##   reserved-word rename and the array-assign decomposition
-## - refusals and verifier violations surface as compile-time errors naming the construct
 
 import std/macros
 
@@ -27,6 +16,7 @@ import ./frontend/nim_to_crucible
 import ./ir/cirv2_lang
 import ./passes/pass_registry
 import ./passes/passes_normalizations
+import ./passes/passes_legalization
 import ./passes/passes_lowering
 import ./passes/passes_validations
 import ./passes/passes_lowering_cpu
@@ -40,16 +30,15 @@ export lang_c.kernelRuntimeParams
 proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   let savedTarget = crucibleCompileTarget
   crucibleCompileTarget = ctCpu
-  let (m, lerr) = lowerCirv2(wrapper)
-  if lerr.len > 0:
-    error(lerr)
+  let m = lowerCirv2(wrapper)
   var reg = PassRegistry.new()
-  registerNormalizationPasses(reg)
+  registerRewriteStmtsExprs(reg)
+  registerResolveBoolDomain(reg)
+  registerValueNormalizations(reg)
+  registerReshapingPasses(reg)
   registerSharedLoweringPasses(reg)
   reg.registerCpuLoweringPasses()
   registerValidationPostPasses(reg)
-  let perr = runPasses(m, reg)
-  if perr.len > 0:
-    error(perr)
+  reg.runPasses(m)
   crucibleCompileTarget = savedTarget
   m

@@ -31,8 +31,6 @@ type
     sharedMem: int
 
 func parseLangName(n: NimNode): string =
-  ## `lang =` launch extra value: a bare language ident matched before sem,
-  ## `spirv` (words route, default), `glsl` (glslangValidator), `hlsl` (dxc)
   var name = $n
   if n.kind == nnkStrLit:
     name = n.strVal
@@ -296,8 +294,8 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
     block:
       const `bridgeSource` = `bridgeN`(`engine`, `langLit`, `procdef`)
       `ingestN`
-      `engine`.launchKernelImpl(`kname`, `outputN`, `argsN`,
-        LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`))
+      `engine`.launchKernelImpl(`outputN`, `argsN`,
+        LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`), `kname`)
 
 func countFormals(candFormals: NimNode): tuple[total, required: int] =
   for i in 1 ..< candFormals.len:
@@ -356,13 +354,6 @@ macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN
 # ═══════════════════════════════════════════════════════════════════════
 
 macro launchDeviceFn*[E](engine: E): DeviceFnSugar[E] =
-  ## Chevron form accessor for device-fn launches.
-  ## - Chevrons:
-  ##   `engine.launchDeviceFn<<(grid, blk)>> fn(args)`
-  ## - Do form:
-  ##     `engine.launchDeviceFn <kernel-expr> do:`
-  ##       `grid = (ceil_div(m, 32), ceil_div(n, 32))`
-  ##       `blk = (32, 1)`
   result = newCall(bindSym"makeDeviceFnSugar", engine)
 
 func makeDeviceFnProxy[E: HwEngine](engine: E, grid, blk: Dim3, sharedMem: int,

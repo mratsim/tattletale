@@ -70,7 +70,7 @@ macro launchKernel*[E](engine: E, kernel, output: untyped, rest: varargs[untyped
     error "launchKernel takes (kernel, output, args[, cfg][, do-schedule]), got " & $(rest.len + 3) & " args"
   let impl = bindSym"launchKernelImpl"
   return quote do:
-    `impl`(`engine`, `kernel`, `output`, `argsNode`, `cfgNode`)
+    `impl`(`engine`, `output`, `argsNode`, `cfgNode`, `kernel`)
 
 func `<<`*[E: HwEngine, G, B: int|tuple](r: LaunchSugar[E], cfg: tuple[grid: G, blk: B]): LaunchSugar[E] {.inline.} =
   result = r
@@ -95,4 +95,4 @@ macro `>>`*(proxy: typed, call: untyped): untyped =
   let outputN = call[1]
   let argsN = call[2]
   return quote do:
-    `proxy`.engine.launchKernelImpl(`kernelN`, `outputN`, `argsN`, `proxy`.cfg)
+    `proxy`.engine.launchKernelImpl(`outputN`, `argsN`, `proxy`.cfg, `kernelN`)

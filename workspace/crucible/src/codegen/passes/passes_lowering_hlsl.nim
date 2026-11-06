@@ -53,54 +53,53 @@ const NumWorkgroupsParam* = "crucible_numworkgroups"
   ## the engine stages the launch's dispatch counts into the uniform block
   ## member of the same name.
 
-proc findNumWorkgroupsExpr(e: CirExpr, coordTy: var CirType): bool =
+proc findNumWorkgroupsExpr(coordTy: var CirType, e: CirExpr): bool =
   if e.isNil:
     return false
   if e.kind == eSym and e.builtin and e.name == "threadgroups_per_grid":
     coordTy = e.typ
     return true
   for ch in getExprChildren(e):
-    if findNumWorkgroupsExpr(ch, coordTy):
+    if findNumWorkgroupsExpr(coordTy, ch):
       return true
   return false
 
-proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
+proc findNumWorkgroupsStmts(coordTy: var CirType, ss: seq[CirStmt]): bool =
   for s in ss:
     case s.kind
     of sVar:
-      if s.init != nil and findNumWorkgroupsExpr(s.init, coordTy):
+      if s.init != nil and findNumWorkgroupsExpr(coordTy, s.init):
         return true
     of sAsgn:
-      if findNumWorkgroupsExpr(s.lhs, coordTy) or
-          findNumWorkgroupsExpr(s.rhs, coordTy):
+      if findNumWorkgroupsExpr(coordTy, s.lhs) or
+          findNumWorkgroupsExpr(coordTy, s.rhs):
         return true
     of sIte:
-      if findNumWorkgroupsExpr(s.cond, coordTy) or
-          findNumWorkgroupsStmts(s.thenBody, coordTy) or
-          findNumWorkgroupsStmts(s.elseBody, coordTy):
+      if findNumWorkgroupsExpr(coordTy, s.cond) or
+          findNumWorkgroupsStmts(coordTy, s.thenBody) or
+          findNumWorkgroupsStmts(coordTy, s.elseBody):
         return true
     of sWhile:
-      if findNumWorkgroupsExpr(s.whileCond, coordTy) or
-          findNumWorkgroupsStmts(s.whileBody, coordTy):
+      if findNumWorkgroupsExpr(coordTy, s.whileCond) or
+          findNumWorkgroupsStmts(coordTy, s.whileBody):
         return true
     of sRet:
-      if s.retVal != nil and findNumWorkgroupsExpr(s.retVal, coordTy):
+      if s.retVal != nil and findNumWorkgroupsExpr(coordTy, s.retVal):
         return true
     of sDiscard:
-      if findNumWorkgroupsExpr(s.discardVal, coordTy):
+      if findNumWorkgroupsExpr(coordTy, s.discardVal):
         return true
     of sCall:
-      if findNumWorkgroupsExpr(s.callCallee, coordTy):
+      if findNumWorkgroupsExpr(coordTy, s.callCallee):
         return true
       for a in s.callArgs:
-        if findNumWorkgroupsExpr(a, coordTy):
+        if findNumWorkgroupsExpr(coordTy, a):
           return true
     of sAsm, sEmit:
       discard
   return false
 
 proc rewriteNumWorkgroupsExpr(e: CirExpr, coordTy: CirType) =
-  ## Expressions are refs, the rewrite applies to the node every sharer sees.
   if e.isNil:
     return
   if e.kind == eSym and e.builtin and e.name == "threadgroups_per_grid":
@@ -114,29 +113,28 @@ proc rewriteNumWorkgroupsExpr(e: CirExpr, coordTy: CirType) =
 proc rewriteNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: CirType) =
   ss.walkStmts(nil, proc(e: CirExpr) = rewriteNumWorkgroupsExpr(e, coordTy))
 
-proc materializeNumWorkgroups(m: CirModule): string =
+proc materializeNumWorkgroups(m: CirModule) =
   ## Kernels without such reads stay untouched, device functions never see one,
   ## the printer refuses a coordinate builtin in a device function.
   for fn in m.procs:
     if not fn.isKernel:
       continue
     var coordTy: CirType = nil
-    if not findNumWorkgroupsStmts(fn.body, coordTy):
+    if not findNumWorkgroupsStmts(coordTy, fn.body):
       continue
     if coordTy.isNil:
-      return "kernel " & fn.name & " reads threadgroups_per_grid through an" &
-        " untyped expression, the materialized parameter has no type"
+      raiseAssert("kernel " & fn.name & " reads threadgroups_per_grid through an" &
+        " untyped expression, the materialized parameter has no type")
     var taken: seq[string]
     for p in fn.params:
       taken.add p.name
     var locals: seq[tuple[name: string, typ: CirType]]
-    fn.body.collectDeclaredLocals(locals)
+    collectDeclaredLocals(locals, fn.body)
     for l in locals:
       taken.add l.name
     if NumWorkgroupsParam in taken:
-      return "kernel " & fn.name & ": the materialized parameter name '" &
-        NumWorkgroupsParam & "' is taken"
+      raiseAssert("kernel " & fn.name & ": the materialized parameter name '" &
+        NumWorkgroupsParam & "' is taken")
     fn.params.add CirParam(name: NumWorkgroupsParam, typ: coordTy)
     rewriteNumWorkgroupsStmts(fn.body, coordTy)
-  return ""
 

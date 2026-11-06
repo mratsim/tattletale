@@ -6,7 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/monotimes
-import ../errors
 import std/times
 import std/os
 import workspace/crucible/vendor/wgpu
@@ -133,7 +132,7 @@ proc waitForRequest(instance: WGPUInstance, done: var bool, what: string) =
   while not done:
     wgpuInstanceProcessEvents(instance)
     if deadline <= getMonoTime():
-      failLoud("WebGPU: timed out waiting for " & what & " request")
+      raiseAssert("WebGPU: timed out waiting for " & what & " request")
     sleep(2)
 
 proc newWebgpuContext*(): WebgpuContext =

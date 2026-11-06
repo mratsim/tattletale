@@ -34,9 +34,6 @@ func registerGlslQualifyVarParams*(reg: var PassRegistry) =
   )
 
 proc registerGlslRefBlockPass*(reg: var PassRegistry) =
-  ## - the pass fills `CirModule.refBlocks` with one entry per block name,
-  ##   in registration order
-  ## - the printer reads the stored entries and registers nothing itself
   reg.register("glslRegisterRefBlocks", pkAnalysis,
     "Registers the buffer-reference blocks that the printer declares, one" &
     " per distinct block name in registration order",
@@ -44,7 +41,6 @@ proc registerGlslRefBlockPass*(reg: var PassRegistry) =
   )
 
 func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
-  ## Relocated declarations use the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope")
@@ -54,7 +50,6 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
-  ## Expressions are refs, so the splice applies to the node every sharer sees.
   e.kind = eSym
   e.name = name
   e.typ = typ
@@ -80,12 +75,12 @@ proc unwrapVarDerefsStmts(ss: seq[CirStmt], varParams: HashSet[string]) =
   ss.walkStmts(nil, proc(e: CirExpr) =
     e.unwrapVarDerefsExpr(varParams))
 
-proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]): string =
+proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string], procs: Table[string, CirProc]) =
   ## Anything at a `var` parameter position that is neither an address-of
   ## wrapper nor the enclosing proc's own `var` parameter must be an lvalue,
   ## the rewrite refuses otherwise.
   if e.isNil:
-    return ""
+    return
   if e.kind == eCall and e.callee.kind == eSym:
     let callee = procs.getOrDefault(e.callee.name)
     if callee != nil and e.args.len == callee.params.len:
@@ -101,75 +96,44 @@ proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string],
             arg.typ != nil and arg.typ.kind == ctPtr:
           arg.typ = arg.typ.pElem
         elif arg.kind notin {eSym, eAt, ePat, eDot}:
-          return refuseAt(fn, "var parameter call argument must be an lvalue, got " & $arg.kind)
+          raiseAssert("var parameter call argument must be an lvalue, got " & $arg.kind)
       if hasVarParams:
         # a call site's callee type still states the pre-lowering signature, so the rewrite re-types it to the retyped parameters
         var ps: seq[CirType]
         for p in callee.params:
           ps.add p.typ
         e.callee.typ = freshProcType(ps, callee.ret)
-    for ch in getExprChildren(e):
-      let err = rewriteVarCallArgsExpr(fn, ch, varParams, procs)
-      if err.len > 0:
-        return err
-    return ""
   for ch in getExprChildren(e):
-    let err = rewriteVarCallArgsExpr(fn, ch, varParams, procs)
-    if err.len > 0:
-      return err
-  return ""
+    rewriteVarCallArgsExpr(fn, ch, varParams, procs)
 
-proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashSet[string], procs: Table[string, CirProc]): string =
+proc rewriteVarCallArgsStmts(ss: var seq[CirStmt], fn: CirProc, varParams: HashSet[string], procs: Table[string, CirProc]) =
   for s in mitems(ss):
     case s.kind
     of sVar:
-      let err = rewriteVarCallArgsExpr(fn, s.init, varParams, procs)
-      if err.len > 0:
-        return err
+      rewriteVarCallArgsExpr(fn, s.init, varParams, procs)
     of sAsgn:
-      let lerr = rewriteVarCallArgsExpr(fn, s.lhs, varParams, procs)
-      if lerr.len > 0:
-        return lerr
-      let rerr = rewriteVarCallArgsExpr(fn, s.rhs, varParams, procs)
-      if rerr.len > 0:
-        return rerr
+      rewriteVarCallArgsExpr(fn, s.lhs, varParams, procs)
+      rewriteVarCallArgsExpr(fn, s.rhs, varParams, procs)
     of sIte:
-      let cerr = rewriteVarCallArgsExpr(fn, s.cond, varParams, procs)
-      if cerr.len > 0:
-        return cerr
-      let terr = rewriteVarCallArgsStmts(fn, s.thenBody, varParams, procs)
-      if terr.len > 0:
-        return terr
-      let eerr = rewriteVarCallArgsStmts(fn, s.elseBody, varParams, procs)
-      if eerr.len > 0:
-        return eerr
+      rewriteVarCallArgsExpr(fn, s.cond, varParams, procs)
+      rewriteVarCallArgsStmts(s.thenBody, fn, varParams, procs)
+      rewriteVarCallArgsStmts(s.elseBody, fn, varParams, procs)
     of sWhile:
-      let cerr = rewriteVarCallArgsExpr(fn, s.whileCond, varParams, procs)
-      if cerr.len > 0:
-        return cerr
-      let werr = rewriteVarCallArgsStmts(fn, s.whileBody, varParams, procs)
-      if werr.len > 0:
-        return werr
+      rewriteVarCallArgsExpr(fn, s.whileCond, varParams, procs)
+      rewriteVarCallArgsStmts(s.whileBody, fn, varParams, procs)
     of sRet:
-      let rerr = rewriteVarCallArgsExpr(fn, s.retVal, varParams, procs)
-      if rerr.len > 0:
-        return rerr
+      rewriteVarCallArgsExpr(fn, s.retVal, varParams, procs)
     of sDiscard:
-      let derr = rewriteVarCallArgsExpr(fn, s.discardVal, varParams, procs)
-      if derr.len > 0:
-        return derr
+      rewriteVarCallArgsExpr(fn, s.discardVal, varParams, procs)
     of sCall:
       let tmp = CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
-      let err = rewriteVarCallArgsExpr(fn, tmp, varParams, procs)
+      rewriteVarCallArgsExpr(fn, tmp, varParams, procs)
       s.callCallee = tmp.callee
       s.callArgs = tmp.args
-      if err.len > 0:
-        return err
     of sAsm, sEmit:
       discard
-  return ""
 
-proc qualifyVarParams(m: CirModule): string =
+proc qualifyVarParams(m: CirModule) =
   ## Marked parameters print with the `inout` qualifier.
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
@@ -182,26 +146,16 @@ proc qualifyVarParams(m: CirModule): string =
         if p.typ != nil and p.typ.kind == ctPtr:
           p.typ = p.typ.pElem
         else:
-          return refuseAt(fn, "var parameter " & p.name & " without a pointer type")
+          raiseAssert("var parameter " & p.name & " without a pointer type")
   for fn in m.procs:
     var varParams: HashSet[string]
     for p in fn.params:
       if p.varParam:
         varParams.incl(p.name)
     fn.body.unwrapVarDerefsStmts(varParams)
-    let err = rewriteVarCallArgsStmts(fn, fn.body, varParams, procs)
-    if err.len > 0:
-      return err
-  return ""
+    rewriteVarCallArgsStmts(fn.body, fn, varParams, procs)
 
 proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirType) =
-  ## Registers the buffer-reference block of one runtime-array pointee,
-  ## deduped by block name.
-  ##
-  ## The block's member is the runtime array `x[]`: a fixed-array element nests
-  ## after the runtime dimension (`uint8_t x[][32]`), as the unsized dimension is
-  ## only legal in the outermost position. The printer builds the member text
-  ## and refuses a void or proc pointee at the declaration site.
   let name = refTypeName(pointee)
   if name in blocks:
     return
@@ -215,9 +169,7 @@ proc registerTypeRefBlocks(blocks: var OrderedTable[string, CirType], t: CirType
   blocks = found
 
 proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr) =
-  ## Every buffer pointer subexpression's pointee needs its block declared
-  ## before the module body prints, a cast target included.
-  ## Node visits run pre-order, in the printer's declaration-sequence order.
+  ## m.refBlocks contains a block for every buffer-pointer pointee the body touches, a cast target included.
   var found = blocks
   e.walkExprs(proc(e: CirExpr) =
     let t = getExprType(e)
@@ -236,7 +188,7 @@ proc registerStmtRefBlocks(blocks: var OrderedTable[string, CirType], ss: seq[Ci
   ss.scanStmtRefs(onDecl, onExpr)
   blocks = found
 
-proc glslRegisterRefBlocks(m: CirModule): string =
+proc glslRegisterRefBlocks(m: CirModule) =
   ## Runs after the last transform: the walked declarations and bodies are
   ## final and the registry never invalidates the record.
   for t in m.types:
@@ -246,4 +198,3 @@ proc glslRegisterRefBlocks(m: CirModule): string =
       if p.typ.kind in {ctAptr, ctPtr}:
         registerRefBlock(m.refBlocks, p.typ.pElem)
     registerStmtRefBlocks(m.refBlocks, fn.body)
-  return ""

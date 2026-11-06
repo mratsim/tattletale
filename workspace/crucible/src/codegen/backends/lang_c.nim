@@ -109,33 +109,26 @@ var cpuCoordUseC {.global, compileTime.}: bool
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
   ## C type name of `t` with no identifier, as casts and sizeof print it.
-  ## Refused kinds name the v0 restriction, the shared walk reads the recorded refusal.
+  ## Refused kinds abort the print with the v0 restriction.
   case t.kind
   of ctVector:
-    ctx.fail("vector types (" & $t.vN & " x " & $t.vElem.kind & ") are not supported in v0, the vector mapping is the optimization pass (P2)")
-    ""
+    raiseAssert("vector types (" & $t.vN & " x " & $t.vElem.kind & ") are not supported in v0, the vector mapping is the optimization pass (P2)")
   of ctSpan:
-    ctx.fail("openArray spans must split to a pointer and a length before printing (the span split pass)")
-    ""
+    raiseAssert("openArray spans must split to a pointer and a length before printing (the span split pass)")
   of ctString:
-    ctx.fail("string types are not supported in v0")
-    ""
+    raiseAssert("string types are not supported in v0")
   of ctBf16:
-    ctx.fail("bfloat16 values are not supported in v0")
-    ""
+    raiseAssert("bfloat16 values are not supported in v0")
   of ctProc:
-    ctx.fail("function pointers are not supported in v0")
-    ""
+    raiseAssert("function pointers are not supported in v0")
   else:
     getFullTypeName(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, t, "struct ", ctx.suffix)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## C declaration text of one struct member via the shared declarator.
   printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
     f.typ, f.name, false, "struct ", ctx.suffix)
 
 proc structDeclName(ctx: var PrintCtx, t: CirType): string =
-  ## Header name of one struct declaration with the launch-site suffix.
   t.name & ctx.suffix
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -154,18 +147,16 @@ proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string
 proc printConv(ctx: var PrintCtx, e: CirExpr): string
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
-  ## C text of one whole coordinate-builtin read through the launch table.
   if not ctx.inlineKernel:
-    ctx.fail("coordinate builtins in device callees are not supported in v0, pass them as parameters")
+    raiseAssert("coordinate builtins in device callees are not supported in v0, pass them as parameters")
   cpuCoordUseC = true
   result = coordExprC(ctx.coords, e.coordBuiltin, -1)
   if result.len == 0:
-    ctx.fail("no launch expression for coordinate builtin " & $e.coordBuiltin)
-
+    raiseAssert("no launch expression for coordinate builtin " & $e.coordBuiltin)
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   ## C text of one coordinate-builtin component read through the launch table.
   if not ctx.inlineKernel:
-    ctx.fail("coordinate builtin components in device callees are not supported in v0, pass them as parameters")
+    raiseAssert("coordinate builtin components in device callees are not supported in v0, pass them as parameters")
   cpuCoordUseC = true
   let comp = case e.fieldName
              of "x": 0
@@ -174,12 +165,11 @@ proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
              else: -1
   result = coordExprC(ctx.coords, e.dotBase.coordBuiltin, comp)
   if result.len == 0:
-    ctx.fail("no launch expression for " & $e.dotBase.coordBuiltin & "." & e.fieldName)
-
+    raiseAssert("no launch expression for " & $e.dotBase.coordBuiltin & "." & e.fieldName)
 proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
   ## C symbol text of one symbol reference.
   ##
-  ## - a non-coordinate builtin records its family refusal
+  ## - a non-coordinate builtin is outside the v0 subset
   ## - a substituted parameter reads its launch text
   ## - a proc-typed symbol is a callee, it appends the launch-site suffix
   ## - `__builtin_` compiler builtins pass verbatim, the decomposeArrayAssign pass emits them
@@ -190,8 +180,7 @@ proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
       elif e.reductionBuiltin != CirReductionBuiltinKind.cbkNone: "subgroup reductions"
       elif e.atomicsBuiltin != CirAtomicsBuiltinKind.cbkNone: "atomic builtins"
       else: "unknown builtins"
-    ctx.fail(what & " are not supported in v0")
-    return e.name
+    raiseAssert(what & " are not supported in v0")
   for (name, txt) in ctx.subst:
     if name == e.name:
       return txt
@@ -200,7 +189,6 @@ proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
   e.name
 
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
-  ## C sizeof text: the element type name with the stacked array dimensions.
   var t = e.ofType
   var dims = ""
   while t.kind == ctArray:
@@ -209,15 +197,13 @@ proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
   "sizeof(" & ctx.emitTypeName(t) & dims & ")"
 
 proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
-  ## Refusals for expression kinds outside the shared walk's coverage.
   if e.kind == eStrLit:
-    ctx.fail("string values are not supported in v0")
+    raiseAssert("string values are not supported in v0")
   else:
-    ctx.fail(getUnhandledExprRejection(e.kind))
+    raiseAssert(getUnhandledExprRejection(e.kind))
   ""
 
 proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string =
-  ## C object-constructor member text: `.field = value`.
   "." & kvv.name & " = " & ctx.printExpr(kvv.value)
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
@@ -227,8 +213,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
     if srcT == nil or e.castType.kind notin
         {ctBool, ctInt, ctUint, ctFloat, ctPtr, ctAptr} or
         srcT.kind notin {ctBool, ctInt, ctUint, ctFloat, ctPtr, ctAptr}:
-      ctx.fail("cast between non-scalar types is not supported in v0")
-      return ""
+      raiseAssert("cast between non-scalar types is not supported in v0")
     return "((union { " & ctx.emitTypeName(srcT) & " _from; " &
       ctx.emitTypeName(e.castType) & " _to; }){ ._from = " &
       ctx.printExpr(e.castOperand) & " })._to"
@@ -243,11 +228,9 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## and the inline kernel's shadow refusals.
   case s.addressSpace
   of caThreadgroup:
-    ctx.fail("threadgroup (shared) memory is not supported in v0")
-    return false
+    raiseAssert("threadgroup (shared) memory is not supported in v0")
   of caConstant, caDevice:
-    ctx.fail("constant/device memory-class locals are not supported in v0")
-    return false
+    raiseAssert("constant/device memory-class locals are not supported in v0")
   of caThread:
     discard
   if ctx.inlineKernel:
@@ -255,29 +238,24 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
     # parameter would misbind
     for (name, _) in ctx.subst:
       if name == s.name:
-        ctx.fail("kernel local '" & s.name & "' shadows a kernel parameter, rename one")
-        return false
+        raiseAssert("kernel local '" & s.name & "' shadows a kernel parameter, rename one")
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
-  ## C declaration text of one local via the shared declarator.
   printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
     s.declType, s.name, false, "struct ", ctx.suffix)
 
 proc printRet(ctx: var PrintCtx, s: CirStmt, pad: string): string =
-  ## Return statement of the cpu launch: the inline kernel exits per-thread
-  ## scope through the launch's done label, callees return values.
   if ctx.inlineKernel:
     # a return inside the inlined body exits at the launch's done label
     if s.retVal != nil:
-      ctx.fail("kernels are void, a return value has no meaning")
+      raiseAssert("kernels are void, a return value has no meaning")
     return pad & "goto crucibleThreadDone;"
   if s.retVal != nil:
     return pad & "return " & ctx.printExpr(s.retVal) & ";"
   pad & "return;"
 
 proc printDiscard(ctx: var PrintCtx, s: CirStmt, pad: string): string =
-  ## Discard statement of the cpu launch: the value expression keeps its side effects, cast to void.
   if s.discardVal != nil:
     pad & "(void)(" & ctx.printExpr(s.discardVal) & ");"
   else:
@@ -287,7 +265,7 @@ proc printDiscard(ctx: var PrintCtx, s: CirStmt, pad: string): string =
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════
 
-proc inlineSourceC(k: CirProc, m: CirModule, ctx: var PrintCtx): tuple[bodyProc: CirProc, call: CirStmt] =
+proc inlineSourceC(ctx: var PrintCtx, k: CirProc, m: CirModule): tuple[bodyProc: CirProc, call: CirStmt] =
   ## Inlined-body lookup: the proc whose body inlines into the launch
   ## thread loop nest, plus the wrapper call when the pipeline kept them separate.
   ## - the wrapper body is one call to the user kernel proc, that body
@@ -299,7 +277,7 @@ proc inlineSourceC(k: CirProc, m: CirModule, ctx: var PrintCtx): tuple[bodyProc:
     case st.kind
     of sCall:
       if call != nil:
-        ctx.fail("the kernel wrapper body makes multiple calls")
+        raiseAssert("the kernel wrapper body makes multiple calls")
       call = st
     else:
       discard
@@ -307,12 +285,11 @@ proc inlineSourceC(k: CirProc, m: CirModule, ctx: var PrintCtx): tuple[bodyProc:
     return (k, nil)
   let callee = call.callCallee
   if callee.kind != eSym or callee.builtin:
-    ctx.fail("the kernel wrapper does not call a module proc")
+    raiseAssert("the kernel wrapper does not call a module proc")
   for p in m.procs:
     if p.name == callee.name:
       return (p, call)
-  ctx.fail("the kernel wrapper calls an unknown proc '" & callee.name & "'")
-
+  raiseAssert("the kernel wrapper calls an unknown proc '" & callee.name & "'")
 proc kernelRuntimeParams*(m: CirModule): seq[tuple[name: string, typ: CirType]] =
   ## Kernel parameters only: the launch macro bakes static parameters into the call before CIRv2 exists.
   for p in m.procs:
@@ -336,24 +313,19 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   for p in m.procs:
     if p.isKernel:
       let k = kctx.getEntryKernel(m)
-      if kctx.failing():
-        error(kctx.err)
-      inlinedName = inlineSourceC(k, m, kctx).bodyProc.name
+      inlinedName = kctx.inlineSourceC(k, m).bodyProc.name
       break
-  if kctx.failing():
-    error(kctx.err)
   var protos: seq[string]
   var blocks: seq[string]
   for p in m.procs:
     if p.isKernel or p.name == inlinedName:
       continue
     var ctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
-    ctx.fnName = p.name
     ctx.suffix = suffix
     var params: seq[string]
     for param in p.params:
       if param.varParam:
-        ctx.fail("`var` parameters are not supported in v0, the cpu backend takes whole values")
+        raiseAssert("`var` parameters are not supported in v0, the cpu backend takes whole values")
       params.add(printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
         param.typ, param.name, false, "struct ", ctx.suffix))
     let retT = ctx.emitTypeName(p.ret)
@@ -364,8 +336,6 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
     protos.add(signature & ";")
     ctx.indent = 1
     blocks.add(signature & " {\n" & ctx.printStmts(p.body) & "\n}")
-    if ctx.failing():
-      error(ctx.err)
   if protos.len > 0:
     result = protos.join("\n") & "\n\n" & blocks.join("\n\n")
   else:
@@ -379,18 +349,11 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
   ## baked statics substitute to their C literals.
   cpuCoordUseC = false
   var kctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
-  kctx.fnName = "kernel"
   kctx.suffix = suffix
   let k = kctx.getEntryKernel(m)
-  if kctx.failing():
-    error(kctx.err)
-  let (bodyProc, call) = inlineSourceC(k, m, kctx)
-  if kctx.failing():
-    error(kctx.err)
-
+  let (bodyProc, call) = kctx.inlineSourceC(k, m)
   var subst: seq[(string, string)] = @[]
   var bctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
-  bctx.fnName = bodyProc.name
   bctx.suffix = suffix
   bctx.coords = coords
   bctx.inlineKernel = true
@@ -404,16 +367,12 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
       if i < call.callArgs.len:
         let arg = call.callArgs[i]
         if arg.kind == eSym and not arg.builtin and arg.name == param.name:
-          # runtime param: the wrapper passes the formal verbatim, the body reads the data struct member
-          subst.add((param.name, dataPrefix & memberNames[i]))
+                    subst.add((param.name, dataPrefix & memberNames[i]))
         else:
-          # baked static: the wrapper passes the literal
-          subst.add((param.name, bctx.printExpr(arg)))
+                    subst.add((param.name, bctx.printExpr(arg)))
   bctx.subst = subst
   result.body = bctx.printStmts(bodyProc.body)
   result.coordUse = cpuCoordUseC
-  if bctx.failing():
-    error(bctx.err)
 
 proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, counterTag: string, coords: CpuCoordTableC, runtimeParams: seq[tuple[name: string, typ: CirType]], serial: bool): tuple[typesAndData: string, funcs: string, coordUse: bool] =
   ## Workgroup task machinery as C text, returned in two parts:
@@ -439,16 +398,13 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, counterTag: string, 
   var mctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
   mctx.suffix = suffix
   if m.globals.len > 0:
-    mctx.fail("hoisted threadgroup/constant globals are not supported in v0")
-    error(mctx.err)
+    raiseAssert("hoisted threadgroup/constant globals are not supported in v0")
   for p in runtimeParams:
     if p.name.startsWith("tpc_") or p.name in
         ["crucibleWgsPerTask", "crucibleGrid", "crucibleBlk"]:
       error("cpu backend: kernel parameter '" & p.name & "' collides with the launch's internal names")
 
   let structDefs = mctx.printStructs(m, cpuModuleShape)
-  if mctx.failing():
-    error(mctx.err)
 
   var members: seq[string]
   members.add("int32_t crucibleGrid[3];")
@@ -558,11 +514,6 @@ proc emitCpuDataFillC*(suffix: string, runtimeParams: seq[tuple[name: string, ty
   fill
 
 proc emitCpuSerialTailC*(suffix: string, runtimeParams: seq[tuple[name: string, typ: CirType]]): string =
-  ## Serial launch tail: the data struct on the caller stack, one direct call of the iteration function over the whole grid.
-  ##
-  ## - crucibleWgsPerTask is the grid workgroup total. One call covers every workgroup in x-fastest flat order
-  ## - the iteration function clamps the range at the grid total
-  ## - the product computes in int64 and the launch's dim guard keeps the total within int32
   var tail = "    extern void (*crucibleIterFn" & suffix & ")(int32_t, void*);\n"
   tail.add("    struct crucibleData" & suffix & " crucibleData;\n")
   tail.add(emitCpuDataFillC(suffix, runtimeParams))

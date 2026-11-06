@@ -95,12 +95,15 @@ flowchart LR
 
 ### Stages
 
-Every target registers the first two stages identically.
+Every target registers the first three stages in the same order:
+statement-expression rewriting, value normalizations, the reshaping passes.
 Divergence starts at the reserved-word rename.
 
 | Stage           | Registration                        | Passes                                                                                         |
 | ---             | ---                                 | ---                                                                                            |
-| Normalization   | `registerNormalizationPasses`       | `settleExprForms`, settles literal use-site types, the bool operator domain and constructor field order; `bindCompoundAssignTemps`, binds the call-bearing targets of compound assignments into temps |
+| Legalization    | `registerRewriteStmtsExprs`                 | `rewriteStmtsExprs`, rewrites statement-expressions into statement position, in front of the statement reading the value or inside the branch computing it |
+| Value normalization | `registerValueNormalizations`   | `resolveBoolDomain`, the bool operator domain; `typeLiterals`, literal use-site types; `completeConstructors`, constructor field order and zero fill |
+| Reshaping       | `registerReshapingPasses`           | `bindCompoundAssignTemps`, binds compound-assignment targets that contain calls into temps |
 | Shared lowering | `registerSharedLoweringPasses`      | `lowerSpans`, splits `openArray` spans into pointer + length pairs                             |
 | Reserved rename | one table row per text target       | `registerRenameReservedIdentifiers` with the target's reserved-word set as data                |
 | Target lowering | one table row per pass              | the target's storage-model transforms, table below                                             |
@@ -203,7 +206,7 @@ The runtime layer turns it into an executing kernel:
 | Platform sessions | `src/runtime/backends/`  | Library loading, device discovery, source to artifact compilation, raw dispatch                         |
 | Launch            | `src/runtime/launch/`    | `launchKernel` with chevron sugar, `launchDeviceFn` with a typed `do:` schedule block, argument packing |
 | Bindings          | `src/abis/`              | Raw C FFI: CUDA driver + NVRTC, OpenCL, Vulkan, Objective-C                                             |
-| Errors            | `src/runtime/errors.nim` | `failLoud`: stacktrace, stderr, exit 1                                                                  |
+| Errors            | runtime-wide             | Runtime refusals call `raiseAssert` immediately: the stacktrace is the location record                 |
 
 ## Enforcement map
 

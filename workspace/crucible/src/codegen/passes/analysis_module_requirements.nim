@@ -63,7 +63,7 @@ proc isFloat32Pointee(t: CirType): bool =
   t != nil and t.kind in {ctPtr, ctAptr} and t.pElem != nil and
     t.pElem.kind == ctFloat and t.pElem.bits == 32
 
-proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
+proc scanType(f: var ModuleFeatures, t: CirType, profile: ScanProfile) =
   if t.isNil:
     return
   case t.kind
@@ -80,19 +80,19 @@ proc scanType(t: CirType, f: var ModuleFeatures, profile: ScanProfile) =
         f.int16 = true
       if t.bits == 64:
         f.int64 = true
-  of ctVector: scanType(t.vElem, f, profile)
-  of ctArray: scanType(t.aElem, f, profile)
-  of ctPtr, ctAptr: scanType(t.pElem, f, profile)
+  of ctVector: scanType(f, t.vElem, profile)
+  of ctArray: scanType(f, t.aElem, profile)
+  of ctPtr, ctAptr: scanType(f, t.pElem, profile)
   of ctStruct:
     for fl in t.fields:
-      scanType(fl.typ, f, profile)
+      scanType(f, fl.typ, profile)
   of ctBf16:
     # no target needs a module feature for bfloat16
     discard
   of ctVoid, ctBool, ctProc, ctSpan, ctString:
     discard
 
-proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, profile: ScanProfile) =
+proc scanCallee(f: var ModuleFeatures, callee: CirExpr, args: seq[CirExpr], profile: ScanProfile) =
   ## Both call shapes share this helper. The caller passes the callee and the arguments of either shape.
   ##
   ## Requires: an `atomicFetchAdd` callee supplies one pointer argument.
@@ -115,74 +115,68 @@ proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, prof
     if pt.isFloat32Pointee():
       f.atomicFloat = true
 
-proc scanExprNode(e: CirExpr, f: var ModuleFeatures, profile: ScanProfile) =
-  ## One expression node of the walk: the callee detectors of a call node,
-  ## then the node's type. The shared walker visits the children.
+proc scanExprNode(f: var ModuleFeatures, e: CirExpr, profile: ScanProfile) =
   if e.kind == eCall and e.callee.kind == eSym:
-    scanCallee(e.callee, e.args, f, profile)
-  scanType(getExprType(e), f, profile)
+    scanCallee(f, e.callee, e.args, profile)
+  scanType(f, getExprType(e), profile)
 
-proc scanStmts(ss: seq[CirStmt], f: var ModuleFeatures, profile: ScanProfile) =
+proc scanStmts(f: var ModuleFeatures, ss: seq[CirStmt], profile: ScanProfile) =
   var features = f
   let onExpr = proc(e: CirExpr) =
-    scanExprNode(e, features, profile)
+    scanExprNode(features, e, profile)
   let onStmt = proc(s: CirStmt) =
     case s.kind
     of sVar:
-      scanType(s.declType, features, profile)
+      scanType(features, s.declType, profile)
     of sWhile:
       if profile.unrollAttr and s.whileUnroll:
         features.controlFlow = true
     of sCall:
-      scanCallee(s.callCallee, s.callArgs, features, profile)
+      scanCallee(features, s.callCallee, s.callArgs, profile)
     else:
       discard
   ss.walkStmts(onStmt, onExpr)
   f = features
 
-proc scanModuleRequirements(m: CirModule, f: var ModuleFeatures, profile: ScanProfile) =
+proc scanModuleRequirements(f: var ModuleFeatures, m: CirModule, profile: ScanProfile) =
   for t in m.types:
-    scanType(t, f, profile)
+    scanType(f, t, profile)
   # scan coverage includes the program-scope declarations a lowering pass
   # relocated out of a kernel body, initializers included
-  scanStmts(m.globals, f, profile)
+  scanStmts(f, m.globals, profile)
   for fn in m.procs:
-    scanType(fn.ret, f, profile)
+    scanType(f, fn.ret, profile)
     for p in fn.params:
-      scanType(p.typ, f, profile)
-    scanStmts(fn.body, f, profile)
+      scanType(f, p.typ, profile)
+    scanStmts(f, fn.body, profile)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerGlslFeatureScan*(reg: var PassRegistry) =
-  ## Fills `CirModule.features` with the flags the GLSL extension block maps.
   reg.register("glslScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the GLSL extension block maps:" &
     " float and integer widths, subgroups, shuffles, atomic float, unroll loops",
-    run = proc(m: CirModule): string {.nimcall.} =
-      scanModuleRequirements(m, m.features, glslProfile))
+    run = proc(m: CirModule) {.nimcall.} =
+      scanModuleRequirements(m.features, m, glslProfile))
 
 proc registerOpenclFeatureScan*(reg: var PassRegistry) =
-  ## Fills `CirModule.features` with the flags the OpenCL pragma block maps.
   reg.register("openclScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the OpenCL pragma block maps:" &
     " float widths, subgroups, atomic float",
-    run = proc(m: CirModule): string {.nimcall.} =
-      scanModuleRequirements(m, m.features, openclProfile))
+    run = proc(m: CirModule) {.nimcall.} =
+      scanModuleRequirements(m.features, m, openclProfile))
 
 proc registerWgslFeatureScan*(reg: var PassRegistry) =
-  ## Fills `CirModule.features` with the `enable f16` trigger of the WGSL module directive.
   reg.register("wgslScanModuleFeatures", pkAnalysis,
     "Scans the module once for 16-bit float values, the WGSL `enable f16` trigger",
-    run = proc(m: CirModule): string {.nimcall.} =
-      scanModuleRequirements(m, m.features, wgslProfile))
+    run = proc(m: CirModule) {.nimcall.} =
+      scanModuleRequirements(m.features, m, wgslProfile))
 
 proc registerCudaFeatureScan*(reg: var PassRegistry) =
-  ## Fills `CirModule.features` with the warp-reduction kinds the CUDA templates emit.
   reg.register("cudaScanModuleFeatures", pkAnalysis,
     "Scans the proc bodies once for the reduction kinds the warp-reduction" &
     " templates emit",
-    run = proc(m: CirModule): string {.nimcall.} =
-      scanModuleRequirements(m, m.features, cudaProfile))
+    run = proc(m: CirModule) {.nimcall.} =
+      scanModuleRequirements(m.features, m, cudaProfile))

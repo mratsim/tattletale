@@ -53,11 +53,6 @@ proc tArray*(n: int, elem: CirType): CirType =
   CirType(kind: ctArray, aN: n, aElem: elem)
 
 proc tSpan*(addressSpace: AddressSpace, elem: CirType): CirType =
-  ## Runtime-length view over `elem` storage in `addressSpace`:
-  ##
-  ## - an `openArray[T]` parameter or the result of a `toOpenArray` call
-  ## - the span split pass decomposes every span into an element pointer
-  ##   plus an int32 length, no span survives to the printers
   CirType(kind: ctSpan, sSpace: addressSpace, sElem: elem)
 
 proc tProcT*(params: varargs[CirType], ret: CirType): CirType =
@@ -144,8 +139,6 @@ proc orE*(left, right: CirExpr): CirExpr =
   CirExpr(kind: eOr, andLeft: left, andRight: right)
 
 proc ternaryE*(ternType: CirType, cond, thenE, elseE: CirExpr): CirExpr =
-  ## A conditional value, `cond` selects between `thenE` and `elseE`.
-  ## Branch values must already carry `ternType`.
   doAssert cond != nil and thenE != nil and elseE != nil,
     "ternaryE: a conditional value takes a condition and two branches"
   CirExpr(kind: eTernary, ternType: ternType, cond: cond, thenE: thenE, elseE: elseE)
@@ -174,10 +167,12 @@ proc aconstrE*(typ: CirType, elems: varargs[CirExpr]): CirExpr =
 proc callE*(callee: CirExpr, args: varargs[CirExpr]): CirExpr =
   CirExpr(kind: eCall, callee: callee, args: @args)
 
+proc stmtsE*(stmts: seq[CirStmt], value: CirExpr): CirExpr =
+  CirExpr(kind: eStmts, stmts: stmts, valueExpr: value)
+
 # Statement constructors
 
 proc varD*(name: string, typ: CirType, init: CirExpr = nil, addressSpace: AddressSpace = caThread): CirStmt =
-  ## `caThreadgroup` is a `{.smem.}` local, `caConstant` a `{.const_mem.}` local.
   CirStmt(kind: sVar, name: name, declType: typ, init: init, addressSpace: addressSpace)
 
 proc asgnS*(lhs, rhs: CirExpr): CirStmt =
@@ -187,7 +182,6 @@ proc iteS*(cond: CirExpr, thenBody: seq[CirStmt], elseBody: seq[CirStmt] = @[]):
   CirStmt(kind: sIte, cond: cond, thenBody: thenBody, elseBody: elseBody)
 
 proc whileS*(cond: CirExpr, whileBody: seq[CirStmt], unroll = false): CirStmt =
-  ## A loop re-testing `cond` before every iteration.
   doAssert cond != nil, "whileS: a conditioned loop takes a condition"
   CirStmt(kind: sWhile, whileCond: cond, whileBody: whileBody, whileUnroll: unroll)
 

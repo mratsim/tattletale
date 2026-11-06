@@ -3,7 +3,7 @@
 ## Test that a `{.device.}` function calling itself dies in the HLSL call-graph
 ## pass before any shader is emitted. The refusal names the function:
 ##
-##   Error: pass hlslCallGraphAnalysis: recursive device function `f` would not terminate, recursion is rejected
+##   Error: recursive device function `f` would not terminate, recursion is rejected
 ##
 ## Run:
 ##   nim c --hints:off --warnings:off \

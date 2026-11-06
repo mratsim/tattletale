@@ -6,7 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/os
-import ../errors
 import workspace/crucible/src/abis/objc_abi as objc
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -14,7 +13,7 @@ import workspace/crucible/src/abis/objc_abi as objc
 # ═══════════════════════════════════════════════════════════════════════
 
 const
-  ## Shared + untracked storage, Apple's MLX allocator mode: contents() needs no staging.
+  ## Shared + untracked storage, Apple's MLX allocator mode: the host reads contents() directly.
   MTLResourceStorageModeShared = 0
   MTLResourceHazardTrackingModeUntracked = 1 shl 8
   SharedUntrackedOptions* = objc.NSUInteger(MTLResourceStorageModeShared or
@@ -41,8 +40,8 @@ proc `=copy`(dst: var MetalContextObj, src: MetalContextObj) {.error:
     "MetalContext owns its device and queue handles, copy the MetalEngine ref not the ctx".}
 
 when defined(macosx):
-  # objc_abi's withMemPool/release are macOS-only, Linux builds of the engines layer
-  # fail to compile this destructor without the guard
+  # objc_abi's withMemPool/release are macOS-only: Linux builds of the engines layer
+  # fail to compile this destructor when the `when defined(macosx)` check omits it.
   proc `=destroy`(ctx: var MetalContextObj) =
       objc.withMemPool:
         objc.release(ctx.queue)
@@ -73,7 +72,7 @@ when defined(macosx):
     ## < 24 → 3.1, 24 → 3.2, ≥ 25 → 4.0 (NSProcessInfo is sret, UB via msgSend).
     var uts: UtSName
     if uname(addr uts) != 0:
-      failLoud("uname failed, cannot determine the MSL language version")
+      raiseAssert("uname failed, cannot determine the MSL language version")
     var major = 0
     for c in uts.release:
       if c in {'0' .. '9'}:
@@ -81,7 +80,7 @@ when defined(macosx):
       else:
         break
     if major == 0:
-      failLoud("uname release '" & $cast[cstring](addr uts.release[0]) &
+      raiseAssert("uname release '" & $cast[cstring](addr uts.release[0]) &
                "' has no leading digit, cannot determine the MSL language version")
     if major < 24:
       result = MTLLanguageVersion3_1
@@ -95,18 +94,16 @@ when defined(macosx):
   # ═════════════════════════════════════════════════
 
   proc compileOptions*(): objc.ID =
-    ## MTLCompileOptions: fast math disabled, MSL version from the OS, +1 returned.
     let cls = objc.getClass("MTLCompileOptions")
     if objc.isNil(cls):
-      failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
+      raiseAssert("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
     result = objc.msgSend(objc.ID(cls), objc.`$$`("alloc"))
-    # `init` may return a different object than `alloc`, keep the init result.
+    # ObjC `init` may return a different object than `alloc`.
     result = objc.msgSend(result, objc.`$$`("init"))
     discard objc.msgSend(result, objc.`$$`("setFastMathEnabled:"), objc.BOOL(0))
     discard objc.msgSend(result, objc.`$$`("setLanguageVersion:"), getMslLanguageVersion())
 
   proc compileLibrary*(device: objc.ID, source: string, opts: objc.ID): objc.ID =
-    ## Compiles `source` to a +1 MLLibrary, quits loudly on NSError.
     var compileError: objc.ID = objc.ID(nil)
     result = objc.msgSend(device, objc.`$$`("newLibraryWithSource:options:error:"),
                           objc.nsStringFromNimString(source), opts, addr compileError)
@@ -114,13 +111,13 @@ when defined(macosx):
       var detail = "no NSError object provided"
       if not objc.isNil(compileError):
         detail = objc.nsStringToNimString(objc.msgSend(compileError, objc.`$$`("localizedDescription")))
-      failLoud("Metal library compilation failed: " & detail)
+      raiseAssert("Metal library compilation failed: " & detail)
 
   proc compilePipelineState*(device, library: objc.ID, kernel: string): objc.ID =
     ## Creates the +1 compute pipeline state for `kernel`.
     let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"), objc.nsStringFromNimString(kernel))
     if objc.isNil(fn):
-      failLoud("newFunctionWithName(" & kernel & ") returned nil")
+      raiseAssert("newFunctionWithName(" & kernel & ") returned nil")
     defer:
       objc.release(fn)
     var psoError: objc.ID = objc.ID(nil)
@@ -130,5 +127,5 @@ when defined(macosx):
       var detail = "no NSError object provided"
       if not objc.isNil(psoError):
         detail = objc.nsStringToNimString(objc.msgSend(psoError, objc.`$$`("localizedDescription")))
-      failLoud("compute pipeline state creation failed for " & kernel & ": " & detail)
+      raiseAssert("compute pipeline state creation failed for " & kernel & ": " & detail)
 

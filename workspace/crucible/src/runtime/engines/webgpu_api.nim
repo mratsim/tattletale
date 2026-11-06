@@ -6,12 +6,11 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 {.experimental: "codeReordering".}
 
-import std/[macros, monotimes, os, strutils, tables, times]
+import std/[monotimes, os, strutils, tables, times]
 
 import workspace/crucible/vendor/wgpu
 
 import workspace/crucible/src/crucible_codegen
-import workspace/crucible/src/runtime/errors
 import workspace/crucible/src/runtime/backends/webgpu_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/launch/launch_serialization
@@ -56,10 +55,10 @@ proc newWebgpuEngine*(): WebgpuEngine =
 # ▸ PUBLIC API
 # ═══════════════════════════════════════════════════════════════════════
 
-template check*(status: WGPUBufferMapAsyncStatus) =
+template check(status: WGPUBufferMapAsyncStatus) =
   let code = status
   if code != wgpuBufferMapAsyncStatusSuccess:
-    failLoud("WGPUBufferMapAsyncStatus " & $code)
+    raiseAssert("WGPUBufferMapAsyncStatus " & $code)
 
 proc ingest*(engine: WebgpuEngine, source: string) =
   if engine.cache.module != nil:
@@ -83,7 +82,7 @@ proc ingest*(engine: WebgpuEngine, source: string) =
   )
   engine.cache.module = wgpuDeviceCreateShaderModule(engine.ctx.device, addr shaderDesc)
   if engine.cache.module == nil:
-    failLoud("WebGPU: failed to create shader module")
+    raiseAssert("WebGPU: failed to create shader module")
   engine.source = source
   engine.shaderSquadron = parseShaderSquadron(source)
 
@@ -160,15 +159,15 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
     else:
       inc j
   if result.x == 0:
-    return Dim3(x: 0, y: 0, z: 0)   # absent or non-literal
+    return Dim3(x: 0, y: 0, z: 0)
   if result.y == 0:
     result.y = 1
   if result.z == 0:
     result.z = 1
 
-proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: WebgpuEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
-    failLoud("WebGPU run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
+    raiseAssert("WebGPU run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   let device = engine.ctx.device
   let queue  = engine.ctx.queue
 
@@ -179,7 +178,7 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
   if engine.shaderSquadron.x == 0 or
      squadron.x != engine.shaderSquadron.x or squadron.y != engine.shaderSquadron.y or
      squadron.z != engine.shaderSquadron.z:
-    failLoud("WebGPU run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
+    raiseAssert("WebGPU run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
          " != baked squadron " & $engine.shaderSquadron.x & "x" & $engine.shaderSquadron.y &
          "x" & $engine.shaderSquadron.z &
          " — launch config mismatch (squadron is shader-baked on WebGPU)")
@@ -200,7 +199,7 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
       mappedAtCreation: false)
     scratch = wgpuDeviceCreateBuffer(device, addr scratchDesc)
     if scratch == nil:
-      failLoud("WebGPU: failed to create the scalar scratch buffer")
+      raiseAssert("WebGPU: failed to create the scalar scratch buffer")
 
   defer:
     if scratch != nil:
@@ -240,14 +239,14 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
     )
     let bgl = wgpuDeviceCreateBindGroupLayout(device, addr bglDesc)
     if bgl == nil:
-      failLoud("WebGPU: failed to create bind group layout")
+      raiseAssert("WebGPU: failed to create bind group layout")
     var plDesc = WGPUPipelineLayoutDescriptor(
       bindGroupLayoutCount: 1,
       bindGroupLayouts: bgl.addr
     )
     let pl = wgpuDeviceCreatePipelineLayout(device, addr plDesc)
     if pl == nil:
-      failLoud("WebGPU: failed to create pipeline layout")
+      raiseAssert("WebGPU: failed to create pipeline layout")
     var entryPtView = WGPUStringView(data: cstring(kernel), length: kernel.len.csize_t)
     var computeState = WGPUComputeState(
       module: engine.cache.module,
@@ -269,13 +268,13 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
     discard wgpuDevicePopErrorScope(device, pipePopInfo)
     while not pipeScope.done:
       if not wgpuDevicePoll(device, true, nil):
-        failLoud("WebGPU: wgpuDevicePoll failed")
+        raiseAssert("WebGPU: wgpuDevicePoll failed")
     if pipeScope.errType != wgpuErrorTypeNoError:
       let uncaptured = takeUncapturedError()
-      failLoud("WebGPU pipeline creation failed: " & pipeScope.message &
+      raiseAssert("WebGPU pipeline creation failed: " & pipeScope.message &
         (if uncaptured.errType != wgpuErrorTypeNoError: " / " & uncaptured.message else: ""))
     if pipeline == nil:
-      failLoud("WebGPU: failed to create compute pipeline")
+      raiseAssert("WebGPU: failed to create compute pipeline")
     cache = WebgpuPipelineCache(
       pipeline: pipeline,
       pipelineLayout: pl,
@@ -308,7 +307,7 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
   )
   let bg = wgpuDeviceCreateBindGroup(device, addr bgDesc)
   if bg == nil:
-    failLoud("WebGPU: failed to create bind group")
+    raiseAssert("WebGPU: failed to create bind group")
   defer:
     wgpuBindGroupRelease(bg)
 
@@ -317,7 +316,7 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
 
   let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
   if encoder == nil:
-    failLoud("WebGPU: failed to create command encoder")
+    raiseAssert("WebGPU: failed to create command encoder")
   defer:
     wgpuCommandEncoderRelease(encoder)
 
@@ -342,13 +341,13 @@ proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args:
     wgpuCommandBufferRelease(cmdBuf)
   while not scopeData.done:
     if not wgpuDevicePoll(device, true, nil):
-      failLoud("WebGPU: wgpuDevicePoll failed")
+      raiseAssert("WebGPU: wgpuDevicePoll failed")
   if scopeData.errType != wgpuErrorTypeNoError:
-    failLoud("WebGPU dispatch failed: " & scopeData.message)
+    raiseAssert("WebGPU dispatch failed: " & scopeData.message)
 
   let uncaptured = takeUncapturedError()
   if uncaptured.errType != wgpuErrorTypeNoError:
-    failLoud("WebGPU uncaptured error: " & uncaptured.message)
+    raiseAssert("WebGPU uncaptured error: " & uncaptured.message)
 
 proc allocDeviceImpl(engine: WebgpuEngine, n: int): WGPUBuffer =
   let device = engine.ctx.device
@@ -359,7 +358,7 @@ proc allocDeviceImpl(engine: WebgpuEngine, n: int): WGPUBuffer =
     mappedAtCreation: false)
   result = wgpuDeviceCreateBuffer(device, addr desc)
   if result == nil:
-    failLoud("WebGPU: failed to create a " & $n & "-byte device buffer")
+    raiseAssert("WebGPU: failed to create a " & $n & "-byte device buffer")
 
 proc copyToDeviceFromHostImpl(engine: WebgpuEngine, dst: WGPUBuffer, src: pointer, n: int) {.inline.} =
   wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, src, n.csize_t)
@@ -373,12 +372,12 @@ proc copyToHostFromDeviceImpl(engine: WebgpuEngine, dst: pointer, src: WGPUBuffe
     mappedAtCreation: false)
   let stagingBuf = wgpuDeviceCreateBuffer(device, addr stagingDesc)
   if stagingBuf == nil:
-    failLoud("WebGPU: failed to create the staging buffer")
+    raiseAssert("WebGPU: failed to create the staging buffer")
   defer:
     wgpuBufferRelease(stagingBuf)
   let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
   if encoder == nil:
-    failLoud("WebGPU: failed to create command encoder")
+    raiseAssert("WebGPU: failed to create command encoder")
   defer:
     wgpuCommandEncoderRelease(encoder)
   wgpuCommandEncoderCopyBufferToBuffer(encoder, src, 0, stagingBuf, 0, n.csize_t)
@@ -399,13 +398,13 @@ proc copyToHostFromDeviceImpl(engine: WebgpuEngine, dst: pointer, src: WGPUBuffe
   )
   discard wgpuBufferMapAsync(stagingBuf, wgpuMapModeRead, 0, n.csize_t, mapCbInfo)
   if not wgpuDevicePoll(device, true, nil):
-    failLoud("WebGPU: wgpuDevicePoll failed")
+    raiseAssert("WebGPU: wgpuDevicePoll failed")
   let deadline = getMonoTime() + initDuration(seconds = 5)
   while not mapData.done:
     if not wgpuDevicePoll(device, false, nil):
-      failLoud("WebGPU: wgpuDevicePoll failed")
+      raiseAssert("WebGPU: wgpuDevicePoll failed")
     if deadline <= getMonoTime():
-      failLoud("WebGPU: timed out waiting for wgpuBufferMapAsync callback")
+      raiseAssert("WebGPU: timed out waiting for wgpuBufferMapAsync callback")
     sleep(2)
   check mapData.status
   let mappedPtr = wgpuBufferGetMappedRange(stagingBuf, 0, mapData.resultBytes.csize_t)

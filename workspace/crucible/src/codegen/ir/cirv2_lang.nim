@@ -119,6 +119,7 @@ type
     eOconstr
     eAconstr
     eCall
+    eStmts
 
   CirExpr* = ref object
     ## A CIRv2 expression tree. Comparisons and `and`/`or` yield `bool`.
@@ -185,6 +186,9 @@ type
     of eCall:
       callee*: CirExpr
       args*: seq[CirExpr]
+    of eStmts:
+      stmts*: seq[CirStmt]
+      valueExpr*: CirExpr
     of eTrue, eFalse:
       discard
 
@@ -349,12 +353,10 @@ proc computeCirSizeBytes(t: CirType): int =
     result = 0
 
 func isLargeStruct*(t: CirType): bool =
-  ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
+  ## Its 24-byte threshold matches the C backend's 3-pointer by-value rule.
   t != nil and t.kind == ctStruct and computeCirSizeBytes(t) > 24
 
 proc withAddressSpace*(t: CirType, addressSpace: AddressSpace): CirType =
-  ## Returns a copy of pointer type `t` re-spaced to `addressSpace`, with the pointee shared.
-  ## CirType values are shared refs: a caller never re-spaces in place, so the copy is the per-site instance.
   doAssert t != nil and t.kind in {ctPtr, ctAptr}
   result = CirType(kind: t.kind)
   result.addressSpace = addressSpace
@@ -435,7 +437,6 @@ proc sameType*(a, b: CirType): bool =
     result = sameType(a.ret, b.ret)
 
 func isScalarType*(t: CirType): bool =
-  ## True for the primitive scalar kinds a primitive operator takes: bool, int, uint, float, bfloat16.
   t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat, ctBf16}
 
 proc getExprType*(e: CirExpr): CirType =
@@ -488,12 +489,10 @@ proc getExprType*(e: CirExpr): CirType =
       if t != nil and t.kind == ctAptr:
         result = t.pElem
       elif t != nil and t.kind == ctArray:
-        # A pat over a base that a deref of a pointer-to-array produced reads one element of that array.
-        result = t.aElem
+                result = t.aElem
       elif t != nil and t.kind == ctPtr and t.pElem != nil and
           t.pElem.kind == ctArray:
-        # A pat over a pointer-to-array base reads one element of the array that the pointer names.
-        result = t.pElem.aElem
+                result = t.pElem.aElem
       elif t != nil and t.kind == ctSpan:
         # A pat over a span base reads one element of the view. The span split
         # pass retypes the base symbol to the element pointer first.
@@ -510,6 +509,8 @@ proc getExprType*(e: CirExpr): CirType =
       let t = getExprType(e.callee)
       if t != nil and t.kind == ctProc:
         result = t.ret
+  of eStmts:
+    result = getExprType(e.valueExpr)
 
 proc getExprChildren*(e: CirExpr): seq[CirExpr] =
   ## Returns the child expressions of `e`, one entry per operand position.
@@ -536,14 +537,23 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
     result = @[e.callee]
     for a in e.args:
       result.add a
+  of eStmts:
+    result = @[e.valueExpr]
   of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSym, eSizeof:
     result = @[]
 
+func containsStmtsDeep*(e: CirExpr): bool =
+  if e.isNil:
+    return false
+  if e.kind == eStmts:
+    return true
+  for ch in e.getExprChildren():
+    if ch.containsStmtsDeep():
+      return true
+  return false
+
 proc hasCallDeep*(e: CirExpr): bool =
-  ## Returns true when a call occurs anywhere in `e`.
-  ##
-  ## Eager-evaluation forms (a conditional value, WGSL's `select`)
-  ## run both variants, a call in either would run unconditionally.
+  ## Eager forms (a conditional value, WGSL's select) evaluate both variants.
   if e.isNil:
     return false
   if e.kind == eCall:
@@ -592,11 +602,13 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
     result = resolveAddressSpace(e.left)
     if result == caDevice:
       result = resolveAddressSpace(e.right)
+  of eStmts:
+    if e.valueExpr != nil:
+      result = resolveAddressSpace(e.valueExpr)
   else:
     discard
 
 func isLvalue*(e: CirExpr): bool =
-  ## An expression that names storage, `addr` and assignment take lvalues.
   e.kind in {eSym, eDeref, eAt, ePat, eDot}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -667,9 +679,7 @@ func base58Short*(h: uint64): string =
       break
 
 func typeIdentityHash*(s: string): uint64 =
-  ## Returns the 64-bit FNV-1a hash of `s` with a splitmix64 finalizer:
-  ## the value distributes uniformly over all 64 bits so the base58 digits
-  ## never cluster on short inputs.
+  ## A splitmix64 finalizer spreads the base58 digits so short inputs never cluster.
   var h: uint64 = 0xcbf29ce484222325'u64
   for c in s:
     h = (h xor uint64(ord(c))) * 0x100000001b3'u64

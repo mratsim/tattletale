@@ -23,15 +23,21 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerSettleExprForms*(reg: var PassRegistry) =
-  reg.register("settleExprForms", pkTransform,
-    "Settles expression forms over the typed IR: literal use-site types," &
-    " the bool operator domain, literal conversions, constructor field order",
-    run = settleExprFormsPass)
+func registerTypeLiterals*(reg: var PassRegistry) =
+  reg.register("typeLiterals", pkTransform,
+    "Retypes every literal operand to its use-site type across arithmetic, comparisons, assignments and call arguments",
+    run = typeLiteralsPass)
+
+func registerCompleteConstructors*(reg: var PassRegistry) =
+  reg.register("completeConstructors", pkTransform,
+    "Completes a partial object constructor. The pass reorders the written fields" &
+    " to the type's declaration order and writes the type's zero value into each" &
+    " field missing from the constructor",
+    run = completeConstructorsPass)
 
 func registerCompoundAssignTemps*(reg: var PassRegistry) =
   reg.register("bindCompoundAssignTemps", pkTransform,
-    "Binds the call-bearing operands of a compound-assign target into temps" &
+    "Binds the operands that contain calls of a compound-assign target into temps" &
     " so the single Nim evaluation prints once",
     run = bindCompoundAssignTempsPass)
 
@@ -41,17 +47,18 @@ func registerMarkExplicitUnrolls*(reg: var PassRegistry) =
     " marker statement and drops every marker",
     run = markExplicitUnrollsPass)
 
-func registerNormalizationPasses*(reg: var PassRegistry) =
-  # settleExprForms decides the literal widths, the bool operator domain,
-  # constructor field order, before the later stages read them
-  reg.registerSettleExprForms()
+func registerValueNormalizations*(reg: var PassRegistry) =
+  reg.registerTypeLiterals()
+  reg.registerCompleteConstructors()
+
+func registerReshapingPasses*(reg: var PassRegistry) =
   # bindCompoundAssignTemps runs first among the reshaping passes:
   # shared-tree detection compares references
   reg.registerCompoundAssignTemps()
   reg.registerMarkExplicitUnrolls()
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Expression settling
+#  Expression concretization
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -100,9 +107,6 @@ proc retypeOperand(e: CirExpr, target: CirType) =
     discard
 
 proc retypeCallArgs(callee: CirExpr, args: seq[CirExpr]) =
-  ## Re-types literal call arguments to the callee formals' types.
-  ## The runtime arguments and the proc type's parameters align positionally:
-  ## both skip the compile-time formals.
   if callee.isNil:
     return
   let fnType = getExprType(callee)
@@ -126,54 +130,13 @@ proc fillOmittedFields(e: CirExpr) =
     ordered.add(kv(f.name, if value != nil: value else: zeroValue(f.typ)))
   e.kvFields = ordered
 
-proc settleExprFormsPass(m: CirModule): string =
+proc typeLiteralsPass(m: CirModule) =
   for fn in m.procs:
     let onExpr = proc(e: CirExpr) =
       case e.kind
-      of eConv:
-        # a conversion over a literal is exact, the node folds to a literal
-        # at the conversion target
-        if e.castType != nil and e.castType.kind != ctBf16 and
-            e.castOperand.kind in {eIntLit, eFloatLit}:
-          let typ = e.castType
-          let op = e.castOperand
-          if typ.kind == ctFloat and op.kind == eIntLit:
-            e.kind = eFloatLit
-            e.fValue = op.value.float
-            e.fLitType = typ
-          elif op.kind == eIntLit:
-            e.kind = eIntLit
-            e.value = op.value
-            e.litType = typ
-          else:
-            # Float-literal operand, the cast retypes it in place
-            e.kind = eFloatLit
-            e.fValue = op.fValue
-            e.fLitType = typ
       of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
-        if e.kind in {eBitAnd, eBitOr, eBitXor} and e.opType != nil and
-            e.opType.kind == ctBool:
-          # bool domain: the logical form, `xor` prints as the != comparison
-          let a = e.left
-          let b = e.right
-          let t = e.opType
-          case e.kind
-          of eBitAnd:
-            e.kind = eAnd
-            e.andLeft = a
-            e.andRight = b
-          of eBitOr:
-            e.kind = eOr
-            e.andLeft = a
-            e.andRight = b
-          else:
-            e.kind = eNeq
-            e.cmpType = t
-            e.a = a
-            e.b = b
-        else:
-          e.left.retypeOperand(e.opType)
-          e.right.retypeOperand(e.opType)
+        e.left.retypeOperand(e.opType)
+        e.right.retypeOperand(e.opType)
       of eEq, eNeq, eLt, eLe:
         e.a.retypeOperand(e.cmpType)
         e.b.retypeOperand(e.cmpType)
@@ -183,8 +146,6 @@ proc settleExprFormsPass(m: CirModule): string =
           e.cmpType = getExprType(e.b)
       of eCall:
         e.callee.retypeCallArgs(e.args)
-      of eOconstr:
-        e.fillOmittedFields()
       else:
         discard
     let onStmt = proc(s: CirStmt) =
@@ -197,47 +158,26 @@ proc settleExprFormsPass(m: CirModule): string =
         discard
     fn.body.walkStmts(onStmt, onExpr)
 
+proc completeConstructorsPass(m: CirModule) =
+  for fn in m.procs:
+    fn.body.walkStmts(nil, proc(e: CirExpr) =
+      if e.kind == eOconstr:
+        e.fillOmittedFields())
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Compound-assign temps
 # ═══════════════════════════════════════════════════════════════════════
 
 
-type TempBinder = object
-  used: HashSet[string]
-  fresh: int
-
-proc claimTempName(b: var TempBinder): string =
-  while true:
-    let candidate = if b.fresh == 0: "lhs_val" else: "lhs_val_" & $b.fresh
-    b.fresh.inc
-    if candidate notin b.used:
-      b.used.incl candidate
-      return candidate
-
-proc tempBinderFor(fn: CirProc): TempBinder =
-  result.used.init
-  for p in fn.params:
-    result.used.incl p.name
-  var collected = result.used
-  let onExpr = proc(e: CirExpr) =
-    if e.kind == eSym:
-      collected.incl e.name
-  let onStmt = proc(s: CirStmt) =
-    if s.kind == sVar:
-      collected.incl s.name
-  fn.body.walkStmts(onStmt, onExpr)
-  result.used = collected
-
 proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
-  ## One evaluation per operand, both use sites read the temp.
   let typ = getExprType(e)
-  let name = b.claimTempName()
+  let name = b.claimTempName("lhs_val")
   let tmp = sym(name, typ)
   hoists.add(varD(name, typ))
   hoists.add(asgnS(tmp, e))
   return tmp
 
-proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
+proc bindSpineCallTemps(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
   ## Only operand positions bind: the lvalue spine (`x`, `x[i]`, `x.f`) is structural.
   ## An operand temp is legal on every target, an address temp is not:
   ## GLSL rewrites pointer locals to their pointees and keeps no function storage.
@@ -247,24 +187,24 @@ proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: Cir
     return e
   case e.kind
   of eAt:
-    e.atBase = b.bindCallBearingOperands(hoists, e.atBase)
+    e.atBase = b.bindSpineCallTemps(hoists, e.atBase)
     if e.atIndex.hasCallDeep():
       e.atIndex = b.bindOperandTemp(hoists, e.atIndex)
   of ePat:
-    e.patBase = b.bindCallBearingOperands(hoists, e.patBase)
+    e.patBase = b.bindSpineCallTemps(hoists, e.patBase)
     if e.patIndex.hasCallDeep():
       e.patIndex = b.bindOperandTemp(hoists, e.patIndex)
   of eDot:
-    e.dotBase = b.bindCallBearingOperands(hoists, e.dotBase)
+    e.dotBase = b.bindSpineCallTemps(hoists, e.dotBase)
   of eDeref:
-    e.derefOperand = b.bindCallBearingOperands(hoists, e.derefOperand)
+    e.derefOperand = b.bindSpineCallTemps(hoists, e.derefOperand)
   else:
     # unreachable: the guard above admits only the four spine kinds
     discard
   return e
 
 proc isSharedArithTarget(s: CirStmt): bool =
-  ## A target call the user wrote twice lowers to two distinct trees, so the reference-identity match never fires on it.
+  ## A call the user wrote twice lowers to two distinct trees, so the reference-identity match never fires on it.
   if s.rhs.kind notin {eAdd, eSub, eMul, eDiv}:
     return false
   result = not s.rhs.left.isNil and s.rhs.left == s.lhs
@@ -276,7 +216,7 @@ proc bindStmtTemps(b: var TempBinder, body: var seq[CirStmt]) =
     of sAsgn:
       if s.isSharedArithTarget():
         var hoists: seq[CirStmt]
-        s.lhs = b.bindCallBearingOperands(hoists, s.lhs)
+        s.lhs = b.bindSpineCallTemps(hoists, s.lhs)
         lowered.add(hoists & @[s])
       else:
         lowered.add(s)
@@ -291,7 +231,7 @@ proc bindStmtTemps(b: var TempBinder, body: var seq[CirStmt]) =
       lowered.add(s)
   body = lowered
 
-proc bindCompoundAssignTempsPass(m: CirModule): string =
+proc bindCompoundAssignTempsPass(m: CirModule) =
   for fn in m.procs:
     var b = tempBinderFor(fn)
     b.bindStmtTemps(fn.body)
@@ -332,7 +272,6 @@ proc markExplicitUnrolls(ss: var seq[CirStmt]) =
         kept.add s
   ss = kept
 
-proc markExplicitUnrollsPass(m: CirModule): string =
+proc markExplicitUnrollsPass(m: CirModule) =
   for fn in m.procs:
     markExplicitUnrolls(fn.body)
-  return ""

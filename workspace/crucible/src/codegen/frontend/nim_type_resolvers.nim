@@ -7,7 +7,7 @@
 
 import ../ir/cirv2_lang
 import ../ir/cirv2_build
-import std/[macros, tables, strutils, hashes]
+import std/[macros, tables]
 
 # ############################################################
 #
@@ -17,25 +17,12 @@ import std/[macros, tables, strutils, hashes]
 
 type
   CirTypeResolver* = object
-    ## Nim-to-CirType translation state.
     structIdentityCache: Table[string, CirType]
-    ## Deriving one struct's fields re-resolves every field type, so a repeated
-    ## identity pays the whole field walk again without the cache.
-    structs*: seq[CirType]
-    ## In discovery order.
-    err*: string
-    ## First refusal message, "" while the walk is clean.
+    resolvedStructs*: seq[CirType]
 
-proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType
-
-proc fail*(r: var CirTypeResolver, detail: string) =
-  ## Records the first refusal, later refusals are ignored while `err` is set.
-  if r.err.len == 0:
-    r.err = "cirv2 frontend: " & detail
+func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType
 
 func getBuiltinDistinctScalar(n: NimNode): CirType =
-  ## The `{.builtin.}` marking is the type's identity: an unmarked distinct
-  ## erases to its storage base and loses the float format.
   if n.kind != nnkSym or n.symKind != nskType:
     return nil
   let impl = n.getImpl()
@@ -46,7 +33,6 @@ func getBuiltinDistinctScalar(n: NimNode): CirType =
   for p in impl[0][1]:
     if p.kind in {nnkSym, nnkIdent} and p.strVal == "builtin":
       marked = true
-    # a payload-less `{.builtin.}` sems as `builtin(nil)` over the pragma template's default argument
     if p.kind in {nnkExprColonExpr, nnkCall} and p.len >= 1 and
         p[0].kind in {nnkIdent, nnkSym} and p[0].strVal == "builtin":
       marked = true
@@ -102,13 +88,12 @@ func deriveStructName*(n: NimNode): string =
   else:
     result = "Object"
 
-proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
+func evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   ## Returns the compile-time integer value of `n`.
   ##
-  ## - `..` reads as the array length `hi - lo + 1`
+  ## - `..` yields the array length `hi - lo + 1`
   template refuse(detail: string) =
-    r.fail(detail)
-    return 0
+    raiseAssert(detail)
   case n.kind
   of nnkIntLit .. nnkUInt64Lit:
     result = n.intVal
@@ -131,8 +116,6 @@ proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   of nnkInfix:
     let a = r.evalConstInt(n[1])
     let b = r.evalConstInt(n[2])
-    if r.err.len > 0:
-      return 0
     case n[0].strVal
     of "..":
       result = b - a + 1
@@ -151,7 +134,7 @@ proc evalConstInt*(r: var CirTypeResolver, n: NimNode): int64 =
   else:
     refuse("compile-time value expected, got node kind " & $n.kind)
 
-proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
+func deriveStructFields(r: var CirTypeResolver, impl: NimNode,
     valueSpaces: Table[string, AddressSpace] = initTable[string, AddressSpace]()): seq[CirField] =
   ## `valueSpaces` maps each field name to the pointer space that the field's
   ## construction value proves, every other field resolves under `caDevice`.
@@ -160,14 +143,11 @@ proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
     if impl.len > 2 and impl[2].kind == nnkRecList:
       for ch in impl[2]:
         if ch.kind == nnkRecCase:
-          r.fail("case object: variant records have no C representation")
-          return @[]
+          raiseAssert("case object: variant records have no C representation")
         for j in 0 ..< ch.len - 2:
           result.add(fld(sanitizeIdent(ch[j].strVal),
             r.resolveCirType(ch[ch.len - 2],
               valueSpaces.getOrDefault(sanitizeIdent(ch[j].strVal), caDevice))))
-        if r.err.len > 0:
-          return @[]
   of nnkTupleTy, nnkTupleConstr:
     for i, ch in impl:
       case ch.kind
@@ -182,21 +162,18 @@ proc deriveStructFields(r: var CirTypeResolver, impl: NimNode,
       else:
         result.add(fld("F" & $i, r.resolveCirType(ch.getTypeInst(),
           valueSpaces.getOrDefault("F" & $i, caDevice))))
-      if r.err.len > 0:
-        return @[]
   of nnkBracketExpr:
     # `tuple[A, B]` is the bracket form of an anonymous tuple type
     for i in 1 ..< impl.len:
       result.add(fld("F" & $(i - 1), r.resolveCirType(impl[i].getTypeInst(),
         valueSpaces.getOrDefault("F" & $(i - 1), caDevice))))
   else:
-    r.fail("struct fields: unexpected type implementation " & $impl.kind)
-    return @[]
+    raiseAssert("struct fields: unexpected type implementation " & $impl.kind)
 
 func followAliasHead(n: NimNode): NimNode =
   ## `Tile[float32, Sh, St]` where `Tile[T, Sh, St] = TensorOwned[T, Sh, St]`
-  ## reads `TensorOwned[float32, Sh, St]`. The CIRv2 struct keeps the aliased
-  ## name so one alias and its target name the same struct.
+  ## reads `TensorOwned[float32, Sh, St]`. The CIRv2 struct is named after the alias,
+  ## so an alias and its target resolve to one struct.
   if n.kind == nnkBracketExpr and n.len > 1 and n[0].kind == nnkSym:
     let rhs = n[0].getTypeImpl()
     if rhs.kind == nnkBracketExpr and rhs.len == n.len and rhs[0].kind == nnkSym:
@@ -207,8 +184,8 @@ func followAliasHead(n: NimNode): NimNode =
   return n
 
 func canonicalizeTypeNode(n: NimNode): NimNode =
-  ## Alias symbols replaced by the types they name, so one type identity derives
-  ## one struct name: `V2F` aliasing `Vec2[float32]` reads back as `Vec2[float32]`.
+  ## Alias symbols are replaced by the types behind them, so one type identity
+  ## derives one struct name. `V2F` aliasing `Vec2[float32]` reads back as `Vec2[float32]`.
   ## Alias heads with unbound generic parameters rewrite later, in `resolveStructType`.
   case n.kind
   of nnkSym:
@@ -227,7 +204,7 @@ func canonicalizeTypeNode(n: NimNode): NimNode =
   else:
     result = n
 
-proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
+func resolveStructType*(r: var CirTypeResolver, n: NimNode,
     valueSpaces: Table[string, AddressSpace] = initTable[string, AddressSpace]()): CirType =
   ## Identity key: the canonical text of the type node plus every non-device
   ## field address space.
@@ -246,27 +223,26 @@ proc resolveStructType*(r: var CirTypeResolver, n: NimNode,
     return r.structIdentityCache[nameKey]
   let impl = n.getTypeImpl()
   let fields = r.deriveStructFields(impl, valueSpaces)
-  if r.err.len > 0:
-    return nil
   let candidate = tStruct(deriveStructName(canon) & "_" &
     base58Short(typeIdentityHash(nameKey)), fields)
-  # One dedup, the registration: an equal structure returns the registered
-  # struct under the identifier its first registration chose. The canonical text
-  # alone is not the identity: an alias instantiation can reach the resolver
-  # through the generic body's own object text, and both name one struct.
-  for registered in r.structs:
+  # A second dedup runs over structure: an alias instantiation
+  # can reach the resolver through the generic body's own object text,
+  # so two nodes with different canonical text derive one struct.
+  # An equal structure is returned under the identifier
+  # its first registration chose.
+  for registered in r.resolvedStructs:
     if structuralEqual(registered, candidate):
       result = registered
       r.structIdentityCache[nameKey] = result
       return
   result = candidate
-  r.structs.add(result)
+  r.resolvedStructs.add(result)
   r.structIdentityCache[nameKey] = result
 
 func constrHasTypeElem(t: NimNode): bool =
   ## A runtime tuple-typed formal instantiates to its member types.
   ## A bound static value instantiates to the value's own elements.
-  ## An object constructor's child 0 names the constructed type, never a value,
+  ## An object constructor's child 0 is the constructed type, never a value,
   ## so an `ObjConstr` scan starts after child 0.
   case t.kind
   of nnkEmpty:
@@ -277,7 +253,6 @@ func constrHasTypeElem(t: NimNode): bool =
     let first = if t.kind == nnkObjConstr: 1 else: 0
     for i in first ..< t.len:
       let e = t[i]
-      # a named field's name is constructor vocabulary and the value decides
       let v = if e.kind == nnkExprColonExpr: e[1] else: e
       if constrHasTypeElem(v):
         return true
@@ -286,8 +261,8 @@ func constrHasTypeElem(t: NimNode): bool =
     result = t.kind notin nnkLiterals
 
 func isCompileTimeFormal*(t: NimNode): bool =
-  ## `static T` (either node layout) or `typedesc`: the argument is compile-time only,
-  ## erased from the closure.
+  ## Returns whether the formal is compile-time only and erased from the closure:
+  ## `static T` (either node layout) or `typedesc`.
   ##
   ## A `static` formal bound to a value shows that value as its instantiated type node,
   ## so a literal, an enum field symbol or a constructor is compile-time only.
@@ -307,7 +282,7 @@ func isCompileTimeFormal*(t: NimNode): bool =
     return true
   return false
 
-proc resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
+func resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
   procTy.expectKind(nnkProcTy)
   let formals = procTy[0]
   formals.expectKind(nnkFormalParams)
@@ -318,24 +293,18 @@ proc resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
     if isCompileTimeFormal(ftype):
       continue
     let ptyp = r.resolveCirType(ftype)
-    if r.err.len > 0:
-      return nil
     if ptyp.isNil:
       continue
     paramTypes.add(ptyp)
   let ret = r.resolveCirType(formals[0])
-  if r.err.len > 0:
-    return nil
   result = tProcT(paramTypes, ret)
 
-proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType =
+func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): CirType =
   ## Translates one Nim type node to CirType.
   ##
-  ## `ptrSpace` names the memory class of the pointer kinds this type node contains:
+  ## `ptrSpace` is the memory class of the pointer kinds this type node contains:
   ## kernel parameters pass `caDevice`, a body-side `addr` result constructs
   ## its own `caThread` pointer.
-  if r.err.len > 0:
-    return nil
   if n.kind == nnkEmpty:
     # a missing return type is void
     return tVoid()
@@ -398,15 +367,14 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
       arr = n.getTypeImpl()
     arr.expectKind(nnkBracketExpr)
     if arr[1].kind == nnkIdent:
-      # a named const length: the implementation tree keeps the identifier while the instantiation tree gives the value
+      # a named const length: the implementation tree has the identifier
+      # and the instantiation tree has the value
       arr = arr.getTypeInst()
       arr.expectKind(nnkBracketExpr)
     let len = r.evalConstInt(arr[1])
-    if r.err.len > 0:
-      return nil
     result = tArray(int(len), r.resolveCirType(arr[2], ptrSpace))
   of ntyEnum:
-    # enums lower as their 32-bit storage and the type kinds have no enum entry
+    # C enums are int
     result = tUint(32)
   of ntyDistinct:
     let marked = getBuiltinDistinctScalar(n)
@@ -422,7 +390,7 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     result = r.resolveCirType(n.getTypeInst(), ptrSpace)
   of ntyOpenArray:
     # openArray[T] passes through the frontend as a span over the element type in the pointer space.
-    # Span split later decomposes a span into an element pointer
+    # Span split decomposes a span into an element pointer
     # plus an int32 length, no span reaches the printers
     var span = n
     if span.kind == nnkSym:
@@ -438,5 +406,4 @@ proc resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
     rng.expectKind(nnkBracketExpr)
     result = r.resolveCirType(rng[1][1], ptrSpace)
   else:
-    r.fail("type not supported: " & n.repr & " (" & $n.typeKind & ")")
-    return nil
+    raiseAssert("type not supported: " & n.repr & " (" & $n.typeKind & ")")

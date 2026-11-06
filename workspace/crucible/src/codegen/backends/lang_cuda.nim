@@ -102,21 +102,15 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string
 
 proc emitCudaScalar(t: CirType): string =
-  ## CUDA name of a non-array type, "" when the caller builds the type name.
   getFullTypeName(TargetVocabs[cgCuda].scalarNames, cudaVectorRule, t)
 
 proc emitCudaType(t: CirType, ident: string, allowEmptyIdent: bool): string =
-  ## CUDA declaration text of `t` with `ident` appended, the shared C declarator
-  ## over the CUDA tables. Arrays put the identifier into the declarator
-  ## (`T ident[N]`, pointer-to-array `T (*ident)[N]`), the printer refuses an array without an identifier.
   printCDecl(TargetVocabs[cgCuda].scalarNames, cudaVectorRule, printerTarget, t, ident, allowEmptyIdent)
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
-  ## CUDA C++ name of `t` with no identifier, as casts and sizeof print it.
   emitCudaType(t, "", true)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## CUDA declaration text of one struct member via the shared C declarator.
   emitCudaType(f.typ, f.name, false)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -180,7 +174,6 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   "(" & emitCudaType(e.castType, "", true) & ")" & ctx.printExpr(e.castOperand)
 
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string =
-  ## CUDA resolves statement-position builtins through the value vocabulary.
   let txt = ctx.emitBuiltinCall(s.callCallee, args)
   if txt.len == 0:
     return ""
@@ -191,16 +184,13 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
 # ═══════════════════════════════════════════════════════════════════════
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
-  ## A device function's `__shared__` initializer refuses: CUDA C++ forbids
-  ## initializing shared variables, and kernel-body initializers rewrote to stores before printing.
+  ## CUDA C++ forbids initializing shared variables.
   if s.addressSpace == caThreadgroup:
     if s.init != nil and not ctx.inKernel:
-      ctx.fail("smem local " & s.name & " with an initializer, CUDA C++ forbids initializing __shared__ variables")
-      return false
+      raiseAssert("smem local " & s.name & " with an initializer, CUDA C++ forbids initializing __shared__ variables")
     return true
   if s.addressSpace == caConstant:
-    ctx.fail("local " & s.name & " in constant addressSpace, CUDA constant storage is program scope only")
-    return false
+    raiseAssert("local " & s.name & " in constant addressSpace, CUDA constant storage is program scope only")
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
@@ -209,7 +199,6 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
   emitCudaType(s.declType, s.name, false)
 
 proc printAsm(ctx: var PrintCtx, s: CirStmt): string =
-  ## One inline assembly statement: the spliced text in an `asm(...)` wrapper.
   let pad = spaces(ctx.indent * 2)
   pad & "asm(" & s.asmSpliceText().strip() & ");"
 
@@ -253,29 +242,23 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
       result.add emitCudaType(p.typ, p.name, true)
 
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
-  ## Translation-unit head of every CUDA module: the fp16 and bf16 includes.
-  ## NVRTC's default include path provides both headers.
-  ## __half, __nv_bfloat16 and the conversion builtins compile with no host-side include setup.
+  ## NVRTC's default include path provides the fp16 and bf16 headers.
   "#include <cuda_fp16.h>\n#include <cuda_bf16.h>\n"
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
-  ## Program-scope `__constant__` declaration of one relocated global.
   var decl = emitCudaType(s.declType, s.name, false)
   if s.init != nil:
     decl &= " = " & ctx.printExpr(s.init)
   return "__constant__ " & decl & ";"
 
 proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
-  ## Warp-reduction template set from the stored module feature scan
-  ## (`CirModule.features`, filled by the feature-scan pass).
   let reduceKinds = m.features.reductions
   if "reduceAdd" in reduceKinds:
     result &= emitWarpReduceTemplate("reduceAdd")
   if "reduceMax" in reduceKinds:
     result &= emitWarpReduceTemplate("reduceMax")
 
-proc printCudaModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full CUDA translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
+proc printCudaModule*(m: CirModule): string =
   var ctx = initPrintCtx(cudaWalkPolicy, cudaVectorRule, cudaEmit, cgCuda)
   ctx.mathNames = cudaMathBuiltinNames
   printModule(ctx, m, getModuleKernels(m), cudaModuleShape)

@@ -115,33 +115,31 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     result = getScalarName(TargetVocabs[cgWebGPU].scalarNames, t)
     if result.len == 0:
       if t.bits == 64:
-        ctx.fail("i64/u64 need the shader-int64 device feature, the vendored wgpu-native cannot request it")
+        raiseAssert("i64/u64 need the shader-int64 device feature, the vendored wgpu-native cannot request it")
       else:
-        ctx.fail($t.bits & "-bit integers have no WGSL type, only 32")
+        raiseAssert($t.bits & "-bit integers have no WGSL type, only 32")
   of ctFloat:
     result = getScalarName(TargetVocabs[cgWebGPU].scalarNames, t)
     if result.len == 0:
       if t.bits == 64:
-        ctx.fail("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
+        raiseAssert("f64 needs the shader-f64 device feature, the vendored wgpu-native cannot request it")
       else:
-        ctx.fail($t.bits & "-bit floats have no WGSL type")
+        raiseAssert($t.bits & "-bit floats have no WGSL type")
   of ctBf16:
-    ctx.fail("bfloat16 has no WGSL type")
+    raiseAssert("bfloat16 has no WGSL type")
   of ctVector:
     let elem = ctx.emitWgslScalar(t.vElem)
     result = getVectorName(wgslVectorRule, TargetVocabs[cgWebGPU].scalarNames, t)
     if result.len == 0 and elem.len > 0:
-      ctx.fail("vector of " & elem & "x" & $t.vN & " has no WGSL type name, the vector needs 2 to 4 lanes")
+      raiseAssert("vector of " & elem & "x" & $t.vN & " has no WGSL type name, the vector needs 2 to 4 lanes")
   of ctStruct:
     result = t.name
   of ctString:
-    ctx.fail("string has no WGSL type")
+    raiseAssert("string has no WGSL type")
   of ctPtr, ctAptr, ctArray, ctProc, ctSpan:
     result = ""
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
-  ## Returns the WGSL name of `t` with no identifier, the form that casts
-  ## and constructors use.
   case t.kind
   of ctArray:
     let elem = ctx.emitTypeName(t.aElem)
@@ -153,7 +151,6 @@ proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
     result = ctx.emitWgslScalar(t)
 
 proc structFieldIsBool(t: CirType, field: string): bool =
-  ## True when `field` names a bool member of struct `t`, a NIM_BOOL storage word.
   if t.isNil or t.kind != ctStruct:
     return false
   for f in t.fields:
@@ -220,11 +217,9 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   ## One coordinate builtin read in the kernel body. WGSL builtins are
   ## entry-point parameters, a device function read refuses.
   if not ctx.inKernel:
-    ctx.fail("coordinate builtin " & $e.coordBuiltin & " in a device function, WGSL builtins are entry-point parameters")
-    return ""
+    raiseAssert("coordinate builtin " & $e.coordBuiltin & " in a device function, WGSL builtins are entry-point parameters")
   if e.coordBuiltin == cbkThreadsPerThreadgroup:
-    ctx.fail("threads_per_threadgroup has no WGSL builtin, WGSL has only the @workgroup_size attribute")
-    return ""
+    raiseAssert("threads_per_threadgroup has no WGSL builtin, WGSL has only the @workgroup_size attribute")
   ctx.builtins.incl(e.coordBuiltin)
   if e.coordBuiltin == cbkThreadIndexInThreadgroup:
     return "i32(" & getWgslBuiltinParam(e.coordBuiltin).param & ")"
@@ -233,14 +228,13 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   ## One coordinate builtin component read in the kernel body.
   if not ctx.inKernel:
-    ctx.fail("a device function reads " & $e.dotBase.coordBuiltin & ", WGSL coordinate builtins are entry-point parameters")
-    return ""
+    raiseAssert("a device function reads " & $e.dotBase.coordBuiltin & ", WGSL coordinate builtins are entry-point parameters")
   let mapped = getWgslCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
   if mapped.len == 0:
     if e.dotBase.coordBuiltin == cbkThreadsPerThreadgroup:
-      ctx.fail("threads_per_threadgroup reads refuse on WGSL, only the @workgroup_size attribute exists")
+      raiseAssert("threads_per_threadgroup reads refuse on WGSL, only the @workgroup_size attribute exists")
     else:
-      ctx.fail("coordinate builtin has no component " & e.fieldName)
+      raiseAssert("coordinate builtin has no component " & e.fieldName)
     return ""
   ctx.builtins.incl(e.dotBase.coordBuiltin)
   mapped
@@ -252,17 +246,14 @@ proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
   ## WGSL has no bool constructor and no bool-to-numeric conversion.
   if e.castType.kind == ctBool:
-    ctx.fail("conversion to bool, WGSL has no bool constructor")
-    return ""
+    raiseAssert("conversion to bool, WGSL has no bool constructor")
   let bt = getExprType(e.castOperand)
   if bt != nil and bt.kind == ctBool:
-    ctx.fail("conversion from bool, WGSL has no bool-to-numeric conversion")
-    return ""
+    raiseAssert("conversion from bool, WGSL has no bool-to-numeric conversion")
   ctx.emitTypeName(e.castType) & "(" & ctx.printExpr(e.castOperand) & ")"
 
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
-  ctx.fail(getUnhandledExprRejection(e.kind))
-  ""
+  raiseAssert(getUnhandledExprRejection(e.kind))
 
 proc bindsNimBool(ctx: var PrintCtx, name: string): bool =
   ## A kernel bool parameter or a bool workgroup variable stores as the vocab's `storageBool` word,
@@ -277,19 +268,16 @@ proc bindsNimBool(ctx: var PrintCtx, name: string): bool =
   false
 
 proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
-  ## A NIM_BOOL storage word coerces to bool on read.
   if e.typ != nil and e.typ.kind == ctBool and ctx.bindsNimBool(e.name):
     return "bool(" & e.name & ")"
   e.name
 
 proc getDotText(ctx: var PrintCtx, e: CirExpr, baseTxt: string): string =
-  ## A NIM_BOOL storage word coerces to bool on read.
   if structFieldIsBool(getExprType(e.dotBase), e.fieldName):
     return "bool(" & baseTxt & "." & e.fieldName & ")"
   baseTxt & '.' & e.fieldName
 
 proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string =
-  ## A NIM_BOOL storage word coerces the stored value.
   if structFieldIsBool(t, kvv.name):
     return "NIM_BOOL(" & ctx.printExpr(kvv.value) & ")"
   ctx.printExpr(kvv.value)
@@ -300,8 +288,7 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
   of eFloatLit:
     # every bitcast<f64> operand form fails, a u32-suffixed 64-bit literal is a parse error
     if e.fValue.classify in {fcInf, fcNegInf, fcNan} and e.fLitType.bits == 64:
-      ctx.fail("a 64-bit non-finite float has no WGSL token, bitcast<f64> needs the unrequestable shader-f64 feature")
-      return ""
+      raiseAssert("a 64-bit non-finite float has no WGSL token, bitcast<f64> needs the unrequestable shader-f64 feature")
     emitLiteral(e, TargetVocabs[ctx.backend].lit, TargetVocabs[ctx.backend].scalarNames)
   of eTernary:
     # select(f, t, cond) puts the false value first, both branches evaluate
@@ -319,13 +306,11 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
       baseTxt = baseTxt & "[" & idxTxt & "]"
     baseTxt
   else:
-    ctx.fail(getUnhandledExprRejection(e.kind))
-    ""
+    raiseAssert(getUnhandledExprRejection(e.kind))
 
 
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string =
-  ## Returns the WGSL barrier statement texts. WGSL has no combined barrier:
-  ## the workgroup fence runs first and the storage fence comes second.
+  ## WGSL has no combined barrier.
   case s.callCallee.synchroBuiltin
   of cbkThreadgroupBarrier:
     pad & "workgroupBarrier();"
@@ -342,14 +327,11 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## WGSL locals are function or workgroup storage, the WGSL lowering pass
   ## hoists the storage spaces to program scope.
   if s.addressSpace == caThreadgroup:
-    ctx.fail("local " & s.name & " in threadgroup addressSpace, the WGSL lowering pass gives it program scope")
-    return false
+    raiseAssert("local " & s.name & " in threadgroup addressSpace, the WGSL lowering pass gives it program scope")
   elif s.addressSpace == caConstant:
-    ctx.fail(s.name & " is a constant-addressSpace local the WGSL lowering pass relocates to program scope")
-    return false
+    raiseAssert(s.name & " is a constant-addressSpace local the WGSL lowering pass relocates to program scope")
   elif s.addressSpace == caDevice:
-    ctx.fail("local " & s.name & " in device addressSpace, WGSL locals are function/workgroup")
-    return false
+    raiseAssert("local " & s.name & " in device addressSpace, WGSL locals are function/workgroup")
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
@@ -423,19 +405,15 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
     result = attr & "var<storage, read_write> " & p.name & ": array<" &
       ctx.emitTypeName(p.typ.pElem) & ">;"
   of ctPtr:
-    ctx.fail("kernel parameter " & p.name & " of pointer type has no WGSL binding")
-    return ""
+    raiseAssert("kernel parameter " & p.name & " of pointer type has no WGSL binding")
   of ctArray:
-    ctx.fail("kernel parameter " & p.name & " of array type has no WGSL binding")
-    return ""
+    raiseAssert("kernel parameter " & p.name & " of array type has no WGSL binding")
   of ctStruct:
     for f in p.typ.fields:
       if f.typ.kind == ctVector:
-        ctx.fail("kernel parameter " & p.name & " field " & f.name & " is a vector with no host-packed WGSL storage")
-        return ""
+        raiseAssert("kernel parameter " & p.name & " field " & f.name & " is a vector with no host-packed WGSL storage")
       if f.typ.kind == ctArray and f.typ.aElem.kind == ctBool:
-        ctx.fail("kernel parameter " & p.name & " field " & f.name & " is a bool array, only a scalar bool field maps to a NIM_BOOL word")
-        return ""
+        raiseAssert("kernel parameter " & p.name & " field " & f.name & " is a bool array, only a scalar bool field maps to a NIM_BOOL word")
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitTypeName(p.typ) & ";"
   of ctBool:
@@ -446,9 +424,7 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
       ctx.emitTypeName(p.typ) & ";"
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## WGSL declaration text of one struct member.
-  ## A bool member stores as NIM_BOOL. A pointer-holding member
-  ## returns "": the dissolution passes rewrote its uses.
+  ## Dissolution passes rewrite every use of a pointer-holding member before printing.
   if f.typ.containsPtrDeep:
     return ""
   result = f.name & ": " & (if f.typ.kind == ctBool:
@@ -487,15 +463,11 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
   if usesNimBool:
     result &= "alias NIM_BOOL = u32;\n\n"
 
-proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full WGSL module through the shared module skeleton, returning "" as the error when clean, else the first refusal.
+proc printWgslModule*(m: CirModule): string =
   var ctx = initPrintCtx(wgslWalkPolicy, wgslVectorRule, wgslEmit, cgWebGPU)
   ctx.mathNames = wgslMathBuiltinNames
   let kernel = getEntryKernel(ctx, m)
-  if ctx.failing():
-    return ("", ctx.err)
   ctx.m = m
-  ctx.fnName = kernel.name
   printModule(ctx, m, @[kernel], wgslModuleShape)
 
 proc codegen*(m: CirModule): string =

@@ -1,4 +1,4 @@
-## Metal: `while` condition over a call-bearing `or` chain.
+## Metal: `while` condition over an `or` chain that contains calls.
 ##
 ## Test that the loop guard re-checks both calls per iteration.
 ##
@@ -31,7 +31,7 @@ const chainWhileMsl = metal:
     output[2] = i
 
 proc runTest() =
-  suite "Metal - while condition over call-bearing boolean chains":
+  suite "Metal - while condition over boolean chains that contain calls":
     test "or chain: the loop runs while either guard holds":
       var engine = newEngine(runMetal)
       engine.ingest(chainWhileMsl)
