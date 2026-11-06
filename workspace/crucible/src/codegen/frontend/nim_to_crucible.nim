@@ -1085,6 +1085,17 @@ func lowerForStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   let varType = ctx.resolver.resolveCirType(vars.getTypeInst())
   let startV = ctx.lowerExpr(unwrapConv(startNode))
   let stopV = ctx.lowerExpr(unwrapConv(stopNode))
+  # Nim evaluates a for loop's stop bound once.
+  # Bounds that contain statements re-run on every loop test.
+  var boundV = stopV
+  var boundPre: seq[CirStmt] = @[]
+  if stopV.containsStmtsDeep():
+    let boundName = ctx.mintUniqueName("stop_bound")
+    let boundType = getExprType(stopV)
+    let boundSym = sym(boundName, boundType)
+    boundPre.add(varD(boundName, boundType))
+    boundPre.add(asgnS(boundSym, stopV))
+    boundV = boundSym
   var stepV: CirExpr = nil
   var stepIsConst = true
   if stepNode.isNil:
@@ -1107,9 +1118,9 @@ func lowerForStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   let body = ctx.lowerStmt(n[^1])
   ctx.popScope()
   let cmp = if inclusive:
-    leE(varSym, stopV)
+    leE(varSym, boundV)
   else:
-    ltE(varSym, stopV)
+    ltE(varSym, boundV)
   var incr: seq[CirStmt] = @[]
   if stepIsConst:
     incr.add(asgnS(varSym, addE(varType, varSym, stepV)))
@@ -1119,7 +1130,7 @@ func lowerForStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
     incr.add(asgnS(varSym, addE(varType, varSym, stepNow)))
   var preamble = @[varD(varName, varType)]
   preamble.add(asgnS(varSym, startV))
-  result = preamble & @[whileS(cmp, body & incr)]
+  result = preamble & boundPre & @[whileS(cmp, body & incr)]
 
 func lowerAsmStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   # a Nim `asm` statement: verbatim template text alternating with backtick

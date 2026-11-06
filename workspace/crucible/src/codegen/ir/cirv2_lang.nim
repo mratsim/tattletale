@@ -542,6 +542,16 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
   of eNil, eTrue, eFalse, eIntLit, eFloatLit, eSym, eSizeof:
     result = @[]
 
+func containsStmtsDeep*(e: CirExpr): bool =
+  if e.isNil:
+    return false
+  if e.kind == eStmts:
+    return true
+  for ch in e.getExprChildren():
+    if ch.containsStmtsDeep():
+      return true
+  return false
+
 proc hasCallDeep*(e: CirExpr): bool =
   ## Eager forms (a conditional value, WGSL's select) evaluate both variants.
   if e.isNil:

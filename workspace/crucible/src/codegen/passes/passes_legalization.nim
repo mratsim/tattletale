@@ -32,16 +32,6 @@ func registerRewriteStmtsExprs*(reg: var PassRegistry) =
 #  Statement-expression elimination
 # ═══════════════════════════════════════════════════════════════════════
 
-func containsStmtsDeep(e: CirExpr): bool =
-  if e.isNil:
-    return false
-  if e.kind == eStmts:
-    return true
-  for ch in e.getExprChildren():
-    if ch.containsStmtsDeep():
-      return true
-  return false
-
 proc rewriteStmt(el: var TempBinder, s: CirStmt): seq[CirStmt]
 proc rewriteBody(el: var TempBinder, body: seq[CirStmt]): seq[CirStmt]
 proc rewriteExpr(el: var TempBinder, e: CirExpr): seq[CirStmt]
