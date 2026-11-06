@@ -5,28 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Metal batch submission.
-## One MTLIndirectCommandBuffer records the batch's dispatches once.
-## Every replay re-executes the recording over the current buffer contents.
-##
-## Contract:
-## - Bindings record the caller's stable buffer addresses, the caller
-##   rewrites buffer contents in place between replays
-## - The batch borrows the device, the queue and every caller buffer,
-##   every bound buffer outlives the batch
-## - The batch allocates one internal device buffer, its constants image
-##   for by-value scalar arguments, and releases nothing
-
 import std/tables
-
 import workspace/crucible/src/abis/objc_abi as objc
 import workspace/crucible/src/crucible_codegen
+import workspace/crucible/src/runtime/backends/metal_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/engines/engines_common
-import workspace/crucible/src/runtime/backends/metal_runtime
 import workspace/crucible/src/runtime/launch/launch_serialization
 
 export engines_common.LaunchConfig, engines_common.dim3
+
+# ############################################################
+#
+#                   Metal batch submission
+#
+# ############################################################
 
 type
   SlotKind = enum
@@ -47,12 +40,14 @@ type
     scalars: seq[byte]
     slots: seq[Slot]
 
-  MetalBatch* = ref object
+  MetalBatchObj = object
     device, queue: objc.ID
     entries: seq[BatchEntry]
     pipelines: Table[string, objc.ID]
     recording: objc.ID
     constants: objc.ID
+
+  MetalBatch* = ref MetalBatchObj
 
 const
   MTLIndirectCommandTypeConcurrentDispatch = objc.NSUInteger(1 shl 5)
@@ -63,15 +58,20 @@ const
   MaxKernelBufferBinds = 31
     ## Metal caps one dispatch at 31 bound buffers
 
+proc `=destroy`*(batch: var MetalBatchObj) =
+  ## Releases the batch's own objects, never the borrowed handles.
+  if not objc.isNil(batch.recording):
+    objc.release(batch.recording)
+  for pso in batch.pipelines.values:
+    objc.release(pso)
+  if not objc.isNil(batch.constants):
+    objc.release(batch.constants)
+
 when defined(macosx):
 
   proc msgSendUseResource(self: objc.ID, op: objc.SEL, resource: objc.ID, usage: objc.NSUInteger): objc.ID {.importc: "objc_msgSend", dynlib: "libobjc.A.dylib".}
-    ## useResource:usage: passes (id, NSUInteger), an arity the bridge's
-    ## template set does not cover
 
   proc compileIndirectPipelineState(device, library: objc.ID, kernel: string): objc.ID =
-    ## A pipeline without supportIndirectCommandBuffers = YES segfaults
-    ## inside setComputePipelineState during replay.
     let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"),
                           objc.nsStringFromNimString(kernel))
     if objc.isNil(fn):
@@ -116,11 +116,11 @@ when defined(macosx):
       raiseAssert("newIndirectCommandBufferWithDescriptor returned nil, indirect command buffers are unsupported on this device")
 
   proc newMetalBatch*(device, queue: objc.ID): MetalBatch =
+    ## Borrowed: the device, the queue and every bound buffer.
+    ## Every bound buffer outlives the batch.
     MetalBatch(device: device, queue: queue)
 
   proc enqueueKernel*(batch: MetalBatch, library: objc.ID, kernel: string, cfg: LaunchConfig, output: auto, args: tuple) =
-    ## An entrypoint's pipeline state compiles once per batch.
-    ##
     ## Usage:
     ##   batch.enqueueKernel(library, "saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
     if not objc.isNil(batch.recording):
@@ -142,21 +142,19 @@ when defined(macosx):
     bindArgs(entry, output, args, storeEntryArg, objc.ID, cgMetal)
     batch.entries.add entry
 
-  func getScalarBytes*(batch: MetalBatch): int =
-    ## Byte size of the caller's constants buffer.
+  func getScalarSize*(batch: MetalBatch): int =
     for e in batch.entries:
       result = round_multiple_up(result + e.scalars.len, 16)
 
   proc finalize*(batch: MetalBatch) =
-    ## Cached: later calls return without rebuilding.
     if not objc.isNil(batch.recording):
       return
     if batch.entries.len == 0:
       raiseAssert("finalize: the batch has no entries")
     batch.recording = newRecording(batch.device, batch.entries.len)
-    if batch.getScalarBytes > 0:
+    if batch.getScalarSize > 0:
       batch.constants = objc.msgSend(batch.device, objc.`$$`("newBufferWithLength:options:"),
-                                     objc.NSUInteger(batch.getScalarBytes), SharedUntrackedOptions)
+                                     objc.NSUInteger(batch.getScalarSize), SharedUntrackedOptions)
     let image = if objc.isNil(batch.constants):
                   objc.ID(nil)
                 else:
