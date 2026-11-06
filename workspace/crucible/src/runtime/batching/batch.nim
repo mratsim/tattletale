@@ -78,17 +78,9 @@ func batchCodegenKind(E: typedesc[VulkanEngine]): CodegenKind {.compileTime.} =
 macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, blkN: untyped, values: varargs[typed]): untyped =
   doAssert values.len > 0,
     "batch enqueue: the kernel needs a runtime parameter as output"
-  var bufVals: seq[NimNode]
-  var scalVals: seq[NimNode]
-  for v in values:
-    let t = v.getTypeInst()
-    if t.kind == nnkPtrTy:
-      error("batch enqueue: pointer kernel args are not supported, pass the " &
-        "DeviceMem handle from allocDevice, got " & t.repr)
-    elif getDeviceMemFields(v).len > 0:
-      bufVals.add(v)
-    else:
-      scalVals.add(v)
+  doAssert getDeviceMemFields(values[0]).len > 0,
+    "batch enqueue: the output must hold a DeviceMem buffer, got " &
+    values[0].getTypeInst().repr
 
   let wg = getWorkgroupPragma(blkN)
   var valuesN = nnkBracket.newTree()
@@ -101,62 +93,49 @@ macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, b
   procdef[0] = ident($procdef[0] & "_" & base58(int(hash(blkN.repr))))
   procdef[6][0][0] = kernel
   let known = $procdef[0].strVal in ctgStashNames
+  if not known:
+    stashWrapper(procdef)
 
   let H = batch.getTypeInst()[2]
   let entryT = nnkBracketExpr.newTree(bindSym"BatchEntry", H)
-  let entryN = ident"batchEntry"
   let kname = newLit($procdef[0])
-  let dim3S = bindSym"dim3"
-  var stmts = nnkStmtList.newTree()
-  if not known:
-    stashWrapper(procdef)
   let configCall = nnkObjConstr.newTree(bindSym"LaunchConfig",
     nnkExprColonExpr.newTree(ident"grid", bindSym"dim3".newCall(gridN)),
     nnkExprColonExpr.newTree(ident"blk", bindSym"dim3".newCall(blkN)))
-  stmts.add quote do:
-    var `entryN` = `entryT`(entrypoint: `kname`, config: `configCall`)
-  for v in bufVals:
-    for f in getDeviceMemFields(v):
-      let path = if f.name == "":
-        quote do: `v`.mem
-      else:
-        let fieldN = ident(f.name)
-        quote do: `v`.`fieldN`.mem
-      stmts.add quote do:
-        `entryN`.buffers.add `path`
-  if scalVals.len > 0:
-    # Vulkan packs each entry's buffer addresses and scalar blob into
-    # one push-constant block
-    var blobVal = nnkTupleConstr.newTree()
-    for i, v in scalVals:
-      blobVal.add(nnkExprColonExpr.newTree(ident("s" & $i), v))
-    let blobN = ident"batchBlob"
-    let offN = ident"batchOff"
-    let layoutN = ident"batchBlobLayout"
-    let cgN = ident"batchCg"
-    let baseN = ident"batchBase"
-    let nbufs = newLit(bufVals.len)
-    let batchCodegenKindS = bindSym("batchCodegenKind", brForceOpen)
-    let computeLayoutS = bindSym"computeDeviceLayout"
-    let typeofS = bindSym"typeof"
-    let roundUpS = bindSym"round_multiple_up"
-    let packFromS = bindSym"packFrom"
-    let bufT = bufVals[0].getTypeInst()
-    stmts.add quote do:
+  let argsTuple = nnkTupleConstr.newTree()
+  for i in 1 ..< values.len:
+    argsTuple.add(values[i])
+  let cgN = ident"batchCg"
+  let recN = ident"batchRec"
+  let recT = ident"BatchRec"
+  let storeN = ident"batchRecStore"
+  let layoutN = ident"batchBlobLayout"
+  let batchCodegenKindS = bindSym("batchCodegenKind", brForceOpen)
+  let outN = values[0]
+  result = quote do:
+    block:
       const `cgN` = `batchCodegenKindS`(typeof(`batch`.engine))
-      const `baseN` = when `cgN` == cgGlsl:
-        `computeLayoutS`(`typeofS`(`bufT`), `cgN`).size * `nbufs`
-      else:
-        0
-      const `layoutN` = `computeLayoutS`(`typeofS`(`blobVal`), `cgN`)
-      var `blobN`: array[`roundUpS`(`baseN`, `layoutN`.align) + `layoutN`.size, byte]
-      var `offN` = `roundUpS`(`baseN`, `layoutN`.align)
-      `packFromS`(`blobN`, `offN`, `blobVal`, `cgN`)
-      `entryN`.scalars = `blobN`[0 ..< `offN`]
-      `entryN`.scalarAlign = `layoutN`.align
-  stmts.add quote do:
-    `batch`.entries.add `entryN`
-  result = nnkStmtList.newTree(nnkBlockStmt.newTree(newEmptyNode(), stmts))
+      const `layoutN` = computeDeviceLayout(typeof(`argsTuple`), `cgN`)
+      type `recT` = object
+        entry: `entryT`
+        blob: array[`layoutN`.size, byte]
+        off: int
+      template `storeN`(ctx: var `recT`, v: auto, pos: int) =
+        when typeof(v) is `H`:
+          ctx.entry.buffers.add v
+        elif typeof(v) is ptr:
+          {.error: "batch enqueue: pointer kernel args are not supported, " &
+            "pass the DeviceMem handle from allocDevice".}
+        elif hasBufferLeaf(typeof(v), typedesc[`H`]):
+          for f in fields(v):
+            `storeN`(ctx, f, pos)
+        else:
+          packFrom(ctx.blob, ctx.off, v, `cgN`)
+      var `recN` = `recT`(entry: `entryT`(entrypoint: `kname`, config: `configCall`))
+      bindArgs(`recN`, `outN`, `argsTuple`, `storeN`, typedesc[`H`], `cgN`)
+      `recN`.entry.scalars = `recN`.blob[0 ..< `recN`.off]
+      `recN`.entry.scalarAlign = `layoutN`.align
+      `batch`.entries.add `recN`.entry
 
 macro recordDeviceCall(batch: Batch, kernel: typed, gridN, blkN: untyped, args: varargs[untyped]): untyped =
   for a in args:
@@ -193,8 +172,6 @@ type
     config: LaunchConfig
 
 func dims3(n: NimNode): array[3, NimNode] =
-  if false:
-    discard
   if n.kind in {nnkPar, nnkTupleConstr, nnkBracket} and n.len > 3:
     error("batch enqueue: a launch dim takes at most 3 axes, got " & $n.len)
   if n.kind in {nnkPar, nnkTupleConstr, nnkBracket}:
