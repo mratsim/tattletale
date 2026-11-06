@@ -154,7 +154,7 @@ when defined(macosx):
       failLoud("copyToHostFromDevice: n must be positive, got " & $n)
     copyMem(dst, readBufferContents(src), n)
 
-  proc launchKernelImpl*(engine: MetalEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+  proc launchKernelImpl*(engine: MetalEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
     ## Compiles the kernel's pipeline state on first use.
     ##   engine.launchKernel<<(1024, 256)>>("saxpy", outDev, (xDev, yDev, 2.0'f32))
     objc.withMemPool:

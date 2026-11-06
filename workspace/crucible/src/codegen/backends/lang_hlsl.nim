@@ -391,7 +391,7 @@ proc emitCoordComponent(ctx: var PrintCtx, k: CirCoordBuiltinKind, field: string
 #  Expressions
 # ═══════════════════════════════════════════════════════════════════════
 
-proc constructionLeaves(ctx: var PrintCtx, t: CirType, v: CirExpr, path: string, outp: var seq[tuple[p, txt: string]]): bool =
+proc constructionLeaves(ctx: var PrintCtx, outp: var seq[tuple[p, txt: string]], t: CirType, v: CirExpr, path: string): bool =
   ## Appends one (dotted path, leaf text) entry per bound leaf field.
   ##
   ## - `path` prefixes each leaf path, "" at the top
@@ -408,7 +408,7 @@ proc constructionLeaves(ctx: var PrintCtx, t: CirType, v: CirExpr, path: string,
       return false
     let leafPath = if path.len == 0: f.name else: path & "." & f.name
     if val.kind == eOconstr and f.typ.kind == ctStruct:
-      if not ctx.constructionLeaves(f.typ, val, leafPath, outp):
+      if not ctx.constructionLeaves(outp, f.typ, val, leafPath):
         return false
     else:
       outp.add (leafPath, ctx.printExpr(val))
@@ -423,7 +423,7 @@ proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string =
   ## Flat brace list of one object construction: `{ 0, 1, 2 }` at any depth.
   ## A zero-field struct contributes one `0` slot for its padding member.
   var leaves: seq[tuple[p, txt: string]]
-  if not ctx.constructionLeaves(t, v, "", leaves) or ctx.failing():
+  if not ctx.constructionLeaves(leaves, t, v, "") or ctx.failing():
     return ""
   if t.fields.len == 0:
     return "{ 0 }"
@@ -475,7 +475,7 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string =
   if s.rhs != nil and s.rhs.kind == eOconstr and s.rhs.ocType.kind == ctStruct:
     # DXC rejects compound literals on assignment, member-wise leaves are the form it accepts
     var leaves: seq[tuple[p, txt: string]]
-    if not ctx.constructionLeaves(s.rhs.ocType, s.rhs, "", leaves) or ctx.failing():
+    if not ctx.constructionLeaves(leaves, s.rhs.ocType, s.rhs, "") or ctx.failing():
       return ""
     var lines: seq[string]
     let target = ctx.printExpr(s.lhs)
@@ -532,7 +532,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
     result = "inline "
   result &= ret & ' ' & fn.name & '(' & params.join(", ") & ')'
 
-proc classifyParams(ctx: var PrintCtx, fn: CirProc, pushParams: var HashSet[string], buffers: var seq[CirParam]) =
+proc classifyParams(ctx: var PrintCtx, pushParams: var HashSet[string], buffers: var seq[CirParam], fn: CirProc) =
   ## Splits one proc's parameters into buffer resources and values:
   ##
   ## - kernels: values pack into the Push block, buffer parameters map to register ordinals
@@ -596,7 +596,7 @@ proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   else:
     # a device function's values pass by value, the push half records nothing
     var devicePush: HashSet[string]
-    ctx.classifyParams(fn, devicePush, buffers)
+    ctx.classifyParams(devicePush, buffers, fn)
     if ctx.failing():
       return
   for p in buffers:
@@ -713,7 +713,7 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: st
     return ("", ctx.err)
   ctx.graph = m.callGraph
   ctx.fnName = kernel.name
-  ctx.classifyParams(kernel, ctx.kernelPush, ctx.kernelBuffers)
+  ctx.classifyParams(ctx.kernelPush, ctx.kernelBuffers, kernel)
   if ctx.failing():
     return ("", ctx.err)
   printModule(ctx, m, @[kernel], hlslModuleShape)

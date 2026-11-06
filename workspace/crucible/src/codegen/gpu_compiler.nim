@@ -68,7 +68,7 @@ macro codegenMetal(body: typed): string =
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  let perr = runPasses(m, reg)
+  let perr = reg.runPasses(m)
   if perr.len > 0:
     error(perr)
   result = newLit(codegen(m, cgMetal))
@@ -90,7 +90,7 @@ macro codegenCuda(body: typed): string =
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  let perr = runPasses(m, reg)
+  let perr = reg.runPasses(m)
   if perr.len > 0:
     error(perr)
   result = newLit(codegen(m, cgCuda))
@@ -115,7 +115,7 @@ macro codegenOpenCL(body: typed): string =
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  let perr = runPasses(m, reg)
+  let perr = reg.runPasses(m)
   if perr.len > 0:
     error(perr)
   result = newLit(codegen(m, cgOpenCL))
@@ -139,7 +139,7 @@ macro codegenGLSL(body: typed): string =
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  let perr = runPasses(m, reg)
+  let perr = reg.runPasses(m)
   if perr.len > 0:
     error(perr)
   result = newLit(codegen(m, cgGlsl))
@@ -156,7 +156,7 @@ macro codegenSpirvShader(body: typed): seq[uint32] =
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  let perr = runPasses(m, reg)
+  let perr = reg.runPasses(m)
   if perr.len > 0:
     error(perr)
   result = newLit(codegenSpirvShader(m))
@@ -182,7 +182,7 @@ macro codegenWebGpu(body: typed): string =
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  let perr = runPasses(m, reg)
+  let perr = reg.runPasses(m)
   if perr.len > 0:
     error(perr)
   result = newLit(codegen(m, cgWebGPU))
@@ -206,7 +206,7 @@ macro codegenHlsl(body: typed, flavor: static HlslFlavor = fvD3D12): string =
   let (m, lerr) = lowerCirv2(body)
   if lerr.len > 0:
     error(lerr)
-  let perr = runPasses(m, reg)
+  let perr = reg.runPasses(m)
   if perr.len > 0:
     error(perr)
   let printed = case flavor

@@ -277,7 +277,7 @@ proc printDiscard(ctx: var PrintCtx, s: CirStmt, pad: string): string =
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════
 
-proc inlineSourceC(k: CirProc, m: CirModule, ctx: var PrintCtx): tuple[bodyProc: CirProc, call: CirStmt] =
+proc inlineSourceC(ctx: var PrintCtx, k: CirProc, m: CirModule): tuple[bodyProc: CirProc, call: CirStmt] =
   ## Inlined-body lookup: the proc whose body inlines into the launch
   ## thread loop nest, plus the wrapper call when the pipeline kept them separate.
   ## - the wrapper body is one call to the user kernel proc, that body
@@ -328,7 +328,7 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
       let k = kctx.getEntryKernel(m)
       if kctx.failing():
         error(kctx.err)
-      inlinedName = inlineSourceC(k, m, kctx).bodyProc.name
+      inlinedName = kctx.inlineSourceC(k, m).bodyProc.name
       break
   if kctx.failing():
     error(kctx.err)
@@ -374,7 +374,7 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
   let k = kctx.getEntryKernel(m)
   if kctx.failing():
     error(kctx.err)
-  let (bodyProc, call) = inlineSourceC(k, m, kctx)
+  let (bodyProc, call) = kctx.inlineSourceC(k, m)
   if kctx.failing():
     error(kctx.err)
 

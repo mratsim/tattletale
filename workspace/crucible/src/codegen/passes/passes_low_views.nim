@@ -117,7 +117,7 @@ type
     ## Span names of the proc under rewrite with a length binding:
     ## split parameters and decomposed view bindings.
 
-proc splitSpanCall(callee: CirExpr, args: var seq[CirExpr], ctx: var SpanCtx, err: var string) =
+proc splitSpanCall(ctx: var SpanCtx, args: var seq[CirExpr], err: var string, callee: CirExpr) =
   ## A `toOpenArray` argument expands into `base + first` and `last - first + 1`,
   ## a span symbol into the pointer and length bindings of its name.
   ## The rewrite refuses a callee outside the module, its span parameter would reach the printer unsplit.
@@ -156,10 +156,10 @@ proc splitSpanCall(callee: CirExpr, args: var seq[CirExpr], ctx: var SpanCtx, er
     paramTypes.add p.typ
   callee.typ = CirType(kind: ctProc, params: paramTypes, ret: def.ret)
 
-proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string)
+proc rewriteSpanUsesExpr(ctx: var SpanCtx, e: var CirExpr, err: var string)
   ## Forward declaration, statement lists recurse into their expressions.
 
-proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string) =
+proc rewriteSpanUsesExpr(ctx: var SpanCtx, e: var CirExpr, err: var string) =
   ## Surviving `toOpenArray` calls: the pass refuses one, the frontend emits one only in a view binding, a call argument, or a `len` read.
   ##
   ## A folded node replaces the node slot its parent references (`e` is a `var` param).
@@ -190,50 +190,50 @@ proc rewriteSpanUsesExpr(e: var CirExpr, ctx: var SpanCtx, err: var string) =
         e = spanPtrLenParts(arg.args[0], arg.args[1], arg.args[2]).lenExpr
         return
     else:
-      splitSpanCall(e.callee, e.args, ctx, err)
+      ctx.splitSpanCall(e.args, err, e.callee)
       if err.len > 0:
         return
-    e.callee.rewriteSpanUsesExpr(ctx, err)
+    ctx.rewriteSpanUsesExpr(e.callee, err)
     if err.len > 0:
       return
     for a in e.args.mitems:
-      a.rewriteSpanUsesExpr(ctx, err)
+      ctx.rewriteSpanUsesExpr(a, err)
   of eCast, eConv:
     # a conversion over a span read retains the read's fold: the operand is
     # a settable field, a folded read replaces it in the conversion
-    e.castOperand.rewriteSpanUsesExpr(ctx, err)
+    ctx.rewriteSpanUsesExpr(e.castOperand, err)
   else:
     # children are shared refs: the walk retypes span symbols in place
     # and no child position replaces its node
     var children = getExprChildren(e)
     for i in 0 ..< children.len:
-      rewriteSpanUsesExpr(children[i], ctx, err)
+      ctx.rewriteSpanUsesExpr(children[i], err)
 
-proc rewriteSpanUsesStmts(ss: seq[CirStmt], ctx: var SpanCtx, err: var string) =
+proc rewriteSpanUsesStmts(ctx: var SpanCtx, err: var string, ss: seq[CirStmt]) =
   for s in ss:
     case s.kind
     of sVar:
-      s.init.rewriteSpanUsesExpr(ctx, err)
+      ctx.rewriteSpanUsesExpr(s.init, err)
     of sAsgn:
-      s.lhs.rewriteSpanUsesExpr(ctx, err)
-      s.rhs.rewriteSpanUsesExpr(ctx, err)
+      ctx.rewriteSpanUsesExpr(s.lhs, err)
+      ctx.rewriteSpanUsesExpr(s.rhs, err)
     of sIte:
-      s.cond.rewriteSpanUsesExpr(ctx, err)
-      s.thenBody.rewriteSpanUsesStmts(ctx, err)
-      s.elseBody.rewriteSpanUsesStmts(ctx, err)
+      ctx.rewriteSpanUsesExpr(s.cond, err)
+      ctx.rewriteSpanUsesStmts(err, s.thenBody)
+      ctx.rewriteSpanUsesStmts(err, s.elseBody)
     of sWhile:
-      s.whileCond.rewriteSpanUsesExpr(ctx, err)
-      s.whileBody.rewriteSpanUsesStmts(ctx, err)
+      ctx.rewriteSpanUsesExpr(s.whileCond, err)
+      ctx.rewriteSpanUsesStmts(err, s.whileBody)
     of sRet:
-      s.retVal.rewriteSpanUsesExpr(ctx, err)
+      ctx.rewriteSpanUsesExpr(s.retVal, err)
     of sDiscard:
-      s.discardVal.rewriteSpanUsesExpr(ctx, err)
+      ctx.rewriteSpanUsesExpr(s.discardVal, err)
     of sCall:
-      splitSpanCall(s.callCallee, s.callArgs, ctx, err)
+      ctx.splitSpanCall(s.callArgs, err, s.callCallee)
       if err.len > 0:
         return
       for a in s.callArgs.mitems:
-        a.rewriteSpanUsesExpr(ctx, err)
+        ctx.rewriteSpanUsesExpr(a, err)
     of sAsm, sEmit:
       discard
     if err.len > 0:
@@ -361,7 +361,7 @@ proc lowerSpansPass(m: CirModule): string =
       ctx.lenNames.incl fn.params[s.paramIdx].name
     var err = decomposeSpanBindings(fn.body, ctx)
     if err.len == 0:
-      rewriteSpanUsesStmts(fn.body, ctx, err)
+      ctx.rewriteSpanUsesStmts(err, fn.body)
     if err.len > 0:
       return "in proc " & fn.name & ": " & err
     let spanErr = fn.survivingSpanRejection()

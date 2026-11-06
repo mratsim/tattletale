@@ -34,7 +34,7 @@ func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
 #  Instantiation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc resolveWantedParamTypes(callee: CirProc, args: seq[CirExpr], wanted: var seq[CirType]): bool =
+proc resolveWantedParamTypes(wanted: var seq[CirType], callee: CirProc, args: seq[CirExpr]): bool =
   # Precondition: `args` covers every formal, `args.len == callee.params.len`.
   wanted.setLen(callee.params.len)
   for i in 0 ..< callee.params.len:
@@ -109,7 +109,7 @@ proc rewriteCallSite(calleeExpr: CirExpr, args: seq[CirExpr], calleeProc: CirPro
   ## The pass refuses a name collision, `ctx.err` receives the refusal text and the call site remains untouched.
   var wanted: seq[CirType]
   var instantiation: CirProc
-  if not calleeProc.resolveWantedParamTypes(args, wanted):
+  if not resolveWantedParamTypes(wanted, calleeProc, args):
     return
   let key = calleeProc.buildInstKey(wanted)
   if ctx.clones.hasKey(key):

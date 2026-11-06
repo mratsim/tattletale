@@ -82,7 +82,7 @@ proc walkStmts*(ss: seq[CirStmt], onStmt: proc(s: CirStmt), onExpr: proc(e: CirE
     if onStmt != nil:
       onStmt(s)
 
-proc collectCallTargets*(stmts: seq[CirStmt], targets: var HashSet[string]) =
+proc collectCallTargets*(targets: var HashSet[string], stmts: seq[CirStmt]) =
   var collected = targets
   let onExpr = proc(e: CirExpr) =
     if e.kind == eCall and e.callee.kind == eSym:
@@ -93,7 +93,7 @@ proc collectCallTargets*(stmts: seq[CirStmt], targets: var HashSet[string]) =
   stmts.walkStmts(onStmt, onExpr)
   targets = collected
 
-proc collectDeclaredLocals*(stmts: seq[CirStmt], locals: var seq[tuple[name: string, typ: CirType]]) =
+proc collectDeclaredLocals*(locals: var seq[tuple[name: string, typ: CirType]], stmts: seq[CirStmt]) =
   var collected = locals
   let collect = proc(s: CirStmt) =
     if s.kind == sVar:
@@ -319,7 +319,7 @@ type
     typ*: CirType
     isBuffer*: bool
 
-proc collectLeaves(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
+proc collectLeaves(leaves: var seq[CirParamLeaf], t: CirType, name: string) =
   case t.kind
   of ctPtr, ctAptr:
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: true)
@@ -330,7 +330,7 @@ proc collectLeaves(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
     elif t.containsPtrDeep:
       for f in t.fields:
         if f.typ.kind != ctVoid:
-          collectLeaves(f.typ, name & "_" & f.name, leaves)
+          collectLeaves(leaves, f.typ, name & "_" & f.name)
     else:
       leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
   of ctArray:
@@ -341,7 +341,7 @@ proc collectLeaves(t: CirType, name: string, leaves: var seq[CirParamLeaf]) =
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
 
 proc kernelParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
-  collectLeaves(t, name, result)
+  collectLeaves(result, t, name)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Pointer-local explosion
@@ -390,7 +390,7 @@ proc getStructRoot*(e: CirExpr): CirExpr =
 proc spliceSym*(e: CirExpr, name: string, typ: CirType) =
   e[] = sym(name, typ)[]
 
-proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: CirType, c: CirExpr, target: string): string =
+proc registerExplodedStruct*(ctx: var ExplodeCtx, fn: CirProc, path: string, t: CirType, c: CirExpr, target: string): string =
   ## Records the field rewrites of one pointer-holding struct local whose
   ## object construction binds leaf symbols, nested constructions recurse.
   ##
@@ -412,7 +412,7 @@ proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: 
     if ft.isNil:
       return refuseAt(fn, "field " & kvv.name & " is not on " & t.name)
     if kvv.value.kind == eOconstr:
-      let err = registerExplodedStruct(fn, ctx, path & "." & kvv.name, ft, kvv.value, target)
+      let err = ctx.registerExplodedStruct(fn, path & "." & kvv.name, ft, kvv.value, target)
       if err.len > 0:
         return err
     elif kvv.value.kind == eSym:
@@ -424,16 +424,16 @@ proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: 
       return refuseAt(fn, "field " & f.name & " of " & path & " is missing from the construction")
   return ""
 
-proc explodeStructVarDecl*(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt, target: string): string =
+proc explodeStructVarDecl*(ctx: var ExplodeCtx, fn: CirProc, s: CirStmt, target: string): string =
   if s.init == nil or s.init.kind != eOconstr:
     return refuseAt(fn, "struct local " & s.name & " without a construction, " & target & " has no pointer struct members")
-  let err = registerExplodedStruct(fn, ctx, s.name, s.declType, s.init, target)
+  let err = ctx.registerExplodedStruct(fn, s.name, s.declType, s.init, target)
   if err.len > 0:
     return err
   ctx.structLocals.incl(s.name)
   return ""
 
-proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
+proc rewritePointerExprShared*(ctx: var ExplodeCtx, fn: CirProc, e: CirExpr,
     target: string,
     ownArm: proc(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr): string): string =
   ## Shared skeleton of the WGSL and HLSL pointer-local expression rewrites.
@@ -486,7 +486,7 @@ proc freshProcType*(params: seq[CirType], ret: CirType): CirType =
   result.params = params
   result.ret = ret
 
-proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): string =
+proc hoistConstMemStmts*(ss: var seq[CirStmt], m: CirModule, fn: CirProc): string =
   ## Relocates the `{.const_mem.}` locals of one statement list into `m.globals`, deleting the declarations from the list.
   ##
   ## Contract:
@@ -508,14 +508,14 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
       continue
     case s.kind
     of sIte:
-      let thenErr = hoistConstMemStmts(m, fn, s.thenBody)
+      let thenErr = hoistConstMemStmts(s.thenBody, m, fn)
       if thenErr.len > 0:
         return thenErr
-      let elseErr = hoistConstMemStmts(m, fn, s.elseBody)
+      let elseErr = hoistConstMemStmts(s.elseBody, m, fn)
       if elseErr.len > 0:
         return elseErr
     of sWhile:
-      let loopErr = hoistConstMemStmts(m, fn, s.whileBody)
+      let loopErr = hoistConstMemStmts(s.whileBody, m, fn)
       if loopErr.len > 0:
         return loopErr
     else:
@@ -526,7 +526,7 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
 proc hoistConstMemLocals*(m: CirModule): string =
   ## Runs after the reserved-word rename so the relocated names match the renamed body references.
   for fn in m.procs:
-    let err = hoistConstMemStmts(m, fn, fn.body)
+    let err = hoistConstMemStmts(fn.body, m, fn)
     if err.len > 0:
       return err
   return ""

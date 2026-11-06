@@ -870,8 +870,8 @@ proc printSig*(ctx: var auto, fn: CirProc): string =
 proc structDeclName*(ctx: var auto, t: CirType): string =
   t.name
 
-proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
-    emitted: var HashSet[string], name: string, outp: var string,
+proc printStructDecl(ctx: var auto, outp: var string, emitted: var HashSet[string],
+    byName: Table[string, CirType], name: string,
     shape: static ModuleShape) =
   ## One struct declaration into `outp`, member structs first, deduplicated by name.
   ## Member structs collect through pointer, array and scalar-named fields.
@@ -887,7 +887,7 @@ proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
     while ft != nil and ft.kind in {ctPtr, ctAptr, ctArray}:
       ft = if ft.kind == ctArray: ft.aElem else: ft.pElem
     if ft != nil and ft.kind == ctStruct:
-      ctx.printStructDecl(byName, emitted, ft.name, outp, shape)
+      ctx.printStructDecl(outp, emitted, byName, ft.name, shape)
   if ctx.failing():
     return
   if shape.structTypedef:
@@ -908,7 +908,7 @@ proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
   else:
     outp.add shape.structClose & "\n\n"
 
-proc seedStructType(t: CirType, byName: var Table[string, CirType]) =
+proc seedStructType(byName: var Table[string, CirType], t: CirType) =
   ## Adds the struct behind a proc parameter or return type to `byName`, through pointers and arrays.
   var t = t
   while t != nil and t.kind in {ctPtr, ctAptr, ctArray}:
@@ -929,11 +929,11 @@ proc printStructs*(ctx: var auto, m: CirModule, shape: static ModuleShape): stri
       byName[t.name] = t
   for fn in m.procs:
     for param in fn.params:
-      seedStructType(param.typ, byName)
-    seedStructType(fn.ret, byName)
+      seedStructType(byName, param.typ)
+    seedStructType(byName, fn.ret)
   var emitted: HashSet[string]
   for name, t in byName.pairs:
-    ctx.printStructDecl(byName, emitted, name, result, shape)
+    ctx.printStructDecl(result, emitted, byName, name, shape)
 
 proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   ## One device function or kernel, "" once the walk refused.

@@ -114,7 +114,7 @@ proc rewriteVarCallArgsExpr(fn: CirProc, e: CirExpr, varParams: HashSet[string],
       return err
   return ""
 
-proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashSet[string], procs: Table[string, CirProc]): string =
+proc rewriteVarCallArgsStmts(ss: var seq[CirStmt], fn: CirProc, varParams: HashSet[string], procs: Table[string, CirProc]): string =
   for s in mitems(ss):
     case s.kind
     of sVar:
@@ -132,17 +132,17 @@ proc rewriteVarCallArgsStmts(fn: CirProc, ss: var seq[CirStmt], varParams: HashS
       let cerr = rewriteVarCallArgsExpr(fn, s.cond, varParams, procs)
       if cerr.len > 0:
         return cerr
-      let terr = rewriteVarCallArgsStmts(fn, s.thenBody, varParams, procs)
+      let terr = rewriteVarCallArgsStmts(s.thenBody, fn, varParams, procs)
       if terr.len > 0:
         return terr
-      let eerr = rewriteVarCallArgsStmts(fn, s.elseBody, varParams, procs)
+      let eerr = rewriteVarCallArgsStmts(s.elseBody, fn, varParams, procs)
       if eerr.len > 0:
         return eerr
     of sWhile:
       let cerr = rewriteVarCallArgsExpr(fn, s.whileCond, varParams, procs)
       if cerr.len > 0:
         return cerr
-      let werr = rewriteVarCallArgsStmts(fn, s.whileBody, varParams, procs)
+      let werr = rewriteVarCallArgsStmts(s.whileBody, fn, varParams, procs)
       if werr.len > 0:
         return werr
     of sRet:
@@ -184,7 +184,7 @@ proc qualifyVarParams(m: CirModule): string =
       if p.varParam:
         varParams.incl(p.name)
     fn.body.unwrapVarDerefsStmts(varParams)
-    let err = rewriteVarCallArgsStmts(fn, fn.body, varParams, procs)
+    let err = rewriteVarCallArgsStmts(fn.body, fn, varParams, procs)
     if err.len > 0:
       return err
   return ""

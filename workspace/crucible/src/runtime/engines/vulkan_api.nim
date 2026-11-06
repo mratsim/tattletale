@@ -255,7 +255,7 @@ proc findFirstFunctionName(src: string, preamble, marker: string): string =
     name = "main"
   name
 
-proc launchKernelImpl*(engine: VulkanEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: VulkanEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
     failLoud("Vulkan run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:

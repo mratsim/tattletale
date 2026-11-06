@@ -66,9 +66,8 @@ proc scanStoredStmts(stored: var HashSet[string], fn: CirProc, ss: seq[CirStmt])
   ss.walkStmts(onStmt, nil)
   stored = g
 
-proc scanCallStmts(procs: Table[string, CirProc],
-    edges: var seq[tuple[caller, arg, callee, param: string]],
-    fn: CirProc, ss: seq[CirStmt]) =
+proc scanCallStmts(edges: var seq[tuple[caller, arg, callee, param: string]],
+    procs: Table[string, CirProc], fn: CirProc, ss: seq[CirStmt]) =
   ## Records one edge per call argument rooted at a parameter symbol:
   ## `caller/arg -> callee/paramI`.
   ##
@@ -166,7 +165,7 @@ proc hlslRun(m: CirModule): string {.nimcall.} =
   var edges: seq[tuple[caller, arg, callee, param: string]]
   for fn in m.procs:
     stored.scanStoredStmts(fn, fn.body)
-    procs.scanCallStmts(edges, fn, fn.body)
+    scanCallStmts(edges, procs, fn, fn.body)
   m.callGraph = CallGraph(stored: stored,
     reached: classifyRwBuffers(stored, edges))
   result = checkDeviceFnRecursion(procs)

@@ -167,7 +167,7 @@ func makeSafeIdent(name: string, reserved: HashSet[string], doubleUnderscorePref
     safe = doubleUnderscorePrefix & safe
   result = safe
 
-func uniqueSafeName(safe: string, used: var HashSet[string]): string =
+func uniqueSafeName(used: var HashSet[string], safe: string): string =
   ## Two declarations sharing one identifier redefine at C compile time or silently shadow.
   var candidate = safe
   var suffix = 0
@@ -177,17 +177,17 @@ func uniqueSafeName(safe: string, used: var HashSet[string]): string =
   used.incl(candidate)
   result = candidate
 
-proc collectLocalNames(ss: seq[CirStmt], used: var HashSet[string]) =
+proc collectLocalNames(used: var HashSet[string], ss: seq[CirStmt]) =
   ## Every local name declared in the statement tree, nested branches included.
   for s in ss:
     case s.kind
     of sVar:
       used.incl(s.name)
     of sIte:
-      collectLocalNames(s.thenBody, used)
-      collectLocalNames(s.elseBody, used)
+      collectLocalNames(used, s.thenBody)
+      collectLocalNames(used, s.elseBody)
     of sWhile:
-      collectLocalNames(s.whileBody, used)
+      collectLocalNames(used, s.whileBody)
     else:
       discard
 
@@ -274,11 +274,11 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
     var usedNames: HashSet[string]
     for p in fn.params:
       usedNames.incl(p.name)
-    collectLocalNames(fn.body, usedNames)
+    collectLocalNames(usedNames, fn.body)
     for p in mitems(fn.params):
       let safe = makeSafeIdent(p.name, reserved, doubleUnderscorePrefix)
       if safe != p.name:
-        let unique = uniqueSafeName(safe, usedNames)
+        let unique = uniqueSafeName(usedNames, safe)
         symRenames[p.name] = unique
         p.name = unique
     # declarations rename first: the body walk reads the maps that they feed
@@ -288,7 +288,7 @@ proc renameReservedIdentifiers(m: CirModule, reserved: HashSet[string], doubleUn
       of sVar:
         let safe = makeSafeIdent(s.name, reserved, doubleUnderscorePrefix)
         if safe != s.name:
-          let unique = uniqueSafeName(safe, usedNames)
+          let unique = uniqueSafeName(usedNames, safe)
           decls.add((s.name, unique))
           s.name = unique
       else:

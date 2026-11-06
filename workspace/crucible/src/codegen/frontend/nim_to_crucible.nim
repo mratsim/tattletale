@@ -1332,7 +1332,7 @@ func lowerAsmStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
 #  Proc translation
 # ═══════════════════════════════════════════════════════════════════════
 
-func lowerProcBody(ctx: var CirFrontend, formals: NimNode, body: NimNode, params: var seq[CirParam]): seq[CirStmt] =
+func lowerProcBody(ctx: var CirFrontend, params: var seq[CirParam], formals: NimNode, body: NimNode): seq[CirStmt] =
   ctx.pushScope()
   for i in 1 ..< formals.len:
     let formal = formals[i]
@@ -1404,7 +1404,7 @@ func lowerProcDef(ctx: var CirFrontend, fn: NimNode): CirProc =
   var params: seq[CirParam] = @[]
   let fnRet = ctx.locals.retType
   let fnName = ctx.locals.fnName
-  let body = ctx.lowerProcBody(formals, getProcBody(fn), params)
+  let body = ctx.lowerProcBody(params, formals, getProcBody(fn))
   result = procD(fnName, params, fnRet, body)
   var paramTypes: seq[CirType]
   for p in params:
@@ -1431,7 +1431,7 @@ func harvestProc(ctx: var CirFrontend, callee: NimNode, cirName: string) =
     return
   var params: seq[CirParam] = @[]
   let fnRet = ctx.locals.retType
-  let body = ctx.lowerProcBody(formals, getProcBody(impl), params)
+  let body = ctx.lowerProcBody(params, formals, getProcBody(impl))
   ctx.exitProcBody(save)
   if ctx.resolver.err.len > 0:
     ctx.module.procs.setLen(savedProcsLen)

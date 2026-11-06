@@ -40,7 +40,7 @@ func registerOpenclLowerByrefParams*(reg: var PassRegistry) =
 #  By-ref parameter lowering
 # ═══════════════════════════════════════════════════════════════════════
 
-proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int, byref: Table[string, seq[int]]) =
+proc addrWrapByrefArgs(pre: var seq[CirStmt], tmpCount: var int, e: CirExpr, byref: Table[string, seq[int]]) =
   ## Wraps a call argument in an address when the callee formal expects the struct
   ## as a hidden reference and the argument is still the struct value.
   ##
@@ -49,7 +49,7 @@ proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int, byr
   if e.isNil:
     return
   for ch in getExprChildren(e):
-    addrWrapByrefArgs(ch, pre, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, ch, byref)
   if e.kind != eCall:
     return
   for i in byref.getOrDefault(e.callee.name):
@@ -71,30 +71,30 @@ proc addrWrapByrefArgs(e: CirExpr, pre: var seq[CirStmt], tmpCount: var int, byr
 proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int, byref: Table[string, seq[int]])
   ## Forward declaration: nested statement lists recurse into each other.
 
-proc addrWrapByrefStmt(s: CirStmt, pre: var seq[CirStmt], tmpCount: var int, byref: Table[string, seq[int]]) =
+proc addrWrapByrefStmt(pre: var seq[CirStmt], tmpCount: var int, s: CirStmt, byref: Table[string, seq[int]]) =
   case s.kind
   of sAsgn:
-    addrWrapByrefArgs(s.rhs, pre, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.rhs, byref)
   of sIte:
-    addrWrapByrefArgs(s.cond, pre, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.cond, byref)
     addrWrapByrefStmts(s.thenBody, tmpCount, byref)
     addrWrapByrefStmts(s.elseBody, tmpCount, byref)
   of sWhile:
-    addrWrapByrefArgs(s.whileCond, pre, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.whileCond, byref)
     addrWrapByrefStmts(s.whileBody, tmpCount, byref)
   of sRet:
-    addrWrapByrefArgs(s.retVal, pre, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.retVal, byref)
   of sDiscard:
-    addrWrapByrefArgs(s.discardVal, pre, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.discardVal, byref)
   of sCall:
     let callE = CirExpr(kind: eCall)
     callE.callee = s.callCallee
     callE.args = s.callArgs
-    addrWrapByrefArgs(callE, pre, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, callE, byref)
     s.callCallee = callE.callee
     s.callArgs = callE.args
   of sVar:
-    addrWrapByrefArgs(s.init, pre, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.init, byref)
   of sAsm, sEmit:
     discard
 
@@ -102,7 +102,7 @@ proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int, byref: Table
   var i = 0
   while i < stmts.len:
     var pre: seq[CirStmt] = @[]
-    addrWrapByrefStmt(stmts[i], pre, tmpCount, byref)
+    addrWrapByrefStmt(pre, tmpCount, stmts[i], byref)
     for h in pre:
       stmts.insert(h, i)
       i.inc

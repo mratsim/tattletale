@@ -65,14 +65,14 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
       else:
         case s.kind
         of sIte:
-          let thenErr = hoistConstMemStmts(m, fn, s.thenBody)
+          let thenErr = hoistConstMemStmts(s.thenBody, m, fn)
           if thenErr.len > 0:
             return thenErr
-          let elseErr = hoistConstMemStmts(m, fn, s.elseBody)
+          let elseErr = hoistConstMemStmts(s.elseBody, m, fn)
           if elseErr.len > 0:
             return elseErr
         of sWhile:
-          let loopErr = hoistConstMemStmts(m, fn, s.whileBody)
+          let loopErr = hoistConstMemStmts(s.whileBody, m, fn)
           if loopErr.len > 0:
             return loopErr
         else:

@@ -166,7 +166,7 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
   if result.z == 0:
     result.z = 1
 
-proc launchKernelImpl*(engine: WebgpuEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: WebgpuEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
     failLoud("WebGPU run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   let device = engine.ctx.device

@@ -79,21 +79,21 @@ proc containsReturn(ss: seq[CirStmt]): bool =
       discard
   return false
 
-proc callsCrossingCalleeTransitively(fn: CirProc, procs: Table[string, CirProc], seen: var HashSet[string]): bool =
+proc callsCrossingCalleeTransitively(seen: var HashSet[string], fn: CirProc, procs: Table[string, CirProc]): bool =
   ## Returns true when `fn` calls itself or reaches a proc whose parameters
   ## cannot cross a WGSL function signature. Splicing such a cycle would never terminate.
   if fn.name in seen:
     return false
   seen.incl(fn.name)
   var targets: HashSet[string]
-  fn.body.collectCallTargets(targets)
+  collectCallTargets(targets, fn.body)
   for t in targets:
     let callee = procs.getOrDefault(t)
     if callee.isNil:
       continue
     if callee.hasCrossingPointerParam:
       return true
-    if callee.callsCrossingCalleeTransitively(procs, seen):
+    if callsCrossingCalleeTransitively(seen, callee, procs):
       return true
   return false
 
@@ -138,7 +138,7 @@ proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
     of sAsm, sEmit:
       discard
 
-proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string
+proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, procs: Table[string, CirProc]): string
   ## Forward declaration, nested statement lists recurse into each other.
 
 proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]): string =
@@ -158,7 +158,7 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
       return err
   return ""
 
-proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): tuple[err: string, spliced: bool] =
+proc inlineCallSite(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, i: int, procs: Table[string, CirProc]): tuple[err: string, spliced: bool] =
   let s = ss[i]
   let callee = procs.getOrDefault(s.callCallee.name)
   if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
@@ -172,7 +172,7 @@ proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[stri
     if body.containsReturn:
       return (refuseAt(fn, "inlining " & callee.name & " needs a return-free body, its pointer parameter cannot cross a WGSL signature"), false)
     var seen: HashSet[string]
-    if callee.callsCrossingCalleeTransitively(procs, seen):
+    if callsCrossingCalleeTransitively(seen, callee, procs):
       return (refuseAt(fn, "inlining " & callee.name & " reaches a crossing call cycle, its pointer parameter cannot cross a WGSL signature"), false)
     # substitution onto fresh aliases evaluates a call argument once
     var bindings: seq[CirStmt]
@@ -198,7 +198,7 @@ proc inlineCallSite(fn: CirProc, ss: var seq[CirStmt], i: int, procs: Table[stri
       return (aerr, false)
   return ("", false)
 
-proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string =
+proc walkValuePositions(used: var HashSet[string], fresh: var int, fn: CirProc, s: CirStmt, procs: Table[string, CirProc]): string =
   ## One non-call statement: its subexpressions refuse value-position calls,
   ## nested statement lists recurse through `inlineInStmts`.
   case s.kind
@@ -217,17 +217,17 @@ proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc], 
     let cerr = refuseValuePositionCalls(fn, s.cond, procs)
     if cerr.len > 0:
       return cerr
-    let terr = inlineInStmts(fn, s.thenBody, procs, used, fresh)
+    let terr = inlineInStmts(s.thenBody, used, fresh, fn, procs)
     if terr.len > 0:
       return terr
-    let eerr = inlineInStmts(fn, s.elseBody, procs, used, fresh)
+    let eerr = inlineInStmts(s.elseBody, used, fresh, fn, procs)
     if eerr.len > 0:
       return eerr
   of sWhile:
     let cerr = refuseValuePositionCalls(fn, s.whileCond, procs)
     if cerr.len > 0:
       return cerr
-    let werr = inlineInStmts(fn, s.whileBody, procs, used, fresh)
+    let werr = inlineInStmts(s.whileBody, used, fresh, fn, procs)
     if werr.len > 0:
       return werr
   of sRet:
@@ -241,18 +241,18 @@ proc walkValuePositions(fn: CirProc, s: CirStmt, procs: Table[string, CirProc], 
   of sCall, sAsm, sEmit:
     discard
 
-proc inlineInStmts(fn: CirProc, ss: var seq[CirStmt], procs: Table[string, CirProc], used: var HashSet[string], fresh: var int): string =
+proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var int, fn: CirProc, procs: Table[string, CirProc]): string =
   var i = 0
   while i < ss.len:
     let s = ss[i]
     if s.kind == sCall and s.callCallee.kind == eSym:
-      let (r, spliced) = inlineCallSite(fn, ss, i, procs, used, fresh)
+      let (r, spliced) = inlineCallSite(ss, used, fresh, fn, i, procs)
       if r.len > 0:
         return r
       if not spliced:
         i.inc
       continue
-    let r = walkValuePositions(fn, s, procs, used, fresh)
+    let r = walkValuePositions(used, fresh, fn, s, procs)
     if r.len > 0:
       return r
     i.inc
@@ -270,19 +270,19 @@ proc inlinePointerParamCalls(m: CirModule): string =
   for fn in mitems(m.procs):
     var used = initHashSet[string]()
     var locals: seq[tuple[name: string, typ: CirType]]
-    fn.body.collectDeclaredLocals(locals)
+    collectDeclaredLocals(locals, fn.body)
     for l in locals:
       used.incl(l.name)
     for p in fn.params:
       used.incl(p.name)
     var fresh = 0
     while true:
-      let err = inlineInStmts(fn, fn.body, procs, used, fresh)
+      let err = inlineInStmts(fn.body, used, fresh, fn, procs)
       if err.len > 0:
         return err
       var changed = false
       var targets: HashSet[string]
-      fn.body.collectCallTargets(targets)
+      collectCallTargets(targets, fn.body)
       for t in targets:
         let callee = procs.getOrDefault(t)
         if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:

@@ -39,7 +39,7 @@ proc memcpyAssign(lhs, rhs: CirExpr, lhsType: CirType): CirStmt =
   let src = addrE(tPtr(caThread, lhsType), rhs)
   callS(callee, dst, src, sizeofE(lhsType))
 
-proc bindConstrLocal(rhs: CirExpr, lhsType: CirType, tmpCount: var int): tuple[decl: CirStmt, local: CirExpr] =
+proc bindConstrLocal(tmpCount: var int, rhs: CirExpr, lhsType: CirType): tuple[decl: CirStmt, local: CirExpr] =
   ## C-family targets cannot take a constructor's address in place.
   inc tmpCount
   let name = "memcpy_tmp" & $tmpCount
@@ -81,7 +81,7 @@ proc decomposeArrayAssignStmts(body: var seq[CirStmt], tmpCount: var int): strin
           return "whole-array assignment right-hand side is not an lvalue, the" &
             " memcpy form copies through storage"
         if s.rhs.kind in {eAconstr, eOconstr}:
-          let bound = bindConstrLocal(s.rhs, lhsType, tmpCount)
+          let bound = bindConstrLocal(tmpCount, s.rhs, lhsType)
           lowered.add bound.decl
           lowered.add memcpyAssign(s.lhs, bound.local, lhsType)
         else:

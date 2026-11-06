@@ -17,7 +17,7 @@ proc runPipeline(m: CirModule): string =
   var reg = PassRegistry.new()
   reg.register("identity", pkTransform, "Leaves the module untouched",
     run = proc(m: CirModule): string = "")
-  result = runPasses(m, reg)
+  result = reg.runPasses(m)
 
 proc kernelModule(body: seq[CirStmt]): CirModule =
   let outParam = param("out", tPtr(caDevice, tInt(32)))
@@ -213,7 +213,7 @@ proc runTest() =
     var reg = PassRegistry.new()
     reg.register("scan", pkAnalysis, "Computes metadata",
       run = proc(m: CirModule): string = "")
-    let err = runPasses(m, reg)
+    let err = reg.runPasses(m)
     doAssert "verify: " in err, "expected the verify refusal on an analysis-only registry, got: " & err
     doAssert "ghost" in err and "(proc k (param out" in err, "expected the refusal to name the symbol and render the proc, got: " & err
 

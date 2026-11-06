@@ -182,7 +182,7 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
     putBytes(dst, off, v, a)
     off += a
 
-macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedesc, backend: static CodegenKind) =
+macro serialize(ctx: var auto, pos: var int, v: auto, store: untyped, H: typedesc, backend: static CodegenKind) =
   ## Only whole-argument packing requires trivially-copyable args.
   ## Struct-explode packing writes the buffer handle plus trivial fields,
   ## so owning wrappers with destructors serialize fine there.
@@ -199,7 +199,7 @@ macro serialize(ctx: var auto, v: auto, pos: var int, store: untyped, H: typedes
       elif hasBufferLeaf(typeof(`v`), `H`):
         when explodesStructArgs(`backend`):
           for f in fields(`v`):
-            serialize(`ctx`, f, `pos`, `store`, `H`, `backend`)
+            serialize(`ctx`, `pos`, f, `store`, `H`, `backend`)
         else:
           # leaves flatten to device addresses, non-leaf fields must stay copyable
           when not supportsCopyMem(typeof(`v`)) and
@@ -232,6 +232,6 @@ func launchArgCount*[O, A, H](_: typedesc[O], _: typedesc[A], _: typedesc[H], ba
 
 template bindArgs*(ctx: var auto, output: auto, args: untyped, store: untyped, H: typedesc, backend: static CodegenKind) =
   var pos = 0
-  serialize(ctx, output, pos, store, H, backend)
+  ctx.serialize(pos, output, store, H, backend)
   for f in fields(args):
-    serialize(ctx, f, pos, store, H, backend)
+    ctx.serialize(pos, f, store, H, backend)

@@ -98,7 +98,7 @@ proc cudaBindArgs(output: auto, args: tuple): auto =
   result = SerializationCtx[n]()
   bindArgs(result, output, args, store, CUdeviceptr, cgCuda)
 
-proc launchKernelImpl*(engine: CudaEngine, kernel: string, output: auto, args: tuple, cfg: LaunchConfig) =
+proc launchKernelImpl*(engine: CudaEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
   ## Runs `kernel` on the engine's GPU, loading the module on first use.
   ## Usage:
   ##   engine.launchKernel<<1024, 256>>("saxpy", outDev, (xDev, yDev, 2.0'f32))

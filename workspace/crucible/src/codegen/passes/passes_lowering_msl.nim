@@ -71,7 +71,7 @@ type
     ##   arena takes an `aptr` over the element, an object arena a `ptr` over
     ##   the object
 
-proc hoistSmemLocal(fn: CirProc, s: CirStmt, arenas: var seq[SmemArena]): string =
+proc hoistSmemLocal(arenas: var seq[SmemArena], fn: CirProc, s: CirStmt): string =
   if s.init != nil:
     return "at " & fn.name & ": smem local " & s.name &
       " with an initializer, a hoisted {.smem.} arena takes no initializer"
@@ -82,12 +82,12 @@ proc hoistSmemLocal(fn: CirProc, s: CirStmt, arenas: var seq[SmemArena]): string
   fn.params.add(param(s.name, typ))
   arenas.add((s.name, s.declType, typ))
 
-proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]): string =
+proc hoistSmemLocals(arenas: var seq[SmemArena], fn: CirProc): string =
   var i = 0
   while i < fn.body.len:
     let s = fn.body[i]
     if s.kind == sVar and s.addressSpace == caThreadgroup:
-      let err = fn.hoistSmemLocal(s, arenas)
+      let err = hoistSmemLocal(arenas, fn, s)
       if err.len > 0:
         return err
       fn.body.delete i
@@ -118,9 +118,9 @@ proc ownedSmemNames(fn: CirProc): HashSet[string] =
     if s.kind == sVar and s.addressSpace == caThreadgroup:
       result.incl(s.name)
 
-proc bindSmemArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
-                  args: var seq[CirExpr],
-                  arenas: seq[SmemArena], owned: var HashSet[string]): string =
+proc bindSmemArgs(args: var seq[CirExpr], owned: var HashSet[string],
+                  fn: CirProc, calleeProc: CirProc, callee: CirExpr,
+                  arenas: seq[SmemArena]): string =
   ## - a matching-name `{.smem.}` local in the caller supplies the argument,
   ##   an array arena decays to its element pointer in the emitted source,
   ##   an object arena binds by reference
@@ -157,8 +157,8 @@ proc bindSmemCallSiteStmts(fn: CirProc, ss: seq[CirStmt], procs: Table[string, C
   var err = ""
   let bindCall = proc(callee: CirExpr, args: var seq[CirExpr]) =
     if callee.kind == eSym and hoisted.hasKey(callee.name):
-      err = bindSmemArgs(fn, procs[callee.name], callee, args,
-        hoisted[callee.name], owned)
+      err = bindSmemArgs(args, owned, fn, procs[callee.name], callee,
+        hoisted[callee.name])
   let onStmt = proc(s: CirStmt) =
     if err.len > 0:
       return
@@ -176,7 +176,7 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
     if fn.isKernel:
       continue
     var arenas: seq[SmemArena]
-    let hoistErr = fn.hoistSmemLocals(arenas)
+    let hoistErr = hoistSmemLocals(arenas, fn)
     if hoistErr.len > 0:
       return hoistErr
     if arenas.len == 0:
@@ -200,14 +200,14 @@ proc mslHoistDeviceFnSmem(m: CirModule): string =
 #  Device-function coordinate builtins
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectCoordReads(e: CirExpr, kinds: var HashSet[CirCoordBuiltinKind]) =
+proc collectCoordReads(kinds: var HashSet[CirCoordBuiltinKind], e: CirExpr) =
   if e.kind == eSym and e.builtin and e.coordBuiltin != cbkNone:
     kinds.incl(e.coordBuiltin)
 
 proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CirCoordBuiltinKind] =
   var kinds: HashSet[CirCoordBuiltinKind]
   let collect = proc(e: CirExpr) =
-    e.collectCoordReads(kinds)
+    collectCoordReads(kinds, e)
   ss.walkStmts(nil, collect)
   return kinds
 
@@ -217,9 +217,9 @@ proc getBuiltinParamType(k: CirCoordBuiltinKind): CirType =
   else:
     tVec(3, tInt(32))
 
-proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[CirCoordBuiltinKind]],
-                      callTargets: Table[string, HashSet[string]],
-                      needs: var Table[string, HashSet[CirCoordBuiltinKind]]): bool =
+proc directCoordNeeds(needs: var Table[string, HashSet[CirCoordBuiltinKind]],
+                      fn: CirProc, direct: Table[string, HashSet[CirCoordBuiltinKind]],
+                      callTargets: Table[string, HashSet[string]]): bool =
   var kinds = direct[fn.name]
   for target in callTargets[fn.name]:
     if needs.hasKey(target):
@@ -248,8 +248,7 @@ proc appendCoordParam(fn: CirProc, k: CirCoordBuiltinKind): string =
   fn.params.add(param(name, getBuiltinParamType(k)))
   return ""
 
-proc appendCoordCallArgs(fn: CirProc, calleeProc: CirProc, callee: CirExpr,
-                         args: var seq[CirExpr],
+proc appendCoordCallArgs(args: var seq[CirExpr], fn: CirProc, calleeProc: CirProc, callee: CirExpr,
                          needs: Table[string, HashSet[CirCoordBuiltinKind]]): string =
   ## One argument per needed builtin in the callee's parameter order, the callee symbol's proc type grows to match.
   ##
@@ -279,14 +278,14 @@ proc appendCoordForwardingArgsStmts(fn: CirProc, ss: seq[CirStmt],
     if err.len > 0:
       return
     if e.kind == eCall:
-      err = appendCoordCallArgs(fn, procs.getOrDefault(e.callee.name), e.callee,
-        e.args, needs)
+      err = appendCoordCallArgs(e.args, fn, procs.getOrDefault(e.callee.name), e.callee,
+        needs)
   let onStmt = proc(s: CirStmt) =
     if err.len > 0:
       return
     if s.kind == sCall:
-      err = appendCoordCallArgs(fn, procs.getOrDefault(s.callCallee.name),
-        s.callCallee, s.callArgs, needs)
+      err = appendCoordCallArgs(s.callArgs, fn, procs.getOrDefault(s.callCallee.name),
+        s.callCallee, needs)
   ss.walkStmts(onStmt, onExpr)
   return err
 
@@ -302,7 +301,7 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
     needs[fn.name] = initHashSet[CirCoordBuiltinKind]()
     direct[fn.name] = fn.body.collectCoordReadsStmts()
     var targets: HashSet[string]
-    fn.body.collectCallTargets(targets)
+    collectCallTargets(targets, fn.body)
     callTargets[fn.name] = targets
   # fixpoint over the call graph: a builtin needed deep in a callee chain
   # reaches every caller, and the round count bounds cyclic call graphs
@@ -311,7 +310,7 @@ proc mslThreadCoordinateBuiltins(m: CirModule): string =
   while changed:
     changed = false
     for fn in m.procs:
-      if fn.directCoordNeeds(direct, callTargets, needs):
+      if directCoordNeeds(needs, fn, direct, callTargets):
         changed = true
     rounds.inc
     if rounds > m.procs.len + 1:

@@ -1419,7 +1419,7 @@ proc emitDeviceFnRec(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
   ctx.emitting.incl procNode.name
   ctx.fnTypes[procNode.name] = procNode.ret
   var calls: HashSet[string]
-  collectCallTargets(procNode.body, calls)
+  collectCallTargets(calls, procNode.body)
   var seen: HashSet[string]
   for c in calls:
     if ctx.fnProcs.hasKey(c) and c notin seen:
@@ -1438,7 +1438,7 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   let push = ctx.buildPushBlock(kernel.params)
   # device fns emit first, an OpFunctionCall result id must exist at the call site
   var calls: HashSet[string]
-  collectCallTargets(kernel.body, calls)
+  collectCallTargets(calls, kernel.body)
   var seen: HashSet[string]
   for c in calls:
     if ctx.fnProcs.hasKey(c) and c notin seen:

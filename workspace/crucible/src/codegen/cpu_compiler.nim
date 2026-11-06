@@ -40,7 +40,7 @@ proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   registerSharedLoweringPasses(reg)
   reg.registerCpuLoweringPasses()
   registerValidationPostPasses(reg)
-  let perr = runPasses(m, reg)
+  let perr = reg.runPasses(m)
   if perr.len > 0:
     error(perr)
   crucibleCompileTarget = savedTarget

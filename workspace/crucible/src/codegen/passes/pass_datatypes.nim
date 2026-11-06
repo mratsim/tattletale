@@ -37,7 +37,7 @@ type
 func register*(reg: var PassRegistry, name: string, kind: PassKind, description: string, run: proc(m: CirModule): string {.nimcall.}) =
   reg.passes.add CirPass(name: name, kind: kind, description: description, run: run)
 
-proc runPasses*(m: CirModule, reg: var PassRegistry): string =
+proc runPasses*(reg: var PassRegistry, m: CirModule): string =
   ## Runs the registered passes in registration order.
   ##
   ## Contract:

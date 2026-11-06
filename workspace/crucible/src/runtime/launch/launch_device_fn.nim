@@ -294,8 +294,8 @@ macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, b
     block:
       const `bridgeSource` = `bridgeN`(`engine`, `langLit`, `procdef`)
       `ingestN`
-      `engine`.launchKernelImpl(`kname`, `outputN`, `argsN`,
-        LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`))
+      `engine`.launchKernelImpl(`outputN`, `argsN`,
+        LaunchConfig(grid: `gridD`, blk: `blkD`, sharedMem: `sharedMemD`), `kname`)
 
 func countFormals(candFormals: NimNode): tuple[total, required: int] =
   for i in 1 ..< candFormals.len:
