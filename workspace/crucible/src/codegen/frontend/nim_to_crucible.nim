@@ -904,7 +904,7 @@ func lowerStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
         let rhs = ctx.lowerExpr(unwrapConv(n[2]))
         let opType = getExprType(lhs)
         # a desugared `op=` left-hand side evaluates exactly once in Nim
-        # temp-binding normalization splits the reads of a call-bearing target
+        # temp-binding normalization splits the reads of a target that contains a call
         let arith = arithExpr(op[0 ..< op.len - 1], opType, lhs, rhs)
         return @[asgnS(lhs, arith)]
     return ctx.lowerVoidCall(n)
@@ -1088,8 +1088,7 @@ func lowerForStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
   let varType = ctx.resolver.resolveCirType(vars.getTypeInst())
   let startV = ctx.lowerExpr(unwrapConv(startNode))
   let stopV = ctx.lowerExpr(unwrapConv(stopNode))
-  # Nim evaluates a for loop's stop bound once.
-  # Bounds that contain statements re-run on every loop test.
+  # Evaluate for-loop bounds once.
   var boundV = stopV
   var boundPre: seq[CirStmt] = @[]
   if stopV.containsStmtsDeep():

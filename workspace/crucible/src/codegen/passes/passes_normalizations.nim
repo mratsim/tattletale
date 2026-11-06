@@ -37,7 +37,7 @@ func registerCompleteConstructors*(reg: var PassRegistry) =
 
 func registerCompoundAssignTemps*(reg: var PassRegistry) =
   reg.register("bindCompoundAssignTemps", pkTransform,
-    "Binds the call-bearing operands of a compound-assign target into temps" &
+    "Binds the operands that contain calls of a compound-assign target into temps" &
     " so the single Nim evaluation prints once",
     run = bindCompoundAssignTempsPass)
 
@@ -177,7 +177,7 @@ proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): C
   hoists.add(asgnS(tmp, e))
   return tmp
 
-proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
+proc bindSpineCallTemps(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
   ## Only operand positions bind: the lvalue spine (`x`, `x[i]`, `x.f`) is structural.
   ## An operand temp is legal on every target, an address temp is not:
   ## GLSL rewrites pointer locals to their pointees and keeps no function storage.
@@ -187,17 +187,17 @@ proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: Cir
     return e
   case e.kind
   of eAt:
-    e.atBase = b.bindCallBearingOperands(hoists, e.atBase)
+    e.atBase = b.bindSpineCallTemps(hoists, e.atBase)
     if e.atIndex.hasCallDeep():
       e.atIndex = b.bindOperandTemp(hoists, e.atIndex)
   of ePat:
-    e.patBase = b.bindCallBearingOperands(hoists, e.patBase)
+    e.patBase = b.bindSpineCallTemps(hoists, e.patBase)
     if e.patIndex.hasCallDeep():
       e.patIndex = b.bindOperandTemp(hoists, e.patIndex)
   of eDot:
-    e.dotBase = b.bindCallBearingOperands(hoists, e.dotBase)
+    e.dotBase = b.bindSpineCallTemps(hoists, e.dotBase)
   of eDeref:
-    e.derefOperand = b.bindCallBearingOperands(hoists, e.derefOperand)
+    e.derefOperand = b.bindSpineCallTemps(hoists, e.derefOperand)
   else:
     # unreachable: the guard above admits only the four spine kinds
     discard
@@ -216,7 +216,7 @@ proc bindStmtTemps(b: var TempBinder, body: var seq[CirStmt]) =
     of sAsgn:
       if s.isSharedArithTarget():
         var hoists: seq[CirStmt]
-        s.lhs = b.bindCallBearingOperands(hoists, s.lhs)
+        s.lhs = b.bindSpineCallTemps(hoists, s.lhs)
         lowered.add(hoists & @[s])
       else:
         lowered.add(s)

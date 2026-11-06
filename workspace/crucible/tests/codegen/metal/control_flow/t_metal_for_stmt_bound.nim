@@ -25,7 +25,7 @@ const forBoundMsl = metal:
 
 proc runTest() =
   suite "Metal - for-loop stop bound containing statements":
-    test "a statement-bearing stop bound evaluates once":
+    test "a stop bound with statements evaluates once":
       var engine = newEngine(runMetal)
       engine.ingest(forBoundMsl)
       let oDev = engine.allocDevice(uint32, 2)
