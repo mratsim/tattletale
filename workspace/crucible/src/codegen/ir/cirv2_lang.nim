@@ -489,12 +489,10 @@ proc getExprType*(e: CirExpr): CirType =
       if t != nil and t.kind == ctAptr:
         result = t.pElem
       elif t != nil and t.kind == ctArray:
-        # A pat over a base that a deref of a pointer-to-array produced reads one element of that array.
-        result = t.aElem
+                result = t.aElem
       elif t != nil and t.kind == ctPtr and t.pElem != nil and
           t.pElem.kind == ctArray:
-        # A pat over a pointer-to-array base reads one element of the array that the pointer names.
-        result = t.pElem.aElem
+                result = t.pElem.aElem
       elif t != nil and t.kind == ctSpan:
         # A pat over a span base reads one element of the view. The span split
         # pass retypes the base symbol to the element pointer first.

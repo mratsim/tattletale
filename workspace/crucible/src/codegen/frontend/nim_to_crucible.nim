@@ -665,8 +665,7 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
       # to the conversion target
       return convE(typ, operand)
     if typ.kind in {ctPtr, ctAptr}:
-      # a pointer conversion preserves the operand's storage space and the cast target supplies the pointee type
-      typ = typ.withAddressSpace(resolveAddressSpace(operand))
+            typ = typ.withAddressSpace(resolveAddressSpace(operand))
     return convE(typ, operand)
   of nnkCast:
     var typ = ctx.resolver.resolveCirType(n[0])

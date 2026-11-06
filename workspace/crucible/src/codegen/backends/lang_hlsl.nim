@@ -283,8 +283,7 @@ proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
     return "push." & e.name
   if ctx.bufferParams.contains(e.name):
     if ctx.flavor == fvVulkan:
-      # zero-descriptor route: the parameter IS its u64 device address
-      return (if ctx.isKernel: "push." & e.name else: e.name)
+            return (if ctx.isKernel: "push." & e.name else: e.name)
     ctx.fail("bare pointer value use of buffer parameter " & e.name)
     return ""
   e.name

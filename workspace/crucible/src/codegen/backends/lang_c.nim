@@ -394,11 +394,9 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
       if i < call.callArgs.len:
         let arg = call.callArgs[i]
         if arg.kind == eSym and not arg.builtin and arg.name == param.name:
-          # runtime param: the wrapper passes the formal verbatim, the body reads the data struct member
-          subst.add((param.name, dataPrefix & memberNames[i]))
+                    subst.add((param.name, dataPrefix & memberNames[i]))
         else:
-          # baked static: the wrapper passes the literal
-          subst.add((param.name, bctx.printExpr(arg)))
+                    subst.add((param.name, bctx.printExpr(arg)))
   bctx.subst = subst
   result.body = bctx.printStmts(bodyProc.body)
   result.coordUse = cpuCoordUseC

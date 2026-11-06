@@ -624,8 +624,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
     result = e.opType
   of eNeg: result = e.unType
   of eEq, eNeq, eLt, eLe:
-    # a comparison is a value of bool, cmpType names the operand type
-    result = CirType(kind: ctBool)
+        result = CirType(kind: ctBool)
   of eNot: result = CirType(kind: ctBool)
   of eAnd, eOr: result = CirType(kind: ctBool)
   of eTernary: result = e.ternType
@@ -686,8 +685,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
           return
       ctx.failSpv("atomicFetchAdd address is not the address of an element")
     elif e.callee.kind == eSym and e.args.len > 0:
-      # a builtin call, the result type is the first argument's type
-      result = ctx.resolveExprType(fn, e.args[0])
+            result = ctx.resolveExprType(fn, e.args[0])
     else:
       ctx.failSpv("call result type of " & (if e.callee.kind == eSym: e.callee.name else: "non-symbol callee"))
 
