@@ -48,6 +48,7 @@ from ./backends/lang_hlsl import HlslFlavor, fvD3D12, fvVulkan
 
 proc registerFrontendPasses(reg: var PassRegistry) =
   registerRewriteStmtsExprs(reg)
+  registerResolveBoolDomain(reg)
   registerValueNormalizations(reg)
   registerReshapingPasses(reg)
 

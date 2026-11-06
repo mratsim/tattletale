@@ -33,6 +33,7 @@ proc lowerCpuKernel*(wrapper: NimNode): CirModule =
   let m = lowerCirv2(wrapper)
   var reg = PassRegistry.new()
   registerRewriteStmtsExprs(reg)
+  registerResolveBoolDomain(reg)
   registerValueNormalizations(reg)
   registerReshapingPasses(reg)
   registerSharedLoweringPasses(reg)

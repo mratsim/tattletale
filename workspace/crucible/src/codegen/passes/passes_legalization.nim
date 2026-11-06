@@ -28,6 +28,11 @@ func registerRewriteStmtsExprs*(reg: var PassRegistry) =
     " in front of the statement reading the value or inside the branch computing it",
     run = rewriteStmtsExprsPass)
 
+func registerResolveBoolDomain*(reg: var PassRegistry) =
+  reg.register("resolveBoolDomain", pkTransform,
+    "Rewrites `and`/`or` over integer operands to the bit form",
+    run = resolveBoolDomainPass)
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Statement-expression elimination
 # ═══════════════════════════════════════════════════════════════════════
@@ -59,8 +64,9 @@ proc rewriteExpr(el: var TempBinder, e: CirExpr): seq[CirStmt] =
   ##   t = a
   ##   x = (t + b)
   ##
-  ## A statement-expression inside a ternary branch or an and/or operand
-  ## assigns a temp instead.
+  ## A statement-expression inside a ternary branch or a bool `and`/`or`
+  ## operand assigns a temp instead.
+  ## An operand skipped by short-circuit evaluation runs no statements.
   ##
   ## Before (IR):
   ##   x = (ite c (stmts t = a (t + b)) 0)
@@ -96,9 +102,13 @@ proc rewriteExpr(el: var TempBinder, e: CirExpr): seq[CirStmt] =
     e[] = tmp[]
     return condPre & @[varD(name, t), iteS(cond, thenArm, elseArm)]
   of eAnd, eOr:
+    if getExprType(e.andLeft).kind != ctBool or not e.andRight.containsStmtsDeep():
+      # an integer `and`/`or` evaluates both operands, its statements hoist eagerly
+      var pre: seq[CirStmt]
+      for ch in e.getExprChildren():
+        pre.add(el.rewriteExpr(ch))
+      return pre
     let leftPre = el.rewriteExpr(e.andLeft)
-    if not e.andRight.containsStmtsDeep():
-      return leftPre & el.rewriteExpr(e.andRight)
     let cond = e.andLeft
     let name = el.claimTempName("short_circuit")
     let tmp = sym(name, tBool())
@@ -198,6 +208,26 @@ proc rewriteStmt(el: var TempBinder, s: CirStmt): seq[CirStmt] =
 proc rewriteBody(el: var TempBinder, body: seq[CirStmt]): seq[CirStmt] =
   for s in body:
     result.add(el.rewriteStmt(s))
+
+proc resolveBoolDomainPass(m: CirModule) =
+  for fn in m.procs:
+    fn.body.walkStmts(nil, proc(e: CirExpr) =
+      case e.kind
+      of eAnd, eOr:
+        let t = getExprType(e.andLeft)
+        if t.kind notin {ctInt, ctUint}:
+          return
+        let a = e.andLeft
+        let b = e.andRight
+        if e.kind == eAnd:
+          e[] = bitAndE(t, a, b)[]
+        else:
+          e[] = bitOrE(t, a, b)[]
+      of eBitXor:
+        if e.opType.kind == ctBool:
+          raiseAssert("bool xor reached the bool-domain pass as the bit form")
+      else:
+        discard)
 
 proc rewriteStmtsExprsPass(m: CirModule) =
   for fn in m.procs:

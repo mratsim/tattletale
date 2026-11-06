@@ -405,15 +405,15 @@ func lowerOperatorExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
         result = leE(b, a)
       return result
     of "and", "or", "xor":
-      # bool vs bitwise domain resolves in the expression-form pass: a bitwise form emits uniformly here, operand types decide in the pass
-      let at = getExprType(a)
       case op
       of "and":
-        return bitAndE(at, a, b)
+        return andE(a, b)
       of "or":
-        return bitOrE(at, a, b)
+        return orE(a, b)
       else:
-        return bitXorE(at, a, b)
+        if getExprType(a).kind == ctBool:
+          return neqE(a, b)
+        return bitXorE(getExprType(a), a, b)
     of "+", "-", "*", "/", "div", "mod", "shl", "shr":
       let opType = getExprType(a)
       return arithExpr(op, opType, a, b)

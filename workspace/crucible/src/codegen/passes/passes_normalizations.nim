@@ -23,11 +23,6 @@ import ./pass_helpers
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-func registerResolveBoolDomain*(reg: var PassRegistry) =
-  reg.register("resolveBoolDomain", pkTransform,
-    "Rewrites bitwise operators over bool operands to the logical form, xor as the != comparison",
-    run = resolveBoolDomainPass)
-
 func registerTypeLiterals*(reg: var PassRegistry) =
   reg.register("typeLiterals", pkTransform,
     "Retypes every literal operand to its use-site type across arithmetic, comparisons, assignments and call arguments",
@@ -53,8 +48,6 @@ func registerMarkExplicitUnrolls*(reg: var PassRegistry) =
     run = markExplicitUnrollsPass)
 
 func registerValueNormalizations*(reg: var PassRegistry) =
-  # resolveBoolDomain runs before typeLiterals: the domain rewrite decides the operator shape before the literal retypes run
-  reg.registerResolveBoolDomain()
   reg.registerTypeLiterals()
   reg.registerCompleteConstructors()
 
@@ -136,31 +129,6 @@ proc fillOmittedFields(e: CirExpr) =
         break
     ordered.add(kv(f.name, if value != nil: value else: zeroValue(f.typ)))
   e.kvFields = ordered
-
-proc resolveBoolDomainPass(m: CirModule) =
-  for fn in m.procs:
-    fn.body.walkStmts(nil, proc(e: CirExpr) =
-      if e.kind notin {eBitAnd, eBitOr, eBitXor} or e.opType == nil or
-          e.opType.kind != ctBool:
-        return
-      # bool domain: the logical form, `xor` prints as the != comparison
-      let a = e.left
-      let b = e.right
-      let t = e.opType
-      case e.kind
-      of eBitAnd:
-        e.kind = eAnd
-        e.andLeft = a
-        e.andRight = b
-      of eBitOr:
-        e.kind = eOr
-        e.andLeft = a
-        e.andRight = b
-      else:
-        e.kind = eNeq
-        e.cmpType = t
-        e.a = a
-        e.b = b)
 
 proc typeLiteralsPass(m: CirModule) =
   for fn in m.procs:
