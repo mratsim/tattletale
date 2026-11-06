@@ -140,8 +140,6 @@ proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
     result = ""
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
-  ## Returns the WGSL name of `t` with no identifier, the form that casts
-  ## and constructors use.
   case t.kind
   of ctArray:
     let elem = ctx.emitTypeName(t.aElem)
@@ -153,7 +151,6 @@ proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
     result = ctx.emitWgslScalar(t)
 
 proc structFieldIsBool(t: CirType, field: string): bool =
-  ## True when `field` names a bool member of struct `t`, a NIM_BOOL storage word.
   if t.isNil or t.kind != ctStruct:
     return false
   for f in t.fields:
@@ -277,19 +274,16 @@ proc bindsNimBool(ctx: var PrintCtx, name: string): bool =
   false
 
 proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
-  ## A NIM_BOOL storage word coerces to bool on read.
   if e.typ != nil and e.typ.kind == ctBool and ctx.bindsNimBool(e.name):
     return "bool(" & e.name & ")"
   e.name
 
 proc getDotText(ctx: var PrintCtx, e: CirExpr, baseTxt: string): string =
-  ## A NIM_BOOL storage word coerces to bool on read.
   if structFieldIsBool(getExprType(e.dotBase), e.fieldName):
     return "bool(" & baseTxt & "." & e.fieldName & ")"
   baseTxt & '.' & e.fieldName
 
 proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string =
-  ## A NIM_BOOL storage word coerces the stored value.
   if structFieldIsBool(t, kvv.name):
     return "NIM_BOOL(" & ctx.printExpr(kvv.value) & ")"
   ctx.printExpr(kvv.value)
@@ -324,8 +318,7 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
 
 
 proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[string]): string =
-  ## Returns the WGSL barrier statement texts. WGSL has no combined barrier:
-  ## the workgroup fence runs first and the storage fence comes second.
+  ## WGSL has no combined barrier.
   case s.callCallee.synchroBuiltin
   of cbkThreadgroupBarrier:
     pad & "workgroupBarrier();"
@@ -446,9 +439,7 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
       ctx.emitTypeName(p.typ) & ";"
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## WGSL declaration text of one struct member.
-  ## A bool member stores as NIM_BOOL. A pointer-holding member
-  ## returns "": the dissolution passes rewrote its uses.
+  ## Dissolution passes rewrite every use of a pointer-holding member before printing.
   if f.typ.containsPtrDeep:
     return ""
   result = f.name & ": " & (if f.typ.kind == ctBool:
@@ -488,7 +479,6 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
     result &= "alias NIM_BOOL = u32;\n\n"
 
 proc printWgslModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full WGSL module through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(wgslWalkPolicy, wgslVectorRule, wgslEmit, cgWebGPU)
   ctx.mathNames = wgslMathBuiltinNames
   let kernel = getEntryKernel(ctx, m)

@@ -151,15 +151,6 @@ const CReserved* = [
 # ═══════════════════════════════════════════════════════════════════════
 
 template registerRenameReservedIdentifiers*(reg: var PassRegistry, passName: string, reserved: untyped, doubleUnderscorePrefix: string = "") =
-  ## Run order: name-matching passes -> reserved renaming -> printing.
-  ##
-  ## Args:
-  ## - `passName`: the registry key, one registration per target
-  ## - `reserved`: the target's reserved words, one of `MetalReserved`,
-  ##   `GlslReserved`, `OpenclReserved`, `WgslReserved`, `HlslReserved`,
-  ##   `CudaReserved`, `CReserved`
-  ## - `doubleUnderscorePrefix`: the prefix every `__`-prefixed name gains,
-  ##   "" for targets without a reserved double-underscore head (WGSL: `wgsl_`)
   reg.register(passName, pkTransform,
     "Renames identifiers colliding with backend reserved words: fn names, call sites, params, locals, struct fields, field accesses",
     run = proc(m: CirModule): string {.nimcall.} =
@@ -177,12 +168,7 @@ func makeSafeIdent(name: string, reserved: HashSet[string], doubleUnderscorePref
   result = safe
 
 func uniqueSafeName(safe: string, used: var HashSet[string]): string =
-  ## Appends `_1`, `_2`, ... to `safe` until no declaration of the proc uses the candidate, then records it in `used`.
-  ##
-  ## The rename pass applies this to every renamed identifier of one proc:
-  ##
-  ## - no two declarations of that proc share an identifier in the emitted C
-  ## - a shared identifier redefines the first declaration at C compile time or silently shadows it
+  ## Two declarations sharing one identifier redefine at C compile time or silently shadow.
   var candidate = safe
   var suffix = 0
   while candidate in used:

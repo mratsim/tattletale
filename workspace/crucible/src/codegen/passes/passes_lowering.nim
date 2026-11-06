@@ -22,14 +22,6 @@ func registerFoldMaxMinToBuiltins*(reg: var PassRegistry) =
     run = foldMaxMinToBuiltins)
 
 func registerSharedLoweringPasses*(reg: var PassRegistry) =
-  ## Shared target-independent passes:
-  ##
-  ## - `lowerSpans`: openArray spans split to pointer + length pairs
-  ##
-  ## Struct kernel parameters stay whole:
-  ##
-  ## - the push-block targets (GLSL, HLSL, SPIR-V) pack them into the block
-  ## - the flat resource targets register the explosion per target
   reg.registerLowerSpans()
 
 proc sameExpr(a, b: CirExpr): bool =

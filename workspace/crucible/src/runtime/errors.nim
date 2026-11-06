@@ -8,8 +8,7 @@
 ## Unified error policy for the runtime: stacktrace + stderr + quit(1).
 
 template failLoud*(msg: string) =
-  ## Stacktrace + stderr + quit(1) with the caller's location.
-  ## A template so instantiationInfo() reports the call site.
+  ## A template so instantiationInfo() reports the caller's location.
   writeStackTrace()
   stderr.write($instantiationInfo() & " exited with error: " & msg & '\n')
   quit 1

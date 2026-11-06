@@ -120,7 +120,6 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
   engine.isHlsl = false
 
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
-  ## Returns the most recently ingested source, empty after direct SPIR-V ingest.
   engine.source
 
 func getSpirV*(engine: VulkanEngine): seq[uint32] {.inline.} =

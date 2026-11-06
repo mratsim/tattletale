@@ -34,9 +34,6 @@ func registerGlslQualifyVarParams*(reg: var PassRegistry) =
   )
 
 proc registerGlslRefBlockPass*(reg: var PassRegistry) =
-  ## - the pass fills `CirModule.refBlocks` with one entry per block name,
-  ##   in registration order
-  ## - the printer reads the stored entries and registers nothing itself
   reg.register("glslRegisterRefBlocks", pkAnalysis,
     "Registers the buffer-reference blocks that the printer declares, one" &
     " per distinct block name in registration order",
@@ -44,7 +41,6 @@ proc registerGlslRefBlockPass*(reg: var PassRegistry) =
   )
 
 func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
-  ## Relocated declarations use the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "glslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope")
@@ -54,7 +50,6 @@ func registerGlslHoistProgramScopeLocals*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc splicePlainSym(e: CirExpr, name: string, typ: CirType) =
-  ## Expressions are refs, so the splice applies to the node every sharer sees.
   e.kind = eSym
   e.name = name
   e.typ = typ
@@ -195,13 +190,6 @@ proc qualifyVarParams(m: CirModule): string =
   return ""
 
 proc registerRefBlock(blocks: var OrderedTable[string, CirType], pointee: CirType) =
-  ## Registers the buffer-reference block of one runtime-array pointee,
-  ## deduped by block name.
-  ##
-  ## The block's member is the runtime array `x[]`: a fixed-array element nests
-  ## after the runtime dimension (`uint8_t x[][32]`), as the unsized dimension is
-  ## only legal in the outermost position. The printer builds the member text
-  ## and refuses a void or proc pointee at the declaration site.
   let name = refTypeName(pointee)
   if name in blocks:
     return
@@ -215,9 +203,7 @@ proc registerTypeRefBlocks(blocks: var OrderedTable[string, CirType], t: CirType
   blocks = found
 
 proc registerExprRefBlocks(blocks: var OrderedTable[string, CirType], e: CirExpr) =
-  ## Every buffer pointer subexpression's pointee needs its block declared
-  ## before the module body prints, a cast target included.
-  ## Node visits run pre-order, in the printer's declaration-sequence order.
+  ## m.refBlocks contains a block for every buffer-pointer pointee the body touches, a cast target included.
   var found = blocks
   e.walkExprs(proc(e: CirExpr) =
     let t = getExprType(e)

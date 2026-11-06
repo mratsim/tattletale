@@ -335,10 +335,6 @@ func hasBoolLeaf(t: CirType): bool =
   else: false
 
 proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
-  ## One push-block member per kernel parameter in parameter order.
-  ## A device array pointer contributes its u64 address.
-  ## A bool contributes its u32 word. Everything else contributes
-  ## its value type.
   if p.typ.kind == ctAptr:
     spvScalar(cirUint64())
   elif p.typ.kind == ctBool:
@@ -347,8 +343,6 @@ proc pushMemberTy(ctx: var SpvLangCtx, p: CirParam): SpvTy =
     ctx.valueTy(p.typ)
 
 proc resolveBdaPointerTy(ctx: var SpvLangCtx, elemTy: CirType): uint32 =
-  ## Physical storage buffer pointer type of a buffer reference
-  ## the `valueTy` shape of the matching `aptr` type.
   ctx.resolveTyId(ctx.valueTy(CirType(kind: ctAptr, addressSpace: caDevice, pElem: elemTy)))
 
 proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
@@ -396,8 +390,6 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
   result.varId = ctx.builder.opVariable(result.ptrTy, scPushConstant)
 
 proc declareBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
-  ## Input-storage builtin variable for a vector coordinate builtin,
-  ## the OpEntryPoint interface lists it.
   if ctx.builtins.hasKey(builtin):
     return ctx.builtins[builtin].varId
   let vecTy = ctx.builder.tyVector(ctx.resolveScalarId(cirUint32()), 3)
@@ -411,15 +403,12 @@ proc declareBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
 proc convertValue(ctx: var SpvLangCtx, v: uint32, source, to: CirType): uint32
 
 proc loadBuiltinComponent(ctx: var SpvLangCtx, builtin: uint32, component: int, target: CirType): uint32 =
-  ## One coordinate-builtin component, cast to the canonical int type
-  ## the CIRv2 vocabulary reads.
   let varId = ctx.declareBuiltinInput(builtin)
   let v = ctx.builder.opLoad(ctx.builtins[builtin].vecTy, varId)
   let raw = ctx.builder.opCompositeExtract(ctx.resolveScalarId(cirUint32()), v, @[component])
   ctx.convertValue(raw, cirUint32(), target)
 
 proc getCoordBuiltinEnumerant(ctx: var SpvLangCtx, k: CirCoordBuiltinKind): uint32 =
-  ## Canonical coordinate vocabulary mapped onto the BuiltIn enumerants.
   case k
   of cbkThreadPositionInGrid: result = biGlobalInvocationId
   of cbkThreadgroupPositionInGrid: result = biWorkgroupId
@@ -442,7 +431,6 @@ proc declareScalarBuiltinInput(ctx: var SpvLangCtx, builtin: uint32): uint32 =
   result = varId
 
 proc loadScalarBuiltin(ctx: var SpvLangCtx, builtin: uint32, target: CirType): uint32 =
-  ## Flat thread index, cast to the canonical int type the CIRv2 reads.
   let varId = ctx.declareScalarBuiltinInput(builtin)
   let raw = ctx.builder.opLoad(ctx.resolveScalarId(cirUint32()), varId)
   ctx.convertValue(raw, cirUint32(), target)
@@ -556,7 +544,6 @@ proc resolveConstId(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): uint32 =
     0
 
 proc getScalarBits(t: CirType): int =
-  ## Bit width of a scalar type, 0 for widthless kinds.
   if t == nil:
     return 0
   if t.kind in {ctInt, ctUint, ctFloat}:
@@ -1129,8 +1116,6 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     ctx.failSpv("assignment target " & $e.kind)
 
 proc emitBarrier(ctx: var SpvLangCtx) =
-  ## OpControlBarrier with Workgroup scope on both operands, semantics
-  ## WorkgroupMemory | AcquireRelease, no result id.
   let scope = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(scopeWorkgroup))
   let sem = ctx.builder.constUint(ctx.resolveScalarId(cirUint32()),
     uint64(semWorkgroupMemory or semAcquireRelease))
@@ -1385,7 +1370,6 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc recordDeadLocals(ctx: var SpvLangCtx, fn: SpvFnCtx, name: string) =
-  ## Dead locals of one planned function: declared locals no OpLoad reaches, recorded in the dry pass only.
   if not ctx.dryRun:
     return
   var dead: HashSet[string]

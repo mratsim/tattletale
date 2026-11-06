@@ -100,7 +100,6 @@ proc findNumWorkgroupsStmts(ss: seq[CirStmt], coordTy: var CirType): bool =
   return false
 
 proc rewriteNumWorkgroupsExpr(e: CirExpr, coordTy: CirType) =
-  ## Expressions are refs, the rewrite applies to the node every sharer sees.
   if e.isNil:
     return
   if e.kind == eSym and e.builtin and e.name == "threadgroups_per_grid":

@@ -23,12 +23,6 @@ template failing*(ctx: auto): bool =
   ctx.err.len > 0
 
 template fail*(ctx: auto, detail: string) =
-  ## Records the first refusal of the walk in `ctx.err`:
-  ##
-  ## - message: `cirv2 printer <printerTarget>: at <fnName>: <detail>`
-  ## - `printerTarget`: the target name each importing printer defines
-  ## - first refusal wins, later refusals never overwrite it
-  ## - the walk keeps going and the printer returns the recorded message
   mixin printerTarget
   if ctx.err.len == 0:
     ctx.err = "cirv2 printer " & printerTarget & ": at " & ctx.fnName & ": " & detail
@@ -37,8 +31,6 @@ template fail*(ctx: auto, detail: string) =
 const nilLiteralRejection* = "nil literal is outside the target subset"
 
 proc getUnhandledExprRejection*(kind: CirExprKind): string =
-  ## Refusal text for an expression kind outside the printer's case.
-  ## A routing bug: the dispatcher sends only the kinds the case lists.
   "expression kind " & $kind & " has no printer emission"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -61,7 +53,6 @@ type BuiltinVocab* = object
 
 func makeTexts*[K: enum](pairs: openArray[tuple[k: K, txt: string]]):
     array[K, string] =
-  ## Sparse kind-indexed text table, kinds without an entry stay "".
   for p in pairs:
     result[p.k] = p.txt
 
@@ -120,11 +111,6 @@ type WalkCtx* {.inheritable.} = object
   ## Workgroup sizes of the entry in flight.
 
 template initPrintCtx*(walkPolicy: WalkPolicy, rule: VectorRule, targetEmit: TargetEmit, bk: CodegenKind): untyped =
-  ## Walk context of one module print: the target's tables, clean state.
-  ## Expands against the importing printer's own `PrintCtx` type.
-  ## A target with registry math entries assigns `mathNames` after the init.
-  ##
-  ## Returns: the initialized context, `fnName` the module-level kernel name.
   PrintCtx(fnName: "<module>", policy: walkPolicy, vectorRule: rule,
     emit: targetEmit, backend: bk)
 
@@ -133,8 +119,7 @@ proc roundUpMultiple*(v, multiple: int): int =
   (v + multiple - 1) div multiple * multiple
 
 proc getScalarByteSize*(t: CirType, boolWidth: static int = 1): int =
-  ## Byte width of one scalar value.
-  ## A bool is `boolWidth` wide: std430 packs a bool into 1 byte and the WGSL launch ABI into 4.
+  ## std430 packs a bool into 1 byte and the WGSL launch ABI into 4.
   case t.kind
   of ctBool: boolWidth
   of ctInt, ctUint, ctFloat, ctBf16: t.bits div 8
@@ -149,13 +134,11 @@ proc emitVectorComponent*(name: string): string =
   else: ""
 
 proc resolveVectorComponent*(ctx: var auto, field: string): string =
-  ## Component letter for one vector field name, refusing on a miss.
   result = emitVectorComponent(field)
   if result.len == 0:
     ctx.fail("no vector component " & field)
 
 proc printSubscriptParts*(ctx: var auto, e: CirExpr): tuple[base, idx: string] =
-  ## Printed base and index texts of one subscript.
   let idx = if e.kind == eAt: e.atIndex else: e.patIndex
   let base = if e.kind == eAt: e.atBase else: e.patBase
   let idxTxt = ctx.printExpr(idx)
@@ -165,7 +148,6 @@ proc printSubscriptParts*(ctx: var auto, e: CirExpr): tuple[base, idx: string] =
   result = (baseTxt, idxTxt)
 
 proc printVectorDot*(ctx: var auto, e: CirExpr): string =
-  ## Text of one vector-component dot `base.x`, "" for a non-vector base.
   let bt = getExprType(e.dotBase)
   if bt == nil or bt.kind != ctVector:
     return ""
@@ -336,8 +318,7 @@ proc matchCastRule(rules: openArray[CastRule], src: CirType, dst: CirType): int 
   return -1
 
 template refuseUninitializedConstMem*(ctx: var auto, name: string): untyped =
-  ## Refusal of a const_mem local without an initializer.
-  ## The target compilers reject constant storage that lacks an initializer.
+  ## Target compilers reject constant storage without an initializer.
   mixin fail
   ctx.fail("const_mem local " & name & " without an initializer")
 
@@ -374,7 +355,6 @@ proc printLoopBodyText(ctx: var auto, body: seq[CirStmt], unroll: bool, head: st
   result &= bodyTxt & "\n" & pad & '}'
 
 proc printWhileText(ctx: var auto, s: CirStmt, style: LoopStyle): string =
-  ## One `sWhile` statement in the target loop style.
   mixin printExpr
   let condTxt = ctx.printExpr(s.whileCond)
   let head = if style.braceSameLine:
@@ -384,7 +364,6 @@ proc printWhileText(ctx: var auto, s: CirStmt, style: LoopStyle): string =
   printLoopBodyText(ctx, s.whileBody, s.whileUnroll, head, style)
 
 proc printIteElse(ctx: var auto, elseBody: seq[CirStmt], pad: string): string =
-  ## Braced else tail of an `sIte` statement, "" for an empty else body.
   mixin printStmts
   if elseBody.len == 0:
     return ""
@@ -450,8 +429,6 @@ proc convBuiltinText*(ctx: var auto, call: CirExpr, args: seq[string]): string =
   txt & "(" & args.join(", ") & ")"
 
 proc mathBuiltinCallText*(names: Table[(string, int), string], call: CirExpr, args: seq[string]): string =
-  ## Native text of one width-sensitive scalar-math call over
-  ## `<target>MathBuiltinNames`, "" when the canonical name passes through.
   if call.callee.kind != eSym or not call.callee.builtin or call.args.len != 1:
     return ""
   let at = getExprType(call.args[0])
@@ -506,7 +483,6 @@ proc printSizeof*(ctx: var auto, e: CirExpr): string =
   "sizeof(" & ctx.emitTypeName(e.ofType) & ")"
 
 proc printExtraExpr*(ctx: var auto, e: CirExpr): string =
-  ## Refusal for an expression kind outside every case.
   mixin printerTarget
   ctx.fail(getUnhandledExprRejection(e.kind))
   result = ""
@@ -638,7 +614,6 @@ proc printExpr*(ctx: var auto, e: CirExpr): string =
     return ""
 
 proc printRet*(ctx: var auto, s: CirStmt, pad: string): string =
-  ## Return statement in the shared form: `return <expr>;` or `return;` without a value.
   mixin printExpr
   if s.retVal != nil:
     pad & "return " & ctx.printExpr(s.retVal) & ";"
@@ -646,12 +621,6 @@ proc printRet*(ctx: var auto, s: CirStmt, pad: string): string =
     pad & "return;"
 
 proc printDiscard*(ctx: var auto, s: CirStmt, pad: string): string =
-  ## Discard statement in the shared form.
-  ##
-  ## Contract:
-  ##
-  ## - the value expression drops, a valued discard's side effects vanish
-  ## - a target whose discards keep their side effects overrides the default
   ""
 
 proc printStmt(ctx: var auto, s: CirStmt): string =
@@ -704,7 +673,6 @@ proc printStmt(ctx: var auto, s: CirStmt): string =
     result = pad & text
 
 proc asmSpliceText*(s: CirStmt): string =
-  ## Verbatim template of one assembly statement with the operand names spliced.
   var text = ""
   for i, part in s.asmParts:
     text.add(part)
@@ -713,7 +681,6 @@ proc asmSpliceText*(s: CirStmt): string =
   text
 
 proc printAsm*(ctx: var auto, s: CirStmt): string =
-  ## Refused. A target with a splice form defines `printAsm` itself.
   mixin printerTarget
   ctx.fail("inline assembly has no " & printerTarget & " form")
   result = ""
@@ -731,7 +698,6 @@ proc getInitText*(ctx: var auto, s: CirStmt): string =
   ""
 
 proc printVar*(ctx: var auto, s: CirStmt): string =
-  ## One local declaration through the target's space policy.
   mixin checkLocalVar, emitLocalDecl, getInitText
   if not ctx.checkLocalVar(s):
     return ""
@@ -743,7 +709,6 @@ proc printVar*(ctx: var auto, s: CirStmt): string =
   printDeclStmt(pad, decl, init)
 
 proc printAsgn*(ctx: var auto, s: CirStmt): string =
-  ## One assignment in the direct form, refusing pointer rebinds per the target knobs.
   mixin printExpr
   let pad = spaces(ctx.indent * 2)
   if ctx.emit.noPointerRebind.len > 0 and s.lhs.kind == eSym and
@@ -753,7 +718,6 @@ proc printAsgn*(ctx: var auto, s: CirStmt): string =
   result = pad & ctx.printExpr(s.lhs) & " = " & ctx.printExpr(s.rhs) & ";"
 
 proc getStmtBuiltinText*(ctx: var auto, s: CirStmt, pad: string, args: seq[string]): string =
-  ## Statement-position text of one builtin call, "" for the direct form.
   let txt = ctx.emit.vocab.stmtText[s.callCallee.synchroBuiltin]
   if txt.len > 0:
     return pad & (txt % args) & ";"
@@ -803,7 +767,6 @@ proc getModuleKernels*(m: CirModule): seq[CirProc] =
       result.add fn
 
 proc getEntryKernel*(ctx: var auto, m: CirModule): CirProc =
-  ## One module kernel, nil with a refusal on none or several.
   let kernels = getModuleKernels(m)
   if kernels.len != 1:
     ctx.fail("exactly one kernel per module, found " & $kernels.len)
@@ -836,9 +799,6 @@ type EntryInputs* = array[cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup, 
   ## - no read at all
 
 template emitEntryInputs*(kinds: untyped, inputs: EntryInputs): string =
-  ## Returns the entry-input texts of one shader entry point.
-  ## One text per coordinate builtin the entry reads.
-  ## The order is the collection's: first use on WGSL, then the canonical HLSL order.
   var texts: seq[string]
   for k in kinds:
     if inputs[k].len > 0:
@@ -898,8 +858,6 @@ proc emitComputePrefix*(ctx: var auto, fn: CirProc): string =
   return ctx.emit.prefixDevice
 
 proc printSig*(ctx: var auto, fn: CirProc): string =
-  ## C signature line of one proc. The kernel name comes from exportc.
-  ## Returns "" once the walk recorded a refusal.
   mixin emitComputeParams, emitComputePrefix, emitTypeName
   ctx.fnName = fn.name
   let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
@@ -910,8 +868,6 @@ proc printSig*(ctx: var auto, fn: CirProc): string =
     '(' & params.join(", ") & ")"
 
 proc structDeclName*(ctx: var auto, t: CirType): string =
-  ## Header name of one struct declaration. A target that renames structs
-  ## per launch site overrides the default.
   t.name
 
 proc printStructDecl(ctx: var auto, byName: Table[string, CirType],
@@ -1000,7 +956,6 @@ proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   return head & " {\n" & bodyTxt & '\n' & '}'
 
 proc declareExtensions*(features: ModuleFeatures, lines: openArray[tuple[on: bool, text: string]]): string =
-  ## One pragma line per set flag in the target's feature table, then a blank line.
   for entry in lines:
     if entry.on:
       result.add entry.text
@@ -1072,9 +1027,6 @@ proc printModule*(ctx: var auto, m: CirModule, kernels: seq[CirProc], shape: sta
         return ("", ctx.err)
 
 proc codegenModule*[R](printed: (R, string)): R =
-  ## Converts a printer result tuple into the `backends_api` entry-point return value.
-  ##
-  ## Returns the artifact. A non-empty refusal is a compile error naming the construct.
   if printed[1].len > 0:
     error(printed[1])
   result = printed[0]

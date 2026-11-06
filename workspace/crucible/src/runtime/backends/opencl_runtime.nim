@@ -51,8 +51,6 @@ proc `=destroy`(k: var OpenCLKernelObj) =
     discard releaseProgram(k.program)
 
 template check*(res: TClResult) =
-  ## Unified error policy: stacktrace + stderr + quit(1).
-  ## No exceptions as the public contract.
   ## A template so instantiationInfo() reports the caller's location.
   let code = res
   if code != SUCCESS:

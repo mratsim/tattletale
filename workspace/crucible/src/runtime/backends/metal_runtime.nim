@@ -95,7 +95,6 @@ when defined(macosx):
   # ═════════════════════════════════════════════════
 
   proc compileOptions*(): objc.ID =
-    ## MTLCompileOptions: fast math disabled, MSL version from the OS, +1 returned.
     let cls = objc.getClass("MTLCompileOptions")
     if objc.isNil(cls):
       failLoud("getClass(MTLCompileOptions) is nil, Metal.framework not loaded")
@@ -106,7 +105,6 @@ when defined(macosx):
     discard objc.msgSend(result, objc.`$$`("setLanguageVersion:"), getMslLanguageVersion())
 
   proc compileLibrary*(device: objc.ID, source: string, opts: objc.ID): objc.ID =
-    ## Compiles `source` to a +1 MLLibrary, quits loudly on NSError.
     var compileError: objc.ID = objc.ID(nil)
     result = objc.msgSend(device, objc.`$$`("newLibraryWithSource:options:error:"),
                           objc.nsStringFromNimString(source), opts, addr compileError)

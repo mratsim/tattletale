@@ -58,8 +58,6 @@ proc `=destroy`(p: var VulkanPipelineObj) =
     p.vkDestroyPipelineLayout(p.device, p.layout, nil)
 
 template check*(res: VkResult) =
-  ## Unified error policy: stacktrace + stderr + quit(1).
-  ## No exceptions as the public contract.
   ## A template so instantiationInfo() reports the caller's location.
   let code = res
   if code != VK_SUCCESS:
@@ -68,11 +66,7 @@ template check*(res: VkResult) =
     quit 1
 
 proc gpaAddr*(ctx: VulkanContext, instance: VkInstance, name: cstring): pointer =
-  ## Loads a Vulkan function pointer through `vkGetInstanceProcAddr`.
-  ##
-  ## - `instance = nil` requests instance-level functions before
-  ##   the instance exists
-  ## - returns the function pointer, `nil` when the loader has no such name
+  ## `instance = nil` requests instance-level functions before the instance exists.
   let fn = cast[proc(instance: VkInstance, name: cstring): pointer {.cdecl.}](ctx.getProcAddr)
   if fn == nil:
     return nil
@@ -137,9 +131,7 @@ proc loadVulkanLoader(): tuple[lib: LibHandle, gpa: pointer] =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc deviceProps(ctx: VulkanContext, dev: VkPhysicalDevice): VkPhysicalDeviceProperties =
-  ## Read VkPhysicalDeviceProperties via a padded buffer. The ABI struct is
-  ## truncated to the fields we read (apiVersion..deviceName), but the driver
-  ## writes the FULL struct including the ~3KB limits/sparseProperties.
+  ## vkGetPhysicalDeviceProperties writes the full struct, and the ABI binding here declares only the leading fields.
   let vkgpd = cast[proc(physicalDevice: VkPhysicalDevice,
     pProperties: ptr VkPhysicalDeviceProperties) {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkGetPhysicalDeviceProperties"))
   if vkgpd != nil:
@@ -148,7 +140,6 @@ proc deviceProps(ctx: VulkanContext, dev: VkPhysicalDevice): VkPhysicalDevicePro
     result = cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr)[]
 
 proc deviceName*(ctx: VulkanContext, dev: VkPhysicalDevice): string =
-  ## Physical device name of `dev` (e.g. "NVIDIA RTX PRO 6000 Blackwell ...").
   for c in deviceProps(ctx, dev).deviceName:
     if c == '\0':
       break

@@ -152,8 +152,6 @@ proc emitHlslScalar(ctx: var PrintCtx, t: CirType): string =
     result = ""
 
 proc emitHlslTypeBare(ctx: var PrintCtx, t: CirType): string =
-  ## HLSL name of `t` with no identifier, the form of casts and constructors.
-  ## Arrays have no direct name form, the printer writes `T name[N]` at the declaration.
   case t.kind
   of ctArray:
     ctx.fail("array type has no bare HLSL name, arrays compose at their declaration")
@@ -161,7 +159,6 @@ proc emitHlslTypeBare(ctx: var PrintCtx, t: CirType): string =
     result = emitHlslScalar(ctx, t)
 
 proc emitHlslDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
-  ## HLSL declaration of `t` for `ident`, the printer appends the array dimensions to the type name.
   if t.kind == ctArray:
     result = emitHlslScalar(ctx, t.aElem) & ' ' & ident & "[" & $t.aN & "]"
   else:
@@ -223,13 +220,9 @@ proc pushMemberExtent(ctx: var PrintCtx, t: CirType, label: string): tuple[size,
     ctx.fail("push member " & label & " of " & $t.kind & " type has no fvVulkan binding")
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
-  ## Type name for the shared composers, forwards to `emitHlslTypeBare`.
   ctx.emitHlslTypeBare(t)
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
-  ## Whole-vector read text of one coordinate builtin:
-  ## - the thread index reads the `SV_GroupThreadID` input, cast to int
-  ## - the other coordinate builtins are outside the subset, the entry binds scalar inputs
   let rej = getCoordReadRejection(ctx, e.coordBuiltin)
   if rej.len > 0:
     ctx.fail(rej)
@@ -241,7 +234,6 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   ""
 
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
-  ## Text of one coordinate component read, the semantic-annotated input.
   let rej = getCoordReadRejection(ctx, e.dotBase.coordBuiltin)
   if rej.len > 0:
     ctx.fail(rej)
@@ -298,7 +290,6 @@ proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
   e.name
 
 proc convBuiltinText(ctx: var PrintCtx, call: CirExpr, args: seq[string]): string =
-  ## HLSL declares no conversion mappings: the printer passes the canonical name through,
   ## dxc rejects what it cannot parse.
   ""
 
@@ -324,9 +315,7 @@ proc printCallArgTexts(ctx: var PrintCtx, callee: CirExpr, args: seq[CirExpr]): 
     result.add ctx.printCallArg(callee, i, a)
 
 proc printOconstr(ctx: var PrintCtx, e: CirExpr): string =
-  ## Returns one object construction:
-  ## - a vector constructor call in assignments
-  ## - a struct brace list in declaration initializers only, DXC errors elsewhere
+  ## DXC accepts a struct brace list only in declaration initializers.
   if e.ocType.kind == ctVector:
     var parts: seq[string]
     for kvv in e.kvFields:
@@ -335,15 +324,13 @@ proc printOconstr(ctx: var PrintCtx, e: CirExpr): string =
   ctx.printBraceList(e.ocType, e)
 
 proc printAconstr(ctx: var PrintCtx, e: CirExpr): string =
-  ## Returns one braced array construction, the initializer form DXC accepts.
+  ## A braced list is the array-initializer form DXC accepts.
   var parts: seq[string]
   for el in e.elems:
     parts.add ctx.printExpr(el)
   "{ " & parts.join(", ") & " }"
 
 proc getCoordReadRejection(ctx: PrintCtx, k: CirCoordBuiltinKind): string =
-  ## Refusal text for a coordinate builtin read the printer rejects, "" in a kernel.
-  ## The lowering pass materializes threadgroups_per_grid.
   if not ctx.isKernel:
     return "coordinate semantics bind the kernel entry point only"
   if k == cbkThreadgroupsPerGrid:
@@ -355,8 +342,6 @@ proc getCoordReadRejection(ctx: PrintCtx, k: CirCoordBuiltinKind): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getCoordInputName(k: CirCoordBuiltinKind): string =
-  ## Synthesized main input variable of one coordinate builtin kind, "" for the kinds without one.
-  ## threads_per_threadgroup prints the workgroup literal, the lowering pass materializes threadgroups_per_grid.
   case k
   of cbkThreadPositionInGrid: "gid"
   of cbkThreadgroupPositionInGrid: "groupId"
@@ -365,9 +350,6 @@ proc getCoordInputName(k: CirCoordBuiltinKind): string =
   else: ""
 
 proc getCoordEntryInput(k: CirCoordBuiltinKind): string =
-  ## Entry-input text of one coordinate builtin kind with its semantic.
-  ## "" for the kinds with no entry input: the workgroup literal prints
-  ## directly and the lowering pass materializes threadgroups_per_grid.
   case k
   of cbkThreadPositionInGrid: "uint3 gid : SV_DispatchThreadID"
   of cbkThreadgroupPositionInGrid: "uint3 groupId : SV_GroupID"
@@ -376,8 +358,6 @@ proc getCoordEntryInput(k: CirCoordBuiltinKind): string =
   else: ""
 
 proc orderedCoordReads(reads: HashSet[CirCoordBuiltinKind]): seq[CirCoordBuiltinKind] =
-  ## Kernel coordinate reads in `CirCoordBuiltinKind` declaration order.
-  ## The entry head declares its inputs in the same order.
   for k in cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup:
     if k in reads:
       result.add k
@@ -436,8 +416,6 @@ proc constructionLeaves(ctx: var PrintCtx, t: CirType, v: CirExpr, path: string,
   return true
 
 proc emitHlslInit(ctx: var PrintCtx, t: CirType, v: CirExpr): string =
-  ## Initializer text of one declaration: a struct construction prints
-  ## the flat brace list, any other value prints as an expression.
   if v != nil and v.kind == eOconstr and t.kind == ctStruct:
     return ctx.printBraceList(t, v)
   return ctx.printExpr(v)
@@ -629,8 +607,7 @@ proc prepProc(ctx: var PrintCtx, fn: CirProc) =
       ctx.rwBuffers.incl(p.name)
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
-  ## Program-scope `static const` declaration of one relocated const_mem local.
-  ## dxc folds them at compile time, no cbuffer register is reserved.
+  ## dxc folds static const storage at compile time, no cbuffer register is reserved.
   if s.init == nil:
     ctx.refuseUninitializedConstMem(s.name)
     return ""
@@ -651,7 +628,6 @@ const hlslModuleShape = ModuleShape(
   printsReduceTemplates: false)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## HLSL declaration text of one struct member. A pointer-holding member refuses: HLSL structs cannot hold resources.
   if f.typ.containsPtrDeep:
     ctx.fail("struct " & t.name & " holds a pointer, HLSL structs cannot hold resources")
     return ""
@@ -721,7 +697,6 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
       result &= "\n"
 
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
-  ## HLSL opens with no prelude lines.
   ""
 
 proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): tuple[src: string, err: string] =

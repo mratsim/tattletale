@@ -37,11 +37,6 @@ func registerExplodeStructWithPtrFields*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc defaultConstr(t: CirType): CirExpr =
-  ## Construction of a static struct from nothing.
-  ##
-  ## - a static struct has no runtime bytes
-  ## - every field is itself static and constructs recursively
-  ## - fields naming a leaf symbol stay constructed by `buildLeafConstr`
   var fields: seq[CirKv]
   for f in t.fields:
     if f.typ.kind == ctVoid:
@@ -279,10 +274,6 @@ template registerExplodePointerLocalsImpl(reg: var PassRegistry, passName,
     run = explodePointerLocals)
 
 template registerExplodePointerLocals*(reg: var PassRegistry, passName, description: string, target: string) =
-  ## Registers the pointer-local explosion pass with the built-in semantics:
-  ## - a pointer local is a value with one address-of binding
-  ## - reads rewrite to the pointee
-  ## - struct locals with pointer fields dissolve
   registerExplodePointerLocalsImpl(reg, passName, description,
     proc(m: CirModule, fn: CirProc): ExplodeCtx = ExplodeCtx(),
     proc(fn: CirProc, ctx: var ExplodeCtx, s: CirStmt): string = defaultExplodeVarDecl(fn, ctx, s, target),

@@ -114,9 +114,6 @@ proc retypeOperand(e: CirExpr, target: CirType) =
     discard
 
 proc retypeCallArgs(callee: CirExpr, args: seq[CirExpr]) =
-  ## Re-types literal call arguments to the callee formals' types.
-  ## The runtime arguments and the proc type's parameters align positionally:
-  ## both skip the compile-time formals.
   if callee.isNil:
     return
   let fnType = getExprType(callee)
@@ -205,7 +202,6 @@ proc completeConstructorsPass(m: CirModule): string =
 
 
 proc bindOperandTemp(b: var TempBinder, hoists: var seq[CirStmt], e: CirExpr): CirExpr =
-  ## One evaluation per operand, both use sites read the temp.
   let typ = getExprType(e)
   let name = b.claimTempName("lhs_val")
   let tmp = sym(name, typ)
@@ -240,7 +236,7 @@ proc bindCallBearingOperands(b: var TempBinder, hoists: var seq[CirStmt], e: Cir
   return e
 
 proc isSharedArithTarget(s: CirStmt): bool =
-  ## A target call the user wrote twice lowers to two distinct trees, so the reference-identity match never fires on it.
+  ## A call the user wrote twice lowers to two distinct trees, so the reference-identity match never fires on it.
   if s.rhs.kind notin {eAdd, eSub, eMul, eDiv}:
     return false
   result = not s.rhs.left.isNil and s.rhs.left == s.lhs

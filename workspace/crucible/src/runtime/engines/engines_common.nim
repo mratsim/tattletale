@@ -37,7 +37,6 @@ template dim3*(d: Dim3): Dim3 = d
 
 proc freeDeviceImpl(h: CUdeviceptr) {.inline.} =
   if culonglong(h) != 0:
-    # cuMemFree rejects the zero handle a moved-from DeviceMem leaves behind
     check cuMemFree(h)
 
 proc freeDeviceImpl(h: OpenCLBuffer) {.inline.} =
@@ -50,7 +49,6 @@ proc freeDeviceImpl(h: VulkanBuffer) {.inline.} =
 
 proc freeDeviceImpl(h: WGPUBuffer) {.inline.} =
   if not h.isNil:
-    # wgpuBufferRelease aborts the process on the nil handle a moved-from DeviceMem leaves behind
     wgpuBufferRelease(h)
 
 when defined(macosx):

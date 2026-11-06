@@ -42,9 +42,7 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerLowerSpans*(reg: var PassRegistry) =
-  ## Placement contract: the shared lowering stage, before every per-target transform,
-  ## so the per-address-space callee instantiation sees the split
-  ## pointer + length call sites.
+  ## Registers in the shared lowering stage, before every per-target transform, so the address-space instantiation sees the split call sites.
   reg.register("lowerSpans", pkTransform,
     "Splits openArray spans into pointer + length pairs, rewrites" &
     " toOpenArray call arguments, folds len reads",
@@ -99,14 +97,12 @@ proc splitSpanParams(fn: CirProc, sigs: seq[SpanSig]) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc spanPtrLenParts(base, first, last: CirExpr): tuple[ptrPlus, lenExpr: CirExpr] =
-  ## toOpenArray(base, first, last) -> (base + first, last - first + 1).
   let ptrTyp = getExprType(base)
   let idxTyp = getExprType(first)
   let lenSub = subE(idxTyp, last, first)
   result = (addE(ptrTyp, base, first), addE(idxTyp, lenSub, intLit(1, idxTyp)))
 
 proc isToOpenArrayCall(e: CirExpr): bool =
-  ## True for the span construction call the frontend emits.
   e.kind == eCall and e.callee.kind == eSym and
     e.callee.name == "toOpenArray" and e.args.len == 3
 

@@ -122,7 +122,6 @@ proc renderExpr(e: CirExpr): string =
     result = inner.lines.join("\n") & " " & renderExpr(e.valueExpr) & ")"
 
 proc renderStmtList*(b: var RenderBuf, body: seq[CirStmt], header: string) =
-  ## A branch body list under `header`, `.` when empty.
   if body.len == 0:
     b.add(header & " .")
   else:

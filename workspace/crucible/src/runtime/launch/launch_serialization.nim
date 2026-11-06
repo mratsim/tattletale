@@ -16,7 +16,6 @@ import workspace/crucible/src/runtime/backends/runtime_utils
 # ═══════════════════════════════════════════════════════════════════════
 
 func getArgWidth[T](_: typedesc[T], backend: static CodegenKind): int {.compileTime.} =
-  ## Crucible-lowered byte width of scalar `T`
   when T is int|uint|enum:
     4
   elif T is bool:

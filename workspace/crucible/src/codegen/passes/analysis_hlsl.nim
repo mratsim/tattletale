@@ -20,24 +20,14 @@ import ./pass_datatypes
 #  Argument-flow edges
 # ═══════════════════════════════════════════════════════════════════════
 
-proc directCalls(ss: seq[CirStmt], outp: var seq[CirExpr]) =
-  ## Call expressions of one statement list, in walk order.
-  ##
-  ## A call value may appear in any operand position, every position is visited:
-  ##
-  ## - statement calls
-  ## - assignment, declaration, and return values
-  ## - operands nested inside other calls
-  ## - loop conditions and ternary branches
-  var calls: seq[CirExpr]
+proc collectDirectCalls(stmts: seq[CirStmt]): seq[CirExpr] =
   let onStmt = proc(s: CirStmt) =
     if s.kind == sCall:
-      calls.add CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
+      result.add CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
   let onExpr = proc(e: CirExpr) =
     if e != nil and e.kind == eCall:
-      calls.add e
-  ss.walkStmts(onStmt, onExpr)
-  outp = calls
+      result.add e
+  stmts.walkStmts(onStmt, onExpr)
 
 proc scanStoredStmts(stored: var HashSet[string], fn: CirProc, ss: seq[CirStmt]) =
   ## Records the parameters `fn` stores through, anywhere in the statement tree:
@@ -110,24 +100,24 @@ proc scanCallStmts(procs: Table[string, CirProc],
 #  Read-write fixpoint
 # ═══════════════════════════════════════════════════════════════════════
 
-proc classifyRwBuffers(stored: HashSet[string], edges: seq[tuple[caller, arg, callee, param: string]], reached: var HashSet[string]) =
+proc classifyRwBuffers(stored: HashSet[string], edges: seq[tuple[caller, arg, callee, param: string]]): HashSet[string] =
   ## Marks every buffer parameter stored through, directly or transitively
   ## over the argument-flow edges: a read-write fixpoint over the call graph.
   ## Each edge propagates read-write both ways:
   ## - a store through the callee's parameter writes the caller's buffer
   ## - a stored caller buffer flows into the callee's parameter
-  reached = stored
+  result = stored
   var grew = true
   while grew:
     grew = false
     for e in edges:
       let src = e.caller & "/" & e.arg
       let dst = e.callee & "/" & e.param
-      if src in reached and dst notin reached:
-        reached.incl(dst)
+      if src in result and dst notin result:
+        result.incl(dst)
         grew = true
-      if dst in reached and src notin reached:
-        reached.incl(src)
+      if dst in result and src notin result:
+        result.incl(src)
         grew = true
 
 proc checkDeviceFnRecursion(procs: Table[string, CirProc]): string =
@@ -154,9 +144,7 @@ proc checkDeviceFnRecursion(procs: Table[string, CirProc]): string =
   for fn in procs.values:
     if fn.isKernel:
       continue
-    var calls: seq[CirExpr]
-    directCalls(fn.body, calls)
-    for c in calls:
+    for c in fn.body.collectDirectCalls:
       if c.callee.kind == eSym and procs.hasKey(c.callee.name) and
           not procs[c.callee.name].isKernel:
         calleesOf.mgetOrPut(fn.name, @[]).add(c.callee.name)
@@ -179,17 +167,11 @@ proc hlslRun(m: CirModule): string {.nimcall.} =
   for fn in m.procs:
     stored.scanStoredStmts(fn, fn.body)
     procs.scanCallStmts(edges, fn, fn.body)
-  var reached: HashSet[string]
-  stored.classifyRwBuffers(edges, reached)
-  m.callGraph = CallGraph(stored: stored, reached: reached)
+  m.callGraph = CallGraph(stored: stored,
+    reached: classifyRwBuffers(stored, edges))
   result = checkDeviceFnRecursion(procs)
 
 proc registerHlslCallGraphPass*(reg: var PassRegistry) =
-  ## Contract:
-  ## - fills `CirModule.callGraph` with the read-write classification of every buffer parameter
-  ## - refuses recursive device functions
-  ## - registers after the last transform, before the check-only validation stage
-  ## - analysis results are valid only if no transform runs after them, which runPasses enforces
   reg.register("hlslCallGraphAnalysis", pkAnalysis,
     "Builds the device-function call graph once: argument-flow edges, the" &
     " read-write classification of buffer parameters, the recursion refusal",

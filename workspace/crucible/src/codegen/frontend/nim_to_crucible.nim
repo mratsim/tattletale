@@ -151,8 +151,6 @@ func resolveTypeSection(ctx: var CirFrontend, n: NimNode) =
     discard ctx.resolver.resolveCirType(typeNode)
 
 func builtinSymExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
-  ## A `{.builtin.}` value reference: the canonical coordinate vectors and the flat thread index,
-  ## emitted as the symbol itself. The printers map the kind onto the target vocabulary.
   let name = sanitizeIdent(n.strVal)
   let typ = ctx.resolver.resolveCirType(n.getTypeInst())
   if ctx.resolver.err.len > 0:
@@ -171,15 +169,12 @@ func getFormalParams(fn: NimNode): NimNode =
   return nil
 
 func resolveCallCallee(callee: NimNode): NimNode =
-  ## Sem's pick: overload resolution ran before the macro, so a choice
-  ## node's first candidate is the resolved symbol.
+  ## Nim resolves overloads before the macro runs, a choice node's first candidate is the resolved symbol.
   if callee.kind in {nnkOpenSymChoice, nnkClosedSymChoice} and callee.len > 0:
     return callee[0]
   return callee
 
 func getProcBody(fn: NimNode): NimNode =
-  ## Statement list of a proc definition, boxing a single-statement body.
-  ## Skips the trailing `result` symbol child value-returning procs carry.
   var i = fn.len - 1
   while i >= 0 and fn[i].kind == nnkSym:
     i.dec
@@ -211,8 +206,6 @@ func getProcIdentity(callee: NimNode): uint64 =
   typeIdentityHash(key)
 
 func claimProcName(ctx: var CirFrontend, identity: uint64, base: string): string =
-  ## A claim by the owning identity returns the base: the module reservation
-  ## pass reserves kernel names, so a kernel's own def re-claims its name.
   if ctx.module.procNameMap.getOrDefault(base, identity) == identity:
     ctx.module.procNameMap[base] = identity
     return base
@@ -553,8 +546,6 @@ func lowerNestedTernary(ctx: var CirFrontend,
 func lowerStmt(ctx: var CirFrontend, n: NimNode): seq[CirStmt]
 
 func lowerBranchBody(ctx: var CirFrontend, bodyNode: NimNode): seq[CirStmt] =
-  ## A branch body nests one scope: a branch-local shadows an outer local only
-  ## inside the branch.
   ctx.pushScope()
   result = ctx.lowerStmt(bodyNode)
   ctx.popScope()

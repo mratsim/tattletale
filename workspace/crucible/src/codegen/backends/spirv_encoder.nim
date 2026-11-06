@@ -533,10 +533,7 @@ func tyFunction(b: var SpvBuilder, returnType: uint32, paramTypes: openArray[uin
   b.cachedInst(OpTypeFunction, ops)
 
 func constUint(b: var SpvBuilder, ty: uint32, value: uint64): uint32 =
-  ## Emits OpConstant holding the bit pattern of `value`:
-  ## - one literal word for 32-bit and narrower types
-  ## - two words (low half first) for 64-bit types, even when the bit pattern
-  ##   fits one word: the word count tracks the type width, never the value
+  ## An OpConstant's literal word count tracks the type width, never the value.
   if b.getScalarWidth(ty) > 32:
     b.cachedTypedInst(OpConstant, @[ty, uint32(value), uint32(value shr 32)])
   else:
@@ -609,7 +606,7 @@ func opSelect(b: var SpvBuilder, resultType, condition, object1, object2: uint32
   b.freshInst(OpSelect, @[resultType, condition, object1, object2])
 
 func opVariableFn(b: var SpvBuilder, resultType: uint32): uint32 =
-  ## Function-scope variables must sit in the entry block
+  ## SPIR-V requires Function-storage OpVariable in the function's entry block.
   result = b.module.allocId()
   b.module.emitInstSeq(ssFunctions, OpVariable, @[resultType, result, scFunction])
 
@@ -624,7 +621,7 @@ func emitExtension(b: var SpvBuilder, name: string) =
   b.module.addString(ssExtensions, name)
 
 func opLoadAligned(b: var SpvBuilder, resultType, pointer, alignment: uint32): uint32 =
-  ## Vulkan requires the Aligned memory access on every load through PhysicalStorageBuffer pointers
+  ## Vulkan requires the Aligned memory access on every load through PhysicalStorageBuffer pointers.
   b.freshInst(OpLoad, @[resultType, pointer, maAligned, alignment])
 
 func opStoreAligned(b: var SpvBuilder, pointer, value, alignment: uint32) =

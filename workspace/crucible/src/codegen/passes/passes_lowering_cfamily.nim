@@ -81,10 +81,6 @@ proc hoistProgramScopeLocalsCore(m: CirModule): string =
   return ""
 
 template registerCfamilyHoistProgramScopeLocals*(reg: var PassRegistry, passName: string, description: string) =
-  ## Args:
-  ## - `passName`: the registry key, one of `glslHoistProgramScopeLocals`
-  ##   and `wgslHoistProgramScopeLocals`
-  ## - `description`: the registry description
   reg.register(passName, pkTransform, description,
     run = proc(m: CirModule): string {.nimcall.} =
       hoistProgramScopeLocalsCore(m)

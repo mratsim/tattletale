@@ -90,8 +90,6 @@ proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): seq[ui
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
 func usesPhysicalStorageBuffer(spv: seq[uint32]): bool =
-  ## True when the SPIR-V module declares the PhysicalStorageBufferAddresses capability (OpCapability 17, capability 5347, spirv-dis-verified).
-  ## The opcode and capability numbers come from the encoder table.
   const opCapability = uint32(OpCapability)
   # 5 header words (magic, version, generator, bound, schema) precede the instruction stream
   var i = 5

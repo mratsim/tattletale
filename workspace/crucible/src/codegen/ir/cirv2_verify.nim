@@ -45,8 +45,6 @@ const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
   ##   Consumers: WGSL/HLSL printers, SPIR-V encoder, and the CUDA math mapping.
 
 proc getEmittedName(fn: CirProc): string =
-  ## Returns the file-scope name the C-family printers emit for `fn`,
-  ## its `exportName` when the kernel sets one and its name otherwise.
   result = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
 
 proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string]): string =

@@ -353,12 +353,10 @@ proc computeCirSizeBytes(t: CirType): int =
     result = 0
 
 func isLargeStruct*(t: CirType): bool =
-  ## True when the struct passes by hidden const reference: the threshold is 24 bytes, matching the C backend's 3-pointer rule.
+  ## Its 24-byte threshold matches the C backend's 3-pointer by-value rule.
   t != nil and t.kind == ctStruct and computeCirSizeBytes(t) > 24
 
 proc withAddressSpace*(t: CirType, addressSpace: AddressSpace): CirType =
-  ## Returns a copy of pointer type `t` re-spaced to `addressSpace`, with the pointee shared.
-  ## CirType values are shared refs: a caller never re-spaces in place, so the copy is the per-site instance.
   doAssert t != nil and t.kind in {ctPtr, ctAptr}
   result = CirType(kind: t.kind)
   result.addressSpace = addressSpace
@@ -439,7 +437,6 @@ proc sameType*(a, b: CirType): bool =
     result = sameType(a.ret, b.ret)
 
 func isScalarType*(t: CirType): bool =
-  ## True for the primitive scalar kinds a primitive operator takes: bool, int, uint, float, bfloat16.
   t != nil and t.kind in {ctBool, ctInt, ctUint, ctFloat, ctBf16}
 
 proc getExprType*(e: CirExpr): CirType =
@@ -548,10 +545,7 @@ proc getExprChildren*(e: CirExpr): seq[CirExpr] =
     result = @[]
 
 proc hasCallDeep*(e: CirExpr): bool =
-  ## Returns true when a call occurs anywhere in `e`.
-  ##
-  ## Eager-evaluation forms (a conditional value, WGSL's `select`)
-  ## run both variants, a call in either would run unconditionally.
+  ## Eager forms (a conditional value, WGSL's select) evaluate both variants.
   if e.isNil:
     return false
   if e.kind == eCall:
@@ -604,7 +598,6 @@ func resolveAddressSpace*(e: CirExpr): AddressSpace =
     discard
 
 func isLvalue*(e: CirExpr): bool =
-  ## An expression that names storage, `addr` and assignment take lvalues.
   e.kind in {eSym, eDeref, eAt, ePat, eDot}
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -675,9 +668,7 @@ func base58Short*(h: uint64): string =
       break
 
 func typeIdentityHash*(s: string): uint64 =
-  ## Returns the 64-bit FNV-1a hash of `s` with a splitmix64 finalizer:
-  ## the value distributes uniformly over all 64 bits so the base58 digits
-  ## never cluster on short inputs.
+  ## A splitmix64 finalizer spreads the base58 digits so short inputs never cluster.
   var h: uint64 = 0xcbf29ce484222325'u64
   for c in s:
     h = (h xor uint64(ord(c))) * 0x100000001b3'u64

@@ -130,12 +130,10 @@ proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
     getFullTypeName(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, t, "struct ", ctx.suffix)
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## C declaration text of one struct member via the shared declarator.
   printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
     f.typ, f.name, false, "struct ", ctx.suffix)
 
 proc structDeclName(ctx: var PrintCtx, t: CirType): string =
-  ## Header name of one struct declaration with the launch-site suffix.
   t.name & ctx.suffix
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -154,7 +152,6 @@ proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string
 proc printConv(ctx: var PrintCtx, e: CirExpr): string
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
-  ## C text of one whole coordinate-builtin read through the launch table.
   if not ctx.inlineKernel:
     ctx.fail("coordinate builtins in device callees are not supported in v0, pass them as parameters")
   cpuCoordUseC = true
@@ -200,7 +197,6 @@ proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
   e.name
 
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
-  ## C sizeof text: the element type name with the stacked array dimensions.
   var t = e.ofType
   var dims = ""
   while t.kind == ctArray:
@@ -209,7 +205,6 @@ proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
   "sizeof(" & ctx.emitTypeName(t) & dims & ")"
 
 proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
-  ## Refusals for expression kinds outside the shared walk's coverage.
   if e.kind == eStrLit:
     ctx.fail("string values are not supported in v0")
   else:
@@ -217,7 +212,6 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
   ""
 
 proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string =
-  ## C object-constructor member text: `.field = value`.
   "." & kvv.name & " = " & ctx.printExpr(kvv.value)
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
@@ -260,13 +254,10 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
-  ## C declaration text of one local via the shared declarator.
   printCDecl(TargetVocabs[cgCpu].scalarNames, cpuVectorRule, printerTarget,
     s.declType, s.name, false, "struct ", ctx.suffix)
 
 proc printRet(ctx: var PrintCtx, s: CirStmt, pad: string): string =
-  ## Return statement of the cpu launch: the inline kernel exits per-thread
-  ## scope through the launch's done label, callees return values.
   if ctx.inlineKernel:
     # a return inside the inlined body exits at the launch's done label
     if s.retVal != nil:
@@ -277,7 +268,6 @@ proc printRet(ctx: var PrintCtx, s: CirStmt, pad: string): string =
   pad & "return;"
 
 proc printDiscard(ctx: var PrintCtx, s: CirStmt, pad: string): string =
-  ## Discard statement of the cpu launch: the value expression keeps its side effects, cast to void.
   if s.discardVal != nil:
     pad & "(void)(" & ctx.printExpr(s.discardVal) & ");"
   else:
@@ -558,11 +548,6 @@ proc emitCpuDataFillC*(suffix: string, runtimeParams: seq[tuple[name: string, ty
   fill
 
 proc emitCpuSerialTailC*(suffix: string, runtimeParams: seq[tuple[name: string, typ: CirType]]): string =
-  ## Serial launch tail: the data struct on the caller stack, one direct call of the iteration function over the whole grid.
-  ##
-  ## - crucibleWgsPerTask is the grid workgroup total. One call covers every workgroup in x-fastest flat order
-  ## - the iteration function clamps the range at the grid total
-  ## - the product computes in int64 and the launch's dim guard keeps the total within int32
   var tail = "    extern void (*crucibleIterFn" & suffix & ")(int32_t, void*);\n"
   tail.add("    struct crucibleData" & suffix & " crucibleData;\n")
   tail.add(emitCpuDataFillC(suffix, runtimeParams))

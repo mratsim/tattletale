@@ -98,24 +98,18 @@ proc printRefBlocks(ctx: var PrintCtx, m: CirModule): string
 proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
 
 proc emitGlslScalar(t: CirType): string =
-  ## GLSL name of a non-array type, "" when the caller builds the type name.
   getTypeName(TargetVocabs[cgGlsl].scalarNames, glslVectorRule, t)
 
 proc glslTypeName(t: CirType): string =
-  ## GLSL name of a type with no identifier, the printer appends the array
-  ## dimensions to the type name (`float[4]`).
   if t.kind == ctArray:
     glslTypeName(t.aElem) & "[" & $t.aN & "]"
   else:
     emitGlslScalar(t)
 
 proc emitTypeName(ctx: var PrintCtx, t: CirType): string =
-  ## GLSL name of `t` with no identifier, matching the cast and constructor form.
   glslTypeName(t)
 
 proc refTypeName*(t: CirType): string =
-  ## GLSL name of the buffer-reference block binding `t`,
-  ## the `Ref_` prefix. The ref-block analysis pass dedups blocks by this name.
   "Ref_" & glslTypeName(t).multiReplace(
     (" ", "_"), ("[", ""), ("]", ""), (",", "_"), ("(", ""), (")", ""))
 
@@ -138,16 +132,12 @@ proc emitGlslRefBlockMember(ctx: var PrintCtx, pointee: CirType): string =
     result = emitGlslScalar(pointee) & " x[];"
 
 proc emitGlslPtrDecl(ctx: var PrintCtx, t: CirType, ident: string): string =
-  ## GLSL declaration of a buffer pointer: the reference block handle,
-  ## `Ref_T ident`.
   if t.addressSpace != caDevice:
     ctx.fail("buffer pointer in " & $t.addressSpace & " addressSpace")
     return ""
   result = refTypeName(t.pElem) & ' ' & ident
 
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
-  ## GLSL declaration text of one struct member: a buffer pointer member is
-  ## the reference block handle, the printer stacks the dimension behind the type name for an array.
   if f.typ.kind == ctArray:
     return emitGlslScalar(f.typ.aElem) & ' ' & f.name & "[" & $f.typ.aN & "]"
   if f.typ.kind in {ctAptr, ctPtr}:
@@ -159,8 +149,7 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getGlslCoordName(k: CirCoordBuiltinKind): string =
-  ## GLSL name of a canonical coordinate builtin: all six are native
-  ## GLSL builtins, a direct rename.
+  ## All six canonical coordinate builtins are native GLSL builtins.
   case k
   of cbkThreadPositionInGrid: "gl_GlobalInvocationID"
   of cbkThreadgroupPositionInGrid: "gl_WorkGroupID"
@@ -178,7 +167,6 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   "ivec3(int(" & g & ".x), int(" & g & ".y), int(" & g & ".z))"
 
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
-  ## One component of an unsigned GLSL builtin, cast to the canonical int.
   "int(" & getGlslCoordName(e.dotBase.coordBuiltin) & "." & e.fieldName & ")"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -186,16 +174,13 @@ proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc printConv(ctx: var PrintCtx, e: CirExpr): string =
-  ## A reference type constructs from its element type.
   let t = e.castType
   if t.kind in {ctAptr, ctPtr}:
     return refTypeName(t.pElem) & "(" & ctx.printExpr(e.castOperand) & ")"
   return ctx.emitTypeName(t) & "(" & ctx.printExpr(e.castOperand) & ")"
 
 proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
-  ## GLSL text of the atomic fetch-and-add call, shared by the value
-  ## and statement paths: int is core, fp needs GL_EXT_shader_atomic_float,
-  ## the address operand is the reference's element 0.
+  ## Float atomics need GL_EXT_shader_atomic_float.
   let addrTxt = if getExprType(args[0]) != nil and getExprType(
       args[0]).kind in {ctAptr, ctPtr}:
     ctx.printExpr(args[0]) & ".x[0]"
@@ -204,8 +189,6 @@ proc printGlslAtomicFetchAdd(ctx: var PrintCtx, args: seq[CirExpr]): string =
   return "atomicAdd(" & addrTxt & ", " & ctx.printExpr(args[1]) & ")"
 
 proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr], args: seq[string]): string =
-  ## atomicFetchAdd prints its own arguments, a pre-print into the shared
-  ## arg list would print each argument twice.
   ctx.printGlslAtomicFetchAdd(argExprs)
 
 proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
@@ -315,8 +298,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
         result.add binding & ctx.emitTypeName(p.typ) & ' ' & p.name
 
 proc emitConstDecl(ctx: var PrintCtx, s: CirStmt): string =
-  ## Program-scope `const` declaration of one hoisted const_mem local.
-  ## The lowering pass refuses an initializer-less const_mem local before relocation, this check fails on a malformed node.
+  ## Cross-pass invariant: the lowering pass refuses an initializer-less const_mem local before relocation.
   if s.init == nil:
     ctx.refuseUninitializedConstMem(s.name)
     return ""
@@ -340,8 +322,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ctx.emitConstDecl(s)
 
 proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
-  ## Head of one GLSL proc: the kernel's `local_size` layout qualifier precedes
-  ## the shared C signature. The engine launches each entry point by name.
+  ## Engines launch each entry point by name.
   if fn.isKernel:
     let wg = getWorkgroup(fn)
     result = "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
@@ -373,9 +354,6 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
     (m.features.atomicFloat, "#extension GL_EXT_shader_atomic_float : enable\n")])
 
 proc printRefBlocks(ctx: var PrintCtx, m: CirModule): string =
-  ## Buffer-reference block declarations, one per `CirModule.refBlocks` entry in registration order.
-  ##
-  ## Filled by the ref-block analysis pass after its last transform, never registered by the printer.
   for name, pointee in m.refBlocks:
     let member = ctx.emitGlslRefBlockMember(pointee)
     result &= "layout(buffer_reference, std430) buffer " & name &
@@ -416,7 +394,6 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
     result &= "};\n\n"
 
 proc printGlslModule*(m: CirModule): tuple[src: string, err: string] =
-  ## Emits the full GLSL translation unit through the shared module skeleton, returning "" as the error when clean, else the first refusal.
   var ctx = initPrintCtx(glslWalkPolicy, glslVectorRule, glslEmit, cgGlsl)
   let kernels = getModuleKernels(m)
   if kernels.len == 0:

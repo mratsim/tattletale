@@ -32,7 +32,6 @@ func registerWgslExplodePointerLocals*(reg: var PassRegistry) =
     "WGSL")
 
 func registerWgslHoistProgramScopeLocals*(reg: var PassRegistry) =
-  ## Rewritten aliases and relocated declarations use the renamed names that their body already references.
   registerCfamilyHoistProgramScopeLocals(reg, "wgslHoistProgramScopeLocals",
     "Relocates smem and const_mem kernel locals into the module's" &
     " program scope")
@@ -48,8 +47,7 @@ func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc crossesWgslSignature(t: CirType): bool =
-  ## WGSL function signatures accept values and `ptr<function>` pointers only,
-  ## so a buffer reference and a pointer in any other address space refuse.
+  ## WGSL function signatures accept values and ptr<function> pointers only.
   if t.isNil:
     return false
   case t.kind
@@ -100,9 +98,6 @@ proc callsCrossingCalleeTransitively(fn: CirProc, procs: Table[string, CirProc],
   return false
 
 proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
-  ## Replaces every symbol named in `subst` with its call-site argument, in place.
-  ## One substitution pass covers every parameter: the spliced argument is not
-  ## re-walked, its symbols belong to the caller.
   if e.isNil:
     return
   if e.kind == eSym:

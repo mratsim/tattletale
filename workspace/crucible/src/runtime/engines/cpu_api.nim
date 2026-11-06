@@ -31,7 +31,6 @@ proc `=copy`*(dst: var CpuEngine, src: CpuEngine) {.
     error: "CpuEngine owns its worker pool and is non-copyable".}
 
 proc newCpuEngine*(numThreads: int = 0): CpuEngine =
-  ## numThreads 0 creates the pool with the OS processor count.
   result.deviceName = "crucible-cpu"
   when compileOption("threads"):
     let n = if numThreads > 0: numThreads else: countProcessors()

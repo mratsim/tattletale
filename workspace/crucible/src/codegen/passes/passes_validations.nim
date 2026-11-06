@@ -24,11 +24,7 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerValidationPostPasses*(reg: var PassRegistry) =
-  ## One semantic check.
-  ##
-  ## Placement contract: the stage sits after every transform, before printing.
-  ## The constant-storage check reads hoisted declarations: the const_mem hoist
-  ## relocates program-scope constants into `m.globals`
+  ## Placement: after every transform, before printing, since the constant-storage check reads the hoisted declarations.
   reg.register("validateConstantWrites", pkValidation,
     "Rejects assignments into constant storage, direct or through a pointer",
     run = validateConstantWritesPass)
@@ -108,8 +104,6 @@ proc resolveConstStorageTarget(e: CirExpr, storage: ConstStorage): string =
   return ""
 
 proc constWriteRejection(lhs: CirExpr, fnName: string, storage: ConstStorage): string =
-  ## Rejection message of one assignment into constant storage.
-  ## Returns "" when the target is in another memory class.
   let target = resolveConstStorageTarget(lhs, storage)
   if target.len == 0:
     return ""
@@ -118,8 +112,6 @@ proc constWriteRejection(lhs: CirExpr, fnName: string, storage: ConstStorage): s
     "read-only; pass mutable state as a pointer parameter"
 
 proc checkConstWritesStmts(ss: seq[CirStmt], fnName: string, storage: ConstStorage): string =
-  ## First assignment into constant storage in one statement list, walk order,
-  ## nested bodies included. Only assignment targets are checked, reads of constant storage stay legal.
   var err = ""
   let check = proc(s: CirStmt) =
     if err.len > 0:

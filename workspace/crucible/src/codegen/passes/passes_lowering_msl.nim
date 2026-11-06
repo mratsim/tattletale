@@ -43,8 +43,7 @@ func registerMslRewriteSmemLocals*(reg: var PassRegistry) =
   )
 
 func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
-  ## Each pass of the MSL window appends its parameters and matching
-  ## call-site arguments last, in registration order.
+  ## Each MSL-window pass appends its parameters and matching call-site arguments last, in registration order.
   reg.register("mslThreadCoordinateBuiltins", pkTransform,
     "Threads coordinate builtins down to device functions as parameters," &
     " call sites forward the caller's values",
@@ -56,9 +55,6 @@ func registerMslThreadCoordinateBuiltins*(reg: var PassRegistry) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc extendedProcType(t: CirType, extra: seq[CirType]): CirType =
-  ## Callee types are interned, structurally identical signatures share one
-  ## `CirType` ref: an in-place extension would leak into every proc and call
-  ## site carrying the signature, so each call site takes a fresh extended copy.
   result = CirType(kind: ctProc)
   result.params = t.params & extra
   result.ret = t.ret
@@ -76,7 +72,6 @@ type
     ##   the object
 
 proc hoistSmemLocal(fn: CirProc, s: CirStmt, arenas: var seq[SmemArena]): string =
-  ## An arena is the caller's storage to lend, the pass refuses an initializer on it.
   if s.init != nil:
     return "at " & fn.name & ": smem local " & s.name &
       " with an initializer, a hoisted {.smem.} arena takes no initializer"
@@ -101,8 +96,6 @@ proc hoistSmemLocals(fn: CirProc, arenas: var seq[SmemArena]): string =
   return ""
 
 proc rewriteArenaReads(e: CirExpr, arenaTypes: Table[string, CirType]) =
-  ## An `at` over a hoisted array arena becomes a `pat`, the rewrite prints `scratch[i]`.
-  ## Expressions are refs, so the rewrite applies to every sharer.
   if e.kind == eSym and arenaTypes.hasKey(e.name):
     e.typ = arenaTypes[e.name]
   if e.kind == eAt and e.atBase.kind == eSym and arenaTypes.hasKey(e.atBase.name):
@@ -219,7 +212,6 @@ proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CirCoordBuiltinKind] =
   return kinds
 
 proc getBuiltinParamType(k: CirCoordBuiltinKind): CirType =
-  ## Builtins carry the canonical `ivec3` type, so the printer emits an `int3` constructor for whole-value reads of the standing-in parameter.
   if k == cbkThreadIndexInThreadgroup:
     tInt(32)
   else:
@@ -239,7 +231,6 @@ proc directCoordNeeds(fn: CirProc, direct: Table[string, HashSet[CirCoordBuiltin
   return true
 
 proc orderedCoordKinds(kinds: HashSet[CirCoordBuiltinKind]): seq[CirCoordBuiltinKind] =
-  ## Needed builtin kinds in `CirCoordBuiltinKind` declaration order, which also fixes the parameter order.
   for k in cbkThreadPositionInGrid..cbkThreadIndexInThreadgroup:
     if k in kinds:
       result.add(k)

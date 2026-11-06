@@ -24,9 +24,7 @@ import ./pass_helpers
 # ═══════════════════════════════════════════════════════════════════════
 
 func registerInstantiateAddressSpaceGenerics*(reg: var PassRegistry) =
-  ## Registration position: after the target's other lowering transforms,
-  ## whose rewrites append parameters and call-site arguments by callee name
-  ## over the declared call graph.
+  ## Registers after the target's other lowering transforms, whose rewrites append parameters and call-site arguments by callee name.
   reg.register("instantiateAddressSpaceGenerics", pkTransform,
     "Instantiates module callees whose pointer arguments name another" &
     " address addressSpace than the formal",
@@ -57,15 +55,6 @@ proc buildInstKey(callee: CirProc, wanted: seq[CirType]): string =
       result.add "\x1f" & $i & "\x1f" & $wanted[i].addressSpace
 
 proc retypeCloneBody(e: CirExpr, retyped: Table[string, CirType]) =
-  ## Retypes one clone body against the symbols recorded in `retyped` --
-  ## re-spaced formals and locals whose declaration adopted a re-spaced
-  ## initializer -- post-order: expressions are refs, so the retyping applies
-  ## to every sharer of the symbol.
-  ##
-  ## - a read of a retyped symbol adopts its type
-  ## - a pointer cast re-derives its target space from its operand,
-  ##   children first: a cast over a cast reads the inner cast's re-derived
-  ##   target
   for c in e.getExprChildren():
     c.retypeCloneBody(retyped)
   if e.kind == eSym and retyped.hasKey(e.name):

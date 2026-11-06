@@ -116,8 +116,6 @@ proc scanCallee(callee: CirExpr, args: seq[CirExpr], f: var ModuleFeatures, prof
       f.atomicFloat = true
 
 proc scanExprNode(e: CirExpr, f: var ModuleFeatures, profile: ScanProfile) =
-  ## One expression node of the walk: the callee detectors of a call node,
-  ## then the node's type. The shared walker visits the children.
   if e.kind == eCall and e.callee.kind == eSym:
     scanCallee(e.callee, e.args, f, profile)
   scanType(getExprType(e), f, profile)
@@ -157,7 +155,6 @@ proc scanModuleRequirements(m: CirModule, f: var ModuleFeatures, profile: ScanPr
 # ═══════════════════════════════════════════════════════════════════════
 
 proc registerGlslFeatureScan*(reg: var PassRegistry) =
-  ## Fills `CirModule.features` with the flags the GLSL extension block maps.
   reg.register("glslScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the GLSL extension block maps:" &
     " float and integer widths, subgroups, shuffles, atomic float, unroll loops",
@@ -165,7 +162,6 @@ proc registerGlslFeatureScan*(reg: var PassRegistry) =
       scanModuleRequirements(m, m.features, glslProfile))
 
 proc registerOpenclFeatureScan*(reg: var PassRegistry) =
-  ## Fills `CirModule.features` with the flags the OpenCL pragma block maps.
   reg.register("openclScanModuleFeatures", pkAnalysis,
     "Scans the module once for the features the OpenCL pragma block maps:" &
     " float widths, subgroups, atomic float",
@@ -173,14 +169,12 @@ proc registerOpenclFeatureScan*(reg: var PassRegistry) =
       scanModuleRequirements(m, m.features, openclProfile))
 
 proc registerWgslFeatureScan*(reg: var PassRegistry) =
-  ## Fills `CirModule.features` with the `enable f16` trigger of the WGSL module directive.
   reg.register("wgslScanModuleFeatures", pkAnalysis,
     "Scans the module once for 16-bit float values, the WGSL `enable f16` trigger",
     run = proc(m: CirModule): string {.nimcall.} =
       scanModuleRequirements(m, m.features, wgslProfile))
 
 proc registerCudaFeatureScan*(reg: var PassRegistry) =
-  ## Fills `CirModule.features` with the warp-reduction kinds the CUDA templates emit.
   reg.register("cudaScanModuleFeatures", pkAnalysis,
     "Scans the proc bodies once for the reduction kinds the warp-reduction" &
     " templates emit",

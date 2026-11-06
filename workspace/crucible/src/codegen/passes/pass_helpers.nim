@@ -26,10 +26,6 @@ proc exprRootSym*(e: CirExpr): CirExpr =
     result = nil
 
 proc walkExprs*(e: CirExpr, visit: proc(e: CirExpr)) =
-  ## Contract:
-  ## - a visitor may rewrite the visited node in place, expressions are shared refs
-  ## - the children are read after the visit, so a rewrite steers the descent
-  ##   into the rewritten shape
   if e.isNil:
     return
   visit(e)
@@ -385,7 +381,6 @@ proc getDottedPath*(e: CirExpr): string =
   return ""
 
 proc getStructRoot*(e: CirExpr): CirExpr =
-  ## Unlike `exprRootSym`, an indexed or pattern base stops this walk, nil.
   result = e
   while result != nil and result.kind == eDot:
     result = result.dotBase
@@ -393,7 +388,6 @@ proc getStructRoot*(e: CirExpr): CirExpr =
     result = nil
 
 proc spliceSym*(e: CirExpr, name: string, typ: CirType) =
-  ## Expressions are shared refs, so a rewrite applies to the node every sharer sees.
   e[] = sym(name, typ)[]
 
 proc registerExplodedStruct*(fn: CirProc, ctx: var ExplodeCtx, path: string, t: CirType, c: CirExpr, target: string): string =
@@ -488,10 +482,6 @@ proc rewritePointerExprShared*(fn: CirProc, ctx: var ExplodeCtx, e: CirExpr,
 # ═══════════════════════════════════════════════════════════════════════
 
 proc freshProcType*(params: seq[CirType], ret: CirType): CirType =
-  ## A fresh proc type over `params`, sharing nothing with the interned signature types.
-  ##
-  ## - structurally identical call-site callee types share one `CirType` ref
-  ## - a call site re-typing its callee swaps the symbol type for the fresh copy, so the shared ref of the other call sites remains untouched
   result = CirType(kind: ctProc)
   result.params = params
   result.ret = ret
@@ -534,8 +524,7 @@ proc hoistConstMemStmts*(m: CirModule, fn: CirProc, ss: var seq[CirStmt]): strin
   return ""
 
 proc hoistConstMemLocals*(m: CirModule): string =
-  ## Precondition: runs after the reserved-word rename, so the relocated
-  ## declaration names match the renamed body references.
+  ## Runs after the reserved-word rename so the relocated names match the renamed body references.
   for fn in m.procs:
     let err = hoistConstMemStmts(m, fn, fn.body)
     if err.len > 0:
