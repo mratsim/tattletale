@@ -3697,6 +3697,7 @@ def lint(paths, base=None):
             scan_dump_identifier(f, text, findings, added)
             registration_top(f, text, findings, added)
             section_banner(f, text, findings, added)
+            round_multiple_calls(f, text, findings, added)
             refusal_inputs.append((f, text))
     if refusal_inputs:
         findings.extend(refusal_slop_files(refusal_inputs, base,
@@ -5044,6 +5045,8 @@ GRIDSTRIDE_RE = re.compile(r"threadgroups_per_grid\.")
 GRIDSIZE_PRODUCT_RE = re.compile(
     r"threadgroups_per_grid\.\w+\s*\*\s*threadgroups_per_grid\.\w+")
 CEILDIV_CALL_RE = re.compile(r"(?<![\w.\"'`])ceil_div\s*\(")
+ROUNDMULT_CALL_RE = re.compile(
+    r"(?<![\w.\"'`])(?:round_multiple_(?:up|down)|roundMultiple)\s*\(")
 GETLAYOUT_CHAIN_RE = re.compile(
     r"\.getLayout\(\)\s*\.\s*(stride|shape|sliceAxes|diceAxes)\b")
 CEILDIV_RE = re.compile(
@@ -5172,7 +5175,7 @@ def scan_tuplelen_rank(path, lines, blocked, findings):
             findings.append(Finding(
                 path, i + 1, "ceil-div-pattern",
                 "the (n + step - 1) div step spelling is banned, "
-                "write n.ceil_div(step) or round_multiple_up(n, step)"))
+                "write n.ceil_div(step) or n.round_multiple_up(step)"))
         if FLOORDIV_RE.search(code):
             findings.append(Finding(
                 path, i + 1, "floor-div-pattern",
@@ -5987,6 +5990,26 @@ def _nim_statement_frames(lines):
                 depth += 1
             elif ch in ")]}":
                 depth -= 1
+
+
+def round_multiple_calls(path, text, findings, added):
+    """Flags prefix round_multiple_up/down and roundMultiple calls on every
+    Nim file, kernel root or not.
+
+    The receiver is the first argument: n.round_multiple_up(step),
+    x.round_multiple_down(step), n.roundMultiple(step).
+    """
+    for i, raw in enumerate(text.splitlines()):
+        code, _c = _strip_comment(raw)
+        if not ROUNDMULT_CALL_RE.search(code):
+            continue
+        if added is not None and (i + 1) not in added:
+            continue
+        findings.append(Finding(
+            path, i + 1, "round-multiple-method",
+            "round_multiple_up/down and roundMultiple read as prefix "
+            "calls here, write n.round_multiple_up(step) / "
+            "x.round_multiple_down(step) / n.roundMultiple(step)"))
 
 
 def stmt_inline(path, text, findings, added):
