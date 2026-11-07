@@ -66,6 +66,8 @@ proc `=destroy`*(batch: var MetalBatchObj) =
     objc.release(pso)
   if not objc.isNil(batch.constants):
     objc.release(batch.constants)
+  =destroy(batch.entries)
+  =destroy(batch.pipelines)
 
 when defined(macosx):
 
