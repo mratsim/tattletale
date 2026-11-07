@@ -44,7 +44,7 @@ type
     context: Pcontext
     queue: Pcommand_queue
     entries: seq[BatchEntry]
-    pipelines*: Table[string, Pkernel]
+    pipelines*: Table[(string, string), Pkernel]
     programs: Table[string, Pprogram]
     finalized: bool
 
@@ -138,9 +138,11 @@ proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg
                 $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
   if cfg.sharedMem != 0 or cfg.stream != 0:
     raiseAssert("OpenCL batch: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
-  if entrypoint notin batch.pipelines:
-    batch.pipelines[entrypoint] = compileEntrypoint(batch, source, entrypoint)
-  var entry = BatchEntry(kernel: batch.pipelines[entrypoint], fleet: cfg.grid, squadron: cfg.blk)
+  # One entrypoint name exists in many sources, the kernel is per (source, entrypoint) pair
+  let kernelKey = (source, entrypoint)
+  if kernelKey notin batch.pipelines:
+    batch.pipelines[kernelKey] = compileEntrypoint(batch, source, entrypoint)
+  var entry = BatchEntry(kernel: batch.pipelines[kernelKey], fleet: cfg.grid, squadron: cfg.blk)
   bindArgs(entry, output, args, storeEntryArg, Pmem, cgOpenCL)
   batch.entries.add entry
 
