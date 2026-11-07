@@ -1,9 +1,7 @@
 ## Vulkan batch: pipeline reuse requires an identical entrypoint and module.
 ##
-## Test that two entries of the same kernel name with different baked workgroup
-## sizes dispatch on distinct pipelines. The kernel reads
-## thread_position_in_threadgroup, which identifies the LocalSize baked into
-## the pipeline that ran.
+## Test that two entries of one kernel name with different baked workgroup
+## sizes dispatch on distinct pipelines.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
@@ -20,6 +18,7 @@ import workspace/crucible/src/runtime/batching/batch_vulkan
 const N = 128
 
 proc tidKernel(outP: ptr UncheckedArray[uint32]) =
+  # LocalSize baked into the running pipeline appears as the value read from thread_position_in_threadgroup
   let i = int(thread_position_in_grid.x)
   let t = uint32(thread_position_in_threadgroup.x)
   if i < N:
