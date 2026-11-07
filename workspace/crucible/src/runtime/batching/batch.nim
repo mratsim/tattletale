@@ -146,6 +146,7 @@ proc enqueue*[E](batch: Batch[E]): EnqueueSugar[E] {.inline.} =
 macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
+  var sharedMemN = newLit(0)
   var c = cfg
   if c.kind in {nnkPar, nnkTupleConstr, nnkBracket} and c.len == 1:
     c = c[0]
@@ -158,16 +159,20 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
           gridN = f[1]
         of "blk":
           blkN = f[1]
+        of "sharedMem":
+          sharedMemN = f[1]
         else:
-          error("batch enqueue: chevron schedule expects grid / blk, got " & f.repr)
+          error("batch enqueue: chevron schedule expects grid / blk / sharedMem, got " & f.repr)
       else:
         case pos
         of 0:
           gridN = f
         of 1:
           blkN = f
+        of 2:
+          sharedMemN = f
         else:
-          error("batch enqueue: chevron schedule takes grid, blk, got " & f.repr)
+          error("batch enqueue: chevron schedule takes grid, blk, sharedMem, got " & f.repr)
         pos.inc
   else:
     error("batch enqueue: chevron schedule expects (grid, blk), got " & cfg.repr)
@@ -176,7 +181,8 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
   let blkCall = bindSym"dim3".newCall(blkN)
   let configCall = nnkObjConstr.newTree(bindSym"LaunchConfig",
     nnkExprColonExpr.newTree(ident"grid", gridCall),
-    nnkExprColonExpr.newTree(ident"blk", blkCall))
+    nnkExprColonExpr.newTree(ident"blk", blkCall),
+    nnkExprColonExpr.newTree(ident"sharedMem", sharedMemN))
   result = quote do:
     EnqueueProxy[`E`](batch: `r`.batch, config: `configCall`)
 

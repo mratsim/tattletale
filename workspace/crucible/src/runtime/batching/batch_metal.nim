@@ -36,6 +36,7 @@ type
   BatchEntry = object
     pipelineState: objc.ID
     fleet, squadron: Dim3
+    sharedMem: int
     borrowedBuffers: seq[objc.ID]
     scalars: seq[byte]
     slots: seq[Slot]
@@ -136,13 +137,12 @@ when defined(macosx):
     if cfg.blk.x * cfg.blk.y * cfg.blk.z > MaxThreadsPerThreadgroup:
       raiseAssert("Metal batch: cfg.blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z &
                   " exceeds the " & $MaxThreadsPerThreadgroup & " threads-per-threadgroup max")
-    if cfg.sharedMem > 0:
-      raiseAssert("Metal batch: the recording does not set threadgroup memory, sharedMem must be 0, got " & $cfg.sharedMem)
     # Two libraries can export the same entrypoint name
     let psoKey = $cast[int](library) & "\0" & entrypoint
     if psoKey notin batch.pipelines:
       batch.pipelines[psoKey] = compileIndirectPipelineState(batch.device, library, entrypoint)
-    var entry = BatchEntry(pipelineState: batch.pipelines[psoKey], fleet: cfg.grid, squadron: cfg.blk)
+    var entry = BatchEntry(pipelineState: batch.pipelines[psoKey], fleet: cfg.grid, squadron: cfg.blk,
+                           sharedMem: cfg.sharedMem.int)
     bindArgs(entry, output, args, storeEntryArg, objc.ID, cgMetal)
     batch.entries.add entry
 
@@ -173,6 +173,9 @@ when defined(macosx):
       if i > 0:
         discard objc.msgSend(cmd, objc.`$$`("setBarrier"))
       discard objc.msgSend(cmd, objc.`$$`("setComputePipelineState:"), e.pipelineState)
+      if e.sharedMem > 0:
+        discard objc.msgSend(cmd, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
+                             objc.NSUInteger(round_multiple_up(e.sharedMem, 16)), objc.NSUInteger(0))
       var argIdx = 0
       for slot in e.slots:
         case slot.kind
