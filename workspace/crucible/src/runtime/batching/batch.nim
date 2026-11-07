@@ -107,7 +107,7 @@ proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
 template appendEntry[E](batch: Batch[E], fnName: string, cfg: LaunchConfig, output: auto, args: tuple) =
   var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
   entry.launch = proc(engine: E) {.closure.} =
-    engine.launchKernelImpl(output, args, cfg, fnName)
+    engine.launchKernelImpl(output, args, entry.config, fnName)
   batch.entries.add entry
 
 macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, blk: untyped, values: varargs[typed]): untyped =
