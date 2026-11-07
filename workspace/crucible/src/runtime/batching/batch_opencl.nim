@@ -53,7 +53,8 @@ type
 const
   QueueDevice = cl_uint(0x1091)
   QueueProperties = cl_uint(0x1093)
-  QueueOutOfOrderExec = cl_ulong(1 shl 2)
+  # CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE is bit 0, bit 2 is CL_QUEUE_ON_DEVICE
+  QueueOutOfOrderExec = cl_ulong(1 shl 0)
 
 proc getCommandQueueInfo(
   queue: Pcommand_queue,
