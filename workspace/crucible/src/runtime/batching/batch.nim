@@ -214,7 +214,9 @@ macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
   result = bindSym"enqueueDeviceFn".newCall(
     batchN, k, statics, cfgN, blkN)
   for i, a in callNode[1 ..< callNode.len]:
-    if not isCompileTime(formalTypes[i]):
+    if isCompileTime(formalTypes[i]):
+      statics.add(a)
+    else:
       result.add(a)
 
 # ═══════════════════════════════════════════════════════════════════════
