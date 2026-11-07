@@ -114,7 +114,7 @@ func parseSpirvEntryInfos(spv: SpirvWords): seq[SpvEntryPoint] =
   const opExecutionMode = uint32(OpExecutionMode)
   # 5 header words carry no instructions, and the stream begins at index 5
   var i = 5
-  var byId: Table[uint32, int]   # entrypoint id → result index
+  var byId: Table[uint32, seq[int]]   # entrypoint id → result indices, one id can back several entrypoint names
   while i < spv.len:
     let wordCount = spv[i] shr 16
     if wordCount == 0 or i + wordCount.int > spv.len:
@@ -141,12 +141,12 @@ func parseSpirvEntryInfos(spv: SpirvWords): seq[SpvEntryPoint] =
             nameDone = true
             break
           result[idx].name.add c
-      byId[result[idx].id] = idx
+      byId.mgetOrPut(result[idx].id, @[]).add idx
     elif opcode == opExecutionMode and wordCount.int >= 6 and
          spv[i + 2] == modeLocalSize:
       # LocalSize mode is exactly three literal words, word 1 is the entrypoint id
-      let idx = byId.getOrDefault(spv[i + 1], -1)
-      if idx >= 0:
+      # OpExecutionMode binds to the id, every name on the id shares the LocalSize
+      for idx in byId.getOrDefault(spv[i + 1], @[]):
         result[idx].localSize = Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
     inc i, wordCount.int
 
