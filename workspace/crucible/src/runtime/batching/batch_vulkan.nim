@@ -342,21 +342,18 @@ proc finalize*(batch: VulkanBatch) =
     sType: VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
   )
   check vkBeginCommandBuffer(cmdBuf, beginInfo.addr)
-  for i, entry in batch.entries.mpairs:
+  for _, entry in batch.entries.mpairs:
     let pkey = (entry.entrypoint, entry.spv)
     if pkey notin batch.pipelines:
       batch.pipelines[pkey] = createBatchPipeline(batch, entry)
     entry.pipelineState = batch.pipelines[pkey].handle
-    if i > 0:
-      # Vulkan gives no ordering guarantee between dispatches in one command buffer.
-      # Barrier insertion makes each dispatch read the previous one's writes.
-      var memBarrier = VkMemoryBarrier(
-        sType: VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-        srcAccessMask: VK_ACCESS_SHADER_WRITE_BIT,
-        dstAccessMask: VK_ACCESS_SHADER_READ_BIT or VK_ACCESS_SHADER_WRITE_BIT)
-      vkCmdPipelineBarrier(cmdBuf,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0, 1, memBarrier.addr, 0, nil, 0, nil)
+    var memBarrier = VkMemoryBarrier(
+      sType: VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+      srcAccessMask: VK_ACCESS_SHADER_WRITE_BIT,
+      dstAccessMask: VK_ACCESS_SHADER_READ_BIT or VK_ACCESS_SHADER_WRITE_BIT)
+    vkCmdPipelineBarrier(cmdBuf,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      0, 1, memBarrier.addr, 0, nil, 0, nil)
     vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, entry.pipelineState)
     if entry.scalars.len > 0:
       vkCmdPushConstants(cmdBuf, batch.pipelines[pkey].layout,
