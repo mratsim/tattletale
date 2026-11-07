@@ -164,6 +164,9 @@ proc recordGlobalFn*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string, c
          ": launch config mismatch, squadron is shader-baked on Vulkan")
   var pack = EntryPack(vctx: batch.ctx)
   bindArgs(pack, output, args, store, VulkanBuffer, cgGlsl)
+  # VUID-VkPushConstantRange-size-00310 and VUID-vkCmdPushConstants-size-00370:
+  # push-constant range and update sizes must be multiples of 4
+  pack.scalars.setLen(round_multiple_up(pack.scalars.len, 4))
   batch.entries.add BatchEntry(
     entrypoint: entrypoint,
     spv: spv,
