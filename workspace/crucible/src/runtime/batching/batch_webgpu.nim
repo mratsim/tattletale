@@ -106,12 +106,12 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
         error "Pointer device function args are not supported, pass the caller's WGPUBuffer handle, got " & $typeof(v)
     const layout = computeDeviceLayout(typeof(v), cgWebGPU)
     let off = round_multiple_up(entry.scalars.len, MinStorageBufferOffsetAlignment)
-    entry.scalars.setLen(off + layout.size)
+    # wgpuQueueWriteBuffer requires a multiple-of-4 size, every scalar window is padded to it
+    let size = round_multiple_up(layout.size, MinStorageBindingSizeMultiple)
+    entry.scalars.setLen(off + size)
     var w = off
     entry.scalars.packFrom(w, v, cgWebGPU)
-    entry.slots.add Slot(kind: skWindow,
-                         off: off,
-                         size: round_multiple_up(layout.size, MinStorageBindingSizeMultiple))
+    entry.slots.add Slot(kind: skWindow, off: off, size: size)
 
 proc compilePipeline(batch: WebgpuBatch, entry: BatchEntry): WebgpuPipeline =
   let n = entry.slots.len
