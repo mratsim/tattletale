@@ -124,6 +124,10 @@ func parseSpirvEntryInfos(spv: SpirvWords): seq[SpvEntryPoint] =
       # OpEntryPoint word layout: executionModel, entrypoint id, then the literal string
       # string storage: NUL-terminated and padded to the word boundary
       # interface ids come after the string
+      if wordCount.int < 4:
+        # wordCount 4 is the spec minimum: executionModel, id, one name word
+        raiseAssert("malformed SPIR-V module: OpEntryPoint with " & $wordCount &
+                    " words at word " & $i & ", the spec minimum is 4")
       let idx = result.len
       result.add default(SpvEntryPoint)
       result[idx].id = spv[i + 2]
