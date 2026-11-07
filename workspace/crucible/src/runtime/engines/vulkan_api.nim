@@ -278,7 +278,7 @@ proc launchKernelImpl*(engine: VulkanEngine, output: auto, args: tuple, cfg: Lau
     spirv = engine.spirv
   else:
     if engine.source.len == 0:
-      raiseAssert("Vulkan: a direct SPIR-V module must declare exactly one entry point, " &
+      raiseAssert("Vulkan: a direct SPIR-V module must declare exactly one entrypoint, " &
                "launch it as \"" & engine.entryPoint & "\", got \"" & kernel & "\"")
     if not engine.caches.spirvCache.hasKey(kernel):
       engine.caches.spirvCache[kernel] = compileGlslToSpirvViaGlslang(engine.source, kernel)

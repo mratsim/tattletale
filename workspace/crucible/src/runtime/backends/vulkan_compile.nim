@@ -60,7 +60,7 @@ proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): se
 
 proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): seq[uint32] =
   ## Compiles HLSL to SPIR-V via ``dxc`` with its SPIR-V codegen backend, skipping the DXIL stage.
-  ## `entryPoint` names the HLSL entry function.
+  ## `entryPoint` is the HLSL entry function's identifier.
   ## It becomes the OpEntryPoint Name operand the Vulkan pipeline looks up.
   let dxc = findExe("dxc")
   if dxc.len == 0:
@@ -111,7 +111,7 @@ type
     entryPoints*: int      ## number of OpEntryPoint instructions in the module
 
 func parseSpirvEntryInfo(spv: seq[uint32]): SpvEntryPointInfo =
-  ## One scan over the module words, returns the entry-point identity:
+  ## One scan over the module words, returns the entrypoint identity:
   ## - name, id: the OpEntryPoint literal name and result id
   ## - localSize: the LocalSize literals of the execution mode bound to id
   ## - entryPoints: the OpEntryPoint instruction count
@@ -127,7 +127,7 @@ func parseSpirvEntryInfo(spv: seq[uint32]): SpvEntryPointInfo =
     let opcode = spv[i] and 0xFFFF
     if opcode == opEntryPoint:
       inc result.entryPoints
-      # OpEntryPoint word layout: executionModel, entry-point id, then the literal string
+      # OpEntryPoint word layout: executionModel, entrypoint id, then the literal string
       # string storage: NUL-terminated and padded to the word boundary
       # interface ids come after the string
       if result.name.len == 0:
@@ -145,6 +145,6 @@ func parseSpirvEntryInfo(spv: seq[uint32]): SpvEntryPointInfo =
     elif opcode == opExecutionMode and wordCount.int >= 6 and
          spv[i + 2] == modeLocalSize and spv[i + 1] == result.id:
       # LocalSize mode is exactly three literal words, and the mode id must
-      # match the parsed entry-point id
+      # match the parsed entrypoint id
       result.localSize = Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
     inc i, wordCount.int

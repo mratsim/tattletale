@@ -67,11 +67,11 @@ proc buildLeafConstr(t: CirType, name: string): CirExpr =
 
 proc explodeGlobalStructWithPtrFields(m: CirModule) =
   ## Contract:
-  ## - buffer leaves name the device address space, value leaves the thread space
+  ## - buffer leaves carry the device address space, value leaves the thread space
   ## - the kernel body opens with the rebuilt struct local
   ## - the pass refuses a leaf name colliding with an existing kernel parameter or body local
   for fn in m.procs:
-    if not fn.isKernel:
+    if not fn.isGlobalFn:
       continue
     var taken: seq[string]
     for p in fn.params:
@@ -84,7 +84,7 @@ proc explodeGlobalStructWithPtrFields(m: CirModule) =
     var preamble: seq[CirStmt]
     for p in fn.params:
       if p.typ.kind == ctStruct and p.typ.containsPtrDeep:
-        let leaves = p.typ.kernelParamLeaves(p.name)
+        let leaves = p.typ.globalFnParamLeaves(p.name)
         for leaf in leaves:
           if leaf.name in taken:
             raiseAssert("leaf '" & leaf.name &
@@ -101,7 +101,8 @@ proc explodeGlobalStructWithPtrFields(m: CirModule) =
           params.add CirParam(name: leaf.name, typ: typ)
         preamble.add varD(p.name, p.typ, buildLeafConstr(p.typ, p.name))
       elif p.typ.isStaticStruct:
-        # the pass drops the parameter from the signature and declares a same-named default local
+        # pass behavior: the parameter leaves the signature
+        # and a default local takes its place, under the same identifier
         preamble.add varD(p.name, p.typ, defaultConstr(p.typ))
       else:
         params.add p
@@ -192,7 +193,7 @@ template registerExplodePointerLocalsImpl(reg: var PassRegistry, passName,
   ##
   ## Pass order: reserved-word rename → pointer-local explosion → printing
   ## - the pass sits after the reserved-word rename
-  ## - the rewritten reads use the renamed names that their body already references
+  ## - the rewritten reads use the renamed identifiers that their body already references
   # Each target module expands the template through a file-private forwarding
   # proc placed after its machinery, one that passes the module-local procs
   # as explicit template arguments.

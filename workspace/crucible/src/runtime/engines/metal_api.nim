@@ -203,7 +203,7 @@ when defined(macosx):
         raiseAssert("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
 # ═══════════════════════════════════════════════════════════════════════
-# ▸ Non-macOS entry point
+# ▸ Non-macOS entrypoint
 # ═══════════════════════════════════════════════════════════════════════
 else:
   proc newMetalEngine*(): MetalEngine =

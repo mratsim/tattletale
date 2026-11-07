@@ -249,7 +249,7 @@ type
       ## Spliced operands, each a typed CIRv2 symbol.
 
   CirParam* = object
-    ## One kernel or proc parameter. Pointer parameters name their memory
+    ## One entrypoint or proc parameter. Pointer parameters declare the memory
     ## class inside the `ptr`/`aptr` type (`addressSpace`).
     name*: string
     typ*: CirType
@@ -268,12 +268,12 @@ type
     params*: seq[CirParam]
     ret*: CirType
     body*: seq[CirStmt]
-    isKernel*: bool
-    ## `{.global.}` proc: a compute entry point. The printers emit the backend's kernel qualifier and its argument ABI for it.
+    isGlobalFn*: bool
+    ## `{.global.}` proc: a compute entrypoint. The printers emit the backend's entrypoint qualifier and its argument ABI for it.
     inline*: bool
     ## `{.inline.}` proc: the printers emit the target inline qualifier on it.
     exportName*: string
-    ## `{.exportc: "name".}` override of the emitted entry-point name, "" when the proc's own name is used.
+    ## `{.exportc: "name".}` override of the emitted entrypoint name, "" when the proc's own name is used.
     workgroup*: array[3, int]
     ## `{.workgroup(x, y, z)}` baked launch shape for the targets that compile it into the shader (Vulkan, WebGPU), all 0 when absent.
 
@@ -311,9 +311,9 @@ type
     types*: seq[CirType]
     procs*: seq[CirProc]
     globals*: seq[CirStmt]
-    ## Program-scope declarations hoisted out of a kernel body by a target
+    ## Program-scope declarations hoisted out of an entrypoint body by a target
     ## lowering pass: `var` statements of a threadgroup or constant memory class.
-    ## Populated in kernel-body order, emitted before the proc set.
+    ## Populated in entrypoint-body order, emitted before the proc set.
     ## Empty on every module a lowering pass has not touched.
     features*: ModuleFeatures
     ## Feature scan result of the target's feature-scan analysis pass,

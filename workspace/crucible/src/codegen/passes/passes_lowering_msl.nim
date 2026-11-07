@@ -137,7 +137,7 @@ proc bindSmemArgs(args: var seq[CirExpr], owned: var HashSet[string],
     if arena.name in owned:
       args.add(sym(arena.name, arena.typ))
       continue
-    if fn.isKernel:
+    if fn.isGlobalFn:
       fn.body.insert(varD(arena.name, arena.declType, nil, caThreadgroup), 0)
       owned.incl(arena.name)
       args.add(sym(arena.name, arena.typ))
@@ -165,7 +165,7 @@ proc mslHoistDeviceFnSmem(m: CirModule) =
   ## Runs before `mslRewriteSmemLocals`, which keeps the kernel-owned arenas in-body.
   var hoisted = initTable[string, seq[SmemArena]]()
   for fn in m.procs:
-    if fn.isKernel:
+    if fn.isGlobalFn:
       continue
     var arenas: seq[SmemArena]
     hoistSmemLocals(arenas, fn)
@@ -302,7 +302,7 @@ proc mslThreadCoordinateBuiltins(m: CirModule) =
   if not anyNeeds:
     return
   for fn in m.procs:
-    if fn.isKernel:
+    if fn.isGlobalFn:
       continue
     for k in orderedCoordKinds(needs[fn.name]):
       fn.appendCoordParam(k)
@@ -324,13 +324,14 @@ proc mslRewriteSmemLocals(m: CirModule) =
   ##
   ## - the hoist drains the locals it covers, this walk refuses one remaining at any depth
   ## - the initializer rewrite ran earlier, a surviving local has no initializer
-  ## - the pass runs after the reserved-word rename, so the kept locals use the renamed names their body already references
+  ## - the pass runs after the reserved-word rename, so the kept locals use
+  ##   the renamed identifiers that their body already references
   for fn in m.procs:
-    let kernel = fn.isKernel
+    let isEntry = fn.isGlobalFn
     let onStmt = proc(s: CirStmt) =
       if s.kind != sVar or s.addressSpace != caThreadgroup:
         return
-      if not kernel:
+      if not isEntry:
         raiseAssert("smem local " & s.name &
           " in a device function, only a kernel allocates" &
           " threadgroup storage")

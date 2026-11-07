@@ -226,7 +226,7 @@ proc applyProcPragmas*(fn: NimNode, p: CirProc): string =
     of nnkIdent, nnkSym:
       case prag.strVal
       of "global":
-        p.isKernel = true
+        p.isGlobalFn = true
       of "inline":
         p.inline = true
       else:

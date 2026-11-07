@@ -360,12 +360,12 @@ type
 const spvMagic = 0x07230203'u32
 # Module baseline: SPIR-V 1.3, encoded in the spvVersion13 version word.
 # That baseline implies semantics beyond the number:
-# - the entry-point interface lists Input/Output variables only
+# - the entrypoint interface lists Input/Output variables only
 # - OpTypeFloat omits the FPEncoding operand, the 1.3 form
 # - PhysicalStorageBufferAddresses is extension-gated
 # - push-constant members narrower than 32 bits refuse, they need the SPIR-V 1.5 storage capabilities
 #
-# Bumping the constant to 1.4+ requires the entry-point interface to list
+# Bumping the constant to 1.4+ requires the entrypoint interface to list
 # every referenced global variable, the push-constant block variable included.
 const spvVersion13 = 0x00010300'u32
 const spvGeneratorNone = 0'u32
@@ -466,9 +466,9 @@ func emitMemoryModel(b: var SpvBuilder, addressingModel, memoryModel: uint32) =
   b.module.emitInstSeq(ssMemoryModel, OpMemoryModel, @[addressingModel, memoryModel])
 
 func emitEntryPoint(b: var SpvBuilder, executionModel, entryPoint: uint32, name: string, iface: openArray[uint32]) =
-  # Interface lists the global Input/Output variables the entry point reads:
+  # Interface lists the global Input/Output variables the entrypoint reads:
   # - Vulkan requires every such variable listed
-  # - an empty list is valid when the entry point reads none
+  # - an empty list is valid when the entrypoint reads none
   # - the Input/Output-only interface matches the spvVersion13 baseline,
   #   SPIR-V 1.4+ requires listing every referenced global variable,
   #   push-constant block included

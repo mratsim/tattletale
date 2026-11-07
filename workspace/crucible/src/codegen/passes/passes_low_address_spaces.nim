@@ -64,7 +64,7 @@ proc retypeCloneBody(e: CirExpr, retyped: Table[string, CirType]) =
       e.castType = e.castType.withAddressSpace(resolveAddressSpace(e.castOperand))
 
 proc cloneCallee(callee: CirProc, wanted: seq[CirType], name: string): CirProc =
-  result = CirProc(name: name, ret: callee.ret, isKernel: callee.isKernel,
+  result = CirProc(name: name, ret: callee.ret, isGlobalFn: callee.isGlobalFn,
                    inline: callee.inline, exportName: callee.exportName,
                    workgroup: callee.workgroup,
                    body: cloneStmts(callee.body))

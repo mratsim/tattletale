@@ -43,15 +43,16 @@ proc hoistProgramScopeLocalsCore(m: CirModule) =
   ## - the initializer rewrite ran earlier, a relocated smem local has no initializer
   ## - the const_mem relocation covers every proc at its encounter position,
   ##   a const_mem initializer is required and prints from the relocated node
-  ## - runs after the reserved-word rename, relocated declarations use the renamed names their bodies already reference
+  ## - runs after the reserved-word rename, relocated declarations use
+  ##   the renamed identifiers that their bodies already reference
   for fn in m.procs:
     var i = 0
     while i < fn.body.len:
       let s = fn.body[i]
       if s.kind == sVar and s.addressSpace == caThreadgroup:
-        if not fn.isKernel:
+        if not fn.isGlobalFn:
           # a device-function smem local remains in place and the printer refuses it,
-          # program-scope workgroup storage belongs to the kernel
+          # program-scope workgroup storage belongs to the entrypoint
           i.inc
           continue
         m.globals.add s
@@ -136,7 +137,7 @@ proc rewriteSmemInits(m: CirModule) =
   ## - program-scope workgroup storage is fresh per workgroup, so every kernel
   ##   observes the declared values
   for fn in mitems(m.procs):
-    if fn.isKernel:
+    if fn.isGlobalFn:
       splitSmemInits(fn.body)
   var entryStores: seq[CirStmt]
   for g in mitems(m.globals):
@@ -145,7 +146,7 @@ proc rewriteSmemInits(m: CirModule) =
       g.init = nil
   if entryStores.len > 0:
     for fn in mitems(m.procs):
-      if fn.isKernel:
+      if fn.isGlobalFn:
         var grown: seq[CirStmt]
         grown.add entryStores
         grown.add fn.body

@@ -56,7 +56,7 @@ const openclEmit = TargetEmit(
   vectorDots: true,
   noPointerValues: (spaces: {}, text: ""),
   noPointerRebind: "",
-  prefixKernel: "__kernel ",
+  prefixGlobalFn: "__kernel ",
   prefixInline: "static inline ",
   prefixDevice: "static inline ")
 
@@ -68,7 +68,7 @@ const openclModuleShape = ModuleShape(
   structClose: "};",
   fwdDecls: true,
   moduleOrderProcs: false,
-  kernelSep: "\n",
+  globalFnSep: "\n",
   customProcHead: false,
   printsRefBlocks: false,
   printsParamBindings: false,
@@ -230,7 +230,7 @@ proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## Kernel-only storage classes: `__local` and `__constant`. Relocation moves const_mem locals out and rejects a device function's smem local.
   if s.addressSpace == caThreadgroup:
-    if not ctx.inKernel:
+    if not ctx.inGlobalFn:
       raiseAssert("smem local " & s.name & " in a device function, __local is kernel storage")
     return true
   if s.addressSpace == caConstant:
@@ -263,12 +263,12 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
     (m.features.subgroup, "#pragma OPENCL EXTENSION cl_khr_subgroups : enable\n"),
   ])
 
-proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
+proc emitParam(ctx: var PrintCtx, p: CirParam, isGlobalFn: bool): string =
   ## Parameter declaration of one kernel or device-function parameter.
   ## A kernel's `ptr T` parameter binds a device buffer, the engine serializes
   ## it through the same pointer-leaf form as a `ptr UncheckedArray[T]` parameter.
   ## Array parameter values reach the kernel packed by the engine.
-  if p.passByRef and not isKernel:
+  if p.passByRef and not isGlobalFn:
     # const Type* _p_name — pointer to const for large structs (no C++ references)
     # Note: openclLowerByrefParams already renamed the param to _p_
     return "const " & ctx.emitTypeName(p.typ) & "* " & p.name
@@ -288,7 +288,7 @@ proc emitParam(ctx: var PrintCtx, p: CirParam, isKernel: bool): string =
 
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   for p in fn.params:
-    result.add ctx.emitParam(p, fn.isKernel)
+    result.add ctx.emitParam(p, fn.isGlobalFn)
 
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ## Program-scope declaration text of one relocated const_mem local.
@@ -312,7 +312,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 proc printOpenclModule*(m: CirModule): string =
   var ctx = initPrintCtx(openclWalkPolicy, openclVectorRule, openclEmit, cgOpenCL)
   ctx.mathNames = openclMathBuiltinNames
-  let kernels = getModuleKernels(m)
+  let kernels = getModuleGlobalFns(m)
   if kernels.len == 0:
     raiseAssert("no kernel in the module")
   printModule(ctx, m, kernels, openclModuleShape)

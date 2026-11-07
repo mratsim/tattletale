@@ -117,7 +117,7 @@ proc materializeNumWorkgroups(m: CirModule) =
   ## Kernels without such reads stay untouched, device functions never see one,
   ## the printer refuses a coordinate builtin in a device function.
   for fn in m.procs:
-    if not fn.isKernel:
+    if not fn.isGlobalFn:
       continue
     var coordTy: CirType = nil
     if not findNumWorkgroupsStmts(coordTy, fn.body):
