@@ -116,11 +116,7 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
 proc compilePipeline(batch: WebgpuBatch, entry: BatchEntry): WebgpuPipeline =
   let n = entry.slots.len
   var bglEntries = newSeq[WGPUBindGroupLayoutEntry](n)
-  bglEntries[0] = WGPUBindGroupLayoutEntry(
-    binding: 0.cuint,
-    visibility: WGPUShaderStageCompute,
-    buffer: WGPUBufferBindingLayout(`type`: WGPUBufferBindingTypeStorage, minBindingSize: 0))
-  for i in 1 ..< n:
+  for i in 0 ..< n:
     var layout = WGPUBufferBindingLayout(minBindingSize: 0)
     if entry.slots[i].kind == skWindow:
       layout.`type` = WGPUBufferBindingTypeReadOnlyStorage
@@ -227,11 +223,7 @@ proc finalize*(batch: WebgpuBatch) =
       wgpuQueueWriteBuffer(batch.queue, batch.scalarBuffer, windowBase.uint64,
                            e.scalars[0].addr, e.scalars.len.csize_t)
     var bgEntries = newSeq[WGPUBindGroupEntry](e.slots.len)
-    bgEntries[0] = WGPUBindGroupEntry(
-      binding: 0.cuint,
-      buffer: e.borrowedBuffers[0],
-      size: wgpuBufferGetSize(e.borrowedBuffers[0]).csize_t)
-    for i in 1 ..< e.slots.len:
+    for i in 0 ..< e.slots.len:
       case e.slots[i].kind
       of skBuffer:
         bgEntries[i] = WGPUBindGroupEntry(
