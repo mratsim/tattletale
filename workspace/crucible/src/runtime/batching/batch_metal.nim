@@ -138,9 +138,11 @@ when defined(macosx):
       raiseAssert("Metal batch: the recording does not set threadgroup memory, sharedMem must be 0, got " & $cfg.sharedMem)
     if cfg.stream != 0:
       raiseAssert("Metal batch: replay runs on the batch queue, stream must be 0, got " & $cfg.stream)
-    if entrypoint notin batch.pipelines:
-      batch.pipelines[entrypoint] = compileIndirectPipelineState(batch.device, library, entrypoint)
-    var entry = BatchEntry(pipelineState: batch.pipelines[entrypoint], fleet: cfg.grid, squadron: cfg.blk)
+    # Two libraries can export the same entrypoint name
+    let psoKey = $cast[int](library) & "\0" & entrypoint
+    if psoKey notin batch.pipelines:
+      batch.pipelines[psoKey] = compileIndirectPipelineState(batch.device, library, entrypoint)
+    var entry = BatchEntry(pipelineState: batch.pipelines[psoKey], fleet: cfg.grid, squadron: cfg.blk)
     bindArgs(entry, output, args, storeEntryArg, objc.ID, cgMetal)
     batch.entries.add entry
 
