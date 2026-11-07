@@ -136,6 +136,8 @@ when defined(macosx):
                   " exceeds the " & $MaxThreadsPerThreadgroup & " threads-per-threadgroup max")
     if cfg.sharedMem > 0:
       raiseAssert("Metal batch: the recording does not set threadgroup memory, sharedMem must be 0, got " & $cfg.sharedMem)
+    if cfg.stream != 0:
+      raiseAssert("Metal batch: replay runs on the batch queue, stream must be 0, got " & $cfg.stream)
     if entrypoint notin batch.pipelines:
       batch.pipelines[entrypoint] = compileIndirectPipelineState(batch.device, library, entrypoint)
     var entry = BatchEntry(pipelineState: batch.pipelines[entrypoint], fleet: cfg.grid, squadron: cfg.blk)
