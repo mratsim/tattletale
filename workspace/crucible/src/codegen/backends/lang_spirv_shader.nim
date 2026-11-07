@@ -1383,6 +1383,7 @@ proc emitGlobalFn(ctx: var SpvLangCtx, globalFn: CirProc): uint32 =
   ## One push block in parameter order, the builtin inputs on the interface
   ## and structured control flow from the CIRv2 body.
   doAssert globalFn.ret.kind == ctVoid, "global functions are void"
+  ctx.pushBoolFields.clear()
   let push = ctx.buildPushBlock(globalFn.params)
   # device fns emit first, an OpFunctionCall result id must exist at the call site
   var calls: HashSet[string]
