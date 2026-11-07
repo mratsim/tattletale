@@ -52,7 +52,7 @@ type
     device: WGPUDevice
     queue: WGPUQueue
     modules: Table[string, WGPUShaderModule]
-    pipelines: Table[string, WebgpuPipeline]
+    pipelines: Table[(WGPUShaderModule, string), WebgpuPipeline]
     entries: seq[BatchEntry]
     scalarBuffer: WGPUBuffer
 
@@ -218,9 +218,11 @@ proc finalize*(batch: WebgpuBatch) =
       raiseAssert("WebGPU batch: failed to create the scalar buffer")
   var windowBase = 0
   for e in batch.entries.mitems:
-    if e.entryPoint notin batch.pipelines:
-      batch.pipelines[e.entryPoint] = compilePipeline(batch, e)
-    e.pipelineState = batch.pipelines[e.entryPoint].pipeline
+    # One entrypoint name exists in many modules, a pipeline is per (module, entrypoint) pair
+    let pipelineKey = (e.module, e.entryPoint)
+    if pipelineKey notin batch.pipelines:
+      batch.pipelines[pipelineKey] = compilePipeline(batch, e)
+    e.pipelineState = batch.pipelines[pipelineKey].pipeline
     if e.scalars.len > 0:
       wgpuQueueWriteBuffer(batch.queue, batch.scalarBuffer, windowBase.uint64,
                            e.scalars[0].addr, e.scalars.len.csize_t)
@@ -243,7 +245,7 @@ proc finalize*(batch: WebgpuBatch) =
           offset: (windowBase + e.slots[i].off).csize_t,
           size: e.slots[i].size.csize_t)
     var bgDesc = WGPUBindGroupDescriptor(
-      layout: batch.pipelines[e.entryPoint].bindGroupLayout,
+      layout: batch.pipelines[pipelineKey].bindGroupLayout,
       entryCount: e.slots.len.csize_t,
       entries: bgEntries[0].addr)
     e.bindGroup = wgpuDeviceCreateBindGroup(batch.device, addr bgDesc)
