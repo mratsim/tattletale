@@ -55,6 +55,7 @@ proc recordBatch*[E: HwEngine](engine: E): Batch[E] {.inline.} =
 var ctgFrontend {.compileTime.}: CirFrontend
 var ctgArtifactKind {.compileTime.}: CodegenKind
 var ctgArtifactPrinted {.compileTime.}: bool
+var ctgArtifactFnCount {.compileTime.}: int
 var ctgTextArtifact {.compileTime.}: string
 var ctgSpirvArtifact {.compileTime.}: SpirvWords
 
@@ -81,20 +82,22 @@ proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
   ctgArtifactKind = kind
   ctgArtifactPrinted = true
   when kind == cgSpirv:
-    if ctgSpirvArtifact.len == 0:
+    if ctgSpirvArtifact.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
       var reg = PassRegistry()
       reg.registerGpuPasses(kind)
       let m = ctgFrontend.finish()
       reg.runPasses(m)
       ctgSpirvArtifact = codegenIR(m, kind)
+      ctgArtifactFnCount = ctgFrontend.getProcCount()
     ctgSpirvArtifact
   else:
-    if ctgTextArtifact.len == 0:
+    if ctgTextArtifact.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
       var reg = PassRegistry()
       reg.registerGpuPasses(kind)
       let m = ctgFrontend.finish()
       reg.runPasses(m)
       ctgTextArtifact = codegenSource(m, kind)
+      ctgArtifactFnCount = ctgFrontend.getProcCount()
     ctgTextArtifact
 
 # ═══════════════════════════════════════════════════════════════════════

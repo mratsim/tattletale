@@ -1297,6 +1297,9 @@ proc finish*(frontend: var CirFrontend): CirModule =
 func isEmpty*(ctx: CirFrontend): bool =
   ctx.module.procs.len == 0
 
+func getProcCount*(ctx: CirFrontend): int =
+  ctx.module.procs.len
+
 proc lowerNimAst*(ctx: var CirFrontend, procdef: NimNode): string =
   let id = getProcIdentity(procdef[0])
   if id in ctx.module.procRegistry and ctx.module.procRegistry[id].hasBody:
