@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Batch layer: the compile-time kernel stream and the runtime command buffer.
+## Batch layer: the compile-time device function stream and the runtime command buffer.
 ##
 ## Usage:
 ##   ```
@@ -13,7 +13,11 @@
 ##   batch.enqueue<<(G, 64)>> saxpy(out, x, y, 3.0'f32)
 ##   batch.submit()
 ##   ```
-import std/[hashes, macros, sets]
+import std/[macros]
+import workspace/crucible/src/codegen/gpu_compiler
+import workspace/crucible/src/codegen/passes/pass_datatypes
+import workspace/crucible/src/codegen/backends/backends_api
+import workspace/crucible/src/codegen/frontend/nim_to_crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
 
@@ -37,20 +41,15 @@ proc recordBatch*[E: HwEngine](engine: E): Batch[E] {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 #  Compile-time stream
 # ═══════════════════════════════════════════════════════════════════════
+# Convention:
+#   compile-time globals or functions that write to a compile-time global
+#   are prefix with ctg
 
-var ctgWrapperStash {.compileTime.}: seq[NimNode]
-var ctgStashNames {.compileTime.}: HashSet[string]
-
-proc stashWrapper(procdef: NimNode) {.compileTime.} =
-  let name = $procdef[0]
-  if name in ctgStashNames:
-    return
-  ctgWrapperStash.add(procdef)
-  ctgStashNames.incl(name)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Enqueue
-# ═══════════════════════════════════════════════════════════════════════
+var ctgFrontend {.compileTime.}: CirFrontend
+var ctgArtifactKind {.compileTime.}: CodegenKind
+var ctgArtifactPrinted {.compileTime.}: bool
+var ctgTextArtifact {.compileTime.}: string
+var ctgSpirvArtifact {.compileTime.}: seq[uint32]
 
 func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
@@ -58,60 +57,64 @@ func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
 func batchCodegenKind(E: typedesc[VulkanEngine]): CodegenKind {.compileTime.} =
   cgSpirv
 
-macro recordBatchEnqueue(batch: Batch, kernel: typed, statics: untyped, gridN, blkN: untyped, values: varargs[typed]): untyped =
-  let wg = getWorkgroupPragma(blkN)
+func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
+  cgWebGPU
+
+func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
+  cgOpenCL
+
+macro ctgAccumulateCir(procdef: typed): untyped =
+  let kname = lowerNimAst(ctgFrontend, procdef)
+  result = newLit(kname)
+
+proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
+  if ctgArtifactPrinted and ctgArtifactKind != kind:
+    raiseAssert("ctgAccumulateArtifact: one codegen kind per compilation, " &
+      $ctgArtifactKind & " already accumulated, asked for " & $kind)
+  ctgArtifactKind = kind
+  ctgArtifactPrinted = true
+  when kind == cgSpirv:
+    if ctgSpirvArtifact.len == 0:
+      var reg = PassRegistry()
+      reg.registerGpuPasses(kind)
+      let m = ctgFrontend.finish()
+      reg.runPasses(m)
+      ctgSpirvArtifact = codegenIR(m, kind)
+    ctgSpirvArtifact
+  else:
+    if ctgTextArtifact.len == 0:
+      var reg = PassRegistry()
+      reg.registerGpuPasses(kind)
+      let m = ctgFrontend.finish()
+      reg.runPasses(m)
+      ctgTextArtifact = codegenSource(m, kind)
+    ctgTextArtifact
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Enqueue
+# ═══════════════════════════════════════════════════════════════════════
+
+template appendEntry[E](batch: Batch[E], fnName: string, cfg: LaunchConfig, output: auto, args: tuple) =
+  var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
+  entry.launch = proc(engine: E) {.closure.} =
+    engine.launchKernelImpl(output, args, cfg, fnName)
+  batch.entries.add entry
+
+macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, values: varargs[typed]): untyped =
   var valuesN = nnkBracket.newTree()
   for v in values:
     valuesN.add(v)
-  let procdef = buildGlobalFn(kernel, statics, valuesN)
-  if not wg.isNil:
-    procdef[4].add(wg)
-
-  procdef[6][0][0] = kernel
-  let known = $procdef[0].strVal in ctgStashNames
-  if not known:
-    stashWrapper(procdef)
-
-  let E = batch.getTypeInst()[1]
-  let entryN = ident"batchEntry"
-  let kname = newLit($procdef[0])
-  let configCall = nnkObjConstr.newTree(bindSym"LaunchConfig",
-    nnkExprColonExpr.newTree(ident"grid", bindSym"dim3".newCall(gridN)),
-    nnkExprColonExpr.newTree(ident"blk", bindSym"dim3".newCall(blkN)))
-  let argsTuple = nnkTupleConstr.newTree()
+  let procdef = buildGlobalFn(deviceFn, statics, valuesN)
+  procdef[6][0][0] = deviceFn
+  let fnNameN = quote do: ctgAccumulateCir(`procdef`)
+  let outN = values[0]
+  var argsTuple = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
     argsTuple.add(values[i])
-  let outN = values[0]
   result = quote do:
     block:
-      var `entryN` = BatchEntry[`E`](entrypoint: `kname`, config: `configCall`)
-      `entryN`.launch = proc(e: `E`) =
-        e.launchKernelImpl(`outN`, `argsTuple`, `configCall`, `kname`)
-      `batch`.entries.add `entryN`
-
-macro recordDeviceCall(batch: Batch, kernel: typed, gridN, blkN: untyped, args: varargs[untyped]): untyped =
-  for a in args:
-    doAssert a.kind notin {nnkExprEqExpr, nnkExprColonExpr},
-      "batch enqueue: named arguments are not supported, pass arguments positionally"
-  let k = kernel.resolveKernelOverload(args.len)
-  let impl = k.getImpl()
-  impl.expectKind(nnkProcDef)
-  let formals = impl[3]
-  var formalTypes: seq[NimNode]
-  for i in 1 ..< formals.len:
-    let f = formals[i]
-    for j in 0 ..< f.len - 2:
-      formalTypes.add(f[^2])
-  doAssert args.len <= formalTypes.len,
-    "batch enqueue: " & $args.len & " args for " &
-    $formalTypes.len & " parameters"
-  var statics = nnkBracket.newTree()
-  result = bindSym"recordBatchEnqueue".newCall(batch, k, statics, gridN, blkN)
-  for i, a in args:
-    if isCompileTime(formalTypes[i]):
-      statics.add(a)
-    else:
-      result.add(a)
+      const fnName = `fnNameN`
+      `batch`.appendEntry(fnName, `cfg`, `outN`, `argsTuple`)
 
 type
   EnqueueSugar*[E] = object
@@ -169,15 +172,30 @@ macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
   doAssert callNode.kind == nnkCall,
-    "batch enqueue RHS must be a kernel call, got: " & callNode.repr
-  let gridN = quote do: `sugar`.config.grid
-  let blkN = quote do: `sugar`.config.blk
-  result = bindSym"recordDeviceCall".newCall(
-    sugar.newDotExpr(ident"batch"),
-    callNode[0],
-    gridN, blkN)
-  for i in 1 ..< callNode.len:
-    result.add(callNode[i])
+    "batch enqueue RHS must be a device function call, got: " & callNode.repr
+  for a in callNode[1 ..< callNode.len]:
+    doAssert a.kind notin {nnkExprEqExpr, nnkExprColonExpr},
+      "batch enqueue: named arguments are not supported, pass arguments positionally"
+  let k = callNode.resolveDeviceFnOverload()
+  let impl = k.getImpl()
+  impl.expectKind(nnkProcDef)
+  let formals = impl[3]
+  var formalTypes: seq[NimNode]
+  for i in 1 ..< formals.len:
+    let f = formals[i]
+    for j in 0 ..< f.len - 2:
+      formalTypes.add(f[^2])
+  doAssert callNode.len - 1 <= formalTypes.len,
+    "batch enqueue: " & $(callNode.len - 1) & " args for " &
+    $formalTypes.len & " parameters"
+  var statics = nnkBracket.newTree()
+  let batchN = quote do: `sugar`.batch
+  let cfgN = quote do: `sugar`.config
+  result = bindSym"enqueueDeviceFn".newCall(
+    batchN, k, statics, cfgN)
+  for i, a in callNode[1 ..< callNode.len]:
+    if not isCompileTime(formalTypes[i]):
+      result.add(a)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Submission
@@ -190,28 +208,25 @@ macro submit*(batch: Batch): untyped =
   ## - at least one `enqueue` in this compilation
   ## - submitting an empty batch is a no-op
   ##
-  ## The compilation compiles its kernels once.
-  ## Kernels enqueued later recompile it, every `submit` reuses the module.
+  ## The compilation compiles its device functions once.
+  ## Device functions enqueued later recompile it, every `submit` reuses the module.
   ##
   ##   ```
   ##   var batch = engine.recordBatch()
   ##   batch.enqueue<<(N div 64, 64)>> saxpy(out, x, y, 3.0'f32)
   ##   batch.submit()
   ##   ```
-  if ctgWrapperStash.len == 0:
-    error("submit: the stream holds no kernel, enqueue first", batch)
-  var procdefsN = nnkStmtList.newTree()
-  for i in 0 ..< ctgWrapperStash.len:
-    procdefsN.add(ctgWrapperStash[i])
+  if ctgFrontend.isEmpty():
+    error("submit: the stream holds no device function, enqueue first", batch)
   let engineN = quote do: `batch`.engine
   result = quote do:
     block:
       const batchKind = batchCodegenKind(typeof(`engineN`))
-      const batchArtifact = compileBatch(`engineN`, `procdefsN`)
       when batchKind == cgSpirv:
-        if `engineN`.getSpirV() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
+        {.error: "submit: the Vulkan batch route binds SPIR-V words through the batch legs".}
       else:
+        const batchArtifact = ctgAccumulateArtifact(batchKind)
         if `engineN`.getArtifact() != batchArtifact:
           `engineN`.ingest(batchArtifact)
-      `engineN`.submit(`batch`)
+        for entry in `batch`.entries:
+          entry.launch(`engineN`)

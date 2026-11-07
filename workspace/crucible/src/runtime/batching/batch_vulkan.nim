@@ -86,7 +86,7 @@ proc checkPushRoom(pushConstantCursor, need: int) {.inline.} =
 
 type
   EntryPack = object
-    ## Packs one entry's push-constant block in kernel signature order:
+    ## Packs one entry's push-constant block in device function signature order:
     ## device addresses at 8-byte alignment, scalars at their device layout.
     vctx: VulkanContext
     pushConstantCursor: int
@@ -106,7 +106,7 @@ proc store(pack: var EntryPack, v: VulkanBuffer, _: int) =
 
 proc store[T](pack: var EntryPack, v: T, _: int) =
   when T is ptr|pointer:
-    {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
+    {.error: "Pointer device function args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   const lay = computeDeviceLayout(T, cgGlsl)
   if lay.align > 1:
     pack.pushConstantCursor = round_multiple_up(pack.pushConstantCursor, lay.align)
@@ -133,9 +133,9 @@ proc store[T](pack: var EntryPack, v: T, _: int) =
     copyMem(pack.scalars[pack.pushConstantCursor].addr, blob[0].addr, lay.size)
   inc pack.pushConstantCursor, lay.size
 
-proc enqueueKernelImpl*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
+proc recordGlobalFn*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
   if batch.recording != nil:
-    raiseAssert("enqueueKernel: the batch is finalized, entries are frozen")
+    raiseAssert("recordGlobalFn: the batch is finalized, entries are frozen")
   if cfg.sharedMem != 0 or cfg.stream != 0:
     raiseAssert("Vulkan batch: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
@@ -144,8 +144,8 @@ proc enqueueKernelImpl*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string
   let sq = parseSpirvEntryInfo(spv)
   if sq.entryPoints != 1 or sq.name != entrypoint:
     raiseAssert("Vulkan batch: the module for \"" & entrypoint &
-             "\" must declare exactly one OpEntryPoint named after the kernel, got " &
-             $sq.entryPoints & " entry points" &
+             "\" must declare exactly one OpEntryPoint named after the device function, got " &
+             $sq.entryPoints & " entrypoints" &
              (if sq.entryPoints == 1: " (\"" & sq.name & "\")" else: ""))
   if sq.localSize.x == 0 or sq.localSize.y == 0 or sq.localSize.z == 0:
     raiseAssert("Vulkan batch: the module for \"" & entrypoint & "\" bakes no workgroup size")
@@ -172,17 +172,16 @@ proc enqueueKernelImpl*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string
     borrowedBuffers: pack.buffers,
     scalars: pack.scalars)
 
-macro enqueueKernel*(batch: VulkanBatch, kernel: typed, cfg: static LaunchConfig, output: typed, args: typed): untyped =
-  ## Records one kernel launch into the batch.
-  ##
-  ## Usage:
-  ##   batch.enqueueKernel(saxpyKernel, LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
+macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchConfig, output: typed, args: typed): untyped =
   var argNodes = args
   if argNodes.kind == nnkPar and argNodes.len == 1:
     argNodes = argNodes[0]
   doAssert argNodes.kind in {nnkTupleConstr, nnkPar},
     "batch enqueue: args must be a tuple, got " & args.repr
-  let k = kernel.resolveKernelOverload(argNodes.len + 1)
+  var callN = nnkCall.newTree(deviceFn)
+  for a in argNodes:
+    callN.add(a)
+  let k = callN.resolveDeviceFnOverload()
   let impl = k.getImpl()
   impl.expectKind(nnkProcDef)
   let formals = impl[3]
@@ -220,7 +219,7 @@ macro enqueueKernel*(batch: VulkanBatch, kernel: typed, cfg: static LaunchConfig
     nnkExprColonExpr.newTree(ident"sharedMem", newLit(cfg.sharedMem)),
     nnkExprColonExpr.newTree(ident"stream", newLit(cfg.stream)))
   let spirvN = bindSym"spirv"
-  let implN = bindSym"enqueueKernelImpl"
+  let implN = bindSym"recordGlobalFn"
   result = quote do:
     block:
       const batchModule = `spirvN`(`procdef`)
@@ -228,7 +227,6 @@ macro enqueueKernel*(batch: VulkanBatch, kernel: typed, cfg: static LaunchConfig
 
 proc newVulkanBatch*(ctx: VulkanContext): VulkanBatch =
   ## Borrowed: the context, its device and queue, and every bound buffer.
-  ## Every bound buffer outlives the batch.
   VulkanBatch(ctx: ctx)
 
 func getScalarSize*(batch: VulkanBatch): int =

@@ -1294,6 +1294,17 @@ proc finish*(frontend: var CirFrontend): CirModule =
   result = moduleD("globalfn", frontend.resolver.resolvedStructs, frontend.module.procs)
   result.globals = frontend.module.decls
 
+func isEmpty*(ctx: CirFrontend): bool =
+  ctx.module.procs.len == 0
+
+proc lowerNimAst*(ctx: var CirFrontend, procdef: NimNode): string =
+  let id = getProcIdentity(procdef[0])
+  if id in ctx.module.procRegistry and ctx.module.procRegistry[id].hasBody:
+    return ctx.module.procRegistry[id].name
+  discard ctx.claimProcName(id, sanitizeIdent(procdef[0].strVal))
+  ctx.update(procdef)
+  return ctx.module.procRegistry[id].name
+
 proc lowerCirv2*(bodyIn: NimNode): CirModule =
   var ctx = CirFrontend.init()
   var body = bodyIn

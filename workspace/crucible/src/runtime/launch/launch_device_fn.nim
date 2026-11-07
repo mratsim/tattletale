@@ -108,12 +108,12 @@ func getElemType(formal: NimNode): NimNode =
   else:
     p
 
-func assertValidDeviceMem(kernel, pname, formal, vtype: NimNode) =
+func assertValidDeviceMem(deviceFn, pname, formal, vtype: NimNode) =
   if formal.kind != nnkPtrTy:
-    error("launchDeviceFn " & $kernel & ": parameter " & $pname & " is " &
+    error("launchDeviceFn " & $deviceFn & ": parameter " & $pname & " is " &
       formal.repr & ", a DeviceMem argument needs a pointer parameter")
   if not sameType(vtype[2], getElemType(formal)):
-    error("launchDeviceFn " & $kernel & ": parameter " & $pname & " points at " &
+    error("launchDeviceFn " & $deviceFn & ": parameter " & $pname & " points at " &
       getElemType(formal).repr & ", the DeviceMem argument holds " & vtype[2].repr)
 
 func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
@@ -176,30 +176,30 @@ func bindFormalGenericArgs(formal, v: NimNode): NimNode =
       args.add(a)
   return args
 
-func getBridgeParamType(kernel: NimNode, formalName, formalType, arg: NimNode): NimNode =
+func getBridgeParamType(deviceFn: NimNode, formalName, formalType, arg: NimNode): NimNode =
   let argType = arg.getTypeInst()
   if isDeviceMemType(argType):
-    assertValidDeviceMem(kernel, formalName, formalType, argType)
+    assertValidDeviceMem(deviceFn, formalName, formalType, argType)
     return formalType
   if getDeviceMemFields(arg).len > 0:
     return bindFormalGenericArgs(formalType, arg)
   return argType
 
-func buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
+func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
   ## ```
-  ##   kernel  = kern                                        (typed callee symbol)
+  ##   deviceFn = kern                                       (typed callee symbol)
   ##   statics = [tiledMma(f32, f16, f16, 32, 32, 16)]       (raw, one per compile-time parameter)
   ##   values  = [Int[3](), v.addr]                          (type-checked, one per runtime parameter)
   ##     │
-  ##     │  zip against the kernel's parameters, in declaration order:
-  ##     │    compile-time parameter → its argument is written into the kernel call as-is
-  ##     │    runtime parameter     → a new kernel parameter, typed by its argument
-  ##     │      (special-cased for DeviceMem: typed from the kernel's declared parameter)
+  ##     │  zip against the device function's parameters, in declaration order:
+  ##     │    compile-time parameter → its argument is written into the device function call as-is
+  ##     │    runtime parameter     → a new parameter, typed by its argument
+  ##     │      (special-cased for DeviceMem: typed from the device function's declared parameter)
   ##     ▼
   ##   proc kern_Xy3kP(x: Int[3], v: ptr float32) {.global.} =
   ##     kern(tiledMma(f32, f16, f16, 32, 32, 16), x, v)
   ##
-  let impl = kernel.getImpl()
+  let impl = deviceFn.getImpl()
   impl.expectKind(nnkProcDef)
   let formals = impl[3]
   var formalNames: seq[NimNode]
@@ -210,8 +210,8 @@ func buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
       formalNames.add(f[j])
       formalTypes.add(f[^2])
   # identity: the callee, its compile-time values and the runtime parameter types
-  var h = hash($kernel)
-  var kcall = ident($kernel).newCall()
+  var h = hash($deviceFn)
+  var deviceFnCall = ident($deviceFn).newCall()
   var params = nnkFormalParams.newTree(newEmptyNode())
   var si = 0
   var vi = 0
@@ -222,26 +222,26 @@ func buildGlobalFn(kernel: NimNode, statics, values: NimNode): NimNode =
     if isCompileTime(formalTypes[i]):
       let v = statics[si]
       si.inc
-      kcall.add(v)
+      deviceFnCall.add(v)
       h = h !& hashNode(v)
     else:
       let v = values[vi]
       vi.inc
       let pname = ident($formalNames[i])
-      let ptype = getBridgeParamType(kernel, formalNames[i], formalTypes[i], v)
+      let ptype = getBridgeParamType(deviceFn, formalNames[i], formalTypes[i], v)
       params.add(nnkIdentDefs.newTree(pname, ptype, newEmptyNode()))
-      kcall.add(pname)
+      deviceFnCall.add(pname)
       h = h !& hashNode(ptype)
 
-  doAssert vi > 0, "launchDeviceFn " & $kernel & ": the kernel needs a runtime parameter as output"
+  doAssert vi > 0, "launchDeviceFn " & $deviceFn & ": the device function needs a runtime parameter as output"
 
   let procdef = nnkProcDef.newTree(
-    ident($kernel & "_" & base58(int(h))),
+    ident($deviceFn & "_" & base58(int(h))),
     newEmptyNode(), newEmptyNode(),
     params,
     nnkPragma.newTree(ident"global"),
     newEmptyNode(),
-    nnkStmtList.newTree(kcall))
+    nnkStmtList.newTree(deviceFnCall))
   return procdef
 
 func getWorkgroupPragma(blkN: NimNode): NimNode =
@@ -264,9 +264,9 @@ func getWorkgroupPragma(blkN: NimNode): NimNode =
     size.add newLit(d)
   nnkExprColonExpr.newTree(ident"workgroup", size)
 
-macro launchGlobalFn(engine: HwEngine, kernel: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, lang: static string, values: varargs[typed]): untyped =
-  ## Builds and launches the `{.global.}` kernel: the first value is the output.
-  let procdef = buildGlobalFn(kernel, statics, values)
+macro launchGlobalFn(engine: HwEngine, deviceFn: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, lang: static string, values: varargs[typed]): untyped =
+  ## Builds and launches the `{.global.}` wrapper: the first value is the output.
+  let procdef = buildGlobalFn(deviceFn, statics, values)
   let wg = getWorkgroupPragma(blkN)
   if not wg.isNil:
     procdef[4].add(wg)
@@ -304,12 +304,14 @@ func countFormals(candFormals: NimNode): tuple[total, required: int] =
     if f[^1].kind == nnkEmpty:
       result.required += f.len - 2
 
-proc resolveKernelOverload(kernel: NimNode, argCount: int): NimNode =
-  if kernel.kind notin {nnkOpenSymChoice, nnkClosedSymChoice}:
-    return kernel
+proc resolveDeviceFnOverload*(callNode: NimNode): NimNode =
+  let deviceFn = callNode[0]
+  let argCount = callNode.len - 1
+  if deviceFn.kind notin {nnkOpenSymChoice, nnkClosedSymChoice}:
+    return deviceFn
   var match: NimNode = nil
   var count = 0
-  for cand in kernel:
+  for cand in deviceFn:
     let candImpl = cand.getImpl()
     if candImpl.kind != nnkProcDef:
       continue
@@ -318,17 +320,19 @@ proc resolveKernelOverload(kernel: NimNode, argCount: int): NimNode =
       match = cand
       count.inc
   doAssert count == 1,
-    "launchDeviceFn " & $kernel & ": " & $count & " overloads take " &
+    "launchDeviceFn " & $deviceFn & ": " & $count & " overloads take " &
     $argCount & " arguments"
   match
 
-macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN: untyped, lang: static string, args: varargs[untyped]): untyped =
-  ## Call an autogenerated {.global.} kernel
+macro resolveDeviceCall(engine: HwEngine, deviceFn: typed, gridN, blkN, sharedMemN: untyped, lang: static string, args: varargs[untyped]): untyped =
   ## This defers arguments so they are inlined in the global function and ccGetBackend resolves properly
   for a in args:
     doAssert a.kind notin {nnkExprEqExpr, nnkExprColonExpr},
-      "launchDeviceFn " & $kernel & ": named arguments are not supported, pass arguments positionally"
-  let k = kernel.resolveKernelOverload(args.len)
+      "launchDeviceFn " & $deviceFn & ": named arguments are not supported, pass arguments positionally"
+  var callN = nnkCall.newTree(deviceFn)
+  for a in args:
+    callN.add(a)
+  let k = callN.resolveDeviceFnOverload()
   let impl = k.getImpl()
   impl.expectKind(nnkProcDef)
   let formals = impl[3]
@@ -338,7 +342,7 @@ macro resolveDeviceCall(engine: HwEngine, kernel: typed, gridN, blkN, sharedMemN
     for j in 0 ..< f.len - 2:
       formalTypes.add(f[^2])
   doAssert args.len <= formalTypes.len,
-    "launchDeviceFn " & $kernel & ": " & $args.len & " args for " &
+    "launchDeviceFn " & $deviceFn & ": " & $args.len & " args for " &
     $formalTypes.len & " parameters"
   var statics = nnkBracket.newTree()
   let langLit = newLit(lang)

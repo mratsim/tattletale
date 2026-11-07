@@ -76,7 +76,7 @@ proc firstContextDevice(context: Pcontext): Pdevice_id =
   check getContextInfo(context, ContextDevices, cl_size_t(sizeof(Pdevice_id)), device.addr, nil)
   result = device
 
-proc compileEntryKernel(batch: OpenCLBatch, source, kernel: string): Pkernel =
+proc compileEntrypoint(batch: OpenCLBatch, source, entrypoint: string): Pkernel =
   if source notin batch.programs:
     let strings = allocCStringArray([source])
     defer: deallocCStringArray(strings)
@@ -98,14 +98,14 @@ proc compileEntryKernel(batch: OpenCLBatch, source, kernel: string): Pkernel =
         check getProgramBuildInfo(program, device, PROGRAM_BUILD_LOG, logLength, log[0].addr, nil)
         if log[^1] == '\0':   # clGetProgramBuildInfo strings are NUL-terminated
           log.setLen(log.len - 1)
-      raiseAssert("OpenCL batch failed to build program for '" & kernel & "': " & log)
+      raiseAssert("OpenCL batch failed to build program for '" & entrypoint & "': " & log)
     else:
       check status
 
     batch.programs[source] = program
 
   var status: TClResult
-  result = createKernel(batch.programs[source], kernel.cstring, status.addr)
+  result = createKernel(batch.programs[source], entrypoint.cstring, status.addr)
   check status
 
 proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
@@ -124,11 +124,9 @@ proc newOpenCLBatch*(context: Pcontext, queue: Pcommand_queue): OpenCLBatch =
   ## Borrows context, queue and buffers
   OpenCLBatch(context: context, queue: queue)
 
-proc enqueueKernel*(batch: OpenCLBatch, source: string, kernel: string, cfg: LaunchConfig, output: auto, args: tuple) =
-  ## Usage:
-  ##   batch.enqueueKernel(source, "saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
+proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
   if batch.finalized:
-    raiseAssert("enqueueKernel: the batch is finalized, entries are frozen")
+    raiseAssert("recordGlobalFn: the batch is finalized, entries are frozen")
   if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
     raiseAssert("OpenCL batch: cfg.grid must be >= 1 per axis, got " &
                 $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
@@ -137,9 +135,9 @@ proc enqueueKernel*(batch: OpenCLBatch, source: string, kernel: string, cfg: Lau
                 $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
   if cfg.sharedMem != 0 or cfg.stream != 0:
     raiseAssert("OpenCL batch: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
-  if kernel notin batch.pipelines:
-    batch.pipelines[kernel] = compileEntryKernel(batch, source, kernel)
-  var entry = BatchEntry(kernel: batch.pipelines[kernel], fleet: cfg.grid, squadron: cfg.blk)
+  if entrypoint notin batch.pipelines:
+    batch.pipelines[entrypoint] = compileEntrypoint(batch, source, entrypoint)
+  var entry = BatchEntry(kernel: batch.pipelines[entrypoint], fleet: cfg.grid, squadron: cfg.blk)
   bindArgs(entry, output, args, storeEntryArg, Pmem, cgOpenCL)
   batch.entries.add entry
 

@@ -61,9 +61,12 @@ export vulkan_api.newVulkanEngine,   vulkan_api.ingest,     vulkan_api.getArtifa
        vulkan_api.allocDevice, vulkan_api.copyToDeviceFromHost, vulkan_api.copyToHostFromDevice
 export webgpu_api.newWebgpuEngine,   webgpu_api.ingest,   webgpu_api.getArtifact,  webgpu_api.deviceName,
        webgpu_api.allocDevice, webgpu_api.copyToDeviceFromHost, webgpu_api.copyToHostFromDevice
+export cuda_api.launchKernelImpl, opencl_api.launchKernelImpl, vulkan_api.launchKernelImpl,
+       webgpu_api.launchKernelImpl
 when defined(macosx):
   export metal_api.newMetalEngine, metal_api.ingest,  metal_api.getArtifact, metal_api.deviceName,
-         metal_api.allocDevice, metal_api.copyToDeviceFromHost, metal_api.copyToHostFromDevice
+         metal_api.allocDevice, metal_api.copyToDeviceFromHost, metal_api.copyToHostFromDevice,
+         metal_api.launchKernelImpl
 
 # CPU engine exemption from the HwEngine concept, contract in cpu_api.nim
 export cpu_api.CpuEngine, cpu_api.newCpuEngine, cpu_api.destroyCpuEngine

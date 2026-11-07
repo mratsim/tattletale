@@ -71,11 +71,11 @@ when defined(macosx):
 
   proc msgSendUseResource(self: objc.ID, op: objc.SEL, resource: objc.ID, usage: objc.NSUInteger): objc.ID {.importc: "objc_msgSend", dynlib: "libobjc.A.dylib".}
 
-  proc compileIndirectPipelineState(device, library: objc.ID, kernel: string): objc.ID =
+  proc compileIndirectPipelineState(device, library: objc.ID, entrypoint: string): objc.ID =
     let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"),
-                          objc.nsStringFromNimString(kernel))
+                          objc.nsStringFromNimString(entrypoint))
     if objc.isNil(fn):
-      raiseAssert("newFunctionWithName(" & kernel & ") returned nil")
+      raiseAssert("newFunctionWithName(" & entrypoint & ") returned nil")
     defer: objc.release(fn)
     let desc = objc.msgSend(objc.msgSend(objc.ID(objc.getClass("MTLComputePipelineDescriptor")), objc.`$$`("alloc")), objc.`$$`("init"))
     defer: objc.release(desc)
@@ -88,7 +88,7 @@ when defined(macosx):
       var detail = "no NSError object provided"
       if not objc.isNil(psoError):
         detail = objc.nsStringToNimString(objc.msgSend(psoError, objc.`$$`("localizedDescription")))
-      raiseAssert("indirect compute pipeline state creation failed for " & kernel & ": " & detail)
+      raiseAssert("indirect compute pipeline state creation failed for " & entrypoint & ": " & detail)
 
   proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
     when typeof(v) is objc.ID:
@@ -96,7 +96,7 @@ when defined(macosx):
       entry.slots.add Slot(kind: skBuffer, buffer: entry.borrowedBuffers.high)
     else:
       when typeof(v) is ptr|pointer:
-        {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $typeof(v).}
+        {.error: "Pointer device function args are not supported, pass the DeviceMem handle from allocDevice, got " & $typeof(v).}
       const layout = computeDeviceLayout(typeof(v), cgMetal)
       let off = round_multiple_up(entry.scalars.len, 16)
       entry.scalars.setLen(off + layout.size)
@@ -120,11 +120,11 @@ when defined(macosx):
     ## Every bound buffer outlives the batch.
     MetalBatch(device: device, queue: queue)
 
-  proc enqueueKernel*(batch: MetalBatch, library: objc.ID, kernel: string, cfg: LaunchConfig, output: auto, args: tuple) =
+  proc recordGlobalFn*(batch: MetalBatch, library: objc.ID, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
     ## Usage:
-    ##   batch.enqueueKernel(library, "saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
+    ##   batch.recordGlobalFn(library, "saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
     if not objc.isNil(batch.recording):
-      raiseAssert("enqueueKernel: the batch is finalized, entries are frozen")
+      raiseAssert("recordGlobalFn: the batch is finalized, entries are frozen")
     if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
       raiseAssert("Metal batch: cfg.grid must be >= 1 per axis, got " &
                   $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
@@ -136,9 +136,9 @@ when defined(macosx):
                   " exceeds the " & $MaxThreadsPerThreadgroup & " threads-per-threadgroup max")
     if cfg.sharedMem > 0:
       raiseAssert("Metal batch: the recording does not set threadgroup memory, sharedMem must be 0, got " & $cfg.sharedMem)
-    if kernel notin batch.pipelines:
-      batch.pipelines[kernel] = compileIndirectPipelineState(batch.device, library, kernel)
-    var entry = BatchEntry(pipelineState: batch.pipelines[kernel], fleet: cfg.grid, squadron: cfg.blk)
+    if entrypoint notin batch.pipelines:
+      batch.pipelines[entrypoint] = compileIndirectPipelineState(batch.device, library, entrypoint)
+    var entry = BatchEntry(pipelineState: batch.pipelines[entrypoint], fleet: cfg.grid, squadron: cfg.blk)
     bindArgs(entry, output, args, storeEntryArg, objc.ID, cgMetal)
     batch.entries.add entry
 

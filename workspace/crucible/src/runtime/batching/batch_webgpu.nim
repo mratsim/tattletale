@@ -103,7 +103,7 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
   else:
     when typeof(v) is ptr|pointer:
       static:
-        error "Pointer kernel args are not supported, pass the caller's WGPUBuffer handle, got " & $typeof(v)
+        error "Pointer device function args are not supported, pass the caller's WGPUBuffer handle, got " & $typeof(v)
     const layout = computeDeviceLayout(typeof(v), cgWebGPU)
     let off = round_multiple_up(entry.scalars.len, MinStorageBufferOffsetAlignment)
     entry.scalars.setLen(off + layout.size)
@@ -166,11 +166,9 @@ proc newWebgpuBatch*(device: WGPUDevice, queue: WGPUQueue): WebgpuBatch =
   ## Borrowsdevice, queue and every bound buffer.
   WebgpuBatch(device: device, queue: queue)
 
-proc enqueueKernel*(batch: WebgpuBatch, wgsl: string, entryPoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
-  ## Usage:
-  ##   batch.enqueueKernel(wgsl, "saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outBuf, (xBuf, yBuf, 3.0'f32))
+proc recordGlobalFn*(batch: WebgpuBatch, wgsl: string, entryPoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
   if batch.entries.len > 0 and batch.entries[0].bindGroup != nil:
-    raiseAssert("enqueueKernel: the batch is finalized, entries are frozen")
+    raiseAssert("recordGlobalFn: the batch is finalized, entries are frozen")
   if cfg.sharedMem != 0 or cfg.stream != 0:
     raiseAssert("WebGPU batch: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
   if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
