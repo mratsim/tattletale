@@ -266,7 +266,7 @@ macro cpuExecLower(engine: CpuEngine, wrapper: typed, gridN, blkN, coarsenN: unt
               " + crucibleBz_" & counterTag & " * " & blkReads[0] & " * " & blkReads[1] & ")"
   let coordsC = cpuCoordTableC(vecC, flatC)
 
-  let runtimeParams = kernelRuntimeParams(m)
+  let runtimeParams = globalFnRuntimeParams(m)
   let (typesAndData, funcsC, coordUseC) = emitCpuWorkgroupLaunchC(
       m, siteSuffix, counterTag, coordsC, runtimeParams, serial)
   if gridN.kind == nnkNilLit and blkN.kind == nnkNilLit and coordUseC:

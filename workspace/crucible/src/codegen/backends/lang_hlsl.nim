@@ -44,8 +44,8 @@ type
     ## Emission state of the HLSL walk: the inherited walk bookkeeping
     ## (proc name, indent, policy, literal and scalar token tables)
     ## plus the per-proc parameter classification below.
-    isKernel: bool
-    ## True while printing the entry kernel, coordinate builtins and push-constant reads bind the entry only.
+    isGlobalFn: bool
+    ## True while printing the entry global function, coordinate builtins and push-constant reads bind the entry only.
     pushParams: HashSet[string]
     ## Push-constant parameters of the proc in flight, reads print through
     ## `push.<name>`, the printer refuses an assignment.
@@ -61,17 +61,17 @@ type
     ## Buffer parameters of the proc in flight by name to their `aptr` type:
     ## the fvVulkan access emitter reads the element type per access.
     coordReads: HashSet[CirCoordBuiltinKind]
-    ## Canonical coordinate builtin names that the kernel body reads.
+    ## Canonical identifiers of the coordinate builtins the entrypoint body reads.
     ## The entry head declares their inputs in `CirCoordBuiltinKind` declaration order.
     procs: Table[string, CirProc]
     ## Module procs by name, by-reference call arguments read callee
     ## parameter types here.
     graph: CallGraph
     ## Stored call-graph record (`CirModule.callGraph`): the read-write classification of every buffer parameter.
-    kernelPush: HashSet[string]
-    ## Push-constant parameter names of the module's kernel, from `classifyParams`.
-    kernelBuffers: seq[CirParam]
-    ## Buffer parameters of the module's kernel, from the same classification.
+    globalFnPush: HashSet[string]
+    ## Push-constant parameter names of the module's entrypoint, from `classifyParams`.
+    globalFnBuffers: seq[CirParam]
+    ## Buffer parameters of the module's entrypoint, from the same classification.
 
 const printerTarget = "hlsl"
 
@@ -111,7 +111,7 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string
 proc prepProc(ctx: var PrintCtx, fn: CirProc)
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string
-proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
+proc printParamBindings(ctx: var PrintCtx, globalFns: seq[CirProc]): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 
 proc refuseHlslScalarName(ctx: var PrintCtx, t: CirType): void =
@@ -274,7 +274,7 @@ proc getSymbolText(ctx: var PrintCtx, e: CirExpr): string =
     return "push." & e.name
   if ctx.bufferParams.contains(e.name):
     if ctx.flavor == fvVulkan:
-            return (if ctx.isKernel: "push." & e.name else: e.name)
+            return (if ctx.isGlobalFn: "push." & e.name else: e.name)
     raiseAssert("bare pointer value use of buffer parameter " & e.name)
   e.name
 
@@ -320,8 +320,8 @@ proc printAconstr(ctx: var PrintCtx, e: CirExpr): string =
   "{ " & parts.join(", ") & " }"
 
 proc getCoordReadRejection(ctx: PrintCtx, k: CirCoordBuiltinKind): string =
-  if not ctx.isKernel:
-    return "coordinate semantics bind the kernel entry point only"
+  if not ctx.isGlobalFn:
+    return "coordinate semantics bind the entrypoint only"
   if k == cbkThreadgroupsPerGrid:
     return "threadgroups_per_grid has no HLSL semantic"
   return ""
@@ -425,9 +425,9 @@ proc printBraceList(ctx: var PrintCtx, t: CirType, v: CirExpr): string =
 #  Statements
 # ═══════════════════════════════════════════════════════════════════════
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
-  ## Local-space policy: buffers are kernel parameters, shared and device spaces never reach the printer.
+  ## Local-space policy: buffers are entrypoint parameters, shared and device spaces never reach the printer.
   if s.declType.kind == ctAptr:
-    raiseAssert("buffer local " & s.name & " has no HLSL binding, buffers are kernel parameters")
+    raiseAssert("buffer local " & s.name & " has no HLSL binding, buffers are entrypoint parameters")
   if s.addressSpace == caThreadgroup:
     raiseAssert("local " & s.name & " in threadgroup addressSpace, HLSL has no program-scope shared emission")
   if s.addressSpace == caConstant:
@@ -482,13 +482,13 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ## - a device function: the direct `RetType name(params)` signature, buffers as resources, `var T` device parameters as `inout`
   ##   an `{.inline.}` proc's signature opens with the `inline ` qualifier
   ## - the classification pass refuses illegal parameters, and the printer reads the stored records
-  ## - the entry kernel: the `[numthreads(...)]` attribute line, then `void <entry>(<entry inputs>)` over the body-walk semantics
+  ## - the entry global function: the `[numthreads(...)]` attribute line, then `void <entry>(<entry inputs>)` over the body-walk semantics
   ##   exportc renames the entry for the host runtime lookup, Vulkan ingest reads the entry name back from the `[numthreads]` line
-  ## - the kernel's open brace prints on its own line (HLSL's brace style) and the body and the closing brace are the caller's
-  if fn.isKernel:
+  ## - the entrypoint's open brace prints on its own line (HLSL's brace style) and the body and the closing brace are the caller's
+  if fn.isGlobalFn:
     let wg = getWorkgroup(fn)
     result = "[numthreads(" & $wg[0] & ", " & $wg[1] & ", " & $wg[2] & ")]\n"
-    # a kernel with no explicit name prints as `main`, device functions print under the identifier that their call sites reference
+    # an entrypoint with no explicit name prints as `main`, device functions print under the identifier that their call sites reference
     let entryName = if fn.exportName.len > 0: fn.exportName else: "main"
     result &= "void " & entryName & "(" &
       emitEntryInputs(orderedCoordReads(ctx.coordReads), hlslEntryInputs) & ")\n{\n"
@@ -515,7 +515,7 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
 proc classifyParams(ctx: var PrintCtx, pushParams: var HashSet[string], buffers: var seq[CirParam], fn: CirProc) =
   ## Splits one proc's parameters into buffer resources and values:
   ##
-  ## - kernels: values pack into the Push block, buffer parameters map to register ordinals
+  ## - entrypoints: values pack into the Push block, buffer parameters map to register ordinals
   ## - device functions: values pass by value with a `var T` parameter as `inout`, buffers are unbound resource params
   ##
   ## Classification runs at the signature-emission sites, so a module printed
@@ -536,7 +536,7 @@ proc classifyParams(ctx: var PrintCtx, pushParams: var HashSet[string], buffers:
       discard
     of ctPtr:
       if p.typ.addressSpace == caThread:
-        if fn.isKernel:
+        if fn.isGlobalFn:
           raiseAssert("by-reference parameter " & p.name & " in kernel `" & fn.name & "` has no binding")
         # device function: the `inout` binding, reads and writes are direct
         discard
@@ -546,7 +546,7 @@ proc classifyParams(ctx: var PrintCtx, pushParams: var HashSet[string], buffers:
       raiseAssert("array parameter " & p.name & " in `" & fn.name & "` has no binding, buffers pass as `ptr UncheckedArray[T]`")
     of ctInt, ctUint, ctFloat, ctBool, ctVoid, ctVector, ctStruct, ctSpan, ctBf16:
       # spans split to pointer + length in the shared lowering, none reaches the printer
-      if fn.isKernel:
+      if fn.isGlobalFn:
         pushParams.incl(p.name)
     of ctProc:
       raiseAssert("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
@@ -557,16 +557,16 @@ proc prepProc(ctx: var PrintCtx, fn: CirProc) =
   ## - the entry kernel: push-constant parameters from the stored classification record, buffer parameters to their resource or address route
   ## - a device function: its own buffer parameters, read-write classification from the stored call-graph record
   ## - the kernel's workgroup sizes, the source of the `threads_per_threadgroup` component tokens
-  ctx.isKernel = fn.isKernel
+  ctx.isGlobalFn = fn.isGlobalFn
   ctx.pushParams = initHashSet[string]()
   ctx.bufferParams = initHashSet[string]()
   ctx.rwBuffers = initHashSet[string]()
   ctx.addressParams = initTable[string, CirType]()
   var buffers: seq[CirParam]
-  if fn.isKernel:
-    ctx.pushParams = ctx.kernelPush
+  if fn.isGlobalFn:
+    ctx.pushParams = ctx.globalFnPush
     ctx.workgroup = getWorkgroup(fn)
-    buffers = ctx.kernelBuffers
+    buffers = ctx.globalFnBuffers
   else:
     # a device function's values pass by value, the push half records nothing
     var devicePush: HashSet[string]
@@ -592,7 +592,7 @@ const hlslModuleShape = ModuleShape(
   structClose: "};",
   fwdDecls: true,
   moduleOrderProcs: false,
-  kernelSep: "\n",
+  globalFnSep: "\n",
   customProcHead: true,
   printsRefBlocks: false,
   printsParamBindings: true,
@@ -603,14 +603,14 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
     raiseAssert("struct " & t.name & " holds a pointer, HLSL structs cannot hold resources")
   ctx.emitHlslDecl(f.typ, f.name)
 
-proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
+proc printParamBindings(ctx: var PrintCtx, globalFns: seq[CirProc]): string =
   ## Resource-binding section of the module's one kernel, per flavor:
   ##
   ## - fvD3D12: register resources on one global ordinal, read-only `t`, read-write `u`, then the Push block on `b`
   ## - fvVulkan: buffer-pointer aliases, then the `[[vk::push_constant]]` struct with every member offset locked to the launch-side packing
   if ctx.flavor == fvVulkan:
     var bpEmitted: HashSet[string]
-    for p in ctx.kernelBuffers:
+    for p in ctx.globalFnBuffers:
       let nm = emitBpName(p.typ.pElem)
       if nm notin bpEmitted:
         bpEmitted.incl nm
@@ -618,10 +618,10 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
           ctx.emitHlslScalar(p.typ.pElem) & "> " & nm & ";\n"
     if bpEmitted.len > 0:
       result &= "\n"
-    if kernels[0].params.len > 0:
+    if globalFns[0].params.len > 0:
       result &= "struct Push {\n"
       var off = 0
-      for p in kernels[0].params:
+      for p in globalFns[0].params:
         if p.typ.kind == ctAptr:
           off = roundUpMultiple(off, 8)
           result &= "  [[vk::offset(" & $off & ")]] uint64_t " & p.name & ";\n"
@@ -643,19 +643,19 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
       result &= "\n"
   else:
     var ordinal = 0
-    for p in ctx.kernelBuffers:
-      let rw = ctx.graph.reached.contains(kernels[0].name & "/" & p.name)
+    for p in ctx.globalFnBuffers:
+      let rw = ctx.graph.reached.contains(globalFns[0].name & "/" & p.name)
       let reg = if rw: 'u' else: 't'
       result &= ctx.emitResourceParam(p, rw) & " : register(" & reg &
         $ordinal & ", space0);\n"
       ordinal.inc
-    if ctx.kernelPush.len > 0:
+    if ctx.globalFnPush.len > 0:
       result &= "struct Push {\n"
-      for p in kernels[0].params:
+      for p in globalFns[0].params:
         if p.name == "crucible_numworkgroups":
           # materialized dispatch grid size, an int3 the engine stages
           result &= "  int3 " & p.name & ";\n"
-        elif p.name in ctx.kernelPush:
+        elif p.name in ctx.globalFnPush:
           result &= "  " & ctx.emitHlslDecl(p.typ, p.name) & ";\n"
       result &= "};\n"
       result &= "ConstantBuffer<Push> push : register(b" & $ordinal &
@@ -672,12 +672,12 @@ proc printHlslModule*(m: CirModule, flavor: HlslFlavor = fvD3D12): string =
   ctx.procs = initTable[string, CirProc]()
   for fn in m.procs:
     ctx.procs[fn.name] = fn
-  let kernel = getEntryKernel(ctx, m)
-  if kernel.ret.kind != ctVoid:
-    raiseAssert("kernel `" & kernel.name & "` must return void, got " & $kernel.ret.kind)
+  let globalFn = getEntryGlobalFn(ctx, m)
+  if globalFn.ret.kind != ctVoid:
+    raiseAssert("global function `" & globalFn.name & "` must return void, got " & $globalFn.ret.kind)
   ctx.graph = m.callGraph
-  ctx.classifyParams(ctx.kernelPush, ctx.kernelBuffers, kernel)
-  printModule(ctx, m, @[kernel], hlslModuleShape)
+  ctx.classifyParams(ctx.globalFnPush, ctx.globalFnBuffers, globalFn)
+  printModule(ctx, m, @[globalFn], hlslModuleShape)
 
 proc codegen*(m: CirModule, flavor: HlslFlavor = fvD3D12): string =
   codegenModule(printHlslModule(m, flavor))

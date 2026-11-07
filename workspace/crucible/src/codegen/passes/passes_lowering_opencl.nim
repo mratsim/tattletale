@@ -119,7 +119,7 @@ proc openclLowerByrefParams(m: CirModule) =
   ## - kernels keep by-value struct parameters, only device functions rewrite
   var byref = initTable[string, seq[int]]()
   for fn in m.procs:
-    if fn.isKernel:
+    if fn.isGlobalFn:
       continue
     for i, p in fn.params.mpairs:
       if not p.passByRef:

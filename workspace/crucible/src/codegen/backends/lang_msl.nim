@@ -51,7 +51,7 @@ const mslEmit = TargetEmit(
   vectorDots: false,
   noPointerValues: (spaces: {}, text: ""),
   noPointerRebind: "",
-  prefixKernel: "kernel ",
+  prefixGlobalFn: "kernel ",
   prefixInline: "inline ",
   prefixDevice: "")
 
@@ -63,7 +63,7 @@ const mslModuleShape = ModuleShape(
   structClose: "};",
   fwdDecls: false,
   moduleOrderProcs: true,
-  kernelSep: "\n\n",
+  globalFnSep: "\n\n",
   customProcHead: false,
   printsRefBlocks: false,
   printsParamBindings: false,
@@ -210,7 +210,7 @@ proc emitBuiltinParam(k: CirCoordBuiltinKind): string =
   return "uint3 " & name & " [[" & name & "]]"
 
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
-  ## MSL parameter texts of one proc or kernel, in declaration order.
+  ## MSL parameter texts of one proc or entrypoint, in declaration order.
   ##
   ## Kernel parameters:
   ## - a relocated smem local binds as threadgroup storage, no buffer slot
@@ -223,7 +223,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ## - a threadgroup `ptr` parameter is a relocated smem arena, caller-owned
   ##   storage (Metal rejects threadgroup allocation inside device functions)
   var slot = 0
-  if fn.isKernel:
+  if fn.isGlobalFn:
     for p in fn.params:
       if p.typ.kind == ctPtr and p.typ.addressSpace == caThreadgroup:
         result.add emitMslSmemParam(p)
@@ -234,8 +234,8 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
           printCDecl(TargetVocabs[cgMetal].scalarNames, mslVectorRule, printerTarget, p.typ, p.name, true) &
           " [[buffer(" & $slot & ")]]"
       of ctArray:
-        # an array kernel argument binds in constant storage like a scalar one.
-        # xcrun metal rejects an unqualified `const T name[N]` kernel argument
+        # an array entrypoint argument binds in constant storage like a scalar one.
+        # xcrun metal rejects an unqualified `const T name[N]` entrypoint argument
         result.add "constant " & emitMslType(p.typ, p.name, false)
       else:
         var elem = emitMslScalar(p.typ)
@@ -273,7 +273,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
 
 proc printMslModule*(m: CirModule): string =
   var ctx = initPrintCtx(mslWalkPolicy, mslVectorRule, mslEmit, cgMetal)
-  printModule(ctx, m, getModuleKernels(m), mslModuleShape)
+  printModule(ctx, m, getModuleGlobalFns(m), mslModuleShape)
 
 proc codegen*(m: CirModule): string =
   codegenModule(printMslModule(m))

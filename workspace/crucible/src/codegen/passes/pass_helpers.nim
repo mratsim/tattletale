@@ -124,11 +124,11 @@ proc walkTypeTree*(t: CirType, visit: proc(t: CirType), descendPtrs: bool = true
   else:
     discard
 
-proc getSingleKernel*(m: CirModule): CirProc =
+proc getSingleGlobalFn*(m: CirModule): CirProc =
   ## A module without exactly one kernel contributes no kernel-side registrations,
   ## the printer refuses such a module.
   for fn in m.procs:
-    if fn.isKernel:
+    if fn.isGlobalFn:
       if result != nil:
         return nil
       result = fn
@@ -337,12 +337,12 @@ proc collectLeaves(leaves: var seq[CirParamLeaf], t: CirType, name: string) =
       leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
   of ctArray:
     doAssert not t.containsPtrDeep,
-      "kernelParamLeaves: array leaf '" & name & "' holds pointers, not supported as a kernel parameter"
+      "globalFnParamLeaves: array leaf '" & name & "' holds pointers, not supported as a kernel parameter"
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
   else:
     leaves.add CirParamLeaf(name: name, typ: t, isBuffer: false)
 
-proc kernelParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
+proc globalFnParamLeaves*(t: CirType, name: string): seq[CirParamLeaf] =
   collectLeaves(result, t, name)
 
 # ═══════════════════════════════════════════════════════════════════════

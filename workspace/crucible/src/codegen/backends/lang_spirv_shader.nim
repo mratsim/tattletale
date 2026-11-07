@@ -181,7 +181,7 @@ type
     fnTypes*: Table[string, CirType]
       ## proc name -> value type of its CirProc, the fn-value-type lookup
     pushBoolFields*: HashSet[string]
-      ## Kernel struct parameters whose direct bool fields map to u32 words
+      ## GlobalFn struct parameters whose direct bool fields map to u32 words
       ## in the push block, field reads coerce back to bool
     dryRun*: bool
       ## Planning-pass flag: one emission into a throwaway builder that walks
@@ -345,11 +345,11 @@ proc buildPushBlock(ctx: var SpvLangCtx, params: seq[CirParam]): SpvPushBlock =
   for p in params:
     if p.typ.kind == ctAptr:
       if p.typ.addressSpace != caDevice:
-        raiseAssert("kernel parameter " & p.name & " in " & $p.typ.addressSpace &
+        raiseAssert("entrypoint parameter " & p.name & " in " & $p.typ.addressSpace &
           " addressSpace, only device buffers carry a push address")
       members.add spvScalar(cirUint64())
     elif p.typ.kind in {ctPtr, ctAptr}:
-      raiseAssert("kernel parameter " & p.name & " of pointer type")
+      raiseAssert("entrypoint parameter " & p.name & " of pointer type")
     else:
       var m = ctx.pushMemberTy(p)
       if p.typ.kind == ctStruct:
@@ -663,7 +663,7 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
     elif e.callee.kind == eSym and e.callee.atomicsBuiltin == cbkAtomicFetchAdd and
         e.args.len == 2 and e.args[0].kind == eAddr:
       # an atomic add yields the addressed element, its first argument
-      # names the address
+      # declares the address
       let pat = e.args[0].addrOperand
       if pat.kind == ePat:
         let t = ctx.resolveExprType(fn, pat.patBase)
@@ -1250,7 +1250,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
       ctx.emitStmts(fn, s.elseBody)
       if not fn.terminated:
         ctx.builder.opBranch(mergeLbl)
-      # a name that either branch stored has no known value at the merge.
+      # a value either branch stored has no known definition at the merge.
       # Only entries unchanged by both branches survive here
       let elseFwd = fn.fwd
       fn.fwd = savedFwd
@@ -1312,7 +1312,7 @@ proc emitStmts(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
         " outside the SPIR-V subset, it must lower earlier")
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Function and kernel emission
+#  Function and entrypoint emission
 # ═══════════════════════════════════════════════════════════════════════
 
 proc recordDeadLocals(ctx: var SpvLangCtx, fn: SpvFnCtx, name: string) =
@@ -1377,16 +1377,17 @@ proc emitDeviceFnRec(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
   ctx.emittedFns[procNode.name] = result
   ctx.emitting.excl procNode.name
 
-proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
-  ## Compute entry point.
+proc emitGlobalFn(ctx: var SpvLangCtx, globalFn: CirProc): uint32 =
+  ## Compute entrypoint.
   ##
   ## One push block in parameter order, the builtin inputs on the interface
   ## and structured control flow from the CIRv2 body.
-  doAssert kernel.ret.kind == ctVoid, "kernels are void"
-  let push = ctx.buildPushBlock(kernel.params)
+  doAssert globalFn.ret.kind == ctVoid, "global functions are void"
+  ctx.pushBoolFields.clear()
+  let push = ctx.buildPushBlock(globalFn.params)
   # device fns emit first, an OpFunctionCall result id must exist at the call site
   var calls: HashSet[string]
-  collectCallTargets(calls, kernel.body)
+  collectCallTargets(calls, globalFn.body)
   var seen: HashSet[string]
   for c in calls:
     if ctx.fnProcs.hasKey(c) and c notin seen:
@@ -1395,11 +1396,11 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
   let voidTy = ctx.builder.tyVoid()
   let fnTy = ctx.builder.tyFunction(voidTy, @[])
   result = ctx.builder.opFunction(voidTy, fnTy)
-  var fn: SpvFnCtx = SpvFnCtx(name: "kernel " & kernel.name)
-  fn.elided = ctx.fnDeadLocals.getOrDefault(kernel.name)
+  var fn: SpvFnCtx = SpvFnCtx(name: "entrypoint " & globalFn.name)
+  fn.elided = ctx.fnDeadLocals.getOrDefault(globalFn.name)
   discard ctx.builder.opLabel()
-  ctx.hoistLocals(fn, kernel.body)
-  for i, p in kernel.params:
+  ctx.hoistLocals(fn, globalFn.body)
+  for i, p in globalFn.params:
     if p.typ.kind == ctAptr:
       # u64 device address in the push block, converted to a buffer pointer
       let u64Ty = ctx.resolveTyId(spvScalar(cirUint64()))
@@ -1425,59 +1426,62 @@ proc emitKernel(ctx: var SpvLangCtx, kernel: CirProc): uint32 =
         ctx.convertValue(loaded, cirUint32(), CirType(kind: ctBool))
       else:
         loaded
-  ctx.emitStmts(fn, kernel.body)
+  ctx.emitStmts(fn, globalFn.body)
   if not fn.terminated:
     ctx.builder.opReturn()
   ctx.builder.opFunctionEnd()
-  ctx.recordDeadLocals(fn, kernel.name)
+  ctx.recordDeadLocals(fn, globalFn.name)
   let usePhys = capPhysicalStorageBufferAddresses in ctx.caps
   if usePhys:
     # PhysicalStorageBufferAddresses is extension-gated on SPIR-V 1.3
     ctx.builder.emitExtension("SPV_KHR_physical_storage_buffer")
   ctx.flushExtensions()
-  let lws = getWorkgroup(kernel)
+  let lws = getWorkgroup(globalFn)
   # exportc renames a kernel entry for the host runtime lookup. Host launchers look up
   # an OpEntryPoint Name operand, so the rename patches that operand. No OpName debug
   # instruction is emitted for the entry, that operand is the whole rename.
-  let entryName = if kernel.isKernel and kernel.exportName.len > 0: kernel.exportName else: kernel.name
+  let entryName = if globalFn.isGlobalFn and globalFn.exportName.len > 0: globalFn.exportName else: globalFn.name
   ctx.builder.emitEntryPoint(emGLCompute, result, entryName, ctx.interfaceVars)
   ctx.builder.emitExecutionMode(result, modeLocalSize,
     @[uint32(lws[0]), uint32(lws[1]), uint32(lws[2])])
-  ctx.builder.emitMemoryModel(
-    (if usePhys: amPhysicalStorageBuffer64 else: amLogical), mmGLSL450)
   ctx.flushCapabilities()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Driver
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printSpirvModule*(m: CirModule): seq[uint32] =
+proc printSpirvModule*(m: CirModule): SpirvWords =
   ## Returns the SPIR-V words of one CIRv2 module for the Vulkan environment.
-  ##
-  ## Exactly one `{.global.}` kernel per module, the device functions it
-  ## calls emitted alongside.
   var lang = initSpvLangCtx()
-  var kernels: seq[CirProc]
+  var globalFns: seq[CirProc]
   for fn in m.procs:
-    if fn.isKernel:
-      kernels.add fn
-  if kernels.len != 1:
-    raiseAssert("exactly one kernel per module, found " & $kernels.len)
+    if fn.isGlobalFn:
+      globalFns.add fn
+  if globalFns.len == 0:
+    raiseAssert("no global function in module")
   lang.fnProcs = initTable[string, CirProc]()
   for fn in m.procs:
-    if not fn.isKernel:
+    if not fn.isGlobalFn:
       lang.fnProcs[fn.name] = fn
   # forwarding plan: one dry emission into a throwaway builder walks the body
   # and records which locals no load reaches.
   # Real emission then elides their storage, binding every read to the stored value
-  var dry = lang
-  dry.dryRun = true
-  dry.builder = initSpvBuilder()
-  discard dry.emitKernel(kernels[0])
-  lang.fnDeadLocals = dry.fnDeadLocals
-  discard lang.emitKernel(kernels[0])
+  for k in globalFns:
+    # a fresh context: type ids cached on the real builder have no width on the dry builder
+    var dry = initSpvLangCtx()
+    dry.dryRun = true
+    dry.caps = lang.caps
+    dry.fnProcs = lang.fnProcs
+    discard dry.emitGlobalFn(k)
+    for name, dead in dry.fnDeadLocals:
+      lang.fnDeadLocals[name] = dead
+    discard lang.emitGlobalFn(k)
+  # one memory model for the module, N entrypoints select their global function
+  let usePhys = capPhysicalStorageBufferAddresses in lang.caps
+  lang.builder.emitMemoryModel(
+    (if usePhys: amPhysicalStorageBuffer64 else: amLogical), mmGLSL450)
   lang.builder.module.finalize()
 
 
-proc codegen*(m: CirModule): seq[uint32] =
+proc codegen*(m: CirModule): SpirvWords =
   codegenModule(printSpirvModule(m))

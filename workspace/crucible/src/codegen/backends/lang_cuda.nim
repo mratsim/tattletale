@@ -63,7 +63,7 @@ const cudaEmit = TargetEmit(
   vectorDots: false,
   noPointerValues: (spaces: {}, text: ""),
   noPointerRebind: "",
-  prefixKernel: "extern \"C\" __global__ ",
+  prefixGlobalFn: "extern \"C\" __global__ ",
   prefixInline: "__forceinline__ __device__ ",
   prefixDevice: "__device__ ")
 
@@ -75,7 +75,7 @@ const cudaModuleShape = ModuleShape(
   structClose: "};",
   fwdDecls: false,
   moduleOrderProcs: true,
-  kernelSep: "\n\n",
+  globalFnSep: "\n\n",
   customProcHead: false,
   printsRefBlocks: false,
   printsParamBindings: false,
@@ -186,7 +186,7 @@ proc getStmtBuiltinText(ctx: var PrintCtx, s: CirStmt, pad: string, args: seq[st
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## CUDA C++ forbids initializing shared variables.
   if s.addressSpace == caThreadgroup:
-    if s.init != nil and not ctx.inKernel:
+    if s.init != nil and not ctx.inGlobalFn:
       raiseAssert("smem local " & s.name & " with an initializer, CUDA C++ forbids initializing __shared__ variables")
     return true
   if s.addressSpace == caConstant:
@@ -222,11 +222,11 @@ proc emitWarpReduceTemplate(name: string): string =
   result &= "}\n\n"
 
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
-  ## CUDA parameter texts of one proc or kernel, in declaration order.
+  ## CUDA parameter texts of one proc or entrypoint, in declaration order.
   ##
-  ## A kernel's by-value array parameter is const-qualified, the printer lowers it to a read-only pointer.
+  ## An entrypoint's by-value array parameter is const-qualified, the printer lowers it to a read-only pointer.
   for p in fn.params:
-    if p.passByRef and not fn.isKernel:
+    if p.passByRef and not fn.isGlobalFn:
       # const Type& name — C++ reference, no body changes needed
       result.add "const " & emitTypeName(ctx, p.typ) & "& " & p.name
       continue
@@ -234,7 +234,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
     of ctAptr, ctPtr:
       result.add emitCudaType(p.typ, p.name, true)
     of ctArray:
-      if fn.isKernel:
+      if fn.isGlobalFn:
         result.add "const " & emitCudaType(p.typ, p.name, false)
       else:
         result.add emitCudaType(p.typ, p.name, true)
@@ -261,7 +261,7 @@ proc printReduceTemplates(ctx: var PrintCtx, m: CirModule): string =
 proc printCudaModule*(m: CirModule): string =
   var ctx = initPrintCtx(cudaWalkPolicy, cudaVectorRule, cudaEmit, cgCuda)
   ctx.mathNames = cudaMathBuiltinNames
-  printModule(ctx, m, getModuleKernels(m), cudaModuleShape)
+  printModule(ctx, m, getModuleGlobalFns(m), cudaModuleShape)
 
 proc codegen*(m: CirModule): string =
   codegenModule(printCudaModule(m))

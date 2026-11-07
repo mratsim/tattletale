@@ -176,7 +176,7 @@ when defined(macosx):
       discard objc.msgSend(encoder, objc.`$$`("setComputePipelineState:"), pso)
       if cfg.sharedMem > 0:
         # Metal requires a 16-byte multiple of threadgroup memory
-        let tgMem = round_multiple_up(cfg.sharedMem, 16)
+        let tgMem = cfg.sharedMem.round_multiple_up(16)
         discard objc.msgSend(encoder, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
                         objc.NSUInteger(tgMem), objc.NSUInteger(0))
 
@@ -203,7 +203,7 @@ when defined(macosx):
         raiseAssert("Metal run: command buffer failed (status " & $status & " [" & $MTLCommandBufferStatusError & "=error]): " & detail)
 
 # ═══════════════════════════════════════════════════════════════════════
-# ▸ Non-macOS entry point
+# ▸ Non-macOS entrypoint
 # ═══════════════════════════════════════════════════════════════════════
 else:
   proc newMetalEngine*(): MetalEngine =

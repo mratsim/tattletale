@@ -56,7 +56,7 @@ const glslEmit = TargetEmit(
   noPointerValues: (spaces: {caThread, caThreadgroup, caConstant},
     text: "pointer local $1 used as a value, GLSL has no pointer values"),
   noPointerRebind: "pointer local $1 rebound, GLSL has no pointer values",
-  prefixKernel: "",
+  prefixGlobalFn: "",
   prefixInline: "",
   prefixDevice: "")
 
@@ -68,7 +68,7 @@ const glslModuleShape = ModuleShape(
   structClose: "};",
   fwdDecls: true,
   moduleOrderProcs: false,
-  kernelSep: "\n\n",
+  globalFnSep: "\n\n",
   customProcHead: true,
   printsRefBlocks: true,
   printsParamBindings: true,
@@ -95,7 +95,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string]
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 proc printRefBlocks(ctx: var PrintCtx, m: CirModule): string
-proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
+proc printParamBindings(ctx: var PrintCtx, globalFns: seq[CirProc]): string
 
 proc emitGlslScalar(t: CirType): string =
   getTypeName(TargetVocabs[cgGlsl].scalarNames, glslVectorRule, t)
@@ -268,10 +268,11 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
 proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ## GLSL parameter texts of one proc or kernel, in declaration order.
   ##
-  ## - a kernel takes zero parameters: every kernel parameter packs into the module's shared push-constant block, deduped across kernels
+  ## - an entrypoint takes zero parameters: every entrypoint parameter packs
+  ##   into the module's shared push-constant block, deduped across entrypoints
   ## - a device function's buffer pointer prints as the reference block
   ##   handle of either pointer kind, a `var` binding gains `inout`
-  if fn.isKernel:
+  if fn.isGlobalFn:
     return
   for p in fn.params:
     case p.typ.kind
@@ -309,8 +310,8 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   ctx.emitConstDecl(s)
 
 proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
-  ## Engines launch each entry point by name.
-  if fn.isKernel:
+  ## Engines launch each entrypoint by name.
+  if fn.isGlobalFn:
     let wg = getWorkgroup(fn)
     result = "layout(local_size_x = " & $wg[0] & ", local_size_y = " &
       $wg[1] & ", local_size_z = " & $wg[2] & ") in;\n"
@@ -348,17 +349,17 @@ proc printRefBlocks(ctx: var PrintCtx, m: CirModule): string =
   if m.refBlocks.len > 0:
     result &= "\n"
 
-proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
+proc printParamBindings(ctx: var PrintCtx, globalFns: seq[CirProc]): string =
   ## Push-constant block: one module-wide block over the union of every
   ## kernel's parameters, same-name dedup by declaration text.
   ##
   ## - a pointer of either kind packs as the buffer-reference handle
-  ## - each launch serializes its own kernel's arguments from offset 0
-  ## - a by-value scalar cannot share the block across kernels
-  ## - multi-kernel sources with scalar block members refuse at ingest
+  ## - each launch serializes its own entrypoint's arguments from offset 0
+  ## - a by-value scalar cannot share the block across entrypoints
+  ## - multi-entrypoint sources with scalar block members refuse at ingest
   var pushDecls: seq[string]
-  for kernel in kernels:
-    for p in kernel.params:
+  for globalFn in globalFns:
+    for p in globalFn.params:
       var decl: string
       case p.typ.kind
       of ctAptr, ctPtr:
@@ -377,10 +378,10 @@ proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
 
 proc printGlslModule*(m: CirModule): string =
   var ctx = initPrintCtx(glslWalkPolicy, glslVectorRule, glslEmit, cgGlsl)
-  let kernels = getModuleKernels(m)
-  if kernels.len == 0:
+  let globalFns = getModuleGlobalFns(m)
+  if globalFns.len == 0:
     raiseAssert("module declares no kernel")
-  printModule(ctx, m, kernels, glslModuleShape)
+  printModule(ctx, m, globalFns, glslModuleShape)
 
 proc codegen*(m: CirModule): string =
   codegenModule(printGlslModule(m))

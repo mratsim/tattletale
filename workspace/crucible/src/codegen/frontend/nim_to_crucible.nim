@@ -266,7 +266,7 @@ func isTriviaBody(body: NimNode): bool =
 
 func harvestedCallee(ctx: var CirFrontend, calleeSym: NimNode): CirExpr =
   ## A builtin callee is emitted under its canonical name:
-  ## a hash-suffixed instantiation name would denote a proc no backend defines.
+  ## a hash-terminated instantiation name would denote a proc no backend defines.
   ## The frontend reads the synchro, reduction, shuffle and atomics family kinds off the `{.builtin.}` payload.
   ## Every printer and pass dispatches on those kinds.
   let calleeBuiltin = getPragmaItem(calleeSym, "builtin") != nil
@@ -274,7 +274,7 @@ func harvestedCallee(ctx: var CirFrontend, calleeSym: NimNode): CirExpr =
   if not calleeBuiltin and not entry.hasBody:
     # a call lowers 1:1 into the callee's body. A callee without a lowerable
     # body has no runtime content, a bodiless magic's documentation stub
-    # renders exactly this way, so refuse and name the construct
+    # renders exactly this way, so refuse and state the construct
     let body = getProcBody(calleeSym.getImpl())
     if body.isNil or isTriviaBody(body):
       raiseAssert("call to " & calleeSym.repr & " has no body to lower")
@@ -773,7 +773,7 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
 # ═══════════════════════════════════════════════════════════════════════
 
 func lowerVoidCall(ctx: var CirFrontend, n: NimNode): seq[CirStmt] =
-  ## A call in statement position: a barrier, a kernel call, or a discardable
+  ## A call in statement position: a barrier, an entrypoint call, or a discardable
   ## non-void call whose value the statement discards.
   let callee = n[0]
   # a generic type instantiation left in statement position appears
@@ -1177,7 +1177,8 @@ func lowerProcBody(ctx: var CirFrontend, params: var seq[CirParam], formals: Nim
       ctx.declareLocal(formal[j].repr, psym)
   let ret = ctx.locals.retType
   if ret.kind != ctVoid:
-    # Nim lets a non-void proc declare its own `result`, and the uniquer suffixes that local past it
+    # Nim lets a non-void proc declare its own `result`, and the uniquer
+    # appends a distinguishing ending to that local past it
     ctx.locals.variablesInScope.incl "result"
     let rsym = sym("result", ret)
     ctx.declareLocal("result", rsym)
@@ -1194,7 +1195,7 @@ func lowerProcBody(ctx: var CirFrontend, params: var seq[CirParam], formals: Nim
 func enterProcBody(ctx: var CirFrontend, cirName: string, formals: NimNode): LocalScope =
   result = ctx.locals
   ctx.locals = LocalScope(layers: @[ctx.module.vars], fnName: cirName)
-  # a local never takes a program-scope name, a claimed proc name,
+  # a local never takes a program-scope name, a registered proc name,
   # a claim made while this body lowers, as the uniquer skips all three
   for g in ctx.module.vars.keys:
     ctx.locals.variablesInScope.incl g
@@ -1211,7 +1212,7 @@ func lowerProcDef(ctx: var CirFrontend, fn: NimNode): CirProc =
     return nil
   let formals = getFormalParams(fn)
   let id = getProcIdentity(fn[0])
-  # a kernel's own name is preserved, launchKernel is ABI on it
+  # an entrypoint's own name is preserved, launchKernel is ABI on it
   let base = if getPragmaItem(fn, "global") != nil: sanitizeIdent(fn[0].strVal)
              else: mangleOperatorName(fn[0].strVal)
   let cirName = ctx.claimProcName(id, base)
@@ -1290,8 +1291,22 @@ proc update*(frontend: var CirFrontend, item: NimNode) =
     raiseAssert("top-level construct not supported: " & $item.kind & " " & item.repr)
 
 proc finish*(frontend: var CirFrontend): CirModule =
-  result = moduleD("kernel", frontend.resolver.resolvedStructs, frontend.module.procs)
+  result = moduleD("globalfn", frontend.resolver.resolvedStructs, frontend.module.procs)
   result.globals = frontend.module.decls
+
+func isEmpty*(ctx: CirFrontend): bool =
+  ctx.module.procs.len == 0
+
+func getProcCount*(ctx: CirFrontend): int =
+  ctx.module.procs.len
+
+proc lowerNimAst*(ctx: var CirFrontend, procdef: NimNode): string =
+  let id = getProcIdentity(procdef[0])
+  if id in ctx.module.procRegistry and ctx.module.procRegistry[id].hasBody:
+    return ctx.module.procRegistry[id].name
+  discard ctx.claimProcName(id, sanitizeIdent(procdef[0].strVal))
+  ctx.update(procdef)
+  return ctx.module.procRegistry[id].name
 
 proc lowerCirv2*(bodyIn: NimNode): CirModule =
   var ctx = CirFrontend.init()
@@ -1308,7 +1323,7 @@ proc lowerCirv2*(bodyIn: NimNode): CirModule =
     ctx.update(body)
   else:
     if body.kind != nnkStmtList:
-      raiseAssert("expected kernel proc definitions, got " & $body.kind)
+      raiseAssert("expected global function proc definitions, got " & $body.kind)
     for c in body:
       if c.kind in {nnkProcDef, nnkFuncDef} and not isGenericDef(c) and
           getPragmaItem(c, "global") != nil:

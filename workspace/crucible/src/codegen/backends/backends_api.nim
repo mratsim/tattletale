@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ./lang_cuda, ./lang_wgsl, ./lang_opencl, ./lang_glsl, ./lang_msl, ./lang_hlsl,
-       ./lang_spirv_shader
+       ./lang_spirv_shader, ./spirv_encoder
 import ../ir/cirv2_lang
 import ../../crucible_codegen
 
@@ -36,7 +36,7 @@ proc codegenSource*(m: CirModule, B: static CodegenKind, flavor: static HlslFlav
     raiseAssert("codegenSource: the flavor overload prints cgHlsl only, got " & $B)
   lang_hlsl.codegen(m, flavor)
 
-proc codegenIR*(m: CirModule, B: static CodegenKind): seq[uint32] =
+proc codegenIR*(m: CirModule, B: static CodegenKind): SpirvWords =
   case B
   of cgSpirv: lang_spirv_shader.codegen(m)
   else:

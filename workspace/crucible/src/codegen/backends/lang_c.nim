@@ -31,7 +31,7 @@ type
     ## Kernel-body reads go through them for every builtin access.
     ##
     ## - vec[k][c]: the expression for builtin k and component c, present
-    ##   only for the builtins the kernel reads
+    ##   only for the builtins the entrypoint reads
     ## - flat: the expression for thread_index_in_threadgroup
     vec*: array[CirCoordBuiltinKind, array[3, string]]
     flat*: string
@@ -66,7 +66,7 @@ const cpuEmit = TargetEmit(
   vectorDots: false,
   noPointerValues: (spaces: {}, text: ""),
   noPointerRebind: "",
-  prefixKernel: "",
+  prefixGlobalFn: "",
   prefixInline: "",
   prefixDevice: "")
 
@@ -78,7 +78,7 @@ const cpuModuleShape = ModuleShape(
   structClose: "};",
   fwdDecls: false,
   moduleOrderProcs: false,
-  kernelSep: "",
+  globalFnSep: "",
   customProcHead: false,
   printsRefBlocks: false,
   printsParamBindings: false,
@@ -91,13 +91,13 @@ type
     ##
     ## - suffix: uniquifies callee references per launch site
     ## - coords: the coordinate-builtin rewrite table, coordinate reads
-    ##   refuse outside the kernel body
-    ## - inlineKernel: marks the kernel body walk, returns become gotos
+    ##   refuse outside the entrypoint body
+    ## - inlineGlobalFn: marks the entrypoint body walk, returns become gotos
     ##   to the per-thread exit label, subst maps identifiers to C text
     ##   for baked static parameters
     suffix: string
     coords: CpuCoordTableC
-    inlineKernel: bool
+    inlineGlobalFn: bool
     subst: seq[(string, string)]
 
 var cpuCoordUseC {.global, compileTime.}: bool
@@ -147,7 +147,7 @@ proc getCtorValue(ctx: var PrintCtx, t: CirType, kvv: CirKv): string
 proc printConv(ctx: var PrintCtx, e: CirExpr): string
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
-  if not ctx.inlineKernel:
+  if not ctx.inlineGlobalFn:
     raiseAssert("coordinate builtins in device callees are not supported in v0, pass them as parameters")
   cpuCoordUseC = true
   result = coordExprC(ctx.coords, e.coordBuiltin, -1)
@@ -155,7 +155,7 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
     raiseAssert("no launch expression for coordinate builtin " & $e.coordBuiltin)
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
   ## C text of one coordinate-builtin component read through the launch table.
-  if not ctx.inlineKernel:
+  if not ctx.inlineGlobalFn:
     raiseAssert("coordinate builtin components in device callees are not supported in v0, pass them as parameters")
   cpuCoordUseC = true
   let comp = case e.fieldName
@@ -225,7 +225,7 @@ proc printConv(ctx: var PrintCtx, e: CirExpr): string =
 
 proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
   ## Local declaration policy of the cpu launch: refused address spaces
-  ## and the inline kernel's shadow refusals.
+  ## and the inline global function's shadow refusals.
   case s.addressSpace
   of caThreadgroup:
     raiseAssert("threadgroup (shared) memory is not supported in v0")
@@ -233,12 +233,12 @@ proc checkLocalVar(ctx: var PrintCtx, s: CirStmt): bool =
     raiseAssert("constant/device memory-class locals are not supported in v0")
   of caThread:
     discard
-  if ctx.inlineKernel:
+  if ctx.inlineGlobalFn:
     # substitution works by name, a local shadowing a substituted
     # parameter would misbind
     for (name, _) in ctx.subst:
       if name == s.name:
-        raiseAssert("kernel local '" & s.name & "' shadows a kernel parameter, rename one")
+        raiseAssert("entrypoint local '" & s.name & "' shadows an entrypoint parameter, rename one")
   true
 
 proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
@@ -246,10 +246,10 @@ proc emitLocalDecl(ctx: var PrintCtx, s: CirStmt): string =
     s.declType, s.name, false, "struct ", ctx.suffix)
 
 proc printRet(ctx: var PrintCtx, s: CirStmt, pad: string): string =
-  if ctx.inlineKernel:
+  if ctx.inlineGlobalFn:
     # a return inside the inlined body exits at the launch's done label
     if s.retVal != nil:
-      raiseAssert("kernels are void, a return value has no meaning")
+      raiseAssert("global functions are void, a return value has no meaning")
     return pad & "goto crucibleThreadDone;"
   if s.retVal != nil:
     return pad & "return " & ctx.printExpr(s.retVal) & ";"
@@ -268,16 +268,16 @@ proc printDiscard(ctx: var PrintCtx, s: CirStmt, pad: string): string =
 proc inlineSourceC(ctx: var PrintCtx, k: CirProc, m: CirModule): tuple[bodyProc: CirProc, call: CirStmt] =
   ## Inlined-body lookup: the proc whose body inlines into the launch
   ## thread loop nest, plus the wrapper call when the pipeline kept them separate.
-  ## - the wrapper body is one call to the user kernel proc, that body
+  ## - the wrapper body is one call to the user device function, that body
   ##   inlines with the call arguments substituting the parameters
-  ## - a pipeline transform already folded the user kernel into the wrapper,
-  ##   the wrapper body is the kernel body itself, no call
+  ## - a pipeline transform already folded the user device function into the wrapper,
+  ##   the wrapper body is the entrypoint body itself, no call
   var call: CirStmt = nil
   for st in k.body:
     case st.kind
     of sCall:
       if call != nil:
-        raiseAssert("the kernel wrapper body makes multiple calls")
+        raiseAssert("the entrypoint wrapper body makes multiple calls")
       call = st
     else:
       discard
@@ -290,10 +290,10 @@ proc inlineSourceC(ctx: var PrintCtx, k: CirProc, m: CirModule): tuple[bodyProc:
     if p.name == callee.name:
       return (p, call)
   raiseAssert("the kernel wrapper calls an unknown proc '" & callee.name & "'")
-proc kernelRuntimeParams*(m: CirModule): seq[tuple[name: string, typ: CirType]] =
+proc globalFnRuntimeParams*(m: CirModule): seq[tuple[name: string, typ: CirType]] =
   ## Kernel parameters only: the launch macro bakes static parameters into the call before CIRv2 exists.
   for p in m.procs:
-    if p.isKernel:
+    if p.isGlobalFn:
       for param in p.params:
         result.add((param.name, param.typ))
       return
@@ -311,14 +311,14 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   var kctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
   var inlinedName = ""
   for p in m.procs:
-    if p.isKernel:
-      let k = kctx.getEntryKernel(m)
+    if p.isGlobalFn:
+      let k = kctx.getEntryGlobalFn(m)
       inlinedName = kctx.inlineSourceC(k, m).bodyProc.name
       break
   var protos: seq[string]
   var blocks: seq[string]
   for p in m.procs:
-    if p.isKernel or p.name == inlinedName:
+    if p.isGlobalFn or p.name == inlinedName:
       continue
     var ctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
     ctx.suffix = suffix
@@ -341,7 +341,7 @@ proc emitCpuCalleesC*(m: CirModule, suffix: string): string =
   else:
     result = blocks.join("\n\n")
 
-proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
+proc globalFnBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
                       dataPrefix: string,
                       memberNames: seq[string]): tuple[body: string, coordUse: bool] =
   ## Kernel body emission with the runtime parameters bound to the data
@@ -350,13 +350,13 @@ proc kernelBodyBoundC(m: CirModule, suffix: string, coords: CpuCoordTableC,
   cpuCoordUseC = false
   var kctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
   kctx.suffix = suffix
-  let k = kctx.getEntryKernel(m)
+  let k = kctx.getEntryGlobalFn(m)
   let (bodyProc, call) = kctx.inlineSourceC(k, m)
   var subst: seq[(string, string)] = @[]
   var bctx = initPrintCtx(cpuWalkPolicy, cpuVectorRule, cpuEmit, cgCpu)
   bctx.suffix = suffix
   bctx.coords = coords
-  bctx.inlineKernel = true
+  bctx.inlineGlobalFn = true
   if call.isNil:
     # folded shape: the wrapper body is the kernel body, every parameter reads its data struct member
     for i, param in bodyProc.params:
@@ -422,7 +422,7 @@ proc emitCpuWorkgroupLaunchC*(m: CirModule, suffix: string, counterTag: string, 
     defs.add("    " & mem & "\n")
   defs.add("};\n")
 
-  let (bodyC, coordUse) = kernelBodyBoundC(m, suffix, coords, "tpc_d_->", memberNames)
+  let (bodyC, coordUse) = globalFnBodyBoundC(m, suffix, coords, "tpc_d_->", memberNames)
 
   # iteration function: one call per pool task, tpc_i is the task index.
   # Each task covers crucibleWgsPerTask adjacent workgroups in x-fastest flat order.

@@ -11,6 +11,7 @@ import std/[strutils, tables]
 import workspace/crucible/src/abis/vulkan_abi as vk
 
 import workspace/crucible/src/crucible_codegen
+import workspace/crucible/src/codegen/backends/spirv_encoder
 import workspace/crucible/src/runtime/backends/vulkan_common
 import workspace/crucible/src/runtime/backends/vulkan_compile {.all.}
 import workspace/crucible/src/runtime/backends/vulkan_address_runtime {.all.}
@@ -25,15 +26,16 @@ import workspace/crucible/src/runtime/engines/engines_common
 
 type
   VulkanCaches = object
-    spirvCache: Table[string, seq[uint32]]
+    spirvCache: Table[string, SpirvWords]
     pipelineCache: Table[(string, int), VulkanPipeline]
 
   VulkanEngine* = ref object
     source: string
-    spirv: seq[uint32]
+    spirv: SpirvWords
     entryPoint: string
     ctx: VulkanContext
     shaderSquadron: Dim3   # squadron baked into the shader at ingest
+    entrySquadrons: Table[string, Dim3]  # LocalSize per entrypoint of a direct SPIR-V module, empty for source ingests
     isHlsl: bool
     caches: VulkanCaches
 
@@ -53,6 +55,7 @@ proc resetCaches(engine: VulkanEngine) =
       echo "[INFO]: vulkan ingest: invalidating previous artifact"
   engine.caches.pipelineCache = initTable[(string, int), VulkanPipeline]()
   engine.caches.spirvCache.clear()
+  engine.entrySquadrons.clear()
 
 proc ingest*(engine: VulkanEngine, source: string) =
   resetCaches(engine)
@@ -99,7 +102,7 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
   engine.shaderSquadron = parseHlslSquadron(hlsl)
   engine.isHlsl = true
 
-proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
+proc ingest*(engine: VulkanEngine, spirv: SpirvWords) =
   ## Ingests a ready-made SPIR-V module produced by a `spirv:` block.
   const spvMagic = 0x07230203'u32
   resetCaches(engine)
@@ -108,10 +111,11 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
              "magic as word 0 and the 5-word header, got " &
              (if spirv.len == 0: "an empty module"
               else: $spirv.len & " words, word 0 = " & spirv[0].toHex()))
-  let sq = parseSpirvEntryInfo(spirv)
-  if sq.entryPoints != 1:
-    raiseAssert("Vulkan ingest: a direct SPIR-V module must declare exactly one " &
-             "OpEntryPoint, got " & $sq.entryPoints)
+  let sq = parseSpirvEntryDescriptor(spirv)
+  if sq.entryPoints == 0:
+    raiseAssert("Vulkan ingest: the module declares no OpEntryPoint")
+  if sq.entryPoints > 1:
+    engine.entrySquadrons = parseSpirvEntrySizes(spirv)
   engine.source = ""
   engine.spirv = spirv
   engine.entryPoint = sq.name
@@ -121,7 +125,7 @@ proc ingest*(engine: VulkanEngine, spirv: seq[uint32]) =
 proc getArtifact*(engine: VulkanEngine): string {.inline.} =
   engine.source
 
-func getSpirV*(engine: VulkanEngine): seq[uint32] {.inline.} =
+func getSpirV*(engine: VulkanEngine): SpirvWords {.inline.} =
   engine.spirv
 
 proc deviceName*(engine: VulkanEngine): string {.inline.} =
@@ -146,7 +150,7 @@ type SerializationCtx = object
   pn: int
 
 proc write8(ctx: var SerializationCtx, x: uint64) =
-  ctx.pn = round_multiple_up(ctx.pn, 8)
+  ctx.pn = ctx.pn.round_multiple_up(8)
   if ctx.pn + 8 > 128:
     raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
@@ -160,7 +164,7 @@ proc store[T](ctx: var SerializationCtx, v: T, _: int) =
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   const lay = computeDeviceLayout(T, cgGlsl)
   if lay.align > 1:
-    ctx.pn = round_multiple_up(ctx.pn, lay.align)
+    ctx.pn = ctx.pn.round_multiple_up(lay.align)
   if ctx.pn + lay.size > 128:
     raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   var blob: array[lay.size, byte]
@@ -168,13 +172,13 @@ proc store[T](ctx: var SerializationCtx, v: T, _: int) =
   when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
     for f in fields(v):
       when typeof(f) is DeviceMem:
-        off = round_multiple_up(off, 8)
+        off = off.round_multiple_up(8)
         let a = deviceAddress(f.mem, ctx.vctx)
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
       else:
         blob.packFrom(off, f, cgGlsl)
-    off = round_multiple_up(off, lay.align)
+    off = off.round_multiple_up(lay.align)
     doAssert off == lay.size,
       "host packing of " & $T & " does not match the device layout"
   else:
@@ -257,40 +261,47 @@ proc findFirstFunctionName(src: string, preamble, marker: string): string =
 proc launchKernelImpl*(engine: VulkanEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
   if cfg.sharedMem != 0 or cfg.stream != 0:
     raiseAssert("Vulkan run: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
-  let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
-              engine.shaderSquadron
-            else:
-              cfg.blk
-
-  if engine.shaderSquadron.x == 0 or
-     squadron.x != engine.shaderSquadron.x or squadron.y != engine.shaderSquadron.y or
-     squadron.z != engine.shaderSquadron.z:
-    raiseAssert("Vulkan run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
-         " != baked squadron " & $engine.shaderSquadron.x & "x" & $engine.shaderSquadron.y &
-         "x" & $engine.shaderSquadron.z &
-         ": launch config mismatch, squadron is shader-baked on Vulkan)")
-
   var entry = engine.entryPoint
-  var spirv: seq[uint32]
-  if engine.isHlsl:
+  var spirv: SpirvWords
+  var baked = engine.shaderSquadron
+  if engine.entrySquadrons.len > 0:
+    if not engine.entrySquadrons.hasKey(kernel):
+      raiseAssert("Vulkan: \"" & kernel & "\" is not an entrypoint of the ingested module")
+    spirv = engine.spirv
+    entry = kernel
+    baked = engine.entrySquadrons[kernel]
+  elif engine.isHlsl:
     spirv = engine.spirv
   elif kernel == engine.entryPoint:
     spirv = engine.spirv
   else:
     if engine.source.len == 0:
-      raiseAssert("Vulkan: a direct SPIR-V module must declare exactly one entry point, " &
+      raiseAssert("Vulkan: a direct SPIR-V module must declare exactly one entrypoint, " &
                "launch it as \"" & engine.entryPoint & "\", got \"" & kernel & "\"")
     if not engine.caches.spirvCache.hasKey(kernel):
       engine.caches.spirvCache[kernel] = compileGlslToSpirvViaGlslang(engine.source, kernel)
     spirv = engine.caches.spirvCache[kernel]
     entry = kernel
 
+  let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
+              baked
+            else:
+              cfg.blk
+
+  if baked.x == 0 or
+     squadron.x != baked.x or squadron.y != baked.y or
+     squadron.z != baked.z:
+    raiseAssert("Vulkan run squadron=" & $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
+         " != baked squadron " & $baked.x & "x" & $baked.y &
+         "x" & $baked.z &
+         ": launch config mismatch, squadron is shader-baked on Vulkan)")
+
   if usesPhysicalStorageBuffer(spirv):
     launchAddressRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)
   else:
     launchDescriptorRoute(engine, kernel, entry, spirv, output, args, cfg, squadron)
 
-proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
+proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: SpirvWords,
                         output: auto, args: tuple, cfg: LaunchConfig, squadron: Dim3) =
   var dctx = SerializationCtx(vctx: engine.ctx)
   bindArgs(dctx, output, args, store, VulkanBuffer, cgGlsl)
@@ -328,7 +339,7 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[
                  if pushConstLen > 0: dctx.pushBuf[0].addr else: nil,
                  pushConstLen)
 
-proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: seq[uint32],
+proc launchDescriptorRoute(engine: VulkanEngine, kernel, entry: string, spirv: SpirvWords,
                            output: auto, args: tuple, cfg: LaunchConfig, squadron: Dim3) =
   var bufs: seq[VulkanBuffer]
   template collectBuffer(ctx: var auto, v: VulkanBuffer, _: int) =

@@ -72,8 +72,8 @@ type TargetEmit* = object
   ## space is in `spaces`. An empty set means pointers are values.
   noPointerRebind*: string
   ## Refusal fingerprint for a pointer rebind, `$1` for the symbol name, "" when pointers rebind.
-  prefixKernel*, prefixInline*, prefixDevice*: string
-  ## Linkage prefixes: kernel, inline device function, device function.
+  prefixGlobalFn*, prefixInline*, prefixDevice*: string
+  ## Linkage prefixes: global function, inline device function, device function.
 
 type WalkCtx* {.inheritable.} = object
   ## Shared walk state of one print run over one module and the base type
@@ -92,7 +92,7 @@ type WalkCtx* {.inheritable.} = object
   ## Static emission knobs of the target.
   mathNames*: Table[(string, int), string]
   ## Registry math table of the target, read by the shared math dispatch.
-  inKernel*: bool
+  inGlobalFn*: bool
   ## False inside a device function.
   builtins*: OrderedSet[CirCoordBuiltinKind]
   ## Coordinate builtin kinds that the body references, first-use order.
@@ -734,20 +734,20 @@ proc printStmtList(ctx: var auto, stmts: seq[CirStmt], style: LoopStyle): string
 proc printStmts*(ctx: var auto, stmts: seq[CirStmt]): string =
   printStmtList(ctx, stmts, ctx.policy.loop)
 
-proc getModuleKernels*(m: CirModule): seq[CirProc] =
+proc getModuleGlobalFns*(m: CirModule): seq[CirProc] =
   for fn in m.procs:
-    if fn.isKernel:
+    if fn.isGlobalFn:
       result.add fn
 
-proc getEntryKernel*(ctx: var auto, m: CirModule): CirProc =
-  let kernels = getModuleKernels(m)
-  if kernels.len != 1:
-    raiseAssert("exactly one kernel per module, found " & $kernels.len)
-  result = kernels[0]
+proc getEntryGlobalFn*(ctx: var auto, m: CirModule): CirProc =
+  let globalFns = getModuleGlobalFns(m)
+  if globalFns.len != 1:
+    raiseAssert("exactly one global function per module, found " & $globalFns.len)
+  result = globalFns[0]
 
 proc getModuleDeviceFns*(m: CirModule): seq[CirProc] =
   for fn in m.procs:
-    if not fn.isKernel:
+    if not fn.isGlobalFn:
       result.add fn
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -806,32 +806,32 @@ type ModuleShape* = object
   ##
   ## - CUDA C++ and MSL resolve calls at their declaration site, a callee
   ##   prints before its caller
-  ## - the device-functions-then-kernels split is off
-  kernelSep*: string
-  ## Text after each kernel body in the fns-then-kernels assembly.
+  ## - the device-functions-then-entrypoints split is off
+  globalFnSep*: string
+  ## Text after each global function body in the fns-then-entrypoints assembly.
   customProcHead*: bool
   ## Targets with their own head grammar assemble the proc head: shader entry heads and the GLSL `local_size` qualifier.
   printsRefBlocks*: bool
   ## Declares the module's buffer-reference blocks when set.
   printsParamBindings*: bool
-  ## Declares the kernel parameter bindings: resource slots, push-constant members.
+  ## Declares the entrypoint parameter bindings: resource slots, push-constant members.
   printsReduceTemplates*: bool
   ## Emits the warp-reduction templates that the module's feature scan lists.
 
 proc prepProc*(ctx: var auto, fn: CirProc) =
   ctx.builtins.clear()
-  ctx.inKernel = fn.isKernel
+  ctx.inGlobalFn = fn.isGlobalFn
 
 proc emitComputePrefix*(ctx: var auto, fn: CirProc): string =
-  if fn.isKernel:
-    return ctx.emit.prefixKernel
+  if fn.isGlobalFn:
+    return ctx.emit.prefixGlobalFn
   if fn.inline:
     return ctx.emit.prefixInline
   return ctx.emit.prefixDevice
 
 proc printSig*(ctx: var auto, fn: CirProc): string =
   mixin emitComputeParams, emitComputePrefix, emitTypeName
-  let name = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
+  let name = if fn.isGlobalFn and fn.exportName.len > 0: fn.exportName else: fn.name
   let params = ctx.emitComputeParams(fn)
   result = ctx.emitComputePrefix(fn) & ctx.emitTypeName(fn.ret) & ' ' & name &
     '(' & params.join(", ") & ")"
@@ -903,7 +903,7 @@ proc printStructs*(ctx: var auto, m: CirModule, shape: static ModuleShape): stri
     ctx.printStructDecl(result, emitted, byName, name, shape)
 
 proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
-  ## One device function or kernel as target text.
+  ## One device function or global function as target text.
   ## - the body prints before the head assembles
   ## - a shader entry head lists the coordinate-builtin inputs
   ##   that the body walk collected
@@ -912,8 +912,8 @@ proc printProc*(ctx: var auto, fn: CirProc, shape: static ModuleShape): string =
   ctx.prepProc(fn)
   let bodyTxt = ctx.printStmts(fn.body)
   let head = when shape.customProcHead: ctx.printProcHead(fn)
-             else: printSig(ctx, fn) & (if fn.isKernel: " {\n" else: "")
-  if fn.isKernel:
+             else: printSig(ctx, fn) & (if fn.isGlobalFn: " {\n" else: "")
+  if fn.isGlobalFn:
     return head & bodyTxt & '\n' & '}'
   return head & " {\n" & bodyTxt & '\n' & '}'
 
@@ -935,7 +935,7 @@ proc printProgramScopeDecls*(ctx: var auto, m: CirModule, spaces: set[AddressSpa
   if result.len > 0:
     result &= '\n'
 
-proc printModule*(ctx: var auto, m: CirModule, kernels: seq[CirProc], shape: static ModuleShape): string =
+proc printModule*(ctx: var auto, m: CirModule, globalFns: seq[CirProc], shape: static ModuleShape): string =
   ## Full module assembly over the shared section skeleton:
   ## - prelude, ref blocks, structs, parameter bindings
   ## - program-scope declarations, reduction templates, the proc set
@@ -945,7 +945,7 @@ proc printModule*(ctx: var auto, m: CirModule, kernels: seq[CirProc], shape: sta
     result &= ctx.printRefBlocks(m)
   result &= printStructs(ctx, m, shape)
   when shape.printsParamBindings:
-    result &= ctx.printParamBindings(kernels)
+    result &= ctx.printParamBindings(globalFns)
   result &= printProgramScopeDecls(ctx, m, shape.spaces)
   when shape.printsReduceTemplates:
     result &= ctx.printReduceTemplates(m)
@@ -964,7 +964,7 @@ proc printModule*(ctx: var auto, m: CirModule, kernels: seq[CirProc], shape: sta
         result &= "\n"
     for fn in fns:
       result &= ctx.printProc(fn, shape) & "\n\n"
-    for kernel in kernels:
-      result &= ctx.printProc(kernel, shape) & shape.kernelSep
+    for globalFn in globalFns:
+      result &= ctx.printProc(globalFn, shape) & shape.globalFnSep
 proc codegenModule*[R](printed: R): R =
   printed

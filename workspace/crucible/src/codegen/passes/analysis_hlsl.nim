@@ -35,7 +35,7 @@ proc scanStoredStmts(stored: var HashSet[string], fn: CirProc, ss: seq[CirStmt])
   ## - an assignment whose target roots at a parameter symbol
   ## - a statement call whose callee or argument roots at one
   ##   (a var parameter that the callee stores through, or a buffer passed deeper)
-  ## - the verbatim text of an emit, which can name a buffer
+  ## - the verbatim text of an emit, which can reference a buffer
   var g = stored
   proc markStored(root: CirExpr) =
     if root != nil:
@@ -51,7 +51,7 @@ proc scanStoredStmts(stored: var HashSet[string], fn: CirProc, ss: seq[CirStmt])
       for a in s.callArgs:
         markStored(exprRootSym(a))
     of sEmit:
-      # a store can hide in an emit: the verbatim text names the buffer,
+      # a store can hide in an emit: the verbatim text references the buffer,
       # every parameter the text mentions counts as stored
       var emitText = ""
       for part in s.emitParts:
@@ -138,14 +138,14 @@ proc checkDeviceFnRecursion(procs: Table[string, CirProc]) =
 
   var calleesOf: Table[string, seq[string]]
   for fn in procs.values:
-    if fn.isKernel:
+    if fn.isGlobalFn:
       continue
     for c in fn.body.collectDirectCalls:
       if c.callee.kind == eSym and procs.hasKey(c.callee.name) and
-          not procs[c.callee.name].isKernel:
+          not procs[c.callee.name].isGlobalFn:
         calleesOf.mgetOrPut(fn.name, @[]).add(c.callee.name)
   for fn in procs.values:
-    if not fn.isKernel and state.getOrDefault(fn.name, 0) == 0:
+    if not fn.isGlobalFn and state.getOrDefault(fn.name, 0) == 0:
       visit(state, calleesOf, fn.name)
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -150,7 +150,7 @@ proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirP
     return
   if e.kind == eCall and e.callee.kind == eSym:
     let callee = procs.getOrDefault(e.callee.name)
-    if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
+    if callee != nil and not callee.isGlobalFn and callee.hasCrossingPointerParam:
       raiseAssert("value-position call of " & callee.name & ", its pointer parameter cannot cross a WGSL signature")
   for ch in getExprChildren(e):
     refuseValuePositionCalls(fn, ch, procs)
@@ -159,7 +159,7 @@ proc inlineCallSite(ss: var seq[CirStmt], used: var HashSet[string], fresh: var 
   ## Returns whether the statement spliced, refusing calls the splice cannot host.
   let s = ss[i]
   let callee = procs.getOrDefault(s.callCallee.name)
-  if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
+  if callee != nil and not callee.isGlobalFn and callee.hasCrossingPointerParam:
     if callee.ret.kind != ctVoid:
       raiseAssert("inlining " & callee.name & " needs a void return, its pointer parameter cannot cross a WGSL signature")
     var body = cloneStmts(callee.body)
@@ -254,13 +254,13 @@ proc inlinePointerParamCalls(m: CirModule) =
       collectCallTargets(targets, fn.body)
       for t in targets:
         let callee = procs.getOrDefault(t)
-        if callee != nil and not callee.isKernel and callee.hasCrossingPointerParam:
+        if callee != nil and not callee.isGlobalFn and callee.hasCrossingPointerParam:
           changed = true
       if not changed:
         break
   var kept: seq[CirProc]
   for fn in m.procs:
-    if not fn.isKernel and fn.hasCrossingPointerParam:
+    if not fn.isGlobalFn and fn.hasCrossingPointerParam:
       # every call site inlined, the signature has no WGSL form
       continue
     kept.add fn

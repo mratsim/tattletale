@@ -55,7 +55,7 @@ const wgslEmit = TargetEmit(
   vectorDots: true,
   noPointerValues: (spaces: {}, text: ""),
   noPointerRebind: "",
-  prefixKernel: "",
+  prefixGlobalFn: "",
   prefixInline: "",
   prefixDevice: "")
 
@@ -67,7 +67,7 @@ const wgslModuleShape = ModuleShape(
   structClose: "}",
   fwdDecls: false,
   moduleOrderProcs: false,
-  kernelSep: "\n",
+  globalFnSep: "\n",
   customProcHead: true,
   printsRefBlocks: false,
   printsParamBindings: true,
@@ -99,7 +99,7 @@ proc printAsgn(ctx: var PrintCtx, s: CirStmt): string
 proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string
 proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string
-proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string
+proc printParamBindings(ctx: var PrintCtx, globalFns: seq[CirProc]): string
 proc printPrelude(ctx: var PrintCtx, m: CirModule): string
 
 proc emitWgslScalar(ctx: var PrintCtx, t: CirType): string =
@@ -163,15 +163,15 @@ proc structFieldIsBool(t: CirType, field: string): bool =
 # ═══════════════════════════════════════════════════════════════════════
 
 type WgslBuiltinParam = tuple[attribute, param, wgslType: string]
-  ## Canonical coordinate builtin name -> WGSL `@builtin(...)` kernel parameter.
+  ## Canonical coordinate builtin name -> WGSL `@builtin(...)` globalFn parameter.
   ## - `attribute`: the WGSL builtin attribute.
-  ## - `param`: the identifier the kernel body reads.
+  ## - `param`: the identifier the globalFn body reads.
   ## - `wgslType`: the WGSL type (scalar for the flat thread index).
 
 proc getWgslBuiltinParam(k: CirCoordBuiltinKind): WgslBuiltinParam =
   ## Returns the WGSL parameter of a coordinate builtin kind, an empty tuple when none exists.
   ## `threads_per_threadgroup` is absent, WGSL exposes the threadgroup size
-  ## only as the `@workgroup_size` entry-point attribute, the printer refuses a read.
+  ## only as the `@workgroup_size` entrypoint attribute, the printer refuses a read.
   case k
   of cbkThreadPositionInGrid:
     ("global_invocation_id", "global_id", "vec3<u32>")
@@ -214,10 +214,10 @@ const wgslEntryInputs*: EntryInputs = block:
   inputs
 
 proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
-  ## One coordinate builtin read in the kernel body. WGSL builtins are
-  ## entry-point parameters, a device function read refuses.
-  if not ctx.inKernel:
-    raiseAssert("coordinate builtin " & $e.coordBuiltin & " in a device function, WGSL builtins are entry-point parameters")
+  ## One coordinate builtin read in the globalFn body. WGSL builtins are
+  ## entrypoint parameters. A device function read refuses.
+  if not ctx.inGlobalFn:
+    raiseAssert("coordinate builtin " & $e.coordBuiltin & " in a device function, WGSL builtins are entrypoint parameters")
   if e.coordBuiltin == cbkThreadsPerThreadgroup:
     raiseAssert("threads_per_threadgroup has no WGSL builtin, WGSL has only the @workgroup_size attribute")
   ctx.builtins.incl(e.coordBuiltin)
@@ -226,9 +226,9 @@ proc coordRef(ctx: var PrintCtx, e: CirExpr): string =
   getWgslWholeVector(e.coordBuiltin)
 
 proc coordDot(ctx: var PrintCtx, e: CirExpr): string =
-  ## One coordinate builtin component read in the kernel body.
-  if not ctx.inKernel:
-    raiseAssert("a device function reads " & $e.dotBase.coordBuiltin & ", WGSL coordinate builtins are entry-point parameters")
+  ## One coordinate builtin component read in the globalFn body.
+  if not ctx.inGlobalFn:
+    raiseAssert("a device function reads " & $e.dotBase.coordBuiltin & ", WGSL coordinate builtins are entrypoint parameters")
   let mapped = getWgslCoordComponent(e.dotBase.coordBuiltin, e.fieldName)
   if mapped.len == 0:
     if e.dotBase.coordBuiltin == cbkThreadsPerThreadgroup:
@@ -256,9 +256,9 @@ proc printSizeof(ctx: var PrintCtx, e: CirExpr): string =
   raiseAssert(getUnhandledExprRejection(e.kind))
 
 proc bindsNimBool(ctx: var PrintCtx, name: string): bool =
-  ## A kernel bool parameter or a bool workgroup variable stores as the vocab's `storageBool` word,
+  ## A globalFn bool parameter or a bool workgroup variable stores as the vocab's `storageBool` word,
   ## reads coerce to `bool`, writes wrap in `NIM_BOOL()`.
-  for p in getEntryKernel(ctx, ctx.m).params:
+  for p in getEntryGlobalFn(ctx, ctx.m).params:
     if p.name == name and p.typ.kind == ctBool:
       return true
   for g in ctx.m.globals:
@@ -286,7 +286,7 @@ proc printExtraExpr(ctx: var PrintCtx, e: CirExpr): string =
   ## WGSL routes the literal, ternary and addressing kinds itself.
   case e.kind
   of eFloatLit:
-    # every bitcast<f64> operand form fails, a u32-suffixed 64-bit literal is a parse error
+    # every bitcast<f64> operand form fails, a u32-terminated 64-bit literal is a parse error
     if e.fValue.classify in {fcInf, fcNegInf, fcNan} and e.fLitType.bits == 64:
       raiseAssert("a 64-bit non-finite float has no WGSL token, bitcast<f64> needs the unrequestable shader-f64 feature")
     emitLiteral(e, TargetVocabs[ctx.backend].lit, TargetVocabs[ctx.backend].scalarNames)
@@ -360,9 +360,9 @@ proc printProcHead(ctx: var PrintCtx, fn: CirProc): string =
   ##
   ## - a device function: the direct `fn name(params) -> ret` signature, a void return emits no arrow (WGSL has no `void` type name)
   ## - a pointer parameter takes the `ptr<function, T>` form
-  ## - the entry kernel: `@compute @workgroup_size(...)` attribute lines, then `fn <entry>(<entry inputs>)` over the body-walk inputs
+  ## - the entry globalFn: `@compute @workgroup_size(...)` attribute lines, then `fn <entry>(<entry inputs>)` over the body-walk inputs
   ##   exportc renames the entry for the host runtime lookup.
-  if fn.isKernel:
+  if fn.isGlobalFn:
     let wg = getWorkgroup(fn, [64, 1, 1])
     let entryName = if fn.exportName.len > 0: fn.exportName else: fn.name
     result = "@compute @workgroup_size(" & $wg[0] & ", " & $wg[1] & ", " &
@@ -396,7 +396,7 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string =
   printDeclStmt("", "const " & s.name & ": " & ctx.emitTypeName(s.declType), ctx.printExpr(s.init))
 
 proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
-  ## `@group(0) @binding(i)` declaration of one kernel parameter in host `store` packing order:
+  ## `@group(0) @binding(i)` declaration of one globalFn parameter in host `store` packing order:
   ## - device buffers bind writable storage, `var<storage, read_write>`
   ## - scalars and value structs bind read-only storage, packed in the engine scratch buffer
   let attr = "@group(0) @binding(" & $i & ") "
@@ -405,15 +405,15 @@ proc emitBinding(ctx: var PrintCtx, p: CirParam, i: int): string =
     result = attr & "var<storage, read_write> " & p.name & ": array<" &
       ctx.emitTypeName(p.typ.pElem) & ">;"
   of ctPtr:
-    raiseAssert("kernel parameter " & p.name & " of pointer type has no WGSL binding")
+    raiseAssert("globalFn parameter " & p.name & " of pointer type has no WGSL binding")
   of ctArray:
-    raiseAssert("kernel parameter " & p.name & " of array type has no WGSL binding")
+    raiseAssert("globalFn parameter " & p.name & " of array type has no WGSL binding")
   of ctStruct:
     for f in p.typ.fields:
       if f.typ.kind == ctVector:
-        raiseAssert("kernel parameter " & p.name & " field " & f.name & " is a vector with no host-packed WGSL storage")
+        raiseAssert("globalFn parameter " & p.name & " field " & f.name & " is a vector with no host-packed WGSL storage")
       if f.typ.kind == ctArray and f.typ.aElem.kind == ctBool:
-        raiseAssert("kernel parameter " & p.name & " field " & f.name & " is a bool array, only a scalar bool field maps to a NIM_BOOL word")
+        raiseAssert("globalFn parameter " & p.name & " field " & f.name & " is a bool array, only a scalar bool field maps to a NIM_BOOL word")
     result = attr & "var<storage, read> " & p.name & ": " &
       ctx.emitTypeName(p.typ) & ";"
   of ctBool:
@@ -432,8 +432,8 @@ proc emitStructField(ctx: var PrintCtx, t: CirType, f: CirField): string =
   else:
     ctx.emitTypeName(f.typ))
 
-proc printParamBindings(ctx: var PrintCtx, kernels: seq[CirProc]): string =
-  for i, p in kernels[0].params:
+proc printParamBindings(ctx: var PrintCtx, globalFns: seq[CirProc]): string =
+  for i, p in globalFns[0].params:
     result &= ctx.emitBinding(p, i) & "\n"
   if result.len > 0:
     result &= "\n"
@@ -444,7 +444,7 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
   ## storage or a declared struct field is bool.
   var usesNimBool = false
   block scan:
-    for p in getEntryKernel(ctx, m).params:
+    for p in getEntryGlobalFn(ctx, m).params:
       if p.typ.kind == ctBool:
         usesNimBool = true
         break scan
@@ -466,9 +466,9 @@ proc printPrelude(ctx: var PrintCtx, m: CirModule): string =
 proc printWgslModule*(m: CirModule): string =
   var ctx = initPrintCtx(wgslWalkPolicy, wgslVectorRule, wgslEmit, cgWebGPU)
   ctx.mathNames = wgslMathBuiltinNames
-  let kernel = getEntryKernel(ctx, m)
+  let globalFn = getEntryGlobalFn(ctx, m)
   ctx.m = m
-  printModule(ctx, m, @[kernel], wgslModuleShape)
+  printModule(ctx, m, @[globalFn], wgslModuleShape)
 
 proc codegen*(m: CirModule): string =
   codegenModule(printWgslModule(m))

@@ -45,14 +45,14 @@ const IntrinsicCallees = ["__builtin_memcpy", "max", "min"]
   ##   Consumers: WGSL/HLSL printers, SPIR-V encoder, and the CUDA math mapping.
 
 proc getEmittedName(fn: CirProc): string =
-  result = if fn.isKernel and fn.exportName.len > 0: fn.exportName else: fn.name
+  result = if fn.isGlobalFn and fn.exportName.len > 0: fn.exportName else: fn.name
 
 proc refuseProc(fn: CirProc, violation: string) =
   raiseAssert(violation)
 
 proc checkScopeExpr(e: CirExpr, visible, moduleNames: HashSet[string], where = "") =
   ## A `{.builtin.}`-marked symbol is a target intrinsic, never a declaration.
-  ## `where` prefixes the violation, the global checks name the offending global with it.
+  ## `where` prefixes the violation, the global checks state the offending global with it.
   if e.isNil:
     return
   if e.kind == eStmts:
