@@ -195,6 +195,7 @@ macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchCon
     $formalTypes.len & " parameters"
   var statics = nnkBracket.newTree()
   var valuesN = nnkBracket.newTree()
+  var valuesTuple = nnkTupleConstr.newTree()
   var allArgs = @[output]
   for i in 0 ..< argNodes.len:
     allArgs.add(argNodes[i])
@@ -203,6 +204,8 @@ macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchCon
       statics.add(a)
     else:
       valuesN.add(a)
+      if i > 0:
+        valuesTuple.add(a)
   let procdef = buildGlobalFn(k, statics, valuesN)
   let wg = getWorkgroupPragma(nnkPar.newTree(
     newLit(cfg.blk.x), newLit(cfg.blk.y), newLit(cfg.blk.z)))
@@ -223,7 +226,7 @@ macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchCon
   result = quote do:
     block:
       const batchModule = `spirvN`(`procdef`)
-      `implN`(`batch`, batchModule, `kname`, `configCall`, `output`, `argNodes`)
+      `implN`(`batch`, batchModule, `kname`, `configCall`, `output`, `valuesTuple`)
 
 proc newVulkanBatch*(ctx: VulkanContext): VulkanBatch =
   ## Borrowed: the context, its device and queue, and every bound buffer.
