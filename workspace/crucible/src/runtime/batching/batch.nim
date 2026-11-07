@@ -207,10 +207,13 @@ macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
   # Vulkan and WebGPU printers bake blk as the entry's LocalSize
   var blkN = newEmptyNode()
   for f in sugar:
-    if f.kind == nnkExprColonExpr and f[0].kind == nnkIdent and f[0].strVal == "config":
+    if f.kind == nnkExprColonExpr and f[0].kind in {nnkIdent, nnkSym} and f[0].strVal == "config":
       for g in f[1]:
-        if g.kind == nnkExprColonExpr and g[0].kind == nnkIdent and g[0].strVal == "blk":
+        if g.kind == nnkExprColonExpr and g[0].kind in {nnkIdent, nnkSym} and g[0].strVal == "blk":
           blkN = g[1][1]
+  if blkN.kind == nnkEmpty:
+    error("batch enqueue: the enqueue proxy must feed >> inline, a proxy stored in a " &
+      "variable carries no block size for the workgroup pragma, got: " & sugar.repr, sugar)
   result = bindSym"enqueueDeviceFn".newCall(
     batchN, k, statics, cfgN, blkN)
   for i, a in callNode[1 ..< callNode.len]:
