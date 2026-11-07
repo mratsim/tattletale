@@ -1466,11 +1466,14 @@ proc printSpirvModule*(m: CirModule): SpirvWords =
   # and records which locals no load reaches.
   # Real emission then elides their storage, binding every read to the stored value
   for k in globalFns:
-    var dry = lang
+    # a fresh context: type ids cached on the real builder have no width on the dry builder
+    var dry = initSpvLangCtx()
     dry.dryRun = true
-    dry.builder = initSpvBuilder()
+    dry.caps = lang.caps
+    dry.fnProcs = lang.fnProcs
     discard dry.emitGlobalFn(k)
-    lang.fnDeadLocals = dry.fnDeadLocals
+    for name, dead in dry.fnDeadLocals:
+      lang.fnDeadLocals[name] = dead
     discard lang.emitGlobalFn(k)
   # one memory model for the module, N entrypoints select their global function
   let usePhys = capPhysicalStorageBufferAddresses in lang.caps
