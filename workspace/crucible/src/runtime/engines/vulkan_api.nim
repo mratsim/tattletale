@@ -150,7 +150,7 @@ type SerializationCtx = object
   pn: int
 
 proc write8(ctx: var SerializationCtx, x: uint64) =
-  ctx.pn = round_multiple_up(ctx.pn, 8)
+  ctx.pn = ctx.pn.round_multiple_up(8)
   if ctx.pn + 8 > 128:
     raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
@@ -164,7 +164,7 @@ proc store[T](ctx: var SerializationCtx, v: T, _: int) =
     {.error: "Pointer kernel args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   const lay = computeDeviceLayout(T, cgGlsl)
   if lay.align > 1:
-    ctx.pn = round_multiple_up(ctx.pn, lay.align)
+    ctx.pn = ctx.pn.round_multiple_up(lay.align)
   if ctx.pn + lay.size > 128:
     raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
   var blob: array[lay.size, byte]
@@ -172,13 +172,13 @@ proc store[T](ctx: var SerializationCtx, v: T, _: int) =
   when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
     for f in fields(v):
       when typeof(f) is DeviceMem:
-        off = round_multiple_up(off, 8)
+        off = off.round_multiple_up(8)
         let a = deviceAddress(f.mem, ctx.vctx)
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
       else:
         blob.packFrom(off, f, cgGlsl)
-    off = round_multiple_up(off, lay.align)
+    off = off.round_multiple_up(lay.align)
     doAssert off == lay.size,
       "host packing of " & $T & " does not match the device layout"
   else:

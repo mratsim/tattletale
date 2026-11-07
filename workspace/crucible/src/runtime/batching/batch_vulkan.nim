@@ -95,7 +95,7 @@ type
     buffers: seq[VulkanBuffer]
 
 proc write8(pack: var EntryPack, x: uint64) =
-  pack.pushConstantCursor = round_multiple_up(pack.pushConstantCursor, 8)
+  pack.pushConstantCursor = pack.pushConstantCursor.round_multiple_up(8)
   checkPushRoom(pack.pushConstantCursor, 8)
   pack.scalars.setLen(pack.pushConstantCursor + 8)
   copyMem(pack.scalars[pack.pushConstantCursor].addr, x.unsafeAddr, 8)
@@ -110,7 +110,7 @@ proc store[T](pack: var EntryPack, v: T, _: int) =
     {.error: "Pointer device function args are not supported, pass the DeviceMem handle from allocDevice, got " & $T.}
   const lay = computeDeviceLayout(T, cgGlsl)
   if lay.align > 1:
-    pack.pushConstantCursor = round_multiple_up(pack.pushConstantCursor, lay.align)
+    pack.pushConstantCursor = pack.pushConstantCursor.round_multiple_up(lay.align)
   checkPushRoom(pack.pushConstantCursor, lay.size)
   pack.scalars.setLen(pack.pushConstantCursor + lay.size)
   var blob: array[lay.size, byte]
@@ -118,14 +118,14 @@ proc store[T](pack: var EntryPack, v: T, _: int) =
   when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
     for f in fields(v):
       when typeof(f) is DeviceMem:
-        off = round_multiple_up(off, 8)
+        off = off.round_multiple_up(8)
         pack.buffers.add f.mem
         let a = deviceAddress(f.mem, pack.vctx)
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
       else:
         blob.packFrom(off, f, cgGlsl)
-    off = round_multiple_up(off, lay.align)
+    off = off.round_multiple_up(lay.align)
     doAssert off == lay.size,
       "host packing of " & $T & " does not match the device layout"
   else:
@@ -167,7 +167,7 @@ proc recordGlobalFn*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string, c
   bindArgs(pack, output, args, store, VulkanBuffer, cgGlsl)
   # VUID-VkPushConstantRange-size-00310 and VUID-vkCmdPushConstants-size-00370:
   # push-constant range and update sizes must be multiples of 4
-  pack.scalars.setLen(round_multiple_up(pack.scalars.len, 4))
+  pack.scalars.setLen(pack.scalars.len.round_multiple_up(4))
   batch.entries.add BatchEntry(
     entrypoint: entrypoint,
     spv: spv,

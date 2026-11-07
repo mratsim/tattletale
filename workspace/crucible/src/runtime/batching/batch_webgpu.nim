@@ -105,9 +105,9 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
       static:
         error "Pointer device function args are not supported, pass the caller's WGPUBuffer handle, got " & $typeof(v)
     const layout = computeDeviceLayout(typeof(v), cgWebGPU)
-    let off = round_multiple_up(entry.scalars.len, MinStorageBufferOffsetAlignment)
+    let off = entry.scalars.len.round_multiple_up(MinStorageBufferOffsetAlignment)
     # wgpuQueueWriteBuffer requires a multiple-of-4 size, every scalar window is padded to it
-    let size = round_multiple_up(layout.size, MinStorageBindingSizeMultiple)
+    let size = layout.size.round_multiple_up(MinStorageBindingSizeMultiple)
     entry.scalars.setLen(off + size)
     var w = off
     entry.scalars.packFrom(w, v, cgWebGPU)
@@ -202,7 +202,7 @@ proc recordGlobalFn*(batch: WebgpuBatch, wgsl: string, entryPoint: string, cfg: 
 
 func getScalarSize*(batch: WebgpuBatch): int =
   for e in batch.entries:
-    result = round_multiple_up(result + e.scalars.len, MinStorageBufferOffsetAlignment)
+    result = result + e.scalars.len.round_multiple_up(MinStorageBufferOffsetAlignment)
 
 proc finalize*(batch: WebgpuBatch) =
   if batch.entries.len > 0 and batch.entries[0].bindGroup != nil:
@@ -251,7 +251,7 @@ proc finalize*(batch: WebgpuBatch) =
     e.bindGroup = wgpuDeviceCreateBindGroup(batch.device, addr bgDesc)
     if e.bindGroup == nil:
       raiseAssert("WebGPU batch: failed to create bind group")
-    windowBase = round_multiple_up(windowBase + e.scalars.len, MinStorageBufferOffsetAlignment)
+    windowBase = windowBase + e.scalars.len.round_multiple_up(MinStorageBufferOffsetAlignment)
 
 proc replay*(batch: WebgpuBatch) =
   if batch.entries.len == 0 or batch.entries[0].bindGroup == nil:

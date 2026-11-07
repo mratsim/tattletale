@@ -101,7 +101,7 @@ when defined(macosx):
       when typeof(v) is ptr|pointer:
         {.error: "Pointer device function args are not supported, pass the DeviceMem handle from allocDevice, got " & $typeof(v).}
       const layout = computeDeviceLayout(typeof(v), cgMetal)
-      let off = round_multiple_up(entry.scalars.len, 16)
+      let off = entry.scalars.len.round_multiple_up(16)
       entry.scalars.setLen(off + layout.size)
       var w = off
       entry.scalars.packFrom(w, v, cgMetal)
@@ -148,7 +148,7 @@ when defined(macosx):
 
   func getScalarSize*(batch: MetalBatch): int =
     for e in batch.entries:
-      result = round_multiple_up(result + e.scalars.len, 16)
+      result = result + e.scalars.len.round_multiple_up(16)
 
   proc finalize*(batch: MetalBatch) =
     if not objc.isNil(batch.recording):
@@ -175,7 +175,7 @@ when defined(macosx):
       discard objc.msgSend(cmd, objc.`$$`("setComputePipelineState:"), e.pipelineState)
       if e.sharedMem > 0:
         discard objc.msgSend(cmd, objc.`$$`("setThreadgroupMemoryLength:atIndex:"),
-                             objc.NSUInteger(round_multiple_up(e.sharedMem, 16)), objc.NSUInteger(0))
+                             objc.NSUInteger(e.sharedMem.round_multiple_up(16)), objc.NSUInteger(0))
       var argIdx = 0
       for slot in e.slots:
         case slot.kind
@@ -193,7 +193,7 @@ when defined(macosx):
                            height: objc.NSUInteger(e.squadron.y),
                            depth: objc.NSUInteger(e.squadron.z))
       discard objc.msgSend(cmd, objc.`$$`("concurrentDispatchThreadgroups:threadsPerThreadgroup:"), g, b)
-      scalarBase = round_multiple_up(scalarBase + e.scalars.len, 16)
+      scalarBase = scalarBase + e.scalars.len.round_multiple_up(16)
 
   proc replay*(batch: MetalBatch) =
     if objc.isNil(batch.recording):

@@ -113,7 +113,7 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
     entry.slots.add Slot(kind: skBuffer, buffer: entry.borrowedBuffers.high)
   else:
     const layout = computeDeviceLayout(typeof(v), cgOpenCL)
-    let off = round_multiple_up(entry.scalars.len, layout.align)
+    let off = entry.scalars.len.round_multiple_up(layout.align)
     entry.scalars.setLen(off + layout.size)
     var w = off
     entry.scalars.packFrom(w, v, cgOpenCL)
