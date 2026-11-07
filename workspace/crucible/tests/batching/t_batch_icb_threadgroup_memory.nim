@@ -7,7 +7,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
 ##     --outdir:build/wip --nimcache:nimcache/wip \
-##     workspace/crucible/tests/codegen/metal/device/t_batch_icb_threadgroup_memory.nim
+##     workspace/crucible/tests/batching/t_batch_icb_threadgroup_memory.nim
 
 import std/[importutils, unittest]
 

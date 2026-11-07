@@ -9,11 +9,11 @@
 ## Run from the worktree root (the stored-proxy compile must fail):
 ##   nim c --hints:off --warnings:off -d:batchStoredProxy --path:"$PWD" \
 ##     --nimcache:nimcache/wip-batchcore --outdir:build/wip-batchcore \
-##     workspace/crucible/tests/runtime/t_batch_enqueue_stored_proxy_refused.nim
+##     workspace/crucible/tests/batching/t_batch_enqueue_stored_proxy_refused.nim
 ## Run from the worktree root (the inline form compiles and launches):
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
 ##     --nimcache:nimcache/wip-batchcore --outdir:build/wip-batchcore \
-##     workspace/crucible/tests/runtime/t_batch_enqueue_stored_proxy_refused.nim
+##     workspace/crucible/tests/batching/t_batch_enqueue_stored_proxy_refused.nim
 
 import workspace/crucible
 import workspace/crucible/src/runtime/batching/batch

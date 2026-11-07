@@ -8,7 +8,7 @@
 ## Run:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
 ##     --outdir:build/wip-vleg --nimcache:nimcache/wip-vleg \
-##     workspace/crucible/tests/codegen/vulkan_via_glsl/device/t_vulkan_batch_pipeline_key.nim
+##     workspace/crucible/tests/batching/t_vulkan_batch_pipeline_key.nim
 
 import std/unittest
 
