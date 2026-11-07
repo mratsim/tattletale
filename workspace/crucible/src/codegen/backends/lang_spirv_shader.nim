@@ -1449,7 +1449,7 @@ proc emitGlobalFn(ctx: var SpvLangCtx, globalFn: CirProc): uint32 =
 #  Driver
 # ═══════════════════════════════════════════════════════════════════════
 
-proc printSpirvModule*(m: CirModule): seq[uint32] =
+proc printSpirvModule*(m: CirModule): SpirvWords =
   ## Returns the SPIR-V words of one CIRv2 module for the Vulkan environment.
   var lang = initSpvLangCtx()
   var globalFns: seq[CirProc]
@@ -1479,5 +1479,5 @@ proc printSpirvModule*(m: CirModule): seq[uint32] =
   lang.builder.module.finalize()
 
 
-proc codegen*(m: CirModule): seq[uint32] =
+proc codegen*(m: CirModule): SpirvWords =
   codegenModule(printSpirvModule(m))

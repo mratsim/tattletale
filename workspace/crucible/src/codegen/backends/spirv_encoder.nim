@@ -17,6 +17,9 @@ import std/algorithm
 import std/macros
 import std/tables
 
+type
+  SpirvWords* = seq[uint32]
+
 # ############################################################
 #
 #            SPIR-V word encoder

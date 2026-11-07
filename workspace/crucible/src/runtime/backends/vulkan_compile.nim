@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 
-import std/[os, osproc, streams, strutils, tempfiles]
+import std/[os, osproc, streams, strutils, tables, tempfiles]
 import ../../codegen/backends/spirv_encoder
 import ../engines/engines_common
 import ./runtime_utils
@@ -15,13 +15,7 @@ import ./runtime_utils
 # SPIR-V compilation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): seq[uint32] =
-  ## Compiles GLSL to SPIR-V via ``glslangValidator``
-  ## (``libshaderc_shared`` does not support compute shaders on this platform).
-  ## Returns SPIR-V words:
-  ## - subgroup sources (the KHR subgroup extensions the codegen emits)
-  ##   compile with the vulkan1.1 target env, shuffles are SPIR-V 1.3
-  ## - every other source remains on the SPIR-V 1.0 default
+proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): SpirvWords =
   let glslang = findExe("glslangValidator")
   if glslang.len == 0:
     raiseAssert("glslangValidator not found on PATH, the Vulkan engine needs it to compile GLSL sources")
@@ -58,7 +52,7 @@ proc compileGlslToSpirvViaGlslang(glsl: string, entryPoint: string = "main"): se
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
-proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): seq[uint32] =
+proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): SpirvWords =
   ## Compiles HLSL to SPIR-V via ``dxc`` with its SPIR-V codegen backend, skipping the DXIL stage.
   ## `entryPoint` is the HLSL entry function's identifier.
   ## It becomes the OpEntryPoint Name operand the Vulkan pipeline looks up.
@@ -88,7 +82,7 @@ proc compileHlslToSpirvViaDxc(hlsl: string, entryPoint: string = "main"): seq[ui
   result = newSeq[uint32](raw.len div 4)
   copyMem(result[0].addr, raw[0].addr, raw.len)
 
-func usesPhysicalStorageBuffer(spv: seq[uint32]): bool =
+func usesPhysicalStorageBuffer(spv: SpirvWords): bool =
   const opCapability = uint32(OpCapability)
   # 5 header words (magic, version, generator, bound, schema) precede the instruction stream
   var i = 5
@@ -103,48 +97,63 @@ func usesPhysicalStorageBuffer(spv: seq[uint32]): bool =
     inc i, wordCount.int
 
 type
-  SpvEntryPointInfo = object
-    ## Entry-point identity parsed from a SPIR-V module's words
-    name*: string          ## OpEntryPoint literal name, "" when absent
-    id*: uint32            ## OpEntryPoint result id, 0 when absent
-    localSize*: Dim3       ## LocalSize literals of the mode bound to `id`, (0, 0, 0) when absent
-    entryPoints*: int      ## number of OpEntryPoint instructions in the module
+  SpvEntryPoint = object
+    name: string
+    id: uint32
+    localSize: Dim3
 
-func parseSpirvEntryInfo(spv: seq[uint32]): SpvEntryPointInfo =
-  ## One scan over the module words, returns the entrypoint identity:
-  ## - name, id: the OpEntryPoint literal name and result id
-  ## - localSize: the LocalSize literals of the execution mode bound to id
-  ## - entryPoints: the OpEntryPoint instruction count
-  # opcode words and the LocalSize mode come from the encoder table
+  SpvEntryPointDescriptor = object
+    name*: string
+    id*: uint32
+    localSize*: Dim3
+    entryPoints*: int
+
+func parseSpirvEntryInfos(spv: SpirvWords): seq[SpvEntryPoint] =
+  ## One record per OpEntryPoint instruction, in stream order, each with its LocalSize
   const opEntryPoint = uint32(OpEntryPoint)
   const opExecutionMode = uint32(OpExecutionMode)
   # 5 header words carry no instructions, and the stream begins at index 5
   var i = 5
+  var byId: Table[uint32, int]   # entrypoint id → result index
   while i < spv.len:
     let wordCount = spv[i] shr 16
     if wordCount == 0 or i + wordCount.int > spv.len:
       break
     let opcode = spv[i] and 0xFFFF
     if opcode == opEntryPoint:
-      inc result.entryPoints
       # OpEntryPoint word layout: executionModel, entrypoint id, then the literal string
       # string storage: NUL-terminated and padded to the word boundary
       # interface ids come after the string
-      if result.name.len == 0:
-        result.id = spv[i + 2]
-        var nameDone = false
-        for j in i + 3 ..< i + wordCount.int:
-          if nameDone:
+      let idx = result.len
+      result.add default(SpvEntryPoint)
+      result[idx].id = spv[i + 2]
+      var nameDone = false
+      for j in i + 3 ..< i + wordCount.int:
+        if nameDone:
+          break
+        for k in 0 ..< 4:
+          let c = char((spv[j] shr (k * 8)) and 0xFF)
+          if c == '\0':
+            nameDone = true
             break
-          for k in 0 ..< 4:
-            let c = char((spv[j] shr (k * 8)) and 0xFF)
-            if c == '\0':
-              nameDone = true
-              break
-            result.name.add c
+          result[idx].name.add c
+      byId[result[idx].id] = idx
     elif opcode == opExecutionMode and wordCount.int >= 6 and
-         spv[i + 2] == modeLocalSize and spv[i + 1] == result.id:
-      # LocalSize mode is exactly three literal words, and the mode id must
-      # match the parsed entrypoint id
-      result.localSize = Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
+         spv[i + 2] == modeLocalSize:
+      # LocalSize mode is exactly three literal words, word 1 is the entrypoint id
+      let idx = byId.getOrDefault(spv[i + 1], -1)
+      if idx >= 0:
+        result[idx].localSize = Dim3(x: spv[i + 3].int, y: spv[i + 4].int, z: spv[i + 5].int)
     inc i, wordCount.int
+
+func parseSpirvEntryDescriptor(spv: SpirvWords): SpvEntryPointDescriptor =
+  let entries = parseSpirvEntryInfos(spv)
+  result.entryPoints = entries.len
+  if entries.len > 0:
+    result.name = entries[0].name
+    result.id = entries[0].id
+    result.localSize = entries[0].localSize
+
+func parseSpirvEntrySizes(spv: SpirvWords): Table[string, Dim3] =
+  for e in parseSpirvEntryInfos(spv):
+    result[e.name] = e.localSize

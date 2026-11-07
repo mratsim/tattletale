@@ -12,11 +12,14 @@
 ##   var batch = engine.recordBatch()
 ##   batch.enqueue<<(G, 64)>> saxpy(out, x, y, 3.0'f32)
 ##   batch.submit()
+##   batch.finalize()
+##   batch.replay()  # relaunches without recompiling
 ##   ```
 import std/[macros]
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/codegen/passes/pass_datatypes
 import workspace/crucible/src/codegen/backends/backends_api
+import workspace/crucible/src/codegen/backends/spirv_encoder
 import workspace/crucible/src/codegen/frontend/nim_to_crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
@@ -34,6 +37,10 @@ type
   Batch*[E] = ref object
     engine*: E
     entries*: seq[BatchEntry[E]]
+    when E is VulkanEngine:
+      artifact*: SpirvWords
+    else:
+      artifact*: string
 
 proc recordBatch*[E: HwEngine](engine: E): Batch[E] {.inline.} =
   Batch[E](engine: engine)
@@ -49,7 +56,7 @@ var ctgFrontend {.compileTime.}: CirFrontend
 var ctgArtifactKind {.compileTime.}: CodegenKind
 var ctgArtifactPrinted {.compileTime.}: bool
 var ctgTextArtifact {.compileTime.}: string
-var ctgSpirvArtifact {.compileTime.}: seq[uint32]
+var ctgSpirvArtifact {.compileTime.}: SpirvWords
 
 func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
@@ -100,11 +107,14 @@ template appendEntry[E](batch: Batch[E], fnName: string, cfg: LaunchConfig, outp
     engine.launchKernelImpl(output, args, cfg, fnName)
   batch.entries.add entry
 
-macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, values: varargs[typed]): untyped =
+macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, blk: untyped, values: varargs[typed]): untyped =
   var valuesN = nnkBracket.newTree()
   for v in values:
     valuesN.add(v)
   let procdef = buildGlobalFn(deviceFn, statics, valuesN)
+  let wg = getWorkgroupPragma(blk)
+  if not wg.isNil:
+    procdef[4].add(wg)
   procdef[6][0][0] = deviceFn
   let fnNameN = quote do: ctgAccumulateCir(`procdef`)
   let outN = values[0]
@@ -191,8 +201,15 @@ macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
   var statics = nnkBracket.newTree()
   let batchN = quote do: `sugar`.batch
   let cfgN = quote do: `sugar`.config
+  # Vulkan and WebGPU printers bake blk as the entry's LocalSize
+  var blkN = newEmptyNode()
+  for f in sugar:
+    if f.kind == nnkExprColonExpr and f[0].kind == nnkIdent and f[0].strVal == "config":
+      for g in f[1]:
+        if g.kind == nnkExprColonExpr and g[0].kind == nnkIdent and g[0].strVal == "blk":
+          blkN = g[1][1]
   result = bindSym"enqueueDeviceFn".newCall(
-    batchN, k, statics, cfgN)
+    batchN, k, statics, cfgN, blkN)
   for i, a in callNode[1 ..< callNode.len]:
     if not isCompileTime(formalTypes[i]):
       result.add(a)
@@ -201,8 +218,51 @@ macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
 #  Submission
 # ═══════════════════════════════════════════════════════════════════════
 
+macro finalize*(batch: Batch): untyped =
+  ## Compiles the batch's device functions into one artifact and ingests it
+  ## into the engine. Does not launch the entries.
+  ##
+  ## Requires:
+  ## - at least one `enqueue` in this compilation
+  ##
+  ## Later `finalize` calls reuse the cached artifact.
+  if ctgFrontend.isEmpty():
+    error("finalize: the stream holds no device function, enqueue first", batch)
+  let engineN = quote do: `batch`.engine
+  result = quote do:
+    block:
+      const batchKind = batchCodegenKind(typeof(`engineN`))
+      const batchArtifact = ctgAccumulateArtifact(batchKind)
+      `batch`.artifact = batchArtifact
+      when batchKind == cgSpirv:
+        if `engineN`.getSpirV() != batchArtifact:
+          `engineN`.ingest(batchArtifact)
+      else:
+        if `engineN`.getArtifact() != batchArtifact:
+          `engineN`.ingest(batchArtifact)
+
+proc replay*[E](batch: Batch[E]) {.inline.} =
+  ## Launches the batch entries on the engine in enqueue order, without recompiling.
+  ##
+  ## Requires:
+  ## - a prior `finalize` in this compilation
+  ##
+  ## Re-ingests the batch artifact when the engine ingested something else
+  ## since `finalize`.
+  if batch.artifact.len == 0:
+    raiseAssert("replay: the batch holds no artifact, call finalize first")
+  when E is VulkanEngine:
+    if batch.engine.getSpirV() != batch.artifact:
+      batch.engine.ingest(batch.artifact)
+  else:
+    if batch.engine.getArtifact() != batch.artifact:
+      batch.engine.ingest(batch.artifact)
+  for entry in batch.entries:
+    entry.launch(batch.engine)
+
 macro submit*(batch: Batch): untyped =
-  ## Flushes the batch: the launches run on the engine in enqueue order.
+  ## Flushes the batch: finalizes the compiled artifact and launches the entries
+  ## on the engine in enqueue order.
   ##
   ## Requires:
   ## - at least one `enqueue` in this compilation
@@ -216,17 +276,6 @@ macro submit*(batch: Batch): untyped =
   ##   batch.enqueue<<(N div 64, 64)>> saxpy(out, x, y, 3.0'f32)
   ##   batch.submit()
   ##   ```
-  if ctgFrontend.isEmpty():
-    error("submit: the stream holds no device function, enqueue first", batch)
-  let engineN = quote do: `batch`.engine
-  result = quote do:
-    block:
-      const batchKind = batchCodegenKind(typeof(`engineN`))
-      when batchKind == cgSpirv:
-        {.error: "submit: the Vulkan batch route binds SPIR-V words through the batch legs".}
-      else:
-        const batchArtifact = ctgAccumulateArtifact(batchKind)
-        if `engineN`.getArtifact() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
-        for entry in `batch`.entries:
-          entry.launch(`engineN`)
+  result = nnkStmtList.newTree(
+    bindSym"finalize".newCall(batch),
+    bindSym"replay".newCall(batch))

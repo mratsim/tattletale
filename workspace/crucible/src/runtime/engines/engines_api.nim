@@ -57,7 +57,7 @@ export cuda_api.newCudaEngine,   cuda_api.ingest, cuda_api.getArtifact, cuda_api
        cuda_api.allocDevice, cuda_api.copyToDeviceFromHost, cuda_api.copyToHostFromDevice
 export opencl_api.newOpenCLEngine,   opencl_api.ingest,     opencl_api.getArtifact,    opencl_api.deviceName,
        opencl_api.allocDevice, opencl_api.copyToDeviceFromHost, opencl_api.copyToHostFromDevice
-export vulkan_api.newVulkanEngine,   vulkan_api.ingest,     vulkan_api.getArtifact,    vulkan_api.deviceName,
+export vulkan_api.newVulkanEngine,   vulkan_api.ingest,     vulkan_api.getArtifact,    vulkan_api.getSpirV,   vulkan_api.deviceName,
        vulkan_api.allocDevice, vulkan_api.copyToDeviceFromHost, vulkan_api.copyToHostFromDevice
 export webgpu_api.newWebgpuEngine,   webgpu_api.ingest,   webgpu_api.getArtifact,  webgpu_api.deviceName,
        webgpu_api.allocDevice, webgpu_api.copyToDeviceFromHost, webgpu_api.copyToHostFromDevice

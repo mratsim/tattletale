@@ -141,7 +141,7 @@ proc recordGlobalFn*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string, c
   if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
     raiseAssert("Vulkan batch: cfg.grid must be >= 1 per axis, got " &
                 $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
-  let sq = parseSpirvEntryInfo(spv)
+  let sq = parseSpirvEntryDescriptor(spv)
   if sq.entryPoints != 1 or sq.name != entrypoint:
     raiseAssert("Vulkan batch: the module for \"" & entrypoint &
              "\" must declare exactly one OpEntryPoint named after the device function, got " &
