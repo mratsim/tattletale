@@ -45,7 +45,8 @@ type
   VulkanBatchObj = object
     ctx: VulkanContext
     entries: seq[BatchEntry]
-    pipelines: Table[string, BatchPipeline]
+    pipelines: Table[(string, seq[uint32]), BatchPipeline]
+      # entrypoint + module words: one name can bake different LocalSizes per entry
     recording: VkCommandBuffer
     cmdPool: VkCommandPool
     destroyCommandPool: proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}
@@ -342,9 +343,10 @@ proc finalize*(batch: VulkanBatch) =
   )
   check vkBeginCommandBuffer(cmdBuf, beginInfo.addr)
   for i, entry in batch.entries.mpairs:
-    if entry.entrypoint notin batch.pipelines:
-      batch.pipelines[entry.entrypoint] = createBatchPipeline(batch, entry)
-    entry.pipelineState = batch.pipelines[entry.entrypoint].handle
+    let pkey = (entry.entrypoint, entry.spv)
+    if pkey notin batch.pipelines:
+      batch.pipelines[pkey] = createBatchPipeline(batch, entry)
+    entry.pipelineState = batch.pipelines[pkey].handle
     if i > 0:
       # Vulkan gives no ordering guarantee between dispatches in one command buffer.
       # Barrier insertion makes each dispatch read the previous one's writes.
@@ -357,7 +359,7 @@ proc finalize*(batch: VulkanBatch) =
         0, 1, memBarrier.addr, 0, nil, 0, nil)
     vkCmdBindPipeline(cmdBuf, VK_PIPELINE_BIND_POINT_COMPUTE, entry.pipelineState)
     if entry.scalars.len > 0:
-      vkCmdPushConstants(cmdBuf, batch.pipelines[entry.entrypoint].layout,
+      vkCmdPushConstants(cmdBuf, batch.pipelines[pkey].layout,
                          uint32(VK_SHADER_STAGE_COMPUTE_BIT),
                          0, uint32(entry.scalars.len), entry.scalars[0].addr)
     vkCmdDispatch(cmdBuf, uint32(entry.fleet.x), uint32(entry.fleet.y),
