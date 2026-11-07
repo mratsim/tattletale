@@ -83,6 +83,12 @@ proc compileEntrypoint(batch: OpenCLBatch, source, entrypoint: string): Pkernel 
     let program = createProgramWithSource(batch.context, 1, strings, length.addr, status.addr)
     check status
 
+    # Release the program unless it enters the cache: the caller owns the program object regardless of build outcome
+    var cached = false
+    defer:
+      if not cached:
+        discard releaseProgram(program)
+
     var device = queueDevice(batch.queue)
     status = buildProgram(program, 1, device.addr, nil, nil, nil)
 
@@ -99,6 +105,7 @@ proc compileEntrypoint(batch: OpenCLBatch, source, entrypoint: string): Pkernel 
       check status
 
     batch.programs[source] = program
+    cached = true
 
   var status: TClResult
   result = createKernel(batch.programs[source], entrypoint.cstring, status.addr)
