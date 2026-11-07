@@ -183,6 +183,7 @@ macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchCon
   doAssert argNodes.kind in {nnkTupleConstr, nnkPar},
     "batch enqueue: args must be a tuple, got " & args.repr
   var callN = nnkCall.newTree(deviceFn)
+  callN.add(output)
   for a in argNodes:
     callN.add(a)
   let k = callN.resolveDeviceFnOverload()
