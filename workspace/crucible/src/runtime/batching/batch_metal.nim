@@ -138,8 +138,6 @@ when defined(macosx):
                   " exceeds the " & $MaxThreadsPerThreadgroup & " threads-per-threadgroup max")
     if cfg.sharedMem > 0:
       raiseAssert("Metal batch: the recording does not set threadgroup memory, sharedMem must be 0, got " & $cfg.sharedMem)
-    if cfg.stream != 0:
-      raiseAssert("Metal batch: replay runs on the batch queue, stream must be 0, got " & $cfg.stream)
     # Two libraries can export the same entrypoint name
     let psoKey = $cast[int](library) & "\0" & entrypoint
     if psoKey notin batch.pipelines:
