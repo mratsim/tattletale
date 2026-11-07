@@ -50,7 +50,10 @@ type
 
   OpenCLBatch* = ref OpenCLBatchObj
 
-const QueueDevice = cl_uint(0x1091)
+const
+  QueueDevice = cl_uint(0x1091)
+  QueueProperties = cl_uint(0x1093)
+  QueueOutOfOrderExec = cl_ulong(1 shl 2)
 
 proc getCommandQueueInfo(
   queue: Pcommand_queue,
@@ -125,6 +128,10 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
 
 proc newOpenCLBatch*(context: Pcontext, queue: Pcommand_queue): OpenCLBatch =
   ## Borrows context, queue and buffers
+  var properties: cl_ulong
+  check getCommandQueueInfo(queue, QueueProperties, cl_size_t(sizeof(cl_ulong)), properties.addr, nil)
+  if (properties and QueueOutOfOrderExec) != 0:
+    raiseAssert("OpenCL batch: replay preserves entry order through in-order-queue semantics, the queue enables out-of-order execution")
   OpenCLBatch(context: context, queue: queue)
 
 proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
