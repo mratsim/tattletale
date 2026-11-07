@@ -50,15 +50,15 @@ type
 
   OpenCLBatch* = ref OpenCLBatchObj
 
-const ContextDevices = cl_uint(0x1081)
+const QueueDevice = cl_uint(0x1091)
 
-proc getContextInfo(
-  context: Pcontext,
+proc getCommandQueueInfo(
+  queue: Pcommand_queue,
   param_name: cl_uint,
   param_value_size: cl_size_t,
   param_value: pointer,
   param_value_size_ret: ptr cl_size_t
-): TClResult {.importc: "clGetContextInfo", dynlib: ClLib.}
+): TClResult {.importc: "clGetCommandQueueInfo", dynlib: ClLib.}
 
 proc `=destroy`*(batch: var OpenCLBatchObj) =
   ## Releases the batch's own objects, never the borrowed handles.
@@ -67,13 +67,9 @@ proc `=destroy`*(batch: var OpenCLBatchObj) =
   for p in batch.programs.values:
     discard releaseProgram(p)
 
-proc firstContextDevice(context: Pcontext): Pdevice_id =
-  var size: cl_size_t
-  check getContextInfo(context, ContextDevices, 0, nil, size.addr)
-  if size == 0:
-    raiseAssert("OpenCL batch: the context has no devices")
+proc queueDevice(queue: Pcommand_queue): Pdevice_id =
   var device: Pdevice_id
-  check getContextInfo(context, ContextDevices, cl_size_t(sizeof(Pdevice_id)), device.addr, nil)
+  check getCommandQueueInfo(queue, QueueDevice, cl_size_t(sizeof(Pdevice_id)), device.addr, nil)
   result = device
 
 proc compileEntrypoint(batch: OpenCLBatch, source, entrypoint: string): Pkernel =
@@ -87,7 +83,7 @@ proc compileEntrypoint(batch: OpenCLBatch, source, entrypoint: string): Pkernel 
     let program = createProgramWithSource(batch.context, 1, strings, length.addr, status.addr)
     check status
 
-    var device = firstContextDevice(batch.context)
+    var device = queueDevice(batch.queue)
     status = buildProgram(program, 1, device.addr, nil, nil, nil)
 
     if status == BUILD_PROGRAM_FAILURE:
