@@ -88,9 +88,9 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
     return
   let tail = wgsl[i + marker.len .. ^1]
   var x, y, z: int
-  if scanf(tail, "$i$s,$s$i$s,$s$i$s)", x, y, z) or
-     scanf(tail, "$i$s,$s$i$s)", x, y) or
-     scanf(tail, "$i)", x):
+  if scanf(tail, "$s$i$s,$s$i$s,$s$i$s)", x, y, z) or
+     scanf(tail, "$s$i$s,$s$i$s)", x, y) or
+     scanf(tail, "$s$i)", x):
     if x <= 0:
       return
     result = Dim3(x: x, y: if y > 0: y else: 1,
