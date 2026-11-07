@@ -161,6 +161,8 @@ when defined(macosx):
     if batch.getScalarSize > 0:
       batch.constants = objc.msgSend(batch.device, objc.`$$`("newBufferWithLength:options:"),
                                      objc.NSUInteger(batch.getScalarSize), SharedUntrackedOptions)
+      if objc.isNil(batch.constants):
+        raiseAssert("Metal batch: newBufferWithLength(" & $batch.getScalarSize & " bytes) returned nil")
     let image = if objc.isNil(batch.constants):
                   objc.ID(nil)
                 else:
