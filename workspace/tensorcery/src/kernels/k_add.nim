@@ -11,25 +11,34 @@
 ## - the register tile map (32 lanes x chunk elements) tiles all inputs
 ## - x, y and z may carry different layouts of the same shape, elements
 ##   pair by coordinate
+## - inputs promote to float32 and the sum rounds back to z's element type
+##   (bfloat16 round back is round-to-nearest-even)
 
+import workspace/ceramic/src/tensors
 import workspace/ceramic/src/tile_algebra
 import workspace/crucible/src/builtins/builtins_gpu_types
+import ../device_view
 
-proc k_add*(z, x, y: distinct TensorView) =
+proc k_add*(z, x, y: distinct DeviceView) =
+  let
+    zv = make_view(z.data +% z.offset, z.layout)
+    xv = make_view(x.data +% x.offset, x.layout)
+    yv = make_view(y.data +% y.offset, y.layout)
   let thrID = getLocalThreadID()
-  var reg: tile(z.T)
-  let tiled = make_layout(z.size()).logical_divide(reg.getLayout())
+  var reg: tile(zv.T)
+  let tiled = make_layout(zv.size()).logical_divide(reg.getLayout())
   let grid = tiled.getTileGrid()
   let
     cSize = grid.size()
     gridStride = getGridSize()
   for tileID in countup(grid.getLocalTileID(), cSize - 1, gridStride):
-    let rx = tile(x.T).load(x, thrID, tileID)
-    let ry = tile(y.T).load(y, thrID, tileID)
-    var rz: tile(z.T)
+    let rx = tile(xv.T).load(xv, thrID, tileID)
+    let ry = tile(yv.T).load(yv, thrID, tileID)
+    var rz: tile(zv.T)
     for i in 0 ..< rx.size():
-      when typeof(rx[i]) is bfloat16:
-        rz[i] = (rx[i].to(float32) + ry[i].to(float32)).to(bfloat16)
+      let s = rx[i].to(float32) + ry[i].to(float32)
+      when zv.T is bfloat16:
+        rz[i] = s.to(bfloat16)
       else:
-        rz[i] = rx[i] + ry[i]
-    z.store(rz, thrID, tileID)
+        rz[i] = s
+    zv.store(rz, thrID, tileID)

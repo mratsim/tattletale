@@ -96,6 +96,7 @@ type
 
   TensorBridge[DevMem, Sh, St] = object
     data {.cursor.}: DevMem
+    offset: int
     layout: Layout[Sh, St]
 
   PosNode[C] = ref object of RootRef
@@ -250,9 +251,9 @@ proc evalWalk[E: HwEngine, Sh: tuple, Mem, T](
       xb = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
       numel = rz.layout.shape.getNumElems()
     let
-      zv = TensorBridge[Mem, Sh, Sh](data: rz.data[], layout: rz.layout)
-      xv = TensorBridge[Mem, Sh, Sh](data: xa.data[], layout: xa.layout)
-      yv = TensorBridge[Mem, Sh, Sh](data: xb.data[], layout: xb.layout)
+      zv = TensorBridge[Mem, Sh, Sh](data: rz.data[], offset: rz.offset, layout: rz.layout)
+      xv = TensorBridge[Mem, Sh, Sh](data: xa.data[], offset: xa.offset, layout: xa.layout)
+      yv = TensorBridge[Mem, Sh, Sh](data: xb.data[], offset: xb.offset, layout: xb.layout)
     batch.enqueue<<(ceil_div(numel, 128), 32)>> k_add(zv, xv, yv)
     return
   let asChunk = n.to(PosNode[SplitCore])
