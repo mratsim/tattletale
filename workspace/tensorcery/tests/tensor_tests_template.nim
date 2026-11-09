@@ -169,5 +169,33 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
       doAssert i1[r * 2 + c].to(float32) == xq[r * 4 + 2 + c].to(float32),
         name & ": column split part 1 " & $r & "," & $c
 
+  # eval + prune: the root rebinds to a leaf. The upstream graph collects
+  # under ORC, a live view and a read intermediate do not dangle
+  block:
+    var
+      dx = newTensor(engine, @[2, 4], kBf16)
+      dy = newTensor(engine, @[2, 4], kBf16)
+    dx.copyToDeviceFromHost(xq)
+    dy.copyToDeviceFromHost(yq)
+    let
+      m1 = dx + dy
+      m2 = dx + dy
+    var dz = m1 + m2
+    let dv = narrow(m1, 1, 1, 2)
+    eval(dz, m1)
+    prune(dz)
+    doAssert dz.node.to(AddNode).isNil, name & ": prune must replace the node by a leaf"
+    let dzGot = readBack(dz, 8)
+    let m1Got = readBack(m1, 8)
+    let dvGot = readBack(dv, 4)
+    for i in 0 ..< 8:
+      let sum = xd[i].to(bfloat16).to(float32) + yd[i].to(bfloat16).to(float32)
+      doAssert dzGot[i].to(float32) == 2.0 * sum, name & ": pruned root " & $i
+      doAssert m1Got[i].to(float32) == sum, name & ": intermediate after prune " & $i
+    for r in 0 ..< 2:
+      for c in 0 ..< 2:
+        doAssert dvGot[r * 2 + c].to(float32) == m1Got[r * 4 + 1 + c].to(float32),
+          name & ": live view after prune " & $r & "," & $c
+
   echo "tensorcery Tensor (", name, "): all checks passed"
 

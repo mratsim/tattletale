@@ -101,11 +101,11 @@ type
     offset: int
     layout: Layout[Sh, St]
 
-  AddNode = ref object
+  AddNode* = ref object
     r: AnyTensorImpl
     a, b: TensorNode
 
-  ViewNode = ref object
+  ViewNode* = ref object
     ## Lazy shared-buffer view: `v` aliases the source impl's buffer cell,
     ## eval materializes the view's storage through `src`.
     src: TensorNode
@@ -654,6 +654,13 @@ proc `+`*(a, b: Tensor): Tensor =
 proc split*(t: Tensor, numParts: int, axis: int = -1): seq[Tensor] =
   for n in t.engine.tn_split(t.node, numParts, axis):
     result.add(Tensor(engine: t.engine, node: n))
+
+proc prune*(t: var Tensor) =
+  ## Rebinds `t` to a materialized leaf carrying the node's impl.
+  ## Precondition: the node's graph evaluated, the impl buffers hold data.
+  ## The upstream graph becomes unreachable from `t`. Its impls collect
+  ## under ORC once no other tensor references them.
+  t.node = t.node.getImpl().to(TensorNode)
 
 proc eval*(ts: varargs[Tensor]) =
   var roots = newSeq[TensorNode](ts.len)
