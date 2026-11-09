@@ -197,6 +197,13 @@ when defined(macosx):
       discard objc.msgSend(cmd, objc.`$$`("concurrentDispatchThreadgroups:threadsPerThreadgroup:"), g, b)
       scalarBase = scalarBase + e.scalars.len.round_multiple_up(16)
 
+  proc resetRecording*(batch: MetalBatch) =
+    ## Drops the recorded command buffer and the scalar buffer.
+    ## The compiled pipeline states persist.
+    batch.entries.setLen(0)
+    batch.recording = RetainedMetalObject(objc.ID(nil))
+    batch.constants = RetainedMetalObject(objc.ID(nil))
+
   proc replay*(batch: MetalBatch) =
     if objc.isNil(objc.ID batch.recording):
       raiseAssert("replay: finalize the batch first")

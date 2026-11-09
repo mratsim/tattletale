@@ -258,6 +258,12 @@ proc finalize*(batch: WebgpuBatch) =
       raiseAssert("WebGPU batch: failed to create bind group")
     windowBase = windowBase + e.scalars.len.round_multiple_up(MinStorageBufferOffsetAlignment)
 
+proc resetRecording*(batch: WebgpuBatch) =
+  ## Drops the recorded bind groups and the scalar buffer.
+  ## The compiled modules and pipelines persist.
+  batch.entries.setLen(0)
+  batch.scalarBuffer = OwnedBuffer(WGPUBuffer(nil))
+
 proc replay*(batch: WebgpuBatch) =
   if batch.entries.len == 0 or WGPUBindGroup(batch.entries[0].bindGroup) == nil:
     raiseAssert("replay: finalize the batch first")

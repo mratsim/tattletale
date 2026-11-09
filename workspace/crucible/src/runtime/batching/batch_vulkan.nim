@@ -372,6 +372,12 @@ proc finalize*(batch: VulkanBatch) =
   check vkEndCommandBuffer(cmdBuf)
   batch.recording = cmdBuf
 
+proc resetRecording*(batch: VulkanBatch) =
+  ## Drops the recorded command buffer with its pool, the compiled pipelines persist.
+  batch.entries.setLen(0)
+  batch.cmdPool = OwnedCommandPool()
+  batch.recording = nil
+
 proc replay*(batch: VulkanBatch) =
   if batch.recording == nil:
     raiseAssert("replay: finalize the batch first")

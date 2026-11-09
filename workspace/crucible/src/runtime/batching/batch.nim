@@ -53,6 +53,14 @@ type
       artifact*: SpirvWords
     else:
       artifact*: string
+    when E is MetalEngine:
+      leg: MetalBatch
+    elif E is VulkanEngine:
+      leg: VulkanBatch
+    elif E is OpenCLEngine:
+      leg: OpenCLBatch
+    elif E is WebgpuEngine:
+      leg: WebgpuBatch
 
 proc recordBatch*[E: HwEngine](engine: E): Batch[E] {.inline.} =
   Batch[E](engine: engine)
@@ -354,29 +362,41 @@ proc replay*[E](batch: Batch[E]) {.inline.} =
     if batch.engine.getArtifact() != batch.artifact:
       batch.engine.ingest(batch.artifact)
   when E is MetalEngine:
-    let leg = newMetalBatch(batch.engine)
+    if batch.leg.isNil:
+      batch.leg = newMetalBatch(batch.engine)
+    else:
+      batch.leg.resetRecording()
     for entry in batch.entries:
-      entry.record(leg)
-    leg.finalize()
-    leg.replay()
+      entry.record(batch.leg)
+    batch.leg.finalize()
+    batch.leg.replay()
   elif E is VulkanEngine:
-    let leg = newVulkanBatch(batch.engine)
+    if batch.leg.isNil:
+      batch.leg = newVulkanBatch(batch.engine)
+    else:
+      batch.leg.resetRecording()
     for entry in batch.entries:
-      entry.record(leg)
-    leg.finalize()
-    leg.replay()
+      entry.record(batch.leg)
+    batch.leg.finalize()
+    batch.leg.replay()
   elif E is OpenCLEngine:
-    let leg = newOpenCLBatch(batch.engine)
+    if batch.leg.isNil:
+      batch.leg = newOpenCLBatch(batch.engine)
+    else:
+      batch.leg.resetRecording()
     for entry in batch.entries:
-      entry.record(leg)
-    leg.finalize()
-    leg.replay()
+      entry.record(batch.leg)
+    batch.leg.finalize()
+    batch.leg.replay()
   elif E is WebgpuEngine:
-    let leg = newWebgpuBatch(batch.engine)
+    if batch.leg.isNil:
+      batch.leg = newWebgpuBatch(batch.engine)
+    else:
+      batch.leg.resetRecording()
     for entry in batch.entries:
-      entry.record(leg)
-    leg.finalize()
-    leg.replay()
+      entry.record(batch.leg)
+    batch.leg.finalize()
+    batch.leg.replay()
   else:
     for entry in batch.entries:
       entry.launch(batch.engine)

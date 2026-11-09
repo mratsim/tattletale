@@ -175,6 +175,11 @@ proc finalize*(batch: OpenCLBatch) =
     raiseAssert("finalize: the batch has no entries")
   batch.finalized = true
 
+proc resetRecording*(batch: OpenCLBatch) =
+  ## Drops the recorded entries, the compiled kernels and programs persist.
+  batch.entries.setLen(0)
+  batch.finalized = false
+
 proc replay*(batch: OpenCLBatch) =
   if not batch.finalized:
     raiseAssert("replay: finalize the batch first")
