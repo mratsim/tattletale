@@ -83,9 +83,19 @@ func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
 func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
-macro ctgAccumulateCir(procdef: typed): untyped =
+macro ctgAccumulateCirImpl(procdef: typed): untyped =
   let kname = lowerNimAst(ctgFrontend, procdef)
   result = newLit(kname)
+
+macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
+  crucibleCompileTarget = case backend
+    of cgMetal: ctMetal
+    of cgSpirv: ctGlsl
+    of cgOpenCL: ctOpenCL
+    of cgWebGPU: ctWebGPU
+    else: ctNone
+  # delayed symbol resolution
+  result = newCall(bindSym"ctgAccumulateCirImpl", procdef)
 
 proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
   if ctgArtifactPrinted and ctgArtifactKind != kind:
@@ -148,7 +158,8 @@ macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg
   if workgroup.kind != nnkEmpty:
     procdef[4].add(workgroup)
   procdef[6][0][0] = deviceFn
-  let fnNameN = quote do: ctgAccumulateCir(`procdef`)
+  let backendN = quote do: batchCodegenKind(typeof(`batch`.engine))
+  let fnNameN = quote do: ctgAccumulateCir(`procdef`, `backendN`)
   let outN = values[0]
   var argsTuple = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
@@ -235,7 +246,7 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
       EnqueueProxy[`E`](batch: `batchN`, config: LaunchConfig(
         grid: `gridRef`, blk: dim3(`blkN`), sharedMem: `smemRef`))
 
-macro enqueueCall[E](batch: Batch[E], cfg: LaunchConfig, workgroup: untyped, deviceFn: typed, values: varargs[typed]): untyped =
+macro enqueueCall[E](batch: Batch[E], cfg: LaunchConfig, workgroup: untyped, deviceFn: typed, values: varargs[untyped]): untyped =
   var callNode = nnkCall.newTree(deviceFn)
   for v in values:
     callNode.add(v)
@@ -257,7 +268,7 @@ macro enqueueCall[E](batch: Batch[E], cfg: LaunchConfig, workgroup: untyped, dev
       entry.add(v)
   result = entry
 
-macro enqueueCallCt[E](batch: Batch[E], cfg: LaunchConfig, blkCt: static Dim3, deviceFn: typed, values: varargs[typed]): untyped =
+macro enqueueCallCt[E](batch: Batch[E], cfg: LaunchConfig, blkCt: static Dim3, deviceFn: typed, values: varargs[untyped]): untyped =
   let wg = getWorkgroupPragma(blkCt)
   result = bindSym"enqueueCall".newCall(batch, cfg,
     if wg.isNil: newEmptyNode() else: wg, deviceFn)
