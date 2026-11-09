@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/assertions
+import std/macros
 import std/typetraits
 
 import workspace/crucible
@@ -17,7 +18,6 @@ import workspace/ceramic/src/macros/static_for
 import workspace/math
 import ../vendor/iface/iface
 export iface.to
-import ./kernels/k_add
 
 # ############################################################
 #
@@ -96,14 +96,17 @@ type
     offset*: int
     layout*: L
 
-  TensorBridge[DevMem, Sh, St] = object
+  TensorBridge*[DevMem, Sh, St] = object
+    ## Launch-side view of a device tensor. Host-side form of the kernel
+    ## face's `DeviceView`:
+    ##
+    ## - same fields as `DeviceView`, in the same order
+    ## - the DeviceMem leaf contributes the element type the kernel binds
+    ## - `.cursor.` borrows the impl's buffer, so a bridge copies without
+    ##   touching the move-only handle
     data {.cursor.}: DevMem
     offset: int
     layout: Layout[Sh, St]
-
-  AddNode* = ref object
-    r: AnyTensorImpl
-    a, b: TensorNode
 
   ViewNode* = ref object
     ## Lazy shared-buffer view: `v` aliases the source impl's buffer cell,
@@ -127,7 +130,7 @@ type Tensor* = object
 #  Layout helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-func getNumElems[Sh: tuple](shape: Sh): int =
+func getNumElems*[Sh: tuple](shape: Sh): int =
   result = 1
   staticFor i, 0, tupleLen(Sh):
     result *= shape[i]
@@ -211,12 +214,6 @@ proc getImpl*(x: AnyTensorImpl): AnyTensorImpl =
 # ═══════════════════════════════════════════════════════════════════════
 #  Nodes - TensorNode implementation
 # ═══════════════════════════════════════════════════════════════════════
-
-proc eval*(n: AddNode) =
-  raiseAssert "eval is not implemented yet: graph layer only"
-
-proc getImpl*(n: AddNode): AnyTensorImpl =
-  n.r
 
 proc eval*(n: ViewNode) =
   raiseAssert "eval is not implemented yet: graph layer only"
@@ -336,105 +333,67 @@ proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Ten
 #  Eval - pull walk, enqueue into one batch, submit
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAdd[E: HwEngine, Sh: tuple, MemZ, MemA, MemB](
-    engine: E, batch: Batch[E], n: AddNode) =
-  ## Enqueues one k_add over the node's impls.
-  ## Each impl's Mem type is a generic argument of this proc.
-  ## A body-local type alias defeats the launch's generic binding.
-  let
-    rz = n.r.to(TensorImpl[MemZ, Layout[Sh, Sh]])
-    ra = n.a.getImpl().to(TensorImpl[MemA, Layout[Sh, Sh]])
-    rb = n.b.getImpl().to(TensorImpl[MemB, Layout[Sh, Sh]])
-    numel = rz.layout.shape.getNumElems()
-    zv = TensorBridge[MemZ, Sh, Sh](data: rz.data[], offset: rz.offset, layout: rz.layout)
-    xv = TensorBridge[MemA, Sh, Sh](data: ra.data[], offset: ra.offset, layout: ra.layout)
-    yv = TensorBridge[MemB, Sh, Sh](data: rb.data[], offset: rb.offset, layout: rb.layout)
-  batch.enqueue<<(ceil_div(numel, 128), 32)>> k_add(zv, xv, yv)
+var ctgEnqueueHandlers {.compileTime.}: seq[NimNode]
 
-proc dispatchAddInputs[E: HwEngine, Sh: tuple, MemZ](
-    engine: E, batch: Batch[E], n: AddNode) =
-  ## Input-side dtype dispatch of one add node. The result Mem is a generic argument.
-  case n.a.getImpl().dtype()
-  of kFp32:
-    type MemA = typeof(engine.allocDevice(float32, 0))
-    case n.b.getImpl().dtype()
-    of kFp32:
-      type MemB = typeof(engine.allocDevice(float32, 0))
-      enqueueAdd[E, Sh, MemZ, MemA, MemB](engine, batch, n)
-    of kBf16:
-      type MemB = typeof(engine.allocDevice(bfloat16, 0))
-      enqueueAdd[E, Sh, MemZ, MemA, MemB](engine, batch, n)
-    else:
-      raise ValueError.newException("eval: kFp16 add operand unsupported")
-  of kBf16:
-    type MemA = typeof(engine.allocDevice(bfloat16, 0))
-    case n.b.getImpl().dtype()
-    of kFp32:
-      type MemB = typeof(engine.allocDevice(float32, 0))
-      enqueueAdd[E, Sh, MemZ, MemA, MemB](engine, batch, n)
-    of kBf16:
-      type MemB = typeof(engine.allocDevice(bfloat16, 0))
-      enqueueAdd[E, Sh, MemZ, MemA, MemB](engine, batch, n)
-    else:
-      raise ValueError.newException("eval: kFp16 add operand unsupported")
-  else:
-    raise ValueError.newException("eval: kFp16 add operand unsupported")
+macro registerEnqueueNode*(enqueue: typed) =
+  ## Registers an op file's enqueue handler with the eval walk.
+  ## Called once, at the op module's top level.
+  ##
+  ## Handler contract:
+  ## - signature `proc[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: TensorNode): bool`
+  ## - walks the node's children through `evalNode`, then enqueues the node's
+  ##   kernels into the batch
+  ## - returns true when the node is the op's own, false for a node the op
+  ##   does not own, so the handlers of several ops compose
+  ##
+  ## The handler resolves the launch's static engine, rank and element types
+  ## inside its own generic body. Nothing outside the op file knows them.
+  ctgEnqueueHandlers.add(enqueue)
+
+macro dispatchEnqueueNodes(E, Sh: typed, engine, batch, n: typed): untyped =
+  ## Expands the registered enqueue handlers over one node. The first handler
+  ## that owns the node enqueues its kernels and ends the walk branch.
+  result = nnkStmtList.newTree()
+  for h in ctgEnqueueHandlers:
+    let call = nnkCall.newTree(
+      nnkBracketExpr.newTree(h, E, Sh), engine, batch, n)
+    result.add nnkIfStmt.newTree(
+      nnkElifBranch.newTree(call, nnkReturnStmt.newTree(newEmptyNode())))
 
 proc evalWalk[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: TensorNode) =
-  let asAdd = n.to(AddNode)
-  if not asAdd.isNil:
-    evalWalk[E, Sh](engine, batch, asAdd.a)
-    evalWalk[E, Sh](engine, batch, asAdd.b)
-    # per-node dtype dispatch: each erased dtype selects the static
-    # Mem of its impl, kFp16 has no erased impls and raises
-    case asAdd.r.dtype()
-    of kFp32:
-      type MemZ = typeof(engine.allocDevice(float32, 0))
-      dispatchAddInputs[E, Sh, MemZ](engine, batch, asAdd)
-    of kBf16:
-      type MemZ = typeof(engine.allocDevice(bfloat16, 0))
-      dispatchAddInputs[E, Sh, MemZ](engine, batch, asAdd)
-    else:
-      raise ValueError.newException("eval: kFp16 add result unsupported")
-    return
   let asView = n.to(ViewNode)
   if not asView.isNil:
     # views alias their source's buffer cell, materialize the source first
     evalWalk[E, Sh](engine, batch, asView.src)
     return
-  # a node that is neither an add nor a view is a materialized impl,
-  # nothing to enqueue
-  return
+  # op nodes enqueue through the handlers their op files registered.
+  # A node no handler owns is a materialized impl, nothing to enqueue.
+  dispatchEnqueueNodes(E, Sh, engine, batch, n)
+
+proc evalNode*[E: HwEngine](engine: E, batch: Batch[E], n: TensorNode) =
+  ## Walks one node at the node's own rank, dispatching the rank tuple.
+  ## Op enqueue handlers recurse into a node's children through this proc.
+  case n.getImpl().shape().len
+  of 1: evalWalk[E, (int,)](engine, batch, n)
+  of 2: evalWalk[E, (int, int)](engine, batch, n)
+  of 3: evalWalk[E, (int, int, int)](engine, batch, n)
+  of 4: evalWalk[E, (int, int, int, int)](engine, batch, n)
+  of 5: evalWalk[E, (int, int, int, int, int)](engine, batch, n)
+  else:
+    raise ValueError.newException(
+      "eval: rank " & $n.getImpl().shape().len & " unsupported")
 
 proc eval*[E: HwEngine](engine: E, roots: Span[TensorNode]) =
   if roots.len == 0:
     return
   var batch = engine.recordBatch()
   for i in 0 ..< roots.len:
-    case roots[i].getImpl().shape().len
-    of 1: evalWalk[E, (int,)](engine, batch, roots[i])
-    of 2: evalWalk[E, (int, int)](engine, batch, roots[i])
-    of 3: evalWalk[E, (int, int, int)](engine, batch, roots[i])
-    of 4: evalWalk[E, (int, int, int, int)](engine, batch, roots[i])
-    of 5: evalWalk[E, (int, int, int, int, int)](engine, batch, roots[i])
-    else:
-      raise ValueError.newException(
-        "eval: rank " & $roots[i].getImpl().shape().len & " unsupported")
+    evalNode(engine, batch, roots[i])
   batch.submit()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Ops - free functions over TensorNode, the engine materializes
 # ═══════════════════════════════════════════════════════════════════════
-
-proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode =
-  let ia = a.getImpl()
-  let ib = b.getImpl()
-  if ia.shape() != ib.shape():
-    raise ValueError.newException("tn_add: shape mismatch")
-  # a bfloat16 operand rounds the sum back to bfloat16. The result dtype
-  # is fp32 only when both operands are fp32.
-  let dz = if ia.dtype() == kFp32 and ib.dtype() == kFp32: kFp32 else: kBf16
-  AddNode(a: a, b: b, r: engine.newTensorNode(dz, ia.shape()).getImpl()).to(TensorNode)
 
 proc transpose*(t: Tensor): Tensor =
   ## View of `t` with every axis reversed.
@@ -647,9 +606,6 @@ proc copyToHostFromDevice*[T](dst: var openArray[T], t: Tensor) =
   t.engine.copyToHostFromDevice(
     toOpenArray(cast[ptr UncheckedArray[byte]](addr dst[0]), 0, dst.len * sizeof(T) - 1),
     t.node)
-
-proc `+`*(a, b: Tensor): Tensor =
-  Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
 
 proc split*(t: Tensor, numParts: int, axis: int = -1): seq[Tensor] =
   for n in t.engine.tn_split(t.node, numParts, axis):

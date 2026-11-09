@@ -8,6 +8,7 @@
 import workspace/crucible
 import workspace/ceramic
 import workspace/tensorcery/src/tensor_datatypes
+import workspace/tattleformers/src/ops_2i1o/add
 
 export tensor_datatypes
 
