@@ -8,8 +8,6 @@
 ##     workspace/crucible/tests/batching/manual_metal_batch_stored_proxy_refused.nim
 
 import workspace/crucible
-import workspace/crucible/src/runtime/batching/batch
-import workspace/crucible/src/runtime/engines/engines_api
 
 proc scaleKernel(outP, x: ptr UncheckedArray[float32], s: float32) =
   let i = int(thread_position_in_grid.x)
