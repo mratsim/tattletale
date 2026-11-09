@@ -17,7 +17,6 @@ import workspace/ceramic/src/macros/static_for
 import workspace/math
 import ../vendor/iface/iface
 import ./kernels/k_add
-import ./kernels/k_divmod
 
 # ############################################################
 #
@@ -107,11 +106,7 @@ type
     r: AnyTensorImpl
     a, b: TensorNode
 
-  DivModCore = ref object
-    co: array[2, AnyTensorImpl]
-    x, y: TensorNode
-
-  ChunkSplitCore = ref object
+  SplitCore = ref object
     r: seq[AnyTensorImpl]
     a: TensorNode
     axis: int
@@ -188,16 +183,10 @@ proc eval*(n: AddNode) =
 proc getImpl*(n: AddNode): AnyTensorImpl =
   n.r
 
-proc eval*(n: DivModCore) =
+proc eval*(n: SplitCore) =
   raiseAssert "eval is not implemented yet: graph layer only"
 
-proc getOutput*(n: DivModCore, i: int): AnyTensorImpl =
-  n.co[i]
-
-proc eval*(n: ChunkSplitCore) =
-  raiseAssert "eval is not implemented yet: graph layer only"
-
-proc getOutput*(n: ChunkSplitCore, i: int): AnyTensorImpl =
+proc getOutput*(n: SplitCore, i: int): AnyTensorImpl =
   n.r[i]
 
 proc eval*[C](n: PosNode[C]) =
@@ -266,25 +255,7 @@ proc evalWalk[E: HwEngine, Sh: tuple, Mem, T](
       yv = TensorBridge[Mem, Sh, Sh](data: xb.data[], layout: xb.layout)
     batch.enqueue<<(ceil_div(numel, 128), 32)>> k_add(zv, xv, yv)
     return
-  let asDiv = n.to(PosNode[DivModCore])
-  if not asDiv.isNil:
-    let core = asDiv.core
-    evalWalk[E, Sh, Mem, T](engine, batch, core.x)
-    evalWalk[E, Sh, Mem, T](engine, batch, core.y)
-    let
-      xx = core.x.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-      xy = core.y.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-      qz = core.co[0].to(TensorImpl[Mem, Layout[Sh, Sh]])
-      rz = core.co[1].to(TensorImpl[Mem, Layout[Sh, Sh]])
-      numel = qz.layout.shape.getNumElems()
-    let
-      qv = TensorBridge[Mem, Sh, Sh](data: qz.data[], layout: qz.layout)
-      rv = TensorBridge[Mem, Sh, Sh](data: rz.data[], layout: rz.layout)
-      xv = TensorBridge[Mem, Sh, Sh](data: xx.data[], layout: xx.layout)
-      yv = TensorBridge[Mem, Sh, Sh](data: xy.data[], layout: xy.layout)
-    batch.enqueue<<(ceil_div(numel, 128), 32)>> k_divmod(qv, rv, xv, yv)
-    return
-  let asChunk = n.to(PosNode[ChunkSplitCore])
+  let asChunk = n.to(PosNode[SplitCore])
   if not asChunk.isNil:
     let core = asChunk.core
     evalWalk[E, Sh, Mem, T](engine, batch, core.a)
@@ -336,40 +307,26 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode =
     raise ValueError.newException("tn_add: dtype mismatch")
   AddNode(a: a, b: b, r: engine.newTensorNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
 
-proc tn_divmod*(engine: AnyEngine, x, y: TensorNode): tuple[q, rem: TensorNode] =
-  let ix = x.getImpl()
-  let iy = y.getImpl()
-  if ix.shape() != iy.shape():
-    raise ValueError.newException("tn_divmod: shape mismatch")
-  if ix.dtype() != iy.dtype():
-    raise ValueError.newException("tn_divmod: dtype mismatch")
-  let core = DivModCore(
-    x: x, y: y,
-    co: [engine.newTensorNode(ix.dtype(), ix.shape()).getImpl(),
-         engine.newTensorNode(ix.dtype(), ix.shape()).getImpl()])
-  result[0] = PosNode[DivModCore](core: core, pos: 0).to(TensorNode)
-  result[1] = PosNode[DivModCore](core: core, pos: 1).to(TensorNode)
-
-proc tn_chunk*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorNode] =
+proc tn_split*(engine: AnyEngine, x: TensorNode, numParts: int, axis: int = -1): seq[TensorNode] =
   let ix = x.getImpl()
   let s = ix.shape()
   if axis != 0:
     # erased impls carry contiguous layouts only, a split on an inner
     # axis needs the inherited strides of the source layout
     raise ValueError.newException(
-      "tn_chunk: axis " & $axis & " unsupported, only the outer axis splits densely")
-  if s[axis] mod k != 0:
+      "tn_split: axis " & $axis & " unsupported, only the outer axis splits densely")
+  if s[axis] mod numParts != 0:
     raise ValueError.newException(
-      "tn_chunk: dimension " & $s[axis] & " not divisible by " & $k)
+      "tn_split: dimension " & $s[axis] & " not divisible by " & $numParts)
   var partShape = newSeq[int](s.len)
   for i in 0 ..< s.len:
     partShape[i] = s[i]
-  partShape[axis] = s[axis] div k
-  let core = ChunkSplitCore(a: x, axis: axis)
-  for i in 0 ..< k:
+  partShape[axis] = s[axis] div numParts
+  let core = SplitCore(a: x, axis: axis)
+  for i in 0 ..< numParts:
     core.r.add(engine.newTensorNode(ix.dtype(), partShape.toSpan()).getImpl())
-  for i in 0 ..< k:
-    result.add(PosNode[ChunkSplitCore](core: core, pos: i).to(TensorNode))
+  for i in 0 ..< numParts:
+    result.add(PosNode[SplitCore](core: core, pos: i).to(TensorNode))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Tensor - the erased user face
@@ -455,12 +412,8 @@ proc copyToHostFromDevice*[T](dst: var openArray[T], t: Tensor) =
 proc `+`*(a, b: Tensor): Tensor =
   Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
 
-proc divmod*(a, b: Tensor): tuple[q, rem: Tensor] =
-  let (qn, rn) = tn_divmod(a.engine, a.node, b.node)
-  (Tensor(engine: a.engine, node: qn), Tensor(engine: a.engine, node: rn))
-
-proc chunk*(t: Tensor, axis: int, k: int): seq[Tensor] =
-  for n in t.engine.tn_chunk(t.node, axis, k):
+proc split*(t: Tensor, numParts: int, axis: int = -1): seq[Tensor] =
+  for n in t.engine.tn_split(t.node, numParts, axis):
     result.add(Tensor(engine: t.engine, node: n))
 
 proc eval*(ts: varargs[Tensor]) =

@@ -30,8 +30,7 @@ proc runTest*(engine: AnyEngine, name: string) =
   doAssert x.node.getImpl().dtype() == kBf16
 
   let z = x + y
-  let (q, r) = divmod(x, y)
-  let parts = chunk(x, 0, 2)
+  let parts = split(x, 2, axis = 0)
   doAssert parts.len == 2
   for p in parts:
     doAssert p.node.getImpl().shape()[0] == 1
@@ -41,33 +40,25 @@ proc runTest*(engine: AnyEngine, name: string) =
   doAssertRaises ValueError:
     discard x + small
   doAssertRaises ValueError:
-    discard chunk(x, 0, 3)
+    discard split(x, 3, axis = 0)
   doAssertRaises ValueError:
     discard newTensor(engine, @[2, 4], kFp16)
   doAssertRaises ValueError:
     x.copyToDeviceFromHost(xd)
 
-  eval(z, q, r, parts[0])
+  eval(z, parts[0])
 
   proc readBack(t: Tensor, n: int): seq[bfloat16] =
     result = newSeq[bfloat16](n)
     copyToHostFromDevice(result, t)
 
   let zGot = readBack(z, 8)
-  let qGot = readBack(q, 8)
-  let rGot = readBack(r, 8)
-  let xyBuf = readBack(x, 8)                # chunks share x's buffer
+  let xyBuf = readBack(x, 8)                # split parts share x's buffer
   for i in 0 ..< 8:
     let xi = xd[i].to(bfloat16).to(float32)
     let yi = yd[i].to(bfloat16).to(float32)
     doAssert zGot[i].to(float32) == xi + yi, name & ": add " & $i
-    let d = xi / yi
-    var qi = float32(int32(d))
-    if qi > d:
-      qi -= 1.0
-    doAssert qGot[i].to(float32) == qi, name & ": div q " & $i
-    doAssert rGot[i].to(float32) == xi - qi * yi, name & ": div r " & $i
-    doAssert xyBuf[i].to(float32) == xi, name & ": chunk source " & $i
+    doAssert xyBuf[i].to(float32) == xi, name & ": split source " & $i
 
   echo "tensorcery Tensor (", name, "): all checks passed"
 
