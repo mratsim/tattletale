@@ -432,6 +432,16 @@ proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var i
     walkValuePositions(used, fresh, fn, s, procs)
     i.inc
 
+proc hasInlineTargets(fn: CirProc, procs: Table[string, CirProc]): bool =
+  ## Returns whether the body still calls a device fn that needs inlining.
+  var targets: HashSet[string]
+  collectCallTargets(targets, fn.body)
+  for t in targets:
+    let callee = procs.getOrDefault(t)
+    if callee != nil and not callee.isGlobalFn and callee.needsInlineForWgsl:
+      return true
+  return false
+
 proc inlinePointerParamCalls(m: CirModule) =
   ## Placement contract:
   ## - the pass runs before the pointer-local explosion pass, which dissolves
@@ -443,26 +453,30 @@ proc inlinePointerParamCalls(m: CirModule) =
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
     procs[fn.name] = fn
-  for fn in mitems(m.procs):
-    var used = initHashSet[string]()
-    var locals: seq[tuple[name: string, typ: CirType]]
-    collectDeclaredLocals(locals, fn.body)
-    for l in locals:
-      used.incl(l.name)
-    for p in fn.params:
-      used.incl(p.name)
-    var fresh = 0
-    while true:
-      inlineInStmts(fn.body, used, fresh, fn, procs)
-      var changed = false
-      var targets: HashSet[string]
-      collectCallTargets(targets, fn.body)
-      for t in targets:
-        let callee = procs.getOrDefault(t)
-        if callee != nil and not callee.isGlobalFn and callee.needsInlineForWgsl:
-          changed = true
-      if not changed:
-        break
+  # Splicing a coordinate-reading callee into a fn can flip that fn
+  # to needs-inline after its callers were processed, stranding their calls.
+  # Sweep again until no body calls a needs-inline callee, so no kept fn
+  # calls a dropped fn.
+  while true:
+    for fn in mitems(m.procs):
+      var used = initHashSet[string]()
+      var locals: seq[tuple[name: string, typ: CirType]]
+      collectDeclaredLocals(locals, fn.body)
+      for l in locals:
+        used.incl(l.name)
+      for p in fn.params:
+        used.incl(p.name)
+      var fresh = 0
+      while true:
+        inlineInStmts(fn.body, used, fresh, fn, procs)
+        if not fn.hasInlineTargets(procs):
+          break
+    var pending = false
+    for fn in m.procs:
+      if fn.hasInlineTargets(procs):
+        pending = true
+    if not pending:
+      break
   var kept: seq[CirProc]
   for fn in m.procs:
     if not fn.isGlobalFn and fn.needsInlineForWgsl:
