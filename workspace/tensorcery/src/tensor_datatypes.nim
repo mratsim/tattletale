@@ -655,6 +655,76 @@ proc split*(t: Tensor, numParts: int, axis: int = -1): seq[Tensor] =
   for n in t.engine.tn_split(t.node, numParts, axis):
     result.add(Tensor(engine: t.engine, node: n))
 
+proc arange*(engine: AnyEngine, n: int, dtype: Dtype = kBf16): Tensor =
+  ## Rank-1 tensor of `n` elements 0, 1, ..., n-1.
+  ## Args:
+  ## - n: the element count
+  ## - dtype: the element type, kFp16 raises
+  ## Values compute on the host and upload in one DMA. The op never
+  ## reads the device back.
+  case dtype
+  of kFp32:
+    var host = newSeq[float32](n)
+    for i in 0 ..< n:
+      host[i] = float32(i)
+    result = newTensor(engine, @[n], dtype)
+    result.copyToDeviceFromHost(host)
+  of kBf16:
+    var host = newSeq[bfloat16](n)
+    for i in 0 ..< n:
+      host[i] = float32(i).to(bfloat16)
+    result = newTensor(engine, @[n], dtype)
+    result.copyToDeviceFromHost(host)
+  else:
+    raise ValueError.newException("arange: dtype " & $dtype & " unsupported")
+
+proc full*(engine: AnyEngine, shape: openArray[int], value: float32, dtype: Dtype = kBf16): Tensor =
+  ## Tensor of `shape` filled with `value`.
+  ## Args:
+  ## - shape: the tensor shape, any supported rank
+  ## - value: the fill scalar, rounded to the element type
+  ## - dtype: the element type, kFp16 raises
+  ## Values compute on the host and upload in one DMA. The op never
+  ## reads the device back.
+  var numel = 1
+  for i in 0 ..< shape.len:
+    numel *= shape[i]
+  case dtype
+  of kFp32:
+    var host = newSeq[float32](numel)
+    for i in 0 ..< numel:
+      host[i] = value
+    result = newTensor(engine, shape, dtype)
+    result.copyToDeviceFromHost(host)
+  of kBf16:
+    var host = newSeq[bfloat16](numel)
+    let q = value.to(bfloat16)
+    for i in 0 ..< numel:
+      host[i] = q
+    result = newTensor(engine, shape, dtype)
+    result.copyToDeviceFromHost(host)
+  else:
+    raise ValueError.newException("full: dtype " & $dtype & " unsupported")
+
+proc item*(t: Tensor): float32 =
+  ## Scalar value of a single-element tensor, one device readback.
+  ## Raises on any other shape.
+  let s = t.node.getImpl().shape()
+  if s.len != 1 or s[0] != 1:
+    raise ValueError.newException(
+      "item: a single-element tensor is required, got rank " & $s.len)
+  case t.node.getImpl().dtype()
+  of kFp32:
+    var got: array[1, float32]
+    copyToHostFromDevice(got, t)
+    result = got[0]
+  of kBf16:
+    var got: array[1, bfloat16]
+    copyToHostFromDevice(got, t)
+    result = got[0].to(float32)
+  else:
+    raise ValueError.newException("item: dtype " & $t.node.getImpl().dtype() & " unsupported")
+
 proc prune*(t: var Tensor) =
   ## Rebinds `t` to a materialized leaf carrying the node's impl.
   ## Precondition: the node's graph evaluated, the impl buffers hold data.

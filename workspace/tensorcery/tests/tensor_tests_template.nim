@@ -197,5 +197,38 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
         doAssert dvGot[r * 2 + c].to(float32) == m1Got[r * 4 + 1 + c].to(float32),
           name & ": live view after prune " & $r & "," & $c
 
+  # host ops: arange, full and item, no device round-trip in the op
+  let ar = arange(engine, 1024)
+  doAssert ar.node.getImpl().shape()[0] == 1024
+  let arGot = readBack(ar, 1024)
+  for i in 0 ..< 1024:
+    doAssert arGot[i].to(float32) == float32(i).to(bfloat16).to(float32),
+      name & ": arange " & $i
+
+  let fu = full(engine, @[2, 3], 1.5'f32)
+  doAssert fu.node.getImpl().shape()[0] == 2
+  doAssert fu.node.getImpl().shape()[1] == 3
+  let fuGot = readBack(fu, 6)
+  for i in 0 ..< 6:
+    doAssert fuGot[i].to(float32) == 1.5'f32, name & ": full " & $i
+
+  let one = full(engine, @[1], 2.5'f32)
+  doAssert item(one) == 2.5'f32, name & ": item"
+  doAssertRaises ValueError:
+    discard item(x)
+
+  # metadata bridge POC: typed int32 device buffers round-trip through
+  # JaggedKvHost-style staging, outside the erased Dtype face
+  const metaIds = [1, 2, 3, 5, 8, 13, 21, 34]
+  var metaStage = newSeq[int32](metaIds.len)
+  for i in 0 ..< metaIds.len:
+    metaStage[i] = int32(metaIds[i])
+  let metaDev = engine.allocDevice(int32, metaIds.len)
+  engine.copyToDeviceFromHost(metaDev, metaStage)
+  var metaBack = newSeq[int32](metaIds.len)
+  engine.copyToHostFromDevice(metaBack, metaDev)
+  for i in 0 ..< metaIds.len:
+    doAssert metaBack[i].int == metaIds[i], name & ": metadata bridge " & $i
+
   echo "tensorcery Tensor (", name, "): all checks passed"
 
