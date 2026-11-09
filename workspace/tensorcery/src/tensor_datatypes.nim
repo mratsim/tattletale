@@ -214,8 +214,24 @@ proc makeTensorImpl[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, 
 
 proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): AnyTensorImpl =
   case shape.len
+  of 1:
+    var sh: (int,)
+    fillShape(sh, shape)
+    makeTensorImpl(engine, dtype, make_layout(sh, rowMajorStrides(sh)))
   of 2:
     var sh: (int, int)
+    fillShape(sh, shape)
+    makeTensorImpl(engine, dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 3:
+    var sh: (int, int, int)
+    fillShape(sh, shape)
+    makeTensorImpl(engine, dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 4:
+    var sh: (int, int, int, int)
+    fillShape(sh, shape)
+    makeTensorImpl(engine, dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 5:
+    var sh: (int, int, int, int, int)
     fillShape(sh, shape)
     makeTensorImpl(engine, dtype, make_layout(sh, rowMajorStrides(sh)))
   else:
@@ -360,8 +376,11 @@ proc eval*[E: HwEngine](engine: E, roots: Span[TensorNode]) =
   var batch = engine.recordBatch()
   for i in 0 ..< roots.len:
     case roots[i].getImpl().shape().len
-    of 2:
-      evalWalk[E, (int, int)](engine, batch, roots[i])
+    of 1: evalWalk[E, (int,)](engine, batch, roots[i])
+    of 2: evalWalk[E, (int, int)](engine, batch, roots[i])
+    of 3: evalWalk[E, (int, int, int)](engine, batch, roots[i])
+    of 4: evalWalk[E, (int, int, int, int)](engine, batch, roots[i])
+    of 5: evalWalk[E, (int, int, int, int, int)](engine, batch, roots[i])
     else:
       raise ValueError.newException(
         "eval: rank " & $roots[i].getImpl().shape().len & " unsupported")
@@ -414,65 +433,103 @@ proc newTensor*(engine: AnyEngine, shape: openArray[int], dtype: Dtype): Tensor 
   Tensor(engine: engine,
          node: engine.newTensorNode(dtype, shape.toSpan()))
 
+template erasedUpload[E: HwEngine](engine: E, impl: AnyTensorImpl, src: openArray[byte], T: typedesc) =
+  # dense host upload through the typed impl, one rank branch per tuple shape
+  type Mem = typeof(engine.allocDevice(T, 0))
+  case impl.shape().len
+  of 1:
+    let t = impl.to(TensorImpl[Mem, Layout[(int,), (int,)]])
+    let numel = t.layout.shape.getNumElems()
+    if src.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
+  of 2:
+    let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+    let numel = t.layout.shape.getNumElems()
+    if src.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
+  of 3:
+    let t = impl.to(TensorImpl[Mem, Layout[(int, int, int), (int, int, int)]])
+    let numel = t.layout.shape.getNumElems()
+    if src.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
+  of 4:
+    let t = impl.to(TensorImpl[Mem, Layout[(int, int, int, int), (int, int, int, int)]])
+    let numel = t.layout.shape.getNumElems()
+    if src.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
+  of 5:
+    let t = impl.to(TensorImpl[Mem, Layout[(int, int, int, int, int), (int, int, int, int, int)]])
+    let numel = t.layout.shape.getNumElems()
+    if src.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
+  else:
+    raise ValueError.newException("copyToDeviceFromHost: rank " & $impl.shape().len & " unsupported")
+
+template erasedDownload[E: HwEngine](engine: E, impl: AnyTensorImpl, dst: var openArray[byte], T: typedesc) =
+  # dense device download through the typed impl, one rank branch per tuple shape
+  type Mem = typeof(engine.allocDevice(T, 0))
+  case impl.shape().len
+  of 1:
+    let t = impl.to(TensorImpl[Mem, Layout[(int,), (int,)]])
+    let numel = t.layout.shape.getNumElems()
+    if dst.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
+    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+  of 2:
+    let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+    let numel = t.layout.shape.getNumElems()
+    if dst.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
+    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+  of 3:
+    let t = impl.to(TensorImpl[Mem, Layout[(int, int, int), (int, int, int)]])
+    let numel = t.layout.shape.getNumElems()
+    if dst.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
+    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+  of 4:
+    let t = impl.to(TensorImpl[Mem, Layout[(int, int, int, int), (int, int, int, int)]])
+    let numel = t.layout.shape.getNumElems()
+    if dst.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
+    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+  of 5:
+    let t = impl.to(TensorImpl[Mem, Layout[(int, int, int, int, int), (int, int, int, int, int)]])
+    let numel = t.layout.shape.getNumElems()
+    if dst.len != numel * sizeof(T):
+      raise ValueError.newException(
+        "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
+    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+  else:
+    raise ValueError.newException("copyToHostFromDevice: rank " & $impl.shape().len & " unsupported")
+
 proc copyToDeviceFromHost*[E: HwEngine](engine: E, node: TensorNode, src: openArray[byte]) =
   let impl = node.getImpl()
   case impl.dtype()
-  of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
-    case impl.shape().len
-    of 2:
-      let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-      let numel = t.layout.shape.getNumElems()
-      if src.len != numel * sizeof(float32):
-        raise ValueError.newException(
-          "copyToDeviceFromHost: expected " & $(numel * sizeof(float32)) & " bytes, got " & $src.len)
-      engine.copyToDeviceFromHost(t.data[],
-        src.toOpenArray(float32))
-    else:
-      raise ValueError.newException("copyToDeviceFromHost: rank " & $impl.shape().len & " unsupported")
-  of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    case impl.shape().len
-    of 2:
-      let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-      let numel = t.layout.shape.getNumElems()
-      if src.len != numel * sizeof(bfloat16):
-        raise ValueError.newException(
-          "copyToDeviceFromHost: expected " & $(numel * sizeof(bfloat16)) & " bytes, got " & $src.len)
-      engine.copyToDeviceFromHost(t.data[],
-        src.toOpenArray(bfloat16))
-    else:
-      raise ValueError.newException("copyToDeviceFromHost: rank " & $impl.shape().len & " unsupported")
+  of kFp32: erasedUpload(engine, impl, src, float32)
+  of kBf16: erasedUpload(engine, impl, src, bfloat16)
   else:
     raise ValueError.newException("copyToDeviceFromHost: dtype " & $impl.dtype() & " unsupported")
 
 proc copyToHostFromDevice*[E: HwEngine](engine: E, dst: var openArray[byte], node: TensorNode) =
   let impl = node.getImpl()
   case impl.dtype()
-  of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
-    case impl.shape().len
-    of 2:
-      let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-      let numel = t.layout.shape.getNumElems()
-      if dst.len != numel * sizeof(float32):
-        raise ValueError.newException(
-          "copyToHostFromDevice: expected " & $(numel * sizeof(float32)) & " bytes, got " & $dst.len)
-      engine.copyToHostFromDevice(dst.toOpenArray(float32), t.data[])
-    else:
-      raise ValueError.newException("copyToHostFromDevice: rank " & $impl.shape().len & " unsupported")
-  of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    case impl.shape().len
-    of 2:
-      let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-      let numel = t.layout.shape.getNumElems()
-      if dst.len != numel * sizeof(bfloat16):
-        raise ValueError.newException(
-          "copyToHostFromDevice: expected " & $(numel * sizeof(bfloat16)) & " bytes, got " & $dst.len)
-      engine.copyToHostFromDevice(dst.toOpenArray(bfloat16), t.data[])
-    else:
-      raise ValueError.newException("copyToHostFromDevice: rank " & $impl.shape().len & " unsupported")
+  of kFp32: erasedDownload(engine, impl, dst, float32)
+  of kBf16: erasedDownload(engine, impl, dst, bfloat16)
   else:
     raise ValueError.newException("copyToHostFromDevice: dtype " & $impl.dtype() & " unsupported")
 

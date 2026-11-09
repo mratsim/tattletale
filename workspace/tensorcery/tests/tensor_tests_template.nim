@@ -73,5 +73,34 @@ proc runTest*(engine: AnyEngine, name: string) =
     let want = (xfd[i] + yd[i].to(bfloat16).to(float32)).to(bfloat16).to(float32)
     doAssert zmGot[i].to(float32) == want, name & ": mixed add " & $i
 
+  # rank-1 round trip: alloc, upload, add, eval, readback
+  let x1 = newTensor(engine, @[1024], kBf16)
+  var x1q = newSeq[bfloat16](1024)
+  for i in 0 ..< 1024:
+    x1q[i] = (float32(i mod 251) - 100.0).to(bfloat16)
+  x1.copyToDeviceFromHost(x1q)
+  doAssert x1.node.getImpl().shape().len == 1
+  doAssert x1.node.getImpl().strides()[0] == 1
+  let z1 = x1 + x1
+  eval(z1, x1)
+  let z1Got = readBack(z1, 1024)
+  for i in 0 ..< 1024:
+    doAssert z1Got[i].to(float32) == 2.0 * x1q[i].to(float32), name & ": rank-1 add " & $i
+
+  # rank-5 pool-slab round trip
+  let x5 = newTensor(engine, @[2, 3, 2, 2, 3], kBf16)
+  var x5q = newSeq[bfloat16](72)
+  for i in 0 ..< 72:
+    x5q[i] = (float32(i) * 0.5).to(bfloat16)
+  x5.copyToDeviceFromHost(x5q)
+  doAssert x5.node.getImpl().shape().len == 5
+  doAssert x5.node.getImpl().strides()[0] == 36
+  doAssert x5.node.getImpl().strides()[4] == 1
+  let z5 = x5 + x5
+  eval(z5, x5)
+  let z5Got = readBack(z5, 72)
+  for i in 0 ..< 72:
+    doAssert z5Got[i].to(float32) == 2.0 * x5q[i].to(float32), name & ": rank-5 add " & $i
+
   echo "tensorcery Tensor (", name, "): all checks passed"
 
