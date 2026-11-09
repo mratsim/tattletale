@@ -24,7 +24,7 @@ import workspace/design_by_contract
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SplitCore = ref object
+  SplitCore* = ref object
     r: seq[AnyTensorImpl]
     a: TensorNode
     axis: int
@@ -36,10 +36,10 @@ func getOutput(n: SplitCore, i: int): AnyTensorImpl =
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl[C](n: PosNode[C]): AnyTensorImpl =
+proc getImpl*[C](n: PosNode[C]): AnyTensorImpl =
   n.core.getOutput(n.pos)
 
-func opName(n: PosNode[SplitCore]): string =
+func opName*(n: PosNode[SplitCore]): string =
   "split"
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -15,15 +15,7 @@ import workspace/tensorcery/src/compute_graph/ops_1iNo/ops_split
 import workspace/tensorcery/src/compute_graph/eval
 import workspace/tensorcery/src/tensors_public_api
 
-# op files register at this import, the walk expands at the user's
-# first eval call
-import workspace/tensorcery/src/compute_graph/eval
+# op files register at this import, the walk expands at the engine accessor's scope
+import workspace/tensorcery/src/tensors_public_api
 
-export tensors_public_types
-export tensors_globals
-# erased plumbing: Tensor's field types live here and toAnyEngine binds
-# a vtable at the call site, the impls resolve in the caller scope
-export tensors_internals
 export tensors_public_api
-# eval resolves at that same toAnyEngine site
-export eval.eval

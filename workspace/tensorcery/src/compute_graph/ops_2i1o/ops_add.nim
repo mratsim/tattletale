@@ -50,7 +50,7 @@ proc k_add(z, x, y: distinct TensorView) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  AddNode = ref object
+  AddNode* = ref object
     r: AnyTensorImpl
     a, b: TensorNode
 
@@ -58,10 +58,10 @@ type
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl(n: AddNode): AnyTensorImpl =
+proc getImpl*(n: AddNode): AnyTensorImpl =
   n.r
 
-func opName(n: AddNode): string =
+func opName*(n: AddNode): string =
   "add"
 
 # ═══════════════════════════════════════════════════════════════════════

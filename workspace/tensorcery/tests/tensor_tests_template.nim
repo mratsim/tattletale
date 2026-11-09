@@ -5,11 +5,21 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import std/importutils
 import workspace/tensorcery/src/tensorcery
+import workspace/tensorcery/src/tensors_internals
+import workspace/tensorcery/src/tensors_globals
+import workspace/tensorcery/src/compute_graph/eval
+export eval.eval
 
 export tensorcery
+# erased layer imports for the white-box tests: iface vtable mixins
+# resolve at the outermost instantiation scope
+export tensors_internals
 
-proc runTest*(engine: AnyEngine, name: string) =
+proc runTest*(run: static Runtime, name: string) =
+  privateAccess(Tensor)
+  let engine = gEngine(run)
   var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
   var yd = @[2.0'f32, 2, 2, 2, 2, 2, 2, 2]
   var xq: array[8, bfloat16]
@@ -17,8 +27,8 @@ proc runTest*(engine: AnyEngine, name: string) =
   for i in 0 ..< 8:
     xq[i] = xd[i].to(bfloat16)
     yq[i] = yd[i].to(bfloat16)
-  let x = engine.toTensor(xq, @[2, 4])
-  let y = engine.toTensor(yq, @[2, 4])
+  let x = toTensor(xq, @[2, 4])
+  let y = toTensor(yq, @[2, 4])
 
   doAssert x.node.getImpl().shape().len == 2
   doAssert x.node.getImpl().shape()[0] == 2
@@ -34,14 +44,14 @@ proc runTest*(engine: AnyEngine, name: string) =
     doAssert p.node.getImpl().shape()[0] == 1
     doAssert p.node.getImpl().shape()[1] == 4
 
-  let small = engine.toTensor(yq[0 ..< 4], @[1, 4])
+  let small = toTensor(yq[0 ..< 4], @[1, 4])
   # face checks are contracts, they raise AssertionDefect
   doAssertRaises AssertionDefect:
     discard x + small
   doAssertRaises AssertionDefect:
     discard split(x, 0, 3)
   doAssertRaises AssertionDefect:
-    discard engine.toTensor(xq[0 ..< 7], @[2, 4])
+    discard toTensor(xq[0 ..< 7], @[2, 4])
 
   eval(z, parts[0])
 

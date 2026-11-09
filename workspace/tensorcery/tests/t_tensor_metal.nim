@@ -19,7 +19,7 @@ import workspace/ceramic
 import workspace/tensorcery/tests/tensor_tests_template
 
 proc main =
-  runTest(gMetalEngine().toAnyEngine(), "Metal")
+  runTest(runMetal, "Metal")
 
 when isMainModule:
   main()
