@@ -80,12 +80,12 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
+proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode, visited: var VisitedNodes): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil:
     return false
-  engine.evalNode(batch, asAdd.a)
-  engine.evalNode(batch, asAdd.b)
+  engine.evalNode(batch, asAdd.a, visited)
+  engine.evalNode(batch, asAdd.b, visited)
   # finalization: the full graph is known, the output buffer allocates here
   var sh: Sh
   fillShape(sh, asAdd.r.shape())
