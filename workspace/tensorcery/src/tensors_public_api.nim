@@ -5,13 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Erased user face of tensorcery
-##
-## - one Tensor type for users, construction from host data, materialization
-## - construction uploads, materialization schedules the graph and downloads
-## - everything below this file works on TensorNode and erased impls
-## - a user op's Tensor wrapper lives here, its node and kernel live in the op's own file
-
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/iface
