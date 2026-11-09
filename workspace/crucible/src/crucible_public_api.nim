@@ -7,14 +7,14 @@
 
 ## Curated public surface of crucible.
 ##
-## | Section       | Symbols                                                                                                                              |
-## | ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-## | Engines       | `newEngine`, `CodegenKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                                        |
-## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                                           |
-## | Launch sugar  | `launchKernel`, `launchDeviceFn`, `launchCpuFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig` |
-## | Batch         | `recordBatch`, `enqueue`, `submit`, `replay`, chevrons `<<`/`>>`, `Batch`, `BatchEntry`, `EnqueueSugar`, `EnqueueProxy`              |
-## | Geometry      | `Dim3`, `dim3`                                                                                                                       |
-## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                                        |
+## | Section       | Symbols                                                                                                                                   |
+## | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+## | Engines       | `newEngine`, `CodegenKind`, `HwEngine`, `ingest`, `getArtifact`, `deviceName`                                                             |
+## | Device memory | `DeviceMem`, `allocDevice`, `copyToDeviceFromHost`, `copyToHostFromDevice`                                                                |
+## | Launch sugar  | `launchKernel`, `launchDeviceFn`, `launchCpuFn`, chevrons `<<`/`>>`, `LaunchSugar`, `DeviceFnSugar`, `DeviceFnProxy`, `LaunchConfig`      |
+## | Batch         | `recordBatch`, `enqueue`, `submit`, `replay`, chevrons `<<`/`>>`, `Batch`, `BatchEntry`, `EnqueueSugar`, `EnqueueProxy`, `EnqueueProxyCt` |
+## | Geometry      | `Dim3`, `dim3`                                                                                                                            |
+## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                                             |
 
 import
   ./codegen/gpu_compiler,
@@ -46,7 +46,7 @@ export launch_device_fn.DeviceFnSugar,
 
 export batch.recordBatch, batch.enqueue, batch.`<<`, batch.`>>`, batch.submit,
        batch.replay
-export batch.Batch, batch.BatchEntry, batch.EnqueueSugar, batch.EnqueueProxy
+export batch.Batch, batch.BatchEntry, batch.EnqueueSugar, batch.EnqueueProxy, batch.EnqueueProxyCt
 
 
 # ═══════════════════════════════════════════════════════════════════════
