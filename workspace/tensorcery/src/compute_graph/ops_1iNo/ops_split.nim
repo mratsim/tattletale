@@ -71,34 +71,21 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
 # ═══════════════════════════════════════════════════════════════════════
 
 proc enqueueSplit*[E: HwEngine, Sh: tuple, Mem](
-    engine: E, batch: Batch[E], n: TensorNode,
-    walk: WalkFn[E]): bool =
+    engine: E, batch: Batch[E], n: TensorNode): bool =
   let asSplit = n.to(PosNode[SplitCore])
   if asSplit.isNil:
     return false
   let core = asSplit.core
-  walk(engine, batch, core.a)
+  evalNode[E, Mem](engine, batch, core.a)
   let src = core.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
   for i in 0 ..< core.r.len:
     let v = core.r[i].to(TensorImpl[Mem, Layout[Sh, Sh]])
     v.data = src.data
   true
 
-proc enqueueSplitMetal*(engine: MetalEngine, batch: Batch[MetalEngine], n: TensorNode, walk: WalkFn[MetalEngine]): bool =
-  case n.getImpl().dtype()
-  of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
-    enqueueSplit[MetalEngine, (int, int), Mem](engine, batch, n, walk)
-  of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    enqueueSplit[MetalEngine, (int, int), Mem](engine, batch, n, walk)
-  else:
-    raise ValueError.newException("eval: kFp16 split unsupported")
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-static:
-  registerEnqueuer("split", OpHandlers(metal: enqueueSplitMetal))
+registerOp("split", enqueueSplit)
 

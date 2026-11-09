@@ -10,7 +10,7 @@
 ## - k_add: one threadgroup per tile, the register tile map tiles all inputs
 ## - elements pair by coordinate, 32 lanes x split per tile
 ## - add: z.node = an AddNode over a.node and b.node
-## - the metal handler enqueues k_add over the node's bridges into the batch
+## - the handler enqueues k_add over the node's bridges into the batch
 
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/engines_api
@@ -88,14 +88,13 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc enqueueAdd*[E: HwEngine, Sh: tuple, Mem](
-    engine: E, batch: Batch[E], n: TensorNode,
-    walk: WalkFn[E]): bool =
+    engine: E, batch: Batch[E], n: TensorNode): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil:
     return false
   let rz = asAdd.r.to(TensorImpl[Mem, Layout[Sh, Sh]])
-  walk(engine, batch, asAdd.a)
-  walk(engine, batch, asAdd.b)
+  evalNode[E, Mem](engine, batch, asAdd.a)
+  evalNode[E, Mem](engine, batch, asAdd.b)
   let
     xa = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
     xb = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
@@ -107,22 +106,8 @@ proc enqueueAdd*[E: HwEngine, Sh: tuple, Mem](
   batch.enqueue<<(ceil_div(numel, 128), 32)>> k_add(zv, xv, yv)
   true
 
-proc enqueueAddMetal*(engine: MetalEngine, batch: Batch[MetalEngine], n: TensorNode, walk: WalkFn[MetalEngine]): bool =
-  ## Metal handler binding the node's dtype and rank where the registry
-  ## lookup hands the walk's own bindings over
-  case n.getImpl().dtype()
-  of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
-    enqueueAdd[MetalEngine, (int, int), Mem](engine, batch, n, walk)
-  of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    enqueueAdd[MetalEngine, (int, int), Mem](engine, batch, n, walk)
-  else:
-    raise ValueError.newException("eval: kFp16 add unsupported")
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-static:
-  registerEnqueuer("add", OpHandlers(metal: enqueueAddMetal))
+registerOp("add", enqueueAdd)
