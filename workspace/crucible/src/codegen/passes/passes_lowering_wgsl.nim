@@ -262,6 +262,50 @@ proc retsToAsgns(ss: var seq[CirStmt], host: CirExpr) =
     else:
       discard
 
+proc foldValueReturns(ss: var seq[CirStmt], calleeName: string) =
+  ## Folds the split returns of a value body into one terminal return:
+  ## a conditional return with one returning branch receives the statements
+  ## after it as its other branch, so both branches return.
+  ## The fold refuses:
+  ## - a return mid-list, the statements after it never run
+  ## - a return inside a loop, the splice has no break to exit the loop
+  var i = 0
+  while i < ss.len:
+    case ss[i].kind
+    of sRet:
+      if i != ss.len - 1:
+        raiseAssert(calleeName & " returns mid-list, the statements after the return never run")
+      return
+    of sIte:
+      let thenRets = ss[i].thenBody.containsReturn
+      let elseRets = ss[i].elseBody.containsReturn
+      if thenRets and elseRets:
+        if i != ss.len - 1:
+          raiseAssert(calleeName & " returns in both branches of a conditional mid-list, the statements after it never run")
+        ss[i].thenBody.foldValueReturns(calleeName)
+        ss[i].elseBody.foldValueReturns(calleeName)
+        return
+      if thenRets != elseRets:
+        if i == ss.len - 1:
+          raiseAssert(calleeName & " returns in one branch of a trailing conditional, the other branch ends the body without a value")
+        # statements after the conditional move into the falling-through branch,
+        # which ends in the body's terminal return
+        if thenRets:
+          ss[i].elseBody.add ss[i + 1 .. ^1]
+        else:
+          ss[i].thenBody.add ss[i + 1 .. ^1]
+        ss.setLen(i + 1)
+        ss[i].thenBody.foldValueReturns(calleeName)
+        ss[i].elseBody.foldValueReturns(calleeName)
+        return
+      i.inc
+    of sWhile:
+      if ss[i].whileBody.containsReturn:
+        raiseAssert(calleeName & " returns inside a loop, the splice has no break to leave the loop with")
+      i.inc
+    else:
+      i.inc
+
 proc spliceCalleeBody(callee: CirProc, callArgs: seq[CirExpr], used: var HashSet[string], fresh: var int, procs: Table[string, CirProc], host: CirExpr): seq[CirStmt] =
   ## One inlined call site: the callee's body with its locals renamed, parameters substituted, and returns writing `host`.
   ## A nil `host` splices a void callee in statement position.
@@ -309,6 +353,7 @@ proc spliceCalleeBody(callee: CirProc, callArgs: seq[CirExpr], used: var HashSet
     subst[p.name] = sym(alias, p.typ)
   body.substituteArgsStmts(subst)
   if host != nil:
+    body.foldValueReturns(callee.name)
     body.retsToAsgns(host)
     doAssert not body.containsReturn
   result = bindings & body
