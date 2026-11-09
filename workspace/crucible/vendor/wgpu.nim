@@ -441,6 +441,9 @@ proc wgpuComputePassEncoderDispatchWorkgroups*(encoder: WGPUComputePassEncoder,
 proc wgpuComputePassEncoderEnd*(encoder: WGPUComputePassEncoder)
   {.importc: "wgpuComputePassEncoderEnd", dynlib: libWgpu.}
 
+proc wgpuComputePassEncoderRelease*(encoder: WGPUComputePassEncoder)
+  {.importc: "wgpuComputePassEncoderRelease", dynlib: libWgpu.}
+
 proc wgpuCommandEncoderFinish*(encoder: WGPUCommandEncoder,
                                 desc: ptr WGPUCommandBufferDescriptor): WGPUCommandBuffer
   {.importc: "wgpuCommandEncoderFinish", dynlib: libWgpu.}

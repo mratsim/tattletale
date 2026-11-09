@@ -326,6 +326,7 @@ proc launchKernelImpl*(engine: WebgpuEngine, output: auto, args: tuple, cfg: Lau
   wgpuDevicePushErrorScope(device, wgpuErrorFilterValidation)
   wgpuComputePassEncoderDispatchWorkgroups(pass, uint32(cfg.grid.x), uint32(cfg.grid.y), uint32(cfg.grid.z))
   wgpuComputePassEncoderEnd(pass)
+  wgpuComputePassEncoderRelease(pass)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
 
   var scopeData = PopErrorScopeData(done: false)

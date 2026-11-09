@@ -260,6 +260,7 @@ proc replay*(batch: WebgpuBatch) =
     wgpuComputePassEncoderSetBindGroup(pass, 0, e.bindGroup, 0, nil)
     wgpuComputePassEncoderDispatchWorkgroups(pass, cuint(e.fleet.x), cuint(e.fleet.y), cuint(e.fleet.z))
   wgpuComputePassEncoderEnd(pass)
+  wgpuComputePassEncoderRelease(pass)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
   wgpuQueueSubmit(batch.queue, 1, cmdBuf.addr)
   wgpuCommandBufferRelease(cmdBuf)
