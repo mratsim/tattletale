@@ -57,14 +57,14 @@ macro dispatchOp*(E, Sh, Mem, engine, batch, n: typed): untyped =
   ifStmt.add elseBranch
   result.add ifStmt
 
-proc evalWalk*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: Batch[E], n: TensorNode)
+proc evalWalk*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode)
   ## Walks one node: a node with no op is a materialized impl, an op node
   ## enqueues through its registered handler
 
-proc evalNode*[E: HwEngine](engine: E, batch: Batch[E], n: TensorNode) =
+proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: TensorNode) =
   ## Walks one node at its own dtype and rank. Op enqueue handlers recurse
   ## into a node's children through this proc.
-  withMem(engine, n.getImpl().dtype()):
+  engine.withMem(n.getImpl().dtype()):
     case n.getImpl().shape().len
     of 1: evalWalk[E, (int,), Mem](engine, batch, n)
     of 2: evalWalk[E, (int, int), Mem](engine, batch, n)
@@ -75,7 +75,7 @@ proc evalNode*[E: HwEngine](engine: E, batch: Batch[E], n: TensorNode) =
       raise ValueError.newException(
         "eval: rank " & $n.getImpl().shape().len & " unsupported")
 
-proc evalWalk*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: Batch[E], n: TensorNode) =
+proc evalWalk*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode) =
   if n.opName() == "":
     return
   dispatchOp(E, Sh, Mem, engine, batch, n)

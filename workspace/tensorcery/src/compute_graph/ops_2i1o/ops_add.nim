@@ -87,13 +87,13 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode =
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAdd*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: Batch[E], n: TensorNode): bool =
+proc enqueueAdd*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil:
     return false
   let rz = asAdd.r.to(TensorImpl[Mem, Layout[Sh, Sh]])
-  evalNode[E](engine, batch, asAdd.a)
-  evalNode[E](engine, batch, asAdd.b)
+  engine.evalNode(batch, asAdd.a)
+  engine.evalNode(batch, asAdd.b)
   let
     xa = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
     xb = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])

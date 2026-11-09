@@ -26,7 +26,7 @@ proc eval*[E: HwEngine](engine: E, roots: Span[TensorNode]) =
     return
   var batch = engine.recordBatch()
   for i in 0 ..< roots.len:
-    evalNode(engine, batch, roots[i])
+    engine.evalNode(batch, roots[i])
   if batch.entries.len == 0:
     # a leaf-only graph, the values are already materialized
     return
