@@ -28,7 +28,11 @@ macro registerOp*(op: static string, handler: typed) =
 
 type VisitedNodes* = Table[pointer, TensorNode]
   ## Per-eval dedupe state. The key is the erased record's object pointer:
-  ## `cast[pointer](n.private_obj)`, stable per record.
+  ## `cast[pointer](n.private_obj)`. The pointer is stable for the whole eval:
+  ##
+  ## - ARC/ORC never moves objects
+  ## - shared records survive until every consumer field is replaced
+  ## - materialized outputs return at the leaf check, before reaching this map
   ## The value is the node's materialized replacement, stored after enqueue.
   ##
   ## A re-visited node returns the stored replacement, so every producer computes once per eval and aliased consumers read one enqueued result:
