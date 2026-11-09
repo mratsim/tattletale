@@ -6,7 +6,15 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible
+import workspace/crucible/src/builtins/builtins_gpu_types
 import workspace/crucible/src/runtime/engines/engines_api
+import workspace/ceramic
+import workspace/iface
+import tensors_internals
+import tensors_internal_types
+import compute_graph/eval
+import compute_graph/ops_2i1o/ops_add
+import compute_graph/ops_1iNo/ops_split
 
 var
   gMetalEngineInstance: pointer
@@ -15,27 +23,44 @@ var
   gWebgpuEngineInstance: pointer
   gCudaEngineInstance: pointer
 
-proc gMetalEngine*(): MetalEngine =
+proc gMetalEngineErased(_: static Runtime = runMetal): AnyEngine =
   if gMetalEngineInstance.isNil:
     gMetalEngineInstance = cast[pointer](newEngine(runMetal))
-  cast[MetalEngine](gMetalEngineInstance)
+  cast[MetalEngine](gMetalEngineInstance).toAnyEngine()
 
-proc gOpenCLEngine*(): OpenCLEngine =
+proc gOpenCLEngineErased(_: static Runtime = runOpenCL): AnyEngine =
   if gOpenCLEngineInstance.isNil:
     gOpenCLEngineInstance = cast[pointer](newEngine(runOpenCL))
-  cast[OpenCLEngine](gOpenCLEngineInstance)
+  cast[OpenCLEngine](gOpenCLEngineInstance).toAnyEngine()
 
-proc gVulkanEngine*(): VulkanEngine =
+proc gVulkanEngineErased(_: static Runtime = runVulkan): AnyEngine =
   if gVulkanEngineInstance.isNil:
     gVulkanEngineInstance = cast[pointer](newEngine(runVulkan))
-  cast[VulkanEngine](gVulkanEngineInstance)
+  cast[VulkanEngine](gVulkanEngineInstance).toAnyEngine()
 
-proc gWebgpuEngine*(): WebgpuEngine =
+proc gWebgpuEngineErased(_: static Runtime = runWebGPU): AnyEngine =
   if gWebgpuEngineInstance.isNil:
     gWebgpuEngineInstance = cast[pointer](newEngine(runWebGPU))
-  cast[WebgpuEngine](gWebgpuEngineInstance)
+  cast[WebgpuEngine](gWebgpuEngineInstance).toAnyEngine()
 
-proc gCudaEngine*(): CudaEngine =
+proc gCudaEngineErased(_: static Runtime = runCuda): AnyEngine =
   if gCudaEngineInstance.isNil:
     gCudaEngineInstance = cast[pointer](newEngine(runCuda))
-  cast[CudaEngine](gCudaEngineInstance)
+  cast[CudaEngine](gCudaEngineInstance).toAnyEngine()
+
+proc gEngine*(run: static Runtime): AnyEngine =
+  ## Returns the backend for the run kind
+  ## - the erasure instantiates inside the per-engine helpers here
+  ## - one engine compiles per run selection
+  when run == runMetal:
+    gMetalEngineErased()
+  elif run == runOpenCL:
+    gOpenCLEngineErased()
+  elif run == runVulkan:
+    gVulkanEngineErased()
+  elif run == runWebGPU:
+    gWebgpuEngineErased()
+  elif run == runCuda:
+    gCudaEngineErased()
+  else:
+    {.error: "gEngine: unsupported run kind".}

@@ -12,11 +12,12 @@ import tensors_internals
 import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_1iNo/ops_split
+import tensors_globals
+import workspace/crucible/src/runtime/engines/engines_api
 import workspace/design_by_contract
 
-# Export Nim-friendly core types so users construct tensors without
-# importing the internals
 export tensors_public_types.Dtype
+export engines_api.Runtime
 
 # #######################################################################
 #
@@ -25,8 +26,8 @@ export tensors_public_types.Dtype
 # #######################################################################
 
 type Tensor* = object
-  engine*: AnyEngine
-  node*: TensorNode
+  engine: AnyEngine
+  node: TensorNode
 
 # #######################################################################
 #
@@ -34,15 +35,25 @@ type Tensor* = object
 #
 # #######################################################################
 
-proc toTensor*[T: float32 | bfloat16](engine: AnyEngine, data: openArray[T], shape: openArray[int]): Tensor {.contracts.} =
+proc toTensor*[T: float32 | bfloat16](data: openArray[T], shape: openArray[int],
+    run: static Runtime = runMetal, dtype: typedesc = T): Tensor {.contracts.} =
   ## One tensor from host data, the upload is the construction
-  ## (the mx.array face), dtype derives from the element type
+  ## (the mx.array face), run picks the backend and dtype converts
+  ## elements that differ from the element type
   {.precondition: shape.len == 2.}
   {.precondition: data.len == shape[0] * shape[1].}
-  result = Tensor(engine: engine,
-                  node: engine.newTensorNode(toDtype(T), shape.toSpan()))
-  if data.len > 0:
-    engine.upload(result.node, data)
+  when T is dtype:
+    let engine = gEngine(run)
+    result = Tensor(engine: engine,
+                    node: engine.newTensorNode(toDtype(T), shape.toSpan()))
+    if data.len > 0:
+      engine.upload(result.node, data)
+  else:
+    var converted: seq[dtype]
+    converted.newSeq(data.len)
+    for i in 0 ..< data.len:
+      converted[i] = data[i].to(dtype)
+    result = toTensor(converted, shape, run, dtype)
 
 # #######################################################################
 #
