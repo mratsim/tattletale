@@ -129,8 +129,8 @@ proc openclLowerByrefParams(m: CirModule) =
       let ptrSym = sym(p.name, tPtr(caThread, p.typ))
       fn.body.walkStmts(nil, proc(e: CirExpr) =
         if e.kind == eSym and e.name == oldName:
-          e.kind = eDeref
-          e.derefOperand = ptrSym)
+          # Nim 2 case objects forbid in-place branch switching, so the rewrite replaces the whole record
+          e[] = CirExpr(kind: eDeref, derefOperand: ptrSym)[])
       byref.mgetOrPut(fn.name, @[]).add(i)
   for fn in m.procs:
     var tmpCount = 0
