@@ -79,7 +79,7 @@ proc sdpaReplayCase(engine: MetalEngine, Elem: typedesc, HeadDim: static int, is
     grid = (qTiles, meta.Hq, meta.B)
     blk = (32, 1)
 
-  engine.copyToHostFromDevice(addr oh.data[0], oDev.data, oh.len())
+  engine.copyToHostFromDevice(oh.data.toOpenArray(0, oh.len() - 1), oDev.data)
   let got = oh.to(float32)
   sdpaCompare(got, expected, "fixture " & meta.name & " (" & $Elem & ")",
               not (Elem is float32))

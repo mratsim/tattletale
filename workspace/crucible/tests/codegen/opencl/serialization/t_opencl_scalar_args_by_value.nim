@@ -23,10 +23,10 @@ proc runTest() =
     var beta = 4'i32
     var output: array[1, float32]
     let aDev = engine.allocDevice(float32, a.len)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(aDev, a)
     let oDev = engine.allocDevice(float32, 1)
     engine.launchKernel("scaleKernel", oDev, (aDev, alpha, beta))
-    engine.copyToHostFromDevice(addr output[0], oDev, 1)
+    engine.copyToHostFromDevice(output.toOpenArray(0, 1 - 1), oDev)
     doAssert output[0] == 11.5'f32, "expected 2.5 * 3.0 + 4.0 = 11.5"
     echo "  OK"
 

@@ -26,7 +26,7 @@ proc runTest() =
   # do not depend on the group count. The neighbor-slot dependency is within-group.
   engine.launchKernel<<(grid: (2, 1), blk: (4, 2))>>("crossVocabSharedKernel", oDev, ())
   var res: array[8, uint32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 8)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 8 - 1), oDev)
   for i in 0 ..< 8:
     let expected = uint32((i + 1) mod 8) * 3'u32
     doAssert res[i] == expected,

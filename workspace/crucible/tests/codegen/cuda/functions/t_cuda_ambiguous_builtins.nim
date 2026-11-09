@@ -37,7 +37,7 @@ proc runTest() =
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("builtinKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   doAssert buf[0] == 10, &"direct min: {buf[0]}"
   doAssert buf[1] == 30, &"direct max: {buf[1]}"
   doAssert buf[2] == 5, &"direct abs: {buf[2]}"

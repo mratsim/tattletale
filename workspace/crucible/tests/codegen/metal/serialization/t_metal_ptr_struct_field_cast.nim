@@ -71,12 +71,12 @@ proc runTest() =
       engine.ingest(msl)
       var input = [10'u32, 20'u32, 30'u32, 40'u32]
       let iDev = engine.allocDevice(uint32, 4)
-      engine.copyToDeviceFromHost(iDev, addr input[0], 4)
+      engine.copyToDeviceFromHost(iDev, input.toOpenArray(0, 4 - 1))
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel << (grid: (1, 1), blk: (1, 1)) >> (
         "ptrFieldDeviceKernel", oDev, (iDev,))
       var output: array[4, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 4)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 4 - 1), oDev)
       for i in 0 ..< 4:
         check output[i] == input[i]
     test "smem view field + cast qualify as `threadgroup` and run":
@@ -86,7 +86,7 @@ proc runTest() =
       engine.launchKernel << (grid: (4, 1), blk: (4, 1)) >> (
         "ptrFieldSmemKernel", oDev, ())
       var output: array[4, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 4)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 4 - 1), oDev)
       # lane L reads the slot written by lane 3-L (reverse through smem)
       for i in 0 ..< 4:
         check output[i] == uint32((3 - i) * 3)
@@ -95,17 +95,17 @@ proc runTest() =
       engine.ingest(msl)
       var input = [10'u32, 20'u32, 30'u32, 40'u32]
       let iDev = engine.allocDevice(uint32, 4)
-      engine.copyToDeviceFromHost(iDev, addr input[0], 4)
+      engine.copyToDeviceFromHost(iDev, input.toOpenArray(0, 4 - 1))
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel << (grid: (1, 1), blk: (1, 1)) >> (
         "viewDeviceKernel", oDev, (iDev,))
       var output: array[4, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 4)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 4 - 1), oDev)
       for i in 0 ..< 4:
         check output[i] == input[i]
       engine.launchKernel << (grid: (4, 1), blk: (4, 1)) >> (
         "viewSmemKernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, 4)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 4 - 1), oDev)
       # lane L reads the slot written by lane 3-L (reverse through smem)
       for i in 0 ..< 4:
         check output[i] == uint32((3 - i) * 3)

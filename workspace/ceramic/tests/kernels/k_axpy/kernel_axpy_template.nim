@@ -67,7 +67,7 @@ proc checkAxpy*[E: HwEngine](
     launch("glsl")
   else:
     launch(hlsl)
-  engine.copyToHostFromDevice(addr y.data[0], yDev.data, y.layout.cosize())
+  engine.copyToHostFromDevice(y.data.toOpenArray(0, y.layout.cosize() - 1), yDev.data)
   assertAllClose(y.view(), expect.view(), rtol = 1e-5, abstol = 1e-4, msg = msg)
 
 # ═══════════════════════════════════════════════════════════════

@@ -31,9 +31,9 @@ proc runTest() =
       var res: array[4, uint32]
       let iDev = engine.allocDevice(uint32, input.len)
       let oDev = engine.allocDevice(uint32, res.len)
-      engine.copyToDeviceFromHost(iDev, addr input[0], input.len)
+      engine.copyToDeviceFromHost(iDev, input)
       engine.launchKernel("mapReadbackKernel", oDev, (iDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6

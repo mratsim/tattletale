@@ -26,7 +26,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel<<(grid: (1, 1), blk: (4, 1))>>("k", oDev, ())
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res == [1'u32, 2, 3, 4]
 
 when isMainModule:

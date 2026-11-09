@@ -30,7 +30,7 @@ proc runTest() =
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("tupleGenericKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   doAssert buf[0] == 10, &"tuple[0].data[0]: got {buf[0]}"
   doAssert buf[1] == 40, &"tuple[0].data[3]: got {buf[1]}"
   doAssert buf[2] == 99, &"tuple[1]: got {buf[2]}"

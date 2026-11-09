@@ -36,7 +36,7 @@ proc runTest() =
   let dev = engine.allocDevice(float32, 1)
   engine.launchKernel<<(grid: (1, 1), blk: (4, 1))>>("kern", dev, ())
   var got: array[1, float32]
-  engine.copyToHostFromDevice(addr got[0], dev, 1)
+  engine.copyToHostFromDevice(got.toOpenArray(0, 1 - 1), dev)
   doAssert got[0] == 1.5'f32,
     "kern readback: got " & $got[0] & ", want 1.5"
   echo "[OK] Metal: a cast over a statement expression adopts the value's address space"

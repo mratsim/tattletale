@@ -41,7 +41,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, LaneWidth)
       engine.launchKernel<<(grid: (1, 1), blk: (LaneWidth, 1))>>("broadcastLane0", oDev, ())
       var res: array[LaneWidth, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, LaneWidth)
+      engine.copyToHostFromDevice(res.toOpenArray(0, LaneWidth - 1), oDev)
       for lane in 0 ..< LaneWidth:
         check res[lane] == 0xABCD0000'u32
 
@@ -51,7 +51,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, LaneWidth)
       engine.launchKernel<<(grid: (1, 1), blk: (LaneWidth, 1))>>("butterflyXor1", oDev, ())
       var res: array[LaneWidth, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, LaneWidth)
+      engine.copyToHostFromDevice(res.toOpenArray(0, LaneWidth - 1), oDev)
       for lane in 0 ..< LaneWidth:
         check res[lane] == uint32(lane xor 1)
 
@@ -61,7 +61,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, LaneWidth)
       engine.launchKernel<<(grid: (1, 1), blk: (LaneWidth, 1))>>("butterflyXor16", oDev, ())
       var res: array[LaneWidth, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, LaneWidth)
+      engine.copyToHostFromDevice(res.toOpenArray(0, LaneWidth - 1), oDev)
       for lane in 0 ..< LaneWidth:
         check res[lane] == uint32(lane xor 16)
 

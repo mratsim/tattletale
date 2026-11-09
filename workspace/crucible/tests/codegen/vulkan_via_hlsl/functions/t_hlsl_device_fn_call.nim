@@ -41,7 +41,7 @@ proc runTest() =
   let oDev = engine.allocDevice(uint32, 1)
   engine.launchKernel("main", oDev, ())
   var got: array[1, uint32]
-  engine.copyToHostFromDevice(addr got[0], oDev, 1)
+  engine.copyToHostFromDevice(got.toOpenArray(0, 1 - 1), oDev)
   # middle(10) = (10 + 1) * 2 = 22, clamped at 100 stays 22
   doAssert got[0] == 22'u32, "device fn chain got " & $got[0] & ", expected 22"
 

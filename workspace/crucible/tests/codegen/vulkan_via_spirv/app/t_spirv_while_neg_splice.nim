@@ -26,7 +26,7 @@ proc runTest() =
     grid = (1, 1)
     blk = (1, 1)
   var got: array[2, int32]
-  engine.copyToHostFromDevice(addr got[0], oDev, 2)
+  engine.copyToHostFromDevice(got.toOpenArray(0, 2 - 1), oDev)
   # splice runs before every test: n counts 1, 0, 1, ending at 1
   doAssert got[0] == 1, "n: got " & $got[0] & ", want 1"
   doAssert got[1] == 2, "i: got " & $got[1] & ", want 2"

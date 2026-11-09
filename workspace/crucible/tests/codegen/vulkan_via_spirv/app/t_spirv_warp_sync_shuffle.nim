@@ -39,7 +39,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, lanes)
     engine.launchKernel("broadcastLane0", oDev, ())
     var res: array[LaneWidth, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, LaneWidth)
+    engine.copyToHostFromDevice(res.toOpenArray(0, LaneWidth - 1), oDev)
     for lane in 0 ..< LaneWidth:
       doAssert res[lane] == 1000'u32,
         "broadcast: lane " & $lane & " read " & $res[lane] & ", expected 1000"
@@ -50,7 +50,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, lanes)
     engine.launchKernel("butterflyXor1", oDev, ())
     var res: array[64, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, 64)
+    engine.copyToHostFromDevice(res.toOpenArray(0, 64 - 1), oDev)
     for lane in 0 ..< 64:
       doAssert res[lane] == uint32(lane xor 1),
         "butterfly: lane " & $lane & " read " & $res[lane] & ", expected " & $(lane xor 1)

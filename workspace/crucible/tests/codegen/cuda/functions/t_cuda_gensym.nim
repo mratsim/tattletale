@@ -21,7 +21,7 @@ proc runTest() =
       engine.ingest(kernelCode)
       let o0 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel_const", o0, ())
-      engine.copyToHostFromDevice(addr buf[0], o0, buf.len)
+      engine.copyToHostFromDevice(buf, o0)
       check buf[0] == 42
 
     ## gensym'd let with {.genSym.} pragma — runtime branch of evalOnceAs
@@ -36,7 +36,7 @@ proc runTest() =
       engine.ingest(kernelCode)
       let o1 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel_let", o1, (7'u32,))
-      engine.copyToHostFromDevice(addr buf[0], o1, buf.len)
+      engine.copyToHostFromDevice(buf, o1)
       check buf[0] == 7
 
     ## genSym'd var in a for loop — pattern from fillWith / gemm kernels
@@ -52,7 +52,7 @@ proc runTest() =
       engine.ingest(kernelCode)
       let o2 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 5)>>("kernel_var", o2, ())
-      engine.copyToHostFromDevice(addr buf[0], o2, buf.len)
+      engine.copyToHostFromDevice(buf, o2)
       for i in 0 ..< 5:
         check buf[i] == uint32(i * 3)
 
@@ -69,7 +69,7 @@ proc runTest() =
       engine.ingest(kernelCode)
       let o3 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel_eoa", o3, (41'u32,))
-      engine.copyToHostFromDevice(addr buf[0], o3, buf.len)
+      engine.copyToHostFromDevice(buf, o3)
       check buf[0] == 42
 
     ## Multiple gensym consts working together in arithmetic
@@ -86,7 +86,7 @@ proc runTest() =
       engine.ingest(kernelCode)
       let o4 = engine.allocDevice(uint32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel_multi", o4, ())
-      engine.copyToHostFromDevice(addr buf[0], o4, buf.len)
+      engine.copyToHostFromDevice(buf, o4)
       check buf[0] == 53
 
 when isMainModule:

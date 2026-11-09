@@ -85,5 +85,5 @@ proc benchCeramic*[E: HwEngine](engine: E, M, N, K, iters: int): auto =
     engine.launchDeviceFn gemmLoop(tiledMma(float32, float16, float16, 32, 32, 16), dDev, aDev, bDev, iters) do:
       grid = (ceil_div(M, 32), ceil_div(N, 32))
       blk = (32, 1)
-  engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, M * N)
+  engine.copyToHostFromDevice(dHost.data.toOpenArray(0, M * N - 1), dDev.data)
   dHost

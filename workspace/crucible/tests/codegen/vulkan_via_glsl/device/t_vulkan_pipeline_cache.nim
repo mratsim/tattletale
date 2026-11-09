@@ -52,18 +52,18 @@ proc runTest() =
     let bDev = engine.allocDevice(uint32, b.len)
     let oDev = engine.allocDevice(uint32, 2)
     var out32: array[2, uint32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
     doAssert out32[0] == 11 and out32[1] == 22
     echo "  addKernel run 1: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     a = [100'u32, 200'u32]
     b = [30'u32, 40'u32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
     doAssert out32[0] == 130 and out32[1] == 240
     echo "  addKernel run 2: [100,200] + [30,40] = [", out32[0], ", ", out32[1], "]"
     echo "  OK: cached pipeline reused, descriptor set rewritten"
@@ -75,18 +75,18 @@ proc runTest() =
     let bDev = engine.allocDevice(uint32, b.len)
     let oDev = engine.allocDevice(uint32, 2)
     var out32: array[2, uint32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("subKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
     doAssert out32[0] == 9 and out32[1] == 18
     echo "  subKernel run 1: [10,20] - [1,2] = [", out32[0], ", ", out32[1], "]"
     a = [50'u32, 80'u32]
     b = [10'u32, 10'u32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("subKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
     doAssert out32[0] == 40 and out32[1] == 70
     echo "  subKernel run 2: [50,80] - [10,10] = [", out32[0], ", ", out32[1], "]"
     echo "  OK: non-entry kernel SPIR-V and pipeline cached"
@@ -98,11 +98,11 @@ proc runTest() =
     let aDev = engine.allocDevice(uint32, a.len)
     let bDev = engine.allocDevice(uint32, b.len)
     let oDev = engine.allocDevice(uint32, 2)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
     var out32: array[2, uint32]
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
     doAssert out32[0] == 15 and out32[1] == 24
     echo "  addKernel after re-ingest: [3,4] * [5,6] = [", out32[0], ", ", out32[1], "]"
     echo "  OK: re-ingest invalidated the caches (same kernel name, new body)"

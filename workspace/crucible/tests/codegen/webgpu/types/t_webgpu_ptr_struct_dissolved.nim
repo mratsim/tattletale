@@ -25,10 +25,10 @@ proc runTest() =
   let oDev = engine.allocDevice(float32, 4)
   let pDev = engine.allocDevice(float32, 4)
   var pData: array[4, float32] = [10.0'f32, 20.0'f32, 30.0'f32, 40.0'f32]
-  engine.copyToDeviceFromHost(pDev, addr pData[0], 4)
+  engine.copyToDeviceFromHost(pDev, pData.toOpenArray(0, 4 - 1))
   engine.launchKernel("axpyView", oDev, (pDev, 4'i32))
   var res: array[4, float32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 4)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
 
   doAssert res[0] == 11.0'f32, "leaf p[0]: got " & $res[0] & ", want 11.0"
   doAssert res[1] == 21.0'f32, "leaf p[1]: got " & $res[1] & ", want 21.0"

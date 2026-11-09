@@ -33,29 +33,29 @@ proc runTest() =
   let aDev = engine.allocDevice(uint32, a.len)
   let bDev = engine.allocDevice(uint32, b.len)
   let rDev = engine.allocDevice(uint32, r.len)
-  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+  engine.copyToDeviceFromHost(aDev, a)
+  engine.copyToDeviceFromHost(bDev, b)
 
   # res=r → kernel gets (c=r, a, b, useAdd=true)
   # chevrons: plain run is 1×1 since the engine carries no grid/blk.
   # The kernel is tid-dependent, so launch 8 threads explicitly.
   engine.launchKernel<<(1, 8)>>("condAdd", rDev, (aDev, bDev, true))
-  engine.copyToHostFromDevice(addr r[0], rDev, r.len)
+  engine.copyToHostFromDevice(r, rDev)
   echo "  condAdd(true): ", r
   for i in 0..7: doAssert r[i] == a[i] + b[i]
 
   engine.launchKernel<<(1, 8)>>("condAdd", rDev, (aDev, bDev, false))
-  engine.copyToHostFromDevice(addr r[0], rDev, r.len)
+  engine.copyToHostFromDevice(r, rDev)
   echo "  condAdd(false): ", r
   for i in 0..7: doAssert r[i] == a[i] - b[i]
 
   engine.launchKernel<<(1, 8)>>("scale", rDev, (rDev, aDev, 3'i32, false))
-  engine.copyToHostFromDevice(addr r[0], rDev, r.len)
+  engine.copyToHostFromDevice(r, rDev)
   echo "  scale(3, false): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3)
 
   engine.launchKernel<<(1, 8)>>("scale", rDev, (rDev, aDev, 3'i32, true))
-  engine.copyToHostFromDevice(addr r[0], rDev, r.len)
+  engine.copyToHostFromDevice(r, rDev)
   echo "  scale(3, true): ", r
   for i in 0..7: doAssert r[i] == uint32(int32(a[i]) * 3 - 1)
 

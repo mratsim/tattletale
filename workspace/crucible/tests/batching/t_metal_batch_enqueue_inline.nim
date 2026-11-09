@@ -24,12 +24,12 @@ proc runTest[E: HwEngine](engine: E) =
   var xs: array[N, float32]
   for i in 0 ..< N:
     xs[i] = float32(i)
-  engine.copyToDeviceFromHost(xD, addr xs[0], N)
+  engine.copyToDeviceFromHost(xD, xs.toOpenArray(0, N - 1))
   var batch = engine.recordBatch()
   batch.enqueue<<(1, 64)>> scaleKernel(outD, xD, 3.0'f32)
   batch.submit()
   var got: array[N, float32]
-  engine.copyToHostFromDevice(addr got[0], outD, N)
+  engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), outD)
   for i in 0 ..< N:
     doAssert got[i] == 3.0'f32 * xs[i], "scale mismatch at " & $i & ": " & $got[i]
   echo "[OK] inline enqueue launches"

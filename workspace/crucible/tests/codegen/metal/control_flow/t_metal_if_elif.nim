@@ -41,24 +41,24 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 1)
       var res: array[1, int32]
       var x = [0'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("elifDispatch", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 10
       x[0] = 1
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("elifDispatch", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 20
       x[0] = 2
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("elifDispatch", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 30
       x[0] = 3
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("elifDispatch", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 40
 
     test "no else in source leaves the sentinel standing on no match":
@@ -68,19 +68,19 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 1)
       var res: array[1, int32]
       var x = [0'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("elifNoElse", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 1
       x[0] = 1
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("elifNoElse", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 2
       x[0] = 2
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("elifNoElse", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 99  # no branch matched: sentinel preserved
 
 when isMainModule:

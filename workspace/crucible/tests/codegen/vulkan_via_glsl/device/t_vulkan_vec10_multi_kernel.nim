@@ -24,18 +24,18 @@ proc runTest() =
   let aDev = engine.allocDevice(uint32, a.len)
   let bDev = engine.allocDevice(uint32, b.len)
   let oDev = engine.allocDevice(uint32, 10)
-  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+  engine.copyToDeviceFromHost(aDev, a)
+  engine.copyToDeviceFromHost(bDev, b)
 
   engine.launchKernel("vec10_add", oDev, (aDev, bDev))
   var res: array[10, uint32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 10)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 10 - 1), oDev)
   for i in 0 ..< 10:
     doAssert res[i] == a[i] + b[i]
   echo "  OK — vec10_add"
 
   engine.launchKernel("vec10_mul", oDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr res[0], oDev, 10)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 10 - 1), oDev)
   for i in 0 ..< 10:
     doAssert res[i] == a[i] * b[i]
   echo "  OK — vec10_mul"

@@ -43,7 +43,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 4)
       engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("zeroArgKernel", oDev, ())
       var res: array[4, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[0] == 0
       check res[1] == 0
       check res[2] == 0
@@ -55,7 +55,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 2)
       engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("mixedKernel", oDev, ())
       var res: array[2, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 7
       check res[1] == 0
 

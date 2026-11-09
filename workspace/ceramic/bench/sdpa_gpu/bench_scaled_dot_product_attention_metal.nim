@@ -128,7 +128,7 @@ proc runCase(engine: MetalEngine, L, S: int, Causal: static bool, iters: int) =
       engine.launchDeviceFn sdpaBenchLoop(oDev, qDev, kDev, vDev, scaleVal, Dk, Dv, Causal, iters) do:
         grid = launchGrid
         blk = (32, 1)
-      engine.copyToHostFromDevice(addr oHost.data[0], oDev.data, oHost.len())
+      engine.copyToHostFromDevice(oHost.data.toOpenArray(0, oHost.len() - 1), oDev.data)
       timings[rep] = inNanoseconds(getMonoTime() - benchStart) div iters
   sort(timings)
   let

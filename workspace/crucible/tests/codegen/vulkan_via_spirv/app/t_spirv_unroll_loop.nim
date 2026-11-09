@@ -36,7 +36,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel(pair.name, oDev, ())
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       for i in 0 ..< 4:
         doAssert res[i] == uint32(i),
           pair.name & ": output[" & $i & "] read " & $res[i] & ", expected " & $i

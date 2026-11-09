@@ -150,7 +150,7 @@ proc runCase(engine: MetalEngine, kvLen: int, numSeqs: int, iters: int) =
           oDev, qDev, kDev, vDev, qOffDev, kvB, scaleVal, 0, H, Nkv, iters) do:
         grid = launchGrid
         blk = (32, 1)
-      engine.copyToHostFromDevice(addr oHost.data[0], oDev.data, oHost.len())
+      engine.copyToHostFromDevice(oHost.data.toOpenArray(0, oHost.len() - 1), oDev.data)
       timings[rep] = inNanoseconds(getMonoTime() - benchStart) div iters
   sort(timings)
   let

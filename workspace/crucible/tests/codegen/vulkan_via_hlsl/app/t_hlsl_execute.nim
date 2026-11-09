@@ -120,11 +120,11 @@ proc runTest() =
       let aDev = engine.allocDevice(uint32, a.len)
       let bDev = engine.allocDevice(uint32, b.len)
       let oDev = engine.allocDevice(uint32, 2)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, a)
+      engine.copyToDeviceFromHost(bDev, b)
       engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+      engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
       doAssert out32[0] == addReadback[0] and out32[1] == addReadback[1],
         "Metal readback [" & $out32[0] & ", " & $out32[1] &
         "] differs from the Vulkan descriptor-route readback [" &

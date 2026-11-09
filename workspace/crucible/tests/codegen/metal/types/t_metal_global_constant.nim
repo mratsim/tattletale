@@ -21,10 +21,10 @@ proc runTest() =
     engine.ingest(globalConstantMsl)
     let oDev = engine.allocDevice(int32, 1)
     let zero: int32 = 0
-    engine.copyToDeviceFromHost(oDev, addr zero, 1)
+    engine.copyToDeviceFromHost(oDev, [zero])
     engine.launchKernel("bump", oDev, ())
     var res: array[1, int32]
-    engine.copyToHostFromDevice(addr res[0], oDev, 1)
+    engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
     check res[0] == 42
 
 when isMainModule:

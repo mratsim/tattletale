@@ -21,11 +21,11 @@ proc runTest() =
 
     let aDev = engine.allocDevice(uint32, a.len)
     let oDev = engine.allocDevice(uint32, out32.len)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(aDev, a)
     # 0x4400 is the f16 bit pattern of 4.0
     let x = cast[float16](0x4400'u16)
     engine.launchKernel("f16ScaleKernel", oDev, (aDev, x))
-    engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
+    engine.copyToHostFromDevice(out32, oDev)
 
     doAssert out32[0] == 14, "f16ScaleKernel: " & $out32[0] & ", expected 14"
     echo "  OK: float16 scalar arg (4.0) added to 10 = 14"

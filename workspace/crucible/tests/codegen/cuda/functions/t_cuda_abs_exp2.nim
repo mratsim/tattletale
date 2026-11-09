@@ -36,9 +36,9 @@ proc runTest() =
 
   bufF32[0] = -2.5'f32
   let o32 = engine.allocDevice(float32, bufF32.len)
-  engine.copyToDeviceFromHost(o32, addr bufF32[0], bufF32.len)
+  engine.copyToDeviceFromHost(o32, bufF32)
   engine.launchKernel("mathKernel", o32, ())
-  engine.copyToHostFromDevice(addr bufF32[0], o32, bufF32.len)
+  engine.copyToHostFromDevice(bufF32, o32)
   echo "  abs(-2.5'f32)   = ", bufF32[1]
   echo "  exp2(-2.5'f32)  = ", bufF32[2]
   doAssert bufF32[1] == 2.5'f32
@@ -48,9 +48,9 @@ proc runTest() =
   engine.ingest(abs64Cuda)
   bufF64[0] = -2.5'f64
   let o64 = engine.allocDevice(float64, bufF64.len)
-  engine.copyToDeviceFromHost(o64, addr bufF64[0], bufF64.len)
+  engine.copyToDeviceFromHost(o64, bufF64)
   engine.launchKernel("abs64Kernel", o64, ())
-  engine.copyToHostFromDevice(addr bufF64[0], o64, bufF64.len)
+  engine.copyToHostFromDevice(bufF64, o64)
   echo "  abs(-2.5'f64)   = ", bufF64[1]
   doAssert bufF64[1] == 2.5'f64
 

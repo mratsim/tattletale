@@ -57,7 +57,7 @@ proc runTest() =
   var buf1: array[1, uint32]
   let oDev1 = engine.allocDevice(uint32, buf1.len)
   engine.launchKernel("sumKernel", oDev1, ())
-  engine.copyToHostFromDevice(addr buf1[0], oDev1, buf1.len)
+  engine.copyToHostFromDevice(buf1, oDev1)
   echo "  sumKernel (100+200+300) = ", buf1[0]
   doAssert buf1[0] == 600
 
@@ -65,7 +65,7 @@ proc runTest() =
   var buf2: array[3, uint32]
   let oDev2 = engine.allocDevice(uint32, buf2.len)
   engine.launchKernel("maxKernel", oDev2, ())
-  engine.copyToHostFromDevice(addr buf2[0], oDev2, buf2.len)
+  engine.copyToHostFromDevice(buf2, oDev2)
   echo "  maxKernel compose(1,2,3) = ", buf2[0]
   echo "  maxKernel t.a+b+c        = ", buf2[1]
   echo "  maxKernel reduceMax      = ", buf2[2]

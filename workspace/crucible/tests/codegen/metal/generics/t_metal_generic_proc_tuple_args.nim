@@ -35,7 +35,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 2)
       engine.launchKernel("repro", oDev, ())
       var res: array[2, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 6.0'f32
       check res[1] == 9.0'f32
 

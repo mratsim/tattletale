@@ -126,7 +126,7 @@ proc runTest() =
   engine.ingest(kernel)
   let oDev = engine.allocDevice(float32, outBuf.len)
   engine.launchKernel<<(1, 1)>>("gemmKernel", oDev, (128'i32, 64'i32))
-  engine.copyToHostFromDevice(addr outBuf[0], oDev, outBuf.len)
+  engine.copyToHostFromDevice(outBuf, oDev)
   doAssert outBuf[0] == 42.0'f32, "output[0] = " & $outBuf[0] & " (expected 42.0)"
   echo "  OK (test_cuda_hoist_vars_dedup)"
 
@@ -139,7 +139,7 @@ proc runTest() =
   engine2.ingest(kernelGensym)
   let oDev2 = engine2.allocDevice(float32, outBuf2.len)
   engine2.launchKernel<<(1, 1)>>("reproKernel", oDev2, ())
-  engine2.copyToHostFromDevice(addr outBuf2[0], oDev2, outBuf2.len)
+  engine2.copyToHostFromDevice(outBuf2, oDev2)
   doAssert outBuf2[0] == 42.0'f32, "output[0] = " & $outBuf2[0] & " (expected 42.0)"
   echo "  OK (test_cuda_hoist_N_gensym_dup)"
 

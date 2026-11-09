@@ -39,12 +39,12 @@ proc runTest() =
       engine.ingest(viewCastMsl)
       var A = [uint16(10), 20, 30, 40, 50, 60, 70, 80]
       let aDev = engine.allocDevice(uint16, A.len)
-      engine.copyToDeviceFromHost(aDev, addr A[0], A.len)
+      engine.copyToDeviceFromHost(aDev, A)
       let oDev = engine.allocDevice(uint32, 1)
       var res: array[1, uint32]
       # baseOff = 2 * strideRow + strideCol = 2 * 3 + 1 = 7
       engine.launchKernel("viewCastKernel", oDev, (aDev, int32(4), int32(3)))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == uint32(A[7])
 
 when isMainModule:

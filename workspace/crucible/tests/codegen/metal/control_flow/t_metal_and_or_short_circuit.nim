@@ -40,9 +40,9 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 2)
       var res: array[2, int32]
       var x = [1'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("andShortCircuit", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 0  # rhs never ran
       check res[1] == 0  # r is false
 
@@ -53,9 +53,9 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 2)
       var res: array[2, int32]
       var x = [0'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("andShortCircuit", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 1  # rhs ran
       check res[1] == 1  # r is true
 
@@ -66,9 +66,9 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 2)
       var res: array[2, int32]
       var x = [1'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("orShortCircuit", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 0  # rhs never ran
       check res[1] == 1  # r is true
 
@@ -79,9 +79,9 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 2)
       var res: array[2, int32]
       var x = [0'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("orShortCircuit", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 1  # rhs ran
       check res[1] == 0  # r is false
 

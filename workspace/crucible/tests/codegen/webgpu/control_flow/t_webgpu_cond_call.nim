@@ -38,7 +38,7 @@ proc runCond(n: int32): array[3, int32] =
   engine.ingest(code)
   let oDev = engine.allocDevice(int32, 3)
   engine.launchKernel("condKernel", oDev, (n,))
-  engine.copyToHostFromDevice(addr result[0], oDev, 3)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 3 - 1), oDev)
 
 proc runTest() =
   suite "WebGPU - device calls in conditions":

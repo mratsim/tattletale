@@ -33,11 +33,11 @@ proc runTest() =
       engine.ingest(kernelBoolRead)
       let flags = [true, false, true, false]
       let fDev = engine.allocDevice(bool, flags.len)
-      engine.copyToDeviceFromHost(fDev, unsafeAddr flags[0], flags.len)
+      engine.copyToDeviceFromHost(fDev, flags)
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
 
     test "seq[bool] input reads 1-byte elements":
@@ -45,11 +45,11 @@ proc runTest() =
       engine.ingest(kernelBoolRead)
       let flags = @[true, false, true, false]
       let fDev = engine.allocDevice(bool, flags.len)
-      engine.copyToDeviceFromHost(fDev, addr flags[0], flags.len)
+      engine.copyToDeviceFromHost(fDev, flags)
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolReadKernel", oDev, (fDev,))
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res == [1'u32, 0'u32, 1'u32, 0'u32]
 
     test "array[bool] output writes 1-byte elements":
@@ -57,11 +57,11 @@ proc runTest() =
       engine.ingest(kernelBoolWrite)
       let vals = [1'u32, 0'u32, 1'u32, 0'u32]
       let vDev = engine.allocDevice(uint32, vals.len)
-      engine.copyToDeviceFromHost(vDev, unsafeAddr vals[0], vals.len)
+      engine.copyToDeviceFromHost(vDev, vals)
       let oDev = engine.allocDevice(bool, 4)
       engine.launchKernel<<(grid: (4, 1), blk: (1, 1))>>("boolWriteKernel", oDev, (vDev,))
       var outBools: array[4, bool]
-      engine.copyToHostFromDevice(addr outBools[0], oDev, 4)
+      engine.copyToHostFromDevice(outBools.toOpenArray(0, 4 - 1), oDev)
       check outBools == [true, false, true, false]
 
 when isMainModule:

@@ -70,7 +70,7 @@ proc runCase(engine: MetalEngine, shape, srcStrides, dstShape, dstStrides: tuple
     grid = (gx, 1)
     blk = (32, 1)
   let benchStop = getMonoTime()
-  engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, nonReducedSize)
+  engine.copyToHostFromDevice(dstHost.data.toOpenArray(0, nonReducedSize - 1), dstDev.data)
   let label = &"axis {axis}"
   reportSum(label, gx, np, iters, benchStart, benchStop)
 

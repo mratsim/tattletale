@@ -34,10 +34,10 @@ proc runTest() =
         expected[lane] = cast[uint32](inp[lane])
       let iDev = engine.allocDevice(float32, 32)
       let oDev = engine.allocDevice(uint32, 32)
-      engine.copyToDeviceFromHost(iDev, addr inp[0], 32)
+      engine.copyToDeviceFromHost(iDev, inp.toOpenArray(0, 32 - 1))
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("bitsToUintKernel", oDev, (iDev,))
       var res: array[32, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 32 - 1), oDev)
       for lane in 0 ..< 32:
         check res[lane] == expected[lane]
 
@@ -51,10 +51,10 @@ proc runTest() =
         expected[lane] = float32(-2.0) - float32(lane)
       let iDev = engine.allocDevice(uint32, 32)
       let oDev = engine.allocDevice(float32, 32)
-      engine.copyToDeviceFromHost(iDev, addr inp[0], 32)
+      engine.copyToDeviceFromHost(iDev, inp.toOpenArray(0, 32 - 1))
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("uintToBitsKernel", oDev, (iDev,))
       var res: array[32, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 32 - 1), oDev)
       for lane in 0 ..< 32:
         check res[lane] == expected[lane]
 

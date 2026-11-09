@@ -94,11 +94,11 @@ when defined(macosx):
   proc allocDevice*[T](engine: MetalEngine, _: typedesc[T], len: int): DeviceMem[objc.ID, T] {.inline.} =
     DeviceMem[objc.ID, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-  proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[objc.ID, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-    engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
-
-  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[objc.ID, T], n: int) {.inline.} =
-    engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+  proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[objc.ID, T], src: openArray[T]) {.inline.} =
+    engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
+  
+  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: var openArray[T], src: DeviceMem[objc.ID, T]) {.inline.} =
+    engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
   # ════════════════════════════════════════════════════════════════════════
   # ▸ Launch serialization

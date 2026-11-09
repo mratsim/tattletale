@@ -37,9 +37,9 @@ const kernel = cuda:
       var engine = newEngine(runCuda)
       engine.ingest(kernel)
       let oDev = engine.allocDevice(int32, output.len)
-      engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
+      engine.copyToDeviceFromHost(oDev, output)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 8  # foldedMul(C[0]+8) = 1 * (0 + 8)
       check output[1] == 5  # foldedFma(C[1]+2) = 1 + (0 + 2) * 2
 

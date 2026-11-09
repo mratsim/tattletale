@@ -37,7 +37,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 3)
       engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("whileSpliceOnce", oDev, ())
       var res: array[3, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check res[0] == 1  # splice ran once before the first (failing) test
       check res[1] == 0  # i untouched: the body never ran
 
@@ -47,7 +47,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 2)
       engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("whileSplicePerTest", oDev, ())
       var res: array[2, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       # tests see i = 1, 2, 3: two admitted iterations
       check res[0] == 2
       check res[1] == 3

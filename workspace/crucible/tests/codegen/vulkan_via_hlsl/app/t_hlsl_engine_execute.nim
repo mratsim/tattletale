@@ -41,13 +41,13 @@ proc runTest() =
     let aDev = engine.allocDevice(uint32, N)
     let bDev = engine.allocDevice(uint32, N)
     let oDev = engine.allocDevice(uint32, N)
-    engine.copyToDeviceFromHost(aDev, addr a[0], N)
-    engine.copyToDeviceFromHost(bDev, addr b[0], N)
+    engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, N - 1))
+    engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, N - 1))
 
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
 
     var got: array[N, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, N)
+    engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), oDev)
     var want: array[N, uint32]
     for i in 0 ..< N:
       want[i] = uint32(i) + uint32(N - i)
@@ -62,7 +62,7 @@ proc runTest() =
     engine.launchKernel("coordKernel", oDev, ())
 
     var got: array[N, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, N)
+    engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), oDev)
     var want: array[N, uint32]
     for i in 0 ..< N:
       want[i] = uint32(i) + 3

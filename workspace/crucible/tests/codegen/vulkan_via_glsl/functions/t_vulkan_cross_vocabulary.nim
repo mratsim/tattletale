@@ -38,7 +38,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 72)
       engine.launchKernel<<(grid: (2, 4), blk: (4, 2))>>("crossVocab2d", oDev, ())
       var res: array[64 + 8, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 72)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 72 - 1), oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i)
       # Flat-local values are position-derived, so they distinguish the x-major order:

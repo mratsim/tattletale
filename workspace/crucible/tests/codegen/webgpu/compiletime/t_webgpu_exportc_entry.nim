@@ -30,20 +30,20 @@ proc runTest() =
 
       var a: array[1, uint32] = [41'u32]
       let aDev = renamedEngine.allocDevice(uint32, 1)
-      renamedEngine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      renamedEngine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
       let oDev = renamedEngine.allocDevice(uint32, 1)
       renamedEngine.launchKernel("my_custom_entry", oDev, (aDev,))
       var res: array[1, uint32]
-      renamedEngine.copyToHostFromDevice(addr res[0], oDev, 1)
+      renamedEngine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
       var b: array[1, uint32] = [40'u32]
       let bDev = bareEngine.allocDevice(uint32, 1)
-      bareEngine.copyToDeviceFromHost(bDev, addr b[0], 1)
+      bareEngine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
       let oDevBare = bareEngine.allocDevice(uint32, 1)
       bareEngine.launchKernel("bareKernel", oDevBare, (bDev,))
       var resBare: array[1, uint32]
-      bareEngine.copyToHostFromDevice(addr resBare[0], oDevBare, 1)
+      bareEngine.copyToHostFromDevice(resBare.toOpenArray(0, 1 - 1), oDevBare)
       check resBare[0] == 42
 
 when isMainModule:

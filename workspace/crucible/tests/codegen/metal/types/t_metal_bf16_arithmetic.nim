@@ -37,13 +37,13 @@ proc runTest() =
   let aDev = engine.allocDevice(bfloat16, 4)
   let bDev = engine.allocDevice(bfloat16, 4)
   let oDev = engine.allocDevice(bfloat16, 4)
-  engine.copyToDeviceFromHost(aDev, unsafeAddr aHost[0], 4)
-  engine.copyToDeviceFromHost(bDev, unsafeAddr bHost[0], 4)
+  engine.copyToDeviceFromHost(aDev, aHost.toOpenArray(0, 4 - 1))
+  engine.copyToDeviceFromHost(bDev, bHost.toOpenArray(0, 4 - 1))
   engine.launchDeviceFn bf16MadKernel(oDev, aDev, bDev) do:
     grid = (1, 1)
     blk = (1, 1)
   var res: array[4, bfloat16]
-  engine.copyToHostFromDevice(addr res[0], oDev, 4)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
   for k in 0 ..< 4:
     # every product and sum here is exact in bf16: the check is bit-exact
     let refVal = toBf16(toBf32(aHost[k]) * toBf32(bHost[k]) + toBf32(aHost[k]))
@@ -56,12 +56,12 @@ proc runTest() =
   let inHost = [1.0'f32, 3.14159'f32, 3.3895e38'f32, 0.0001'f32]
   let iDev = engine.allocDevice(float32, 4)
   let rDev = engine.allocDevice(float32, 4)
-  engine.copyToDeviceFromHost(iDev, unsafeAddr inHost[0], 4)
+  engine.copyToDeviceFromHost(iDev, inHost.toOpenArray(0, 4 - 1))
   engine.launchDeviceFn bf16RoundTripKernel(rDev, iDev) do:
     grid = (1, 1)
     blk = (1, 1)
   var round: array[4, float32]
-  engine.copyToHostFromDevice(addr round[0], rDev, 4)
+  engine.copyToHostFromDevice(round.toOpenArray(0, 4 - 1), rDev)
   for k in 0 ..< 4:
     let refVal = toBf32(toBf16(inHost[k]))
     doAssert abs(round[k] - refVal) <= abs(refVal) * 1e-6'f32,
@@ -71,13 +71,13 @@ proc runTest() =
   # cast[uint16](bfloat16) and cast[bfloat16](uint16) move the bit pattern, never a numeric value
   # a fresh input buffer: a device buffer read by two launches needs the copy, not a second borrow
   let aBitsDev = engine.allocDevice(bfloat16, 4)
-  engine.copyToDeviceFromHost(aBitsDev, unsafeAddr aHost[0], 4)
+  engine.copyToDeviceFromHost(aBitsDev, aHost.toOpenArray(0, 4 - 1))
   let uDev = engine.allocDevice(uint16, 4)
   engine.launchDeviceFn bf16BitsKernel(uDev, aBitsDev) do:
     grid = (1, 1)
     blk = (1, 1)
   var bitsRes: array[4, uint16]
-  engine.copyToHostFromDevice(addr bitsRes[0], uDev, 4)
+  engine.copyToHostFromDevice(bitsRes.toOpenArray(0, 4 - 1), uDev)
   for k in 0 ..< 4:
     doAssert bitsRes[k] == cast[uint16](aHost[k]),
       "lane " & $k & ": got " & $bitsRes[k] & ", expected " & $cast[uint16](aHost[k])
@@ -86,7 +86,7 @@ proc runTest() =
     grid = (1, 1)
     blk = (1, 1)
   var unbitsRes: array[4, bfloat16]
-  engine.copyToHostFromDevice(addr unbitsRes[0], o2Dev, 4)
+  engine.copyToHostFromDevice(unbitsRes.toOpenArray(0, 4 - 1), o2Dev)
   for k in 0 ..< 4:
     doAssert cast[uint16](unbitsRes[k]) == cast[uint16](aHost[k]),
       "lane " & $k & ": got " & $cast[uint16](unbitsRes[k]) & ", expected " &

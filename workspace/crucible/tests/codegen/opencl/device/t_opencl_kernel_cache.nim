@@ -32,18 +32,18 @@ proc runTest() =
     let aDev = engine.allocDevice(uint32, a.len)
     let bDev = engine.allocDevice(uint32, b.len)
     let oDev = engine.allocDevice(uint32, 1)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
+    engine.copyToHostFromDevice(outVal.toOpenArray(0, 1 - 1), oDev)
     doAssert outVal[0] == 11
 
     a = [100'u32]
     b = [200'u32]
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
+    engine.copyToHostFromDevice(outVal.toOpenArray(0, 1 - 1), oDev)
     doAssert outVal[0] == 300
     echo "  OK - cached kernel reused across runs"
 
@@ -58,15 +58,15 @@ proc runTest() =
     let aDev = engine.allocDevice(uint32, a.len)
     let bDev = engine.allocDevice(uint32, b.len)
     let oDev = engine.allocDevice(uint32, 1)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
+    engine.copyToHostFromDevice(outVal.toOpenArray(0, 1 - 1), oDev)
     doAssert outVal[0] == 3
 
     engine.ingest(kernelCode2)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
+    engine.copyToHostFromDevice(outVal.toOpenArray(0, 1 - 1), oDev)
     doAssert outVal[0] == 1003
     echo "  OK - re-ingest invalidated cached kernel"
 

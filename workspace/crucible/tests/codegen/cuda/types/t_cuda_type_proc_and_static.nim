@@ -24,7 +24,7 @@ proc runTest() =
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("typeBranchesKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   doAssert buf[0] == 1, &"ntyStatic buf[0]: got {buf[0]}"
   doAssert buf[1] == 4, &"ntyStatic buf[1]: got {buf[1]}"
   echo "  OK (test_cuda_type_proc_and_static)"

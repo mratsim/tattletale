@@ -48,10 +48,10 @@ proc runTest() =
     var out32: array[2, uint32]
 
     let aDev = engine.allocDevice(uint32, a.len)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(aDev, a)
     let oDev = engine.allocDevice(uint32, 2)
     engine.launchKernel("accKernel", oDev, (aDev,))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
 
     echo "  accKernel: output = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 17  # 10 + 6 + 1
@@ -64,9 +64,9 @@ proc runTest() =
 
     var x: array[4, int32] = [0'i32, 0, 0, 0]
     let xDev = engine.allocDevice(int32, x.len)
-    engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
+    engine.copyToDeviceFromHost(xDev, x)
     engine.launchKernel("hazardKernel", xDev, ())
-    engine.copyToHostFromDevice(addr x[0], xDev, x.len)
+    engine.copyToHostFromDevice(x, xDev)
 
     echo "  hazardKernel: x = [", x[0], ", ", x[1], ", ", x[2], ", ", x[3], "]"
     doAssert x[0] == 1  # the index expression was evaluated exactly once
@@ -80,9 +80,9 @@ proc runTest() =
 
     var x: array[4, int32] = [0'i32, 0, 0, 0]
     let xDev = engine.allocDevice(int32, x.len)
-    engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
+    engine.copyToDeviceFromHost(xDev, x)
     engine.launchKernel("blitKernel", xDev, ())
-    engine.copyToHostFromDevice(addr x[0], xDev, x.len)
+    engine.copyToHostFromDevice(x, xDev)
 
     echo "  blitKernel: x = [", x[0], ", ", x[1], ", ", x[2], ", ", x[3], "]"
     doAssert x[0] == 3  # i = 0: x[0] += 3

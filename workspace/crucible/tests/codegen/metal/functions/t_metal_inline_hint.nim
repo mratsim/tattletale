@@ -26,10 +26,10 @@ proc runTest() =
       engine.ingest(inlineHintMsl)
       let oDev = engine.allocDevice(int32, 2)
       let sentinels: array[2, int32] = [-7, -7]
-      engine.copyToDeviceFromHost(oDev, addr sentinels[0], 2)
+      engine.copyToDeviceFromHost(oDev, sentinels.toOpenArray(0, 2 - 1))
       engine.launchKernel("scaleKernel", oDev, ())
       var res: array[2, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 7
       check res[1] == 42
 

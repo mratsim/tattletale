@@ -36,10 +36,10 @@ proc runTest() =
     var a: array[2, float32] = [2.0'f32, 5.0'f32]
     let aDev = engine.allocDevice(float32, a.len)
     let oDev = engine.allocDevice(float32, 2)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(aDev, a)
     engine.launchKernel("constMemKernel", oDev, (aDev,))
     var got: array[2, float32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 2)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 2 - 1), oDev)
     # a[0] > 0: 2 * 2 + 1 = 5, device fn: 5 * 3 = 15
     doAssert got[0] == 5.0'f32, "nested+top-level const_mem: got " & $got[0]
     doAssert got[1] == 15.0'f32, "device-fn const_mem: got " & $got[1]
@@ -50,10 +50,10 @@ proc runTest() =
     var a: array[2, float32] = [-1.0'f32, 5.0'f32]
     let aDev = engine.allocDevice(float32, a.len)
     let oDev = engine.allocDevice(float32, 2)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+    engine.copyToDeviceFromHost(aDev, a)
     engine.launchKernel("constMemKernel", oDev, (aDev,))
     var got: array[2, float32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 2)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 2 - 1), oDev)
     # else branch: cmBias alone = 1, device fn: 5 * 3 = 15
     doAssert got[0] == 1.0'f32, "else branch const_mem: got " & $got[0]
     doAssert got[1] == 15.0'f32, "device-fn const_mem: got " & $got[1]

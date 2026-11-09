@@ -104,13 +104,13 @@ proc runTest() =
       var a: array[1, uint32] = [13'u32]
       var b: array[1, uint32] = [5'u32]
       let aDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
       let bDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+      engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
       let oDev = engine.allocDevice(uint32, 10)
       engine.launchKernel("basicKernel", oDev, (aDev, bDev))
       var out32: array[10, uint32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 10)
+      engine.copyToHostFromDevice(out32.toOpenArray(0, 10 - 1), oDev)
       check out32[0] == 18
       check out32[1] == 8
       check out32[2] == 65
@@ -129,13 +129,13 @@ proc runTest() =
       var a: array[1, uint32] = [7'u32]
       var b: array[1, uint32] = [3'u32]
       let aDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
       let bDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+      engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
       let oDev = engine.allocDevice(uint32, 10)
       engine.launchKernel("structKernel", oDev, (aDev, bDev))
       var out32b: array[10, uint32]
-      engine.copyToHostFromDevice(addr out32b[0], oDev, 10)
+      engine.copyToHostFromDevice(out32b.toOpenArray(0, 10 - 1), oDev)
       check out32b[0] == 10
       check out32b[1] == 4
       check out32b[2] == 21
@@ -154,13 +154,13 @@ proc runTest() =
       var a: array[1, uint32] = [14'u32]
       var b: array[1, uint32] = [3'u32]
       let aDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
       let bDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+      engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
       let oDev = engine.allocDevice(uint32, 10)
       engine.launchKernel("structKernel2", oDev, (aDev, bDev))
       var out32c: array[10, uint32]
-      engine.copyToHostFromDevice(addr out32c[0], oDev, 10)
+      engine.copyToHostFromDevice(out32c.toOpenArray(0, 10 - 1), oDev)
       check out32c[0] == 17
       check out32c[1] == 11
       check out32c[2] == 42

@@ -23,7 +23,7 @@ proc runTest() =
     let oDev = engine.allocDevice(array[32, byte], 2)
     engine.launchKernel("k", oDev, ())
     var res: array[64, byte]
-    engine.copyToHostFromDevice(cast[ptr array[32, byte]](addr res[0]), oDev, 2)
+    engine.copyToHostFromDevice(res, oDev)
     for i in 0 ..< 64:
       doAssert res[i] == byte(i), &"digest byte {i}: {res[i]} != {i}"
     echo "  OK — runtime array of byte[32] blocks (sha256 shape) through a Vulkan ref block"

@@ -63,10 +63,10 @@ proc runTest() =
   let aDev = engine.allocDevice(uint16, N)
   let bDev = engine.allocDevice(uint16, N)
   let cDev = engine.allocDevice(uint16, N)
-  engine.copyToDeviceFromHost(aDev, addr A[0], N)
-  engine.copyToDeviceFromHost(bDev, addr B[0], N)
+  engine.copyToDeviceFromHost(aDev, A.toOpenArray(0, N - 1))
+  engine.copyToDeviceFromHost(bDev, B.toOpenArray(0, N - 1))
   engine.launchKernel("f16MulKernel", cDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr C[0], cDev, N)
+  engine.copyToHostFromDevice(C.toOpenArray(0, N - 1), cDev)
   # Products ≤ 225 are exact in f16 and f32. The check is bit-exact.
   for i in 0 ..< N:
     let refVal = f16ToF32(A[i]) * f16ToF32(B[i])

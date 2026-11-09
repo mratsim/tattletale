@@ -27,13 +27,13 @@ proc runTest() =
       var a: array[2, int64] = [-5'i64, 12'i64]
       var b: array[2, uint64] = [3'u64, 0'u64]
       let aDev = engine.allocDevice(int64, a.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       let bDev = engine.allocDevice(uint64, b.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(bDev, b)
       let oDev = engine.allocDevice(uint64, 2)
       engine.launchKernel("int64Kernel", oDev, (aDev, bDev))
       var res: array[2, uint64]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 7'u64
       check res[1] == 1000000000006'u64
 

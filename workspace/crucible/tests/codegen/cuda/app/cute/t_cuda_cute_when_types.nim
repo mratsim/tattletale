@@ -36,7 +36,7 @@ proc runTest() =
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("whenTypesKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   doAssert buf[0] == 42, &"small tile: {buf[0]}"
   doAssert buf[1] == 43, &"large tile: {buf[1]}"
   echo "  OK — when dispatch types (B26)"

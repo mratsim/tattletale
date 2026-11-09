@@ -65,10 +65,10 @@ proc runTest() =
       var engine = newEngine(runCuda)
       engine.ingest(kernelCode)
       let iDev = engine.allocDevice(int32, dynArr.len)
-      engine.copyToDeviceFromHost(iDev, addr dynArr[0], dynArr.len)
+      engine.copyToDeviceFromHost(iDev, dynArr)
       let oDev = engine.allocDevice(int32, buf.len)
       engine.launchKernel<<(1, 1)>>("staticIntOps", oDev, (iDev,))
-      engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+      engine.copyToHostFromDevice(buf, oDev)
       check buf[0] == 11    # Int[10]() + 1
       check buf[1] == 12    # 2 + Int[10]()
       check buf[2] == 30    # Int[10]() * 3

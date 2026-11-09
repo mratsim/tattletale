@@ -25,10 +25,10 @@ proc runTest() =
   let oDev = engine.allocDevice(float32, 5)
   let iDev = engine.allocDevice(float32, 2)
   var input: array[2, float32] = [4.5'f32, 1.25'f32]
-  engine.copyToDeviceFromHost(iDev, addr input[0], 2)
+  engine.copyToDeviceFromHost(iDev, input.toOpenArray(0, 2 - 1))
   engine.launchKernel("minMax", oDev, (iDev,))
   var res: array[5, float32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 5)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 5 - 1), oDev)
 
   doAssert res[0] == 4.5'f32, "max(x, y): got " & $res[0] & ", want 4.5"
   doAssert res[1] == 1.25'f32, "min(x, y): got " & $res[1] & ", want 1.25"

@@ -26,7 +26,7 @@ proc runTest() =
   let outDev = engine.allocDevice(uint32, 1)
   engine.launchKernel("stepKernel", outDev, (10'i32,))
   var o: array[1, uint32]
-  engine.copyToHostFromDevice(addr o[0], outDev, 1)
+  engine.copyToHostFromDevice(o.toOpenArray(0, 1 - 1), outDev)
   # frozen-at-entry the step stays 1 and the loop counts 11
   doAssert o[0] == 5, "loop count got " & $o[0] & ", want 5 (per-iteration step)"
   echo "  loop-variant step: [", o[0], "] exact on MoltenVK"

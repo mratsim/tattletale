@@ -31,7 +31,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel("onceBoundKernel", oDev, ())
       var output: array[2, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 2)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 2 - 1), oDev)
       # Nim evaluates a for bound once: countup is inclusive, 4 iterations,
       # one bound evaluation.
       check output[0] == 4

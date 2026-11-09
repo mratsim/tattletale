@@ -42,7 +42,7 @@ proc runTest() =
       engine.launchKernel("assemblyKernel", oDev,
         (Controls(scale: 100'u32, enable: true),))
       var got: array[2, uint32]
-      engine.copyToHostFromDevice(addr got[0], oDev, 2)
+      engine.copyToHostFromDevice(got.toOpenArray(0, 2 - 1), oDev)
       check got[0] == 115'u32   # triple(5) + 100 = 115
       check got[1] == 17'u32    # 6 + 11
 
@@ -53,7 +53,7 @@ proc runTest() =
       engine.launchKernel("assemblyKernel", oDev,
         (Controls(scale: 0'u32, enable: false),))
       var got: array[2, uint32]
-      engine.copyToHostFromDevice(addr got[0], oDev, 2)
+      engine.copyToHostFromDevice(got.toOpenArray(0, 2 - 1), oDev)
       check got[0] == 5'u32     # triple skipped, 5 + 0
       check got[1] == 17'u32    # 6 + 11
 

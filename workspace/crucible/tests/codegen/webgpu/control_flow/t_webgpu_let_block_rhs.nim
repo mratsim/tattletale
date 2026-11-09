@@ -44,7 +44,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("dummyKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 1
 
     test "Pattern B — const + let":
@@ -54,7 +54,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("dummyKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 1
 
     test "Pattern C — block with const then yield":
@@ -64,7 +64,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("dummyKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 1
 
 when isMainModule:

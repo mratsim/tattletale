@@ -26,7 +26,7 @@ proc runTest() =
   let oDev = engine.allocDevice(float32, 3)
   engine.launchKernel("infNanKernel", oDev, ())
   var res: array[3, float32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 3)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
   doAssert res[0].classify == fcInf, "output[0] = " & $res[0]
   doAssert res[1].classify == fcNegInf, "output[1] = " & $res[1]
   doAssert res[2].classify == fcNan, "output[2] = " & $res[2]

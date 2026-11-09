@@ -27,9 +27,9 @@ proc runTest() =
     engine.ingest(codeSingle)
     var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
     let oDev = engine.allocDevice(uint32, 1)
-    engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
+    engine.copyToDeviceFromHost(oDev, gpuOut.toOpenArray(0, 1 - 1))
     engine.launchKernel("kernelB", oDev, (3'u32, 4'u32,))
-    engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
+    engine.copyToHostFromDevice(gpuOut.toOpenArray(0, 1 - 1), oDev)
     doAssert gpuOut[0] == 7, &"kernelB(3, 4): got {gpuOut[0]}, expected 7"
     echo "  OK — kernelB(3, 4) = ", gpuOut[0]
 
@@ -38,9 +38,9 @@ proc runTest() =
     engine.ingest(codeWithVal)
     var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
     let oDev = engine.allocDevice(uint32, 1)
-    engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
+    engine.copyToDeviceFromHost(oDev, gpuOut.toOpenArray(0, 1 - 1))
     engine.launchKernel("kernelWithVal", oDev, (42'u32,))
-    engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
+    engine.copyToHostFromDevice(gpuOut.toOpenArray(0, 1 - 1), oDev)
     doAssert gpuOut[0] == 42, &"kernelWithVal(42): got {gpuOut[0]}, expected 42"
     echo "  OK — kernelWithVal(42) = ", gpuOut[0]
 

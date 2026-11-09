@@ -26,11 +26,11 @@ proc runTest() =
     engine.ingest(matSpv)
     let oDev = engine.allocDevice(float32, 4)
     var oHost: array[4, float32] = [0.0'f32, 1.0, 2.0, 3.0]
-    engine.copyToDeviceFromHost(oDev, addr oHost[0], oHost.len)
+    engine.copyToDeviceFromHost(oDev, oHost)
 
     engine.launchKernel("matKernel", oDev, (0.5'f32,))
 
-    engine.copyToHostFromDevice(addr oHost[0], oDev, oHost.len)
+    engine.copyToHostFromDevice(oHost, oDev)
     for j in 0 ..< 4:
       doAssert oHost[j] == float32(j) + 0.5'f32,
         "slot " & $j & " got " & $oHost[j] & ", want the input + 0.5"
@@ -42,11 +42,11 @@ proc runTest() =
     engine.ingest(convSpv)
     let oDev = engine.allocDevice(float32, 4)
     var oHost: array[4, float32] = [10.0'f32, 20.0, 30.0, 40.0]
-    engine.copyToDeviceFromHost(oDev, addr oHost[0], oHost.len)
+    engine.copyToDeviceFromHost(oDev, oHost)
 
     engine.launchKernel("convKernel", oDev, (5.0'f32, 2'u32))
 
-    engine.copyToHostFromDevice(addr oHost[0], oDev, oHost.len)
+    engine.copyToHostFromDevice(oHost, oDev)
     doAssert oHost[2] == 35.0'f32, "slot 2 got " & $oHost[2] & ", want 30 + 5"
     doAssert oHost[0] == 10.0'f32 and oHost[1] == 20.0'f32 and oHost[3] == 40.0'f32,
       "the untouched slots stay exact"

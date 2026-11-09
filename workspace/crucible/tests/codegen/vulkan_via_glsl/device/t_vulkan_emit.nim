@@ -128,11 +128,11 @@ proc runTest() =
       let aDev = engine.allocDevice(uint32, a.len)
       let bDev = engine.allocDevice(uint32, b.len)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, a)
+      engine.copyToDeviceFromHost(bDev, b)
       engine.launchKernel("t1Kernel", oDev, (aDev, bDev))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "comma form with one interpolated ident":
@@ -141,10 +141,10 @@ proc runTest() =
       var a: array[1, uint32] = [41'u32]
       let aDev = engine.allocDevice(uint32, a.len)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       engine.launchKernel("t2Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
@@ -153,10 +153,10 @@ proc runTest() =
       var a: array[1, uint32] = [20'u32]
       let aDev = engine.allocDevice(uint32, a.len)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       engine.launchKernel("t3Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "backtick form on a local variable":
@@ -165,10 +165,10 @@ proc runTest() =
       var a: array[1, uint32] = [40'u32]
       let aDev = engine.allocDevice(uint32, a.len)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       engine.launchKernel("t4Kernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "triple-quoted multiline string":
@@ -179,11 +179,11 @@ proc runTest() =
       let aDev = engine.allocDevice(uint32, a.len)
       let bDev = engine.allocDevice(uint32, b.len)
       let oDev = engine.allocDevice(uint32, 2)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, a)
+      engine.copyToDeviceFromHost(bDev, b)
       engine.launchKernel("t5Kernel", oDev, (aDev, bDev))
       var res: array[2, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 42
       check res[1] == 13
 
@@ -193,7 +193,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t6Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
@@ -202,10 +202,10 @@ proc runTest() =
       var x: array[1, uint32] = [41'u32]
       let xDev = engine.allocDevice(uint32, x.len)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(xDev, x)
       engine.launchKernel("t7Kernel", oDev, (xDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "comma form on a kernel parameter":
@@ -214,10 +214,10 @@ proc runTest() =
       var x: array[1, uint32] = [41'u32]
       let xDev = engine.allocDevice(uint32, x.len)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(xDev, x)
       engine.launchKernel("t8Kernel", oDev, (xDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
@@ -226,7 +226,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t10Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
@@ -235,7 +235,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t12Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "#define-style payload is byte-exact (no `;` appended)":
@@ -244,7 +244,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t14Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 33
 
     test "every emit item in one pragma renders, in order, on separate lines":
@@ -253,7 +253,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t15Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
@@ -262,7 +262,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("t16Kernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
 when isMainModule:

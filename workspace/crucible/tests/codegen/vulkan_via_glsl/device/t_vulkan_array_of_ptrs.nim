@@ -23,12 +23,12 @@ proc runTest() =
                 engine.allocDevice(uint32, 4), engine.allocDevice(uint32, 4)]
     var seed: array[4, uint32] = [7'u32, 8'u32, 9'u32, 10'u32]
     for i in 0 ..< 4:
-      engine.copyToDeviceFromHost(devs[i], addr seed[0], seed.len)
+      engine.copyToDeviceFromHost(devs[i], seed)
     engine.launchKernel("k", sDev, (devs[0], devs[1], devs[2], devs[3]))
-    var got: uint32
-    engine.copyToHostFromDevice(addr got, sDev, 1)
+    var got: array[1, uint32]
+    engine.copyToHostFromDevice(got, sDev, 1)
     for i in 0 ..< 4:
-    doAssert got == 11'u32, &"ps[0][1] = ps[2][3] + 1: {got} != 11"
+    doAssert got[0] == 11'u32, &"ps[0][1] = ps[2][3] + 1: {got} != 11"
     echo "  OK — array of buffer references in the push constants"
 
 when isMainModule:

@@ -316,9 +316,9 @@ proc launchHadamardGrid*[E: HwEngine](engine: E, v: ScaleVariant,
     dstMem = engine.allocDevice(float16, M * C)
     preMem = engine.allocDevice(float16, C)
     postMem = engine.allocDevice(float16, C)
-  engine.copyToDeviceFromHost(srcMem, cast[ptr float16](addr src[0]), M * C)
-  engine.copyToDeviceFromHost(preMem, cast[ptr float16](addr preScale[0]), C)
-  engine.copyToDeviceFromHost(postMem, cast[ptr float16](addr postScale[0]), C)
+  engine.copyToDeviceFromHost(srcMem, src.toOpenArray(0, M * C - 1))
+  engine.copyToDeviceFromHost(preMem, preScale.toOpenArray(0, C - 1))
+  engine.copyToDeviceFromHost(postMem, postScale.toOpenArray(0, C - 1))
   let
     srcLay = make_layout((M, C), (C, 1))
     lineLay = make_layout((C,), (1,))
@@ -344,7 +344,7 @@ proc launchHadamardGrid*[E: HwEngine](engine: E, v: ScaleVariant,
   of varPost: launchVariant(false, true)
   of varBoth: launchVariant(true, true)
   result = newSeq[uint16](M * C)
-  engine.copyToHostFromDevice(cast[ptr float16](addr result[0]), dstView.data, M * C)
+  engine.copyToHostFromDevice(result.toOpenArray(0, M * C - 1), dstView.data)
 
 proc launchHadamard*[E: HwEngine](engine: E, v: ScaleVariant, src, preScale, postScale: seq[uint16], M, C: int, norm: float32): seq[uint16] =
   ## One launch at the natural grid, one threadgroup per tensor line and 128-block.

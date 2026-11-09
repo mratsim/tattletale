@@ -134,11 +134,11 @@ proc deviceName*(engine: VulkanEngine): string {.inline.} =
 proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[VulkanBuffer, T] {.inline.} =
   DeviceMem[VulkanBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer, T], src: openArray[T]) {.inline.} =
+  engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[VulkanBuffer, T], n: int) {.inline.} =
-  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: DeviceMem[VulkanBuffer, T]) {.inline.} =
+  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization

@@ -191,7 +191,7 @@ proc checkSum[E: HwEngine](engine: E, axis: static int, shape: tuple) =
       tiledMma(float32, float32, float32, 32, 32, 32), axis) do:
     grid = (1, 1)
     blk = (32, 1)
-  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, got.len)
+  engine.copyToHostFromDevice(got.data.toOpenArray(0, got.len - 1), gotDev.data)
   assertAllClose(got.view(), expect.view(), msg = "sum " & $shape)
 
 proc checkMax[E: HwEngine](engine: E, axis: static int, shape: tuple) =
@@ -213,7 +213,7 @@ proc checkMax[E: HwEngine](engine: E, axis: static int, shape: tuple) =
       tiledMma(float32, float32, float32, 32, 32, 32), axis) do:
     grid = (1, 1)
     blk = (32, 1)
-  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, got.len)
+  engine.copyToHostFromDevice(got.data.toOpenArray(0, got.len - 1), gotDev.data)
   assertAllClose(got.view(), expect.view(), msg = "max " & $shape)
 
 proc checkMin[E: HwEngine](engine: E, axis: static int, shape: tuple) =
@@ -235,7 +235,7 @@ proc checkMin[E: HwEngine](engine: E, axis: static int, shape: tuple) =
       tiledMma(float32, float32, float32, 32, 32, 32), axis) do:
     grid = (1, 1)
     blk = (32, 1)
-  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, got.len)
+  engine.copyToHostFromDevice(got.data.toOpenArray(0, got.len - 1), gotDev.data)
   assertAllClose(got.view(), expect.view(), msg = "min " & $shape)
 
 proc run_tile_reduce_tests*[E: HwEngine](engine: E, moduleName: string) =

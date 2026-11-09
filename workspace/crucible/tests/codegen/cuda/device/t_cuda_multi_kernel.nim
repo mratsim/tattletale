@@ -24,18 +24,18 @@ proc runTest() =
   var buf: array[8, uint32]
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 8)>>("setConstantKernel", oDev, (42'u32,))
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   echo "  setConstant(42): ", buf
   for i in 0..7: doAssert buf[i] == 42
 
   var a, b: array[8, uint32]
   for i in 0..7: a[i] = uint32(i); b[i] = uint32(i * 10)
   let aDev = engine.allocDevice(uint32, a.len)
-  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+  engine.copyToDeviceFromHost(aDev, a)
   let bDev = engine.allocDevice(uint32, b.len)
-  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+  engine.copyToDeviceFromHost(bDev, b)
   engine.launchKernel<<(1, 8)>>("addKernel", oDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   echo "  add: ", buf
   for i in 0..7: doAssert buf[i] == uint32(i + i*10)
   echo "  OK (test_cuda_multi_kernel)"

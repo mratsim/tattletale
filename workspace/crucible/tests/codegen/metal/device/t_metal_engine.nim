@@ -83,21 +83,21 @@ proc runTest() =
       block: # a launch consumes its inputs, each round allocates fresh buffers
         let aDev = engine.allocDevice(uint32, 1)
         let bDev = engine.allocDevice(uint32, 1)
-        engine.copyToDeviceFromHost(aDev, addr a[0], 1)
-        engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+        engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
+        engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
         engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 5
       var a2: array[1, uint32] = [10'u32]
       var b2: array[1, uint32] = [20'u32]
       block:
         let aDev = engine.allocDevice(uint32, 1)
         let bDev = engine.allocDevice(uint32, 1)
-        engine.copyToDeviceFromHost(aDev, addr a2[0], 1)
-        engine.copyToDeviceFromHost(bDev, addr b2[0], 1)
+        engine.copyToDeviceFromHost(aDev, a2.toOpenArray(0, 1 - 1))
+        engine.copyToDeviceFromHost(bDev, b2.toOpenArray(0, 1 - 1))
         engine.launchKernel("addKernel", oDev, (aDev, bDev))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 30
 
     test "re-ingest with a changed body invalidates and recompiles":
@@ -109,20 +109,20 @@ proc runTest() =
       block: # a launch consumes its inputs, each round allocates fresh buffers
         let aDev = engine.allocDevice(uint32, 1)
         let bDev = engine.allocDevice(uint32, 1)
-        engine.copyToDeviceFromHost(aDev, addr a[0], 1)
-        engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+        engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
+        engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
         engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 5
       engine.ingest(mulMsl)
       block:
         let aDev = engine.allocDevice(uint32, 1)
         let bDev = engine.allocDevice(uint32, 1)
-        engine.copyToDeviceFromHost(aDev, addr a[0], 1)
-        engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+        engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
+        engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
         engine.launchKernel("addKernel", oDev, (aDev, bDev))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 6
 
     test "dispatch with grid/blk via dispatchThreadgroups":
@@ -133,13 +133,13 @@ proc runTest() =
         a[i] = uint32(i)
         b[i] = 1'u32
       let aDev = engine.allocDevice(uint32, 128)
-      engine.copyToDeviceFromHost(aDev, addr a[0], 128)
+      engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 128 - 1))
       let bDev = engine.allocDevice(uint32, 128)
-      engine.copyToDeviceFromHost(bDev, addr b[0], 128)
+      engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 128 - 1))
       let oDev = engine.allocDevice(uint32, 128)
       engine.launchKernel<<(2, 64)>>("vecAdd", oDev, (aDev, bDev))
       var res: array[128, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 128)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 128 - 1), oDev)
       for i in 0 ..< 128:
         check res[i] == uint32(i) + 1
 
@@ -150,11 +150,11 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel("scalarKernel", oDev, (7'i32, 1.5'f32))
       var res: array[2, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 7
       check res[1] == 1
       engine.launchKernel("scalarKernel", oDev, (10'i32, 2.5'f32))
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 10
       check res[1] == 2
 
@@ -171,13 +171,13 @@ proc runTest() =
         var a: array[1, uint32] = [2'u32]
         var b: array[1, uint32] = [3'u32]
         let aDev = engine.allocDevice(uint32, 1)
-        engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+        engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
         let bDev = engine.allocDevice(uint32, 1)
-        engine.copyToDeviceFromHost(bDev, addr b[0], 1)
+        engine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
         let oDev = engine.allocDevice(uint32, 1)
         engine.launchKernel("addKernel", oDev, (aDev, bDev))
         var res: array[1, uint32]
-        engine.copyToHostFromDevice(addr res[0], oDev, 1)
+        engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
         check res[0] == 5
 
 when isMainModule:

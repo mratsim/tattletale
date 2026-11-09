@@ -44,7 +44,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 4)
       engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("k", oDev, ())
       var res: array[4, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[0] == 0.0'f32
       # function-space bump ran through a real call: 41 + 1
       check res[1] == 42.0'f32

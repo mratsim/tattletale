@@ -28,7 +28,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, (64 + 8))
       engine.launchKernel<<(grid: (8, 1), blk: (8, 1))>>("crossVocabFlat", oDev, ())
       var res: array[64 + 8, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, (64 + 8))
+      engine.copyToHostFromDevice(res.toOpenArray(0, (64 + 8) - 1), oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i)
       for i in 0 ..< 8:

@@ -25,7 +25,7 @@ proc runTest() =
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("tileMmaKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   doAssert buf[0] == 4,  &"tile loop: {buf[0]} (expected 2x2=4)"
   doAssert buf[1] == 42, &"output: {buf[1]}"
   echo "  OK — tile loop + PTX patterns"

@@ -33,17 +33,17 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(code)
       let aDev = engine.allocDevice(uint32, a.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       let bDev = engine.allocDevice(uint32, b.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(bDev, b)
       let oDev = engine.allocDevice(uint32, 10)
       var res: array[10, uint32]
       engine.launchKernel("vec10_add", oDev, (aDev, bDev))
-      engine.copyToHostFromDevice(addr res[0], oDev, 10)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 10 - 1), oDev)
       for i in 0 ..< 10:
         check res[i] == a[i] + b[i]
       engine.launchKernel("vec10_mul", oDev, (aDev, bDev))
-      engine.copyToHostFromDevice(addr res[0], oDev, 10)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 10 - 1), oDev)
       for i in 0 ..< 10:
         check res[i] == a[i] * b[i]
 

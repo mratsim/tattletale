@@ -27,20 +27,20 @@ proc bf16Kernel(o: ptr UncheckedArray[float32], i: ptr UncheckedArray[float32]) 
 proc roundtripF16(engine: MetalEngine, inp: array[4, float32]): array[4, float32] =
   let iDev = engine.allocDevice(float32, 4)
   let oDev = engine.allocDevice(float32, 4)
-  engine.copyToDeviceFromHost(iDev, unsafeAddr inp[0], 4)
+  engine.copyToDeviceFromHost(iDev, inp.toOpenArray(0, 4 - 1))
   engine.launchDeviceFn f16Kernel(oDev, iDev) do:
     grid = (1, 1)
     blk = (1, 1)
-  engine.copyToHostFromDevice(addr result[0], oDev, 4)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 4 - 1), oDev)
 
 proc roundtripBf16(engine: MetalEngine, inp: array[4, float32]): array[4, float32] =
   let iDev = engine.allocDevice(float32, 4)
   let oDev = engine.allocDevice(float32, 4)
-  engine.copyToDeviceFromHost(iDev, unsafeAddr inp[0], 4)
+  engine.copyToDeviceFromHost(iDev, inp.toOpenArray(0, 4 - 1))
   engine.launchDeviceFn bf16Kernel(oDev, iDev) do:
     grid = (1, 1)
     blk = (1, 1)
-  engine.copyToHostFromDevice(addr result[0], oDev, 4)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 4 - 1), oDev)
 
 proc runTest() =
   suite "Metal - element conversion builtins":

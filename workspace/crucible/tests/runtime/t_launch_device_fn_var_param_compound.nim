@@ -27,9 +27,9 @@ proc runTest() =
   engine.launchDeviceFn accumulateKernel(dev, 41.0'f32) do:
     grid = (1, 1)
     blk = (1, 1)
-  var host: float32
-  engine.copyToHostFromDevice(addr host, dev, 1)
-  doAssert host == 42.0'f32, "accumulateKernel: got " & $host & " want 42.0"
+  var host: array[1, float32]
+  engine.copyToHostFromDevice(host, dev)
+  doAssert host[0] == 42.0'f32, "accumulateKernel: got " & $host & " want 42.0"
   echo "[OK] launchDeviceFn: compound assign through a var scalar parameter"
 
 runTest()

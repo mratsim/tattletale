@@ -25,10 +25,10 @@ proc runTest() =
     engine.launchDeviceFn kernStatic(dev, 10, 4) do:
       grid = (1, 1)
       blk = (1, 1)
-    var host: float32
-    engine.copyToHostFromDevice(addr host, dev, 1)
+    var host: array[1, float32]
+    engine.copyToHostFromDevice(host, dev)
     let expected = float32(3) * float32(10 + 4)
-    doAssert host == expected,
+    doAssert host[0] == expected,
       "kernStatic: got " & $host & " want " & $expected
     echo "[OK] launchDeviceFn: omitted static parameter fills from its default"
 
@@ -37,10 +37,10 @@ proc runTest() =
     engine.launchDeviceFn kernRuntime(dev, 10, 4) do:
       grid = (1, 1)
       blk = (1, 1)
-    var host: float32
-    engine.copyToHostFromDevice(addr host, dev, 1)
+    var host: array[1, float32]
+    engine.copyToHostFromDevice(host, dev)
     let expected = float32(10 + 4) + 0.5'f32
-    doAssert host == expected,
+    doAssert host[0] == expected,
       "kernRuntime: got " & $host & " want " & $expected
     echo "[OK] launchDeviceFn: omitted runtime parameter fills from its default"
 
@@ -49,10 +49,10 @@ proc runTest() =
     engine.launchDeviceFn kernBoth(dev, 10, 4) do:
       grid = (1, 1)
       blk = (1, 1)
-    var host: float32
-    engine.copyToHostFromDevice(addr host, dev, 1)
+    var host: array[1, float32]
+    engine.copyToHostFromDevice(host, dev)
     let expected = float32(3) * (float32(10 + 4) + 0.5'f32)
-    doAssert host == expected,
+    doAssert host[0] == expected,
       "kernBoth: got " & $host & " want " & $expected
     echo "[OK] launchDeviceFn: trailing static and runtime defaults both fill"
 

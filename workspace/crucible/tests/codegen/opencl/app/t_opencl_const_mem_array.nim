@@ -23,7 +23,7 @@ proc runTest() =
     grid = (1, 1)
     blk = (1, 1)
   var got: array[4, float32]
-  engine.copyToHostFromDevice(addr got[0], oDev, 4)
+  engine.copyToHostFromDevice(got.toOpenArray(0, 4 - 1), oDev)
   for i in 0 ..< 4:
     let expected = 10.0'f32 * [1.5'f32, 2.5'f32, 3.5'f32, 4.5'f32][i]
     doAssert got[i] == expected,

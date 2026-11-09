@@ -47,9 +47,9 @@ proc runTest() =
     engine.ingest(scalarCode)
     let oDev = engine.allocDevice(uint32, 3)
     var gpuOut: array[3, uint32] = [0xDEADBEEF'u32, 0xDEADBEEF'u32, 0xDEADBEEF'u32]
-    engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 3)
+    engine.copyToDeviceFromHost(oDev, gpuOut.toOpenArray(0, 3 - 1))
     engine.launchKernel("kernelBoolPair", oDev, (BoolPair(a: true, b: false, c: 1.0'f32),))
-    engine.copyToHostFromDevice(addr gpuOut[0], oDev, 3)
+    engine.copyToHostFromDevice(gpuOut.toOpenArray(0, 3 - 1), oDev)
     doAssert gpuOut[0] == 1, &"scalar bool field a: got {gpuOut[0]:#x}, expected 1"
     doAssert gpuOut[1] == 0, &"scalar bool field b: got {gpuOut[1]:#x}, expected 0"
     doAssert gpuOut[2] == 1, &"scalar float field c: got {gpuOut[2]:#x}, expected 1"
@@ -61,10 +61,10 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 5)
     var gpuOut: array[5, uint32] = [0xDEADBEEF'u32, 0xDEADBEEF'u32, 0xDEADBEEF'u32,
                                     0xDEADBEEF'u32, 0xDEADBEEF'u32]
-    engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 5)
+    engine.copyToDeviceFromHost(oDev, gpuOut.toOpenArray(0, 5 - 1))
     engine.launchKernel("kernelFlagPack", oDev,
       (FlagPack(flags: [true, false, true, false], x: 2.5'f32),))
-    engine.copyToHostFromDevice(addr gpuOut[0], oDev, 5)
+    engine.copyToHostFromDevice(gpuOut.toOpenArray(0, 5 - 1), oDev)
     doAssert gpuOut[0] == 1, &"bool array element 0: got {gpuOut[0]:#x}, expected 1"
     doAssert gpuOut[1] == 0, &"bool array element 1: got {gpuOut[1]:#x}, expected 0"
     doAssert gpuOut[2] == 1, &"bool array element 2: got {gpuOut[2]:#x}, expected 1"

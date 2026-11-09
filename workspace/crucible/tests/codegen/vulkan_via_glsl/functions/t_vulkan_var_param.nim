@@ -48,10 +48,10 @@ proc runTest() =
       var seed: array[8, float32]
       for i in 0 ..< 8:
         seed[i] = 100.0'f32 + float32(i)
-      engine.copyToDeviceFromHost(oDev, addr seed[0], seed.len)
+      engine.copyToDeviceFromHost(oDev, seed)
       engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("k", oDev, ())
       var res: array[8, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 8)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 8 - 1), oDev)
       # v: 3 -> 4 through the pass-through bump, arr[1] = 8, acc = 2 * outBuf[2]
       check res[0] == 4.0'f32 + 8.0'f32 + 2.0'f32 * 102.0'f32
       check res[2] == 102.0'f32

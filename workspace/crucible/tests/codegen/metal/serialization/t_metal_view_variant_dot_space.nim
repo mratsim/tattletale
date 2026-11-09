@@ -47,12 +47,12 @@ proc runTest() =
       engine.ingest(variantMsl)
       var input = [10'u32, 20'u32, 30'u32, 40'u32, 50'u32]
       let iDev = engine.allocDevice(uint32, input.len)
-      engine.copyToDeviceFromHost(iDev, addr input[0], input.len)
+      engine.copyToDeviceFromHost(iDev, input)
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel << (grid: (1, 1), blk: (1, 1)) >> (
         "viewDeviceKernel", oDev, (iDev,))
       var output: array[4, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 4)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 4 - 1), oDev)
       for i in 0 ..< 4:
         check output[i] == input[i + 1]
     test "threadgroup view: +% through the field reads scratch[t + 1]":
@@ -62,7 +62,7 @@ proc runTest() =
       engine.launchKernel << (grid: (1, 1), blk: (8, 1)) >> (
         "viewSmemKernel", oDev, ())
       var output: array[4, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 4)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 4 - 1), oDev)
       for i in 0 ..< 4:
         check output[i] == uint32((i + 1) * 3)
 

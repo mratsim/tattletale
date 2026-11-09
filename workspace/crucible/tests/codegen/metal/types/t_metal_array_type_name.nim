@@ -28,7 +28,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 1)
       engine.launchKernel("repro", oDev, ())
       var res: array[1, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 8'i32
 
 when isMainModule:

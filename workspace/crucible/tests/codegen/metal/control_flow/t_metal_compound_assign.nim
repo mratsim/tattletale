@@ -50,9 +50,9 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(rmwMsl)
       let oDev = engine.allocDevice(int32, output.len)
-      engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
+      engine.copyToDeviceFromHost(oDev, output)
       engine.launchKernel("rmwKernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 30  # (10 + 5) * 2
       check output[1] == 32  # (11 + 5) * 2
       check output[2] == 34  # (12 + 5) * 2
@@ -63,9 +63,9 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(hazardMsl)
       let oDev = engine.allocDevice(int32, x.len)
-      engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(oDev, x)
       engine.launchKernel("hazardKernel", oDev, ())
-      engine.copyToHostFromDevice(addr x[0], oDev, x.len)
+      engine.copyToHostFromDevice(x, oDev)
       check x[0] == 1  # index side effect fired exactly once
       check x[1] == 7  # stored back into the element the single index selected
       check x[2] == 0  # a second index evaluation would have stored here
@@ -75,9 +75,9 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(hazardMsl)
       let oDev = engine.allocDevice(int32, x.len)
-      engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(oDev, x)
       engine.launchKernel("dupKernel", oDev, ())
-      engine.copyToHostFromDevice(addr x[0], oDev, x.len)
+      engine.copyToHostFromDevice(x, oDev)
       check x[0] == 2  # written-out form evaluates the index twice
       check x[2] == 7  # second evaluation selected the stored element
       check x[1] == 0  # shared-tree binding shape would have stored here
@@ -87,9 +87,9 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(hazardMsl)
       let oDev = engine.allocDevice(int32, x.len)
-      engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(oDev, x)
       engine.launchKernel("captureKernel", oDev, ())
-      engine.copyToHostFromDevice(addr x[0], oDev, x.len)
+      engine.copyToHostFromDevice(x, oDev)
       check x[0] == 1  # index side effect fired exactly once
       check x[1] == 7  # stored into the element the single index selected
       check x[3] == 100  # temp never captured the user's lhs_val local
@@ -99,9 +99,9 @@ proc runTest() =
       var engine = newEngine(runMetal)
       engine.ingest(blitMsl)
       let oDev = engine.allocDevice(int32, x.len)
-      engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(oDev, x)
       engine.launchKernel("blitKernel", oDev, ())
-      engine.copyToHostFromDevice(addr x[0], oDev, x.len)
+      engine.copyToHostFromDevice(x, oDev)
       check x[0] == 3  # i = 0: x[0] += 3
       check x[1] == 0
       check x[2] == 3  # i = 1: x[2] += 3

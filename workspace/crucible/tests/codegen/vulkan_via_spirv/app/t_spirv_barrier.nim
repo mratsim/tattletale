@@ -82,7 +82,7 @@ proc runTest() =
     # a Workgroup-scoped one lets every invocation pass and store
     engine.launchKernel<<(grid: (2, 1, 1), blk: (4, 1, 1))>>("barrierKernel", oDev, ())
     var got: array[8, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 8)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 8 - 1), oDev)
     for i in 0 ..< 8:
       doAssert got[i] == uint32(i) + 100'u32,
         "element " & $i & " got " & $got[i] & ", want " & $(uint32(i) + 100) &

@@ -25,7 +25,7 @@ proc runTest() =
   var outBuf: array[8, uint32]
   let oDev = engine.allocDevice(uint32, outBuf.len)
   engine.launchKernel<<(1, 1)>>("fillKernel", oDev, ())
-  engine.copyToHostFromDevice(addr outBuf[0], oDev, outBuf.len)
+  engine.copyToHostFromDevice(outBuf, oDev)
   echo "  fill: ", outBuf
   for i in 0..7: doAssert outBuf[i] == uint32(i + 10)
 
@@ -33,12 +33,12 @@ proc runTest() =
   for i in 0..7: a[i] = uint32(i); b[i] = uint32(i * 10)
   var c: array[8, uint32]
   let aDev = engine.allocDevice(uint32, a.len)
-  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+  engine.copyToDeviceFromHost(aDev, a)
   let bDev = engine.allocDevice(uint32, b.len)
-  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+  engine.copyToDeviceFromHost(bDev, b)
   let cDev = engine.allocDevice(uint32, c.len)
   engine.launchKernel<<(1, 1)>>("addKernel", cDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr c[0], cDev, c.len)
+  engine.copyToHostFromDevice(c, cDev)
   echo "  add:  ", c
   for i in 0..7: doAssert c[i] == uint32(i + i*10)
   echo "  OK (test_cuda_ptr_unchecked)"

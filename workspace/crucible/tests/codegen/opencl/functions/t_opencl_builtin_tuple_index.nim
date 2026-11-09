@@ -28,7 +28,7 @@ proc runTest() =
   let oDev = engine.allocDevice(uint32, 18)
   engine.launchKernel<<(grid: (1, 3), blk: (1, 2))>>("tupleIndexKernel", oDev, ())
   var res: array[18, uint32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 18)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 18 - 1), oDev)
   for gy in 0 ..< 6:
     doAssert res[gy * 3 + 0] == uint32(gy div 2),
       "blockIdx[1] at global y " & $gy & ": got " & $res[gy * 3 + 0]

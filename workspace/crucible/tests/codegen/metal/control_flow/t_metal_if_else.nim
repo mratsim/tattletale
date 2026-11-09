@@ -35,18 +35,18 @@ proc runDispatch(x: int32): array[1, int32] =
   engine.ingest(ifElseMsl)
   let xDev = engine.allocDevice(int32, 1)
   let oDev = engine.allocDevice(int32, 1)
-  engine.copyToDeviceFromHost(xDev, unsafeAddr x, 1)
+  engine.copyToDeviceFromHost(xDev, [x])
   engine.launchKernel("ifElseDispatch", oDev, (xDev,))
-  engine.copyToHostFromDevice(addr result[0], oDev, 1)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 1 - 1), oDev)
 
 proc runNoElse(x: int32): array[1, int32] =
   var engine = newEngine(runMetal)
   engine.ingest(noElseMsl)
   let xDev = engine.allocDevice(int32, 1)
   let oDev = engine.allocDevice(int32, 1)
-  engine.copyToDeviceFromHost(xDev, unsafeAddr x, 1)
+  engine.copyToDeviceFromHost(xDev, [x])
   engine.launchKernel("ifNoElse", oDev, (xDev,))
-  engine.copyToHostFromDevice(addr result[0], oDev, 1)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 1 - 1), oDev)
 
 proc runTest() =
   suite "Metal - if/elif/else statement lowering":

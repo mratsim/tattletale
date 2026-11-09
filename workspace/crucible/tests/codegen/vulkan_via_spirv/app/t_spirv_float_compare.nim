@@ -45,7 +45,7 @@ proc runTest() =
   # x = 1.5: <, <=, != fire; >, >=, == do not
   engine.launchKernel("cmpKernel", oDev, (1.5'f32,))
   var out32: array[6, uint32]
-  engine.copyToHostFromDevice(addr out32[0], oDev, 6)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 6 - 1), oDev)
   doAssert out32[0] == 1, "1.5 < 2.5 got " & $out32[0] & ", want 1"
   doAssert out32[1] == 2, "1.5 <= 2.5 got " & $out32[1] & ", want 2"
   doAssert out32[2] == 0, "1.5 > 2.5 got " & $out32[2] & ", want 0"
@@ -56,7 +56,7 @@ proc runTest() =
 
   # x = 2.5: <=, >=, == fire; <, >, != do not
   engine.launchKernel("cmpKernel", oDev, (2.5'f32,))
-  engine.copyToHostFromDevice(addr out32[0], oDev, 6)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 6 - 1), oDev)
   doAssert out32[0] == 0, "2.5 < 2.5 got " & $out32[0] & ", want 0"
   doAssert out32[1] == 2, "2.5 <= 2.5 got " & $out32[1] & ", want 2"
   doAssert out32[2] == 0, "2.5 > 2.5 got " & $out32[2] & ", want 0"
@@ -67,7 +67,7 @@ proc runTest() =
 
   # x = 4.0: >, >=, != fire; <, <=, == do not
   engine.launchKernel("cmpKernel", oDev, (4.0'f32,))
-  engine.copyToHostFromDevice(addr out32[0], oDev, 6)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 6 - 1), oDev)
   doAssert out32[0] == 0, "4.0 < 2.5 got " & $out32[0] & ", want 0"
   doAssert out32[1] == 0, "4.0 <= 2.5 got " & $out32[1] & ", want 0"
   doAssert out32[2] == 3, "4.0 > 2.5 got " & $out32[2] & ", want 3"

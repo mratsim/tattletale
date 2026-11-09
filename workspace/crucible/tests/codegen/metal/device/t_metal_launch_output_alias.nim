@@ -20,10 +20,10 @@ proc runTest() =
   var engine = newEngine(runMetal)
   engine.ingest(scaleMsl)
   let dev = engine.allocDevice(uint32, 1)
-  engine.copyToDeviceFromHost(dev, unsafeAddr one, 1)
+  engine.copyToDeviceFromHost(dev, [one])
   engine.launchKernel("scaleBy", dev, (dev, 2'u32))
   var res: array[1, uint32]
-  engine.copyToHostFromDevice(addr res[0], dev, 1)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), dev)
   doAssert res[0] == 2 * one, "scaleBy in-place: got " & $res[0]
 
 when isMainModule:

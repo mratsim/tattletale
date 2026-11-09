@@ -42,7 +42,7 @@ proc runTest() =
       engine.ingest(kernelComplement)
       let oDev = engine.allocDevice(int32, Buf.len)
       engine.launchKernel<<(1, 1)>>("kComplement", oDev, ())
-      engine.copyToHostFromDevice(addr Buf[0], oDev, Buf.len)
+      engine.copyToHostFromDevice(Buf, oDev)
       check Buf[0] == 1
 
 when isMainModule:

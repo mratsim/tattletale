@@ -33,8 +33,8 @@ proc runTest() =
   for i in 0 ..< N:
     xHost[i] = float32(i + 1)
     yHost[i] = float32(10 * (i + 1))
-  engine.copyToDeviceFromHost(xDev, addr xHost[0], N)
-  engine.copyToDeviceFromHost(yDev, addr yHost[0], N)
+  engine.copyToDeviceFromHost(xDev, xHost.toOpenArray(0, N - 1))
+  engine.copyToDeviceFromHost(yDev, yHost.toOpenArray(0, N - 1))
 
   engine.launchDeviceFn axpy(AxpyBuf[typeof(yDev)](p: yDev, n: N), 2.5'f32,
                              AxpyBuf[typeof(xDev)](p: xDev, n: N)) do:
@@ -42,7 +42,7 @@ proc runTest() =
     blk = (1, 1)
 
   var got: array[N, float32]
-  engine.copyToHostFromDevice(addr got[0], yDev, N)
+  engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), yDev)
   for i in 0 ..< N:
     let expected = 2.5'f32 * xHost[i] + yHost[i]
     doAssert got[i] == expected,

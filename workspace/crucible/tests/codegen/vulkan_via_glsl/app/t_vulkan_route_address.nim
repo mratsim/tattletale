@@ -25,13 +25,13 @@ proc runTest() =
   let aDev = engine.allocDevice(uint32, a.len)
   let bDev = engine.allocDevice(uint32, b.len)
   let oDev = engine.allocDevice(uint32, 2)
-  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+  engine.copyToDeviceFromHost(aDev, a)
+  engine.copyToDeviceFromHost(bDev, b)
 
   engine.launchKernel("addScalarKernel", oDev, (aDev, bDev, 5'u32))
 
   var out32: array[2, uint32]
-  engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
   doAssert out32[0] == 16, "slot 0 got " & $out32[0] & ", want 10 + 1 + 5 = 16"
   doAssert out32[1] == 27, "slot 1 got " & $out32[1] & ", want 20 + 2 + 5 = 27"
   echo "  address route: [", out32[0], ", ", out32[1], "] exact readback"

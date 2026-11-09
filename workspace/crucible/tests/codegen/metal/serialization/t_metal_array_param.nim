@@ -21,7 +21,7 @@ proc runTest() =
   let oDev = engine.allocDevice(float32, 1)
   engine.launchKernel("arrKernel", oDev, ([1.5'f32, 2.0'f32, 3.5'f32, 4.0'f32], ()))
   var res: array[1, float32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 1)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
   doAssert res[0] == 5.5'f32
   echo "  OK — the array parameter emits `constant float a[4]` and the kernel reads it"
 

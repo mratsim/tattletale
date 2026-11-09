@@ -41,19 +41,19 @@ proc runTest() =
       echo kernelDouble
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
       let aDev = engine.allocDevice(uint32, a.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       let oDev = engine.allocDevice(uint32, 4)
       var res: array[4, uint32]
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[0] == 2
       check res[1] == 4
       check res[2] == 6
       check res[3] == 8
       var b = [10'u32, 20'u32, 30'u32, 40'u32]
-      engine.copyToDeviceFromHost(aDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, b)
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[0] == 20
       check res[1] == 40
       check res[2] == 60
@@ -65,17 +65,17 @@ proc runTest() =
       echo kernelDouble
       var a = [1'u32, 2'u32, 3'u32, 4'u32]
       let aDev = engine.allocDevice(uint32, a.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       let oDev = engine.allocDevice(uint32, 4)
       var res: array[4, uint32]
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[0] == 2
       check res[1] == 4
       engine.ingest(kernelTriple)
       echo kernelTriple
       engine.launchKernel("doubleKernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[0] == 3
       check res[1] == 6
       check res[2] == 9

@@ -22,7 +22,7 @@ proc runTest() =
       engine.ingest(code)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 1.0
 
 when isMainModule:

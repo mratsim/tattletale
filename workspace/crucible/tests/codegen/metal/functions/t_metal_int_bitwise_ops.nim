@@ -27,10 +27,10 @@ proc runTest() =
       let xDev = engine.allocDevice(int32, 1)
       let oDev = engine.allocDevice(int32, 3)
       var x = [0xA5'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("bitOps", oDev, (xDev,))
       var res: array[3, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check res[0] == 0x05'i32  # 0xA5 and 0x0F
       check res[1] == 0xB5'i32  # 0xA5 or 0x30
       check res[2] == 0x5A'i32  # 0xA5 xor 0xFF

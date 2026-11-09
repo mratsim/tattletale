@@ -36,7 +36,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 3)
       engine.launchKernel("specials", oDev, ())
       var res: array[3, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check bits32(res[0]) == 0xFF800000'u32
       check bits32(res[1]) == 0x7F800000'u32
       check classify(res[2]) == fcNan
@@ -46,7 +46,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 2)
       engine.launchKernel("foldedDiv", oDev, ())
       var res: array[2, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check bits32(res[0]) == 0xFF800000'u32
       check bits32(res[1]) == 0x7F800000'u32
 

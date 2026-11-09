@@ -36,18 +36,18 @@ proc runAnd(cmd: uint32): array[2, uint32] =
   engine.ingest(shortCircuitMsl)
   let cDev = engine.allocDevice(uint32, 1)
   let oDev = engine.allocDevice(uint32, 2)
-  engine.copyToDeviceFromHost(cDev, unsafeAddr cmd, 1)
+  engine.copyToDeviceFromHost(cDev, [cmd])
   engine.launchKernel("andKernel", oDev, (cDev,))
-  engine.copyToHostFromDevice(addr result[0], oDev, 2)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 2 - 1), oDev)
 
 proc runOr(cmd: uint32): array[2, uint32] =
   var engine = newEngine(runMetal)
   engine.ingest(shortCircuitMsl)
   let cDev = engine.allocDevice(uint32, 1)
   let oDev = engine.allocDevice(uint32, 2)
-  engine.copyToDeviceFromHost(cDev, unsafeAddr cmd, 1)
+  engine.copyToDeviceFromHost(cDev, [cmd])
   engine.launchKernel("orKernel", oDev, (cDev,))
-  engine.copyToHostFromDevice(addr result[0], oDev, 2)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 2 - 1), oDev)
 
 proc runTest() =
   suite "Metal - short-circuit of call operands under statement-position and/or":

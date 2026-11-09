@@ -65,10 +65,10 @@ proc runScale(launcher: string, width = 1, outWidth = -1): seq[float32] =
     inp[i] = float32(i + 1)
   var outp = newSeq[float32](outW)
   let iDev = engine.allocDevice(float32, inp.len)
-  engine.copyToDeviceFromHost(iDev, addr inp[0], inp.len)
+  engine.copyToDeviceFromHost(iDev, inp)
   let oDev = engine.allocDevice(float32, outp.len)
   engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
-  engine.copyToHostFromDevice(addr outp[0], oDev, outp.len)
+  engine.copyToHostFromDevice(outp, oDev)
   result = outp
 
 proc runTest() =

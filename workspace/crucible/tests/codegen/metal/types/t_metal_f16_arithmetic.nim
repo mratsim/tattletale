@@ -22,13 +22,13 @@ proc runTest() =
   let aDev = engine.allocDevice(float16, 4)
   let bDev = engine.allocDevice(float16, 4)
   let oDev = engine.allocDevice(float16, 4)
-  engine.copyToDeviceFromHost(aDev, unsafeAddr aHost[0], 4)
-  engine.copyToDeviceFromHost(bDev, unsafeAddr bHost[0], 4)
+  engine.copyToDeviceFromHost(aDev, aHost.toOpenArray(0, 4 - 1))
+  engine.copyToDeviceFromHost(bDev, bHost.toOpenArray(0, 4 - 1))
   engine.launchDeviceFn f16MadKernel(oDev, aDev, bDev) do:
     grid = (1, 1)
     blk = (1, 1)
   var res: array[4, float16]
-  engine.copyToHostFromDevice(addr res[0], oDev, 4)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
   for k in 0 ..< 4:
     # every product and sum here is exact in fp16: the check is bit-exact
     let refVal = toFp16(toFp32(aHost[k]) * toFp32(bHost[k]) + toFp32(aHost[k]))

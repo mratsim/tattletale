@@ -68,7 +68,7 @@ proc benchSumCeramic*(engine: MetalEngine, np, iters: int): auto =
     engine.launchDeviceFn sumLoop(dstDev, srcDev, 3) do:
       grid = (gx, 1)
       blk = (32, 1)
-    engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, 1)
+    engine.copyToHostFromDevice(dstHost.data.toOpenArray(0, 1 - 1), dstDev.data)
   # timed, the launch overhead leaves the measurement
   dstHost.data[0] = 0
   let
@@ -78,7 +78,7 @@ proc benchSumCeramic*(engine: MetalEngine, np, iters: int): auto =
     engine.launchDeviceFn sumLoop(dstDev, srcDev, iters) do:
       grid = (gx, 1)
       blk = (32, 1)
-  engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, 1)
+  engine.copyToHostFromDevice(dstHost.data.toOpenArray(0, 1 - 1), dstDev.data)
   dstHost
 
 proc benchOneThreadgroup*(engine: MetalEngine, np, iters: int): auto =
@@ -96,7 +96,7 @@ proc benchOneThreadgroup*(engine: MetalEngine, np, iters: int): auto =
     engine.launchDeviceFn sumLoop(dstDev, srcDev, 3) do:
       grid = (1, 1)
       blk = (32, 1)
-    engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, 1)
+    engine.copyToHostFromDevice(dstHost.data.toOpenArray(0, 1 - 1), dstDev.data)
   # timed, the launch overhead leaves the measurement
   dstHost.data[0] = 0
   let
@@ -106,5 +106,5 @@ proc benchOneThreadgroup*(engine: MetalEngine, np, iters: int): auto =
     engine.launchDeviceFn sumLoop(dstDev, srcDev, iters) do:
       grid = (1, 1)
       blk = (32, 1)
-  engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, 1)
+  engine.copyToHostFromDevice(dstHost.data.toOpenArray(0, 1 - 1), dstDev.data)
   dstHost

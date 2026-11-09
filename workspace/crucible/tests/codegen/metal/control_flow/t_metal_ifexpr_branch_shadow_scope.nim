@@ -30,7 +30,7 @@ proc runTest() =   # private: engines are destroyed at proc return
       let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel("branchShadowKernel", oDev, ())
       var output: array[2, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 2)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 2 - 1), oDev)
       # branch-local x = 3 computes y
       # x is the outer 7 after the expression
       check output[0] == 7

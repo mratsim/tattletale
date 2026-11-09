@@ -32,9 +32,9 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 3)
       var res: array[3, int32]
       var x = [0'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("ifExprBranches", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check res[0] == 10
       check res[1] == 1  # then branch ran
       check res[2] == 0  # else branch did not run
@@ -46,9 +46,9 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 3)
       var res: array[3, int32]
       var x = [5'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("ifExprBranches", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check res[0] == 20
       check res[1] == 0  # then branch did not run
       check res[2] == 1  # else branch ran

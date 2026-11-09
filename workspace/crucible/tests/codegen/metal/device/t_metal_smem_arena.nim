@@ -43,10 +43,10 @@ proc runTest() =
       var input: array[64, float32]
       for i in 0 ..< 64:
         input[i] = float32(i)
-      engine.copyToDeviceFromHost(iDev, addr input[0], 64)
+      engine.copyToDeviceFromHost(iDev, input.toOpenArray(0, 64 - 1))
       engine.launchKernel<<(grid: (1, 1), blk: (64, 1))>>("sumSmem", oDev, (iDev,))
       var res: array[64, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 64)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 64 - 1), oDev)
       for i in 0 ..< 64:
         check res[i] == 2016.0'f32
 
@@ -71,10 +71,10 @@ proc runTest() =
       var input: array[64, float32]
       for i in 0 ..< 64:
         input[i] = float32(i)
-      engine.copyToDeviceFromHost(iDev, addr input[0], 64)
+      engine.copyToDeviceFromHost(iDev, input.toOpenArray(0, 64 - 1))
       engine.launchKernel<<(grid: (1, 1), blk: (64, 1))>>("sumSmemObj", oDev, (iDev,))
       var res: array[64, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 64)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 64 - 1), oDev)
       for i in 0 ..< 64:
         check res[i] == 2016.0'f32
 
@@ -96,12 +96,12 @@ proc runTest() =
       var input: array[64, float32]
       for i in 0 ..< 64:
         input[i] = float32(i)
-      engine.copyToDeviceFromHost(iDev, addr input[0], 64)
+      engine.copyToDeviceFromHost(iDev, input.toOpenArray(0, 64 - 1))
       engine.launchDeviceFn foldKernel(oDev, iDev) do:
         grid = (1, 1)
         blk = (64, 1)
       var res: array[64, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 64)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 64 - 1), oDev)
       for i in 0 ..< 64:
         check res[i] == 2016.0'f32
 

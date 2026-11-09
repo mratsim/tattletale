@@ -26,13 +26,13 @@ proc runTest() =
   let yDev = engine.allocDevice(float32, 1)
   var xHost: array[1, float32] = [7.0'f32]
   var yHost: array[1, float32] = [20.0'f32]
-  engine.copyToDeviceFromHost(xDev, addr xHost[0], 1)
-  engine.copyToDeviceFromHost(yDev, addr yHost[0], 1)
+  engine.copyToDeviceFromHost(xDev, xHost.toOpenArray(0, 1 - 1))
+  engine.copyToDeviceFromHost(yDev, yHost.toOpenArray(0, 1 - 1))
 
   # 3 + 4*5 + 7 + 20 = 50, every arg in declaration order through the block
   engine.launchKernel("mix", oDev, (3'u32, 4'u32, 5'u32, xDev, yDev))
   var got: array[1, uint32]
-  engine.copyToHostFromDevice(addr got[0], oDev, 1)
+  engine.copyToHostFromDevice(got.toOpenArray(0, 1 - 1), oDev)
   doAssert got[0] == 50'u32, &"mix: got {got[0]}, expected 50"
   echo "  OK — mix(3, 4, 5, x, y) = ", got[0]
 

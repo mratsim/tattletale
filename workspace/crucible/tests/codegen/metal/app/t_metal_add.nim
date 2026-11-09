@@ -69,11 +69,11 @@ proc runTest() =
       let aDev = engine.allocDevice(uint32, a.len)
       let bDev = engine.allocDevice(uint32, b.len)
       let oDev = engine.allocDevice(uint32, 2)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, a)
+      engine.copyToDeviceFromHost(bDev, b)
       engine.launchKernel("addKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+      engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
       check out32[0] == 11
       check out32[1] == 22
 
@@ -85,11 +85,11 @@ proc runTest() =
       let aDev = engine.allocDevice(uint32, a.len)
       let bDev = engine.allocDevice(uint32, b.len)
       let oDev = engine.allocDevice(uint32, 2)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, a)
+      engine.copyToDeviceFromHost(bDev, b)
       engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
       var out32: array[2, uint32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+      engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
       check out32[0] == 103
       check out32[1] == 204
 
@@ -101,11 +101,11 @@ proc runTest() =
       let aDev = engine.allocDevice(uint32, a.len)
       let bDev = engine.allocDevice(uint32, b.len)
       let oDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, a)
+      engine.copyToDeviceFromHost(bDev, b)
       engine.launchKernel("maxKernel", oDev, (aDev, bDev))
       var outVal: array[1, uint32]
-      engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
+      engine.copyToHostFromDevice(outVal.toOpenArray(0, 1 - 1), oDev)
       check outVal[0] == 42
 
 when isMainModule:

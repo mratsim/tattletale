@@ -26,21 +26,21 @@ proc runTest() =
 
   block:  # k1 writes its literal, one buffer address at offset 0
     var seed: array[1, uint32] = [0xDEADBEEF'u32]
-    engine.copyToDeviceFromHost(oDev, addr seed[0], 1)
+    engine.copyToDeviceFromHost(oDev, seed.toOpenArray(0, 1 - 1))
     engine.launchKernel("k1", oDev, ())
     var got: array[1, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 1)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 1 - 1), oDev)
     doAssert got[0] == 1'u32, &"k1: got {got[0]}, expected 1"
     echo "  OK — k1 writes 1"
 
   block:  # k2 reads extra[0] through the second block member, offset 8
     var seedOut: array[1, uint32] = [0xDEADBEEF'u32]
     var seedExtra: array[1, uint32] = [77'u32]
-    engine.copyToDeviceFromHost(oDev, addr seedOut[0], 1)
-    engine.copyToDeviceFromHost(eDev, addr seedExtra[0], 1)
+    engine.copyToDeviceFromHost(oDev, seedOut.toOpenArray(0, 1 - 1))
+    engine.copyToDeviceFromHost(eDev, seedExtra.toOpenArray(0, 1 - 1))
     engine.launchKernel("k2", oDev, (eDev,))
     var got: array[1, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 1)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 1 - 1), oDev)
     doAssert got[0] == 77'u32, &"k2: got {got[0]}, expected 77"
     echo "  OK — k2 copies extra[0] = ", got[0]
 

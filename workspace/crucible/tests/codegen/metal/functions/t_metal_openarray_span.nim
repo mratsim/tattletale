@@ -43,10 +43,10 @@ proc runTest() =
   var host: array[8, float32]
   for i in 0 ..< 8:
     host[i] = 1000.0'f32 + float32(i)
-  engine.copyToDeviceFromHost(dev, addr host[0], 8)
+  engine.copyToDeviceFromHost(dev, host.toOpenArray(0, 8 - 1))
   engine.launchKernel<<(grid: (1, 1), blk: (8, 1))>>("kern", dev, ())
   var got: array[16, float32]
-  engine.copyToHostFromDevice(addr got[0], dev, 16)
+  engine.copyToHostFromDevice(got.toOpenArray(0, 16 - 1), dev)
   # elements 0..7 hold the input sentinels, 8..10 the three span results,
   # 11..15 stay at the buffer's zero init
   let expected: array[16, float32] = [
