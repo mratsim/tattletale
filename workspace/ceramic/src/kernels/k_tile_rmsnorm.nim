@@ -9,6 +9,12 @@
 ##
 ## - `rmsnorm(dst, src, eps, axis)`: x * rsqrt(mean(x²) + eps) over the input axis
 ## - `rmsnorm(dst, src, weight, eps, axis)`: the same, scaled by the per-axis weight
+##
+## Element dtype contract:
+##
+## - values upcast to float32 on the load, all math runs in float32
+## - one rounding at the store through dst's element type,
+##   round-to-nearest-even for bfloat16 / float16
 
 import workspace/crucible
 import workspace/ceramic/src/tile_algebra
@@ -22,7 +28,16 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ## Sum of squares per row, one register tile at a time:
   ## - `alongAxisAt` cuts the source and destination strips per row. The rank-1 weight strip is the full tensor
   ## - tile loads pad past-the-end slots with zero, so short and ragged rows contribute nothing to the sum
-  ## - `tileSum += reg.data[i]` per element, `acc += reduceAdd(tileSum)` folds each tile onto the accumulator, one subgroup butterfly per tile
+  ## - `tileSum += x * x` per element, `acc += reduceAdd(tileSum)` folds each tile onto the accumulator, one subgroup butterfly per tile
+  ##
+  ## Element dtype contract:
+  ## - values upcast to float32 on the load, all math runs in float32
+  ## - one rounding at the store through dst's element type,
+  ##   round-to-nearest-even for bfloat16 / float16
+  ## - the loaded tile shares the float32 register tile's thread->value map:
+  ##   the default map's chunk width is element-size dependent:
+  ##   8 bfloat16 slots vs 4 float32 slots per 16-byte load
+  ## - a shared map keeps the two tiles' element positions identical
   ##
   ## Mean accumulation in fp32. `rsqrt` is the backend native reciprocal square root.
   ##
@@ -45,6 +60,8 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   ## - axis: the axis normalized over
   ## - withWeight: static switch, false compiles the weight out
   var reg: tile(float32)
+  # reg's thread->value map also maps the loaded tile, see the dtype contract above
+  var raw: tile(src.T, reg.getLayout())
   const
     W = getLaneWidth()
     owned = reg.size() div W
@@ -52,9 +69,13 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
   # The reduce's butterfly is subgroup-scoped: a threadgroup of any other size leaves
   # per-simdgroup partials uncombined or rows partially written.
   # TODO: cross-warp combine via shared memory and barrier.
-  let
-    rows = src.sliceAxes(axis).size()
-    gridStride = getGridSize()
+  # a rank-1 source is a single axis strip: sliceAxes on its only axis
+  # yields an empty layout, alongAxisAt special-cases rank 1 the same way
+  when src.rank() == 1:
+    let rows = 1
+  else:
+    let rows = src.sliceAxes(axis).size()
+  let gridStride = getGridSize()
   for g in countup(getLocalTileID(src.shape), rows - 1, gridStride):
     let
       srcRow = alongAxisAt(src, axis, g)
@@ -65,21 +86,22 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     # pass 1: sum of squares, one register tile at a time
     var acc = zero(float32)
     for tileID in 0 ..< stripTiles:
-      reg.load(srcRow, thrID, tileID, padWith = zero(float32))
+      raw.load(srcRow, thrID, tileID, padWith = zero(src.T))
       var tileSum = zero(float32)
       for i in 0 ..< owned:
-        reg.data[i] = reg.data[i].square()
-        tileSum += reg.data[i]
+        let x = raw.data[i].to(float32)
+        tileSum += x * x
       acc += reduceAdd(tileSum)
     let scale = rsqrt(acc / float32(rowSize) + eps)
-    # pass 2: scaled apply, the weight broadcast along the axis
+    # pass 2: scaled apply with per-axis weight broadcast,
+    # one rounding at the store through dst's element type
     when withWeight:
       let weightStrip = alongAxisAt(weight, 0, 0)
       for r in countup(thrID, rowSize - 1, W):
-        dstRow[r] = srcRow[r] * scale * weightStrip[r]
+        dstRow[r] = (srcRow[r].to(float32) * scale * weightStrip[r].to(float32)).to(dst.T)
     else:
       for r in countup(thrID, rowSize - 1, W):
-        dstRow[r] = srcRow[r] * scale
+        dstRow[r] = (srcRow[r].to(float32) * scale).to(dst.T)
 
 proc rmsnorm*(dst, src: distinct TensorView, eps: float32, axis: static int) {.inline.} =
   ## Root-mean-square normalization over the input axis, fully overwriting dst.
