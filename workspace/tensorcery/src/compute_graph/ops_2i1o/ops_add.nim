@@ -93,8 +93,8 @@ proc enqueueAdd*[E: HwEngine, Sh: tuple, Mem](
   if asAdd.isNil:
     return false
   let rz = asAdd.r.to(TensorImpl[Mem, Layout[Sh, Sh]])
-  evalNode[E, Mem](engine, batch, asAdd.a)
-  evalNode[E, Mem](engine, batch, asAdd.b)
+  evalNode[E](engine, batch, asAdd.a)
+  evalNode[E](engine, batch, asAdd.b)
   let
     xa = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
     xb = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])

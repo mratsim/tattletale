@@ -24,27 +24,9 @@ import ../compute_graph/ops_1iNo/ops_split
 proc eval*[E: HwEngine](engine: E, roots: Span[TensorNode]) =
   if roots.len == 0:
     return
-  let impl = roots[0].getImpl()
   var batch = engine.recordBatch()
-  case impl.dtype()
-  of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
-    case impl.shape().len
-    of 2:
-      for i in 0 ..< roots.len:
-        evalWalk[E, (int, int), Mem](engine, batch, roots[i])
-    else:
-      raise ValueError.newException("eval: rank " & $impl.shape().len & " unsupported")
-  of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    case impl.shape().len
-    of 2:
-      for i in 0 ..< roots.len:
-        evalWalk[E, (int, int), Mem](engine, batch, roots[i])
-    else:
-      raise ValueError.newException("eval: rank " & $impl.shape().len & " unsupported")
-  else:
-    raise ValueError.newException("eval: dtype unsupported")
+  for i in 0 ..< roots.len:
+    evalNode(engine, batch, roots[i])
   if batch.entries.len == 0:
     # a leaf-only graph, the values are already materialized
     return
