@@ -6,6 +6,9 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible/src/builtins/builtins_gpu_types
+import workspace/crucible/src/runtime/engines/engines_api
+
+export engines_api.Runtime
 
 type Dtype* = enum
     kFp16, kBf16, kFp32

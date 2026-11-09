@@ -13,11 +13,9 @@ import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_1iNo/ops_split
 import tensors_globals
-import workspace/crucible/src/runtime/engines/engines_api
 import workspace/design_by_contract
 
-export tensors_public_types.Dtype
-export engines_api.Runtime
+export tensors_public_types
 
 # #######################################################################
 #
