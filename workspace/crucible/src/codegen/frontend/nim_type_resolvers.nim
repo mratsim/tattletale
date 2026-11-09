@@ -282,6 +282,39 @@ func isCompileTimeFormal*(t: NimNode): bool =
     return true
   return false
 
+func getPhantomStaticArg*(n: NimNode): NimNode =
+  ## Static argument of a phantom value type, nil when absent.
+  ##
+  ## - a phantom value type is an object with no fields whose value is
+  ##   its static argument `V`, instantiated as `Phantom[V]`
+  ##   (the phantom-value convention, Ceramic's `Int[V]`)
+  ## - the type resolves to the argument's integer type and a value
+  ##   of it lowers to the argument, so the value survives into
+  ##   runtime layout arithmetic
+  ## Returns:
+  ## - the static argument node, or nil for every other type
+  var t = n
+  if t.kind == nnkSym and t.typeKind == ntyGenericInst:
+    # an instantiation symbol reads back as its bracket form `Phantom[V]`
+    let impl = t.getImpl()
+    if impl.kind != nnkTypeDef or impl[2].kind != nnkSym:
+      return nil
+    t = impl[2]
+  if t.kind != nnkBracketExpr or t.len != 2:
+    return nil
+  if t[1].kind notin nnkIntLit .. nnkUInt64Lit:
+    return nil
+  let head = t[0]
+  if head.kind != nnkSym or head.symKind != nskType:
+    return nil
+  let impl = head.getImpl()
+  if impl.kind != nnkTypeDef or impl[2].kind != nnkObjectTy:
+    return nil
+  let recList = impl[2][2]
+  if recList.kind == nnkRecList and recList.len > 0:
+    return nil
+  return t[1]
+
 func resolveProcType(r: var CirTypeResolver, procTy: NimNode): CirType =
   procTy.expectKind(nnkProcTy)
   let formals = procTy[0]
@@ -360,7 +393,11 @@ func resolveCirType*(r: var CirTypeResolver, n: NimNode, ptrSpace = caDevice): C
   of ntyAlias:
     result = r.resolveCirType(n.getTypeImpl(), ptrSpace)
   of ntyObject, ntyTuple, ntyGenericInst:
-    result = r.resolveStructType(n)
+    if getPhantomStaticArg(n).isNil:
+      result = r.resolveStructType(n)
+    else:
+      # a phantom value type's value is its static argument, an int
+      result = tInt(32)
   of ntyArray:
     var arr: NimNode = n
     if n.kind == nnkSym:

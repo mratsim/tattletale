@@ -668,6 +668,10 @@ func lowerExpr(ctx: var CirFrontend, n: NimNode): CirExpr =
       raiseAssert("value call callee " & callee.repr & " is not a proc symbol")
     return ctx.lowerCallValue(callee, n)
   of nnkObjConstr:
+    let phantomArg = getPhantomStaticArg(n.getTypeInst())
+    if not phantomArg.isNil:
+      # a phantom value's value is its static argument, an int
+      return intLit(phantomArg.intVal, tInt(32))
     var lowereds: seq[tuple[name: string, v: CirExpr, isNil: bool]] = @[]
     var valueSpaces = initTable[string, AddressSpace]()
     for i in 1 ..< n.len:

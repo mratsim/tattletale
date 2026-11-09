@@ -60,6 +60,8 @@ proc getIndicesSortedByStride(strides: seq[int]): seq[int] {.compileTime.} =
 #     the size is unchanged and every input integer maps to the
 #     same output integer
 
+proc pathSelect(node: NimNode, path: seq[int]): NimNode {.compileTime.}
+
 macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
   ## Merges adjacent dimensions as long as there are no gaps between their elements.
   var builder = TupleBuilderFlat.new(2)
@@ -86,6 +88,18 @@ macro coalesceImpl(sh, st: typed, dropTrailing: static bool = false): untyped =
     let shapeEv = shS.next()
     let strideEv = stS.next()
     if shapeEv.kind != kLeaf:
+      continue
+    if strideEv.kind != kLeaf:
+      # a coordinate-vector stride value evaluates to a coefficient tuple under its scalar shape mode, never merging
+      stS.drainSubtree()
+      if not headTy.isNil:
+        appendChain()
+      builder.append((shapeEv.leaf, shapeEv.leafTy),
+        (pathSelect(st, strideEv.path), nil))
+      span = 0
+      headTy = nil
+      pending = newEmptyNode()
+      pendingVal = DynamicSentinel
       continue
     let shapeVal = shapeEv.leafTy.getStaticInt()
     let strideVal = strideEv.leafTy.getStaticInt()
@@ -222,16 +236,18 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
   var slots: seq[tuple[path: seq[int], cur: int, curNode, leaf: NimNode]]
 
   for p in pairs:
+    # a stride-0 leaf maps every coordinate to offset 0,
+    # a size-1 dimension covers one offset, neither opens a gap
+    # and neither consumes a bound leaf: the slot must not exist,
+    # or its terminal claims a codomain axis the tiler never advances
+    if p.scale == 0 or p.shapeVal == 1:
+      continue
     # a fresh slot's index is the leaf it consumes
     let si = slots.slotAt(p.path, (
       if slots.len < boundLeafs.len:
         boundLeafs[slots.len]
       else:
         IntCT(1)))
-    # a stride-0 leaf maps every coordinate to offset 0,
-    # a size-1 dimension covers one offset, neither opens a gap
-    if p.scale == 0 or p.shapeVal == 1:
-      continue
     if p.scale < slots[si].cur:
       error "complement: non-injective layout, stride " & $p.scale &
         " overlaps the covered span " & $slots[si].cur & " on slot " & $p.path
@@ -241,6 +257,15 @@ proc complementGenericFold(sh, st: NimNode, bound: NimNode, dropTrailing: bool):
     slots[si].cur = p.scale * p.shapeVal
     slots[si].curNode = p.stride * IntCT(p.shapeVal)
 
+  if slots.len == 0:
+    # no gap opener advanced any codomain axis, the tiler covers one
+    # offset and the whole codomain is the complement with one terminal
+    # over the bound product at stride 1
+    var total = IntCT(1)
+    for leaf in boundLeafs:
+      total = total * leaf
+    builder.append((total, nil), (IntCT(1), nil))
+    return bindSym"coalesceImpl".newCall(builder.emit(0), builder.emit(1), newLit(dropTrailing))
   # leftover leaves multiply into the last slot's terminal leaf
   var remaining = IntCT(1)
   for k in slots.len ..< boundLeafs.len:

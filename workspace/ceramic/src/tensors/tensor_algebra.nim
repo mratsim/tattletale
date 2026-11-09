@@ -58,7 +58,7 @@ func atAxisIndex*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, idx: 
   ##
   ##   atAxisIndex(src, axis = 1, idx = 2)  # src (2, 3, 4) -> view (2, 4), view[a, b] aliases src[a, 2, b]
   when src.rank() == 1:
-    # a rank-1 `src` keeps no other coordinate, the view is the full tensor
+    # a rank-1 `src` has no other coordinate, the view is the full tensor
     make_view(src.data, src.getLayout(), src.offset)
   else:
     let others = src.sliceAxes(axis)
