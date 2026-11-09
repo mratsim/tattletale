@@ -35,6 +35,12 @@ proc statKernel*(outP: ptr UncheckedArray[uint32], n: static int, v: uint32) =
   if i < n:
     outP[i] = v + uint32(n)
 
+proc fillSentinel[E: HwEngine](engine: E, dst: auto, len: int, v: auto) =
+  var host = newSeq[typeof(v)](len)
+  for i in 0 ..< len:
+    host[i] = v
+  engine.copyToDeviceFromHost(dst, host.toOpenArray(0, len - 1))
+
 proc copyBack[E: HwEngine](engine: E, dst: var openArray[uint32], src: auto) =
   var host = newSeq[uint32](dst.len)
   engine.copyToHostFromDevice(host.toOpenArray(0, host.len - 1), src)
@@ -63,9 +69,11 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
   multi.enqueue<<(1, 16)>> scaleKernel(out2D, xD, 5.0'f32)
   multi.enqueue<<(1, 16)>> fillKernel(fillD, 5'u32)
 
+  var tid32D = engine.allocDevice(uint32, TidN)
+  var tid64D = engine.allocDevice(uint32, TidN)
   var sizes = engine.recordBatch()
-  sizes.enqueue<<(2, 32)>> tidKernel(tidD)
-  sizes.enqueue<<(2, 64)>> tidKernel(tidD)
+  sizes.enqueue<<(2, 32)>> tidKernel(tid32D)
+  sizes.enqueue<<(2, 64)>> tidKernel(tid64D)
 
   var statics = engine.recordBatch()
   statics.enqueue<<(1, 16)>> statKernel(statD, N, 7'u32)
@@ -120,6 +128,8 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
     engine.copyToHostFromDevice(eagerScaled.toOpenArray(0, N - 1), out2D)
     copyBack(engine, eagerFilled, fillD)
 
+    fillSentinel(engine, out2D, N, -1.0'f32)
+    fillSentinel(engine, fillD, N, 0xFFFFFFFF'u32)
     multi.submit()
     var gotScaled: array[N, float32]
     var gotFilled: array[N, uint32]
@@ -128,6 +138,7 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
     for i in 0 ..< N:
       doAssert gotScaled[i] == eagerScaled[i], "scaled mismatch at " & $i
       doAssert gotFilled[i] == eagerFilled[i], "filled mismatch at " & $i
+    fillSentinel(engine, fillD, N, 0xFFFFFFFF'u32)
     multi.replay()
     copyBack(engine, gotFilled, fillD)
     for i in 0 ..< N:
@@ -136,19 +147,27 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
 
   block:
     # same kernel at two workgroup sizes, each entry dispatches its own size
-    engine.launchDeviceFn tidKernel(tidD) do:
+    engine.launchDeviceFn tidKernel(tid64D) do:
       grid = (2, 1)
       blk = (64, 1)
     var eager: array[TidN, uint32]
-    copyBack(engine, eager, tidD)
+    copyBack(engine, eager, tid64D)
     for i in 0 ..< TidN:
       doAssert eager[i] == uint32(i mod 64), "eager tid mismatch at " & $i
 
+    fillSentinel(engine, tid32D, TidN, 0xFFFFFFFF'u32)
+    fillSentinel(engine, tid64D, TidN, 0xFFFFFFFF'u32)
+    sizes.enqueue<<(2, 32)>> tidKernel(tid32D)
+    sizes.enqueue<<(2, 64)>> tidKernel(tid64D)
     sizes.submit()
-    var got: array[TidN, uint32]
-    copyBack(engine, got, tidD)
+    var got32: array[TidN, uint32]
+    var got64: array[TidN, uint32]
+    copyBack(engine, got32, tid32D)
+    copyBack(engine, got64, tid64D)
     for i in 0 ..< TidN:
-      doAssert got[i] == uint32(i mod 64), "batched tid mismatch at " & $i
+      let expected32 = if i < 64: uint32(i mod 32) else: 0xFFFFFFFF'u32
+      doAssert got32[i] == expected32, "batched 32-thread tid mismatch at " & $i
+      doAssert got64[i] == uint32(i mod 64), "batched 64-thread tid mismatch at " & $i
     echo "[OK] two workgroup sizes: both entries dispatch their own size"
 
   block:
@@ -159,6 +178,7 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
     var eager: array[N, uint32]
     copyBack(engine, eager, statD)
 
+    fillSentinel(engine, statD, N, 0xFFFFFFFF'u32)
     statics.submit()
     var got: array[N, uint32]
     copyBack(engine, got, statD)
@@ -180,6 +200,8 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
     copyBack(engine, eagerFilled, fillD)
     copyBack(engine, eagerProduct, productD)
 
+    fillSentinel(engine, fillD, N, 0xFFFFFFFF'u32)
+    fillSentinel(engine, productD, N, 0xFFFFFFFF'u32)
     overloads.submit()
     var gotFilled: array[N, uint32]
     var gotProduct: array[N, uint32]
