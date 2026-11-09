@@ -23,6 +23,14 @@ import workspace/tensorcery/src/kernels/k_add
 
 type AddNode* = ref object
   r: AnyTensorImpl
+  enqueued: bool
+    ## Launch-once marker under the eval walk's fan-out re-walks:
+    ## - a downstream op that fans out over a shared input re-walks
+    ##   the whole upstream chain (the FFN's two projections share one input)
+    ## - the repeat visit must not re-run the handler, the launch is
+    ##   already in the batch and its subtree is already scheduled
+    ## Precondition: an op node is constructed per forward and enqueued in
+    ## exactly one eval, so the flag never crosses an eval boundary.
   a, b: TensorNode
 
 proc eval*(n: AddNode) =
@@ -86,6 +94,10 @@ proc enqueueAddNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: Tens
   let asAdd = n.to(AddNode)
   if asAdd.isNil:
     return false
+  if asAdd.enqueued:
+    # re-visit under the walk's fan-out, the subtree is already scheduled
+    return true
+  asAdd.enqueued = true
   evalNode[E](engine, batch, asAdd.a)
   evalNode[E](engine, batch, asAdd.b)
   # per-node dtype dispatch: each erased dtype selects the static

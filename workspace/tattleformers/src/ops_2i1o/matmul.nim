@@ -29,6 +29,14 @@ export tile_algebra
 
 type MatmulNode* = ref object
   r: AnyTensorImpl
+  enqueued: bool
+    ## Launch-once marker under the eval walk's fan-out re-walks:
+    ## - a downstream op that fans out over a shared input re-walks
+    ##   the whole upstream chain (the FFN's two projections share one input)
+    ## - the repeat visit must not re-run the handler, the launch is
+    ##   already in the batch and its subtree is already scheduled
+    ## Precondition: an op node is constructed per forward and enqueued in
+    ## exactly one eval, so the flag never crosses an eval boundary.
   a, b: TensorNode
 
 proc eval*(n: MatmulNode) =
@@ -72,6 +80,10 @@ proc enqueueMatmulNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: T
   let mm = n.to(MatmulNode)
   if mm.isNil:
     return false
+  if mm.enqueued:
+    # re-visit under the walk's fan-out, the subtree is already scheduled
+    return true
+  mm.enqueued = true
   evalNode[E](engine, batch, mm.a)
   evalNode[E](engine, batch, mm.b)
   # per-node dtype dispatch: both operands share one dtype (checked at the face),

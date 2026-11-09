@@ -39,6 +39,14 @@ export tile_algebra
 
 type RmsNormNode* = ref object
   r: AnyTensorImpl
+  enqueued: bool
+    ## Launch-once marker under the eval walk's fan-out re-walks:
+    ## - a downstream op that fans out over a shared input re-walks
+    ##   the whole upstream chain (the FFN's two projections share one input)
+    ## - the repeat visit must not re-run the handler, the launch is
+    ##   already in the batch and its subtree is already scheduled
+    ## Precondition: an op node is constructed per forward and enqueued in
+    ## exactly one eval, so the flag never crosses an eval boundary.
   x, w: TensorNode
   eps: float32
 
@@ -149,6 +157,10 @@ proc enqueueRmsnormNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: 
   let asN = n.to(RmsNormNode)
   if asN.isNil:
     return false
+  if asN.enqueued:
+    # re-visit under the walk's fan-out, the subtree is already scheduled
+    return true
+  asN.enqueued = true
   evalNode[E](engine, batch, asN.x)
   evalNode[E](engine, batch, asN.w)
   # per-node dtype dispatch, the face checks x/weight/result dtype equality:

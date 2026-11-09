@@ -24,6 +24,14 @@ import workspace/positron/src/kernels/k_embed_gather
 
 type EmbedGatherNode* = ref object
   o: AnyTensorImpl
+  enqueued: bool
+    ## Launch-once marker under the eval walk's fan-out re-walks:
+    ## - a downstream op that fans out over a shared input re-walks
+    ##   the whole upstream chain (the FFN's two projections share one input)
+    ## - the repeat visit must not re-run the handler, the launch is
+    ##   already in the batch and its subtree is already scheduled
+    ## Precondition: an op node is constructed per forward and enqueued in
+    ## exactly one eval, so the flag never crosses an eval boundary.
   w: TensorNode
   ids: seq[int]
   ## Host-side token ids, staged to a typed device buffer at eval time
@@ -64,6 +72,10 @@ proc enqueueEmbedGatherNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E],
   let asG = n.to(EmbedGatherNode)
   if asG.isNil:
     return false
+  if asG.enqueued:
+    # re-visit under the walk's fan-out, the subtree is already scheduled
+    return true
+  asG.enqueued = true
   evalNode[E](engine, batch, asG.w)
   # per-eval staging of the ids: host Nim ints upload to a typed int32 buffer that the launch closure owns through submit
   let numTokens = asG.ids.len
