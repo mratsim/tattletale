@@ -34,8 +34,8 @@ proc k_pool_write*(dstK, srcK, dstV, srcV: distinct DeviceView, meta: ptr Unchec
   ##
   ## Output:
   ## - dstK, dstV fully written over positions [offset, offset + seq_len):
-  ##   source element (t, h, d) writes the pool entry (page, withinPage, h, d)
-  ##   at slot pageSlots[globalPos div page_size]
+  ##   source element (t, h, d) writes the pool entry
+  ##   (page, withinPage, h, d) at slot pageSlots[globalPos div page_size]
   ##
   ## Positions before max(0, cachedTokens - offset) keep their previous content.
   ## Sequence page = globalPos div page_size, withinPage = globalPos mod
