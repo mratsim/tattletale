@@ -12,6 +12,7 @@ import tensors_internals
 import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_1iNo/ops_split
+import compute_graph/ops_Ni1o/ops_embed_gather
 import tensors_globals
 import workspace/design_by_contract
 
@@ -98,3 +99,15 @@ proc `+`*(a, b: Tensor): Tensor =
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] =
   for n in t.engine.tn_split(t.node, axis, k):
     result.add(Tensor(engine: t.engine, node: n))
+
+proc embed_gather*(w: Tensor, inputIds: openArray[int]): Tensor =
+  ## Gathers one weight entry per token id.
+  ##
+  ## Args:
+  ## - w: the weight tensor, shape (vocab, hidden)
+  ## - inputIds: token ids in [0, vocab), each id selects one weight entry
+  ##
+  ## Returns:
+  ## - a tensor of shape (numTokens, hidden), token t's vector copied from
+  ##   the weight entry ids[t]
+  Tensor(engine: w.engine, node: tn_embed_gather(w.engine, w.node, inputIds))

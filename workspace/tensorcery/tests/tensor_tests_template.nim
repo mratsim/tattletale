@@ -12,6 +12,7 @@ import workspace/tensorcery/src/tensors_internals
 import workspace/tensorcery/src/tensors_globals
 import workspace/tensorcery/src/compute_graph/dispatch
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
+import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/eval
 export eval.eval
 
@@ -153,6 +154,78 @@ proc runDedupeTest*(run: static Runtime, name: string) =
     doAssert ge[i] == eExp, name & ": aliased e[" & $i & "]"
 
   echo "tensorcery dedupe (", name, "): all checks passed"
+
+proc runEmbedGatherTest*(run: static Runtime, name: string) =
+  ## Embed gather end to end: a (16, 8) bf16 weight, ids [3, 0, 7, 3]
+  ## (the duplicate id reads one weight entry twice).
+  ##
+  ## Checks:
+  ## - public-face eval: toTensor, embed_gather, eval and item readback equal
+  ##   the weight entry at the id
+  ## - face contracts raise AssertionDefect: an empty id list, ids outside
+  ##   the vocabulary
+  ## - fan-out enqueue count: two add consumers of one gather output enqueue
+  ##   the gather exactly once (3 batch entries), numerics read back
+  var wq = newSeq[bfloat16](16 * 8)
+  for i in 0 ..< 16 * 8:
+    wq[i] = float32(i).to(bfloat16)
+
+  # public face: toTensor + eval + item readback
+  let w = toTensor(wq, @[16, 8])
+  let selected = embed_gather(w, @[3, 0, 7, 3])
+  doAssert selected.shape().len == 2, name & ": gather rank"
+  doAssert selected.shape()[0] == 4, name & ": gather tokens"
+  doAssert selected.shape()[1] == 8, name & ": gather hidden"
+  eval(selected)
+  for t in 0 ..< 4:
+    for c in 0 ..< 8:
+      doAssert selected.item(t, c, bfloat16) == float32([3, 0, 7, 3][t] * 8 + c).to(bfloat16),
+        name & ": gather out " & $t & "," & $c
+
+  # face contracts raise AssertionDefect
+  doAssertRaises AssertionDefect:
+    discard embed_gather(w, @[])
+  doAssertRaises AssertionDefect:
+    discard embed_gather(w, @[16])
+
+  # fan-out: two consumers of one gather output enqueue the gather ONCE
+  let engine = newEngine(run)
+  var wShape = @[16, 8]
+  let wNode = engine.newTensorNode(kBf16, wShape.toSpan())
+  engine.upload(wNode, wq)
+  var xq: array[4 * 8, bfloat16]
+  for i in 0 ..< 4 * 8:
+    xq[i] = float32(i).to(bfloat16)
+  var gShape = @[4, 8]
+  let x = engine.newTensorNode(kBf16, gShape.toSpan())
+  let y = engine.newTensorNode(kBf16, gShape.toSpan())
+  engine.upload(x, xq)
+  engine.upload(y, xq)
+
+  let g = engine.tn_embed_gather(wNode, @[3, 0, 7, 3])
+  let z1 = engine.tn_add(g, x)
+  let z2 = engine.tn_add(g, y)
+  var batch = engine.recordBatch()
+  var visited: VisitedNodes
+  var nz1 = z1
+  var nz2 = z2
+  engine.evalNode(batch, nz1, visited)
+  engine.evalNode(batch, nz2, visited)
+  doAssert batch.entries.len == 3,
+    name & ": gather fan-out enqueued " & $batch.entries.len & " kernels, expected 3"
+  batch.submit()
+  var gz1, gz2: array[4 * 8, bfloat16]
+  engine.download(gz1, nz1)
+  engine.download(gz2, nz2)
+  for t in 0 ..< 4:
+    for c in 0 ..< 8:
+      let gVal = float32([3, 0, 7, 3][t] * 8 + c).to(bfloat16)
+      let xVal = float32(t * 8 + c).to(bfloat16)
+      let exp = (gVal.to(float32) + xVal.to(float32)).to(bfloat16)
+      doAssert gz1[t * 8 + c] == exp, name & ": gather z1 " & $t & "," & $c
+      doAssert gz2[t * 8 + c] == exp, name & ": gather z2 " & $t & "," & $c
+
+  echo "tensorcery embed gather (", name, "): all checks passed"
 
 proc runRankNTest*(run: static Runtime, name: string) =
   ## Construct-upload-item-download round-trips at ranks 1, 3, 4, 5, bf16.
