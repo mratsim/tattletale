@@ -32,30 +32,7 @@ export tensors_internal_types
 # This allows batching compute all-at-once, reducing the CPU<->GPU synchronization overhead.
 # Furthermore, when backprop is added, the graph can be reused for backward propagation.
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Output slot - a node's deferred output, metadata only
-# ═══════════════════════════════════════════════════════════════════════
 
-type SlotImpl* = ref object
-  dt*: Dtype
-  sh*: seq[int]
-  st*: seq[int]
-
-func dtype*(s: SlotImpl): Dtype =
-  s.dt
-
-func shape*(s: SlotImpl): Span[int] =
-  s.sh.toSpan()
-
-func strides*(s: SlotImpl): Span[int] =
-  s.st.toSpan()
-
-func toSeq*(s: Span[int]): seq[int] =
-  result.newSeq(s.len)
-  for i in 0 ..< s.len:
-    result[i] = s[i]
-
-# ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - AnyTensorImpl implementation
 # ═══════════════════════════════════════════════════════════════════════
 

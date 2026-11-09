@@ -73,12 +73,8 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
   let ib = b.getImpl()
   {.precondition: ia.shape() == ib.shape().}
   {.precondition: ia.dtype() == ib.dtype().}
-  var sh: (int, int)
-  fillShape(sh, ia.shape())
-  let st = rowMajorStrides(sh)
-  let slot = SlotImpl(dt: ia.dtype(), sh: ia.shape().toSeq(),
-                      st: toSpan(st).toSeq())
-  AddNode(a: a, b: b, r: slot.to(AnyTensorImpl)).to(TensorNode)
+  AddNode(a: a, b: b,
+          r: engine.newViewNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
