@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Batch layer: the compile-time device function stream and the runtime command buffer.
+## BatchCommands layer: the compile-time device function stream and the runtime command buffer.
 ##
 ## Usage:
 ##   ```
@@ -46,7 +46,7 @@ type
     elif E is WebgpuEngine:
       record: proc(leg: WebgpuBatch) {.closure.}
 
-  Batch*[E] = ref object
+  BatchCommands*[E] = ref object
     engine*: E
     entries*: seq[BatchEntry[E]]
     when E is VulkanEngine:
@@ -62,8 +62,8 @@ type
     elif E is WebgpuEngine:
       leg: WebgpuBatch
 
-proc recordBatch*[E: HwEngine](engine: E): Batch[E] {.inline.} =
-  Batch[E](engine: engine)
+proc recordBatch*[E: HwEngine](engine: E): BatchCommands[E] {.inline.} =
+  BatchCommands[E](engine: engine)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Compile-time stream
@@ -134,7 +134,7 @@ proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
 #  Enqueue
 # ═══════════════════════════════════════════════════════════════════════
 
-template appendEntry[E](batch: Batch[E], fnName: string, cfg: LaunchConfig, output: auto, args: tuple) =
+template appendEntry[E](batch: BatchCommands[E], fnName: string, cfg: LaunchConfig, output: auto, args: tuple) =
   var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
   entry.launch = proc(engine: E) {.closure.} =
     engine.launchKernelImpl(output, args, entry.config, fnName)
@@ -143,7 +143,7 @@ template appendEntry[E](batch: Batch[E], fnName: string, cfg: LaunchConfig, outp
       leg.recordGlobalFn(fnName, entry.config, output, args)
   batch.entries.add entry
 
-template appendEntry[E](batch: Batch[E], fnName: string, artifact: auto, cfg: LaunchConfig, output: auto, args: tuple) =
+template appendEntry[E](batch: BatchCommands[E], fnName: string, artifact: auto, cfg: LaunchConfig, output: auto, args: tuple) =
   var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
   entry.launch = proc(engine: E) {.closure.} =
     engine.launchKernelImpl(output, args, entry.config, fnName)
@@ -158,7 +158,7 @@ template appendEntry[E](batch: Batch[E], fnName: string, artifact: auto, cfg: La
       leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
   batch.entries.add entry
 
-macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, workgroup: untyped, values: varargs[typed]): untyped =
+macro enqueueDeviceFn[E](batch: BatchCommands[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, workgroup: untyped, values: varargs[typed]): untyped =
   var valuesN = nnkBracket.newTree()
   for v in values:
     valuesN.add(v)
@@ -190,19 +190,19 @@ macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg
 type
   EnqueueSugar*[E] = object
     ## Chevron stage between `batch.enqueue` and `<<`, wrapping the batch.
-    batch: Batch[E]
+    batch: BatchCommands[E]
 
   EnqueueProxy*[E] = object
     ## Chevron stage between `<<` and `>>`, runtime block size.
-    batch: Batch[E]
+    batch: BatchCommands[E]
     config: LaunchConfig
 
   EnqueueProxyCt*[E; blkCt: static Dim3] = object
     ## Chevron stage between `<<` and `>>`, compile-time block size.
-    batch: Batch[E]
+    batch: BatchCommands[E]
     config: LaunchConfig
 
-proc enqueue*[E](batch: Batch[E]): EnqueueSugar[E] {.inline.} =
+proc enqueue*[E](batch: BatchCommands[E]): EnqueueSugar[E] {.inline.} =
   ## batch.enqueue<<(4, 16)>> saxpy(out, x, y, 2.0)
   EnqueueSugar[E](batch: batch)
 
@@ -254,7 +254,7 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
       EnqueueProxy[`E`](batch: `batchN`, config: LaunchConfig(
         grid: `gridRef`, blk: dim3(`blkN`), sharedMem: `smemRef`))
 
-macro enqueueCall[E](batch: Batch[E], cfg: LaunchConfig, workgroup: untyped, deviceFn: typed, values: varargs[untyped]): untyped =
+macro enqueueCall[E](batch: BatchCommands[E], cfg: LaunchConfig, workgroup: untyped, deviceFn: typed, values: varargs[untyped]): untyped =
   var callNode = nnkCall.newTree(deviceFn)
   for v in values:
     callNode.add(v)
@@ -276,7 +276,7 @@ macro enqueueCall[E](batch: Batch[E], cfg: LaunchConfig, workgroup: untyped, dev
       entry.add(v)
   result = entry
 
-macro enqueueCallCt[E](batch: Batch[E], cfg: LaunchConfig, blkCt: static Dim3, deviceFn: typed, values: varargs[untyped]): untyped =
+macro enqueueCallCt[E](batch: BatchCommands[E], cfg: LaunchConfig, blkCt: static Dim3, deviceFn: typed, values: varargs[untyped]): untyped =
   let wg = getWorkgroupPragma(blkCt)
   result = bindSym"enqueueCall".newCall(batch, cfg,
     if wg.isNil: newEmptyNode() else: wg, deviceFn)
@@ -322,7 +322,7 @@ macro `>>`*[E](sugar: EnqueueProxy[E], call: untyped): untyped =
 #  Submission
 # ═══════════════════════════════════════════════════════════════════════
 
-macro finalize*(batch: Batch): untyped =
+macro finalize*(batch: BatchCommands): untyped =
   ## Compiles the batch's device functions into one artifact and ingests it
   ## into the engine. Does not launch the entries.
   ##
@@ -345,7 +345,7 @@ macro finalize*(batch: Batch): untyped =
         if `engineN`.getArtifact() != batchArtifact:
           `engineN`.ingest(batchArtifact)
 
-proc replay*[E](batch: Batch[E]) {.inline.} =
+proc replay*[E](batch: BatchCommands[E]) {.inline.} =
   ## Launches the batch entries on the engine in enqueue order, without recompiling.
   ##
   ## Requires:
@@ -367,6 +367,7 @@ proc replay*[E](batch: Batch[E]) {.inline.} =
     else:
       batch.leg.resetRecording()
     for entry in batch.entries:
+      echo "DBG record nil=", entry.record.isNil, " fn=", entry.entrypoint
       entry.record(batch.leg)
     batch.leg.finalize()
     batch.leg.replay()
@@ -401,7 +402,7 @@ proc replay*[E](batch: Batch[E]) {.inline.} =
     for entry in batch.entries:
       entry.launch(batch.engine)
 
-macro submit*(batch: Batch): untyped =
+macro submit*(batch: BatchCommands): untyped =
   ## Flushes the batch: finalizes the compiled artifact and launches the entries
   ## on the engine in enqueue order.
   ##

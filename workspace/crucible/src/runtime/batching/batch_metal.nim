@@ -122,7 +122,7 @@ when defined(macosx):
     privateAccess(typeof(engine.cache))
     result = MetalBatch(device: engine.ctx.device, queue: engine.ctx.queue)
     # Engine library cache is a single slot: a re-ingest releases the old library.
-    # Batch construction retains its own reference.
+    # BatchCommands construction retains its own reference.
     result.library = RetainedMetalObject(objc.retain(engine.cache.library))
 
   proc recordGlobalFn*(batch: MetalBatch, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
