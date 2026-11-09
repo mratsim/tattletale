@@ -382,10 +382,10 @@ proc runLocalPartition4ArgStep11(errors: var int) =
     doAssert p(0,0) == (15.0 + 15.0*128.0).float32
   echo "  OK"
 
-═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  18. partitioning an offset view
 #      view (8,8):(1,8) at offset 13, tiler (4,4), coord (1,0)
-═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc runOffsetParent(errors: var int) =
   echo "--- 18. partitioning an offset view (8x8) tiler (4,4) coord (1,0) ---"

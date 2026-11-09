@@ -82,8 +82,9 @@ proc to*[T, Sh, St, U](src: HostTensor[T, Sh, St], _: typedesc[U]): HostTensor[U
     data: cast[ptr UncheckedArray[U]](allocShared(toInt(layout.cosize()) * sizeof(U))),
     offset: originOffset(layout),
     layout: layout)
+  let start = src.offset - originOffset(layout)
   for i in 0 ..< toInt(layout.cosize()):
-    result.data[i] = src.data[i].to(U)
+    result.data[i] = src.data[start + i].to(U)
 
 proc makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder): auto =
   let layout = make_layout(shape, order)
@@ -125,8 +126,8 @@ func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
 proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
   let n = ht.layout.cosize()
   let dev = engine.allocDevice(T, n)
-  engine.copyToDeviceFromHost(dev, ht.data.toOpenArray(ht.offset, ht.offset + n - 1))
-  BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
+  engine.copyToDeviceFromHost(dev, ht.data.toOpenArray(0, n - 1))
+  BridgeTensor[typeof(dev), Sh, St](data: dev, offset: ht.offset, layout: ht.layout)
 
 # ═══════════════════════════════════════════════════════════════
 #  Tensor assertions

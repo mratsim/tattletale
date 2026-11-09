@@ -120,7 +120,7 @@ func copyFrom*[T, ShD, StD, ShS, StS](
     vecCap = min(wV and -wV, 128 div elemBits)
   let spansCover = size(R) === size(srcV)
   if spansCover and s0 === 1:
-    copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
+    copyChunks(C, 1, cast[ptr UncheckedArray[T]](addr dstV[0]), cast[ptr UncheckedArray[T]](addr srcV[0]), 0, 0, wV, wV, vecCap, elemBits)
   else:
     copyElementwise(dstV, srcV)
 
@@ -137,10 +137,10 @@ func copyFromIfAsync*[T, Sh, StA, StB, StP](
   const atom = getCopyAsyncAtom(T)
   const chunkElems = atom.getVecBytes() div sizeof(T)
   when Sh.rank == 1:
-    copyIf(atom, dst, src, predicate.data[0], chunkElems)
+    copyIf(atom, dst, src, predicate[0], chunkElems)
   else:
     for i in 0 ..< size(predicate):
-      copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0], chunkElems)
+      copyIf(atom, dst(_, i), src(_, i), predicate(_, i)[0], chunkElems)
 
 # ═════════════════════════════════════════════════════════════════════════
 #   Partitioned copies
@@ -232,7 +232,7 @@ func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
   ##   copyFromIfAsync(dstChunks, srcChunks, predChunks)
   ##
   ## Example: a (16, 8) int8 tile with 4 threads, thread 2 gets the chunks at flat positions c = 2, 6, element offsets 32, 96.
-  let thrTensor = make_view(src.data, thrfrg_copy(src.getLayout(), atom, blockSize))
+  let thrTensor = make_view(src, src.getLayout().thrfrg_copy(atom, blockSize))
   thrTensor(thrIdx, _, _)
 
 func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
@@ -251,5 +251,5 @@ func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
   ##   copyFromIfAsync(dstChunks, srcChunks, predChunks)
   ##
   ## Example: a (16, 8) int8 tile with 4 threads, thread 2 gets the chunks at flat positions c = 2, 6, element offsets 32, 96.
-  let thrTensor = make_view(dst.data, thrfrg_copy(dst.getLayout(), atom, blockSize))
+  let thrTensor = make_view(dst, dst.getLayout().thrfrg_copy(atom, blockSize))
   thrTensor(thrIdx, _, _)

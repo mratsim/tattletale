@@ -34,7 +34,7 @@ func refSum*[T, Sh, St](src: TensorView[T, Sh, St]): float32 =
   ## Sum of the tensor, f64 accumulation
   var acc = 0.0
   for i in 0 ..< src.size():
-    acc += float64(src.data[i])
+    acc += float64(src[i])
   float32(acc)
 
 func refSum[T, ShS, StS, ShD, StD](dst: TensorView[T, ShD, StD], src: TensorView[T, ShS, StS], axis: static int) =
@@ -70,7 +70,7 @@ proc checkSum*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sS
     grid = (gridX, gridY)
     blk = (32, 1)
   var expect = makeHostTensor(float32, (1, 1), (1, 1))
-  expect.data[0] = refSum(src.view())
+  expect[0] = refSum(src.view())
   engine.copyToHostFromDevice(got.data.toOpenArray(0, 1 - 1), gotDev.data)
   assertAllClose(got.view(), expect.view(), rtol = 1e-5, abstol = 1e-4)
 
@@ -113,7 +113,7 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
     var sumGot = makeHostTensor(float32, (1, 1, 1), (1, 1, 1))
     let srcDev = engine.bridge(src)
     var expectSum = makeHostTensor(float32, (1, 1, 1), (1, 1, 1))
-    expectSum.data[0] = refSum(src.view())
+    expectSum[0] = refSum(src.view())
     let sumDev = engine.bridge(sumGot)
     engine.launchDeviceFn sum(sumDev, engine.bridge(src)) do:
       grid = (1, 1)
@@ -127,7 +127,7 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
     var sumGot = makeHostTensor(float32, (1, 1, 1, 1), (1, 1, 1, 1))
     let srcDev = engine.bridge(src)
     var expectSum = makeHostTensor(float32, (1, 1, 1, 1), (1, 1, 1, 1))
-    expectSum.data[0] = refSum(src.view())
+    expectSum[0] = refSum(src.view())
     let sumDev = engine.bridge(sumGot)
     engine.launchDeviceFn sum(sumDev, engine.bridge(src)) do:
       grid = (1, 1)
