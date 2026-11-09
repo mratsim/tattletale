@@ -5,14 +5,54 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import std/[math, options]
 import workspace/crucible
 import workspace/ceramic
 import workspace/tensorcery/src/tensor_datatypes
 import workspace/tattleformers/src/ops_2i1o/add
+import workspace/tattleformers/src/ops_2i1o/matmul
+import workspace/ceramic/src/tile_algebra
 import workspace/tattleformers/src/ops_Ni1o/embed_gather
 import workspace/tattleformers/src/layers/embedding
+import workspace/tattleformers/src/layers/linear
 
 export tensor_datatypes
+
+func ulpKey16*(x: bfloat16): int32 =
+  ## Ordered key of a bfloat16 word.
+  ##
+  ## Args:
+  ## - x: a bfloat16 value
+  ##
+  ## Returns: sign-magnitude bits mapped so keys increase with the value,
+  ## -0 and +0 collide. Key distance counts bfloat16 ulps.
+  let u = cast[uint16](x)
+  if (u and 0x8000'u16) != 0'u16:
+    -int32(u and 0x7FFF'u16)
+  else:
+    int32(u)
+
+proc checkBf16Ulp*(got: openArray[bfloat16], refVals: openArray[float32], ulpBand: int, msg: string) =
+  ## Asserts every element within `ulpBand` bfloat16 ulps of its reference.
+  ##
+  ## Args:
+  ## - got: device readback
+  ## - refVals: sequential f32 host reference
+  ## - ulpBand: per-stage drift allowance in ulps, 4 for a kReduction-class
+  ##   check at depth 1
+  doAssert got.len == refVals.len, msg & ": length mismatch"
+  var worst = 0
+  var worstAt = 0
+  for i in 0 ..< got.len:
+    let want = refVals[i].to(bfloat16)
+    let dist = abs(ulpKey16(got[i]) - ulpKey16(want))
+    if dist > worst:
+      worst = dist
+      worstAt = i
+    doAssert dist <= ulpBand,
+      msg & " elem " & $i & ": got " & $got[i].to(float32) &
+      ", reference " & $refVals[i] & ", distance " & $dist & " bf16 ulps"
+  echo msg, ": worst ", worst, " bf16 ulps at elem ", worstAt
 
 proc runTest*[E: HwEngine](engine: E, name: string) =
   # weight entries with a distinct value per (entry, col), bf16 end to end
@@ -110,5 +150,149 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
       doAssert gotR[i].to(float32) == wHost[i].to(float32), name & ": reshape " & $i
     doAssertRaises ValueError:
       discard w.reshape([Vocab * Hidden + 1])
+
+  # ── matmul op and Linear layer ────────────────────────────────────────
+  # operands with a distinct value per cell, judged against a sequential
+  # f32 host reference within the kReduction-class ulp band
+  block:
+    const
+      M = 3
+      K = 8
+      N = 5
+    var aHost = newSeq[bfloat16](M * K)
+    var bHost = newSeq[bfloat16](K * N)
+    for i in 0 ..< M * K:
+      aHost[i] = (float32(i) * 0.25'f32 - 1.0'f32).to(bfloat16)
+    for i in 0 ..< K * N:
+      bHost[i] = (float32(i mod 7) * 0.5'f32 - 1.5'f32).to(bfloat16)
+    var refO = newSeq[float32](M * N)
+    for m in 0 ..< M:
+      for n in 0 ..< N:
+        var acc = 0.0'f32
+        for k in 0 ..< K:
+          acc += aHost[m * K + k].to(float32) * bHost[k * N + n].to(float32)
+        refO[m * N + n] = acc
+
+    let a = newTensor(engine, @[M, K], kBf16)
+    a.copyToDeviceFromHost(aHost)
+    let b = newTensor(engine, @[K, N], kBf16)
+    b.copyToDeviceFromHost(bHost)
+    let c = Tensor(engine: a.engine, node: tn_matmul(a.engine, a.node, b.node))
+    doAssert c.node.getImpl().shape()[0] == M
+    doAssert c.node.getImpl().shape()[1] == N
+    doAssert c.node.getImpl().dtype() == kBf16
+    var cRoots = @[c.node]
+    c.engine.eval(cRoots.toSpan())
+    var gotC = newSeq[bfloat16](M * N)
+    copyToHostFromDevice(gotC, c)
+    gotC.checkBf16Ulp(refO, 4, name & ": matmul")
+
+    # face contract: a K mismatch and a dtype mismatch raise
+    let bShort = newTensor(engine, @[K + 1, N], kBf16)
+    doAssertRaises ValueError:
+      discard tn_matmul(engine, a.node, bShort.node)
+    let bF32 = newTensor(engine, @[K, N], kFp32)
+    doAssertRaises ValueError:
+      discard tn_matmul(engine, a.node, bF32.node)
+
+    # matmul and add compose in one graph through the open dispatch
+    let bias = newTensor(engine, @[M, N], kBf16)
+    var biasHost = newSeq[bfloat16](M * N)
+    for i in 0 ..< M * N:
+      biasHost[i] = (float32(i mod 5) * 0.125'f32).to(bfloat16)
+    bias.copyToDeviceFromHost(biasHost)
+    let summed = c + bias
+    var sRoots = @[summed.node]
+    summed.engine.eval(sRoots.toSpan())
+    var gotS = newSeq[bfloat16](M * N)
+    copyToHostFromDevice(gotS, summed)
+    for i in 0 ..< M * N:
+      let want = (refO[i] + biasHost[i].to(float32)).to(bfloat16).to(float32)
+      doAssert gotS[i].to(float32) == want, name & ": matmul add " & $i
+
+  # Linear layer port: y = x @ weight^T over the erased face
+  block:
+    const
+      OutF = 5
+      InF = 8
+    var wHost = newSeq[bfloat16](OutF * InF)
+    for i in 0 ..< OutF * InF:
+      wHost[i] = (float32(i) * 0.125'f32 - 2.0'f32).to(bfloat16)
+    let w = newTensor(engine, @[OutF, InF], kBf16)
+    w.copyToDeviceFromHost(wHost)
+
+    let layer = Linear.init(w)
+    doAssert layer.in_features == InF
+    doAssert layer.out_features == OutF
+
+    # GEMM weight operand: a transposed view of the stored weight,
+    # same buffer cell, no allocation
+    block:
+      let wt = w.transpose()
+      doAssert wt.node.getImpl().shape()[0] == InF
+      doAssert wt.node.getImpl().shape()[1] == OutF
+      doAssert wt.node.getImpl().strides()[0] == 1
+      doAssert wt.node.getImpl().strides()[1] == InF
+      type MemW = typeof(engine.allocDevice(bfloat16, 0))
+      let wImpl = w.node.getImpl().to(TensorImpl[MemW, Layout[(int, int), (int, int)]])
+      let wtImpl = wt.node.getImpl().to(TensorImpl[MemW, Layout[(int, int), (int, int)]])
+      doAssert wtImpl.data == wImpl.data, name & ": the transposed weight view must alias the weight cell"
+
+    # (tokens, in) -> (tokens, out)
+    block:
+      var xHost = newSeq[bfloat16](3 * InF)
+      for i in 0 ..< 3 * InF:
+        xHost[i] = (float32(i) * 0.5'f32 - 6.0'f32).to(bfloat16)
+      let x = newTensor(engine, @[3, InF], kBf16)
+      x.copyToDeviceFromHost(xHost)
+      let y = layer.forward(x)
+      doAssert y.node.getImpl().shape()[0] == 3
+      doAssert y.node.getImpl().shape()[1] == OutF
+      var yRoots = @[y.node]
+      y.engine.eval(yRoots.toSpan())
+      var gotY = newSeq[bfloat16](3 * OutF)
+      copyToHostFromDevice(gotY, y)
+      for m in 0 ..< 3:
+        for n in 0 ..< OutF:
+          var acc = 0.0'f32
+          for k in 0 ..< InF:
+            acc += xHost[m * InF + k].to(float32) * wHost[n * InF + k].to(float32)
+          let want = acc.to(bfloat16).to(float32)
+          doAssert abs(gotY[m * OutF + n].to(float32) - want) <= 4.0 * max(abs(want), 1.0'f32) * 0.008,
+            name & ": linear (" & $m & "," & $n & "): got " &
+            $gotY[m * OutF + n].to(float32) & ", want " & $want
+
+    # (batch, seq, in) -> (batch, seq, out), reference (..., in_features) contract
+    block:
+      var xHost = newSeq[bfloat16](2 * 3 * InF)
+      for i in 0 ..< 2 * 3 * InF:
+        xHost[i] = (float32(i) * 0.25'f32 - 4.0'f32).to(bfloat16)
+      let x = newTensor(engine, @[2, 3, InF], kBf16)
+      x.copyToDeviceFromHost(xHost)
+      let y = layer.forward(x)
+      doAssert y.node.getImpl().shape()[0] == 2
+      doAssert y.node.getImpl().shape()[1] == 3
+      doAssert y.node.getImpl().shape()[2] == OutF
+      var yRoots = @[y.node]
+      y.engine.eval(yRoots.toSpan())
+      var gotY = newSeq[bfloat16](2 * 3 * OutF)
+      copyToHostFromDevice(gotY, y)
+      for t in 0 ..< 2 * 3:
+        for n in 0 ..< OutF:
+          var acc = 0.0'f32
+          for k in 0 ..< InF:
+            acc += xHost[t * InF + k].to(float32) * wHost[n * InF + k].to(float32)
+          let want = acc.to(bfloat16).to(float32)
+          doAssert abs(gotY[t * OutF + n].to(float32) - want) <= 4.0 * max(abs(want), 1.0'f32) * 0.008,
+            name & ": linear 3d (" & $t & "," & $n & "): got " &
+            $gotY[t * OutF + n].to(float32) & ", want " & $want
+
+    # bias branch raises, Qwen3 runs bias-free
+    block:
+      let b = newTensor(engine, @[OutF], kBf16)
+      let biased = Linear.init(w, some(b))
+      let x = newTensor(engine, @[2, InF], kBf16)
+      doAssertRaises ValueError:
+        discard biased.forward(x)
 
   echo "tattleformers ops (", name, "): all checks passed"

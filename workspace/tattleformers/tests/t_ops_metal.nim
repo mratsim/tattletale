@@ -17,6 +17,7 @@
 
 import workspace/crucible
 import workspace/ceramic
+import workspace/ceramic/src/tile_algebra
 import workspace/tattleformers/tests/ops_tests_template
 
 proc main =
