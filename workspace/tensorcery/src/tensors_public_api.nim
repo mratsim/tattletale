@@ -16,6 +16,7 @@ import tensors_globals
 import workspace/design_by_contract
 
 export tensors_public_types
+export bfloat16
 
 # #######################################################################
 #
@@ -61,6 +62,15 @@ proc eval*(ts: varargs[Tensor]) =
   for i in 0 ..< ts.len:
     roots[i] = ts[i].node
   ts[0].engine.eval(roots.toSpan())
+
+proc shape*(t: Tensor): Span[int] =
+  t.node.getImpl().shape()
+
+proc strides*(t: Tensor): Span[int] =
+  t.node.getImpl().strides()
+
+proc dtype*(t: Tensor): Dtype =
+  t.node.getImpl().dtype()
 
 proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.contracts.} =
   let impl = t.node.getImpl()

@@ -5,7 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/importutils
 import workspace/tensorcery/src/tensorcery
 import workspace/tensorcery/src/tensors_internals
 import workspace/tensorcery/src/tensors_globals
@@ -13,12 +12,10 @@ import workspace/tensorcery/src/compute_graph/eval
 export eval.eval
 
 export tensorcery
-# erased layer imports for the white-box tests: iface vtable mixins
-# resolve at the outermost instantiation scope
+# erased layer imports, the vtable mixins resolve at the outermost scope
 export tensors_internals
 
 proc runTest*(run: static Runtime, name: string) =
-  privateAccess(Tensor)
   var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
   var yd = @[2.0'f32, 2, 2, 2, 2, 2, 2, 2]
   var xq: array[8, bfloat16]
@@ -29,19 +26,19 @@ proc runTest*(run: static Runtime, name: string) =
   let x = toTensor(xq, @[2, 4])
   let y = toTensor(yq, @[2, 4])
 
-  doAssert x.node.getImpl().shape().len == 2
-  doAssert x.node.getImpl().shape()[0] == 2
-  doAssert x.node.getImpl().shape()[1] == 4
-  doAssert x.node.getImpl().strides()[0] == 4
-  doAssert x.node.getImpl().strides()[1] == 1
-  doAssert x.node.getImpl().dtype() == kBf16
+  doAssert x.shape().len == 2
+  doAssert x.shape()[0] == 2
+  doAssert x.shape()[1] == 4
+  doAssert x.strides()[0] == 4
+  doAssert x.strides()[1] == 1
+  doAssert x.dtype() == kBf16
 
   let z = x + y
   let parts = split(x, 0, 2)
   doAssert parts.len == 2
   for p in parts:
-    doAssert p.node.getImpl().shape()[0] == 1
-    doAssert p.node.getImpl().shape()[1] == 4
+    doAssert p.shape()[0] == 1
+    doAssert p.shape()[1] == 4
 
   let small = toTensor(yq[0 ..< 4], @[1, 4])
   # face checks are contracts, they raise AssertionDefect
