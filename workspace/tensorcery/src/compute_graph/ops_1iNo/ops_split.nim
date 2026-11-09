@@ -25,12 +25,12 @@ import workspace/design_by_contract
 
 type
   SplitCore* = ref object
-    r: seq[AnyTensorImpl]
+    r: seq[TensorNode]    # view shells, bound at finalization
     a: TensorNode
     axis: int
 
-func getOutput(n: SplitCore, i: int): AnyTensorImpl =
-  n.r[i]
+proc getOutput(n: SplitCore, i: int): AnyTensorImpl =
+  n.r[i].getImpl()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Interface
@@ -58,7 +58,7 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
   partShape[axis] = s[axis] div k
   let core = SplitCore(a: x, axis: axis)
   for i in 0 ..< k:
-    core.r.add(engine.newViewNode(ix.dtype(), partShape.toSpan()).getImpl())
+    core.r.add(engine.newViewNode(ix.dtype(), partShape.toSpan()))
   for i in 0 ..< k:
     result.add(PosNode[SplitCore](core: core, pos: i).to(TensorNode))
 
@@ -66,7 +66,7 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueSplit[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode): bool =
+proc enqueueSplit[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
   let asSplit = n.to(PosNode[SplitCore])
   if asSplit.isNil:
     return false
@@ -78,10 +78,11 @@ proc enqueueSplit[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E
     partLen = src.layout.shape.atAxis(axis) div core.r.len
     partStride = src.layout.stride.atAxis(axis)
   for i in 0 ..< core.r.len:
-    let v = core.r[i].to(TensorImpl[Mem, Layout[Sh, Sh]])
+    let v = core.r[i].getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
     v.data = src.data
     v.offset = src.offset + i * partLen * partStride
     v.layout = make_layout(src.layout.shape.withAxis(axis, partLen), src.layout.stride)
+  n = core.r[asSplit.pos]
   true
 
 # ═══════════════════════════════════════════════════════════════════════

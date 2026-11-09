@@ -33,6 +33,29 @@ export tensors_internal_types
 # Furthermore, when backprop is added, the graph can be reused for backward propagation.
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Output slot - a node's deferred output, metadata only
+# ═══════════════════════════════════════════════════════════════════════
+
+type SlotImpl* = ref object
+  dt*: Dtype
+  sh*: seq[int]
+  st*: seq[int]
+
+func dtype*(s: SlotImpl): Dtype =
+  s.dt
+
+func shape*(s: SlotImpl): Span[int] =
+  s.sh.toSpan()
+
+func strides*(s: SlotImpl): Span[int] =
+  s.st.toSpan()
+
+func toSeq*(s: Span[int]): seq[int] =
+  result.newSeq(s.len)
+  for i in 0 ..< s.len:
+    result[i] = s[i]
+
+# ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - AnyTensorImpl implementation
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -116,7 +139,7 @@ proc makeTensorImpl[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, 
   else:
     raise ValueError.newException("makeTensorImpl: dtype " & $dtype & " unsupported")
 
-proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): AnyTensorImpl =
+proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): AnyTensorImpl =
   case shape.len
   of 2:
     var sh: (int, int)
@@ -125,7 +148,7 @@ proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Any
   else:
     raise ValueError.newException("makeTensorImpl: rank " & $shape.len & " unsupported")
 
-proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
+proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
   engine.makeTensorImpl(dtype, shape.toSpan())
 
 proc newViewNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =

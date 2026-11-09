@@ -53,9 +53,9 @@ macro dispatchOp(E, Sh, Mem, engine, batch, n: typed): untyped =
   ifStmt.add elseBranch
   result.add ifStmt
 
-proc evalWalk[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode)
+proc evalWalk[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode)
 
-proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: TensorNode) =
+proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNode) =
   engine.withMem(n.getImpl().dtype()):
     case n.getImpl().shape().len
     of 1: evalWalk[E, (int,), Mem](engine, batch, n)
@@ -67,7 +67,7 @@ proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: TensorNode) =
       raise ValueError.newException(
         "eval: rank " & $n.getImpl().shape().len & " unsupported")
 
-proc evalWalk[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode) =
+proc evalWalk[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode) =
   if n.opName() == "":
     return
   dispatchOp(E, Sh, Mem, engine, batch, n)
