@@ -46,13 +46,13 @@ func opName*(n: PosNode[SplitCore]): string =
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorNode] =
+proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorNode] {.contracts.} =
   let ix = x.getImpl()
   let s = ix.shape()
   # erased impls carry contiguous layouts only, a split on an inner
   # axis needs the inherited strides of the source layout
-  precondition: (axis == 0, "split: axis " & $axis & " unsupported, only the outer axis splits densely")
-  precondition: s[axis] mod k == 0
+  {.precondition: (axis == 0, "split: axis " & $axis & " unsupported, only the outer axis splits densely").}
+  {.precondition: s[axis] mod k == 0.}
   var partShape = newSeq[int](s.len)
   for i in 0 ..< s.len:
     partShape[i] = s[i]

@@ -97,7 +97,7 @@ func rowMajorStrides*[Sh: tuple](shape: Sh): Sh =
     result[tupleLen(Sh) - 1 - j] = acc
     acc *= shape[tupleLen(Sh) - 1 - j]
 
-func fillShape*[Sh: tuple](shape: var Sh, s: Span[int]) =
-  precondition: s.len == tupleLen(Sh)
+func fillShape*[Sh: tuple](shape: var Sh, s: Span[int]) {.contracts.} =
+  {.precondition: s.len == tupleLen(Sh).}
   staticFor i, 0, tupleLen(Sh):
     shape[i] = s[i]

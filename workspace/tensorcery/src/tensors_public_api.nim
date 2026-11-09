@@ -34,11 +34,11 @@ type Tensor* = object
 #
 # #######################################################################
 
-proc toTensor*[T: float32 | bfloat16](engine: AnyEngine, data: openArray[T], shape: openArray[int]): Tensor =
+proc toTensor*[T: float32 | bfloat16](engine: AnyEngine, data: openArray[T], shape: openArray[int]): Tensor {.contracts.} =
   ## One tensor from host data, the upload is the construction
   ## (the mx.array face), dtype derives from the element type
-  precondition: shape.len == 2
-  precondition: data.len == shape[0] * shape[1]
+  {.precondition: shape.len == 2.}
+  {.precondition: data.len == shape[0] * shape[1].}
   result = Tensor(engine: engine,
                   node: engine.newTensorNode(toDtype(T), shape.toSpan()))
   if data.len > 0:
@@ -62,11 +62,11 @@ proc eval*(ts: varargs[Tensor]) =
 #
 # #######################################################################
 
-proc toHost*[T: float32 | bfloat16](t: Tensor, _: typedesc[T]): seq[T] =
+proc toHost*[T: float32 | bfloat16](t: Tensor, _: typedesc[T]): seq[T] {.contracts.} =
   ## Schedules the graph and reads the tensor's values back as host data
   ## (the np.array face), the typedesc picks T and must match the dtype
   let impl = t.node.getImpl()
-  precondition: impl.dtype() == toDtype(T)
+  {.precondition: impl.dtype() == toDtype(T).}
   var roots = newSeq[TensorNode](1)
   roots[0] = t.node
   t.engine.eval(roots.toSpan())
