@@ -458,6 +458,10 @@ type
       ## Function-storage pointer param name -> the parameter's pointer id
     addrPointee*: Table[string, CirType]
       ## pointer param name -> the pointee value type
+    paramSnaps*: Table[string, uint32]
+      ## by-value param name -> Function-storage snapshot that element chains
+      ## read through. OpAccessChain indexes through a pointer and a param
+      ## is a value
     loopMerge*: uint32
       ## the merge block of the loop this body belongs to, 0 outside a loop
     loopCont*: uint32
@@ -478,6 +482,22 @@ type
     terminated*: bool
 
 proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32
+
+proc collectAtChainRoots(ss: seq[CirStmt], roots: var HashSet[string]) =
+  ## Symbols rooting an element access base chain (`eAt`).
+  ## A by-value param among them snapshots into Function storage:
+  ## OpAccessChain indexes through a pointer and a param is a value.
+  var found: HashSet[string]
+  let onExpr = proc(e: CirExpr) =
+    if e.kind != eAt:
+      return
+    var walk = e.atBase
+    while walk.kind == eDot:
+      walk = walk.dotBase
+    if walk.kind == eSym:
+      found.incl walk.name
+  ss.walkStmts(nil, onExpr)
+  roots = roots + found
 
 proc hoistLocals(ctx: var SpvLangCtx, fn: var SpvFnCtx, ss: seq[CirStmt]) =
   ## Function-storage variables must all precede the entry block's first load.
@@ -761,8 +781,8 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       # a pointer-typed local, its value is the pointee variable's address
       return fn.ptrTargets[e.name]
     if fn.addrParams.hasKey(e.name):
-      let t = ctx.resolveExprType(fn, e)
-      return ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(t)), fn.addrParams[e.name])
+      # a pointer parameter's value is the pointer itself, every deref loads through it
+      return fn.addrParams[e.name]
     raiseAssert("unknown symbol " & e.name & " in " & fn.name)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let opTy = e.opType
@@ -991,8 +1011,11 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       @[idx0])
     result = (ptrId, rootTy.fields[i].typ, false, false)
   of eAt:
-    # base chain rooted at a local: a direct local or the struct behind
-    # a pointer-typed local: the access chain runs on the variable directly
+    # element access chains root at a local or at a pointer parameter:
+    #   a direct local
+    #   a struct behind a pointer-typed local
+    #   a pointee behind a pointer parameter
+    # access chains run on the root directly
     var rootVar = 0'u32
     var memberIdxs: seq[int]
     var chainOk = true
@@ -1003,6 +1026,8 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
         if fn.locals.hasKey(walk.name):
           fn.localLoads.mgetOrPut(walk.name, 0).inc
           rootVar = fn.locals[walk.name]
+        elif fn.paramSnaps.hasKey(walk.name):
+          rootVar = fn.paramSnaps[walk.name]
         else:
           chainOk = false
         break
@@ -1013,6 +1038,10 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
           break
         if walk.derefOperand.kind == eSym and fn.ptrTargets.hasKey(walk.derefOperand.name):
           rootVar = fn.ptrTargets[walk.derefOperand.name]
+          break
+        if walk.derefOperand.kind == eSym and fn.addrParams.hasKey(walk.derefOperand.name):
+          # a pointer parameter: the access chain runs on the param directly
+          rootVar = fn.addrParams[walk.derefOperand.name]
           break
         chainOk = false
       of eDot:
@@ -1352,6 +1381,18 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
       fn.params[p.name] = pid
   discard ctx.builder.opLabel()
   ctx.hoistLocals(fn, procNode.body)
+  # every OpVariable precedes the entry block's first non-variable instruction.
+  # Snapshots declare after the locals and store here
+  var chainRoots: HashSet[string]
+  collectAtChainRoots(procNode.body, chainRoots)
+  for p in procNode.params:
+    # only a struct or array param roots a chain whose final base is an array
+    if p.typ.kind in {ctStruct, ctArray} and p.name in chainRoots:
+      let snapPtrTy = ctx.builder.tyPointer(scFunction,
+        ctx.resolveTyId(ctx.valueTy(p.typ)))
+      let snap = ctx.builder.opVariableFn(snapPtrTy)
+      ctx.builder.opStore(snap, fn.params[p.name])
+      fn.paramSnaps[p.name] = snap
   ctx.emitStmts(fn, procNode.body)
   if not fn.terminated:
     ctx.builder.opReturn()
