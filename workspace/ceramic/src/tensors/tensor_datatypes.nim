@@ -21,6 +21,7 @@ type
 
   TensorView*[T, Sh, St] = object
     data*: ptr UncheckedArray[T]
+    offset*: int
     layout*: Layout[Sh, St]
 
 type AnyTensor*[T, Sh, St] = TensorView[T, Sh, St] or TensorOwned[T, Sh, St]
@@ -58,8 +59,8 @@ func make_tensor_like*[T, Sh, St, NewT](t: TensorOwned[T, Sh, St]; _: typedesc[N
 
 # ── Non-owning: make_view(ptr, Layout) ─────────────────────────────────
 
-template make_view*[T, Sh, St](pD: ptr UncheckedArray[T] or ptr T, L: Layout[Sh, St]): TensorView[T, Sh, St] =
-  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](pD), layout: L)
+template make_view*[T, Sh, St](pD: ptr UncheckedArray[T] or ptr T, L: Layout[Sh, St], elementOffset: int = 0): TensorView[T, Sh, St] =
+  TensorView[T, Sh, St](data: cast[ptr UncheckedArray[T]](pD), offset: elementOffset, layout: L)
 
 template make_view*[T](data: ptr UncheckedArray[T] or ptr T;
                        shape: IntOrIntTuple;
@@ -71,13 +72,12 @@ template make_view*[P: ptr | ptr UncheckedArray, ShT, StT: IntOrIntTuple](
   make_view(data, make_layout(shape, stride))
 
 template slice*[T, Sh, St](t: AnyTensor[T, Sh, St], R: Layout, sel: untyped): auto =
-  make_view(addr t.data[crd2idx(R, sel)], slice(R, sel))
+  make_view(addr t.data[0], slice(R, sel), getOffset(t) + crd2idx(R, sel))
 
 # ── Non-owning: make_view(openArray, Layout) — zero-copy ───────────────
 
-func make_view*[T, Sh, St](data: openArray[T];
-                           L: Layout[Sh, St]): TensorView[T, Sh, St] {.inline.} =
-  make_view(cast[ptr UncheckedArray[T]](addr data[0]), L)
+func make_view*[T, Sh, St](data: openArray[T], L: Layout[Sh, St], elementOffset: int = 0): TensorView[T, Sh, St] {.inline.} =
+  make_view(cast[ptr UncheckedArray[T]](addr data[0]), L, elementOffset)
 
 template make_view*[T](data: openArray[T];
                        shape: IntOrIntTuple;
@@ -93,7 +93,7 @@ template make_view*[T](data: openArray[T];
 func make_view*[T, ShA, StA, ShB, StB](
     tv: TensorView[T, ShA, StA];
     L: Layout[ShB, StB]): TensorView[T, ShB, StB] {.inline.} =
-  TensorView[T, ShB, StB](data: tv.data, layout: L)
+  TensorView[T, ShB, StB](data: tv.data, offset: tv.offset, layout: L)
 
 template make_view*(tv: TensorView;
                        shape: IntOrIntTuple;
@@ -107,6 +107,9 @@ template make_view*(tv: TensorView;
 # ═════════════════════════════════════════════════════════════════════════
 #  Layout accessors
 # ═════════════════════════════════════════════════════════════════════════
+
+func getOffset*[T, Sh, St](tv: TensorView[T, Sh, St]): int {.inline.} = tv.offset
+func getOffset*[T, Sh, St](t: TensorOwned[T, Sh, St]): int {.inline.} = 0
 
 template getLayout*[T, Sh, St](t: TensorOwned[T, Sh, St]): Layout[Sh, St] =
   make_layout(default(Sh), default(St))

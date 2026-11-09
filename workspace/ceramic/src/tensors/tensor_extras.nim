@@ -28,7 +28,7 @@ template transpose*(t: AnyTensor, dim0, dim1: static int): auto =
   ## Example: V stores one row of Dv elements per sequence step with the rows
   ## contiguous in memory. transpose(1, 0) reads the same memory with the dimensions exchanged.
   ##   vV = V(batch, kvHead, _, _).transpose(1, 0)  # the shape is (Dv, S)
-  make_view(t.data, transposedSelect(t.getLayout(), dim0, dim1))
+  make_view(t.data, transposedSelect(t.getLayout(), dim0, dim1), getOffset(t))
 
 proc checkPermutation(Is: openArray[int]) {.compileTime.} =
   for m in 0 ..< Is.len:
@@ -54,4 +54,4 @@ macro permute*(t: AnyTensor, Is: varargs[int]{lit|`const`}): auto =
   var call = bindSym"selectDimensions".newCall((newDotExpr(t, bindSym"getLayout")).newCall())
   for n in Is:
     call.add n
-  result.add bindSym"make_view".newCall(newDotExpr(t, newIdentNode("data")), call)
+  result.add bindSym"make_view".newCall(newDotExpr(t, newIdentNode("data")), call, bindSym"getOffset".newCall(t))

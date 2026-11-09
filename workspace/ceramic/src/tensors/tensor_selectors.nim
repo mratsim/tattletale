@@ -26,17 +26,17 @@ proc pop(tree: var NimNode): NimNode {.compileTime.} =
 #  `()` — dual dispatch: all-int → element, `_` or `a ..< b` → sub-View
 # ═════════════════════════════════════════════════════════════════════════
 
-template tensorSubViewImpl(dataBase: untyped, layout: Layout, coords: varargs[untyped]): untyped =
+template tensorSubViewImpl(t: AnyTensor, coords: varargs[untyped]): untyped =
   # Layout and coords are pasted verbatim twice, this is intentional.
   # Layout and coordinates are pure so no side-effect will be evaluated twice
   # and we argue that it's easier for compilers, especially shader compilers that might not be as tuned as LLVM,
   # to do constant folding and common subexpression elimination on an integer expression
   # than through temporaries especially if wrapped in block expressions.
-  make_view(dataBase +% toInt(crd2idx(layout, varargs_to_par(coords))), slice(layout, varargs_to_par(coords)))
+  make_view(addr t.data[0], slice(t.getLayout(), varargs_to_par(coords)), getOffset(t) + crd2idx(t.getLayout(), varargs_to_par(coords)))
 
 template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
   when isSubview(args):
-    tensorSubViewImpl(t.data[0].addr, t.getLayout(), args)
+    tensorSubViewImpl(t, args)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
     # and so can't be assigned to.
@@ -46,13 +46,13 @@ template `()`*(t: TensorOwned; args: varargs[untyped]): untyped =
 
 template `()`*(tv: TensorView; args: varargs[untyped]): untyped =
   when isSubview(args):
-    tensorSubViewImpl(tv.data, tv.getLayout(), args)
+    tensorSubViewImpl(tv, args)
   else:
     # We can't wrap the whole expression into a block or it isn't a lvalue
     # and so can't be assigned to.
     # At the same time, coord MUST be wrapped, or we have scoping and name collision issues.
     {.warning: "Assignment through `()` is discouraged, use `[]=` instead".}
-    tv.data[toInt crd2idx(tv.getLayout(), varargs_to_par(args))]
+    tv.data[tv.offset + crd2idx(tv.getLayout(), varargs_to_par(args))]
 
 # ═════════════════════════════════════════════════════════════════════════
 #  `[]` — element access only (underscore and ranges rejected)
@@ -66,7 +66,7 @@ template `[]`*(t: TensorOwned; args: varargs[untyped]): untyped =
 template `[]`*(tv: TensorView; args: varargs[untyped]): untyped =
   when isSubview(varargs_to_par(args)):
     {.fatal: "_ and ranges not allowed in operator[] — use operator() for sub-Views".}
-  tv.data[toInt crd2idx(tv.getLayout(), varargs_to_par(args))]
+  tv.data[tv.offset + crd2idx(tv.getLayout(), varargs_to_par(args))]
 
 macro `[]=`*(t: TensorOwned; args: varargs[untyped]): untyped =
   var a = args
@@ -86,17 +86,14 @@ macro `[]=`*(tv: TensorView; args: varargs[untyped]): untyped =
     when isSubview(`coord`):
       {.fatal: "_ and ranges not allowed in operator[] — use operator() for sub-Views".}
     else:
-      `tv`.data[toInt crd2idx(`tv`.getLayout(), `coord`)] = `val`
+      `tv`.data[`tv`.offset + crd2idx(`tv`.getLayout(), `coord`)] = `val`
 
 # ═════════════════════════════════════════════════════════════════════════
 #  slice — subtensor via underscore dispatch
 # ═════════════════════════════════════════════════════════════════════════
 
-template slice*(t: TensorOwned; coords: varargs[untyped]): untyped =
-  tensorSubViewImpl(t.data[0].addr, t.getLayout(), coords)
-
-template slice*(tv: TensorView; coords: varargs[untyped]): untyped =
-  tensorSubViewImpl(tv.data, tv.getLayout(), coords)
+template slice*(t: AnyTensor, coords: varargs[untyped]): untyped =
+  tensorSubViewImpl(t, coords)
 
 # ═════════════════════════════════════════════════════════════════════════
 #  inner_partition / outer_partition / local_tile / local_partition
@@ -122,19 +119,22 @@ macro partitionImpl(tv: typed, zipped: Layout, coord: typed, doInner: static boo
     if doInner:
       # Tile whole first, sliced rest second.
       result.add quote do:
-        make_view(`tv`.data +% toInt(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
+        make_view(addr `tv`.data[0],
           make_layout(concat(`wholeShape`, slice(`slicedShape`, `coord`)),
-                      concat(`wholeStride`, slice(`slicedStride`, `coord`))))
+                      concat(`wholeStride`, slice(`slicedStride`, `coord`))),
+          getOffset(`tv`) + crd2idxImpl(`coord`, `slicedShape`, `slicedStride`))
     else:
       # Sliced tile first, rest whole second.
       result.add quote do:
-        make_view(`tv`.data +% toInt(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
+        make_view(addr `tv`.data[0],
           make_layout(concat(slice(`slicedShape`, `coord`), `wholeShape`),
-                      concat(slice(`slicedStride`, `coord`), `wholeStride`)))
+                      concat(slice(`slicedStride`, `coord`), `wholeStride`)),
+          getOffset(`tv`) + crd2idxImpl(`coord`, `slicedShape`, `slicedStride`))
   else:
     result.add quote do:
-      make_view(`tv`.data +% toInt(crd2idxImpl(`coord`, `slicedShape`, `slicedStride`)),
-        make_layout(`wholeShape`, `wholeStride`))
+      make_view(addr `tv`.data[0], make_layout(`wholeShape`, `wholeStride`),
+        getOffset(`tv`) + crd2idxImpl(`coord`, `slicedShape`, `slicedStride`))
+
 
 template inner_partition*(tv: AnyTensor; tiler: typed; coord: typed): untyped =
   ## Cut the tensor into tiles, select the one tile `coord` targets,
@@ -295,11 +295,11 @@ template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int; proj: ty
 func displace*[T, Sh, St](t: TensorView[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset TensorView by `coord` (logical coords).
   ## Returns: a sub-view with shape `original_shape - coord` (element-wise),
-  ## the data pointer advanced by `crd2idx(layout, coord)`, strides preserved.
+  ## the offset advanced by `crd2idx(layout, coord)`, strides preserved.
   let off = crd2idx(t.getLayout(), coord)
   let ns = zipLeavesWith(t.shape, coord):
     it_a - it_b
-  make_view(t.data +% off, make_layout(ns, t.stride))
+  make_view(t.data, make_layout(ns, t.stride), t.offset + off)
 
 func displace*[T, Sh, St](t: TensorOwned[T, Sh, St]; coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset TensorOwned by `coord` (logical coords). Returns a sub-view whose shape is

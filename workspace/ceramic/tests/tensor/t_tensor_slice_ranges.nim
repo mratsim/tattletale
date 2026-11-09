@@ -8,7 +8,6 @@ import std/macros
 import workspace/ceramic/src/int_tuples {.all.}
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/ptr_arithmetic
 
 # ═══════════════════════════════════════════════════════════════════════
 #  1. range first mode: (8,8):(8,1), (2 ..< 5, _) → (3,8):(8,1), origin +16
@@ -17,7 +16,7 @@ import workspace/ceramic/src/ptr_arithmetic
 proc runRangeFirstMode(errors: var int) =
   echo "--- 1. range first mode (8,8):(8,1), 2 ..< 5 ---"
   var buf = newSeq[float32](64)
-  let t = make_view(buf +% 0, make_layout((8,8), (8,1)))
+  let t = make_view(buf, make_layout((8,8), (8,1)))
   for i in 0..<64:
     buf[i] = float32(i)
   let r0 = 2
@@ -35,7 +34,7 @@ proc runRangeFirstMode(errors: var int) =
 proc runRangeSecondMode(errors: var int) =
   echo "--- 2. range second mode (8,8):(8,1), (1, 2 ..< 6) ---"
   var buf = newSeq[float32](64)
-  let t = make_view(buf +% 0, make_layout((8,8), (8,1)))
+  let t = make_view(buf, make_layout((8,8), (8,1)))
   for i in 0..<64:
     buf[i] = float32(i)
   let r0 = 2
@@ -53,7 +52,7 @@ proc runRangeSecondMode(errors: var int) =
 proc runRangeTranspose(errors: var int) =
   echo "--- 3. range + transpose ---"
   var buf = newSeq[float32](64)
-  let t = make_view(buf +% 0, make_layout((8,8), (8,1)))
+  let t = make_view(buf, make_layout((8,8), (8,1)))
   for i in 0..<64:
     buf[i] = float32(i)
   let r0 = 2

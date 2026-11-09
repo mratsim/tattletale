@@ -17,12 +17,11 @@
 
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/ptr_arithmetic
 
 proc runTest =
   block: # 2D row-major, axis 0: strip runs down the column
     var buf = newSeq[float32](8 * 4)
-    var t = make_view(buf +% 0, make_layout((8, 4)))
+    var t = make_view(buf, make_layout((8, 4)))
     for i in 0 ..< 8:
       for j in 0 ..< 4:
         t(i, j) = float32(10 * i + j)
@@ -34,7 +33,7 @@ proc runTest =
 
   block: # 2D row-major, axis 1: strip runs along the row
     var buf = newSeq[float32](8 * 4)
-    var t = make_view(buf +% 0, make_layout((8, 4)))
+    var t = make_view(buf, make_layout((8, 4)))
     for i in 0 ..< 8:
       for j in 0 ..< 4:
         t(i, j) = float32(10 * i + j)
@@ -45,7 +44,7 @@ proc runTest =
 
   block: # 2D column-major: the strip keeps the source axis stride
     var buf = newSeq[float32](8 * 4)
-    var t = make_view(buf +% 0, make_layout((8, 4), (1, 8)))
+    var t = make_view(buf, make_layout((8, 4), (1, 8)))
     for i in 0 ..< 8:
       for j in 0 ..< 4:
         t(i, j) = float32(10 * i + j)
@@ -57,7 +56,7 @@ proc runTest =
 
   block: # 3D, middle axis: the flat idx unravels over the outer axes, dim 0 fastest
     var buf = newSeq[float32](2 * 3 * 4)
-    var t = make_view(buf +% 0, make_layout((2, 3, 4)))
+    var t = make_view(buf, make_layout((2, 3, 4)))
     for i in 0 ..< 2:
       for j in 0 ..< 3:
         for k in 0 ..< 4:
@@ -70,7 +69,7 @@ proc runTest =
 
   block: # 3D, strided source: offsets go through the others' strides
     var buf = newSeq[float32](4 * 2 * 3)
-    var t = make_view(buf +% 0, make_layout((2, 3, 4), (6, 2, 1)))
+    var t = make_view(buf, make_layout((2, 3, 4), (6, 2, 1)))
     for i in 0 ..< 2:
       for j in 0 ..< 3:
         for k in 0 ..< 4:
@@ -83,7 +82,7 @@ proc runTest =
 
   block: # rank 1: the only strip is the whole tensor
     var buf = newSeq[float32](6)
-    var t = make_view(buf +% 0, make_layout((6,)))
+    var t = make_view(buf, make_layout((6,)))
     for i in 0 ..< 6:
       t(i) = float32(i)
     let strip = alongAxisAt(t, axis = 0, idx = 0)

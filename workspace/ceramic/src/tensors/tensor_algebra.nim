@@ -7,7 +7,6 @@
 
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_indexing
-import workspace/ceramic/src/ptr_arithmetic
 import ./tensor_datatypes
 import std/macros
 
@@ -41,10 +40,10 @@ macro diceAxes*(tv: TensorView, axes: varargs[int]{lit|`const`}): untyped =
 template logical_divide*[T, Sh, St](t: TensorOwned[T, Sh, St], tiler: Layout): auto =
   ## A view aliasing the caller's storage, a by-value param would dangle
   ## for small inline arrays.
-  make_view(addr t.data[0], t.getLayout().logical_divide(tiler))
+  make_view(addr t.data[0], t.getLayout().logical_divide(tiler), getOffset(t))
 
 func logical_divide*[T, Sh, St](t: TensorView[T, Sh, St], tiler: Layout): auto {.inline.} =
-  make_view(addr t.data[0], t.getLayout().logical_divide(tiler))
+  make_view(addr t.data[0], t.getLayout().logical_divide(tiler), getOffset(t))
 
 func getIdentityLayout*[T, Sh, St](t: TensorView[T, Sh, St]): auto {.inline.} =
   ## Identity layout over the tensor's shape, its coordinate space.
@@ -60,11 +59,11 @@ func atAxisIndex*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, idx: 
   ##   atAxisIndex(src, axis = 1, idx = 2)  # src (2, 3, 4) -> view (2, 4), view[a, b] aliases src[a, 2, b]
   when src.rank() == 1:
     # a rank-1 `src` keeps no other coordinate, the view is the full tensor
-    make_view(src.data, src.getLayout())
+    make_view(src.data, src.getLayout(), src.offset)
   else:
     let others = src.sliceAxes(axis)
     let axisAlone = src.diceAxes(axis)
-    make_view(addr src.data[crd2idx(axisAlone, idx)], others)
+    make_view(src.data, others, src.offset + crd2idx(axisAlone, idx))
 
 func alongAxisAt*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, idx: int): auto =
   ## Returns a rank-1 view of the `axis` strip of `src`.
@@ -73,8 +72,8 @@ func alongAxisAt*[T, Sh, St](src: TensorView[T, Sh, St], axis: static int, idx: 
   ##   alongAxisAt(src, axis = 1, idx = 5)  # src (2, 3, 4) -> view (3,), view[r] aliases src[1, r, 2]
   when src.rank() == 1:
     # a rank-1 `src` is one strip, the only flat position is the full tensor
-    make_view(src.data, src.getLayout())
+    make_view(src.data, src.getLayout(), src.offset)
   else:
     let others = src.sliceAxes(axis)
     let axisAlone = src.diceAxes(axis)
-    make_view(addr src.data[crd2idx(others, idx)], axisAlone)
+    make_view(src.data, axisAlone, src.offset + crd2idx(others, idx))

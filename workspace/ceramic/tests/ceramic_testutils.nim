@@ -13,7 +13,6 @@
 
 import std/[macros, math, random]
 import workspace/crucible
-import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/src/macros/varargs_to_par
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/tensors
@@ -40,6 +39,7 @@ type
 
   BridgeTensor*[DevMem, Sh, St] = object
     data*: DevMem
+    offset*: int
     layout*: Layout[Sh, St]
 
 proc `=destroy`*[T, Sh, St](ht: var HostTensor[T, Sh, St]) =
@@ -54,14 +54,14 @@ proc popNode(tree: var NimNode): NimNode {.compileTime.} =
   tree.del(tree.len - 1)
 
 template `[]`*(ht: HostTensor, args: varargs[untyped]): untyped =
-  ht.data[ht.offset + toInt crd2idx(ht.layout, varargs_to_par(args))]
+  ht.data[ht.offset + crd2idx(ht.layout, varargs_to_par(args))]
 
 macro `[]=`*(ht: HostTensor, args: varargs[untyped]): untyped =
   var a = args
   let val = popNode(a)
   let coord = getAst(varargs_to_par(a))
   result = quote do:
-    `ht`.data[`ht`.offset + toInt crd2idx(`ht`.layout, `coord`)] = `val`
+    `ht`.data[`ht`.offset + crd2idx(`ht`.layout, `coord`)] = `val`
 
 func originOffset[Sh, St](layout: Layout[Sh, St]): int =
   ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
@@ -120,7 +120,7 @@ func len*[T, Sh, St](ht: HostTensor[T, Sh, St]): int =
   toInt(ht.layout.cosize())
 
 func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
-  TensorView[T, Sh, St](data: ht.data +% ht.offset, layout: ht.layout)
+  TensorView[T, Sh, St](data: ht.data, offset: ht.offset, layout: ht.layout)
 
 proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
   let n = ht.layout.cosize()
@@ -157,8 +157,8 @@ proc allClose*[T, ShA, StA, ShB, StB](
   let expectedL = expected.getLayout()
   for i in 0 ..< n:
     let crd = idx2crd(actual.shape, i)
-    let a = to(actual.data[toInt crd2idx(actualL, crd)], float64)
-    let e = to(expected.data[toInt crd2idx(expectedL, idx2crd(expected.shape, i))], float64)
+    let a = to(actual.data[actual.offset + toInt crd2idx(actualL, crd)], float64)
+    let e = to(expected.data[expected.offset + toInt crd2idx(expectedL, idx2crd(expected.shape, i))], float64)
     # NaN never matches, a NaN difference is not greater than any bound,
     # an infinite expected value must not inflate the relative bound
     var d = abs(a - e)

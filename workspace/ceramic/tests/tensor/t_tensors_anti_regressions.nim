@@ -18,7 +18,6 @@
 import workspace/ceramic/src/int_tuples
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/ptr_arithmetic
 import workspace/ceramic/tests/layout/layouts_testutils
 
 proc runTests =
@@ -31,11 +30,12 @@ proc runTests =
     for i in 0 ..< 128: buf[i] = i.int32
     let v = make_view(buf[0].addr, pL)
 
-    # Thread-3 slice: shape (1, 8), strides (0, 16), data at element 12.
+    # Thread-3 slice: shape (1, 8), strides (0, 16), element offset 12.
     let sub = v(3, _, _)
     check sub.shape, (1, 8), (Int[1], Int[8])
     check sub.stride, (0, 16), (Int[0], Int[16])
-    doAssert cast[ptr int32](sub.data) == buf[0].addr +% 12
+    doAssert cast[ptr int32](sub.data) == buf[0].addr
+    doAssert sub.offset == 12
 
     # Flat-thread-index origins: crd2idx of the scalar thread index in
     # this layout is 4 * thrIdx (CuTe: 0, 4, 12, 60 for threads 0, 1, 3, 15).

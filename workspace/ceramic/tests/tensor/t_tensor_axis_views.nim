@@ -17,12 +17,11 @@
 
 import workspace/ceramic/src/tensors
 import workspace/ceramic/src/layout_algebra
-import workspace/ceramic/src/ptr_arithmetic
 
 proc runTest =
   block: # atAxisIndex, 2D: axis 1 fixed at 2 keeps the rows
     var buf = newSeq[float32](8 * 4)
-    var t = make_view(buf +% 0, make_layout((8, 4)))
+    var t = make_view(buf, make_layout((8, 4)))
     for i in 0 ..< 8:
       for j in 0 ..< 4:
         t(i, j) = float32(10 * i + j)
@@ -33,7 +32,7 @@ proc runTest =
 
   block: # atAxisIndex, 3D: the fixed axis leaves the shape, the rest stays
     var buf = newSeq[float32](2 * 3 * 4)
-    var t = make_view(buf +% 0, make_layout((2, 3, 4)))
+    var t = make_view(buf, make_layout((2, 3, 4)))
     for i in 0 ..< 2:
       for j in 0 ..< 3:
         for k in 0 ..< 4:
@@ -46,7 +45,7 @@ proc runTest =
 
   block: # atAxisIndex, rank 1: the only axis fixes away, the view is the full tensor
     var buf = newSeq[float32](6)
-    var t = make_view(buf +% 0, make_layout((6,)))
+    var t = make_view(buf, make_layout((6,)))
     for i in 0 ..< 6:
       t(i) = float32(i)
     let v = atAxisIndex(t, axis = 0, idx = 3)
@@ -56,7 +55,7 @@ proc runTest =
 
   block: # 2D duality: fixing the complement axis is the alongAxisAt strip
     var buf = newSeq[float32](8 * 4)
-    var t = make_view(buf +% 0, make_layout((8, 4)))
+    var t = make_view(buf, make_layout((8, 4)))
     for i in 0 ..< 8:
       for j in 0 ..< 4:
         t(i, j) = float32(10 * i + j)
