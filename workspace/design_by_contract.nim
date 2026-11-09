@@ -16,34 +16,44 @@
 ## proc addKernels(a, b: openArray[int], outp: var openArray[int], n: int) {.contracts.} =
 ##   {.precondition: n == a.len and n == b.len.}
 ##   for i in 0 ..< n:
-##     {.invariant: i >= 0 and i <= n.}
+##     {.invariant: (i >= 0 and i <= n, "the loop walks the inputs").}
 ##     outp[i] = a[i] + b[i]
 ##   {.postcondition: outp[0] == a[0] + b[0].}
 ## ```
 ##
 ## - the first form is live on import
 ## - the second needs {.contracts.} on the proc (statement pragmas are discarded at sem otherwise)
-## - violations raiseAssert with the condition as written
+## - a (condition, "message") tuple gives the message, the condition
+##   alone raises with the condition as written
 
 import std/macros
 import std/assertions
 import std/strutils
 
+macro contractCheck(kind: static string, expr: untyped) =
+  ## Emits one check, a (condition, "message") tuple gives the message
+  var e = expr
+  if e.kind == nnkStmtList and e.len == 1:
+    e = e[0]
+  var cond, msg: NimNode
+  if e.kind == nnkTupleConstr and e.len == 2:
+    cond = e[0]
+    msg = e[1]
+  else:
+    cond = e
+    msg = newLit(e.repr.replace("\n", " ").strip())
+  result = quote do:
+    if not `cond`:
+      raiseAssert(`kind` & " violated: " & `msg`)
+
 template precondition*(expr: untyped) =
-  if not expr:
-    raiseAssert("precondition violated: " & astToStr(expr).replace("\n", " ").strip())
+  contractCheck("precondition", expr)
 
 template invariant*(expr: untyped) =
-  if not expr:
-    raiseAssert("invariant violated: " & astToStr(expr).replace("\n", " ").strip())
+  contractCheck("invariant", expr)
 
 template postcondition*(expr: untyped) =
-  if not expr:
-    raiseAssert("postcondition violated: " & astToStr(expr).replace("\n", " ").strip())
-
-template precondition*(expr: bool) {.pragma.}
-template invariant*(expr: bool) {.pragma.}
-template postcondition*(expr: bool) {.pragma.}
+  contractCheck("postcondition", expr)
 
 proc isContractPragma(n: NimNode): bool =
   n.kind == nnkPragma and n.len == 1 and n[0].kind == nnkExprColonExpr and
