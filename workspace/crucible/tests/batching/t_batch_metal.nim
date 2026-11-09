@@ -1,6 +1,6 @@
 ## Batch suite, metal runtime.
 ##
-## Test that every batching scenario through the tier-2 public API matches
+## Test that every batching scenario through the public batch API matches
 ## an eager launch on the same engine.
 ##
 ## Run from the worktree root:

@@ -121,30 +121,15 @@ when defined(macosx):
     if objc.isNil(result):
       raiseAssert("newIndirectCommandBufferWithDescriptor returned nil, indirect command buffers are unsupported on this device")
 
-  proc newMetalBatch*(device, queue: objc.ID): MetalBatch =
-    ## Borrowed: the device, the queue and every bound buffer.
-    ## Every bound buffer outlives the batch.
-    MetalBatch(device: device, queue: queue)
-
   proc newMetalBatch*(engine: MetalEngine): MetalBatch =
-    ## Constructs the batch from the engine.
-    ##
-    ## Borrows:
-    ## - the engine's device and queue
-    ## - the engine's ingested library, entrypoints compile against it
-    ##
-    ## Construct after the engine ingested the batch artifact (finalize does):
-    ## recording an entry needs the library to hold it.
     privateAccess(MetalEngine)
     privateAccess(typeof(engine.cache))
-    result = newMetalBatch(engine.ctx.device, engine.ctx.queue)
+    result = MetalBatch(device: engine.ctx.device, queue: engine.ctx.queue)
     result.library = engine.cache.library
 
   proc recordGlobalFn*(batch: MetalBatch, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
     ## Usage:
     ##   batch.recordGlobalFn("saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
-    ##
-    ## The entrypoint compiles against the library bound at construction.
     if not objc.isNil(batch.recording):
       raiseAssert("recordGlobalFn: the batch is finalized, entries are frozen")
     if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
@@ -239,8 +224,5 @@ when defined(macosx):
                   $MTLCommandBufferStatusCompleted & "=completed): " & detail)
 
 else:
-  proc newMetalBatch*(device, queue: objc.ID): MetalBatch =
-    raiseAssert("cgMetal requires macOS")
-
   proc newMetalBatch*(engine: MetalEngine): MetalBatch =
     raiseAssert("cgMetal requires macOS")

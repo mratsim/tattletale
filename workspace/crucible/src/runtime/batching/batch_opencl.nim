@@ -122,21 +122,16 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
     entry.scalars.packFrom(w, v, cgOpenCL)
     entry.slots.add Slot(kind: skBytes, off: off, size: layout.size)
 
-proc newOpenCLBatch*(context: Pcontext, queue: Pcommand_queue): OpenCLBatch =
-  ## Borrows context, queue and buffers
-  var properties: cl_ulong
-  check getCommandQueueInfo(queue, QueueProperties, cl_size_t(sizeof(cl_ulong)), properties.addr, nil)
-  if (properties and QueueOutOfOrderExec) != 0:
-    raiseAssert("OpenCL batch: replay preserves entry order through in-order-queue semantics, the queue enables out-of-order execution")
-  OpenCLBatch(context: context, queue: queue)
-
 proc newOpenCLBatch*(engine: OpenCLEngine): OpenCLBatch =
-  ## Constructs the batch from the engine.
-  ##
-  ## Borrows the engine's context, its command queue and every bound buffer.
+  ## Precondition: the engine's queue preserves entry order.
+  ## Replay relies on in-order-queue semantics.
   privateAccess(OpenCLEngine)
   privateAccess(OpenCLContext)
-  newOpenCLBatch(engine.ctx.context, engine.ctx.commands)
+  var properties: cl_ulong
+  check getCommandQueueInfo(engine.ctx.commands, QueueProperties, cl_size_t(sizeof(cl_ulong)), properties.addr, nil)
+  if (properties and QueueOutOfOrderExec) != 0:
+    raiseAssert("OpenCL batch: the queue enables out-of-order execution, entry order is not preserved")
+  OpenCLBatch(context: engine.ctx.context, queue: engine.ctx.commands)
 
 proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
   if batch.finalized:
@@ -149,7 +144,7 @@ proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg
                 $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
   if cfg.sharedMem != 0 or cfg.stream != 0:
     raiseAssert("OpenCL batch: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
-  # One entrypoint name exists in many sources, the kernel is per (source, entrypoint) pair
+  # One entrypoint name exists in many sources, the kernel is per source and entrypoint pair
   let kernelKey = (source, entrypoint)
   if kernelKey notin batch.pipelines:
     batch.pipelines[kernelKey] = compileEntrypoint(batch, source, entrypoint)

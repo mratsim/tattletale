@@ -160,16 +160,9 @@ proc compilePipeline(batch: WebgpuBatch, entry: BatchEntry): WebgpuPipeline =
     raiseAssert("WebGPU batch: failed to create compute pipeline")
   result = WebgpuPipeline(pipeline: pipeline, pipelineLayout: pl, bindGroupLayout: bgl)
 
-proc newWebgpuBatch*(device: WGPUDevice, queue: WGPUQueue): WebgpuBatch =
-  ## Borrowsdevice, queue and every bound buffer.
-  WebgpuBatch(device: device, queue: queue)
-
 proc newWebgpuBatch*(engine: WebgpuEngine): WebgpuBatch =
-  ## Constructs the batch from the engine.
-  ##
-  ## Borrows the engine's device, its queue and every bound buffer.
   privateAccess(WebgpuEngine)
-  newWebgpuBatch(engine.ctx.device, engine.ctx.queue)
+  WebgpuBatch(device: engine.ctx.device, queue: engine.ctx.queue)
 
 proc recordGlobalFn*(batch: WebgpuBatch, wgsl: string, entryPoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
   if batch.entries.len > 0 and batch.entries[0].bindGroup != nil:

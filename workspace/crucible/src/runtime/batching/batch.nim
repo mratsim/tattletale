@@ -37,9 +37,6 @@ type
     entrypoint*: string
     config*: LaunchConfig
     launch*: proc(engine: E) {.closure.}
-    ## Tier-1 batch of the entry's backend. `replay` constructs it from the engine,
-    ## `record` re-enqueues the entry onto it, `launch` launches eagerly where
-    ## no tier-1 batch exists.
     when E is MetalEngine:
       record: proc(leg: MetalBatch) {.closure.}
     elif E is VulkanEngine:
@@ -124,7 +121,6 @@ template appendEntry[E](batch: Batch[E], fnName: string, cfg: LaunchConfig, outp
   entry.launch = proc(engine: E) {.closure.} =
     engine.launchKernelImpl(output, args, entry.config, fnName)
   when E is MetalEngine:
-    # Metal records each entry against the engine's ingested library, borrowed by the tier-1 batch at construction after finalize's ingest.
     entry.record = proc(leg: MetalBatch) {.closure.} =
       leg.recordGlobalFn(fnName, entry.config, output, args)
   batch.entries.add entry
@@ -304,10 +300,6 @@ proc replay*[E](batch: Batch[E]) {.inline.} =
   ##
   ## Requires:
   ## - a prior `finalize` in this compilation
-  ##
-  ## Routed backends replay through their tier-1 batch: replay constructs it
-  ## from the engine, records the entries onto it, then runs one tier-1
-  ## finalize and replay. Unrouted backends launch each entry eagerly.
   ##
   ## Re-ingests the batch artifact when the engine ingested something else
   ## since `finalize`.

@@ -234,16 +234,9 @@ macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchCon
       const batchModule = `spirvN`(`procdef`)
       `implN`(`batch`, batchModule, `kname`, `configCall`, `output`, `valuesTuple`)
 
-proc newVulkanBatch*(ctx: VulkanContext): VulkanBatch =
-  ## Borrowed: the context, its device and queue, and every bound buffer.
-  VulkanBatch(ctx: ctx)
-
 proc newVulkanBatch*(engine: VulkanEngine): VulkanBatch =
-  ## Constructs the batch from the engine.
-  ##
-  ## Borrows the engine's context, its device and queue, and every bound buffer.
   privateAccess(VulkanEngine)
-  newVulkanBatch(engine.ctx)
+  VulkanBatch(ctx: engine.ctx)
 
 func getScalarSize*(batch: VulkanBatch): int =
   for e in batch.entries:
