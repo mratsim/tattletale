@@ -59,7 +59,12 @@ proc checkBf16Ulp*(got: openArray[bfloat16], refVals: openArray[float32], ulpBan
       ", reference " & $refVals[i] & ", distance " & $dist & " bf16 ulps"
   echo msg, ": worst ", worst, " bf16 ulps at elem ", worstAt
 
-proc runTest*[E: HwEngine](engine: E, name: string) =
+proc runTest*[Mem](any: AnyEngine, name: string) =
+  # Mem: explicit type argument, erased engine.
+  # Why not a typed engine parameter:
+  # - the converter instantiates twice, here and in the driver
+  # - both emit the AnyEngine vtable under the driver's call-site name
+  # - the linker rejects the duplicate symbol
   # weight entries with a distinct value per (entry, col), bf16 end to end
   const Vocab = 7
   const Hidden = 4
@@ -67,7 +72,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
   for r in 0 ..< Vocab:
     for c in 0 ..< Hidden:
       wHost[r * Hidden + c] = (float32(r * 10 + c) + 0.5).to(bfloat16)
-  let w = newTensor(engine, @[Vocab, Hidden], kBf16)
+  let w = newTensor(any, @[Vocab, Hidden], kBf16)
   w.copyToDeviceFromHost(wHost)
 
   # ids with duplicates and both boundary ids, judged against the host entries
@@ -145,7 +150,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
     doAssert r.node.getImpl().shape()[1] == Vocab
     doAssert r.node.getImpl().strides()[0] == Vocab
     doAssert r.node.getImpl().strides()[1] == 1
-    type MemW = typeof(engine.allocDevice(bfloat16, 0))
+    type MemW = Mem
     let wImpl = w.node.getImpl().to(TensorImpl[MemW, Layout[(int, int), (int, int)]])
     let rImpl = r.node.getImpl().to(TensorImpl[MemW, Layout[(int, int), (int, int)]])
     doAssert rImpl.data == wImpl.data, name & ": reshape must alias the source cell"
@@ -178,9 +183,9 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
           acc += aHost[m * K + k].to(float32) * bHost[k * N + n].to(float32)
         refO[m * N + n] = acc
 
-    let a = newTensor(engine, @[M, K], kBf16)
+    let a = newTensor(any, @[M, K], kBf16)
     a.copyToDeviceFromHost(aHost)
-    let b = newTensor(engine, @[K, N], kBf16)
+    let b = newTensor(any, @[K, N], kBf16)
     b.copyToDeviceFromHost(bHost)
     let c = Tensor(engine: a.engine, node: tn_matmul(a.engine, a.node, b.node))
     doAssert c.node.getImpl().shape()[0] == M
@@ -193,15 +198,15 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
     gotC.checkBf16Ulp(refO, 4, name & ": matmul")
 
     # face contract: a K mismatch and a dtype mismatch raise
-    let bShort = newTensor(engine, @[K + 1, N], kBf16)
+    let bShort = newTensor(any, @[K + 1, N], kBf16)
     doAssertRaises ValueError:
-      discard tn_matmul(engine, a.node, bShort.node)
-    let bF32 = newTensor(engine, @[K, N], kFp32)
+      discard tn_matmul(any, a.node, bShort.node)
+    let bF32 = newTensor(any, @[K, N], kFp32)
     doAssertRaises ValueError:
-      discard tn_matmul(engine, a.node, bF32.node)
+      discard tn_matmul(any, a.node, bF32.node)
 
     # matmul and add compose in one graph through the open dispatch
-    let bias = newTensor(engine, @[M, N], kBf16)
+    let bias = newTensor(any, @[M, N], kBf16)
     var biasHost = newSeq[bfloat16](M * N)
     for i in 0 ..< M * N:
       biasHost[i] = (float32(i mod 5) * 0.125'f32).to(bfloat16)
@@ -223,7 +228,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
     var wHost = newSeq[bfloat16](OutF * InF)
     for i in 0 ..< OutF * InF:
       wHost[i] = (float32(i) * 0.125'f32 - 2.0'f32).to(bfloat16)
-    let w = newTensor(engine, @[OutF, InF], kBf16)
+    let w = newTensor(any, @[OutF, InF], kBf16)
     w.copyToDeviceFromHost(wHost)
 
     let layer = Linear.init(w)
@@ -238,7 +243,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
       doAssert wt.node.getImpl().shape()[1] == OutF
       doAssert wt.node.getImpl().strides()[0] == 1
       doAssert wt.node.getImpl().strides()[1] == InF
-      type MemW = typeof(engine.allocDevice(bfloat16, 0))
+      type MemW = Mem
       let wImpl = w.node.getImpl().to(TensorImpl[MemW, Layout[(int, int), (int, int)]])
       let wtImpl = wt.node.getImpl().to(TensorImpl[MemW, Layout[(int, int), (int, int)]])
       doAssert wtImpl.data == wImpl.data, name & ": the transposed weight view must alias the weight cell"
@@ -248,7 +253,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
       var xHost = newSeq[bfloat16](3 * InF)
       for i in 0 ..< 3 * InF:
         xHost[i] = (float32(i) * 0.5'f32 - 6.0'f32).to(bfloat16)
-      let x = newTensor(engine, @[3, InF], kBf16)
+      let x = newTensor(any, @[3, InF], kBf16)
       x.copyToDeviceFromHost(xHost)
       let y = layer.forward(x)
       doAssert y.node.getImpl().shape()[0] == 3
@@ -272,7 +277,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
       var xHost = newSeq[bfloat16](2 * 3 * InF)
       for i in 0 ..< 2 * 3 * InF:
         xHost[i] = (float32(i) * 0.25'f32 - 4.0'f32).to(bfloat16)
-      let x = newTensor(engine, @[2, 3, InF], kBf16)
+      let x = newTensor(any, @[2, 3, InF], kBf16)
       x.copyToDeviceFromHost(xHost)
       let y = layer.forward(x)
       doAssert y.node.getImpl().shape()[0] == 2
@@ -294,9 +299,9 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
 
     # bias branch raises, Qwen3 runs bias-free
     block:
-      let b = newTensor(engine, @[OutF], kBf16)
+      let b = newTensor(any, @[OutF], kBf16)
       let biased = Linear.init(w, some(b))
-      let x = newTensor(engine, @[2, InF], kBf16)
+      let x = newTensor(any, @[2, InF], kBf16)
       doAssertRaises ValueError:
         discard biased.forward(x)
 
@@ -328,9 +333,9 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
         let w = float64(wHost[i].to(float32))
         refO[r * N + i] = float32(x * scale * w)
 
-    let x = newTensor(engine, @[Rows, N], kBf16)
+    let x = newTensor(any, @[Rows, N], kBf16)
     x.copyToDeviceFromHost(xHost)
-    let w = newTensor(engine, @[N], kBf16)
+    let w = newTensor(any, @[N], kBf16)
     w.copyToDeviceFromHost(wHost)
 
     let o = Tensor(engine: x.engine,
@@ -347,7 +352,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
 
     # rank-1 and rank-3 sources walk at their own rank, the last axis is normalized
     block:
-      let x1 = newTensor(engine, @[N], kBf16)
+      let x1 = newTensor(any, @[N], kBf16)
       x1.copyToDeviceFromHost(xHost[0 ..< N])
       let o1 = Tensor(engine: x1.engine,
         node: tn_rmsnorm(x1.engine, x1.node, w.node, 1e-6'f32))
@@ -358,7 +363,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
       copyToHostFromDevice(got1, o1)
       got1.checkBf16Ulp(refO[0 ..< N], 2, name & ": rmsnorm rank 1")
 
-      let x3 = newTensor(engine, @[2, 3, N], kBf16)
+      let x3 = newTensor(any, @[2, 3, N], kBf16)
       var x3Host = newSeq[bfloat16](2 * 3 * N)
       for i in 0 ..< 2 * 3 * N:
         x3Host[i] = xHost[i mod (Rows * N)]
@@ -374,15 +379,15 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
 
     # face contract: weight size, weight rank and dtype mismatches raise
     block:
-      let wShort = newTensor(engine, @[N - 1], kBf16)
+      let wShort = newTensor(any, @[N - 1], kBf16)
       doAssertRaises ValueError:
-        discard tn_rmsnorm(engine, x.node, wShort.node, 1e-6'f32)
-      let w2d = newTensor(engine, @[1, N], kBf16)
+        discard tn_rmsnorm(any, x.node, wShort.node, 1e-6'f32)
+      let w2d = newTensor(any, @[1, N], kBf16)
       doAssertRaises ValueError:
-        discard tn_rmsnorm(engine, x.node, w2d.node, 1e-6'f32)
-      let wF32 = newTensor(engine, @[N], kFp32)
+        discard tn_rmsnorm(any, x.node, w2d.node, 1e-6'f32)
+      let wF32 = newTensor(any, @[N], kFp32)
       doAssertRaises ValueError:
-        discard tn_rmsnorm(engine, x.node, wF32.node, 1e-6'f32)
+        discard tn_rmsnorm(any, x.node, wF32.node, 1e-6'f32)
 
     # RmsNorm layer port: RmsNorm(w)(x) through the erased face
     block:
@@ -402,7 +407,7 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
         var rHost = newSeq[bfloat16](Rows * N)
         for i in 0 ..< Rows * N:
           rHost[i] = (float32((i * 53) mod 17 - 8) * 0.25'f32).to(bfloat16)
-        let residual = newTensor(engine, @[Rows, N], kBf16)
+        let residual = newTensor(any, @[Rows, N], kBf16)
         residual.copyToDeviceFromHost(rHost)
         let (normed, newResidual) = rms.forward_with_residual(x, residual)
         doAssert normed.node.getImpl().shape()[0] == Rows

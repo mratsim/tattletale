@@ -70,7 +70,8 @@ proc main =
           "RmsNorm(w)(x) (" & $row & "," & $i & "): got " &
           $got[row * N + i].to(float32) & ", want " & $want & ", " & $d & " ulps"
 
-  runTest(gMetalEngine(), "Metal")
+  type Mem = typeof(gMetalEngine().allocDevice(bfloat16, 0))
+  runTest[Mem](gMetalEngine().toAnyEngine(), "Metal")
 
 when isMainModule:
   main()
