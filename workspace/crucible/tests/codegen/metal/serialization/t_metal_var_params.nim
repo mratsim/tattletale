@@ -41,7 +41,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 4)
       engine.launchKernel("varParamKernel", oDev, ())
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[0] == 10'u32
       check res[1] == 20'u32
       check res[2] == 2'u32

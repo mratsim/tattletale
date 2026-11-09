@@ -23,12 +23,12 @@ proc runTest() =
   let d = engine.allocDevice(uint32, 1)
   let av = 40'u32
   let bv = 2'u32
-  engine.copyToDeviceFromHost(a, unsafeAddr av, 1)
-  engine.copyToDeviceFromHost(b, unsafeAddr bv, 1)
+  engine.copyToDeviceFromHost(a, [av])
+  engine.copyToDeviceFromHost(b, [bv])
   engine.launchKernel("addK", c, (a, b))
   engine.launchKernel("addK", d, (c, b))
   var res: array[1, uint32]
-  engine.copyToHostFromDevice(addr res[0], d, 1)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), d)
   doAssert res[0] == av + 2 * bv, "addK relaunch chain: got " & $res[0]
 
 when isMainModule:

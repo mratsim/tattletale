@@ -23,7 +23,7 @@ proc runTest() =
   let oDev = engine.allocDevice(uint32, 2)
   engine.launchKernel("kernelMain", oDev, ())
   var out32: array[2, uint32]
-  engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
   doAssert out32[0] == 42'u32,
     "first write through the inlined buffer binding got " & $out32[0] & ", want 42"
   doAssert out32[1] == 7'u32,

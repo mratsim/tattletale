@@ -28,7 +28,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 1)
       engine.launchKernel("repro", oDev, ())
       var res: array[1, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 3.0'f32
 
 when isMainModule:

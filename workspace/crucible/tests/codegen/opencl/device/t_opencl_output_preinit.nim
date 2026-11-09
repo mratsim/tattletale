@@ -22,14 +22,14 @@ proc runTest() =
     var outBuf: array[1, uint32]
     outBuf[0] = 0
     let oDev = engine.allocDevice(uint32, 1)
-    engine.copyToDeviceFromHost(oDev, addr outBuf[0], 1)
+    engine.copyToDeviceFromHost(oDev, outBuf.toOpenArray(0, 1 - 1))
     engine.launchKernel("incInPlace", oDev, ())
-    engine.copyToHostFromDevice(addr outBuf[0], oDev, 1)
+    engine.copyToHostFromDevice(outBuf.toOpenArray(0, 1 - 1), oDev)
     doAssert outBuf[0] == 1, "first run must see a zeroed output buffer"
 
     # Second run: the buffer holds 1 and the in-place kernel reads 1 and writes 2.
     engine.launchKernel("incInPlace", oDev, ())
-    engine.copyToHostFromDevice(addr outBuf[0], oDev, 1)
+    engine.copyToHostFromDevice(outBuf.toOpenArray(0, 1 - 1), oDev)
     doAssert outBuf[0] == 2, "second run must see the previous output contents"
     echo "  OK"
 

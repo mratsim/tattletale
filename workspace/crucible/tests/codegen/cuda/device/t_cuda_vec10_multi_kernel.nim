@@ -30,18 +30,18 @@ proc runTest() =
 
   var buf: array[10, uint32]
   let aDev = engine.allocDevice(uint32, a.len)
-  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+  engine.copyToDeviceFromHost(aDev, a)
   let bDev = engine.allocDevice(uint32, b.len)
-  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+  engine.copyToDeviceFromHost(bDev, b)
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 10)>>("vec10_add", oDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   echo "  vec10_add: ", buf
   for i in 0 ..< 10:
     doAssert buf[i] == a[i] + b[i]
 
   engine.launchKernel<<(1, 10)>>("vec10_mul", oDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   echo "  vec10_mul: ", buf
   for i in 0 ..< 10:
     doAssert buf[i] == a[i] * b[i]

@@ -27,11 +27,11 @@ proc runTest() =
 
   engine.launchKernel("bothRetKernel", outDev, (0'i32,))
   var o: array[1, uint32]
-  engine.copyToHostFromDevice(addr o[0], outDev, 1)
+  engine.copyToHostFromDevice(o.toOpenArray(0, 1 - 1), outDev)
   doAssert o[0] == 1, "x=0 got " & $o[0] & ", want 1"
 
   engine.launchKernel("bothRetKernel", outDev, (5'i32,))
-  engine.copyToHostFromDevice(addr o[0], outDev, 1)
+  engine.copyToHostFromDevice(o.toOpenArray(0, 1 - 1), outDev)
   doAssert o[0] == 2, "x=5 got " & $o[0] & ", want 2"
   echo "  both-branches-return: [", o[0], "] exact on MoltenVK"
 

@@ -21,11 +21,11 @@ proc runTest() =
   engine.ingest(wgsl)
   var input: array[1, uint32] = [41'u32]
   let inDev = engine.allocDevice(uint32, 1)
-  engine.copyToDeviceFromHost(inDev, addr input[0], 1)
+  engine.copyToDeviceFromHost(inDev, input.toOpenArray(0, 1 - 1))
   let outDev = engine.allocDevice(uint32, 1)
   engine.launchKernel("addOneKernel", outDev, (inDev,))
   var res: array[1, uint32]
-  engine.copyToHostFromDevice(addr res[0], outDev, 1)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), outDev)
   doAssert res[0] == 42, "readback = " & $res[0] & ", expected 42"
   echo "  OK - t_webgpu_input_arg_launch"
   flushFile(stdout)

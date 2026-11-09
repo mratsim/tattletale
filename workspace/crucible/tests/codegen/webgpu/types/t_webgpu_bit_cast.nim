@@ -25,10 +25,10 @@ proc runTest() =
     expected[lane] = cast[uint32](inp[lane])
   let iDev = engine.allocDevice(float32, 8)
   let oDev = engine.allocDevice(uint32, 8)
-  engine.copyToDeviceFromHost(iDev, addr inp[0], 8)
+  engine.copyToDeviceFromHost(iDev, inp.toOpenArray(0, 8 - 1))
   engine.launchKernel("bitsToUintKernel", oDev, (iDev,))
   var res: array[8, uint32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 8)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 8 - 1), oDev)
   for lane in 0 ..< 8:
     doAssert res[lane] == expected[lane],
       "bitcast readback " & $res[lane] & " != host cast " & $expected[lane]

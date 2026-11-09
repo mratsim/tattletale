@@ -41,7 +41,7 @@ proc runTest() =
 
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("externalFnKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   echo "  addThree(10,20,30)  = ", buf[0]
   echo "  scaleAndAdd(5,2,3)  = ", buf[1]
   echo "  selectValue(isEven(42), 100, 200) = ", buf[2]

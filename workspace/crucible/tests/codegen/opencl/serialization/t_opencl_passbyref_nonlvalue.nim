@@ -45,7 +45,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("kernelMain", oDev, ())
     var out32: array[1, uint32]
-    engine.copyToHostFromDevice(addr out32[0], oDev, 1)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 1 - 1), oDev)
     doAssert out32[0] == 30'u32,
       "inline constructor arg to a by-ref param: got " & $out32[0] & ", want 30"
 
@@ -55,7 +55,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("kernelMain", oDev, ())
     var out32: array[1, uint32]
-    engine.copyToHostFromDevice(addr out32[0], oDev, 1)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 1 - 1), oDev)
     doAssert out32[0] == 126'u32,
       "call-result arg to a by-ref param: got " & $out32[0] & ", want 126"
 

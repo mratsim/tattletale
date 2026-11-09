@@ -44,7 +44,7 @@ proc runTest() =
     blk = (Blk, 1)
     sharedMem = Blk * sizeof(float32)
   var eager: array[Groups, float32]
-  engine.copyToHostFromDevice(addr eager[0], outD, Groups)
+  engine.copyToHostFromDevice(eager.toOpenArray(0, Groups - 1), outD)
   for g in 0 ..< Groups:
     check eager[g] == Sum
 
@@ -61,11 +61,11 @@ proc runTest() =
   batch.replay()
 
   var got: array[Groups, float32]
-  engine.copyToHostFromDevice(addr got[0], outD, Groups)
+  engine.copyToHostFromDevice(got.toOpenArray(0, Groups - 1), outD)
   for g in 0 ..< Groups:
     check got[g] == Sum
   batch.replay()
-  engine.copyToHostFromDevice(addr got[0], outD, Groups)
+  engine.copyToHostFromDevice(got.toOpenArray(0, Groups - 1), outD)
   for g in 0 ..< Groups:
     check got[g] == Sum
   echo "[OK] ICB batch: threadgroup memory encoded per entry, both replays match"

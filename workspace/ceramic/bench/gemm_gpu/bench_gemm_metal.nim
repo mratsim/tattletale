@@ -67,7 +67,7 @@ proc benchAppleMlxSteel(engine: MetalEngine, M, N, K, iters: int): auto =
   benchGemm("Apple MLX", M, N, K, iters):
     engine.launchKernel<<(grid: (tn * tile, ceil_div(tm, tile), 1), blk: (128, 1, 1), sharedMem: 5376)>>(
       "mlx_gemm_64x64x16", dDev.data, (aDev.data, bDev.data, params, iters))
-  engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, M * N)
+  engine.copyToHostFromDevice(dHost.data.toOpenArray(0, M * N - 1), dDev.data)
   dHost
 
 proc benchAppleNax(engine: MetalEngine, M, N, K, iters: int): auto =
@@ -106,7 +106,7 @@ proc benchAppleNax(engine: MetalEngine, M, N, K, iters: int): auto =
   benchGemm("Apple NAX", M, N, K, iters):
     engine.launchKernel<<(grid: (ceil_div(N, 64), ceil_div(M, 64), 1), blk: (128, 1, 1))>>(
       "mlx_gemm_nax_64x64", dDev.data, (aDev.data, bDev.data, params, iters))
-  engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, M * N)
+  engine.copyToHostFromDevice(dHost.data.toOpenArray(0, M * N - 1), dDev.data)
   dHost
 
 proc main() =

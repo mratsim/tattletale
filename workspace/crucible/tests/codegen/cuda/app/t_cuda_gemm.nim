@@ -37,7 +37,7 @@ proc runTest() =
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("gemmKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   let expected = [58'u32, 64, 139, 154]
   for i in 0 ..< 4:
     doAssert buf[i] == expected[i], &"C[{i}]: {buf[i]} != {expected[i]}"

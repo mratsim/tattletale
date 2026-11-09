@@ -29,7 +29,7 @@ proc runTest() =
   let oDev = engine.allocDevice(float32, 32)
   engine.launchKernel("nestedCopyKernel", oDev, ())
   var res: array[32, float32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 32)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 32 - 1), oDev)
   for i in 0 ..< 32:
     doAssert res[i] == float32(i) * 1.5'f32 + 0.25'f32,
       "slot " & $i & " carries the copied value, got " & $res[i]

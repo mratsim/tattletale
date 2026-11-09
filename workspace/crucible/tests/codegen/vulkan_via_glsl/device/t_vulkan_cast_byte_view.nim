@@ -24,11 +24,11 @@ proc runTest() =
     engine.ingest(kernelCode)
     let oDev = engine.allocDevice(uint32, 1)
     var zero: uint32 = 0
-    engine.copyToDeviceFromHost(oDev, addr zero, 1)
+    engine.copyToDeviceFromHost(oDev, [zero])
     engine.launchKernel("k", oDev, ())
-    var got: uint32
-    engine.copyToHostFromDevice(addr got, oDev, 1)
-    doAssert got == 16777217'u32, &"byte view wrote the top byte: {got} != 16777217"
+    var got: array[1, uint32]
+    engine.copyToHostFromDevice(got, oDev)
+    doAssert got[0] == 16777217'u32, &"byte view wrote the top byte: {got[0]} != 16777217"
     echo "  OK — byte view through a cast pulls in the int8 extensions"
 
 when isMainModule:

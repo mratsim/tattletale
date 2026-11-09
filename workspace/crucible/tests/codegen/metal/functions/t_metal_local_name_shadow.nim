@@ -45,7 +45,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 3)
       engine.launchKernel("k", oDev, (1'i32,))
       var res: array[3, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check res[0] == 999
       check res[1] == 100
       check res[2] == 200
@@ -56,7 +56,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 3)
       engine.launchKernel("k", oDev, ())
       var res: array[3, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check res == [8'i32, 7, 555]
 
     test "a non-void device proc may declare its own result":
@@ -65,7 +65,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 1)
       engine.launchKernel("k", oDev, ())
       var res: array[1, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 10
 
 when isMainModule:

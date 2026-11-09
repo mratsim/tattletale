@@ -71,7 +71,7 @@ proc checkSum*[E: HwEngine](rng: var Rand, engine: E, rows, cols: static int, sS
     blk = (32, 1)
   var expect = makeHostTensor(float32, (1, 1), (1, 1))
   expect.data[0] = refSum(src.view())
-  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, 1)
+  engine.copyToHostFromDevice(got.data.toOpenArray(0, 1 - 1), gotDev.data)
   assertAllClose(got.view(), expect.view(), rtol = 1e-5, abstol = 1e-4)
 
 proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, shape, srcStrides, dstStrides: tuple, axis: static int, msg: string) =
@@ -93,7 +93,7 @@ proc checkSumAxis*[E: HwEngine](rng: var Rand, engine: E, shape, srcStrides, dst
   engine.launchDeviceFn sum(gotDev, srcDev, axis) do:
     grid = (gridX, 1)
     blk = (32, 1)
-  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, toInt(got.layout.cosize()))
+  engine.copyToHostFromDevice(got.data.toOpenArray(0, toInt(got.layout.cosize()) - 1), gotDev.data)
   assertAllClose(got.view(), expect.view(), rtol = 1e-5, abstol = 1e-4, msg = msg)
 
 proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
@@ -118,7 +118,7 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
     engine.launchDeviceFn sum(sumDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
-    engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
+    engine.copyToHostFromDevice(sumGot.data.toOpenArray(0, 1 - 1), sumDev.data)
     assertAllClose(sumGot.view(), expectSum.view(), msg = "3D sum full")
 
   # ── 4D tensor: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
@@ -132,7 +132,7 @@ proc run_sum_full_tests*[E: HwEngine](engine: E, moduleName: string) =
     engine.launchDeviceFn sum(sumDev, engine.bridge(src)) do:
       grid = (1, 1)
       blk = (32, 1)
-    engine.copyToHostFromDevice(addr sumGot.data[0], sumDev.data, 1)
+    engine.copyToHostFromDevice(sumGot.data.toOpenArray(0, 1 - 1), sumDev.data)
     assertAllClose(sumGot.view(), expectSum.view(), msg = "4D sum full")
 
 func genAxisCases*[Sh: tuple](shapes: varargs[Sh]): seq[tuple[src, dst: tuple[shape, strides: Sh], axis, iters: int]] =
@@ -244,7 +244,7 @@ proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
     engine.launchDeviceFn sum(axisDev, engine.bridge(src), 2) do:
       grid = (1, 1)
       blk = (32, 1)
-    engine.copyToHostFromDevice(addr axisGot.data[0], axisDev.data, 4)
+    engine.copyToHostFromDevice(axisGot.data.toOpenArray(0, 4 - 1), axisDev.data)
     assertAllClose(axisGot.view(), expectAxis.view(), msg = "3D sum with axis")
 
   # ── partial tiles on the last axis: the (2, 2, 2, 2) block covers (2, 2, 2, 50) ──
@@ -258,5 +258,5 @@ proc run_sum_axis_tests*[E: HwEngine](engine: E, moduleName: string) =
     engine.launchDeviceFn sum(axisDev, engine.bridge(src), 3) do:
       grid = (1, 1)
       blk = (32, 1)
-    engine.copyToHostFromDevice(addr axisGot.data[0], axisDev.data, 8)
+    engine.copyToHostFromDevice(axisGot.data.toOpenArray(0, 8 - 1), axisDev.data)
     assertAllClose(axisGot.view(), expectAxis.view(), msg = "4D sum with axis")

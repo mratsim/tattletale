@@ -25,11 +25,11 @@ proc runTest() =
   let aDev = engine.allocDevice(float16, 4)
   let bDev = engine.allocDevice(float16, 4)
   let oDev = engine.allocDevice(float16, 4)
-  engine.copyToDeviceFromHost(aDev, addr aHost[0], 4)
-  engine.copyToDeviceFromHost(bDev, addr bHost[0], 4)
+  engine.copyToDeviceFromHost(aDev, aHost.toOpenArray(0, 4 - 1))
+  engine.copyToDeviceFromHost(bDev, bHost.toOpenArray(0, 4 - 1))
   engine.launchKernel<<(grid: (1, 1), blk: (4, 1))>>("f16MadKernel", oDev, (aDev, bDev))
   var res: array[4, float16]
-  engine.copyToHostFromDevice(addr res[0], oDev, 4)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
   for k in 0 ..< 4:
     let refVal = toFp16(toFp32(aHost[k]) * toFp32(bHost[k]) + toFp32(aHost[k]))
     doAssert cast[uint16](res[k]) == cast[uint16](refVal),

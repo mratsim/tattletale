@@ -42,13 +42,13 @@ proc runTest() =
       # vkAllocateMemory contents are undefined, initialize the buffers
       var zeroF: array[1, float32]
       var zerosF: array[32, float32]
-      engine.copyToDeviceFromHost(cDev, addr zeroF[0], 1)
-      engine.copyToDeviceFromHost(oDev, addr zerosF[0], 32)
+      engine.copyToDeviceFromHost(cDev, zeroF.toOpenArray(0, 1 - 1))
+      engine.copyToDeviceFromHost(oDev, zerosF.toOpenArray(0, 32 - 1))
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("addFpSame", cDev.mem, (oDev.mem, ()))
       var old: array[32, float32]
-      engine.copyToHostFromDevice(addr old[0], oDev, 32)
+      engine.copyToHostFromDevice(old.toOpenArray(0, 32 - 1), oDev)
       var counter: array[1, float32]
-      engine.copyToHostFromDevice(addr counter[0], cDev, 1)
+      engine.copyToHostFromDevice(counter.toOpenArray(0, 1 - 1), cDev)
       # equal adds serialize into distinct counts, whatever the order:
       # the returned old values are exactly 0..31
       old.sort()
@@ -64,13 +64,13 @@ proc runTest() =
       # vkAllocateMemory contents are undefined, initialize the buffers
       var zeroF: array[1, float32]
       var zerosF: array[32, float32]
-      engine.copyToDeviceFromHost(cDev, addr zeroF[0], 1)
-      engine.copyToDeviceFromHost(oDev, addr zerosF[0], 32)
+      engine.copyToDeviceFromHost(cDev, zeroF.toOpenArray(0, 1 - 1))
+      engine.copyToDeviceFromHost(oDev, zerosF.toOpenArray(0, 32 - 1))
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("addFp", cDev.mem, (oDev.mem, ()))
       var old: array[32, float32]
-      engine.copyToHostFromDevice(addr old[0], oDev, 32)
+      engine.copyToHostFromDevice(old.toOpenArray(0, 32 - 1), oDev)
       var counter: array[1, float32]
-      engine.copyToHostFromDevice(addr counter[0], cDev, 1)
+      engine.copyToHostFromDevice(counter.toOpenArray(0, 1 - 1), cDev)
       # sum of lanes 0..31 = 496, exact in fp32 and order-independent
       # distinct adds make the per-lane old values order-dependent,
       # bounded by the exact sum
@@ -84,10 +84,10 @@ proc runTest() =
       let cDev = engine.allocDevice(int32, 1)
       # vkAllocateMemory contents are undefined, initialize the counter
       var zeroI: array[1, int32]
-      engine.copyToDeviceFromHost(cDev, addr zeroI[0], 1)
+      engine.copyToDeviceFromHost(cDev, zeroI.toOpenArray(0, 1 - 1))
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("addInt", cDev.mem, ())
       var counter: array[1, int32]
-      engine.copyToHostFromDevice(addr counter[0], cDev, 1)
+      engine.copyToHostFromDevice(counter.toOpenArray(0, 1 - 1), cDev)
       check counter[0] == 32
 
     test "fp: 4 threadgroups x 32 lanes, counter ends at 128":
@@ -96,10 +96,10 @@ proc runTest() =
       let cDev = engine.allocDevice(float32, 1)
       # vkAllocateMemory contents are undefined, initialize the counter
       var zeroF: array[1, float32]
-      engine.copyToDeviceFromHost(cDev, addr zeroF[0], 1)
+      engine.copyToDeviceFromHost(cDev, zeroF.toOpenArray(0, 1 - 1))
       engine.launchKernel<<(grid: (4, 1), blk: (32, 1))>>("addMultiTg", cDev.mem, ())
       var counter: array[1, float32]
-      engine.copyToHostFromDevice(addr counter[0], cDev, 1)
+      engine.copyToHostFromDevice(counter.toOpenArray(0, 1 - 1), cDev)
       check counter[0] == 128.0
 
 when isMainModule:

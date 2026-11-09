@@ -47,7 +47,7 @@ proc runTest() =
       engine.ingest(kernelDirect)
       let oA = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oA, ())
-      engine.copyToHostFromDevice(addr output[0], oA, output.len)
+      engine.copyToHostFromDevice(output, oA)
       check output[0] == 1
 
     test "Pattern B — const + let":
@@ -57,7 +57,7 @@ proc runTest() =
       engine.ingest(code)
       let oB = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oB, ())
-      engine.copyToHostFromDevice(addr output[0], oB, output.len)
+      engine.copyToHostFromDevice(output, oB)
       check output[0] == 1
 
     test "Pattern C — block with const then yield":
@@ -67,7 +67,7 @@ proc runTest() =
       engine.ingest(code)
       let oC = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oC, ())
-      engine.copyToHostFromDevice(addr output[0], oC, output.len)
+      engine.copyToHostFromDevice(output, oC)
       check output[0] == 1
 
 when isMainModule:

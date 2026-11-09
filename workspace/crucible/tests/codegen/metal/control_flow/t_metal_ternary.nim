@@ -42,10 +42,10 @@ proc runTernary(a, b: uint32): array[3, uint32] =
   let aDev = engine.allocDevice(uint32, 1)
   let bDev = engine.allocDevice(uint32, 1)
   let oDev = engine.allocDevice(uint32, 3)
-  engine.copyToDeviceFromHost(aDev, unsafeAddr a, 1)
-  engine.copyToDeviceFromHost(bDev, unsafeAddr b, 1)
+  engine.copyToDeviceFromHost(aDev, [a])
+  engine.copyToDeviceFromHost(bDev, [b])
   engine.launchKernel("ternaryKernel", oDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr result[0], oDev, 3)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 3 - 1), oDev)
 
 proc runTernCall(cmd: uint32): array[2, uint32] =
   ## One launch per call: device buffers serve a single launch so handles never need a copy.
@@ -53,9 +53,9 @@ proc runTernCall(cmd: uint32): array[2, uint32] =
   engine.ingest(branchCallMsl)
   let cDev = engine.allocDevice(uint32, 1)
   let oDev = engine.allocDevice(uint32, 2)
-  engine.copyToDeviceFromHost(cDev, unsafeAddr cmd, 1)
+  engine.copyToDeviceFromHost(cDev, [cmd])
   engine.launchKernel("ternCallKernel", oDev, (cDev,))
-  engine.copyToHostFromDevice(addr result[0], oDev, 2)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 2 - 1), oDev)
 
 proc runTest() =
   suite "Metal - ternary lowering":

@@ -25,7 +25,7 @@ proc runInit(): array[1, uint32] =
   engine.ingest(code)
   let oDev = engine.allocDevice(uint32, 1)
   engine.launchKernel("initKernel", oDev, ())
-  engine.copyToHostFromDevice(addr result[0], oDev, 1)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 1 - 1), oDev)
 
 proc runTest() =
   suite "Metal - call-valued initializers":

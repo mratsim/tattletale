@@ -24,10 +24,10 @@ proc runTest() =
   engine.ingest(code)
   var inputs: array[2, float32] = [-2.5'f32, 1.5'f32]
   let oDev = engine.allocDevice(float32, 6)
-  engine.copyToDeviceFromHost(oDev, addr inputs[0], 2)
+  engine.copyToDeviceFromHost(oDev, inputs.toOpenArray(0, 2 - 1))
   engine.launchKernel("scalarMinMaxAbs", oDev, ())
   var res: array[6, float32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 6)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 6 - 1), oDev)
   doAssert res[2] == -2.5'f32, "min = " & $res[2]
   doAssert res[3] == 1.5'f32, "max = " & $res[3]
   doAssert res[4] == 2.5'f32, "abs = " & $res[4]

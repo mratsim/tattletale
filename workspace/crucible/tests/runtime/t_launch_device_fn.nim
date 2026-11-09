@@ -24,11 +24,11 @@ proc runTest() =
     engine.launchDeviceFn mix(3, dev, 10, 4, 0.5'f32) do:
       grid = (1, 1)
       blk = (1, 1)
-    var host: float32
-    engine.copyToHostFromDevice(addr host, dev, 1)
+    var host: array[1, float32]
+    engine.copyToHostFromDevice(host, dev)
     let expected = float32(3) * (float32(10 + 4) + 0.5'f32)
-    doAssert host == expected,
-      "mix: got " & $host & " want " & $expected
+    doAssert host[0] == expected,
+      "mix: got " & $host[0] & " want " & $expected
     echo "[OK] launchDeviceFn: grouped parameters, compile-time parameter, int/float/DeviceMem values"
 
   block allValues:
@@ -36,10 +36,10 @@ proc runTest() =
     engine.launchDeviceFn blend(dev, 6, 7, 2.25'f32) do:
       grid = (1, 1)
       blk = (1, 1)
-    var host: float32
-    engine.copyToHostFromDevice(addr host, dev, 1)
+    var host: array[1, float32]
+    engine.copyToHostFromDevice(host, dev)
     let expected = float32(6 * 7) - 2.25'f32
-    doAssert host == expected,
+    doAssert host[0] == expected,
       "blend: got " & $host & " want " & $expected
     echo "[OK] launchDeviceFn: every parameter is a runtime parameter"
 

@@ -41,10 +41,10 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("structBoolKernel", oDev, (Flags(count: 42'u32, on: true),))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
       engine.launchKernel("structBoolKernel", oDev, (Flags(count: 42'u32, on: false),))
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 0
 
     test "local struct value with a bool field":
@@ -54,7 +54,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("localBoolKernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 9
 
 when isMainModule:

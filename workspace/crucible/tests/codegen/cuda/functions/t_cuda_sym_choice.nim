@@ -23,7 +23,7 @@ proc runTest() =
   engine.ingest(kernelCode)
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("symChoiceKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   echo "  output: [", buf[0], ", ", buf[1], "]"
   doAssert buf[0] == 11, &"uint32 addOne: {buf[0]} != 11"
   doAssert buf[1] == 22, &"uint64 addOne: {buf[1]} != 22"

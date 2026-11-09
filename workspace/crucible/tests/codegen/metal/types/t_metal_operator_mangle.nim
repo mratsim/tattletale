@@ -68,7 +68,7 @@ proc runTest() =
       var res: array[2, int32]
       let oDev = engine.allocDevice(int32, 2)
       engine.launchKernel("compoundKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 16
       check res[1] == 11
 
@@ -78,7 +78,7 @@ proc runTest() =
       var res: array[2, int32]
       let oDev = engine.allocDevice(int32, 2)
       engine.launchKernel("overloadPairKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 18
       check res[1] == 2
 
@@ -88,7 +88,7 @@ proc runTest() =
       var res: array[2, int32]
       let oDev = engine.allocDevice(int32, 2)
       engine.launchKernel("infixKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 17
       check res[1] == 7
 

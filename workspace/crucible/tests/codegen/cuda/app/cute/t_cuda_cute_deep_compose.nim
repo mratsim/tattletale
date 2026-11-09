@@ -56,7 +56,7 @@ proc runTest() =
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel("deepComposeKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   doAssert buf[0] == 0,   &"alias[0]: {buf[0]}"
   doAssert buf[1] == 15,  &"alias[15]: {buf[1]}"
   doAssert buf[2] == 42,  &"nested val: {buf[2]}"

@@ -21,13 +21,13 @@ proc runTest() =
   var x = [1'u32, 2, 3, 4]
   let yDev = engine.allocDevice(uint32, y.len)
   let xDev = engine.allocDevice(uint32, x.len)
-  engine.copyToDeviceFromHost(yDev, addr y[0], y.len)
-  engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
+  engine.copyToDeviceFromHost(yDev, y)
+  engine.copyToDeviceFromHost(xDev, x)
   engine.launchDeviceFn incKernel(yDev, xDev, 4) do:
     grid = (1, 1)
     blk = (32, 1)
     lang = "spirv"
-  engine.copyToHostFromDevice(addr y[0], yDev, y.len)
+  engine.copyToHostFromDevice(y, yDev)
   doAssert y == [2'u32, 3, 4, 5], "y = " & $y
 
 when isMainModule:

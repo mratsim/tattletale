@@ -43,7 +43,7 @@ proc runTest() =
       engine.ingest(code)
       let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 1
 
     test "Case 2 — typeof field access in type definition":
@@ -53,7 +53,7 @@ proc runTest() =
       engine.ingest(code)
       let oDev = engine.allocDevice(uint32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 1
 
 when isMainModule:

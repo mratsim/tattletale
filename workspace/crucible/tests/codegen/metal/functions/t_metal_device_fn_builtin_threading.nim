@@ -40,15 +40,15 @@ proc runTest() =
       var sentinels: array[64, uint32]
       for i in 0 ..< 64:
         sentinels[i] = 0xEEEE_0000'u32 + uint32(i)
-      engine.copyToDeviceFromHost(pDev, addr sentinels[0], 64)
-      engine.copyToDeviceFromHost(oDev, addr sentinels[0], 64)
+      engine.copyToDeviceFromHost(pDev, sentinels.toOpenArray(0, 64 - 1))
+      engine.copyToDeviceFromHost(oDev, sentinels.toOpenArray(0, 64 - 1))
       engine.launchKernel<<(grid: (1, 1), blk: (64, 1))>>("chainKernel", pDev, ())
       engine.launchKernel<<(grid: (1, 1), blk: (64, 1))>>("directKernel", oDev, ())
       var res: array[64, uint32]
-      engine.copyToHostFromDevice(addr res[0], pDev, 64)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 64 - 1), pDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i) + 100'u32
-      engine.copyToHostFromDevice(addr res[0], oDev, 64)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 64 - 1), oDev)
       for i in 0 ..< 64:
         check res[i] == uint32(i) + 100'u32
 

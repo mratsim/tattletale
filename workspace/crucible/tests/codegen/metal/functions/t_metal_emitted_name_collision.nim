@@ -45,7 +45,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 4)
       engine.launchKernel("k", oDev, ())
       var res: array[4, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[0] == 6
       check res[1] == 30
       check res[2] == 9
@@ -57,7 +57,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 1)
       engine.launchKernel("k", oDev, ())
       var res: array[1, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 20
 
 when isMainModule:

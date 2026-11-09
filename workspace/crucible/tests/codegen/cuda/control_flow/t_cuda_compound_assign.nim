@@ -42,9 +42,9 @@ proc runTest() =
       var engine = newEngine(runCuda)
       engine.ingest(kernel)
       let oDev = engine.allocDevice(int32, output.len)
-      engine.copyToDeviceFromHost(oDev, addr output[0], output.len)
+      engine.copyToDeviceFromHost(oDev, output)
       engine.launchKernel<<(1, 1)>>("compoundKernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 30  # (10 + 5) * 2
       check output[1] == 32  # (11 + 5) * 2
       check output[2] == 34  # (12 + 5) * 2
@@ -55,9 +55,9 @@ proc runTest() =
       var engine = newEngine(runCuda)
       engine.ingest(hazardKernel)
       let oDev = engine.allocDevice(int32, x.len)
-      engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(oDev, x)
       engine.launchKernel<<(1, 1)>>("hazardKernel", oDev, ())
-      engine.copyToHostFromDevice(addr x[0], oDev, x.len)
+      engine.copyToHostFromDevice(x, oDev)
       check x[0] == 1  # the index side effect fired exactly once
       check x[1] == 7  # stored back into the element the single index selected
       check x[2] == 0  # a second index evaluation would have stored here
@@ -67,9 +67,9 @@ proc runTest() =
       var engine = newEngine(runCuda)
       engine.ingest(callLhsKernel)
       let oDev = engine.allocDevice(int32, x.len)
-      engine.copyToDeviceFromHost(oDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(oDev, x)
       engine.launchKernel<<(1, 1)>>("callLhsKernel", oDev, ())
-      engine.copyToHostFromDevice(addr x[0], oDev, x.len)
+      engine.copyToHostFromDevice(x, oDev)
       check x[0] == 12  # 7, then += 5 through the returned reference
       check x[1] == 12
       check x[2] == 0

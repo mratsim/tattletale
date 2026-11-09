@@ -64,9 +64,9 @@ proc bridge*[E: HwEngine](engine: E, kv: var JaggedKvHost): auto =
     offDev = engine.allocDevice(int32, kv.capacity + 1)
     idxDev = engine.allocDevice(int32, kv.capacity)
     seqDev = engine.allocDevice(int32, kv.capacity)
-  engine.copyToDeviceFromHost(offDev, kv.offsets, kv.capacity + 1)
-  engine.copyToDeviceFromHost(idxDev, kv.indices, kv.capacity)
-  engine.copyToDeviceFromHost(seqDev, kv.seqlens, kv.capacity)
+  engine.copyToDeviceFromHost(offDev, kv.offsets.toOpenArray(0, kv.capacity + 1 - 1))
+  engine.copyToDeviceFromHost(idxDev, kv.indices.toOpenArray(0, kv.capacity - 1))
+  engine.copyToDeviceFromHost(seqDev, kv.seqlens.toOpenArray(0, kv.capacity - 1))
   JaggedKvBridge[typeof(offDev)](offsets: offDev, indices: idxDev, seqlens: seqDev,
                                  batchSize: kv.batchSize)
 
@@ -199,7 +199,7 @@ func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
 proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
   let n = ht.layout.cosize()
   let dev = engine.allocDevice(T, n)
-  engine.copyToDeviceFromHost(dev, ht.data +% ht.offset, n)
+  engine.copyToDeviceFromHost(dev, ht.data.toOpenArray(ht.offset, ht.offset + n - 1))
   BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
 
 func xorHash*[T, Sh, St](ht: HostTensor[T, Sh, St]): uint32 =

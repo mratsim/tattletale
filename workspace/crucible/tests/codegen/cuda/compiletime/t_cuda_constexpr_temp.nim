@@ -75,7 +75,7 @@ proc runTest() =
       engine.ingest(kernelA)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 1.0'f32
 
     test "Pattern B — constexpr in arithmetic expression":
@@ -84,7 +84,7 @@ proc runTest() =
       engine.ingest(kernelB)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 128.0'f32
 
     test "Pattern C — template wrapConst (block with constexpr)":
@@ -93,7 +93,7 @@ proc runTest() =
       engine.ingest(kernelC)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 1.0'f32
 
     test "Pattern E — block with constexpr temp (evalOnceAs sim)":
@@ -102,7 +102,7 @@ proc runTest() =
       engine.ingest(kernelE)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 0.0'f32
 
     test "Pattern F — constexpr tuple field access":
@@ -111,7 +111,7 @@ proc runTest() =
       engine.ingest(kernelF)
       let oDev = engine.allocDevice(float32, output.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr output[0], oDev, output.len)
+      engine.copyToHostFromDevice(output, oDev)
       check output[0] == 8.0'f32
 
 when isMainModule:

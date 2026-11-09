@@ -57,13 +57,13 @@ proc runTest() =
   let aDev = engine.allocDevice(uint32, a.len)
   let bDev = engine.allocDevice(uint32, b.len)
   let oDev = engine.allocDevice(uint32, 2)
-  engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-  engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+  engine.copyToDeviceFromHost(aDev, a)
+  engine.copyToDeviceFromHost(bDev, b)
 
   engine.launchKernel("addScalarKernel", oDev, (aDev, bDev, 5'u32))
 
   var out32: array[2, uint32]
-  engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
   doAssert out32[0] == 16, "slot 0 got " & $out32[0] & ", want 10 + 1 + 5 = 16"
   doAssert out32[1] == 27, "slot 1 got " & $out32[1] & ", want 20 + 2 + 5 = 27"
   echo "  address route over direct SPIR-V: [", out32[0], ", ", out32[1], "] exact readback"
@@ -77,11 +77,11 @@ proc runTest() =
 
     engine.launchKernel("flagKernel", oDev, (true,))
     var outFlag: array[1, uint32]
-    engine.copyToHostFromDevice(addr outFlag[0], oDev, 1)
+    engine.copyToHostFromDevice(outFlag.toOpenArray(0, 1 - 1), oDev)
     doAssert outFlag[0] == 7, "flag=true got " & $outFlag[0] & ", want 7"
 
     engine.launchKernel("flagKernel", oDev, (false,))
-    engine.copyToHostFromDevice(addr outFlag[0], oDev, 1)
+    engine.copyToHostFromDevice(outFlag.toOpenArray(0, 1 - 1), oDev)
     doAssert outFlag[0] == 3, "flag=false got " & $outFlag[0] & ", want 3"
     echo "  bool kernel param: i32 push member, truthy [", outFlag[0], "] on MoltenVK"
 
@@ -93,11 +93,11 @@ proc runTest() =
 
     engine.launchKernel("structBoolKernel", oDev, (Flags(count: 42'u32, on: true),))
     var outS: array[1, uint32]
-    engine.copyToHostFromDevice(addr outS[0], oDev, 1)
+    engine.copyToHostFromDevice(outS.toOpenArray(0, 1 - 1), oDev)
     doAssert outS[0] == 42, "on=true got " & $outS[0] & ", want f.count = 42"
 
     engine.launchKernel("structBoolKernel", oDev, (Flags(count: 42'u32, on: false),))
-    engine.copyToHostFromDevice(addr outS[0], oDev, 1)
+    engine.copyToHostFromDevice(outS.toOpenArray(0, 1 - 1), oDev)
     doAssert outS[0] == 0, "on=false got " & $outS[0] & ", want 0"
     echo "  struct bool field: u32 push member, reads [", outS[0], "] on MoltenVK"
 

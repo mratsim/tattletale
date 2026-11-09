@@ -27,7 +27,7 @@ proc runTest() =
     var outVal: array[1, uint32]
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("kernelMain", oDev, ())
-    engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
+    engine.copyToHostFromDevice(outVal.toOpenArray(0, 1 - 1), oDev)
     doAssert outVal[0] == 42
     echo "  OK"
 

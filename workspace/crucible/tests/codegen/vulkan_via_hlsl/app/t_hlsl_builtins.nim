@@ -47,7 +47,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 256)
     engine.launchKernel("main", oDev, ())
     var got: array[256, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 256)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 256 - 1), oDev)
     # grid (1,1,1): global id i in 0..255, group id 0
     for i in 0 ..< 256:
       doAssert got[i] == uint32(i), "coord got " & $got[i] & " at " & $i & ", expected " & $i
@@ -58,7 +58,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 5)
     engine.launchKernel("main", oDev, ())
     var got: array[5, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 5)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 5 - 1), oDev)
     doAssert got[0] == 30'u32, "max(30u, 7u) got " & $got[0]
     doAssert got[1] == 3'u32, "min(3u, 9u) got " & $got[1]
     doAssert got[2] == 5'u32, "abs(-5) got " & $got[2]

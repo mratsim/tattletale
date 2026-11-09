@@ -22,14 +22,14 @@ proc runTest() =
   # Nim: -7 % 3 == -1 (dividend sign). An OpSMod lowering gives 2 (divisor sign).
   engine.launchKernel("modKernel", oDev, ((-7'i32), 3'i32))
   var out32: array[2, int32]
-  engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
   doAssert out32[0] == -1, "-7 % 3 got " & $out32[0] & ", want -1 (dividend sign)"
   doAssert out32[1] == 1, "7 % 3 got " & $out32[1] & ", want 1"
   echo "  signed %: (-7 % 3) = ", out32[0], ", (7 % 3) = ", out32[1], " exact on MoltenVK"
 
   # Nim: 7 % -3 == 1 (dividend sign). An OpSMod lowering gives -2.
   engine.launchKernel("modKernel", oDev, (7'i32, (-3'i32)))
-  engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
   doAssert out32[0] == 1, "7 % -3 got " & $out32[0] & ", want 1 (dividend sign)"
   doAssert out32[1] == -1, "-7 % -3 got " & $out32[1] & ", want -1"
   echo "  signed %: (7 % -3) = ", out32[0], ", (-7 % -3) = ", out32[1], " exact on MoltenVK"

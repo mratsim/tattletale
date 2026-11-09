@@ -52,11 +52,11 @@ proc runTest() =
     engine.ingest(scalarSpv)
     let oDev = engine.allocDevice(float32, 4)
     var oHost: array[4, float32] = [1.0'f32, 2.0, 3.0, 4.0]
-    engine.copyToDeviceFromHost(oDev, addr oHost[0], oHost.len)
+    engine.copyToDeviceFromHost(oDev, oHost)
 
     engine.launchKernel("compoundScalarKernel", oDev, ())
 
-    engine.copyToHostFromDevice(addr oHost[0], oDev, oHost.len)
+    engine.copyToHostFromDevice(oHost, oDev)
     for j in 0 ..< 4:
       doAssert oHost[j] == float32(j + 1) + 1.5'f32,
         "slot " & $j & " got " & $oHost[j] & ", want the input + 2.5 - 1.0"
@@ -69,11 +69,11 @@ proc runTest() =
     engine.ingest(indexedSpv)
     let oDev = engine.allocDevice(float32, 4)
     var oHost: array[4, float32] = [2.0'f32, 4.0, 6.0, 8.0]
-    engine.copyToDeviceFromHost(oDev, addr oHost[0], oHost.len)
+    engine.copyToDeviceFromHost(oDev, oHost)
 
     engine.launchKernel("compoundIndexedKernel", oDev, ())
 
-    engine.copyToHostFromDevice(addr oHost[0], oDev, oHost.len)
+    engine.copyToHostFromDevice(oHost, oDev)
     for j in 0 ..< 4:
       doAssert oHost[j] == (float32(j + 1) * 2.0'f32 + 4.0'f32) * 3.0'f32 / 2.0'f32,
         "slot " & $j & " got " & $oHost[j] & ", want (input + 4) * 3 / 2"

@@ -44,7 +44,7 @@ proc runTest() =
       let dstDev = engine.allocDevice(float32, 1)
       engine.launchKernel("forEachCollapsedKernel", dstDev, ())
       var res: array[1, float32]
-      engine.copyToHostFromDevice(addr res[0], dstDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), dstDev)
       check res[0] == 7.5'f32
 
     test "collapsed index is the flat offset 0":
@@ -53,7 +53,7 @@ proc runTest() =
       let dstDev = engine.allocDevice(float32, 1)
       engine.launchKernel("forEachCollapsedIndexedKernel", dstDev, ())
       var res: array[1, float32]
-      engine.copyToHostFromDevice(addr res[0], dstDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), dstDev)
       check res[0] == 7.5'f32
 
 when isMainModule:

@@ -20,7 +20,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("addressSpaceKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 7'u32
 
 when isMainModule:

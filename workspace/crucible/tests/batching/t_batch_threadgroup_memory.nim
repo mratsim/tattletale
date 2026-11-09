@@ -40,7 +40,7 @@ proc runBatch[E: HwEngine](engine: E) =
     blk = (Blk, 1)
     sharedMem = Blk * sizeof(float32)
   var eager: array[Groups, float32]
-  engine.copyToHostFromDevice(addr eager[0], outD, Groups)
+  engine.copyToHostFromDevice(eager.toOpenArray(0, Groups - 1), outD)
   for g in 0 ..< Groups:
     check eager[g] == Sum
 
@@ -49,7 +49,7 @@ proc runBatch[E: HwEngine](engine: E) =
   batch.enqueue<<(Groups, Blk, Blk * sizeof(float32))>> tgSumKernel(outD)
   batch.submit()
   var batched: array[Groups, float32]
-  engine.copyToHostFromDevice(addr batched[0], outD, Groups)
+  engine.copyToHostFromDevice(batched.toOpenArray(0, Groups - 1), outD)
   for g in 0 ..< Groups:
     check batched[g] == Sum
 

@@ -38,12 +38,12 @@ proc runTest() =
     let aDev = engine.allocDevice(uint32, 2)
     let bDev = engine.allocDevice(uint32, 2)
     let oDev = engine.allocDevice(uint32, 2)
-    engine.copyToDeviceFromHost(aDev, addr aHost[0], 2)
-    engine.copyToDeviceFromHost(bDev, addr bHost[0], 2)
+    engine.copyToDeviceFromHost(aDev, aHost.toOpenArray(0, 2 - 1))
+    engine.copyToDeviceFromHost(bDev, bHost.toOpenArray(0, 2 - 1))
     (aDev, bDev, oDev)
   template readback(oDev: auto, msg: string) =
     var got: array[2, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 2)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 2 - 1), oDev)
     doAssert got == [16'u32, 27'u32], msg & " got " & $got
 
   block:

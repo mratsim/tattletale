@@ -64,9 +64,9 @@ proc runTest() =
       var out32: array[10, int32]
       let dynDev = engine.allocDevice(int32, dynArr.len)
       let oDev = engine.allocDevice(int32, out32.len)
-      engine.copyToDeviceFromHost(dynDev, addr dynArr[0], dynArr.len)
+      engine.copyToDeviceFromHost(dynDev, dynArr)
       engine.launchKernel("staticIntOps", oDev, (dynDev,))
-      engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
+      engine.copyToHostFromDevice(out32, oDev)
       check out32[0] == 11    # Int[10]() + 1
       check out32[1] == 12    # 2 + Int[10]()
       check out32[2] == 30    # Int[10]() * 3

@@ -17,7 +17,7 @@ proc runTest() =
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(int64, buf.len)
   engine.launchKernel("hiddenSubConvKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   doAssert buf[0] == 42, &"hiddenSubConv: got {buf[0]}"
   echo "  OK (test_cuda_hidden_subconv)"
 

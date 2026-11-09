@@ -33,14 +33,14 @@ proc runTest() =
   var cloneRes: array[1, uint32]
   let cDev = engine.allocDevice(uint32, 1)
   engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("cloneKernel", cDev, ())
-  engine.copyToHostFromDevice(addr cloneRes[0], cDev, 1)
+  engine.copyToHostFromDevice(cloneRes.toOpenArray(0, 1 - 1), cDev)
   doAssert cloneRes[0] == 1,
     "thread-addressSpace clone read got " & $cloneRes[0] & ", expected 1"
 
   var smemRes: array[8, uint32]
   let sDev = engine.allocDevice(uint32, 8)
   engine.launchKernel<<(grid: (1, 1), blk: (8, 1))>>("smemCastKernel", sDev, ())
-  engine.copyToHostFromDevice(addr smemRes[0], sDev, 8)
+  engine.copyToHostFromDevice(smemRes.toOpenArray(0, 8 - 1), sDev)
   for i in 0 ..< 8:
     doAssert smemRes[i] == uint32(i) * 3'u32 + 1,
       "slot " & $i & ": got " & $smemRes[i] & ", expected " &

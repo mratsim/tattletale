@@ -27,7 +27,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 8)
       engine.launchKernel("fillKernel", oDev, ())
       var res: array[8, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 8)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 8 - 1), oDev)
       for i in 0 ..< 8:
         check res[i] == uint32(i + 10)
 

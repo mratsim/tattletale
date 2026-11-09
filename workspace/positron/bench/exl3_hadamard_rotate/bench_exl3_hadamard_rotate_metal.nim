@@ -73,9 +73,9 @@ template stageViews(engine: MetalEngine, rows, cols, np: int, pattern, preHost, 
     dstDev = engine.allocDevice(float16, np)
     preDev = engine.allocDevice(float16, cols)
     postDev = engine.allocDevice(float16, cols)
-  engine.copyToDeviceFromHost(srcDev, cast[ptr float16](addr pattern[0]), np)
-  engine.copyToDeviceFromHost(preDev, cast[ptr float16](addr preHost[0]), cols)
-  engine.copyToDeviceFromHost(postDev, cast[ptr float16](addr postHost[0]), cols)
+  engine.copyToDeviceFromHost(srcDev, pattern.toOpenArray(0, np - 1))
+  engine.copyToDeviceFromHost(preDev, preHost.toOpenArray(0, cols - 1))
+  engine.copyToDeviceFromHost(postDev, postHost.toOpenArray(0, cols - 1))
   let
     srcLay = make_layout((rows, cols), (cols, 1))
     lineLay = make_layout((cols,), (1,))
@@ -118,7 +118,7 @@ proc timeIt(engine: MetalEngine, rows, cols, np, iters: int, pattern, preHost, p
       let benchStart = getMonoTime()
       launchIters(engine, rows, cols, int32(iters), dstView, srcView, preView, postView)
       let benchStop = getMonoTime()
-      engine.copyToHostFromDevice(cast[ptr float16](addr pattern[0]), dstView.data, 1)
+      engine.copyToHostFromDevice(pattern.toOpenArray(0, 1 - 1), dstView.data)
       timings[rep] = inNanoseconds(benchStop - benchStart) div iters
   sort(timings)
   timings[1]

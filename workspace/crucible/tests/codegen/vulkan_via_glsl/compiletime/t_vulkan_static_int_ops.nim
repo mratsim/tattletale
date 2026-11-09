@@ -65,11 +65,11 @@ proc runTest() =
       var engine = newEngine(runVulkan)
       engine.ingest(kernelCode)
       let dynDev = engine.allocDevice(int32, 1)
-      engine.copyToDeviceFromHost(dynDev, addr dynArr[0], 1)
+      engine.copyToDeviceFromHost(dynDev, dynArr.toOpenArray(0, 1 - 1))
       let oDev = engine.allocDevice(int32, 10)
       engine.launchKernel("staticIntOps", oDev, (dynDev,))
       var out32: array[10, int32]
-      engine.copyToHostFromDevice(addr out32[0], oDev, 10)
+      engine.copyToHostFromDevice(out32.toOpenArray(0, 10 - 1), oDev)
       check out32[0] == 11    # Int[10]() + 1
       check out32[1] == 12    # 2 + Int[10]()
       check out32[2] == 30    # Int[10]() * 3

@@ -117,10 +117,10 @@ proc runTest() =
       let aDev = engine.allocDevice(uint32, a.len)
       let bDev = engine.allocDevice(uint32, b.len)
       let oDev = engine.allocDevice(uint32, res.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, a)
+      engine.copyToDeviceFromHost(bDev, b)
       engine.launchKernel("t1Kernel", oDev, (aDev, bDev))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "comma form with one interpolated ident":
@@ -130,9 +130,9 @@ proc runTest() =
       var res: array[1, uint32]
       let aDev = engine.allocDevice(uint32, a.len)
       let oDev = engine.allocDevice(uint32, res.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       engine.launchKernel("t2Kernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "comma form with ident + call + arithmetic":
@@ -142,9 +142,9 @@ proc runTest() =
       var res: array[1, uint32]
       let aDev = engine.allocDevice(uint32, a.len)
       let oDev = engine.allocDevice(uint32, res.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       engine.launchKernel("t3Kernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "backtick form on a local variable":
@@ -154,9 +154,9 @@ proc runTest() =
       var res: array[1, uint32]
       let aDev = engine.allocDevice(uint32, a.len)
       let oDev = engine.allocDevice(uint32, res.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
+      engine.copyToDeviceFromHost(aDev, a)
       engine.launchKernel("t4Kernel", oDev, (aDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "triple-quoted multiline string":
@@ -168,10 +168,10 @@ proc runTest() =
       let aDev = engine.allocDevice(uint32, a.len)
       let bDev = engine.allocDevice(uint32, b.len)
       let oDev = engine.allocDevice(uint32, res.len)
-      engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-      engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+      engine.copyToDeviceFromHost(aDev, a)
+      engine.copyToDeviceFromHost(bDev, b)
       engine.launchKernel("t5Kernel", oDev, (aDev, bDev))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
       check res[1] == 13
 
@@ -181,7 +181,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t6Kernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "backtick form on a kernel parameter":
@@ -191,9 +191,9 @@ proc runTest() =
       var res: array[1, uint32]
       let xDev = engine.allocDevice(uint32, x.len)
       let oDev = engine.allocDevice(uint32, res.len)
-      engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(xDev, x)
       engine.launchKernel("t7Kernel", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "comma form on a kernel parameter":
@@ -203,9 +203,9 @@ proc runTest() =
       var res: array[1, uint32]
       let xDev = engine.allocDevice(uint32, x.len)
       let oDev = engine.allocDevice(uint32, res.len)
-      engine.copyToDeviceFromHost(xDev, addr x[0], x.len)
+      engine.copyToDeviceFromHost(xDev, x)
       engine.launchKernel("t8Kernel", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "trailing emit in a non-void device fn survives insertResult":
@@ -214,7 +214,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t10Kernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "call-form emit is not silently dropped (must override the DSL write)":
@@ -223,7 +223,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t12Kernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
     test "every emit item in one pragma renders and the kernel runs":
@@ -232,7 +232,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t15Kernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 2
 
     test "non-emit statement pragma stays a gpuDiscard (kernel compiles and runs)":
@@ -241,7 +241,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("t16Kernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 42
 
 when isMainModule:

@@ -33,7 +33,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 2)
       engine.launchKernel("k", oDev, ())
       var res: array[2, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 2)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
       check res[0] == 4
       check res[1] == 5
 

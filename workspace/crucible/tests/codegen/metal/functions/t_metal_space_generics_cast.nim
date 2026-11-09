@@ -43,7 +43,7 @@ proc runTest() =
   let dev = engine.allocDevice(uint32, 5)
   engine.launchKernel<<(grid: (1, 1), blk: (4, 1))>>("kern", dev, ())
   var got: array[5, uint32]
-  engine.copyToHostFromDevice(addr got[0], dev, 5)
+  engine.copyToHostFromDevice(got.toOpenArray(0, 5 - 1), dev)
   # 1.5'f32 is 0x3FC00000. Each call site must read those bits back through
   # its own instantiation: base callee on device space, clone on threadgroup
   for i in 0 ..< 5:

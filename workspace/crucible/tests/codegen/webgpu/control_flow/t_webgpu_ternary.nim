@@ -34,10 +34,10 @@ proc runTernary(a, b: uint32): array[3, uint32] =
   let aDev = engine.allocDevice(uint32, 1)
   let bDev = engine.allocDevice(uint32, 1)
   let oDev = engine.allocDevice(uint32, 3)
-  engine.copyToDeviceFromHost(aDev, unsafeAddr a, 1)
-  engine.copyToDeviceFromHost(bDev, unsafeAddr b, 1)
+  engine.copyToDeviceFromHost(aDev, [a])
+  engine.copyToDeviceFromHost(bDev, [b])
   engine.launchKernel("ternaryKernel", oDev, (aDev, bDev))
-  engine.copyToHostFromDevice(addr result[0], oDev, 3)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 3 - 1), oDev)
 
 proc runTest() =
   suite "WebGPU - ternary lowering":

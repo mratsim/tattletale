@@ -27,7 +27,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 4)
       engine.launchKernel<<(grid: (1, 1), blk: (4, 1))>>("sqKernel", oDev, (3.5'f32,))
       var res: array[4, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       for i in 0 ..< 4:
         check res[i] == 12.25'f32
 

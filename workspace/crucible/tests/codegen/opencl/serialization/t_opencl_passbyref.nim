@@ -29,7 +29,7 @@ proc runTest() =
   let oDev = engine.allocDevice(uint32, 1)
   engine.launchKernel("kernelMain", oDev, ())
   var out32: array[1, uint32]
-  engine.copyToHostFromDevice(addr out32[0], oDev, 1)
+  engine.copyToHostFromDevice(out32.toOpenArray(0, 1 - 1), oDev)
   doAssert out32[0] == 1'u32,
     "kernelMain readback got " & $out32[0] & ", want 1 (s.data[0] through the by-ref call)"
 

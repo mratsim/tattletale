@@ -28,11 +28,11 @@ proc runTest() =
       engine.ingest(renamedCl)
       var a: array[1, uint32] = [41'u32]
       let aDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("my_custom_entry", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
     test "bare exportc keeps the proc name and launches":
@@ -40,11 +40,11 @@ proc runTest() =
       engine.ingest(bareCl)
       var a: array[1, uint32] = [40'u32]
       let aDev = engine.allocDevice(uint32, 1)
-      engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+      engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("bareKernel", oDev, (aDev,))
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 42
 
 when isMainModule:

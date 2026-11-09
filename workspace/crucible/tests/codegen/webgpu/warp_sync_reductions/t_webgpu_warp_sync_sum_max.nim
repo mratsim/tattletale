@@ -60,7 +60,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("sumScalar", oDev, ())
       var res: array[32, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 32 - 1), oDev)
       # sum of lanes 0..31 = 496, every lane holds the total
       for lane in 0 ..< 32:
         check res[lane] == 496.0
@@ -71,7 +71,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 32 * 4)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("sumPartials", oDev, ())
       var res: array[32 * 4, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32 * 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 32 * 4 - 1), oDev)
       # partial j: thread t holds t + j, summed over t = 496 + 32*j
       for lane in 0 ..< 32:
         for j in 0 ..< 4:
@@ -83,7 +83,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 32)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("maxScalar", oDev, ())
       var res: array[32, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 32 - 1), oDev)
       # max of lanes 0..31 = 31, every lane holds it
       for lane in 0 ..< 32:
         check res[lane] == 31.0
@@ -94,7 +94,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 32 * 4)
       engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>("maxPartials", oDev, ())
       var res: array[32 * 4, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32 * 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 32 * 4 - 1), oDev)
       # partial j: thread t holds t + j, maxed over t = 31 + j
       for lane in 0 ..< 32:
         for j in 0 ..< 4:

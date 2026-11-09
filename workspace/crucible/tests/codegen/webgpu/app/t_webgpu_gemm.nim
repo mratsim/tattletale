@@ -41,7 +41,7 @@ proc runTest() =
     var res: array[4, uint32]
     let oDev = engine.allocDevice(uint32, res.len)
     engine.launchKernel("gemmKernel", oDev, ())
-    engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+    engine.copyToHostFromDevice(res, oDev)
     let expected = [58'u32, 64, 139, 154]
     for i in 0 ..< 4:
       doAssert res[i] == expected[i], &"C[{i}]: {res[i]} != {expected[i]}"

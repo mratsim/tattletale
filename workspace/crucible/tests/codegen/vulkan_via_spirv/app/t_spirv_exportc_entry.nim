@@ -46,7 +46,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("my_custom_entry", oDev, ())
     var res: array[1, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, 1)
+    engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
     doAssert res[0] == 42, "renamed entry got " & $res[0] & ", want 42"
     echo "  renamed entry: OpEntryPoint \"my_custom_entry\", launch exact on MoltenVK"
 
@@ -57,7 +57,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("bareKernel", oDev, ())
     var res: array[1, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, 1)
+    engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
     doAssert res[0] == 43, "bare entry got " & $res[0] & ", want 43"
     echo "  bare entry: OpEntryPoint \"bareKernel\", launch exact on MoltenVK"
 

@@ -27,7 +27,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, 32)
       engine.launchKernel("discardScanKernel", oDev, ())
       var res: array[32, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 32)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 32 - 1), oDev)
       for lane in 0 ..< 32:
         check res[lane] == float32(lane)
 

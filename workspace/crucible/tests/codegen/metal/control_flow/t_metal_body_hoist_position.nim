@@ -55,7 +55,7 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 5)
       engine.launchKernel<<(grid: (1, 1), blk: (1, 1))>>("bodyHoistPos", oDev, ())
       var res: array[5, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 5)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 5 - 1), oDev)
       check res[1] == 0   # statement 1 saw tick before any increment
       check res[4] == 1   # hoist saw tick = 1: after stmt 2, before stmt 4
       check res[3] == 2   # hoisted code ran before its own statement's assignment
@@ -69,9 +69,9 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 5)
       var res: array[5, int32]
       var x = [0'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("bodyHoistIfExpr", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 5)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 5 - 1), oDev)
       check res[1] == 0   # statement 1 saw tick before any increment
       check res[4] == 1   # branch statement's effect saw tick = 1, not 11
       check res[3] == 2
@@ -84,9 +84,9 @@ proc runTest() =
       let oDev = engine.allocDevice(int32, 5)
       var res: array[5, int32]
       var x = [0'i32]
-      engine.copyToDeviceFromHost(xDev, addr x[0], 1)
+      engine.copyToDeviceFromHost(xDev, x.toOpenArray(0, 1 - 1))
       engine.launchKernel("bodyHoistCondSplice", oDev, (xDev,))
-      engine.copyToHostFromDevice(addr res[0], oDev, 5)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 5 - 1), oDev)
       check res[1] == 0   # statement 1 saw tick before any increment
       check res[4] == 1   # condition splice saw tick = 1, not 11
       check res[3] == 2

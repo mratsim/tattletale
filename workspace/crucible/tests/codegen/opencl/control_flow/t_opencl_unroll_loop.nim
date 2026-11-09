@@ -22,7 +22,7 @@ proc runTest() =
   let oDev = engine.allocDevice(uint32, 4)
   engine.launchKernel("unrollKernel", oDev, ())
   var res: array[4, uint32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 4)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
   for i in 0 ..< 4:
     doAssert res[i] == uint32(i), "output[" & $i & "] = " & $res[i]
   echo "  OK - t_opencl_unroll_loop"

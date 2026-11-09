@@ -63,10 +63,10 @@ proc runTest() =
       var sentinel: array[N, float32]
       for i in 0 ..< N:
         sentinel[i] = -7.0'f32
-      engine.copyToDeviceFromHost(oDev, addr sentinel[0], N)
+      engine.copyToDeviceFromHost(oDev, sentinel.toOpenArray(0, N - 1))
       engine.launchKernel<<(grid: (N, 1), blk: (1, 1))>>("copyKernel", oDev, ())
       var got: array[N, float32]
-      engine.copyToHostFromDevice(addr got[0], oDev, N)
+      engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), oDev)
       # CPU reference over the same inputs:
       # b[i] = i*1.5 + 0.25, a = c = b, thread 0 copies a into d,
       # every d element gains 1, output[t] = b[3] + b[4] + d[t]
@@ -81,7 +81,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, N)
       engine.launchKernel<<(grid: (1, 1), blk: (N, 1))>>("copySmem", oDev, ())
       var got: array[N, float32]
-      engine.copyToHostFromDevice(addr got[0], oDev, N)
+      engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), oDev)
       for i in 0 ..< N:
         check got[i] == float32(i) * 1.5'f32 + 0.25'f32
 
@@ -91,7 +91,7 @@ proc runTest() =
       let oDev = engine.allocDevice(float32, N)
       engine.launchKernel<<(grid: (N, 1), blk: (1, 1))>>("copyFromConst", oDev, ())
       var got: array[N, float32]
-      engine.copyToHostFromDevice(addr got[0], oDev, N)
+      engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), oDev)
       let want = [1.5'f32, 2.5'f32, 3.5'f32, 4.5'f32, 5.5'f32, 6.5'f32, 7.5'f32, 8.5'f32]
       for i in 0 ..< N:
         check got[i] == want[i]

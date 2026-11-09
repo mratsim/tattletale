@@ -65,9 +65,9 @@ proc runTest() =
   engine.launchKernel("genericImplKernel", oDevImpl, ())
   engine.launchKernel("sizedKernel", oDevFallback, ())
   engine.launchKernel("testIntGeneric", oDevInt, ())
-  engine.copyToHostFromDevice(addr bufImpl[0], oDevImpl, bufImpl.len)
-  engine.copyToHostFromDevice(addr bufFallback[0], oDevFallback, bufFallback.len)
-  engine.copyToHostFromDevice(addr bufInt[0], oDevInt, bufInt.len)
+  engine.copyToHostFromDevice(bufImpl, oDevImpl)
+  engine.copyToHostFromDevice(bufFallback, oDevFallback)
+  engine.copyToHostFromDevice(bufInt, oDevInt)
   doAssert bufImpl[0] == 30, &"objectTy: got {bufImpl[0]}"
   doAssert bufImpl[1] == 42, &"staticTy: got {bufImpl[1]}"
   doAssert bufFallback[0] == 1, &"SizedArr[4].data[0]: got {bufFallback[0]}, expected 1"

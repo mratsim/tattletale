@@ -38,10 +38,10 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 4)
       # Iteration counts must not depend on allocDevice's initial contents.
       let start: array[4, uint32] = [1'u32, 1'u32, 1'u32, 1'u32]
-      engine.copyToDeviceFromHost(oDev, unsafeAddr start[0], 4)
+      engine.copyToDeviceFromHost(oDev, start.toOpenArray(0, 4 - 1))
       engine.launchKernel("orWhileKernel", oDev, ())
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[2] == 4'u32
       check res[0] == 5'u32
       check res[1] == 5'u32
@@ -51,10 +51,10 @@ proc runTest() =
       engine.ingest(chainWhileMsl)
       let oDev = engine.allocDevice(uint32, 4)
       let start: array[4, uint32] = [1'u32, 1'u32, 1'u32, 1'u32]
-      engine.copyToDeviceFromHost(oDev, unsafeAddr start[0], 4)
+      engine.copyToDeviceFromHost(oDev, start.toOpenArray(0, 4 - 1))
       engine.launchKernel("andWhileKernel", oDev, ())
       var res: array[4, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[2] == 2'u32
       check res[0] == 3'u32
 

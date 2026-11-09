@@ -124,7 +124,7 @@ proc runCase(engine: MetalEngine, shape, srcStrides, dstStrides: tuple, axis: st
         grid = (gx, 1)
         blk = (32, 1)
       let benchStop = getMonoTime()
-      engine.copyToHostFromDevice(addr dstHost.data[0], dstDev.data, 1)
+      engine.copyToHostFromDevice(dstHost.data.toOpenArray(0, 1 - 1), dstDev.data)
       timings[rep] = inNanoseconds(benchStop - benchStart) div iters
   sort(timings)
   let gbps = np.float * 12.0 / (timings[1].float / 1e9) / 1e9

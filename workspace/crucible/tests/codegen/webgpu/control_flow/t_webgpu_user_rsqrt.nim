@@ -25,7 +25,7 @@ proc runTest() =
   let oDev = engine.allocDevice(float32, 1)
   engine.launchKernel("rsqrtKernel", oDev, ())
   var res: array[1, float32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 1)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
   doAssert res[0] == 0.125'f32, "output[0] = " & $res[0] & ", expected the user proc's 0.5/4"
   echo "  OK - t_webgpu_user_rsqrt"
   flushFile(stdout)

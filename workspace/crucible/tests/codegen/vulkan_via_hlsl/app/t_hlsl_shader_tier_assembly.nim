@@ -52,7 +52,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("main", oDev, ())
     var got: array[1, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 1)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 1 - 1), oDev)
     doAssert got[0] == 1045'u32, "fvD3D12 device-fn chain got " & $got[0] & ", want 1045"
     echo "  fvD3D12 device-fn chain: [", got[0], "] exact readback (widen(45))"
 
@@ -64,7 +64,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("main", oDev, (Pair(a: 20'i32, b: 22'i32),))
     var got: array[1, uint32]
-    engine.copyToHostFromDevice(addr got[0], oDev, 1)
+    engine.copyToHostFromDevice(got.toOpenArray(0, 1 - 1), oDev)
     doAssert got[0] == 1045'u32, "fvVulkan assembly got " & $got[0] & ", want 1045"
     echo "  fvVulkan assembly: [", got[0], "] exact readback (20 + 22 + widen(3))"
 

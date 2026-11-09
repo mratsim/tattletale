@@ -42,7 +42,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 3)
       engine.launchKernel("xorKernel", oDev, ())
       var res: array[3, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check res[1] == 7'u32  # readFlag ran, its store landed
       check res[2] == 1'u32  # false xor true is true
 
@@ -52,7 +52,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 3)
       engine.launchKernel("xorSymKernel", oDev, ())
       var res: array[3, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 3)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 3 - 1), oDev)
       check res[1] == 0'u32  # true xor true is false
       check res[2] == 1'u32  # true xor false is true
 

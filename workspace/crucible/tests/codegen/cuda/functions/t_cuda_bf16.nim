@@ -34,11 +34,11 @@ proc runTest() =
   let aDev = engine.allocDevice(bfloat16, 4)
   let bDev = engine.allocDevice(bfloat16, 4)
   let oDev = engine.allocDevice(bfloat16, 4)
-  engine.copyToDeviceFromHost(aDev, addr aHost[0], 4)
-  engine.copyToDeviceFromHost(bDev, addr bHost[0], 4)
+  engine.copyToDeviceFromHost(aDev, aHost.toOpenArray(0, 4 - 1))
+  engine.copyToDeviceFromHost(bDev, bHost.toOpenArray(0, 4 - 1))
   engine.launchKernel<<(1, 4)>>("bf16MadKernel", oDev, (aDev, bDev))
   var mad: array[4, bfloat16]
-  engine.copyToHostFromDevice(addr mad[0], oDev, 4)
+  engine.copyToHostFromDevice(mad.toOpenArray(0, 4 - 1), oDev)
   for k in 0 ..< 4:
     let refVal = toBf16(toBf32(aHost[k]) * toBf32(bHost[k]) + toBf32(aHost[k]))
     doAssert cast[uint16](mad[k]) == cast[uint16](refVal),
@@ -51,10 +51,10 @@ proc runTest() =
   let inHost = [1.0'f32, 3.14159'f32, 3.3895e38'f32, 0.0001'f32]
   let iDev = engine.allocDevice(float32, 4)
   let rDev = engine.allocDevice(float32, 4)
-  engine.copyToDeviceFromHost(iDev, addr inHost[0], 4)
+  engine.copyToDeviceFromHost(iDev, inHost.toOpenArray(0, 4 - 1))
   engine.launchKernel<<(1, 4)>>("bf16RoundTripKernel", rDev, (iDev,))
   var res: array[4, float32]
-  engine.copyToHostFromDevice(addr res[0], rDev, 4)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), rDev)
   for k in 0 ..< 4:
     let refVal = toBf32(toBf16(inHost[k]))
     doAssert abs(res[k] - refVal) <= abs(refVal) * 1e-6'f32,

@@ -33,7 +33,7 @@ proc runTest() =
       engine.ingest(kernelBasic)
       let oB = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelBasic", oB, ())
-      engine.copyToHostFromDevice(addr output[0], oB, output.len)
+      engine.copyToHostFromDevice(output, oB)
       check output[0] == 18
       check output[1] == 8
       check output[2] == 65
@@ -122,7 +122,7 @@ proc runTest() =
       engine.ingest(kernelStruct)
       let oS = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelStruct", oS, ())
-      engine.copyToHostFromDevice(addr output[0], oS, output.len)
+      engine.copyToHostFromDevice(output, oS)
       check output[0] == 10
       check output[1] == 4
       check output[2] == 21
@@ -140,7 +140,7 @@ proc runTest() =
       engine.ingest(kernelStruct2)
       let oS2 = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelStruct2", oS2, ())
-      engine.copyToHostFromDevice(addr output[0], oS2, output.len)
+      engine.copyToHostFromDevice(output, oS2)
       check output[0] == 17
       check output[1] == 11
       check output[2] == 42
@@ -158,7 +158,7 @@ proc runTest() =
       engine.ingest(kernelBoth)
       let oBoth = engine.allocDevice(int32, output.len)
       engine.launchKernel<<(1, 1)>>("kernelBoth", oBoth, ())
-      engine.copyToHostFromDevice(addr output[0], oBoth, output.len)
+      engine.copyToHostFromDevice(output, oBoth)
       check output[0] == 10
       check output[1] == 17
 

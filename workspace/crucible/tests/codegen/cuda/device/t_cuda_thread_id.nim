@@ -95,7 +95,7 @@ proc runTest() =
     var buf: array[4, uint32]
     let o0 = engine.allocDevice(uint32, buf.len)
     engine.launchKernel<<(1, 1)>>("threadIdKernel", o0, ())
-    engine.copyToHostFromDevice(addr buf[0], o0, buf.len)
+    engine.copyToHostFromDevice(buf, o0)
     doAssert buf[0] == 0
     doAssert buf[1] == 0
     doAssert buf[2] == 0
@@ -108,7 +108,7 @@ proc runTest() =
     var rec: array[3 * 5 * recordLen, uint32]
     let o1 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(3, 5)>>("threadState1d", o1, ())
-    engine.copyToHostFromDevice(addr rec[0], o1, rec.len)
+    engine.copyToHostFromDevice(rec, o1)
     for b in 0 ..< 3:
       for t in 0 ..< 5:
         let gid = b * 5 + t
@@ -125,7 +125,7 @@ proc runTest() =
     var rec: array[gx * gy * bx * by * recordLen, uint32]
     let o2 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(grid: (gx, gy), blk: (bx, by))>>("threadState2d", o2, ())
-    engine.copyToHostFromDevice(addr rec[0], o2, rec.len)
+    engine.copyToHostFromDevice(rec, o2)
     for byy in 0 ..< gy:
       for bxx in 0 ..< gx:
         let blockId = byy * gx + bxx
@@ -150,7 +150,7 @@ proc runTest() =
     var rec: array[gx * gy * gz * bx * by * bz * recordLen, uint32]
     let o3 = engine.allocDevice(uint32, rec.len)
     engine.launchKernel<<(grid: (gx, gy, gz), blk: (bx, by, bz))>>("threadState3d", o3, ())
-    engine.copyToHostFromDevice(addr rec[0], o3, rec.len)
+    engine.copyToHostFromDevice(rec, o3)
     for bzz in 0 ..< gz:
       for byy in 0 ..< gy:
         for bxx in 0 ..< gx:

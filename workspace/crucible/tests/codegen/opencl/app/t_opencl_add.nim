@@ -76,11 +76,11 @@ proc runTest() =
 
     let aDev = engine.allocDevice(uint32, a.len)
     let bDev = engine.allocDevice(uint32, b.len)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     let oDev = engine.allocDevice(uint32, 2)
     engine.launchKernel("addKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
 
     echo "  addKernel: [10,20] + [1,2] = [", out32[0], ", ", out32[1], "]"
     doAssert out32[0] == 11
@@ -97,11 +97,11 @@ proc runTest() =
 
     let aDev = engine.allocDevice(uint32, a.len)
     let bDev = engine.allocDevice(uint32, b.len)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     let oDev = engine.allocDevice(uint32, 2)
     engine.launchKernel("vec2AddKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, 2)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 2 - 1), oDev)
 
     echo "  vec2AddKernel: Vec2(100,200) + Vec2(3,4) = (", out32[0], ", ", out32[1], ")"
     doAssert out32[0] == 103
@@ -118,11 +118,11 @@ proc runTest() =
 
     let aDev = engine.allocDevice(uint32, a.len)
     let bDev = engine.allocDevice(uint32, b.len)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     let oDev = engine.allocDevice(uint32, 1)
     engine.launchKernel("maxKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr outVal[0], oDev, 1)
+    engine.copyToHostFromDevice(outVal.toOpenArray(0, 1 - 1), oDev)
 
     echo "  maxKernel: max(42, 17) = ", outVal[0]
     doAssert outVal[0] == 42

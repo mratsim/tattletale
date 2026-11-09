@@ -43,10 +43,10 @@ proc runTest() =
       engine.ingest(floatCode)
       var inputs: array[2, float32] = [-2.5'f32, 1.5'f32]
       let oDev = engine.allocDevice(float32, 5)
-      engine.copyToDeviceFromHost(oDev, addr inputs[0], 2)
+      engine.copyToDeviceFromHost(oDev, inputs.toOpenArray(0, 2 - 1))
       engine.launchKernel("floatProbe", oDev, ())
       var res: array[5, float32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 5)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 5 - 1), oDev)
       check res[2] == -2.5'f32
       check res[3] == -2.5'f32
       check res[4] == 7.0'f32
@@ -55,10 +55,10 @@ proc runTest() =
       engine.ingest(intCode)
       var inputs: array[2, int32] = [9'i32, -4'i32]
       let oDev = engine.allocDevice(int32, 4)
-      engine.copyToDeviceFromHost(oDev, addr inputs[0], 2)
+      engine.copyToDeviceFromHost(oDev, inputs.toOpenArray(0, 2 - 1))
       engine.launchKernel("intProbe", oDev, ())
       var res: array[4, int32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 4)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
       check res[2] == -4'i32
       check res[3] == 9'i32
 

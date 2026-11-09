@@ -25,12 +25,12 @@ proc runTest() =
                 engine.allocDevice(uint64, 4), engine.allocDevice(uint64, 4)]
     var seed: array[4, uint64] = [7'u64, 8'u64, 9'u64, 10'u64]
     for i in 0 ..< 4:
-      engine.copyToDeviceFromHost(devs[i], addr seed[0], seed.len)
+      engine.copyToDeviceFromHost(devs[i], seed)
     engine.launchKernel("k", sDev, (devs[0], devs[1], devs[2], devs[3]))
-    var got: uint32
-    engine.copyToHostFromDevice(addr got, sDev, 1)
+    var got: array[1, uint32]
+    engine.copyToHostFromDevice(got, sDev, 1)
     for i in 0 ..< 4:
-    doAssert got == 10'u32, &"ps[0][1] = ps[2][3]: {got} != 10"
+    doAssert got[0] == 10'u32, &"ps[0][1] = ps[2][3]: {got} != 10"
     echo "  OK — reference block declared from a nested array-of-refs pointee"
 
 when isMainModule:

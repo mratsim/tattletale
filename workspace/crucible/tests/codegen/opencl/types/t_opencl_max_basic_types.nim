@@ -42,10 +42,10 @@ proc runTest() =
       engine.ingest(kernelCode)
       var out32: array[9, float32]
       let dDev = engine.allocDevice(float32, dynArr.len)
-      engine.copyToDeviceFromHost(dDev, addr dynArr[0], dynArr.len)
+      engine.copyToDeviceFromHost(dDev, dynArr)
       let oDev = engine.allocDevice(float32, 9)
       engine.launchKernel("maxBasic", oDev, (dDev,))
-      engine.copyToHostFromDevice(addr out32[0], oDev, 9)
+      engine.copyToHostFromDevice(out32.toOpenArray(0, 9 - 1), oDev)
       check out32[0] == 9.0    # max(2.5, 9.0)
       check out32[1] == 7.25   # max(3.5, 7.25)
       check out32[2] == 9.0    # max(9.0, 2.5)

@@ -186,7 +186,7 @@ proc jaggedAttnReplayCase*(engine: MetalEngine, Elem: typedesc, name: string, gr
           JaggedAttnTile, 64) do:
         grid = (gridX, meta.H, meta.numSeqs)
         blk = (32, 1)
-    engine.copyToHostFromDevice(addr oStage.data[0], oDev.data, oStage.len())
+    engine.copyToHostFromDevice(oStage.data.toOpenArray(0, oStage.len() - 1), oDev.data)
     result = newSeq[uint32](oStage.len())
     for i in 0 ..< oStage.len():
       when Elem is float16:
@@ -357,7 +357,7 @@ proc jaggedAttnDenseCrossCheck*(engine: MetalEngine, Elem: typedesc, name: strin
       meta.scale, meta.numSeqs, meta.H, meta.Nkv, maxKv, 64, 64) do:
     grid = (1, 1, 1)
     blk = (32, 1)
-  engine.copyToHostFromDevice(addr oDense.data[0], oDenseDev.data, oDense.len())
+  engine.copyToHostFromDevice(oDense.data.toOpenArray(0, oDense.len() - 1), oDenseDev.data)
 
   var
     exact, djBad, doBad = 0

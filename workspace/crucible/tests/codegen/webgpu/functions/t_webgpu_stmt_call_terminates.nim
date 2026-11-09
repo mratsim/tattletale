@@ -24,7 +24,7 @@ proc runTest() =
       var res: array[8, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel<<(grid: (1, 1, 1), blk: (4, 1))>>("bump", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       for i in 0 ..< 4:
         check res[i] == 1'u32
       for i in 4 ..< 8:

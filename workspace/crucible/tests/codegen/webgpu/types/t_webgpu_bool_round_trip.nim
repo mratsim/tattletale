@@ -32,9 +32,9 @@ proc launchAndRead(flag: uint32): array[2, uint32] =
   let oDev = engine.allocDevice(uint32, 2)
   let fDev = engine.allocDevice(uint32, 1)
   var flagBuf: array[1, uint32] = [flag]
-  engine.copyToDeviceFromHost(fDev, addr flagBuf[0], 1)
+  engine.copyToDeviceFromHost(fDev, flagBuf.toOpenArray(0, 1 - 1))
   engine.launchKernel("boolRoundTrip", oDev, (fDev,))
-  engine.copyToHostFromDevice(addr result[0], oDev, 2)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 2 - 1), oDev)
 
 proc runTest() =
   block:  # a set flag: b true, c false

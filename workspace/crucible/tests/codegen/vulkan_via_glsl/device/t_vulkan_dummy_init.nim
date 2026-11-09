@@ -31,7 +31,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var buf: array[1, uint32]
-      engine.copyToHostFromDevice(addr buf[0], oDev, 1)
+      engine.copyToHostFromDevice(buf.toOpenArray(0, 1 - 1), oDev)
       check buf[0] == 1
 
     test "tuple of dummy structs const":
@@ -41,7 +41,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("dummyKernel", oDev, ())
       var buf: array[1, uint32]
-      engine.copyToHostFromDevice(addr buf[0], oDev, 1)
+      engine.copyToHostFromDevice(buf.toOpenArray(0, 1 - 1), oDev)
       check buf[0] == 1
 
 when isMainModule:

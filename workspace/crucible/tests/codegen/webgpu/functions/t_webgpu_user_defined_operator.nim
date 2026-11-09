@@ -114,14 +114,14 @@ proc runTest() =
     var b: array[1, uint32] = [5'u32]
     let aDev = engine.allocDevice(uint32, a.len)
     let bDev = engine.allocDevice(uint32, b.len)
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
 
     echo "--- basicKernel ---"
     var out32: array[10, uint32]
     let oDev = engine.allocDevice(uint32, out32.len)
     engine.launchKernel("basicKernel", oDev, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32[0], oDev, out32.len)
+    engine.copyToHostFromDevice(out32, oDev)
     echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
          ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
     doAssert out32[0] == 18
@@ -140,12 +140,12 @@ proc runTest() =
     engine.ingest(structWgsl)
     a[0] = 7
     b[0] = 3
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     var out32b: array[10, uint32]
     let oDevB = engine.allocDevice(uint32, out32b.len)
     engine.launchKernel("structKernel", oDevB, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32b[0], oDevB, out32b.len)
+    engine.copyToHostFromDevice(out32b, oDevB)
     echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
          ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
     doAssert out32b[0] == 10
@@ -164,12 +164,12 @@ proc runTest() =
     engine.ingest(structWgsl2)
     a[0] = 14
     b[0] = 3
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     var out32c: array[10, uint32]
     let oDevC = engine.allocDevice(uint32, out32c.len)
     engine.launchKernel("structKernel2", oDevC, (aDev, bDev))
-    engine.copyToHostFromDevice(addr out32c[0], oDevC, out32c.len)
+    engine.copyToHostFromDevice(out32c, oDevC)
     echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
          ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
     doAssert out32c[0] == 17

@@ -31,7 +31,7 @@ proc runTest() =   # private: engines are destroyed at proc return
       let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel("declCondKernel", oDev, ())
       var output: array[2, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 2)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 2 - 1), oDev)
       # Nim re-runs the condition block before every test: tests = 3 admitted
       # iterations plus the failing test, i stops at the recomputed bound.
       check output[0] == 3

@@ -141,7 +141,7 @@ proc checkRmsnorm*[E: HwEngine](rng: var Rand, engine: E, shape, srcStrides, dst
     engine.launchDeviceFn rmsnorm(gotDev, engine.bridge(src), eps, axis) do:
       grid = (rng.rand(1 .. 8), 1)
       blk = (32, 1)
-  engine.copyToHostFromDevice(addr got.data[0], gotDev.data, toInt(got.layout.cosize()))
+  engine.copyToHostFromDevice(got.data.toOpenArray(0, toInt(got.layout.cosize()) - 1), gotDev.data)
   let report = allClose(got.view(), expect.view(), rtol = 1e-5, abstol = 1e-4)
   echo msg, ": worst |d| = ", formatFloat(report.worst, ffScientific, 3)
   doAssert report.bad == 0, msg & ": " & $report.bad & " mismatched elements"

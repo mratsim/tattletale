@@ -40,10 +40,10 @@ proc runKernel(artifact: string, launcher: string): seq[float32] =
   inp[0] = 1.0'f32
   var outp = newSeq[float32](1)
   let iDev = engine.allocDevice(float32, 1)
-  engine.copyToDeviceFromHost(iDev, addr inp[0], 1)
+  engine.copyToDeviceFromHost(iDev, inp.toOpenArray(0, 1 - 1))
   let oDev = engine.allocDevice(float32, 1)
   engine.launchKernel<<(grid: (1, 1), blk: (32, 1))>>(launcher, oDev, (iDev,))
-  engine.copyToHostFromDevice(addr outp[0], oDev, 1)
+  engine.copyToHostFromDevice(outp.toOpenArray(0, 1 - 1), oDev)
   result = outp
 
 proc runTest() =

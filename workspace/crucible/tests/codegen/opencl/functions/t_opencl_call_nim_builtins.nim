@@ -20,7 +20,7 @@ template runMulKernel(t: typedesc; expected0, expected1: float32) =
     var res: array[2, float32]
     let oDev = engine.allocDevice(float32, 2)
     engine.launchKernel("mulKernel", oDev, ())
-    engine.copyToHostFromDevice(addr res[0], oDev, 2)
+    engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
     check res[0] == expected0
     check res[1] == expected1
 
@@ -38,7 +38,7 @@ template runFloatMulKernel(t: typedesc; expected0, expected1: float32) =
     var res: array[2, float32]
     let oDev = engine.allocDevice(float32, 2)
     engine.launchKernel("mulKernel", oDev, ())
-    engine.copyToHostFromDevice(addr res[0], oDev, 2)
+    engine.copyToHostFromDevice(res.toOpenArray(0, 2 - 1), oDev)
     check res[0] == expected0
     check res[1] == expected1
 

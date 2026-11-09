@@ -90,7 +90,7 @@ proc checkGemm*[E: HwEngine, TAcc, TIn](
     grid = (rng.rand(1 .. 2 * ceil_div(M, MT)),
             rng.rand(1 .. 2 * ceil_div(N, NT)))
     blk = (32, 1)
-  engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, dHost.len)
+  engine.copyToHostFromDevice(dHost.data.toOpenArray(0, dHost.len - 1), dDev.data)
   gemm_ref(refHost, cs.alpha, aHost, bHost, cs.beta, cHost)
   assertAllClose(dHost.view(), refHost.view(), rtol = 1e-5, abstol = 1e-3,
     msg = "gemm " & $M & "x" & $N & "x" & $K & " strides " & $aStrides & " " &

@@ -25,11 +25,11 @@ proc runTest() =
   engine.ingest(renamedHlsl)
   var a: array[1, uint32] = [41'u32]
   let aDev = engine.allocDevice(uint32, 1)
-  engine.copyToDeviceFromHost(aDev, addr a[0], 1)
+  engine.copyToDeviceFromHost(aDev, a.toOpenArray(0, 1 - 1))
   let oDev = engine.allocDevice(uint32, 1)
   engine.launchKernel("my_custom_entry", oDev, (aDev,))
   var res: array[1, uint32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 1)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
   doAssert res[0] == 42, "renamed entry got " & $res[0] & ", want 42"
 
   # Bare HLSL keeps `main` as the entry
@@ -37,11 +37,11 @@ proc runTest() =
   bareEngine.ingest(bareHlsl)
   var b: array[1, uint32] = [40'u32]
   let bDev = bareEngine.allocDevice(uint32, 1)
-  bareEngine.copyToDeviceFromHost(bDev, addr b[0], 1)
+  bareEngine.copyToDeviceFromHost(bDev, b.toOpenArray(0, 1 - 1))
   let bOut = bareEngine.allocDevice(uint32, 1)
   bareEngine.launchKernel("main", bOut, (bDev,))
   var bareRes: array[1, uint32]
-  bareEngine.copyToHostFromDevice(addr bareRes[0], bOut, 1)
+  bareEngine.copyToHostFromDevice(bareRes.toOpenArray(0, 1 - 1), bOut)
   doAssert bareRes[0] == 42, "bare entry got " & $bareRes[0] & ", want 42"
   echo "  HLSL exportc entry: renamed and bare kernels exact on MoltenVK"
 

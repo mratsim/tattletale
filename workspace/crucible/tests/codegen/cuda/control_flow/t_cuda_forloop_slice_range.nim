@@ -29,7 +29,7 @@ proc runTest() =
       engine.ingest(kernel)
       let oDev = engine.allocDevice(float32, buf.len)
       engine.launchKernel<<(1, 1)>>("kernel", oDev, ())
-      engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+      engine.copyToHostFromDevice(buf, oDev)
       check buf[0] == 1.0'f32
       check buf[127] == 1.0'f32
 

@@ -95,11 +95,11 @@ proc deviceName*(engine: WebgpuEngine): string {.inline.} =
 proc allocDevice*[T](engine: WebgpuEngine, _: typedesc[T], len: int): DeviceMem[WGPUBuffer, T] {.inline.} =
   DeviceMem[WGPUBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: WebgpuEngine, dst: DeviceMem[WGPUBuffer, T], src: ptr T or ptr UncheckedArray[T], n: int) {.inline.} =
-  engine.copyToDeviceFromHostImpl(dst.mem, src, n * sizeof(T))
+proc copyToDeviceFromHost*[T](engine: WebgpuEngine, dst: DeviceMem[WGPUBuffer, T], src: openArray[T]) {.inline.} =
+  engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: ptr T or ptr UncheckedArray[T], src: DeviceMem[WGPUBuffer, T], n: int) {.inline.} =
-  engine.copyToHostFromDeviceImpl(dst, src.mem, n * sizeof(T))
+proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: var openArray[T], src: DeviceMem[WGPUBuffer, T]) {.inline.} =
+  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization

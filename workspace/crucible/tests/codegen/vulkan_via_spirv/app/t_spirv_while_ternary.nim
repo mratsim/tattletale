@@ -55,7 +55,7 @@ proc runTest() =
   let oDev = engine.allocDevice(uint32, 4)
   engine.launchKernel("whileTernaryKernel", oDev, ())
   var res: array[4, uint32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 4)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 4 - 1), oDev)
   doAssert res[0] == 100'u32, "slot 0 takes the ternary then-branch, got " & $res[0]
   doAssert res[1] == 1'u32 and res[2] == 2'u32,
     "slots 1 and 2 take the ternary else-branch, got " & $res[1] & ", " & $res[2]
@@ -65,7 +65,7 @@ proc runTest() =
   let o2 = engine.allocDevice(uint32, 3)
   engine.launchKernel("ternCondKernel", o2, ())
   var res2: array[3, uint32]
-  engine.copyToHostFromDevice(addr res2[0], o2, 3)
+  engine.copyToHostFromDevice(res2.toOpenArray(0, 3 - 1), o2)
   doAssert res2[0] == 0'u32 and res2[1] == 1'u32,
     "the ternary-condition loop runs its body once per admitted iteration, got " & $res2
   doAssert res2[2] == 2'u32,

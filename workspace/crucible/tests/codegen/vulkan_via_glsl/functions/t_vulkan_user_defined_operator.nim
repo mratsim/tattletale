@@ -119,11 +119,11 @@ proc runTest() =
     let oDev = engine.allocDevice(int32, 10)
 
     echo "--- basicKernel ---"
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("basicKernel", oDev, (aDev, bDev))
     var out32: array[10, int32]
-    engine.copyToHostFromDevice(addr out32[0], oDev, 10)
+    engine.copyToHostFromDevice(out32.toOpenArray(0, 10 - 1), oDev)
     echo "  [13,5] -> [", out32[0], ", ", out32[1], ", ", out32[2], ", ", out32[3], ", ", out32[4],
          ", ", out32[5], ", ", out32[6], ", ", out32[7], ", ", out32[8], ", ", out32[9], "]"
     doAssert out32[0] == 18
@@ -142,11 +142,11 @@ proc runTest() =
     engine.ingest(structVk)
     a[0] = 7
     b[0] = 3
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("structKernel", oDev, (aDev, bDev))
     var out32b: array[10, int32]
-    engine.copyToHostFromDevice(addr out32b[0], oDev, 10)
+    engine.copyToHostFromDevice(out32b.toOpenArray(0, 10 - 1), oDev)
     echo "  [7,3] -> [", out32b[0], ", ", out32b[1], ", ", out32b[2], ", ", out32b[3], ", ", out32b[4],
          ", ", out32b[5], ", ", out32b[6], ", ", out32b[7], ", ", out32b[8], ", ", out32b[9], "]"
     doAssert out32b[0] == 10
@@ -165,11 +165,11 @@ proc runTest() =
     engine.ingest(structVk2)
     a[0] = 14
     b[0] = 3
-    engine.copyToDeviceFromHost(aDev, addr a[0], a.len)
-    engine.copyToDeviceFromHost(bDev, addr b[0], b.len)
+    engine.copyToDeviceFromHost(aDev, a)
+    engine.copyToDeviceFromHost(bDev, b)
     engine.launchKernel("structKernel2", oDev, (aDev, bDev))
     var out32c: array[10, int32]
-    engine.copyToHostFromDevice(addr out32c[0], oDev, 10)
+    engine.copyToHostFromDevice(out32c.toOpenArray(0, 10 - 1), oDev)
     echo "  [14,3] -> [", out32c[0], ", ", out32c[1], ", ", out32c[2], ", ", out32c[3], ", ", out32c[4],
          ", ", out32c[5], ", ", out32c[6], ", ", out32c[7], ", ", out32c[8], ", ", out32c[9], "]"
     doAssert out32c[0] == 17

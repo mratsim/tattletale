@@ -49,7 +49,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 2)
       engine.launchKernel("countKernel", oDev, ())
       var output: array[2, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 2)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 2 - 1), oDev)
       # 4 condition-splice firings, one before each condition evaluation.
       # i counts the admitted iterations in the loop body, so it stops at 3
       check output[0] == 4
@@ -61,7 +61,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 3)
       engine.launchKernel("feedKernel", oDev, ())
       var output: array[3, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 3)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 3 - 1), oDev)
       # Nim fires the splice before the failing test too: n = 3 at the failing test.
       # A pre-splice n = 0 admits no iteration on the first test.
       # i counts 2 admitted iterations
@@ -75,7 +75,7 @@ proc runTest() =
       let oDev = engine.allocDevice(uint32, 1)
       engine.launchKernel("ifKernel", oDev, ())
       var output: array[1, uint32]
-      engine.copyToHostFromDevice(addr output[0], oDev, 1)
+      engine.copyToHostFromDevice(output.toOpenArray(0, 1 - 1), oDev)
       # Splice data: the assignment fed the test,
       # and the then branch took it
       check output[0] == 11

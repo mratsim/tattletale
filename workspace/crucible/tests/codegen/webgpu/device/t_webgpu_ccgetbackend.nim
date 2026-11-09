@@ -36,7 +36,7 @@ proc runTest() =
       var res: array[1, int32] = [0'i32]
       let oDev = engine.allocDevice(int32, 1)
       engine.launchKernel("backendProbe", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 5
 
 when isMainModule:

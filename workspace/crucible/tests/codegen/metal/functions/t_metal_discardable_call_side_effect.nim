@@ -26,10 +26,10 @@ proc runTest() =
       engine.ingest(sideEffectMsl)
       let oDev = engine.allocDevice(uint32, 1)
       let sentinel: uint32 = 41
-      engine.copyToDeviceFromHost(oDev, addr sentinel, 1)
+      engine.copyToDeviceFromHost(oDev, [sentinel])
       engine.launchKernel("sideEffectKernel", oDev, ())
       var res: array[1, uint32]
-      engine.copyToHostFromDevice(addr res[0], oDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
       check res[0] == 7'u32
 
 when isMainModule:

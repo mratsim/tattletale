@@ -27,10 +27,10 @@ proc runTest() =
   var sentinel: array[N, float32]
   for i in 0 ..< N:
     sentinel[i] = -7.0'f32
-  engine.copyToDeviceFromHost(oDev, addr sentinel[0], N)
+  engine.copyToDeviceFromHost(oDev, sentinel.toOpenArray(0, N - 1))
   engine.launchKernel<<(grid: (N, 1), blk: (1, 1))>>("kern", oDev, ())
   var got: array[N, float32]
-  engine.copyToHostFromDevice(addr got[0], oDev, N)
+  engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), oDev)
   # CPU reference: the constructor lists i + 1 and the memcpy delivers it intact
   for i in 0 ..< N:
     let expected = float32(i) + 1.0'f32

@@ -19,7 +19,7 @@ const scaleMsl = metal:
 proc initBuffer(engine: MetalEngine, v: uint32): auto =
   result = engine.allocDevice(uint32, 1)
   var host: array[1, uint32] = [v]
-  engine.copyToDeviceFromHost(result, addr host[0], 1)
+  engine.copyToDeviceFromHost(result, host.toOpenArray(0, 1 - 1))
 
 proc runTest() =
   suite "Metal - same buffer relaunched with readback between launches":
@@ -30,15 +30,15 @@ proc runTest() =
       let inDev = engine.allocDevice(uint32, 1)
       let outDev = engine.allocDevice(uint32, 1)
       var host: array[1, uint32] = [3'u32]
-      engine.copyToDeviceFromHost(inDev, addr host[0], 1)
+      engine.copyToDeviceFromHost(inDev, host.toOpenArray(0, 1 - 1))
       var res: array[1, uint32]
 
       engine.launchKernel("scaleBy", outDev, (inDev, 2'u32))
-      engine.copyToHostFromDevice(addr res[0], outDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), outDev)
       check res[0] == 6'u32
 
       engine.launchKernel("scaleBy", outDev, (inDev, 5'u32))
-      engine.copyToHostFromDevice(addr res[0], outDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), outDev)
       check res[0] == 15'u32
 
     test "a temporary buffer argument crosses to the kernel":
@@ -48,7 +48,7 @@ proc runTest() =
       var res: array[1, uint32]
 
       engine.launchKernel("scaleBy", outDev, (engine.initBuffer(7), 4'u32))
-      engine.copyToHostFromDevice(addr res[0], outDev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), outDev)
       check res[0] == 28'u32
 
     test "the output aliases an argument":
@@ -56,11 +56,11 @@ proc runTest() =
       engine.ingest(scaleMsl)
       let dev = engine.allocDevice(uint32, 1)
       var host: array[1, uint32] = [3'u32]
-      engine.copyToDeviceFromHost(dev, addr host[0], 1)
+      engine.copyToDeviceFromHost(dev, host.toOpenArray(0, 1 - 1))
       var res: array[1, uint32]
 
       engine.launchKernel("scaleBy", dev, (dev, 2'u32))
-      engine.copyToHostFromDevice(addr res[0], dev, 1)
+      engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), dev)
       check res[0] == 6'u32
 
 when isMainModule:

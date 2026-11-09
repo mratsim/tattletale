@@ -37,7 +37,7 @@ proc runTest() =
       var res: array[1, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("plainLocalKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 7'u32
     test "let alias of a storage param keeps ptr<storage, ...> and runs":
       var engine = newEngine(runWebGPU)
@@ -45,7 +45,7 @@ proc runTest() =
       var res: array[2, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("paramAliasKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       check res[0] == 7'u32
       check res[1] == 7'u32
     test "let alias of a smem var keeps ptr<workgroup, ...> and runs":
@@ -54,7 +54,7 @@ proc runTest() =
       var res: array[4, uint32]
       let oDev = engine.allocDevice(uint32, res.len)
       engine.launchKernel("smemAliasKernel", oDev, ())
-      engine.copyToHostFromDevice(addr res[0], oDev, res.len)
+      engine.copyToHostFromDevice(res, oDev)
       for i in 0 ..< 4:
         check res[i] == uint32(i * 3)
 

@@ -71,14 +71,14 @@ proc runTest() =
       let srcDev = engine.allocDevice(float32, 8)
       let dstDev = engine.allocDevice(float32, 8)
       var host: array[8, float32] = [1.0'f32, 2, 3, 4, 5, 6, 7, 8]
-      engine.copyToDeviceFromHost(srcDev, addr host[0], 8)
+      engine.copyToDeviceFromHost(srcDev, host.toOpenArray(0, 8 - 1))
       let srcView = makeViewStatic(srcDev)
       let dstView = makeViewStatic(dstDev)
       engine.launchDeviceFn kCopyStatic(dstView, srcView) do:
         grid = (1, 1)
         blk = (8, 1)
       var back: array[8, float32]
-      engine.copyToHostFromDevice(addr back[0], dstDev, 8)
+      engine.copyToHostFromDevice(back.toOpenArray(0, 8 - 1), dstDev)
       check back == [2.0'f32, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
 
     test "runtime-int layout leaves keep working":
@@ -86,14 +86,14 @@ proc runTest() =
       let srcDev = engine.allocDevice(float32, 8)
       let dstDev = engine.allocDevice(float32, 8)
       var host: array[8, float32] = [1.0'f32, 2, 3, 4, 5, 6, 7, 8]
-      engine.copyToDeviceFromHost(srcDev, addr host[0], 8)
+      engine.copyToDeviceFromHost(srcDev, host.toOpenArray(0, 8 - 1))
       let srcView = makeViewRun(srcDev, 8)
       let dstView = makeViewRun(dstDev, 8)
       engine.launchDeviceFn kCopyRun(dstView, srcView) do:
         grid = (1, 1)
         blk = (8, 1)
       var back: array[8, float32]
-      engine.copyToHostFromDevice(addr back[0], dstDev, 8)
+      engine.copyToHostFromDevice(back.toOpenArray(0, 8 - 1), dstDev)
       check back == [2.0'f32, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
 
 runTest()

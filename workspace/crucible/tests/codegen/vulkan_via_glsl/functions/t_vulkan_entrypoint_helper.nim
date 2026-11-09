@@ -36,9 +36,9 @@ proc runTest() =
   # recompiles per launch.
   var gpuOut: array[1, uint32] = [0xDEADBEEF'u32]
   let oDev = engine.allocDevice(uint32, 1)
-  engine.copyToDeviceFromHost(oDev, addr gpuOut[0], 1)
+  engine.copyToDeviceFromHost(oDev, gpuOut.toOpenArray(0, 1 - 1))
   engine.launchKernel("entryKernel", oDev, ())
-  engine.copyToHostFromDevice(addr gpuOut[0], oDev, 1)
+  engine.copyToHostFromDevice(gpuOut.toOpenArray(0, 1 - 1), oDev)
   echo &"  entryKernel: got {gpuOut[0]}, expected 42"
   doAssert gpuOut[0] == 42, &"entryKernel: got {gpuOut[0]}, expected 42"
 

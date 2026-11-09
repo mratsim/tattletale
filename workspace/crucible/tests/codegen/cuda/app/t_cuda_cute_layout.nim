@@ -32,7 +32,7 @@ proc runTest() =
   echo "PTX: ", engine.getArtifact().len, " bytes"
   let oDev = engine.allocDevice(uint32, buf.len)
   engine.launchKernel<<(1, 1)>>("cuteKernel", oDev, ())
-  engine.copyToHostFromDevice(addr buf[0], oDev, buf.len)
+  engine.copyToHostFromDevice(buf, oDev)
   doAssert buf[0] == 10, &"tile[0,0]: {buf[0]}"
   doAssert buf[1] == 20, &"tile[0,1]: {buf[1]}"
   doAssert buf[2] == 60, &"tile[1,2]: {buf[2]}"

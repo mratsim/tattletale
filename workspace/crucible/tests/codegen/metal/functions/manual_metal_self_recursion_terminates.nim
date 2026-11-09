@@ -24,7 +24,7 @@ proc runTest() =
   let oDev = engine.allocDevice(int32, 1)
   engine.launchKernel("k", oDev, ())
   var res: array[1, int32]
-  engine.copyToHostFromDevice(addr res[0], oDev, 1)
+  engine.copyToHostFromDevice(res.toOpenArray(0, 1 - 1), oDev)
   doAssert res[0] == 0
   echo "recursion terminated, readback ", res[0]
 

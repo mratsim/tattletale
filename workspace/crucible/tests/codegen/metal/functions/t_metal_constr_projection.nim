@@ -26,7 +26,7 @@ proc runProj(i: int32): array[4, int32] =
   engine.ingest(code)
   let oDev = engine.allocDevice(int32, 4)
   engine.launchKernel("projKernel", oDev, ())
-  engine.copyToHostFromDevice(addr result[0], oDev, 4)
+  engine.copyToHostFromDevice(result.toOpenArray(0, 4 - 1), oDev)
 
 proc runTest() =
   suite "Metal - construction-then-field projection":
