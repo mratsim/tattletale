@@ -89,7 +89,6 @@ proc toAnyEngine*[E: HwEngine](engine: E): AnyEngine =
   engine.to(AnyEngine)
 
 proc materializeImpl[E: HwEngine, Sh: tuple, St: tuple, T, Mem](engine: E, _: typedesc[T], layout: Layout[Sh, St]): TensorImpl[Mem, Layout[Sh, St]] =
-  ## One allocation of a materialized tensor over the engine's device memory,
   ## Mem is the engine's device memory for T, bound by the caller's dtype case
   var t = TensorImpl[Mem, Layout[Sh, St]](data: nil, offset: 0, layout: layout)
   t.data.new()
