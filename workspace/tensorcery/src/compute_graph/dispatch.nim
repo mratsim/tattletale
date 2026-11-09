@@ -40,8 +40,6 @@ template withMem(engine: HwEngine, dtype: Dtype, body: untyped) =
     raise ValueError.newException("eval: dtype unsupported")
 
 macro dispatchOp(E, Sh, Mem, engine, batch, n: typed): untyped =
-  ## Expands one typed branch per registered op, each handler symbol
-  ## instantiates with the walk's own bindings
   result = nnkStmtList.newTree()
   var ifStmt = newNimNode(nnkIfStmt)
   for name, h in pairs(OpRegistry):
@@ -58,8 +56,6 @@ macro dispatchOp(E, Sh, Mem, engine, batch, n: typed): untyped =
 proc evalWalk[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode)
 
 proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: TensorNode) =
-  ## Op enqueue handlers recurse into a node's children through this proc,
-  ## the child walks at its own dtype and rank.
   engine.withMem(n.getImpl().dtype()):
     case n.getImpl().shape().len
     of 1: evalWalk[E, (int,), Mem](engine, batch, n)
