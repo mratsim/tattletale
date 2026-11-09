@@ -70,7 +70,7 @@ type
     pos*: int
 
 func initTensorBridge*[DevMem, Sh, St](data: DevMem, offset: int, layout: Layout[Sh, St]): TensorBridge[DevMem, Sh, St] =
-  ## Kernel ABI face of a materialized tensor, assembled at launch sites
+  ## Kernel ABI of a materialized tensor, assembled at launch sites
   TensorBridge[DevMem, Sh, St](data: data, offset: offset, layout: layout)
 
 iface *AnyEngine:

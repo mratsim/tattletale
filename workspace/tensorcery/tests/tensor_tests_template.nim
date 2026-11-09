@@ -52,27 +52,22 @@ proc runTest*(run: static Runtime, name: string) =
   doAssertRaises AssertionDefect:
     discard toTensor(xq[0 ..< 7], @[2, 4])
 
-  let zAt = proc(r, c: int): float32 = z.item(r, c, bfloat16).to(float32)
-  let xAt = proc(r, c: int): float32 = x.item(r, c, bfloat16).to(float32)
-  let p0At = proc(r, c: int): float32 = parts[0].item(r, c, bfloat16).to(float32)
-  let p1At = proc(r, c: int): float32 = parts[1].item(r, c, bfloat16).to(float32)
-  # inner-axis split makes strided views, strides inherit the source
-  let cols = split(x, 1, 2)
-  let w = cols[0] + cols[1]
-  let wAt = proc(r, c: int): float32 = w.item(r, c, bfloat16).to(float32)
   for i in 0 ..< 8:
     let xi = xd[i].to(bfloat16).to(float32)
     let yi = yd[i].to(bfloat16).to(float32)
-    doAssert zAt(i div 4, i mod 4) == xi + yi, name & ": add " & $i
-    doAssert xAt(i div 4, i mod 4) == xi, name & ": split source " & $i
+    doAssert z.item(i div 4, i mod 4, bfloat16) == (xi + yi).to(bfloat16), name & ": add " & $i
+    doAssert x.item(i div 4, i mod 4, bfloat16) == xd[i].to(bfloat16), name & ": split source " & $i
   for c in 0 ..< 4:
-    doAssert p0At(0, c) == xd[c].to(bfloat16).to(float32), name & ": part0 " & $c
-    doAssert p1At(0, c) == xd[4 + c].to(bfloat16).to(float32), name & ": part1 " & $c
+    doAssert parts[0].item(0, c, bfloat16) == xd[c].to(bfloat16), name & ": part0 " & $c
+    doAssert parts[1].item(0, c, bfloat16) == xd[4 + c].to(bfloat16), name & ": part1 " & $c
+  # inner-axis split makes strided views, strides inherit the source
+  let cols = split(x, 1, 2)
+  let w = cols[0] + cols[1]
   for r in 0 ..< 2:
     for c in 0 ..< 2:
       let e0 = xd[r * 4 + c].to(bfloat16).to(float32)
       let e1 = xd[r * 4 + c + 2].to(bfloat16).to(float32)
-      doAssert wAt(r, c) == e0 + e1, name & ": colsplit " & $r & "," & $c
+      doAssert w.item(r, c, bfloat16) == (e0 + e1).to(bfloat16), name & ": colsplit " & $r & "," & $c
 
   echo "tensorcery Tensor (", name, "): all checks passed"
 

@@ -36,7 +36,7 @@ type Tensor* = object
 proc toTensor*[T: float32 | bfloat16](data: openArray[T], shape: openArray[int],
     run: static Runtime = runMetal, dtype: typedesc = T): Tensor {.contracts.} =
   ## One tensor from host data, the upload is the construction
-  ## (the mx.array face), run picks the backend and dtype converts
+  ## (the mx.array signature), run picks the backend and dtype converts
   ## elements that differ from the element type
   {.precondition: shape.len == 2.}
   {.precondition: data.len == shape[0] * shape[1].}
@@ -66,8 +66,8 @@ proc eval*(ts: varargs[Tensor]) =
   ts[0].engine.eval(roots.toSpan())
 
 proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.contracts.} =
-  ## Scalar readback, the t[0, 0].item face. Schedules the graph,
-  ## downloads the element at the index
+  ## Scalar readback on the layout offset, the libtorch `t[0, 0].item(T)` idiom.
+  ## Schedules the graph and downloads one element
   let impl = t.node.getImpl()
   {.precondition: impl.dtype() == toDtype(T).}
   let strides = impl.strides()

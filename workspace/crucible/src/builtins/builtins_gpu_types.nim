@@ -32,6 +32,8 @@ template to*(src: float32, T: typedesc[float32]): float32 = src
 
 template to*(src: float16, T: typedesc[float32]): float32 = toFp32(src)
 template to*(src: bfloat16, T: typedesc[float32]): float32 = toBf32(src)
+
+func `==`*(a, b: bfloat16): bool = a.to(float32) == b.to(float32)
 template to*(src: fp8e4m3, T: typedesc[float32]): float32 = toFp32(src)
 template to*(src: fp8e5m2, T: typedesc[float32]): float32 = toFp32(src)
 
