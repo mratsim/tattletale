@@ -14,12 +14,14 @@ import workspace/ceramic
 import workspace/tensorcery/src/tensor_datatypes
 import workspace/tattleformers/src/ops_2i1o/add
 import workspace/tattleformers/src/ops_2i1o/matmul
+import workspace/tattleformers/src/ops_2i1o/silu_mul
 import workspace/ceramic/src/tile_algebra
 import workspace/tattleformers/src/ops_Ni1o/embed_gather
 import workspace/tattleformers/src/ops_1i1o/rmsnorm
 import workspace/tattleformers/src/layers/embedding
 import workspace/tattleformers/src/layers/linear
 import workspace/tattleformers/src/layers/norm
+import workspace/tattleformers/src/layers/ffn
 import workspace/tattleformers/src/ops_Ni1o/rope
 import workspace/tattleformers/src/layers/rope
 
@@ -439,6 +441,222 @@ proc runTest*[Mem](any: AnyEngine, name: string) =
             refRes[r * N + i] = float32(v * scale * w)
         gotNormed.checkBf16Ulp(refRes, 2, name & ": RmsNorm residual fused")
 
+
+  # ── silu·mul op: the gated FFN activation ─────────────────────────────
+  # bf16 (64, 3072) at the Qwen3 FFN intermediate width: an f64 host
+  # reference judges it at the kElementwise-class band (2 bf16 ulps)
+  block:
+    const
+      Tokens = 64
+      N = 3072
+    var gHost = newSeq[bfloat16](Tokens * N)
+    var vHost = newSeq[bfloat16](Tokens * N)
+    for i in 0 ..< Tokens * N:
+      gHost[i] = (float32((i * 37) mod 41 - 20) * 0.5'f32).to(bfloat16)
+      vHost[i] = (float32((i * 29) mod 31 - 15) * 0.25'f32).to(bfloat16)
+    # f64 host reference of the reference silu path
+    # (F.silu(gate_out) * up_out): silu(g) = g / (1 + exp(-g))
+    var refO = newSeq[float32](Tokens * N)
+    for i in 0 ..< Tokens * N:
+      let g = float64(gHost[i].to(float32))
+      let v = float64(vHost[i].to(float32))
+      refO[i] = float32(g / (1.0 + exp(-g)) * v)
+
+    let gate = newTensor(any, @[Tokens, N], kBf16)
+    gate.copyToDeviceFromHost(gHost)
+    let value = newTensor(any, @[Tokens, N], kBf16)
+    value.copyToDeviceFromHost(vHost)
+    let o = Tensor(engine: gate.engine,
+      node: tn_silu_mul(gate.engine, gate.node, value.node))
+    doAssert o.node.getImpl().shape()[0] == Tokens
+    doAssert o.node.getImpl().shape()[1] == N
+    doAssert o.node.getImpl().dtype() == kBf16
+    var oRoots = @[o.node]
+    o.engine.eval(oRoots.toSpan())
+    var gotO = newSeq[bfloat16](Tokens * N)
+    copyToHostFromDevice(gotO, o)
+    gotO.checkBf16Ulp(refO, 2, name & ": silu·mul (64, 3072)")
+
+    # boundary set at the float32 limits: silu(g) exact at the positive
+    # bfloat16 max, -0 at the negative one, subnormal silu underflows
+    # to -0 against an f64 reference that rounds to -0 too
+    block:
+      const
+        BTokens = 2
+        BN = 6
+      let gBig = [(3.3e38'f32).to(bfloat16), (-3.3e38'f32).to(bfloat16),
+                  (-100.0'f32).to(bfloat16), (88.0'f32).to(bfloat16),
+                  (-88.0'f32).to(bfloat16), (0.0'f32).to(bfloat16)]
+      let vBig = [(1.0'f32).to(bfloat16), (1.0'f32).to(bfloat16),
+                  (1.0'f32).to(bfloat16), (2.0'f32).to(bfloat16),
+                  (2.0'f32).to(bfloat16), (3.0'f32).to(bfloat16)]
+      var gbHost = newSeq[bfloat16](BTokens * BN)
+      var vbHost = newSeq[bfloat16](BTokens * BN)
+      var refB = newSeq[float32](BTokens * BN)
+      for t in 0 ..< BTokens:
+        for c in 0 ..< BN:
+          let g = gBig[c]
+          let v = vBig[c]
+          gbHost[t * BN + c] = g
+          vbHost[t * BN + c] = v
+          let g64 = float64(g.to(float32))
+          let v64 = float64(v.to(float32))
+          refB[t * BN + c] = float32(g64 / (1.0 + exp(-g64)) * v64)
+      let gateB = newTensor(any, @[BTokens, BN], kBf16)
+      gateB.copyToDeviceFromHost(gbHost)
+      let valueB = newTensor(any, @[BTokens, BN], kBf16)
+      valueB.copyToDeviceFromHost(vbHost)
+      let oB = Tensor(engine: gateB.engine,
+        node: tn_silu_mul(gateB.engine, gateB.node, valueB.node))
+      var oBRoots = @[oB.node]
+      oB.engine.eval(oBRoots.toSpan())
+      var gotB = newSeq[bfloat16](BTokens * BN)
+      copyToHostFromDevice(gotB, oB)
+      gotB.checkBf16Ulp(refB, 2, name & ": silu·mul boundary")
+
+    # face contract: shape, rank and dtype mismatches raise
+    block:
+      let vShort = newTensor(any, @[Tokens, N - 1], kBf16)
+      doAssertRaises ValueError:
+        discard tn_silu_mul(any, gate.node, vShort.node)
+      let v3d = newTensor(any, @[2, 3, N], kBf16)
+      doAssertRaises ValueError:
+        discard tn_silu_mul(any, gate.node, v3d.node)
+      let vF32 = newTensor(any, @[Tokens, N], kFp32)
+      doAssertRaises ValueError:
+        discard tn_silu_mul(any, gate.node, vF32.node)
+
+  # ── GatedDenseFFN chained smoke: rmsnorm → gate/up proj → silu·mul →
+  # down proj vs reference order at the Qwen3 dense geometry,
+  # hidden 1024, intermediate 3072.
+  # Intermediates read back: each stage's reference consumes the device's own previous-stage values
+  block:
+    const
+      CTokens = 4
+      CHidden = 1024
+      CInter = 3072
+    var xHost = newSeq[bfloat16](CTokens * CHidden)
+    for i in 0 ..< xHost.len:
+      xHost[i] = (float32((i * 41) mod 23 - 11) * 0.125'f32).to(bfloat16)
+    var wnHost = newSeq[bfloat16](CHidden)
+    for i in 0 ..< CHidden:
+      wnHost[i] = (float32(i mod 11) * 0.1'f32 + 0.5'f32).to(bfloat16)
+    var wgHost = newSeq[bfloat16](CInter * CHidden)
+    var wuHost = newSeq[bfloat16](CInter * CHidden)
+    for i in 0 ..< CInter * CHidden:
+      wgHost[i] = (float32((i * 17) mod 29 - 14) * 0.0625'f32).to(bfloat16)
+      wuHost[i] = (float32((i * 13) mod 31 - 15) * 0.0625'f32).to(bfloat16)
+    var wdHost = newSeq[bfloat16](CHidden * CInter)
+    for i in 0 ..< CHidden * CInter:
+      wdHost[i] = (float32((i * 19) mod 27 - 13) * 0.0625'f32).to(bfloat16)
+
+    let x = newTensor(any, @[CTokens, CHidden], kBf16)
+    x.copyToDeviceFromHost(xHost)
+    let wn = newTensor(any, @[CHidden], kBf16)
+    wn.copyToDeviceFromHost(wnHost)
+    let wg = newTensor(any, @[CInter, CHidden], kBf16)
+    wg.copyToDeviceFromHost(wgHost)
+    let wu = newTensor(any, @[CInter, CHidden], kBf16)
+    wu.copyToDeviceFromHost(wuHost)
+    let wd = newTensor(any, @[CHidden, CInter], kBf16)
+    wd.copyToDeviceFromHost(wdHost)
+
+    # reference order: norm, two projections off the normed states, silu·mul, down_proj
+    let normed = RmsNorm.init(wn).forward(x)
+    let gateProj = Linear.init(wg).forward(normed)
+    let upProj = Linear.init(wu).forward(normed)
+    let act = Tensor(engine: gateProj.engine,
+      node: tn_silu_mul(gateProj.engine, gateProj.node, upProj.node))
+    let downOut = Linear.init(wd).forward(act)
+    doAssert gateProj.node.getImpl().shape()[0] == CTokens
+    doAssert gateProj.node.getImpl().shape()[1] == CInter
+    doAssert act.node.getImpl().shape()[1] == CInter
+    doAssert downOut.node.getImpl().shape()[0] == CTokens
+    doAssert downOut.node.getImpl().shape()[1] == CHidden
+    var roots = @[downOut.node]
+    downOut.engine.eval(roots.toSpan())
+
+    # norm reference over the device's own input
+    var gotNormed = newSeq[bfloat16](CTokens * CHidden)
+    copyToHostFromDevice(gotNormed, normed)
+    var refNormed = newSeq[float32](CTokens * CHidden)
+    for t in 0 ..< CTokens:
+      var ss = 0.0'f64
+      for i in 0 ..< CHidden:
+        let v = float64(xHost[t * CHidden + i].to(float32))
+        ss += v * v
+      let scale = 1.0 / sqrt(ss / float64(CHidden) + 1e-6)
+      for i in 0 ..< CHidden:
+        let v = float64(xHost[t * CHidden + i].to(float32))
+        let w = float64(wnHost[i].to(float32))
+        refNormed[t * CHidden + i] = float32(v * scale * w)
+    gotNormed.checkBf16Ulp(refNormed, 2, name & ": FFN chain rmsnorm")
+
+    # projection references over the device's own normed values
+    var gotGate = newSeq[bfloat16](CTokens * CInter)
+    var gotUp = newSeq[bfloat16](CTokens * CInter)
+    copyToHostFromDevice(gotGate, gateProj)
+    copyToHostFromDevice(gotUp, upProj)
+    var refGate = newSeq[float32](CTokens * CInter)
+    var refUp = newSeq[float32](CTokens * CInter)
+    for t in 0 ..< CTokens:
+      for n in 0 ..< CInter:
+        var accG = 0.0'f32
+        var accU = 0.0'f32
+        for k in 0 ..< CHidden:
+          let nv = gotNormed[t * CHidden + k].to(float32)
+          accG += nv * wgHost[n * CHidden + k].to(float32)
+          accU += nv * wuHost[n * CHidden + k].to(float32)
+        refGate[t * CInter + n] = accG
+        refUp[t * CInter + n] = accU
+    gotGate.checkBf16Ulp(refGate, 4, name & ": FFN chain gate_proj")
+    gotUp.checkBf16Ulp(refUp, 4, name & ": FFN chain up_proj")
+
+    # activation reference over the device's own projection values
+    var gotAct = newSeq[bfloat16](CTokens * CInter)
+    copyToHostFromDevice(gotAct, act)
+    var refAct = newSeq[float32](CTokens * CInter)
+    for i in 0 ..< CTokens * CInter:
+      let g = float64(gotGate[i].to(float32))
+      let v = float64(gotUp[i].to(float32))
+      refAct[i] = float32(g / (1.0 + exp(-g)) * v)
+    gotAct.checkBf16Ulp(refAct, 2, name & ": FFN chain silu·mul")
+
+    # down projection reference over the device's own activation
+    var gotDown = newSeq[bfloat16](CTokens * CHidden)
+    copyToHostFromDevice(gotDown, downOut)
+    var refDown = newSeq[float32](CTokens * CHidden)
+    for t in 0 ..< CTokens:
+      for n in 0 ..< CHidden:
+        var acc = 0.0'f32
+        for k in 0 ..< CInter:
+          acc += gotAct[t * CInter + k].to(float32) * wdHost[n * CInter + k].to(float32)
+        refDown[t * CHidden + n] = acc
+    gotDown.checkBf16Ulp(refDown, 4, name & ": FFN chain down_proj")
+
+    # GatedDenseFFN layer port through the erased face: one forward over
+    # normed states reproduces the manual chain bit for bit. Both graphs enqueue the same kernels over the same input buffers
+    block:
+      let ffn = GatedDenseFFN.init(Linear.init(wg), Linear.init(wu), Linear.init(wd))
+      let y = ffn.forward(normed)
+      doAssert y.node.getImpl().shape()[0] == CTokens
+      doAssert y.node.getImpl().shape()[1] == CHidden
+      doAssert y.node.getImpl().dtype() == kBf16
+      var yRoots = @[y.node]
+      y.engine.eval(yRoots.toSpan())
+      var gotY = newSeq[bfloat16](CTokens * CHidden)
+      copyToHostFromDevice(gotY, y)
+      for i in 0 ..< CTokens * CHidden:
+        doAssert gotY[i].to(float32) == gotDown[i].to(float32),
+          name & ": FFN layer " & $i & ": got " & $gotY[i].to(float32) &
+          ", manual chain " & $gotDown[i].to(float32)
+
+    # kGeluTanh branch unported: the reference host op binds libtorch
+    block:
+      let ffnGelu = GatedDenseFFN.init(Linear.init(wg), Linear.init(wu),
+        Linear.init(wd), kGeluTanh)
+      doAssertRaises ValueError:
+        discard ffnGelu.forward(x)
 
   # ── rope op, RotaryPositionEmbedding layer, chained q_proj→q_norm→rope ──
   # bf16 q (8, 16, 128) with f32 cos/sin half tables at the Qwen3 geometry
