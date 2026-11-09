@@ -38,8 +38,8 @@ func registerWgslHoistProgramScopeLocals*(reg: var PassRegistry) =
 
 func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
   reg.register("wgslInlinePointerParamCalls", pkTransform,
-    "Inlines calls whose pointer arguments cannot cross a WGSL function" &
-    " signature",
+    "Inlines calls whose pointer or pointer-holding struct arguments" &
+    " cannot cross a WGSL function signature",
     run = inlinePointerParamCalls)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -48,6 +48,8 @@ func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
 
 proc crossesWgslSignature(t: CirType): bool =
   ## WGSL function signatures accept values and ptr<function> pointers only.
+  ## A pointer-holding struct crosses too: the WGSL struct declaration drops
+  ## its pointer fields, so the callee's field reads have no target type.
   if t.isNil:
     return false
   case t.kind
@@ -55,6 +57,8 @@ proc crossesWgslSignature(t: CirType): bool =
     result = true
   of ctPtr:
     result = t.addressSpace != caThread
+  of ctStruct:
+    result = t.containsPtrDeep
   else:
     result = false
 
@@ -180,6 +184,15 @@ proc inlineCallSite(ss: var seq[CirStmt], used: var HashSet[string], fresh: var 
         # a pointer argument has no WGSL local form, it substitutes directly
         subst[p.name] = s.callArgs[j]
         continue
+      if p.typ.kind == ctStruct and p.typ.containsPtrDeep:
+        # a struct argument substitutes directly: its pointer fields have no
+        # WGSL local form. The pointer-local explosion pass dissolves spliced
+        # field reads into the caller's leaf symbols.
+        if s.callArgs[j].kind != eSym:
+          raiseAssert("struct argument " & p.name & " of " & callee.name &
+            " is not a symbol read, WGSL has no local form for a pointer-holding struct value")
+        subst[p.name] = s.callArgs[j]
+        continue
       var alias = "inl" & $fresh & "_" & p.name
       fresh.inc
       while alias in used:
@@ -231,10 +244,12 @@ proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var i
 
 proc inlinePointerParamCalls(m: CirModule) =
   ## Placement contract:
-  ## - the pass runs after the pointer-local explosion pass, so the spliced
-  ##   bodies carry no pointer locals
-  ## - the per-address-space callee instantiation runs first, a re-spaced formal
-  ##   refuses exactly when the new signature cannot print
+  ## - the pass runs before the pointer-local explosion pass, which dissolves
+  ##   the spliced struct field reads into the caller's leaves
+  ## - the spliced bodies carry no pointer locals: pointer and pointer-holding
+  ##   struct arguments substitute directly
+  ## - the per-address-space callee instantiation runs after this pass
+  ##   and reads the splice-substituted concrete argument types
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
     procs[fn.name] = fn
