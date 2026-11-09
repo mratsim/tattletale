@@ -124,6 +124,26 @@ proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Any
 proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
   engine.makeTensorImpl(dtype, shape.toSpan())
 
+proc newViewNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
+  ## A graph node shell without a buffer, view ops bind the data at enqueue
+  case dtype
+  of kFp32:
+    type Mem = typeof(engine.allocDevice(float32, 0))
+    var sh: (int, int)
+    fillShape(sh, shape)
+    TensorImpl[Mem, Layout[(int, int), (int, int)]](
+      data: nil, offset: 0,
+      layout: make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
+  of kBf16:
+    type Mem = typeof(engine.allocDevice(bfloat16, 0))
+    var sh: (int, int)
+    fillShape(sh, shape)
+    TensorImpl[Mem, Layout[(int, int), (int, int)]](
+      data: nil, offset: 0,
+      layout: make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
+  else:
+    raise ValueError.newException("newViewNode: dtype " & $dtype & " unsupported")
+
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
   case shape.len
   of 2:

@@ -58,7 +58,7 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
   partShape[axis] = s[axis] div k
   let core = SplitCore(a: x, axis: axis)
   for i in 0 ..< k:
-    core.r.add(engine.newTensorNode(ix.dtype(), partShape.toSpan()).getImpl())
+    core.r.add(engine.newViewNode(ix.dtype(), partShape.toSpan()).getImpl())
   for i in 0 ..< k:
     result.add(PosNode[SplitCore](core: core, pos: i).to(TensorNode))
 

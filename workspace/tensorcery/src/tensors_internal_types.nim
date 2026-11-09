@@ -75,6 +75,7 @@ func initTensorBridge*[DevMem, Sh, St](data: DevMem, offset: int, layout: Layout
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: Span[int]): TensorNode
+    proc newViewNode(dtype: Dtype, shape: Span[int]): TensorNode
     proc upload(node: TensorNode, src: openArray[float32])
     proc upload(node: TensorNode, src: openArray[bfloat16])
     proc download(dst: var openArray[float32], node: TensorNode)
