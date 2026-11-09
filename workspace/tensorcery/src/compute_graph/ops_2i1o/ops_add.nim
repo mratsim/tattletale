@@ -51,7 +51,7 @@ proc k_add(z, x, y: distinct TensorView) =
 
 type
   AddNode* = ref object
-    r: AnyTensorImpl
+    r: AnyTensorImpl      # output slot, metadata only until finalization
     a, b: TensorNode
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -73,19 +73,28 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
   let ib = b.getImpl()
   {.precondition: ia.shape() == ib.shape().}
   {.precondition: ia.dtype() == ib.dtype().}
-  AddNode(a: a, b: b, r: engine.newTensorNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
+  var sh: (int, int)
+  fillShape(sh, ia.shape())
+  let st = rowMajorStrides(sh)
+  let slot = SlotImpl(dt: ia.dtype(), sh: ia.shape().toSeq(),
+                      st: toSpan(st).toSeq())
+  AddNode(a: a, b: b, r: slot.to(AnyTensorImpl)).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode): bool =
+proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil:
     return false
-  let rz = asAdd.r.to(TensorImpl[Mem, Layout[Sh, Sh]])
   engine.evalNode(batch, asAdd.a)
   engine.evalNode(batch, asAdd.b)
+  # finalization: the full graph is known, the output buffer allocates here
+  var sh: Sh
+  fillShape(sh, asAdd.r.shape())
+  let rz = engine.makeTensorImpl(asAdd.r.dtype(), asAdd.r.shape())
+    .to(TensorImpl[Mem, Layout[Sh, Sh]])
   let
     xa = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
     xb = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
@@ -95,6 +104,7 @@ proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E],
     xv = initTensorBridge(xa.data[], xa.offset, xa.layout)
     yv = initTensorBridge(xb.data[], xb.offset, xb.layout)
   batch.enqueue<<(ceil_div(numel, 128), 32)>> k_add(zv, xv, yv)
+  n = rz.to(TensorNode)
   true
 
 # ═══════════════════════════════════════════════════════════════════════

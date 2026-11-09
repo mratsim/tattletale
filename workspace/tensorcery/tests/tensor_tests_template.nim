@@ -66,5 +66,15 @@ proc runTest*(run: static Runtime, name: string) =
       let e1 = xd[r * 4 + c + 2].to(bfloat16).to(float32)
       doAssert w.item(r, c, bfloat16) == (e0 + e1).to(bfloat16), name & ": colsplit " & $r & "," & $c
 
+  # eval materializes op nodes, a re-eval walks nothing, the values stay
+  let d = x + y
+  let e = d + x
+  eval(e)
+  eval(e)
+  for i in 0 ..< 8:
+    doAssert e.item(i div 4, i mod 4, bfloat16) ==
+      (xd[i].to(bfloat16).to(float32) * 2'f32 + yd[i].to(bfloat16).to(float32)).to(bfloat16),
+      name & ": diamond " & $i
+
   echo "tensorcery Tensor (", name, "): all checks passed"
 
