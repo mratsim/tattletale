@@ -137,7 +137,7 @@ proc scaled_dot_product_attention*(
       var k: tile(K.T, qkMma.getMmaLayout(opB))  # (NT, Dk)
       k.load(vK, kMap, thrID, (kv, 0))
       qk.fillWith(0'f32)
-      qkMma.atom.gemm_tile(qk, q, k, qk)         # S = Q·Kᵀ   (MMA 1)
+      qkMma.atom.gemm_tile(qk, q, k)             # S = Q·Kᵀ   (MMA 1)
 
       qk *= qMul                                 # scale, before the band cut
 
@@ -168,7 +168,7 @@ proc scaled_dot_product_attention*(
       acc *.= alpha                              # (MT × Dv) *.= (MT × 1)
       var v: tile(V.T, pvMma.getMmaLayout(opB))  # (Dv, NT), B operand of MMA 2
       v.load(vV, vMap, thrID, (0, kv))
-      pvMma.atom.gemm_tile(acc, p, v, acc)       # O += P·V   (MMA 2)
+      pvMma.atom.gemm_tile(acc, p, v)            # O += P·V   (MMA 2)
 
     acc /.= l_i                                  # (MT × Dv) /.= (MT × 1)
     vO.store(acc.downcast(O.T), oMap, thrID, (qTile, 0))

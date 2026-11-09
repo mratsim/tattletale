@@ -128,6 +128,10 @@ template constStr*(atom: untyped, suffix: untyped): string =
   ## The string value of a per-atom registry const.
   bindSym($atom & "_" & suffix).getImpl()[2].strVal
 
+template constInt(atom: untyped, suffix: untyped): int =
+  ## Int value of a per-atom registry const.
+  int(bindSym($atom & "_" & suffix).getImpl()[2].intVal)
+
 proc assertStagedDtype(name: string, node: NimNode, dtype, operand: string) =
   let expected = case dtype
     of "float": bindSym"float32"
@@ -164,6 +168,45 @@ template valuesPerThread*(atom: untyped, layoutKey: string): int =
   doAssert shape.len >= 2,
     "gemm_mma: expected a (T, V) layout shape, got " & shape.repr
   leafProduct(shape[1])
+
+proc typeIntLeaves(n: NimNode): seq[int] =
+  ## Int values of the leaves of a type-AST tuple, a layout shape
+  ## or stride part: `Int[4]` leaves contribute 4, nested tuples flatten
+  ## in declaration order.
+  case n.kind
+  of nnkIntLit:
+    result = @[int(n.intVal)]
+  of nnkBracketExpr:
+    doAssert n.len == 2 and n[0].kind == nnkSym and n[1].kind == nnkIntLit,
+      "gemm_mma: expected an Int[N] leaf, got " & n.repr
+    result = @[int(n[1].intVal)]
+  of nnkTupleConstr, nnkPar, nnkTupleTy:
+    result = @[]
+    for ch in n:
+      result.add typeIntLeaves(ch)
+  else:
+    error("gemm_mma: expected an Int tuple type, got " & n.repr)
+
+template valueOffsets(atom: untyped, layoutKey: string, vCount: int): seq[int] =
+  ## Cell offsets of an operand's values at thread coordinates 0:
+  ## `offset(v) = Σ_d stride_d·coord_d(v)`, coordinates decoded first dim
+  ## fastest over the layout type's value dims.
+  let layoutType = bindSym($atom & "_" & layoutKey).getTypeInst()
+  doAssert layoutType.kind == nnkBracketExpr and layoutType.len == 3,
+    "gemm_mma: expected a Layout[Shape, Stride] type, got " & layoutType.repr
+  let dimLeaves = typeIntLeaves(layoutType[1][1])
+  let strideLeaves = typeIntLeaves(layoutType[2][1])
+  doAssert dimLeaves.len == strideLeaves.len,
+    "gemm_mma: layout value dims and strides of unequal rank, " & layoutType.repr
+  var offs = newSeq[int](vCount)
+  for v in 0 ..< vCount:
+    var off = 0
+    var rem = v
+    for d in 0 ..< dimLeaves.len:
+      off += strideLeaves[d] * (rem mod dimLeaves[d])
+      rem = rem div dimLeaves[d]
+    offs[v] = off
+  offs
 
 # ═════════════════════════════════════════════════════════════════════════
 #  gemm_mma: one register-level MMA call
@@ -219,6 +262,69 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[typed]): untyped =
             $(dV) & "/" & $(aV) & "/" & $(bV))
     result = quote do:
       `scalars[0]` = typeof(`scalars[0]`)(`scalars[1]` * `scalars[2]`) + `scalars[3]`
+  of "fma_tile":
+    # Vulkan generic-tile atoms: scalar arithmetic, no asm. The index map
+    # derives from the fragment layouts at macro time. Value v of an operand
+    # has cell offset off(v) at thread coordinates 0, m = off mod Mcell,
+    # k = off div Mcell. Each C value (m, n) accumulates the A and B
+    # registers holding (m, k) and (n, k).
+    var staged: seq[(string, NimNode, string, string)]
+    for i in 0 ..< dV:
+      staged.add(($scalars[i], scalars[i], constStr(atom, "cType"), "accumulator"))
+    for i in 0 ..< aV:
+      staged.add(($scalars[dV + i], scalars[dV + i], constStr(atom, "aType"), "A operand"))
+    for i in 0 ..< bV:
+      staged.add(($scalars[dV + aV + i], scalars[dV + aV + i], constStr(atom, "aType"), "B operand"))
+    for i in 0 ..< dV:
+      staged.add(($scalars[dV + aV + bV + i], scalars[dV + aV + bV + i], constStr(atom, "cType"), "addend"))
+    for (name, node, dtype, operand) in staged:
+      assertStagedDtype(name, node, dtype, operand)
+    let
+      mCell = constInt(atom, "m")
+      nCell = constInt(atom, "n")
+      kCell = constInt(atom, "k")
+      aOff = valueOffsets(atom, "aLayout", aV)
+      bOff = valueOffsets(atom, "bLayout", bV)
+      cOff = valueOffsets(atom, "cLayout", dV)
+    var aConsumed = newSeq[bool](aV)
+    var bConsumed = newSeq[bool](bV)
+    result = newStmtList()
+    for i in 0 ..< dV:
+      let
+        mI = cOff[i] mod mCell
+        nI = cOff[i] div mCell
+      var acc = scalars[dV + aV + bV + i]
+      for k in 0 ..< kCell:
+        var aI = -1
+        var bI = -1
+        for v in 0 ..< aV:
+          if aOff[v] mod mCell == mI and aOff[v] div mCell == k:
+            aI = v
+            aConsumed[v] = true
+        for v in 0 ..< bV:
+          if bOff[v] mod nCell == nI and bOff[v] div nCell == k:
+            bI = v
+            bConsumed[v] = true
+        if aI < 0 or bI < 0:
+          error("gemm_mma: atom " & $atom & " C value " & $i & " has no " & (if aI < 0: "A" else: "B") & " fragment")
+        let aTerm = scalars[dV + aI]
+        let bTerm = scalars[dV + aV + bI]
+        acc = quote do: `acc` + `aTerm` * `bTerm`
+      result.add nnkAsgn.newTree(scalars[i], acc)
+    # Every A and B fragment value is consumed by some C value's product.
+    var aCount = 0
+    for consumed in aConsumed:
+      if consumed:
+        inc aCount
+    var bCount = 0
+    for consumed in bConsumed:
+      if consumed:
+        inc bCount
+    if aCount != aV or bCount != bV:
+      let operand = if aCount != aV: "A" else: "B"
+      let count = if aCount != aV: aCount else: bCount
+      let want = if aCount != aV: aV else: bV
+      error("gemm_mma: atom " & $atom & " " & operand & " fragment layout leaves " & $(want - count) & " of " & $want & " values unconsumed")
   else:
     if not instr.startsWith("mma.sync.aligned."):
       error("gemm_mma: unsupported instruction `" & instr & "`")

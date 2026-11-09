@@ -67,6 +67,7 @@
 ## Catalog:
 ## - 3 universal FMA atoms, the 1×1×1 scalar fallback (f32, f16, bf16 operands)
 ## - 3 Apple simdgroup atoms, 9 NVIDIA tensor-core atoms (SM80/SM89)
+## - 1 Vulkan generic-tile atom with per-thread FMA (MoltenVK has no MMA instruction)
 ## The CPU atoms (AMX, SIMD ukernels) are not declared.
 
 import workspace/ceramic/src/layout_algebra
@@ -103,6 +104,29 @@ const
     ## (T32,V16) → (M16,K32), A fragment of m16n8k32 int8·fp8
   SM80_16x8x32_B* = make_layout(((4, 8), (4, 2)), ((32, 1), (8, 128)))
     ## (T32,V8) → (N8,K32), B fragment of m16n8k32 int8·fp8
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Vulkan generic-tile layouts
+# ═══════════════════════════════════════════════════════════════════════
+#
+#  Fragments of VULKAN_32x32x2_F32. Each thread owns one 4x8 block of the (32, 32) C cell:
+#  A: m = 4·rowBlock..+3 (rowBlock = t mod 8), B: n = 8·colBlock..+7 (colBlock = t div 8).
+#  Each value index runs over the nested value dims, first dim fastest
+#  (v = m_rel + 4·k on A), which is the register order that the thread->value map loads into.
+
+const
+  Vulkan32x32x2_A_Layout* = make_layout(((8, 4), (4, 2)), ((4, 0), (1, 32)))
+    ## (T32, V8) → (M32, K2), A fragment of the Vulkan generic-tile atom,
+    ## col-major offset m + 32·k, V stepping along K.
+    ## ColBlock thread dim at stride 0. 4 threads of one rowBlock load the same A values.
+  Vulkan32x32x2_B_Layout* = make_layout(((8, 4), (8, 2)), ((0, 8), (1, 32)))
+    ## (T32, V16) → (N32, K2), B fragment of the Vulkan generic-tile atom,
+    ## col-major offset n + 32·k, V stepping along K.
+    ## Thread t = rowBlock + 8·colBlock, same as A/C. The RowBlock thread dim
+    ## has stride 0: 8 threads of one colBlock load the same B values.
+  Vulkan32x32x2_C_Layout* = make_layout(((8, 4), (4, 8)), ((4, 256), (1, 32)))
+    ## (T32, V32) → (M32, N32), C fragment of the Vulkan generic-tile atom,
+    ## col-major offset m + 32·n, V stepping along N.
 
 # ═════════════════════════════════════════════════════════════════════════
 #  The atoms
@@ -200,6 +224,22 @@ declareAtoms:
     instr: "simdgroup_multiply_accumulate"
     aType: "bfloat"
     bType: "bfloat"
+    cType: "float"
+
+  # Vulkan generic-tile atom: Vulkan via MoltenVK exposes no MMA instruction.
+  # fma_tile schedules multiply-accumulates over the 32 threads, no subgroup ops.
+  atom VULKAN_32x32x2_F32:
+    m: 32
+    n: 32
+    k: 2
+    vpt: 8
+    threadCount: 32
+    aLayout: Vulkan32x32x2_A_Layout
+    bLayout: Vulkan32x32x2_B_Layout
+    cLayout: Vulkan32x32x2_C_Layout
+    instr: "fma_tile"
+    aType: "float"
+    bType: "float"
     cType: "float"
 
   # NVIDIA tensor-core atoms, the mma.sync extended-asm path.

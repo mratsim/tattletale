@@ -22,8 +22,7 @@ import workspace/ceramic/src/macros/static_for
 {.experimental: "dynamicBindSym".}
 
 macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc, cTile, cLoc: untyped): untyped =
-  ## One Matrix-Multiply-Accumulate (MMA) atom call at a tile position,
-  ## for an atom with 2 values per thread.
+  ## One Matrix-Multiply-Accumulate (MMA) atom call at a tile position.
   ## Args:
   ##   - dTile, dLoc: result tile and cell position, d receives a·b + c
   ##   - aTile, aLoc: A operand tile and cell position
@@ -93,18 +92,19 @@ macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc, 
 
   result = nnkBlockStmt.newTree(genSym(nskLabel, "gemmAtomAt"), result)
 
-func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St], aTile, bTile: distinct TensorOwned, cTile: var TensorOwned[T, Sh, St]) =
+func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St], aTile, bTile: distinct TensorOwned) =
   ## Tile-level GEneralized Matrix-Multiply (GEMM)
   ##
   ## Args:
   ##
-  ##   | tile  | shape       | role                                |
-  ##   | ----- | ----------- | ----------------------------------- |
-  ##   | mma   |             | the hardware instruction descriptor |
-  ##   | dTile | (V, MR, NR) | result, d receives a*b + c          |
-  ##   | aTile | (V, MR, KR) | A operand                           |
-  ##   | bTile | (V, NR, KR) | B operand                           |
-  ##   | cTile | (V, MR, NR) | addend, may alias dTile             |
+  ##   | tile  | shape       | role                                      |
+  ##   | ----- | ----------- | ----------------------------------------- |
+  ##   | mma   |             | the hardware instruction descriptor       |
+  ##   | dTile | (V, MR, NR) | result, accumulates in place: d = a·b + d |
+  ##   | aTile | (V, MR, KR) | A operand                                 |
+  ##   | bTile | (V, NR, KR) | B operand                                 |
+  ##
+  ## The addend of d = a·b + d is dTile's pre-call value, staged before each atom call.
   ##
   ## Worked example, m16n8k8, warp tile (32, 16, 32): MR = NR = 2,
   ## KR = 4, one warp per tile, fp16 A/B, fp32 D.
@@ -168,15 +168,15 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
     aBits = aTile.shape[0].toInt() * sizeof(typeof(aTile.data[0]))
     bBits = bTile.shape[0].toInt() * sizeof(typeof(bTile.data[0]))
 
-  # For k = 0: d = a0·b0 + c, where c may alias d.
-  # Then d += a0·b0
+  # k = 0 seeds the accumulator: d = a·b + d(pre), staged inside gemm_atom_at.
+  # Then d += a·b
   when aBits == 8:
     for m in 0 ..< MR:
       {.unroll.}
       for n in 0 ..< NR:
         {.unroll.}
         let ns = if (m and 1) == 1: NR - 1 - n else: n
-        mma.gemm_atom_at(dTile, (m, ns), aTile, (m, 0), bTile, (ns, 0), cTile, (m, ns))
+        mma.gemm_atom_at(dTile, (m, ns), aTile, (m, 0), bTile, (ns, 0), dTile, (m, ns))
     for k in 1 ..< KR:
       {.unroll.}
       for m in 0 ..< MR:
@@ -191,7 +191,7 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
       for m in 0 ..< MR:
         {.unroll.}
         let ms = if (n and 1) == 1: MR - 1 - m else: m
-        mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, 0), bTile, (n, 0), cTile, (ms, n))
+        mma.gemm_atom_at(dTile, (ms, n), aTile, (ms, 0), bTile, (n, 0), dTile, (ms, n))
     for k in 1 ..< KR:
       {.unroll.}
       for n in 0 ..< NR:
@@ -207,9 +207,9 @@ func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St
         {.unroll.}
         let n0 = n * 2
         let ms = if (n * 2 and 2) == 2: MR - 1 - m else: m
-        mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, 0), bTile, (n0, 0), cTile, (ms, n0))
+        mma.gemm_atom_at(dTile, (ms, n0), aTile, (ms, 0), bTile, (n0, 0), dTile, (ms, n0))
         if n0 + 1 < NR:
-          mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, 0), bTile, (n0 + 1, 0), cTile, (ms, n0 + 1))
+          mma.gemm_atom_at(dTile, (ms, n0 + 1), aTile, (ms, 0), bTile, (n0 + 1, 0), dTile, (ms, n0 + 1))
     for k in 1 ..< KR:
       {.unroll.}
       for n in 0 ..< (NR + 1) div 2:

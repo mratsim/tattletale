@@ -53,7 +53,7 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
       for k in 0 ..< kTiles:
         rA.load(A, tvmA, thrID, (m, k))
         rB.load(B, tvmB, thrID, (n, k))
-        mma.atom.gemm_tile(rD, rA, rB, rD)
+        mma.atom.gemm_tile(rD, rA, rB)
 
       if alpha != 1.0'f32:
         for i in 0 ..< cLayout.size():

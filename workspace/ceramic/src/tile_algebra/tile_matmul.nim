@@ -33,6 +33,11 @@ proc getMmaAtom*(TAcc, TA, TB: typedesc): static MmaAtom {.inline.} =
     elif TA is float32: APPLE_8x8x8_F32
     elif TA is bfloat16: APPLE_8x8x8_BF16
     else: {.error: "no Metal MMA atom for the requested element types".}
+  elif ccGetBackend() == ctGlsl or ccGetBackend() == ctSpirvShader:
+    # MoltenVK has no MMA instruction. The atom is the generic tile-FMA schedule.
+    when TAcc is float32 and TA is float32 and TB is float32:
+      VULKAN_32x32x2_F32
+    else: {.error: "no Vulkan MMA atom for the requested element types".}
   else:
     when TAcc is float32 and TA is float16 and TB is float16:
       UNIVERSAL_1x1x1_F32F16F16F32

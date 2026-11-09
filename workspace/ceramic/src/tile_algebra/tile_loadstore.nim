@@ -5,6 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import std/macros
 import workspace/ceramic/src/int_tuples/int_tuples_unsanctioned_helpers
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/macros/static_for
@@ -41,6 +42,152 @@ func guardedStore[T, Sh, St](dst: TensorView[T, Sh, St], crd: int or tuple, val:
   if crd.inBounds(dst.shape):
     dst[crd] = val
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Thread->value map offset unfolding
+# ═══════════════════════════════════════════════════════════════════════
+
+type
+  TvmCoeff = tuple[axis, coeff: int]
+    ## One stride-leaf contribution: `coeff` per coordinate unit, added to coordinate axis `axis`.
+  TvmLeaf = object
+    ## One leaf of a thread->value map layout: the dimension and the coordinate contributions of one unit.
+    dim: int
+    coeffs: seq[TvmCoeff]
+
+proc flattenTvmCoeffs(n: NimNode, axis: var int, coeffs: var seq[TvmCoeff]) {.compileTime.} =
+  ## Flattens a coordinate stride's coefficient tree into (axis, coeff) pairs, axes numbered in tree order.
+  if n.kind in {nnkTupleConstr, nnkPar}:
+    for child in n:
+      flattenTvmCoeffs(child, axis, coeffs)
+  else:
+    coeffs.add (axis, n.intVal.int)
+    axis.inc
+
+proc collectTvmLeaves(sh, st: NimNode, leaves: var seq[TvmLeaf]) {.compileTime.} =
+  ## Flattens a (shape, stride) type tree into its leaves, tree order.
+  ## Stride leaves:
+  ## - a coordinate-stride leaf contributes one pair per flat coefficient
+  ## - a scalar static stride leaf contributes its value on axis 0
+  if sh.kind in {nnkTupleConstr, nnkPar, nnkTupleTy}:
+    for i in 0 ..< sh.len:
+      collectTvmLeaves(sh[i], st[i], leaves)
+  else:
+    var leaf: TvmLeaf
+    leaf.dim = sh.getStaticInt()
+    if st.isCoordStride():
+      var axis = 0
+      flattenTvmCoeffs(st.getCoordStrideDescriptor().coeffs, axis, leaf.coeffs)
+    else:
+      leaf.coeffs = @[(0, st.getStaticInt())]
+    leaves.add leaf
+
+proc tvmAxisCount(leaves: seq[TvmLeaf]): int {.compileTime.} =
+  ## Number of coordinate axes the leaves spread over.
+  result = 1
+  for leaf in leaves:
+    for (axis, _) in leaf.coeffs:
+      result = max(result, axis + 1)
+
+proc tvmLayoutAxes(layoutTy: NimNode): int {.compileTime.} =
+  ## Coordinate-axis count of a thread->value map layout.
+  ## The count is the widest flat coefficient vector over all stride leaves,
+  ## one shared rank for the thread part and the register part.
+  var leaves: seq[TvmLeaf] = @[]
+  collectTvmLeaves(layoutTy[1], layoutTy[2], leaves)
+  tvmAxisCount(leaves)
+
+proc emitTvmUnfold(stmts: NimNode, leaves: seq[TvmLeaf], nAxes: int, idx: NimNode) {.compileTime.} =
+  ## Appends the offset computation of one flat index over `leaves`:
+  ## - the index decomposes layout-left over the leaf dimensions
+  ##   (`idx2crd` order), every quotient carried to the next dimension.
+  ##   The last dimension keeps its quotient unmodded
+  ## - each coordinate scales its leaf's nonzero coefficients
+  ## - one accumulator per coordinate axis over `nAxes` with the offsets
+  ##   returned as a tuple
+  let rem = genSym(nskVar, "tvmRem")
+  stmts.add quote do:
+    var `rem` = `idx`
+  var accs: seq[NimNode] = @[]
+  for axis in 0 ..< nAxes:
+    let acc = genSym(nskVar, "tvmAcc" & $axis)
+    stmts.add quote do:
+      var `acc` = 0
+    accs.add acc
+  for k in 0 ..< leaves.len:
+    let leaf = leaves[k]
+    let crd = genSym(nskLet, "tvmCrd" & $k)
+    if k < leaves.len - 1:
+      let dim = newLit(leaf.dim)
+      stmts.add quote do:
+        let `crd` = `rem` mod `dim`
+        `rem` = `rem` div `dim`
+    else:
+      stmts.add quote do:
+        let `crd` = `rem`
+    for (axis, coeff) in leaf.coeffs:
+      if coeff != 0:
+        let co = newLit(coeff)
+        let target = accs[axis]
+        stmts.add quote do:
+          `target` = `target` + `crd` * `co`
+  var parts = nnkTupleConstr.newTree()
+  for acc in accs:
+    parts.add acc
+  stmts.add parts
+
+proc tvmRegisterTrees(layoutTy: NimNode): tuple[sh, st: NimNode] {.compileTime.} =
+  ## (value dims, cell-repetition dims) of a thread->value map layout type:
+  ## the register part that the map loads into.
+  result.sh = nnkTupleConstr.newTree(layoutTy[1][0][1], layoutTy[1][1])
+  result.st = nnkTupleConstr.newTree(layoutTy[2][0][1], layoutTy[2][1])
+
+macro tvmThreadOffset(layout: Layout, threadIdx: int): untyped =
+  ## Coordinate offset of a thread's slots in a thread->value map,
+  ## unfolded from the map layout's static type tree at compile time.
+  ##
+  ## Structure of a thread->value map layout:
+  ## `((thread dims, value dims), cell-repetition dims)` with the thread dims at `layout.shape[0][0]`.
+  ##
+  ## The flat thread index decomposes over the thread dims layout-left,
+  ## each dimension's coordinate scales its stride leaf's coefficients
+  ## (leaf contributions: `collectTvmLeaves`, offset accumulation: `emitTvmUnfold`).
+  ##
+  ## Returns a tuple of runtime ints with one entry per coordinate axis.
+  ## `crd2idx` over runtime coordinates cannot evaluate these layouts.
+  ## Composition leaves a zero stride as an `Int[0]` beside `CoordStride` leaves.
+  ## The runtime sum has no `+` across the two.
+  let ty = layout.getTypeInst()
+  var leaves: seq[TvmLeaf] = @[]
+  collectTvmLeaves(ty[1][0][0], ty[2][0][0], leaves)
+  var stmts = nnkStmtList.newTree()
+  emitTvmUnfold(stmts, leaves, tvmLayoutAxes(ty), threadIdx)
+  result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
+
+macro tvmRegisterSize(layout: Layout): int =
+  ## Register slot count of a thread->value map. The count is the product
+  ## of the value and cell-repetition dimensions.
+  let ty = layout.getTypeInst()
+  var leaves: seq[TvmLeaf] = @[]
+  let trees = tvmRegisterTrees(ty)
+  collectTvmLeaves(trees.sh, trees.st, leaves)
+  var product = 1
+  for leaf in leaves:
+    product *= leaf.dim
+  result = newLit(product)
+
+macro tvmRegisterOffset(layout: Layout, regIdx: int): untyped =
+  ## Coordinate offset of one register slot in a thread->value map.
+  ## The flat register index decomposes over the non-thread dimensions.
+  ## The leaf contributions are the same as for `tvmThreadOffset`.
+  ## Returns the offset as a tuple of runtime ints with one entry per coordinate axis.
+  let ty = layout.getTypeInst()
+  var leaves: seq[TvmLeaf] = @[]
+  let trees = tvmRegisterTrees(ty)
+  collectTvmLeaves(trees.sh, trees.st, leaves)
+  var stmts = nnkStmtList.newTree()
+  emitTvmUnfold(stmts, leaves, tvmLayoutAxes(ty), regIdx)
+  result = nnkBlockExpr.newTree(newEmptyNode(), stmts)
+
 # ═══════════════════════════════════════════════════════════════
 #  Tile load / store for tensor cores
 # ═══════════════════════════════════════════════════════════════
@@ -63,22 +210,16 @@ proc load*[T, ShD, StD, ShS, StS, Sh, St, TSh](
   ##   - dst: the register tile, sized by `tvm`'s register layout
   ##   - src: the global tensor
   ##   - padWith: the read past bounds
-  let tiled = src.logical_divide(tvm.layout)
-  let thrCrd = idx2crd(tvm.getThreadPartitioning(), threadIdx)
-  let thrSel = (((thrCrd, _), _), tileID)
-  let srcReg = tiled.slice(thrSel)
-  let tiledCrd = src.getIdentityLayout().logical_divide(tvm.layout)
-  let regCrd = tiledCrd.slice(thrSel)
-
-  let tileSel = (((_, _), _), tileID)
-  let tileCrd = tiledCrd.slice(tileSel)
-  if tileInBounds(tiledCrd, tileCrd, tileSel, src):
-    for i in 0 ..< srcReg.size():
-      dst[i] = srcReg[i]
+  let thrBase = tvmThreadOffset(tvm.layout, threadIdx)
+  let regSize = tvmRegisterSize(tvm.layout)
+  let tileBase = (tileID[0] * tvm.tileShape[0], tileID[1] * tvm.tileShape[1])
+  let farCorner = tileBase + tvm.layout.crd2idx(tvm.layout.size() - 1)
+  if farCorner.inBounds(src.shape):
+    for i in 0 ..< regSize:
+      dst[i] = src[tileBase + thrBase + tvmRegisterOffset(tvm.layout, i)]
   else:
-    let crdBase = tiledCrd.crd2idx(thrSel)
-    for i in 0 ..< srcReg.size():
-      dst[i] = src.paddedLoad(crdBase + regCrd.crd2idx(i), padWith)
+    for i in 0 ..< regSize:
+      dst[i] = src.paddedLoad(tileBase + thrBase + tvmRegisterOffset(tvm.layout, i), padWith)
 
 proc store*[T, ShD, StD, ShS, StS, Sh, St, TSh](
     dst: TensorView[T, ShD, StD], src: Tile[T, ShS, StS],
@@ -97,22 +238,16 @@ proc store*[T, ShD, StD, ShS, StS, Sh, St, TSh](
   ## Args:
   ##   - dst: the global tensor stored into
   ##   - src: the register tile, sized by `tvm`'s register layout
-  let tiled = dst.logical_divide(tvm.layout)
-  let thrCrd = idx2crd(tvm.getThreadPartitioning(), threadIdx)
-  let thrSel = (((thrCrd, _), _), tileID)
-  let dstReg = tiled.slice(thrSel)
-  let tiledCrd = dst.getIdentityLayout().logical_divide(tvm.layout)
-  let regCrd = tiledCrd.slice(thrSel)
-
-  let tileSel = (((_, _), _), tileID)
-  let tileCrd = tiledCrd.slice(tileSel)
-  if tileInBounds(tiledCrd, tileCrd, tileSel, dst):
-    for i in 0 ..< dstReg.size():
-      dstReg[i] = src[i]
+  let thrBase = tvmThreadOffset(tvm.layout, threadIdx)
+  let regSize = tvmRegisterSize(tvm.layout)
+  let tileBase = (tileID[0] * tvm.tileShape[0], tileID[1] * tvm.tileShape[1])
+  let farCorner = tileBase + tvm.layout.crd2idx(tvm.layout.size() - 1)
+  if farCorner.inBounds(dst.shape):
+    for i in 0 ..< regSize:
+      dst[tileBase + thrBase + tvmRegisterOffset(tvm.layout, i)] = src[i]
   else:
-    let crdBase = tiledCrd.crd2idx(thrSel)
-    for i in 0 ..< dstReg.size():
-      dst.guardedStore(crdBase + regCrd.crd2idx(i), src[i])
+    for i in 0 ..< regSize:
+      dst.guardedStore(tileBase + thrBase + tvmRegisterOffset(tvm.layout, i), src[i])
 
 # ═══════════════════════════════════════════════════════════
 #  Tile load / store for general case

@@ -256,7 +256,7 @@ proc jagged_attn_fwd*(
       var kReg: tile(k_pool.T, qkMma.getMmaLayout(opB))  # (nt, D)
       kReg.load(vK, kMap, thrID, (0, 0))
       qk.fillWith(0'f32)
-      qkMma.atom.gemm_tile(qk, qReg, kReg, qk)   # S = Q·Kᵀ   (MMA 1)
+      qkMma.atom.gemm_tile(qk, qReg, kReg)       # S = Q·Kᵀ   (MMA 1)
 
       qk *= qMul                                 # scale, before the band cut
 
@@ -285,7 +285,7 @@ proc jagged_attn_fwd*(
       acc *.= alpha                              # (mt × D) *.= (mt × 1)
       var vReg: tile(v_pool.T, pvMma.getMmaLayout(opB))  # (D, nt), B operand of MMA 2
       vReg.load(vV, vMap, thrID, (0, 0))
-      pvMma.atom.gemm_tile(acc, p, vReg, acc)    # O += P·V   (MMA 2)
+      pvMma.atom.gemm_tile(acc, p, vReg)         # O += P·V   (MMA 2)
 
     acc /.= lI                                   # (mt × D) /.= (mt × 1)
     segO.store(acc.downcast(o.T), oMap, thrID, (qBlock, 0))

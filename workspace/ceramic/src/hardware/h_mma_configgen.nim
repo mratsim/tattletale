@@ -112,9 +112,10 @@ proc parseAtomDecls*(defs: var seq[AtomParams]; body: NimNode) =
         let v = valNode[0]
         v.expectKind(nnkStrLit)
         doAssert v.strVal == "" or v.strVal == "simdgroup_multiply_accumulate" or
+                 v.strVal == "fma_tile" or
                  v.strVal.startsWith("mma.sync.aligned."),
           "declareAtoms: invalid instruction `" & v.strVal & "` on atom `" & $name &
-          "` (expected \"\", \"simdgroup_multiply_accumulate\", or an mma.sync.aligned.* mnemonic)"
+          "` (expected \"\", \"simdgroup_multiply_accumulate\", \"fma_tile\", or an mma.sync.aligned.* mnemonic)"
       elif keyStr in DtypePropKeys:
         let v = valNode[0]
         v.expectKind(nnkStrLit)
