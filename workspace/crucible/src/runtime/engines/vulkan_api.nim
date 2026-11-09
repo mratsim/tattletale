@@ -137,8 +137,8 @@ proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[
 proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[runVulkan, T], src: openArray[T]) {.inline.} =
   engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: DeviceMem[runVulkan, T]) {.inline.} =
-  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
+proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: DeviceMem[runVulkan, T], offsetElems: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T), offsetElems * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
@@ -381,6 +381,6 @@ proc copyToDeviceFromHostImpl(engine: VulkanEngine, dst: VulkanBuffer, src: poin
   var dst = dst
   engine.ctx.writeBuffer(dst, src, n)
 
-proc copyToHostFromDeviceImpl(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
+proc copyToHostFromDeviceImpl(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int, offsetBytes: int = 0) =
   let res = readBuffer[byte](engine.ctx, src)
-  copyMem(dst, res[0].addr, n)
+  copyMem(dst, res[offsetBytes].addr, n)

@@ -135,11 +135,12 @@ proc writeBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
     buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
   )
 
-proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int) =
-  if size > buffer.size:
-    raiseAssert("OpenCL readBuffer: read of " & $size & " bytes exceeds buffer size " & $buffer.size)
+proc readBuffer*(buffer: OpenCLBuffer, data: pointer, size: int, offset: int = 0) =
+  if size + offset > buffer.size:
+    raiseAssert("OpenCL readBuffer: read of " & $size & " bytes at offset " &
+      $offset & " exceeds buffer size " & $buffer.size)
   check buffer.commands.enqueueReadBuffer(
-    buffer.mem, CL_TRUE, 0, cl_size_t(size), data, 0, nil, nil
+    buffer.mem, CL_TRUE, cl_size_t(offset), cl_size_t(size), data, 0, nil, nil
   )
 
 proc compileKernel*(ctx: OpenCLContext, name: string, source: string): OpenCLKernel =
