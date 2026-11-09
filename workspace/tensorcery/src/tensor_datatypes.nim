@@ -455,6 +455,22 @@ proc narrow*(t: Tensor, axis: int, start: int, width: int): Tensor =
   let v = t.engine.makeViewImpl(impl, ns.toSpan(), st, offset)
   Tensor(engine: t.engine, node: ViewNode(src: t.node, v: v).to(TensorNode))
 
+proc view*(t: Tensor, shape, strides: openArray[int], offset: int): Tensor =
+  ## Layout view of `t` over the same buffer cell.
+  ## Args:
+  ## - shape, strides: the view layout over the source's element order
+  ## - offset: the view origin's element offset from the tensor origin
+  ## The general case of narrow, transpose and reshape: any rank, any strides,
+  ## one shared buffer, no allocation and no copy. The view must stay inside
+  ## the source's storage window (offset + cosize within the source buffer):
+  ## the makeViewImpl constructor enforces the window contract.
+  let impl = t.node.getImpl()
+  if shape.len != strides.len:
+    raise ValueError.newException(
+      "view: shape rank " & $shape.len & " != strides rank " & $strides.len)
+  let v = t.engine.makeViewImpl(impl, shape.toSpan(), strides.toSpan(), offset)
+  Tensor(engine: t.engine, node: ViewNode(src: t.node, v: v).to(TensorNode))
+
 proc reshape*(t: Tensor, shape: openArray[int]): Tensor =
   ## View of `t` with a new shape, same element order.
   ## Args:
