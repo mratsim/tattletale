@@ -14,17 +14,20 @@ import ./int_tuples_streams
 template toInt*(x: int): int = x
 template toInt*[V: static int](x: Int[V]): int = V
 
-func cosizeLeaf*(leaf, stride: int or Int): int =
+func cosizeLeaf*[L, S](leaf: L, stride: S): auto =
   ## One cosize term of the cosize sum: (leaf - 1) * |stride|.
   ##
   ## Args:
-  ## - leaf, stride: one shape leaf and its stride, `int` or `Int[N]`
-  ## Returns: the term as a scalar int, `Int[N]` leaves fold to N.
+  ## - leaf, stride: one shape leaf and its stride, `int` or `Int[N]`,
+  ##   never a tuple
+  ## Returns: the term, folding at compile time for `Int[N]` leaves
+  ## through the Int operator matrix, runtime ints compute the term.
   ##
   ## Emitted by cosizeImpl as a bound symbol: the macro expansion resolves
-  ## the call in this module's scope, valid at instantiation sites that do
-  ## not see the Int operator matrix.
-  (leaf.toInt() - 1) * abs(stride.toInt())
+  ## each call in this module's scope, valid at instantiation sites lacking
+  ## the Int operator matrix. Static layouts fold to compile-time terms here.
+  ## A runtime cosize never reads an `Int[N]` phantom's storage.
+  (leaf - 1) * abs(stride)
 
 func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.
