@@ -53,6 +53,11 @@ proc runTest*(run: static Runtime, name: string) =
     discard split(x, 0, 3)
   doAssertRaises AssertionDefect:
     discard toTensor(xq[0 ..< 7], @[2, 4])
+  # item bounds are contracts: negative and past-the-end indices raise
+  doAssertRaises AssertionDefect:
+    discard x.item(-1, float32)
+  doAssertRaises AssertionDefect:
+    discard x.item(0, 4, float32)
 
   for i in 0 ..< 8:
     let xi = xd[i].to(bfloat16).to(float32)

@@ -76,10 +76,18 @@ proc strides*(t: Tensor): Span[int] =
 proc dtype*(t: Tensor): Dtype =
   t.node.getImpl().dtype()
 
+func allIdxInShape(impl: AnyTensorImpl, idx: varargs[int]): bool =
+  let shape = impl.shape()
+  for i in 0 ..< idx.len:
+    if idx[i] < 0 or idx[i] >= shape[i]:
+      return false
+  true
+
 proc item*[T: float32 | bfloat16](t: Tensor, idx: varargs[int], _: typedesc[T]): T {.contracts.} =
   let impl = t.node.getImpl()
   {.precondition: idx.len == impl.shape().len.}
   {.precondition: impl.dtype() == toDtype(T).}
+  {.precondition: allIdxInShape(impl, idx).}
   var roots = newSeq[TensorNode](1)
   roots[0] = t.node
   var span = roots.toSpan()
