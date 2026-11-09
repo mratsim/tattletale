@@ -78,11 +78,11 @@ proc slabIdx(page, layer, pos, h, d: int): int =
 proc srcIdx(t, h, d: int): int =
   (t * KvHeads + h) * HeadDim + d
 
-proc runWrite(pool: PagePool, layer: int, offset, seqLen, cachedTokens: int, kSrc, vSrc: Tensor) =
+proc runWrite(pool: PagePool, layer: int, offset, seqLen, cachedTokens: int, kSrc, vSrc: Tensor, pageSlots: openArray[int]) =
   ## One eval of the pool write op over the layer's views.
   let (lk, lv) = pool.layerView(layer)
   let node = tn_pool_write(pool.kBuffer().engine, lk.node, lv.node,
-    kSrc.node, vSrc.node, offset, seqLen, cachedTokens)
+    kSrc.node, vSrc.node, offset, seqLen, cachedTokens, pageSlots)
   var roots = @[node]
   pool.kBuffer().engine.eval(roots.toSpan())
 
@@ -107,7 +107,7 @@ proc runMain[E: HwEngine](engine: E) =
     let kSlab = uploadSlab(engine, pool.kBuffer(), 1)
     let vSlab = uploadSlab(engine, pool.vBuffer(), 2)
     let (kSrc, vSrc, kh, vh) = srcRows(engine, 10, 3)
-    runWrite(pool, 0, 0, 10, 0, kSrc, vSrc)
+    runWrite(pool, 0, 0, 10, 0, kSrc, vSrc, @[0, 1, 2, 3])
     # Layer 0 stores the entries, layer 1 keeps its sentinels
     let gotK = downloadSlab(pool.kBuffer())
     let gotV = downloadSlab(pool.vBuffer())
@@ -134,7 +134,7 @@ proc runMain[E: HwEngine](engine: E) =
     let kSlab = uploadSlab(engine, pool.kBuffer(), 4)
     let vSlab = uploadSlab(engine, pool.vBuffer(), 5)
     let (kSrc, vSrc, kh, vh) = srcRows(engine, 600, 6)
-    runWrite(pool, 1, 200, 600, 0, kSrc, vSrc)
+    runWrite(pool, 1, 200, 600, 0, kSrc, vSrc, @[0, 1, 2, 3])
     let gotK = downloadSlab(pool.kBuffer())
     let gotV = downloadSlab(pool.vBuffer())
     for t in 0 ..< 600:
@@ -160,7 +160,7 @@ proc runMain[E: HwEngine](engine: E) =
   block:
     let kSlab = uploadSlab(engine, pool.kBuffer(), 7)
     let (kSrc, vSrc, kh, vh) = srcRows(engine, 10, 8)
-    runWrite(pool, 0, 100, 10, 105, kSrc, vSrc)
+    runWrite(pool, 0, 100, 10, 105, kSrc, vSrc, @[0, 1, 2, 3])
     let gotK = downloadSlab(pool.kBuffer())
     let gotV = downloadSlab(pool.vBuffer())
     # writeStart = max(0, 105 - 100) = 5: global positions 105..109 written,
@@ -178,6 +178,28 @@ proc runMain[E: HwEngine](engine: E) =
               "K cached (" & $t & "," & $h & "," & $d & ")"
             doAssert gotV[slabIdx(0, 0, pos, h, d)].to(float32) == vh[srcIdx(t, h, d)].to(float32),
               "V cached (" & $t & "," & $h & "," & $d & ")"
+
+  # remapped page table case:
+  # - sequence page 0 targets pool slot 2
+  # - sequence page 1 targets pool slot 0
+  # - the write uses the table over the slot order
+  block:
+    let kSlab = uploadSlab(engine, pool.kBuffer(), 9)
+    let vSlab = uploadSlab(engine, pool.vBuffer(), 10)
+    let (kSrc, vSrc, kh, vh) = srcRows(engine, PageSize + 10, 11)
+    runWrite(pool, 1, 0, PageSize + 10, 0, kSrc, vSrc, @[2, 0, 1, 3])
+    let gotK = downloadSlab(pool.kBuffer())
+    let gotV = downloadSlab(pool.vBuffer())
+    for t in 0 ..< PageSize + 10:
+      let seqPage = t div PageSize
+      let poolPage = [2, 0, 1, 3][seqPage]
+      let pos = t mod PageSize
+      for h in 0 ..< KvHeads:
+        for d in 0 ..< HeadDim:
+          doAssert gotK[slabIdx(poolPage, 1, pos, h, d)].to(float32) == kh[srcIdx(t, h, d)].to(float32),
+            "K remapped (" & $t & " seqPage " & $seqPage & " slot " & $poolPage & "," & $h & "," & $d & ")"
+          doAssert gotV[slabIdx(poolPage, 1, pos, h, d)].to(float32) == vh[srcIdx(t, h, d)].to(float32),
+            "V remapped (" & $t & " seqPage " & $seqPage & " slot " & $poolPage & "," & $h & "," & $d & ")"
 
   echo "pool write op (Metal): all checks passed"
 

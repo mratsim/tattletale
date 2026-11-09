@@ -42,6 +42,7 @@ type PoolWriteNode* = ref object
   offset: int              # global token position of src entry 0
   seqLen: int              # entries to write
   cachedTokens: int        # entries already in the trie from copy-on-write forks
+  pageSlots: seq[int]      # pool slot of each sequence page, in page order
 
 proc eval*(n: PoolWriteNode) =
   raiseAssert "eval is not implemented yet: graph layer only"
@@ -106,10 +107,16 @@ proc enqueuePoolWriteNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n
   type
     Mem = typeof(engine.allocDevice(bfloat16, 0))
   # Write range metadata: Nim ints at the host face, int32 on device,
-  # (offset, seqLen, cachedTokens, pageSize), staged per eval
+  # (offset, seqLen, cachedTokens, pageSize, pageSlots[0], pageSlots[1], ...),
+  # staged per eval
   let pkShape = asP.poolK.getImpl().shape()
-  var metaHost = [int32(asP.offset), int32(asP.seqLen),
-                  int32(asP.cachedTokens), int32(pkShape[1])]
+  var metaHost = newSeq[int32](4 + asP.pageSlots.len)
+  metaHost[0] = int32(asP.offset)
+  metaHost[1] = int32(asP.seqLen)
+  metaHost[2] = int32(asP.cachedTokens)
+  metaHost[3] = int32(pkShape[1])
+  for i in 0 ..< asP.pageSlots.len:
+    metaHost[4 + i] = int32(asP.pageSlots[i])
   let metaDev = engine.allocDevice(int32, metaHost.len)
   engine.copyToDeviceFromHost(metaDev, metaHost)
   enqueuePoolWriteRows[E, (int, int, int, int), Mem, typeof(metaDev)](
@@ -122,7 +129,7 @@ registerEnqueueNode(enqueuePoolWriteNode)
 #  Tensor face
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, offset, seqLen, cachedTokens: int): TensorNode =
+proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, offset, seqLen, cachedTokens: int, pageSlots: openArray[int]): TensorNode =
   ## Writes post-rope K/V entries into pool pages, in graph: the write enqueues
   ## before any node reading the pool, one eval orders write then attention.
   ## The returned node aliases the K pool view, the V pool view is written
@@ -134,6 +141,9 @@ proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, off
   ## - kSrc, vSrc: (1, seq_len, kv_heads, head_dim) post-rope entries,
   ##   bfloat16, batch index 0 (batch 1 per forward pass)
   ## - offset: global token position of src entry 0
+  ## - pageSlots: the pool slot of each sequence page, in page order,
+  ##   pageSlots[globalPos div PAGE_SIZE] receives globalPos's entries,
+  ##   the slots sit anywhere in the pool (trie-cached pages included)
   ##
   ## Ranges:
   ## - seqLen: entries to write, seqLen <= kSrc's token count
@@ -187,11 +197,17 @@ proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, off
       "tn_pool_write: negative offset " & $offset & " or cachedTokens " & $cachedTokens)
   let pageSize = spk[1]
   let lastPos = offset + seqLen - 1
-  if seqLen > 0 and lastPos div pageSize >= spk[0]:
+  if seqLen > 0 and lastPos div pageSize >= pageSlots.len:
     raise ValueError.newException(
-      "tn_pool_write: write range reaches page " & $(lastPos div pageSize) &
-      ", the pool holds " & $spk[0] & " pages")
+      "tn_pool_write: write range reaches sequence page " & $(lastPos div pageSize) &
+      ", the page table lists " & $pageSlots.len & " pages")
+  for i in 0 ..< pageSlots.len:
+    if pageSlots[i] < 0 or pageSlots[i] >= spk[0]:
+      raise ValueError.newException(
+        "tn_pool_write: page table slot " & $pageSlots[i] &
+        " outside the pool of " & $spk[0] & " pages")
   PoolWriteNode(
     r: ipk,
     poolK: poolK, poolV: poolV, kSrc: kSrc, vSrc: vSrc,
-    offset: offset, seqLen: seqLen, cachedTokens: cachedTokens).to(TensorNode)
+    offset: offset, seqLen: seqLen, cachedTokens: cachedTokens,
+    pageSlots: @pageSlots).to(TensorNode)

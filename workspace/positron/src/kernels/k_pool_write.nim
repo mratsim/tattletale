@@ -26,16 +26,20 @@ proc k_pool_write*(dstK, srcK, dstV, srcV: distinct DeviceView, meta: ptr Unchec
   ## Expected input:
   ## - srcK, srcV: (seq_len, kv_heads, head_dim) entries of the post-rope K and V
   ## - dstK, dstV: (num_pages, page_size, kv_heads, head_dim) pool layer views
-  ## - meta: 4 int32 scalars, offset, seqLen, cachedTokens and pageSize,
-  ##   the pointer-formal metadata buffer pattern of k_embed_gather
+  ## - meta: the pointer-formal metadata buffer pattern of k_embed_gather.
+  ##   Entry layout: offset, seqLen, cachedTokens, pageSize, then one int32
+  ##   pool slot per sequence page
+  ## - pageSlots[i] is the pool slot of sequence page i, a cached page
+  ##   occupies any pool slot
   ##
   ## Output:
   ## - dstK, dstV fully written over positions [offset, offset + seq_len):
   ##   source element (t, h, d) writes the pool entry (page, withinPage, h, d)
+  ##   at slot pageSlots[globalPos div page_size]
   ##
   ## Positions before max(0, cachedTokens - offset) keep their previous content.
-  ## Page = globalPos div page_size, withinPage = globalPos mod page_size,
-  ## globalPos = offset + t.
+  ## Sequence page = globalPos div page_size, withinPage = globalPos mod
+  ## page_size, globalPos = offset + t.
   let
     dvK = make_view(dstK.data +% dstK.offset, dstK.layout)
     svK = make_view(srcK.data +% srcK.offset, srcK.layout)
@@ -77,7 +81,7 @@ proc k_pool_write*(dstK, srcK, dstV, srcV: distinct DeviceView, meta: ptr Unchec
       d = rem mod int32(svK.shape[2])
     if t >= writeStart:
       let globalPos = offset + t
-      let page = globalPos div pageSize
+      let page = meta[4 + globalPos div pageSize]
       let withinPage = globalPos mod pageSize
       dvK[int(page), int(withinPage), int(h), int(d)] = svK[int(t), int(h), int(d)]
       dvV[int(page), int(withinPage), int(h), int(d)] = svV[int(t), int(h), int(d)]
