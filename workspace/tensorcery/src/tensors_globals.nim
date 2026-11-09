@@ -49,8 +49,6 @@ proc gCudaEngineErased(_: static Runtime = runCuda): AnyEngine =
   cast[CudaEngine](gCudaEngineInstance).toAnyEngine()
 
 proc gEngine*(run: static Runtime): AnyEngine =
-  ## Erasure instantiates inside the per-engine helpers here.
-  ## One engine compiles per run selection
   when run == runMetal:
     gMetalEngineErased()
   elif run == runOpenCL:
