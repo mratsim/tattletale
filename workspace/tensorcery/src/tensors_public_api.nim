@@ -67,24 +67,6 @@ proc eval*(ts: varargs[Tensor]) =
 
 # #######################################################################
 #
-#                            Materialization
-#
-# #######################################################################
-
-proc toHost*[T: float32 | bfloat16](t: Tensor, _: typedesc[T]): seq[T] {.contracts.} =
-  ## Schedules the graph and reads the tensor's values back as host data
-  ## (the np.array face), the typedesc picks T and must match the dtype
-  let impl = t.node.getImpl()
-  {.precondition: impl.dtype() == toDtype(T).}
-  var roots = newSeq[TensorNode](1)
-  roots[0] = t.node
-  t.engine.eval(roots.toSpan())
-  result = newSeq[T](impl.shape().getNumElems())
-  if result.len > 0:
-    t.engine.download(result, t.node)
-
-# #######################################################################
-#
 #                            Ops
 #
 # #######################################################################
