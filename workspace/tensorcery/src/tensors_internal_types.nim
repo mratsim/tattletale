@@ -80,6 +80,8 @@ iface *AnyEngine:
     proc upload(node: TensorNode, src: openArray[bfloat16])
     proc download(dst: var openArray[float32], node: TensorNode)
     proc download(dst: var openArray[bfloat16], node: TensorNode)
+    proc download(dst: var openArray[float32], node: TensorNode, offsetElems: int)
+    proc download(dst: var openArray[bfloat16], node: TensorNode, offsetElems: int)
     proc eval(roots: Span[TensorNode])
 
 func getNumElems*(shape: Span[int]): int =

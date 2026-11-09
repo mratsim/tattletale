@@ -65,6 +65,19 @@ proc eval*(ts: varargs[Tensor]) =
     roots[i] = ts[i].node
   ts[0].engine.eval(roots.toSpan())
 
+proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.contracts.} =
+  ## Scalar readback, the t[0, 0].item face. Schedules the graph,
+  ## downloads the element at the index
+  let impl = t.node.getImpl()
+  {.precondition: impl.dtype() == toDtype(T).}
+  let strides = impl.strides()
+  var roots = newSeq[TensorNode](1)
+  roots[0] = t.node
+  t.engine.eval(roots.toSpan())
+  var one: array[1, T]
+  t.engine.download(one, t.node, i * strides[0] + j * strides[1])
+  one[0]
+
 # #######################################################################
 #
 #                            Ops
