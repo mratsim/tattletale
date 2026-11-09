@@ -53,47 +53,99 @@ proc getImpl*(n: RmsNormNode): AnyTensorImpl =
 # ═══════════════════════════════════════════════════════════════════════
 
 template enqueueRmsnormRows[E: HwEngine, Mem](
-    engine: E, batch: Batch[E], n: RmsNormNode, Sh: untyped, Axis: untyped) =
-  ## Enqueues one k_rmsnorm over the node's impls at the rank given by Sh.
-  ## x and the result share one Mem, the weight is rank 1 with its own layout.
+    engine: E, batch: Batch[E], n: RmsNormNode) =
+  ## Enqueues one k_rmsnorm over the node's impls, one literal shape tuple
+  ## per rank branch.
   ##
   ## A template, not a proc: batch.enqueue walks the kernel body at compile
   ## time over this call site's argument types, and the walked chain
   ## (k_rmsnorm -> ceramic rmsnorm) slices layouts at compile time
   ## (`sliceAxes` inside the ceramic kernel).
   ##
-  ## Both statics must be concrete here:
+  ## Every shape tuple and the axis index are written as literals
+  ## inside each branch, matching the erasedUpload pattern:
   ##
-  ## - Sh: the shape tuple, one handler branch per rank below
-  ## - Axis: a literal index like k_matmul's tile schedule, a computed
-  ##   expression miscompiles the walk
+  ## - Sh-parametric type expressions in the walked body bind unreliably
+  ##   at the launch
+  ## - the DeviceView binding of a rank-2 f32 bridge failed under some
+  ##   handler registration orders
+  ## - literal types bind always
   ##
   ## x and the result share one Mem, the weight is rank 1 with its own layout.
-  let
-    rr = n.r.to(TensorImpl[Mem, Layout[Sh, Sh]])
-    rx = n.x.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    rw = n.w.getImpl().to(TensorImpl[Mem, Layout[(int,), (int,)]])
-    rv = TensorBridge[Mem, Sh, Sh](data: rr.data[], offset: rr.offset, layout: rr.layout)
-    xv = TensorBridge[Mem, Sh, Sh](data: rx.data[], offset: rx.offset, layout: rx.layout)
-    wv = TensorBridge[Mem, (int,), (int,)](data: rw.data[], offset: rw.offset, layout: rw.layout)
-  # one move into a local: the enqueue macro binds the launch closure's handle from there
-  let eps = n.eps
-  let
-    axisSize = xv.layout.shape[tupleLen(Sh) - 1]
-    rows = xv.layout.shape.getNumElems() div axisSize
-  # one warp per axis strip: the threadgroup is exactly one warp of threads,
-  # grid-stride in the kernel covers any grid size
-  batch.enqueue<<(rows, 32)>> k_rmsnorm(rv, xv, wv, eps, Axis)
+  case n.x.getImpl().shape().len
+  of 1:
+    let
+      rr = n.r.to(TensorImpl[Mem, Layout[(int,), (int,)]])
+      rx = n.x.getImpl().to(TensorImpl[Mem, Layout[(int,), (int,)]])
+      rw = n.w.getImpl().to(TensorImpl[Mem, Layout[(int,), (int,)]])
+      rv = TensorBridge[Mem, (int,), (int,)](data: rr.data[], offset: rr.offset, layout: rr.layout)
+      xv = TensorBridge[Mem, (int,), (int,)](data: rx.data[], offset: rx.offset, layout: rx.layout)
+      wv = TensorBridge[Mem, (int,), (int,)](data: rw.data[], offset: rw.offset, layout: rw.layout)
+    # one move into a local: the enqueue macro binds the launch closure's handle from there
+    let eps = n.eps
+    # one warp per axis strip: the threadgroup is exactly one warp of threads,
+    # grid-stride in the kernel covers any grid size
+    batch.enqueue<<(1, 32)>> k_rmsnorm(rv, xv, wv, eps, 0)
+  of 2:
+    let
+      rr = n.r.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+      rx = n.x.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+      rw = n.w.getImpl().to(TensorImpl[Mem, Layout[(int,), (int,)]])
+      rv = TensorBridge[Mem, (int, int), (int, int)](data: rr.data[], offset: rr.offset, layout: rr.layout)
+      xv = TensorBridge[Mem, (int, int), (int, int)](data: rx.data[], offset: rx.offset, layout: rx.layout)
+      wv = TensorBridge[Mem, (int,), (int,)](data: rw.data[], offset: rw.offset, layout: rw.layout)
+    let eps = n.eps
+    let
+      axisSize = xv.layout.shape[1]
+      rows = xv.layout.shape.getNumElems() div axisSize
+    batch.enqueue<<(rows, 32)>> k_rmsnorm(rv, xv, wv, eps, 1)
+  of 3:
+    let
+      rr = n.r.to(TensorImpl[Mem, Layout[(int, int, int), (int, int, int)]])
+      rx = n.x.getImpl().to(TensorImpl[Mem, Layout[(int, int, int), (int, int, int)]])
+      rw = n.w.getImpl().to(TensorImpl[Mem, Layout[(int,), (int,)]])
+      rv = TensorBridge[Mem, (int, int, int), (int, int, int)](data: rr.data[], offset: rr.offset, layout: rr.layout)
+      xv = TensorBridge[Mem, (int, int, int), (int, int, int)](data: rx.data[], offset: rx.offset, layout: rx.layout)
+      wv = TensorBridge[Mem, (int,), (int,)](data: rw.data[], offset: rw.offset, layout: rw.layout)
+    let eps = n.eps
+    let
+      axisSize = xv.layout.shape[2]
+      rows = xv.layout.shape.getNumElems() div axisSize
+    batch.enqueue<<(rows, 32)>> k_rmsnorm(rv, xv, wv, eps, 2)
+  of 4:
+    let
+      rr = n.r.to(TensorImpl[Mem, Layout[(int, int, int, int), (int, int, int, int)]])
+      rx = n.x.getImpl().to(TensorImpl[Mem, Layout[(int, int, int, int), (int, int, int, int)]])
+      rw = n.w.getImpl().to(TensorImpl[Mem, Layout[(int,), (int,)]])
+      rv = TensorBridge[Mem, (int, int, int, int), (int, int, int, int)](data: rr.data[], offset: rr.offset, layout: rr.layout)
+      xv = TensorBridge[Mem, (int, int, int, int), (int, int, int, int)](data: rx.data[], offset: rx.offset, layout: rx.layout)
+      wv = TensorBridge[Mem, (int,), (int,)](data: rw.data[], offset: rw.offset, layout: rw.layout)
+    let eps = n.eps
+    let
+      axisSize = xv.layout.shape[3]
+      rows = xv.layout.shape.getNumElems() div axisSize
+    batch.enqueue<<(rows, 32)>> k_rmsnorm(rv, xv, wv, eps, 3)
+  of 5:
+    let
+      rr = n.r.to(TensorImpl[Mem, Layout[(int, int, int, int, int), (int, int, int, int, int)]])
+      rx = n.x.getImpl().to(TensorImpl[Mem, Layout[(int, int, int, int, int), (int, int, int, int, int)]])
+      rw = n.w.getImpl().to(TensorImpl[Mem, Layout[(int,), (int,)]])
+      rv = TensorBridge[Mem, (int, int, int, int, int), (int, int, int, int, int)](data: rr.data[], offset: rr.offset, layout: rr.layout)
+      xv = TensorBridge[Mem, (int, int, int, int, int), (int, int, int, int, int)](data: rx.data[], offset: rx.offset, layout: rx.layout)
+      wv = TensorBridge[Mem, (int,), (int,)](data: rw.data[], offset: rw.offset, layout: rw.layout)
+    let eps = n.eps
+    let
+      axisSize = xv.layout.shape[4]
+      rows = xv.layout.shape.getNumElems() div axisSize
+    batch.enqueue<<(rows, 32)>> k_rmsnorm(rv, xv, wv, eps, 4)
+  else:
+    raise ValueError.newException(
+      "eval: rank " & $n.x.getImpl().shape().len & " unsupported")
 
 proc enqueueRmsnormNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: TensorNode): bool =
   ## Enqueue handler of the rmsnorm op, registered below. The erased node
   ## downcasts to the rmsnorm node here. A node of another op returns false,
   ## leaving the dispatch to that op's handler.
-  ##
-  ## The rank dispatch is internal, one concrete shape tuple per branch:
-  ##
-  ## - the enqueue template must expand with a concrete Sh
-  ## - the eval walk instantiates this handler once per rank
   let asN = n.to(RmsNormNode)
   if asN.isNil:
     return false
@@ -104,26 +156,10 @@ proc enqueueRmsnormNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: 
   case asN.x.getImpl().dtype()
   of kFp32:
     type Mem = typeof(engine.allocDevice(float32, 0))
-    case asN.x.getImpl().shape().len
-    of 1: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int,), 0)
-    of 2: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int, int), 1)
-    of 3: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int, int, int), 2)
-    of 4: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int, int, int, int), 3)
-    of 5: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int, int, int, int, int), 4)
-    else:
-      raise ValueError.newException(
-        "eval: rank " & $asN.x.getImpl().shape().len & " unsupported")
+    enqueueRmsnormRows[E, Mem](engine, batch, asN)
   of kBf16:
     type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    case asN.x.getImpl().shape().len
-    of 1: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int,), 0)
-    of 2: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int, int), 1)
-    of 3: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int, int, int), 2)
-    of 4: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int, int, int, int), 3)
-    of 5: enqueueRmsnormRows[E, Mem](engine, batch, asN, (int, int, int, int, int), 4)
-    else:
-      raise ValueError.newException(
-        "eval: rank " & $asN.x.getImpl().shape().len & " unsupported")
+    enqueueRmsnormRows[E, Mem](engine, batch, asN)
   else:
     raise ValueError.newException("eval: kFp16 rmsnorm unsupported")
   return true
