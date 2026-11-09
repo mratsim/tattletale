@@ -100,11 +100,11 @@ proc registerGpuPasses*(reg: var PassRegistry, B: CodegenKind) {.compileTime.} =
     registerFoldMaxMinToBuiltins(reg)
     reg.registerRenameReservedIdentifiers("wgslReservedIdentifiers", WgslReserved, "wgsl_")
     registerExplodeStructWithPtrFields(reg)
+    registerWgslInlinePointerParamCalls(reg)
     registerWgslExplodePointerLocals(reg)
     registerSmemInitRewrite(reg)
     registerWgslHoistProgramScopeLocals(reg)
     registerInstantiateAddressSpaceGenerics(reg)
-    registerWgslInlinePointerParamCalls(reg)
     registerWgslFeatureScan(reg)
     registerValidationPostPasses(reg)
   of cgHlsl:
