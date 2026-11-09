@@ -187,6 +187,11 @@ proc enqueueJaggedAttnNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], 
     batch.enqueue<<((gx, n.H, n.kv.batchSize), (attnTile, 1))>> attnCombo(ob, qb, kb, vb, qOffB, kvB, float32(n.scale), n.layer, n.H, n.Nkv, 256, 128, false, low(int32))
 
 
+  # Pool children walk first: a pool-write node enqueues its launch here,
+  # ordering the write before this attention inside the one batch.
+  # Materialized slabs walk as no-ops.
+  evalNode[E](engine, batch, asA.poolK)
+  evalNode[E](engine, batch, asA.poolV)
   evalNode[E](engine, batch, asA.q)
   # q_offsets staged per eval in the handler, outside the walked body,
   # per the embed gather ids pattern

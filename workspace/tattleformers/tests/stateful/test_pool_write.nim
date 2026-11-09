@@ -79,10 +79,10 @@ proc srcIdx(t, h, d: int): int =
   (t * KvHeads + h) * HeadDim + d
 
 proc runWrite(pool: PagePool, layer: int, offset, seqLen, cachedTokens: int, kSrc, vSrc: Tensor, pageSlots: openArray[int]) =
-  ## One eval of the pool write op over the layer's views.
-  let (lk, lv) = pool.layerView(layer)
-  let node = tn_pool_write(pool.kBuffer().engine, lk.node, lv.node,
-    kSrc.node, vSrc.node, offset, seqLen, cachedTokens, pageSlots)
+  ## One eval of the pool write op over the pool slabs.
+  let node = tn_pool_write(pool.kBuffer().engine, pool.kBuffer().node,
+    pool.vBuffer().node, kSrc.node, vSrc.node, layer,
+    offset, seqLen, cachedTokens, pageSlots)
   var roots = @[node]
   pool.kBuffer().engine.eval(roots.toSpan())
 

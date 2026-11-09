@@ -34,10 +34,12 @@ export tile_algebra
 
 type PoolWriteNode* = ref object
   ## Writes post-rope K/V entries into pool pages, in graph.
-  ## The node's impl is the K pool layer view: the output aliases the pool,
-  ## downstream nodes read the written slots through it.
+  ## The node's impl is the K pool SLAB: the output aliases the pool.
+  ## The jagged attention node consumes it as its poolK child, so the eval
+  ## walk enqueues the write before the attention through the child walk.
   r: AnyTensorImpl
-  poolK, poolV: TensorNode # (num_pages, PAGE_SIZE, kv_heads, head_dim) layer views
+  poolK, poolV: TensorNode # (num_pages, num_layers, PAGE_SIZE, kv_heads, head_dim) slabs
+  layer: int               # target slab layer
   kSrc, vSrc: TensorNode   # (1, seq_len, kv_heads, head_dim) post-rope entries
   offset: int              # global token position of src entry 0
   seqLen: int              # entries to write
@@ -56,22 +58,34 @@ proc getImpl*(n: PoolWriteNode): AnyTensorImpl =
 
 const poolWriteBlk = 256
 
-proc enqueuePoolWriteRows[E: HwEngine, Sh: tuple, Mem, MemMeta](
+proc enqueuePoolWriteRows[E: HwEngine, ShP: tuple, ShS: tuple, Mem, MemMeta](
     engine: E, batch: Batch[E], n: PoolWriteNode, meta: sink MemMeta) =
   ## Enqueues one k_pool_write over the node's write range.
   ## A body-local type alias defeats the launch's generic binding.
+  ##
+  ## The pool impls walk at the slab rank (ShP), the src entries at rank 4
+  ## (ShS), both literal shape tuples at the call site.
   let
-    pk = n.poolK.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    pv = n.poolV.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    sk = n.kSrc.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    sv = n.vSrc.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
+    pk = n.poolK.getImpl().to(TensorImpl[Mem, Layout[ShP, ShP]])
+    pv = n.poolV.getImpl().to(TensorImpl[Mem, Layout[ShP, ShP]])
+    sk = n.kSrc.getImpl().to(TensorImpl[Mem, Layout[ShS, ShS]])
+    sv = n.vSrc.getImpl().to(TensorImpl[Mem, Layout[ShS, ShS]])
   let
-    pageSize = pk.layout.shape[1]
-    kvHeads = pk.layout.shape[2]
-    headDim = pk.layout.shape[3]
-    seqLen = sk.layout.shape[1]
-    dstK = TensorBridge[Mem, Sh, Sh](data: pk.data[], offset: pk.offset, layout: pk.layout)
-    dstV = TensorBridge[Mem, Sh, Sh](data: pv.data[], offset: pv.offset, layout: pv.layout)
+    slab = pk.layout
+    # Dst = the layer's (num_pages, PAGE_SIZE, kv_heads, head_dim) window:
+    # layer axis drops, offset is the layer base
+    dstLayout = make_layout(
+      (int(slab.shape[0]), int(slab.shape[2]), int(slab.shape[3]), int(slab.shape[4])),
+      (int(slab.stride[0]), int(slab.stride[2]), int(slab.stride[3]), int(slab.stride[4])))
+    dstOffset = pk.offset + n.layer * int(slab.stride[1])
+    pageSize = int(slab.shape[2])
+    kvHeads = int(slab.shape[3])
+    headDim = int(slab.shape[4])
+    seqLen = int(sk.layout.shape[1])
+    dstK = TensorBridge[Mem, (int, int, int, int), (int, int, int, int)](
+      data: pk.data[], offset: dstOffset, layout: dstLayout)
+    dstV = TensorBridge[Mem, (int, int, int, int), (int, int, int, int)](
+      data: pv.data[], offset: dstOffset, layout: dstLayout)
     # Src entries (1, seq_len, kv_heads, head_dim), batch 1 per forward pass.
     # Kernel side: one (seq_len, kv_heads, head_dim) window at the batch offset.
     srcK = TensorBridge[Mem, (int, int, int), (int, int, int)](
@@ -97,13 +111,17 @@ proc enqueuePoolWriteNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n
     return false
   evalNode[E](engine, batch, asP.kSrc)
   evalNode[E](engine, batch, asP.vSrc)
-  # Pool views and src entries share one bf16 Mem (checked at the face).
-  # Rank dispatch: the enqueue template runs at the rank 4 branch only,
-  # one literal shape tuple per branch, the rmsnorm handler pattern.
-  if asP.poolK.getImpl().shape().len != 4:
+  # Pool slabs and src entries share one bf16 Mem (checked at the face).
+  # Rank dispatch: the enqueue template runs at the slab-rank-5 /
+  # src-rank-4 pair only, one literal shape tuple per pair (rmsnorm handler).
+  if asP.poolK.getImpl().shape().len != 5:
     raise ValueError.newException(
-      "eval: the pool write op is rank 4, walked at rank " &
+      "eval: the pool write op walks rank-5 slabs, walked at rank " &
       $asP.poolK.getImpl().shape().len)
+  if asP.kSrc.getImpl().shape().len != 4:
+    raise ValueError.newException(
+      "eval: the pool write op walks rank-4 src entries, walked at rank " &
+      $asP.kSrc.getImpl().shape().len)
   type
     Mem = typeof(engine.allocDevice(bfloat16, 0))
   # Write range metadata: Nim ints at the host face, int32 on device,
@@ -114,13 +132,13 @@ proc enqueuePoolWriteNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n
   metaHost[0] = int32(asP.offset)
   metaHost[1] = int32(asP.seqLen)
   metaHost[2] = int32(asP.cachedTokens)
-  metaHost[3] = int32(pkShape[1])
+  metaHost[3] = int32(pkShape[2])
   for i in 0 ..< asP.pageSlots.len:
     metaHost[4 + i] = int32(asP.pageSlots[i])
   let metaDev = engine.allocDevice(int32, metaHost.len)
   engine.copyToDeviceFromHost(metaDev, metaHost)
-  enqueuePoolWriteRows[E, (int, int, int, int), Mem, typeof(metaDev)](
-    engine, batch, asP, metaDev)
+  enqueuePoolWriteRows[E, (int, int, int, int, int), (int, int, int, int),
+                       Mem, typeof(metaDev)](engine, batch, asP, metaDev)
   return true
 
 registerEnqueueNode(enqueuePoolWriteNode)
@@ -129,21 +147,26 @@ registerEnqueueNode(enqueuePoolWriteNode)
 #  Tensor face
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, offset, seqLen, cachedTokens: int, pageSlots: openArray[int]): TensorNode =
-  ## Writes post-rope K/V entries into pool pages, in graph: the write enqueues
-  ## before any node reading the pool, one eval orders write then attention.
-  ## The returned node aliases the K pool view, the V pool view is written
-  ## by the same launch.
+proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, layer: int, offset, seqLen, cachedTokens: int, pageSlots: openArray[int]): TensorNode =
+  ## Writes post-rope K/V entries into pool pages, in graph.
+  ##
+  ## - the write enqueues before any node reading the pool, one eval
+  ##   orders write then attention
+  ## - the returned node aliases the K pool SLAB: the jagged attention
+  ##   node consumes it as its poolK child and one walk orders write
+  ##   before attention through the child walk
+  ## - one launch writes both pools
   ##
   ## Args:
-  ## - poolK, poolV: (num_pages, PAGE_SIZE, kv_heads, head_dim) layer views
-  ##   of the pool slabs in bfloat16, from PagePool.layerView
+  ## - poolK, poolV: (num_pages, num_layers, PAGE_SIZE, kv_heads, head_dim)
+  ##   pool slabs in bfloat16, `layer` selects the slab layer the write
+  ##   targets
   ## - kSrc, vSrc: (1, seq_len, kv_heads, head_dim) post-rope entries,
   ##   bfloat16, batch index 0 (batch 1 per forward pass)
   ## - offset: global token position of src entry 0
   ## - pageSlots: the pool slot of each sequence page, in page order,
   ##   pageSlots[globalPos div PAGE_SIZE] receives globalPos's entries,
-  ##   the slots sit anywhere in the pool (trie-cached pages included)
+  ##   a trie-cached page occupies any pool slot
   ##
   ## Ranges:
   ## - seqLen: entries to write, seqLen <= kSrc's token count
@@ -151,7 +174,7 @@ proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, off
   ##   positions before max(0, cachedTokens - offset) stay untouched
   ##
   ## Raises on a rank/dtype/geometry mismatch and when the write range
-  ## exceeds the pool capacity.
+  ## exceeds the pool capacity or the page table.
   let
     ipk = poolK.getImpl()
     ipv = poolV.getImpl()
@@ -167,10 +190,10 @@ proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, off
     spv = ipv.shape()
     ssk = isk.shape()
     ssv = isv.shape()
-  if spk.len != 4 or spv.len != 4:
+  if spk.len != 5 or spv.len != 5:
     raise ValueError.newException(
-      "tn_pool_write: the pool views must be rank 4 " &
-      "(num_pages, PAGE_SIZE, kv_heads, head_dim), got rank " &
+      "tn_pool_write: the pool slabs must be rank 5 " &
+      "(num_pages, num_layers, PAGE_SIZE, kv_heads, head_dim), got rank " &
       $spk.len & " and " & $spv.len)
   if ssk.len != 4 or ssv.len != 4:
     raise ValueError.newException(
@@ -185,17 +208,20 @@ proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, off
   if ssk[0] != 1:
     raise ValueError.newException(
       "tn_pool_write: the src rows carry batch " & $ssk[0] & ", batch 1 per forward pass")
-  if ssk[2] != spk[2] or ssk[3] != spk[3]:
+  if layer < 0 or layer >= spk[1]:
+    raise ValueError.newException(
+      "tn_pool_write: layer " & $layer & " outside the slabs' " & $spk[1] & " layers")
+  if ssk[2] != spk[3] or ssk[3] != spk[4]:
     raise ValueError.newException(
       "tn_pool_write: layer kv geometry (" & $ssk[2] & ", " & $ssk[3] &
-      ") exceeds the pool slot (" & $spk[2] & ", " & $spk[3] & ")")
+      ") exceeds the pool slot (" & $spk[3] & ", " & $spk[4] & ")")
   if seqLen < 0 or seqLen > ssk[1]:
     raise ValueError.newException(
       "tn_pool_write: seqLen " & $seqLen & " outside the src rows' " & $ssk[1] & " tokens")
   if offset < 0 or cachedTokens < 0:
     raise ValueError.newException(
       "tn_pool_write: negative offset " & $offset & " or cachedTokens " & $cachedTokens)
-  let pageSize = spk[1]
+  let pageSize = spk[2]
   let lastPos = offset + seqLen - 1
   if seqLen > 0 and lastPos div pageSize >= pageSlots.len:
     raise ValueError.newException(
@@ -208,6 +234,6 @@ proc tn_pool_write*(engine: AnyEngine, poolK, poolV, kSrc, vSrc: TensorNode, off
         " outside the pool of " & $spk[0] & " pages")
   PoolWriteNode(
     r: ipk,
-    poolK: poolK, poolV: poolV, kSrc: kSrc, vSrc: vSrc,
+    poolK: poolK, poolV: poolV, layer: layer, kSrc: kSrc, vSrc: vSrc,
     offset: offset, seqLen: seqLen, cachedTokens: cachedTokens,
     pageSlots: @pageSlots).to(TensorNode)
