@@ -124,7 +124,7 @@
 
 import
   std/options,
-  pkg/iface,
+  workspace/iface,
   workspace/libtorch as F,
   ./norm,
   ../stateful/inference_context
