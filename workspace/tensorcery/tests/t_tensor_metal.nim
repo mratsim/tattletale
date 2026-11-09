@@ -7,7 +7,7 @@
 
 ## Tensorcery erased tensor layer on metal
 ##
-## Test that the erased user face (toTensor, toHost, add, split, eval) runs end to end on the Metal engine in bfloat16.
+## Test that the user face (toTensor, add, split, eval) runs end to end on the Metal engine in bfloat16.
 ##
 ## Run from the worktree root:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
