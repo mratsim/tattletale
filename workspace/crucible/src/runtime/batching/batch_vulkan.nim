@@ -44,44 +44,48 @@ type
     destroyPipeline: proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
     destroyLayout: proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
 
+  OwnedCommandPool = object
+    ## An owned VkCommandPool, its recorded command buffers die with it.
+    device: VkDevice
+    handle: VkCommandPool
+    destroy: proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}
+
   VulkanBatchObj = object
     ctx: VulkanContext
     entries: seq[BatchEntry]
     pipelines: Table[(string, seq[uint32]), BatchPipeline]
       # entrypoint + module words: one name can bake different LocalSizes per entry
     recording: VkCommandBuffer
-    cmdPool: VkCommandPool
-    destroyCommandPool: proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}
+    cmdPool: OwnedCommandPool
 
   VulkanBatch* = ref VulkanBatchObj
 
   VkMemoryBarrier = object
     sType: VkStructureType
-    pNext: pointer
     srcAccessMask: uint32
     dstAccessMask: uint32
+    pNext: pointer
 
   VkPushConstantRange = object
     stageFlags: uint32
     offset: uint32
     size: uint32
 
+proc `=destroy`(p: var BatchPipeline) =
+  if p.handle != nil and p.destroyPipeline != nil:
+    p.destroyPipeline(p.device, p.handle, nil)
+  if p.layout != nil and p.destroyLayout != nil:
+    p.destroyLayout(p.device, p.layout, nil)
+
+proc `=destroy`(p: var OwnedCommandPool) =
+  if p.handle != nil and p.destroy != nil:
+    p.destroy(p.device, p.handle, nil)
+
 const
   VK_STRUCTURE_TYPE_MEMORY_BARRIER = VkStructureType(46)
   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT = 0x00000800
   VK_ACCESS_SHADER_READ_BIT = 0x00000020
   VK_ACCESS_SHADER_WRITE_BIT = 0x00000040
-
-proc `=destroy`(batch: var VulkanBatchObj) =
-  ## Releases the batch's own objects, never the borrowed context or buffers.
-  # Destroying the pool frees the recorded command buffer allocated from it.
-  if batch.cmdPool != nil and batch.destroyCommandPool != nil:
-    batch.destroyCommandPool(batch.ctx.device, batch.cmdPool, nil)
-  for p in batch.pipelines.values:
-    if p.handle != nil and p.destroyPipeline != nil:
-      p.destroyPipeline(p.device, p.handle, nil)
-    if p.layout != nil and p.destroyLayout != nil:
-      p.destroyLayout(p.device, p.layout, nil)
 
 proc checkPushRoom(pushConstantCursor, need: int) {.inline.} =
   if pushConstantCursor + need > 128:
@@ -320,18 +324,21 @@ proc finalize*(batch: VulkanBatch) =
          bufferMemoryBarrierCount: uint32, pBufferMemoryBarriers: pointer,
          imageMemoryBarrierCount: uint32, pImageMemoryBarriers: pointer) {.cdecl.}
   ](ctx.gpaAddr(ctx.instance, "vkCmdPipelineBarrier"))
-  if batch.cmdPool == nil:
+  if batch.cmdPool.handle == nil:
     var cpc = VkCommandPoolCreateInfo(
       sType: VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
       queueFamilyIndex: ctx.queueFamilyIndex
     )
-    check vkCreateCommandPool(ctx.device, cpc.addr, nil, batch.cmdPool.addr)
-    batch.destroyCommandPool = cast[
-      proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}
-    ](ctx.gpaAddr(ctx.instance, "vkDestroyCommandPool"))
+    check vkCreateCommandPool(ctx.device, cpc.addr, nil, batch.cmdPool.handle.addr)
+    batch.cmdPool = OwnedCommandPool(
+      device: ctx.device,
+      handle: batch.cmdPool.handle,
+      destroy: cast[
+        proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}
+      ](ctx.gpaAddr(ctx.instance, "vkDestroyCommandPool")))
   var allocInfo = VkCommandBufferAllocateInfo(
     sType: VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-    commandPool: batch.cmdPool,
+    commandPool: batch.cmdPool.handle,
     level: 0,
     commandBufferCount: 1
   )

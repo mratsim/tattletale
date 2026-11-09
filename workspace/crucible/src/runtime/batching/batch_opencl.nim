@@ -42,15 +42,29 @@ type
     scalars: seq[byte]
     slots: seq[Slot]
 
+  RetainedKernel* = distinct Pkernel
+    ## An owned cl_kernel, released on destruction.
+
+  RetainedProgram* = distinct Pprogram
+    ## An owned cl_program, released on destruction.
+
   OpenCLBatchObj = object
     context: Pcontext
     queue: Pcommand_queue
     entries: seq[BatchEntry]
-    pipelines*: Table[(string, string), Pkernel]
-    programs: Table[string, Pprogram]
+    pipelines*: Table[(string, string), RetainedKernel]
+    programs: Table[string, RetainedProgram]
     finalized: bool
 
   OpenCLBatch* = ref OpenCLBatchObj
+
+proc `=destroy`(k: var RetainedKernel) =
+  if Pkernel(k) != nil:
+    discard releaseKernel(Pkernel(k))
+
+proc `=destroy`(p: var RetainedProgram) =
+  if Pprogram(p) != nil:
+    discard releaseProgram(Pprogram(p))
 
 const
   QueueDevice = cl_uint(0x1091)
@@ -65,13 +79,6 @@ proc getCommandQueueInfo(
   param_value: pointer,
   param_value_size_ret: ptr cl_size_t
 ): TClResult {.importc: "clGetCommandQueueInfo", dynlib: ClLib.}
-
-proc `=destroy`*(batch: var OpenCLBatchObj) =
-  ## Releases the batch's own objects, never the borrowed handles.
-  for k in batch.pipelines.values:
-    discard releaseKernel(k)
-  for p in batch.programs.values:
-    discard releaseProgram(p)
 
 proc queueDevice(queue: Pcommand_queue): Pdevice_id =
   var device: Pdevice_id
@@ -104,10 +111,10 @@ proc compileEntrypoint(batch: OpenCLBatch, source, entrypoint: string): Pkernel 
     else:
       check status
 
-    batch.programs[source] = program
+    batch.programs[source] = RetainedProgram(program)
 
   var status: TClResult
-  result = createKernel(batch.programs[source], entrypoint.cstring, status.addr)
+  result = createKernel(Pprogram batch.programs[source], entrypoint.cstring, status.addr)
   check status
 
 proc storeEntryArg(entry: var BatchEntry, v: OpenCLBuffer, _: int) =
@@ -152,8 +159,8 @@ proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg
   # One entrypoint name exists in many sources, the kernel is per source and entrypoint pair
   let kernelKey = (source, entrypoint)
   if kernelKey notin batch.pipelines:
-    batch.pipelines[kernelKey] = compileEntrypoint(batch, source, entrypoint)
-  var entry = BatchEntry(kernel: batch.pipelines[kernelKey], fleet: cfg.grid, squadron: cfg.blk)
+    batch.pipelines[kernelKey] = RetainedKernel(compileEntrypoint(batch, source, entrypoint))
+  var entry = BatchEntry(kernel: Pkernel batch.pipelines[kernelKey], fleet: cfg.grid, squadron: cfg.blk)
   bindArgs(entry, output, args, storeEntryArg, OpenCLBuffer, cgOpenCL)
   batch.entries.add entry
 

@@ -43,13 +43,16 @@ type
     scalars: seq[byte]
     slots: seq[Slot]
 
+  RetainedMetalObject* = distinct objc.ID
+    ## An owned +1 Metal object, released on destruction.
+
   MetalBatchObj = object
     device, queue: objc.ID
-    library: objc.ID
+    library: RetainedMetalObject
     entries: seq[BatchEntry]
-    pipelines: Table[string, objc.ID]
-    recording: objc.ID
-    constants: objc.ID
+    pipelines: Table[string, RetainedMetalObject]
+    recording: RetainedMetalObject
+    constants: RetainedMetalObject
 
   MetalBatch* = ref MetalBatchObj
 
@@ -62,18 +65,9 @@ const
   MaxKernelBufferBinds = 31
     ## Metal caps one dispatch at 31 bound buffers
 
-proc `=destroy`*(batch: var MetalBatchObj) =
-  ## Releases the batch's own objects, never the borrowed handles.
-  if not objc.isNil(batch.recording):
-    objc.release(batch.recording)
-  if not objc.isNil(batch.library):
-    objc.release(batch.library)
-  for pso in batch.pipelines.values:
-    objc.release(pso)
-  if not objc.isNil(batch.constants):
-    objc.release(batch.constants)
-  `=destroy`(batch.entries)
-  `=destroy`(batch.pipelines)
+proc `=destroy`(o: var RetainedMetalObject) =
+  if not objc.isNil(objc.ID o):
+    objc.release(objc.ID o)
 
 when defined(macosx):
 
@@ -129,12 +123,12 @@ when defined(macosx):
     result = MetalBatch(device: engine.ctx.device, queue: engine.ctx.queue)
     # Engine library cache is a single slot: a re-ingest releases the old library.
     # Batch construction retains its own reference.
-    result.library = objc.retain(engine.cache.library)
+    result.library = RetainedMetalObject(objc.retain(engine.cache.library))
 
   proc recordGlobalFn*(batch: MetalBatch, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
     ## Usage:
     ##   batch.recordGlobalFn("saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
-    if not objc.isNil(batch.recording):
+    if not objc.isNil(objc.ID batch.recording):
       raiseAssert("recordGlobalFn: the batch is finalized, entries are frozen")
     if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
       raiseAssert("Metal batch: cfg.grid must be >= 1 per axis, got " &
@@ -146,10 +140,10 @@ when defined(macosx):
       raiseAssert("Metal batch: cfg.blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z &
                   " exceeds the " & $MaxThreadsPerThreadgroup & " threads-per-threadgroup max")
     # Two libraries can export the same entrypoint name
-    let psoKey = $cast[int](batch.library) & "\0" & entrypoint
+    let psoKey = $cast[int](objc.ID batch.library) & "\0" & entrypoint
     if psoKey notin batch.pipelines:
-      batch.pipelines[psoKey] = compileIndirectPipelineState(batch.device, batch.library, entrypoint)
-    var entry = BatchEntry(pipelineState: batch.pipelines[psoKey], fleet: cfg.grid, squadron: cfg.blk,
+      batch.pipelines[psoKey] = RetainedMetalObject(compileIndirectPipelineState(batch.device, objc.ID batch.library, entrypoint))
+    var entry = BatchEntry(pipelineState: objc.ID batch.pipelines[psoKey], fleet: cfg.grid, squadron: cfg.blk,
                            sharedMem: cfg.sharedMem.int)
     bindArgs(entry, output, args, storeEntryArg, objc.ID, cgMetal)
     batch.entries.add entry
@@ -159,25 +153,25 @@ when defined(macosx):
       result = result + e.scalars.len.round_multiple_up(16)
 
   proc finalize*(batch: MetalBatch) =
-    if not objc.isNil(batch.recording):
+    if not objc.isNil(objc.ID batch.recording):
       return
     if batch.entries.len == 0:
       raiseAssert("finalize: the batch has no entries")
-    batch.recording = newRecording(batch.device, batch.entries.len)
+    batch.recording = RetainedMetalObject(newRecording(batch.device, batch.entries.len))
     if batch.getScalarSize > 0:
-      batch.constants = objc.msgSend(batch.device, objc.`$$`("newBufferWithLength:options:"),
-                                     objc.NSUInteger(batch.getScalarSize), SharedUntrackedOptions)
-      if objc.isNil(batch.constants):
+      batch.constants = RetainedMetalObject(objc.msgSend(batch.device, objc.`$$`("newBufferWithLength:options:"),
+                                     objc.NSUInteger(batch.getScalarSize), SharedUntrackedOptions))
+      if objc.isNil(objc.ID batch.constants):
         raiseAssert("Metal batch: newBufferWithLength(" & $batch.getScalarSize & " bytes) returned nil")
-    let image = if objc.isNil(batch.constants):
+    let image = if objc.isNil(objc.ID batch.constants):
                   objc.ID(nil)
                 else:
-                  objc.msgSend(batch.constants, objc.`$$`("contents"))
+                  objc.msgSend(objc.ID batch.constants, objc.`$$`("contents"))
     var scalarBase = 0
     for i, e in batch.entries.mpairs:
       if not objc.isNil(image) and e.scalars.len > 0:
         copyMem(cast[ptr UncheckedArray[byte]](image)[scalarBase].addr, e.scalars[0].addr, e.scalars.len)
-      let cmd = objc.msgSend(batch.recording, objc.`$$`("indirectComputeCommandAtIndex:"), objc.NSUInteger(i))
+      let cmd = objc.msgSend(objc.ID batch.recording, objc.`$$`("indirectComputeCommandAtIndex:"), objc.NSUInteger(i))
       if i > 0:
         discard objc.msgSend(cmd, objc.`$$`("setBarrier"))
       discard objc.msgSend(cmd, objc.`$$`("setComputePipelineState:"), e.pipelineState)
@@ -192,7 +186,7 @@ when defined(macosx):
                                e.borrowedBuffers[slot.buffer], objc.NSUInteger(0), objc.NSUInteger(argIdx))
         of skBytes:
           discard objc.msgSend(cmd, objc.`$$`("setKernelBuffer:offset:atIndex:"),
-                               batch.constants, objc.NSUInteger(scalarBase + slot.off), objc.NSUInteger(argIdx))
+                               objc.ID batch.constants, objc.NSUInteger(scalarBase + slot.off), objc.NSUInteger(argIdx))
         inc argIdx
       let g = objc.MTLSize(width: objc.NSUInteger(e.fleet.x),
                            height: objc.NSUInteger(e.fleet.y),
@@ -204,17 +198,17 @@ when defined(macosx):
       scalarBase = scalarBase + e.scalars.len.round_multiple_up(16)
 
   proc replay*(batch: MetalBatch) =
-    if objc.isNil(batch.recording):
+    if objc.isNil(objc.ID batch.recording):
       raiseAssert("replay: finalize the batch first")
     let cmdBuf = objc.msgSend(batch.queue, objc.`$$`("commandBuffer"))
     let encoder = objc.msgSend(cmdBuf, objc.`$$`("computeCommandEncoder"))
     for e in batch.entries:
       for h in e.borrowedBuffers:
         discard msgSendUseResource(encoder, objc.`$$`("useResource:usage:"), h, ResourceUsageReadWrite)
-    if not objc.isNil(batch.constants):
-      discard msgSendUseResource(encoder, objc.`$$`("useResource:usage:"), batch.constants, ResourceUsageReadWrite)
+    if not objc.isNil(objc.ID batch.constants):
+      discard msgSendUseResource(encoder, objc.`$$`("useResource:usage:"), objc.ID batch.constants, ResourceUsageReadWrite)
     discard objc.msgSend(encoder, objc.`$$`("executeCommandsInBuffer:withRange:"),
-                         batch.recording, objc.NSUInteger(0), objc.NSUInteger(batch.entries.len))
+                         objc.ID batch.recording, objc.NSUInteger(0), objc.NSUInteger(batch.entries.len))
     discard objc.msgSend(encoder, objc.`$$`("endEncoding"))
     discard objc.msgSend(cmdBuf, objc.`$$`("commit"))
     discard objc.msgSend(cmdBuf, objc.`$$`("waitUntilCompleted"))
