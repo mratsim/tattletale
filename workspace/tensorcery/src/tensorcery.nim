@@ -21,7 +21,9 @@ import workspace/tensorcery/src/compute_graph/eval
 
 export tensors_public_types
 export tensors_globals
+# erased plumbing: Tensor's field types live here and toAnyEngine binds
+# a vtable at the call site, the impls resolve in the caller scope
 export tensors_internals
 export tensors_public_api
-# vtable slot lambdas resolve the eval impl at the caller's toAnyEngine site
+# eval resolves at that same toAnyEngine site
 export eval.eval
