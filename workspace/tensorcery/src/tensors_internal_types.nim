@@ -50,13 +50,13 @@ func `==`*[T](a, b: Span[T]): bool =
 
 
 iface *AnyTensorImpl:
-    proc dtype(): Dtype
-    proc shape(): Span[int]
-    proc strides(): Span[int]
+    func dtype(): Dtype
+    func shape(): Span[int]
+    func strides(): Span[int]
 
 iface *TensorNode:
     proc getImpl(): AnyTensorImpl
-    proc opName(): string
+    func opName(): string
 
 type
   TensorImpl*[Mem, L] = ref object
@@ -73,7 +73,7 @@ type
     core*: C
     pos*: int
 
-proc initTensorBridge*[DevMem, Sh, St](data: DevMem, offset: int, layout: Layout[Sh, St]): TensorBridge[DevMem, Sh, St] =
+func initTensorBridge*[DevMem, Sh, St](data: DevMem, offset: int, layout: Layout[Sh, St]): TensorBridge[DevMem, Sh, St] =
   ## Kernel ABI face of a materialized tensor, assembled at launch sites
   TensorBridge[DevMem, Sh, St](data: data, offset: offset, layout: layout)
 

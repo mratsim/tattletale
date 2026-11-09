@@ -36,13 +36,13 @@ export tensors_internal_types
 #  TensorImpl - AnyTensorImpl implementation
 # ═══════════════════════════════════════════════════════════════════════
 
-proc shape*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
+func shape*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
   toSpan(t.layout.shape)
 
-proc strides*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
+func strides*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
   toSpan(t.layout.stride)
 
-proc dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dtype =
+func dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dtype =
   toDtype(T)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -52,7 +52,7 @@ proc dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dt
 proc getImpl*[Mem, L](t: TensorImpl[Mem, L]): AnyTensorImpl =
   t.to(AnyTensorImpl)
 
-proc opName*[Mem, L](t: TensorImpl[Mem, L]): string =
+func opName*[Mem, L](t: TensorImpl[Mem, L]): string =
   ## A materialized tensor is a node with no op, the walk leaves it alone
   ""
 
