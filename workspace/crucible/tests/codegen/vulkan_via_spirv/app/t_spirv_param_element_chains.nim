@@ -1,8 +1,8 @@
 ## SPIR-V binary emission: pointer and by-value params in device fns
 ##
-## Test that `{.device.}` fns with var and ptr parameters emit binary SPIR-V
-## accepted by `spirv-val --target-env vulkan1.4`.
-## Covered shapes: scalar derefs, elementwise array-field writes, by-value struct reads
+## Test that a kernel calling device fns with `var` and by-value parameters
+## emits valid binary SPIR-V, and that the kernel computes the expected
+## value on Vulkan through its callees' pointer writes.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -42,6 +42,15 @@ const paramSpv = spirv:
     gather(acc, r)
     output[0] = x + acc + r.data[0]
 
+proc paramKernelLaunch(output: ptr UncheckedArray[float32]) =
+  var r: Reg4
+  fill(r, 2.0'f32)
+  var x: float32 = 3.0'f32
+  scale(x, 2.0'f32)
+  var acc: float32 = 0.0'f32
+  gather(acc, r)
+  output[0] = x + acc + r.data[0]
+
 proc runTest() =
   block emission:
     doAssert paramSpv.len > 0, "`spirv:` macro emitted no words"
@@ -72,6 +81,20 @@ proc runTest() =
     doAssert spirvDis.len > 0,
       "spirv-dis not found on PATH, install the SPIRV-Tools (brew install spirv-tools)"
 
+  block numerics:
+    # scale writes x through a pointer parameter, gather writes acc through one
+    # and reads r by value: 6.0 + 14.0 + 2.0
+    var engine = newEngine(runVulkan)
+    let oDev = engine.allocDevice(float32, 1)
+    engine.launchDeviceFn paramKernelLaunch(oDev) do:
+      lang = spirv
+      grid = (1, 1)
+      blk = (1, 1)
+    var got: array[1, float32]
+    engine.copyToHostFromDevice(got.toOpenArray(0, 0), oDev)
+    doAssert got[0] == 22.0'f32,
+      "kernel computed " & $got[0] & ", want 22.0 (6.0 + 14.0 + 2.0)"
+
 when isMainModule:
   runTest()
-  echo "t_spirv_param_element_chains: spirv-val accepted the emitted module"
+  echo "t_spirv_param_element_chains: spirv-val accepted the emitted module, kernel computed 22.0"

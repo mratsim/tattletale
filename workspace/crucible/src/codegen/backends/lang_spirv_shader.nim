@@ -1187,8 +1187,16 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   let fnId = ctx.emittedFns[name]
   let retTy = ctx.fnTypes[name]
   var args: seq[uint32]
+  var writesLocals = false
   for a in e.args:
     args.add ctx.emitExpr(fn, a)
+    let at = ctx.resolveExprType(fn, a)
+    if at != nil and at.containsPtrDeep:
+      writesLocals = true
+  if writesLocals:
+    # a callee writes anything its pointer arguments reach.
+    # Forwarded local values are stale after the call
+    fn.fwd.clear()
   return ctx.builder.freshInst(OpFunctionCall,
     @[ctx.resolveTyId(ctx.valueTy(retTy)), fnId] & args)
 
