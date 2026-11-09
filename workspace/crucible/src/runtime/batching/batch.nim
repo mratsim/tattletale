@@ -367,7 +367,6 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     else:
       batch.leg.resetRecording()
     for entry in batch.entries:
-      echo "DBG record nil=", entry.record.isNil, " fn=", entry.entrypoint
       entry.record(batch.leg)
     batch.leg.finalize()
     batch.leg.replay()

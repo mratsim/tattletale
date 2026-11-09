@@ -24,22 +24,22 @@ import workspace/design_by_contract
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  SplitCore* = ref object
-    r*: seq[AnyTensorImpl]
-    a*: TensorNode
-    axis*: int
+  SplitCore = ref object
+    r: seq[AnyTensorImpl]
+    a: TensorNode
+    axis: int
 
-func getOutput*(n: SplitCore, i: int): AnyTensorImpl =
+func getOutput(n: SplitCore, i: int): AnyTensorImpl =
   n.r[i]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl*[C](n: PosNode[C]): AnyTensorImpl =
+proc getImpl[C](n: PosNode[C]): AnyTensorImpl =
   n.core.getOutput(n.pos)
 
-func opName*(n: PosNode[SplitCore]): string =
+func opName(n: PosNode[SplitCore]): string =
   "split"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -66,7 +66,7 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueSplit*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode): bool =
+proc enqueueSplit[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode): bool =
   let asSplit = n.to(PosNode[SplitCore])
   if asSplit.isNil:
     return false

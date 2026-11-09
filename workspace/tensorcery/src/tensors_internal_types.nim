@@ -93,13 +93,11 @@ func getNumElems*[Sh: tuple](shape: Sh): int =
     result *= shape[i]
 
 func atAxis*[Sh: tuple](s: Sh, axis: int): int =
-  ## Tuple element at the runtime axis
   staticFor i, 0, tupleLen(Sh):
     if i == axis:
       result = s[i]
 
 func withAxis*[Sh: tuple](s: Sh, axis: int, val: int): Sh =
-  ## Tuple with the runtime axis element replaced
   staticFor i, 0, tupleLen(Sh):
     if i == axis:
       result[i] = val

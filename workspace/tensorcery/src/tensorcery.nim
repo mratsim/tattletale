@@ -15,12 +15,13 @@ import workspace/tensorcery/src/compute_graph/ops_1iNo/ops_split
 import workspace/tensorcery/src/compute_graph/eval
 import workspace/tensorcery/src/tensors_public_api
 
+# op files register at this import, the walk expands at the user's
+# first eval call
+import workspace/tensorcery/src/compute_graph/eval
+
 export tensors_public_types
-export tensors_internal_types
-export tensors_internals
 export tensors_globals
-export dispatch
-export ops_add
-export ops_split
-export eval
+export tensors_internals
 export tensors_public_api
+# vtable slot lambdas resolve the eval impl at the caller's toAnyEngine site
+export eval.eval
