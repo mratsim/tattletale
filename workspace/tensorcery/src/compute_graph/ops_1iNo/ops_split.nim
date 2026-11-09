@@ -70,8 +70,7 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueSplit*[E: HwEngine, Sh: tuple, Mem](
-    engine: E, batch: Batch[E], n: TensorNode): bool =
+proc enqueueSplit*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: Batch[E], n: TensorNode): bool =
   let asSplit = n.to(PosNode[SplitCore])
   if asSplit.isNil:
     return false

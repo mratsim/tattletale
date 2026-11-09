@@ -1842,12 +1842,16 @@ SIG_WRAP_MAX = 140
 def nim_sig_wrap_checks(path, text, findings):
     """Flags a callable signature (proc, func, macro, template, iterator,
     converter) wrapped across lines while the joined single-line form fits
-    the 100-column code budget. Only the comma-join shape counts, a first
-    line ending on a comma and continuations that complete the parameter
-    list; a signature too long to join stays legal."""
+    the 140-column budget. Two wrap shapes count: a first line ending on a
+    comma, and a first line ending on the generic bracket plus open paren
+    `](`; continuations must complete the parameter list. A signature too
+    long to join stays legal."""
     lines = text.splitlines()
     for i, raw in enumerate(lines):
-        if not SIG_HEAD_RE.match(raw) or not raw.rstrip().endswith(","):
+        stripped = raw.rstrip()
+        if not SIG_HEAD_RE.match(raw):
+            continue
+        if not (stripped.endswith(",") or stripped.endswith("](")):
             continue
         parts = [raw.strip()]
         j = i + 1
