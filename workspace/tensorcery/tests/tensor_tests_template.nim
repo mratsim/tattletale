@@ -66,7 +66,7 @@ proc runTest*(run: static Runtime, name: string) =
       let e1 = xd[r * 4 + c + 2].to(bfloat16).to(float32)
       doAssert w.item(r, c, bfloat16) == (e0 + e1).to(bfloat16), name & ": colsplit " & $r & "," & $c
 
-  # eval materializes op nodes, a re-eval walks nothing, the values stay
+  # Memoize computation and drop ancestor nodes
   let d = x + y
   let e = d + x
   eval(e)
