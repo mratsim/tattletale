@@ -11,5 +11,8 @@
 import workspace/crucible
 import ./batch_suite
 
-when isMainModule:
+proc runTest() =
   runBatchSuite(newEngine(runOpenCL))
+
+when isMainModule:
+  runTest()
