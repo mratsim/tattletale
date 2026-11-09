@@ -17,8 +17,8 @@ proc runTest*(engine: AnyEngine, name: string) =
   for i in 0 ..< 8:
     xq[i] = xd[i].to(bfloat16)
     yq[i] = yd[i].to(bfloat16)
-  let x = toTensor(engine, xq, @[2, 4])
-  let y = toTensor(engine, yq, @[2, 4])
+  let x = engine.toTensor(xq, @[2, 4])
+  let y = engine.toTensor(yq, @[2, 4])
 
   doAssert x.node.getImpl().shape().len == 2
   doAssert x.node.getImpl().shape()[0] == 2
@@ -34,13 +34,14 @@ proc runTest*(engine: AnyEngine, name: string) =
     doAssert p.node.getImpl().shape()[0] == 1
     doAssert p.node.getImpl().shape()[1] == 4
 
-  let small = toTensor(engine, yq[0 ..< 4], @[1, 4])
-  doAssertRaises ValueError:
+  let small = engine.toTensor(yq[0 ..< 4], @[1, 4])
+  # face checks are contracts, they raise AssertionDefect
+  doAssertRaises AssertionDefect:
     discard x + small
-  doAssertRaises ValueError:
+  doAssertRaises AssertionDefect:
     discard split(x, 0, 3)
-  doAssertRaises ValueError:
-    discard toTensor(engine, xq[0 ..< 7], @[2, 4])
+  doAssertRaises AssertionDefect:
+    discard engine.toTensor(xq[0 ..< 7], @[2, 4])
 
   eval(z, parts[0])
 

@@ -11,6 +11,7 @@ import workspace/ceramic
 import workspace/iface
 import ../../tensors_internals
 import ../dispatch
+import workspace/design_by_contract
 
 # ############################################################
 #
@@ -48,14 +49,10 @@ func opName*(n: PosNode[SplitCore]): string =
 proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorNode] =
   let ix = x.getImpl()
   let s = ix.shape()
-  if axis != 0:
-    # erased impls carry contiguous layouts only, a split on an inner
-    # axis needs the inherited strides of the source layout
-    raise ValueError.newException(
-      "split: axis " & $axis & " unsupported, only the outer axis splits densely")
-  if s[axis] mod k != 0:
-    raise ValueError.newException(
-      "split: dimension " & $s[axis] & " not divisible by " & $k)
+  # erased impls carry contiguous layouts only, a split on an inner
+  # axis needs the inherited strides of the source layout
+  precondition: (axis == 0, "split: axis " & $axis & " unsupported, only the outer axis splits densely")
+  precondition: s[axis] mod k == 0
   var partShape = newSeq[int](s.len)
   for i in 0 ..< s.len:
     partShape[i] = s[i]

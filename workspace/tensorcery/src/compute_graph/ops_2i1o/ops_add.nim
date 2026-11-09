@@ -14,6 +14,7 @@ import workspace/iface
 import workspace/math
 import ../../tensors_internals
 import ../dispatch
+import workspace/design_by_contract
 
 # ############################################################
 #
@@ -70,10 +71,8 @@ func opName*(n: AddNode): string =
 proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode =
   let ia = a.getImpl()
   let ib = b.getImpl()
-  if ia.shape() != ib.shape():
-    raise ValueError.newException("tn_add: shape mismatch")
-  if ia.dtype() != ib.dtype():
-    raise ValueError.newException("tn_add: dtype mismatch")
+  precondition: ia.shape() == ib.shape()
+  precondition: ia.dtype() == ib.dtype()
   AddNode(a: a, b: b, r: engine.newTensorNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -12,6 +12,7 @@ import tensors_internals
 import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_1iNo/ops_split
+import workspace/design_by_contract
 
 # Export Nim-friendly core types so users construct tensors without
 # importing the internals
@@ -36,13 +37,8 @@ type Tensor* = object
 proc toTensor*[T: float32 | bfloat16](engine: AnyEngine, data: openArray[T], shape: openArray[int]): Tensor =
   ## One tensor from host data, the upload is the construction
   ## (the mx.array face), dtype derives from the element type
-  if shape.len == 0:
-    raise ValueError.newException("toTensor: empty shape")
-  if shape.len != 2:
-    raise ValueError.newException("toTensor: rank " & $shape.len & " unsupported")
-  if data.len != shape[0] * shape[1]:
-    raise ValueError.newException(
-      "toTensor: data holds " & $data.len & " elements, the shape wants " & $(shape[0] * shape[1]))
+  precondition: shape.len == 2
+  precondition: data.len == shape[0] * shape[1]
   result = Tensor(engine: engine,
                   node: engine.newTensorNode(toDtype(T), shape.toSpan()))
   if data.len > 0:
@@ -70,9 +66,7 @@ proc toHost*[T: float32 | bfloat16](t: Tensor, _: typedesc[T]): seq[T] =
   ## Schedules the graph and reads the tensor's values back as host data
   ## (the np.array face), the typedesc picks T and must match the dtype
   let impl = t.node.getImpl()
-  if impl.dtype() != toDtype(T):
-    raise ValueError.newException(
-      "toHost: tensor holds " & $impl.dtype() & ", T is " & $toDtype(T))
+  precondition: impl.dtype() == toDtype(T)
   var roots = newSeq[TensorNode](1)
   roots[0] = t.node
   t.engine.eval(roots.toSpan())
