@@ -71,9 +71,27 @@ func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
 func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
+func batchCompileTarget(E: typedesc[MetalEngine]): CompileTarget {.compileTime.} =
+  ctMetal
+
+func batchCompileTarget(E: typedesc[VulkanEngine]): CompileTarget {.compileTime.} =
+  ctSpirvShader
+
+func batchCompileTarget(E: typedesc[WebgpuEngine]): CompileTarget {.compileTime.} =
+  ctWebGPU
+
+func batchCompileTarget(E: typedesc[OpenCLEngine]): CompileTarget {.compileTime.} =
+  ctOpenCL
+
 macro ctgAccumulateCir(procdef: typed): untyped =
   let kname = lowerNimAst(ctgFrontend, procdef)
   result = newLit(kname)
+
+macro ctgAccumulateCirIn(target: static CompileTarget, procdef: untyped): untyped =
+  ## Types the wrapper under the engine's compile target so device builtins
+  ## resolve at the enqueue site, then lowers it to the batch CIR stream.
+  crucibleCompileTarget = target
+  result = newCall(bindSym"ctgAccumulateCir", procdef)
 
 proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
   if ctgArtifactPrinted and ctgArtifactKind != kind:
@@ -119,7 +137,9 @@ macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg
   if not wg.isNil:
     procdef[4].add(wg)
   procdef[6][0][0] = deviceFn
-  let fnNameN = quote do: ctgAccumulateCir(`procdef`)
+  let engineN = quote do: `batch`.engine
+  let targetN = quote do: batchCompileTarget(typeof(`engineN`))
+  let fnNameN = quote do: ctgAccumulateCirIn(`targetN`, `procdef`)
   let outN = values[0]
   var argsTuple = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
