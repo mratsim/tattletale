@@ -5,11 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Internal tensor types: Span, the impl records and the graph ifaces
-##
-## - no behavior lives here, the impl procs are in tensors_internals
-## - imports tensors_public_types for Dtype, the iface signatures bind it
-
 import std/macros
 import std/typetraits
 import workspace/crucible/src/builtins/builtins_gpu_types

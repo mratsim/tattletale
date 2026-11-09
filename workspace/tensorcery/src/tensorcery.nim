@@ -5,12 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Tensorcery's public face: the erased tensor layer plus its ops
-##
-## - the graph core never imports the ops
-## - op files register their handlers in the dispatch registry at import
-## - eval.nim imports them and freezes the registry before the walk
-
 import workspace/tensorcery/src/tensors_public_types
 import workspace/tensorcery/src/tensors_internal_types
 import workspace/tensorcery/src/tensors_internals

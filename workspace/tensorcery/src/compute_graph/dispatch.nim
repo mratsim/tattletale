@@ -5,21 +5,15 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Op registry: one handler symbol per op, registration at import
-##
-## - an op file registers its generic handler symbol with registerOp
-## - the registry key is the opName string each node reports, the value
-##   is a NimNode, nothing instantiates at registration
-## - dispatchOp instantiates each symbol with the walk's (E, Sh, Mem)
-##   during the first evalWalk instantiation, the user's eval call
-## - the walk procs live here, op handlers recurse through evalNode,
-##   adding a backend touches no op file
-
 import std/tables
 import std/macros
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import ../tensors_internals
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Registry
+# ═══════════════════════════════════════════════════════════════════════
 
 var OpRegistry* {.compileTime.}: Table[string, NimNode]
   ## OpName to handler symbol, populated by op files at sem
@@ -27,6 +21,10 @@ var OpRegistry* {.compileTime.}: Table[string, NimNode]
 macro registerOp*(op: static string, handler: typed) =
   ## Registration entry of an op file, the value is the generic symbol
   OpRegistry[op] = handler
+
+# ═══════════════════════════════════════════════════════════════════════
+#  The walk
+# ═══════════════════════════════════════════════════════════════════════
 
 template withMem*(engine: HwEngine, dtype: Dtype, body: untyped) =
   ## Binds Mem over the body from the node's own dtype
