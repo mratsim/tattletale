@@ -273,21 +273,36 @@ proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Any
 proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
   makeTensorImpl(engine, dtype, shape.toSpan())
 
+proc implDataCell[E: HwEngine, Mem](engine: E, src: AnyTensorImpl, _: typedesc[Mem]): ref Mem =
+  ## Shared `ref DeviceMem` cell of an erased impl.
+  ## Views alias the cell and hold their own layout, any rank.
+  case src.shape().len
+  of 1: src.to(TensorImpl[Mem, Layout[(int,), (int,)]]).data
+  of 2: src.to(TensorImpl[Mem, Layout[(int, int), (int, int)]]).data
+  of 3: src.to(TensorImpl[Mem, Layout[(int, int, int), (int, int, int)]]).data
+  of 4: src.to(TensorImpl[Mem, Layout[(int, int, int, int), (int, int, int, int)]]).data
+  of 5: src.to(TensorImpl[Mem, Layout[(int, int, int, int, int), (int, int, int, int, int)]]).data
+  else:
+    raise ValueError.newException(
+      "implDataCell: rank " & $src.shape().len & " unsupported")
+
 proc makeViewImpl[E: HwEngine, Sh: tuple, St: tuple](
     engine: E, src: AnyTensorImpl, layout: Layout[Sh, St], offset: int): AnyTensorImpl =
   ## Shared-buffer view over `src`: aliases the source's `ref DeviceMem` cell
   ## with a new layout and element offset, no allocation and no copy.
-  ## Contract: the view stays inside the source's storage window,
-  ## offset + cosize(layout) must not exceed the source buffer length.
+  ##
+  ## - the source may be any rank, reshape changes the rank
+  ## - contract: the view stays inside the source's storage window,
+  ##   offset + cosize(layout) must not exceed the source buffer length
   case src.dtype()
   of kFp32:
     type Mem = typeof(engine.allocDevice(float32, 0))
-    let s = src.to(TensorImpl[Mem, Layout[Sh, St]])
-    TensorImpl[Mem, Layout[Sh, St]](data: s.data, offset: offset, layout: layout).to(AnyTensorImpl)
+    TensorImpl[Mem, Layout[Sh, St]](
+      data: implDataCell(engine, src, Mem), offset: offset, layout: layout).to(AnyTensorImpl)
   of kBf16:
     type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    let s = src.to(TensorImpl[Mem, Layout[Sh, St]])
-    TensorImpl[Mem, Layout[Sh, St]](data: s.data, offset: offset, layout: layout).to(AnyTensorImpl)
+    TensorImpl[Mem, Layout[Sh, St]](
+      data: implDataCell(engine, src, Mem), offset: offset, layout: layout).to(AnyTensorImpl)
   else:
     raise ValueError.newException("makeViewImpl: dtype " & $src.dtype() & " unsupported")
 
@@ -360,15 +375,9 @@ macro dispatchEnqueueNodes(E, Sh: typed, engine, batch, n: typed): untyped =
     result.add nnkIfStmt.newTree(
       nnkElifBranch.newTree(call, nnkReturnStmt.newTree(newEmptyNode())))
 
-proc evalWalk[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: TensorNode) =
-  let asView = n.to(ViewNode)
-  if not asView.isNil:
-    # views alias their source's buffer cell, materialize the source first
-    evalWalk[E, Sh](engine, batch, asView.src)
-    return
-  # op nodes enqueue through the handlers their op files registered.
-  # A node no handler owns is a materialized impl, nothing to enqueue.
-  dispatchEnqueueNodes(E, Sh, engine, batch, n)
+proc evalWalk[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: TensorNode)
+  ## Walks one node: a view materializes its source, an op node enqueues
+  ## through its registered handler, a materialized leaf is left untouched.
 
 proc evalNode*[E: HwEngine](engine: E, batch: Batch[E], n: TensorNode) =
   ## Walks one node at the node's own rank, dispatching the rank tuple.
@@ -382,6 +391,17 @@ proc evalNode*[E: HwEngine](engine: E, batch: Batch[E], n: TensorNode) =
   else:
     raise ValueError.newException(
       "eval: rank " & $n.getImpl().shape().len & " unsupported")
+
+proc evalWalk[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: TensorNode) =
+  let asView = n.to(ViewNode)
+  if not asView.isNil:
+    # views alias their source's buffer cell, materialize the source first.
+    # A source walks at its own rank, reshape views change the rank.
+    evalNode(engine, batch, asView.src)
+    return
+  # op nodes enqueue through the handlers their op files registered.
+  # A node no handler owns is a materialized impl, nothing to enqueue.
+  dispatchEnqueueNodes(E, Sh, engine, batch, n)
 
 proc eval*[E: HwEngine](engine: E, roots: Span[TensorNode]) =
   if roots.len == 0:
@@ -433,6 +453,41 @@ proc narrow*(t: Tensor, axis: int, start: int, width: int): Tensor =
   ns[axis] = width
   let offset = impl.offset() + start * st[axis]
   let v = t.engine.makeViewImpl(impl, ns.toSpan(), st, offset)
+  Tensor(engine: t.engine, node: ViewNode(src: t.node, v: v).to(TensorNode))
+
+proc reshape*(t: Tensor, shape: openArray[int]): Tensor =
+  ## View of `t` with a new shape, same element order.
+  ## Args:
+  ## - shape: the new shape, its element count must match
+  ## Requires a dense contiguous source: the new layout is contiguous over
+  ## the same buffer window, a strided source would need a copy op.
+  ## Shared buffer, no allocation and no copy.
+  let impl = t.node.getImpl()
+  let s = impl.shape()
+  let st = impl.strides()
+  var numel = 1
+  for i in 0 ..< s.len:
+    numel *= s[i]
+  var newSize = 1
+  for i in 0 ..< shape.len:
+    newSize *= shape[i]
+  if newSize != numel:
+    raise ValueError.newException(
+      "reshape: element count " & $newSize & " does not match " & $numel)
+  # dense contiguous source check over the erased spans:
+  # - last stride is 1
+  # - each earlier stride is the product of the later strides and shapes
+  if st[s.len - 1] != 1:
+    raise ValueError.newException("reshape: the source must be dense contiguous")
+  for i in 0 ..< s.len - 1:
+    if st[i] != st[i + 1] * s[i + 1]:
+      raise ValueError.newException("reshape: the source must be dense contiguous")
+  var strides = newSeq[int](shape.len)
+  var acc = 1
+  for j in 1 .. shape.len:
+    strides[shape.len - j] = acc
+    acc *= shape[shape.len - j]
+  let v = t.engine.makeViewImpl(impl, shape.toSpan(), strides.toSpan(), impl.offset())
   Tensor(engine: t.engine, node: ViewNode(src: t.node, v: v).to(TensorNode))
 
 proc tn_split*(engine: AnyEngine, x: TensorNode, numParts: int, axis: int = -1): seq[TensorNode] =
