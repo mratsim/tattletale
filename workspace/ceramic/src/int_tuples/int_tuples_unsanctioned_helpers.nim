@@ -1,7 +1,7 @@
 ## Unsanctioned helpers, pending rationalization.
 ##
-## Helpers landing here bypass the sanctioned op surface, the funnel pass
-## later promotes, keeps, or kills each one.
+## Helpers landing here bypass the sanctioned op surface.
+## The funnel pass later promotes, keeps, or kills each one.
 ##
 ## - sanctioned modules may import this file while a helper awaits its home
 ## - what survives rationalization is re-exported through the family module
@@ -13,6 +13,18 @@ import ./int_tuples_streams
 
 template toInt*(x: int): int = x
 template toInt*[V: static int](x: Int[V]): int = V
+
+func cosizeLeaf*(leaf, stride: int or Int): int =
+  ## One cosize term of the cosize sum: (leaf - 1) * |stride|.
+  ##
+  ## Args:
+  ## - leaf, stride: one shape leaf and its stride, `int` or `Int[N]`
+  ## Returns: the term as a scalar int, `Int[N]` leaves fold to N.
+  ##
+  ## Emitted by cosizeImpl as a bound symbol: the macro expansion resolves
+  ## the call in this module's scope, valid at instantiation sites that do
+  ## not see the Int operator matrix.
+  (leaf.toInt() - 1) * abs(stride.toInt())
 
 func toSeqStaticInts*(t: NimNode): seq[int] {.compileTime.} =
   ## Recursively extract Int[N] values from a (possibly nested) tuple type AST node.

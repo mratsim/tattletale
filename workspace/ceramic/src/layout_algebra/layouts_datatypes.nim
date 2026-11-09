@@ -154,12 +154,14 @@ func isLayoutTy*(n: NimNode): bool {.compileTime.} =
 # ═══════════════════════════════════════════════════════════════
 
 macro cosizeImpl(sh, st: typed): untyped =
-  ## Cosize emit, one term per shape leaf
-  let one = IntCT(1)
-  result = one
+  ## Cosize emit, one term per shape leaf.
+  ## Each term calls the bound `cosizeLeaf` helper: the expansion resolves
+  ## in the helper's module scope, valid at instantiation sites that do
+  ## not see the Int operator matrix.
+  result = newLit(1)
   for (shEv, stEv) in zip(sh.tupleStream(), st.tupleStream()):
     if shEv.kind == kLeaf:
-      result = result + (shEv.leaf - one) * abs(stEv.leaf)
+      result = infix(result, "+", bindSym"cosizeLeaf".newCall(shEv.leaf, stEv.leaf))
 
 func cosize*(layout: Layout): auto =
   ## Compute cosize = sum_i ((sh_i - 1) * |st_i|) + 1.
