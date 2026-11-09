@@ -56,7 +56,7 @@ macro guardWriteDisjointness(shD, stD, shS, stS: typed) =
                  " has stride 0 with shape > 1 and src stride " & $stSv[d] &
                  " is non-zero")))
 
-func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr T, dstOff, srcOff, srcStride: int, W, vecCap: int, elemBits: static int) {.inline.} =
+func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr UncheckedArray[T], dstOff, srcOff, srcStride: int, W, vecCap: int, elemBits: static int) {.inline.} =
   ## Copies dst <- src by chunks
   when d == rank(C):
     let
@@ -92,9 +92,7 @@ func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr
                  W, vecCap, elemBits)
 
 
-func copyElementwise[T, ShD, StD, ShS, StS](
-    dst: var TensorView[T, ShD, StD];
-    src: TensorView[T, ShS, StS]) {.inline.} =
+func copyElementwise[T, ShD, StD, ShS, StS](dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]), src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
   for i in 0 ..< size(src):
     dst(i) = src(i)
 
@@ -106,20 +104,18 @@ func copyFrom*[T, ShD, StD, ShS, StS](
   ## For runtime strides, assumes 128B alignment for vectorized copies
   guardWriteDisjointness(dst.shape, dst.stride,
                          src.shape, src.stride)
-  var dstV = when typeof(dst) is TensorOwned: view(dst) else: dst
-  let srcV = when typeof(src) is TensorOwned: view(src) else: src
-  let R = right_inverse(srcV.getLayout())
-  let C = coalesce(compose(dstV.getLayout(), R))
+  let R = right_inverse(src.getLayout())
+  let C = coalesce(compose(dst.getLayout(), R))
   const elemBits = sizeof(T) * 8
   let
     s0 = when typeof(C.stride) is tuple: C.stride[0] else: C.stride
     wV = when typeof(C.shape) is tuple: toInt(C.shape[0]) else: toInt(C.shape)
     vecCap = min(wV and -wV, 128 div elemBits)
-  let spansCover = size(R) === size(srcV)
+  let spansCover = size(R) === size(src)
   if spansCover and s0 === 1:
-    copyChunks(C, 1, addr dstV[0], addr srcV[0], 0, 0, wV, wV, vecCap, elemBits)
+    copyChunks(C, 1, dst.getOriginPtr(), src.getOriginPtr(), 0, 0, wV, wV, vecCap, elemBits)
   else:
-    copyElementwise(dstV, srcV)
+    copyElementwise(dst, src)
 
 
 func copyFromIfAsync*[T, Sh, StA, StB, StP](

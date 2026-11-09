@@ -114,6 +114,9 @@ func getOffset*[T, Sh, St](t: TensorOwned[T, Sh, St]): int {.inline.} = 0
 func getOriginPtr*[T, Sh, St](tv: TensorView[T, Sh, St]): ptr UncheckedArray[T] {.inline.} =
   cast[ptr UncheckedArray[T]](addr tv.data[tv.offset])
 
+func getOriginPtr*[T, Sh, St](t: TensorOwned[T, Sh, St]): ptr UncheckedArray[T] {.inline.} =
+  cast[ptr UncheckedArray[T]](addr t.data[0])
+
 template getLayout*[T, Sh, St](t: TensorOwned[T, Sh, St]): Layout[Sh, St] =
   make_layout(default(Sh), default(St))
 template getLayout*(tv: TensorView): untyped = tv.layout
