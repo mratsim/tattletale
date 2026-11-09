@@ -68,11 +68,11 @@ func opName*(n: AddNode): string =
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode =
+proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
   let ia = a.getImpl()
   let ib = b.getImpl()
-  precondition: ia.shape() == ib.shape()
-  precondition: ia.dtype() == ib.dtype()
+  {.precondition: ia.shape() == ib.shape().}
+  {.precondition: ia.dtype() == ib.dtype().}
   AddNode(a: a, b: b, r: engine.newTensorNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
