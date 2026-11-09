@@ -16,6 +16,7 @@ import workspace/ceramic
 import workspace/ceramic/src/macros/static_for
 import workspace/math
 import ../vendor/iface/iface
+export iface.to
 import ./kernels/k_add
 
 # ############################################################
@@ -83,6 +84,7 @@ iface *AnyTensorImpl:
     proc dtype(): Dtype
     proc shape(): Span[int]
     proc strides(): Span[int]
+    proc offset(): int
 
 iface *TensorNode:
     proc eval()
@@ -136,6 +138,14 @@ func rowMajorStrides[Sh: tuple](shape: Sh): Sh =
     result[tupleLen(Sh) - 1 - j] = acc
     acc *= shape[tupleLen(Sh) - 1 - j]
 
+func isDenseRowMajor[Sh: tuple, St: tuple](shape: Sh, strides: St): bool =
+  ## Contiguous ascending storage: the last stride is 1 and each earlier
+  ## stride is the product of the later strides and shapes.
+  result = strides[tupleLen(St) - 1] == 1
+  staticFor i, 0, tupleLen(Sh) - 1:
+    if strides[i] != strides[i + 1] * shape[i + 1]:
+      return false
+
 func fillShape[Sh: tuple](shape: var Sh, s: Span[int]) =
   if s.len != tupleLen(Sh):
     raise ValueError.newException(
@@ -147,11 +157,37 @@ func fillShape[Sh: tuple](shape: var Sh, s: Span[int]) =
 #  TensorImpl - AnyTensorImpl implementation
 # ═══════════════════════════════════════════════════════════════════════
 
+proc gatherToHost[E: HwEngine, Sh: tuple, St: tuple, Mem, T](
+    engine: E, t: TensorImpl[Mem, Layout[Sh, St]], dst: var openArray[T]) =
+  ## Reads back a strided or offset view.
+  ## The engine DMA is flat over the whole buffer.
+  ## The view's storage window copies into a host scratch first:
+  ## - window: offset + cosize(layout) elements from the buffer base
+  ## - dst[i] reads the scratch at the layout address of element i
+  ##   (elements ordered by ascending flat index)
+  ## - elemAddr(i) = offset + sum_a crd_a(i) * stride_a
+  ##   crd decomposes so the last axis varies fastest
+  let numel = t.layout.shape.getNumElems()
+  var scratch = newSeq[T](t.offset + t.layout.cosize().toInt())
+  engine.copyToHostFromDevice(scratch, t.data[])
+  for i in 0 ..< numel:
+    var rem = i
+    var elemAddr = t.offset
+    # decomposition with the last axis varying fastest
+    staticFor a, 0, tupleLen(Sh):
+      const ax = tupleLen(Sh) - 1 - a
+      elemAddr += (rem mod t.layout.shape[ax]) * t.layout.stride[ax]
+      rem = rem div t.layout.shape[ax]
+    dst[i] = scratch[elemAddr]
+
 proc shape*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
   toSpan(t.layout.shape)
 
 proc strides*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
   toSpan(t.layout.stride)
+
+proc offset*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): int =
+  t.offset
 
 proc dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dtype =
   toDtype(T)
@@ -400,6 +436,46 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode =
   let dz = if ia.dtype() == kFp32 and ib.dtype() == kFp32: kFp32 else: kBf16
   AddNode(a: a, b: b, r: engine.newTensorNode(dz, ia.shape()).getImpl()).to(TensorNode)
 
+proc transpose*(t: Tensor): Tensor =
+  ## View of `t` with every axis reversed.
+  ## Args:
+  ## - t: the source tensor, any rank
+  ## Matches MLX transpose with no axes argument.
+  ## Shared buffer, no allocation and no copy.
+  let impl = t.node.getImpl()
+  let s = impl.shape()
+  let st = impl.strides()
+  var rs = newSeq[int](s.len)
+  var rt = newSeq[int](s.len)
+  for i in 0 ..< s.len:
+    rs[i] = s[s.len - 1 - i]
+    rt[i] = st[st.len - 1 - i]
+  let v = t.engine.makeViewImpl(impl, rs.toSpan(), rt.toSpan(), 0)
+  Tensor(engine: t.engine, node: ViewNode(src: t.node, v: v).to(TensorNode))
+
+proc narrow*(t: Tensor, axis: int, start: int, width: int): Tensor =
+  ## Window view of `t`, other axes unchanged.
+  ## Args:
+  ## - axis: the narrowed dimension
+  ## - start, width: the window inside that dimension
+  ## The element offset shifts by start * stride[axis].
+  ## Shared buffer, no allocation and no copy.
+  let impl = t.node.getImpl()
+  let s = impl.shape()
+  let st = impl.strides()
+  if axis < 0 or axis >= s.len:
+    raise ValueError.newException("narrow: axis " & $axis & " outside the rank " & $s.len)
+  if start < 0 or width < 0 or start + width > s[axis]:
+    raise ValueError.newException(
+      "narrow: window [" & $start & ", " & $(start + width) & ") outside dimension " & $s[axis])
+  var ns = newSeq[int](s.len)
+  for i in 0 ..< s.len:
+    ns[i] = s[i]
+  ns[axis] = width
+  let offset = impl.offset() + start * st[axis]
+  let v = t.engine.makeViewImpl(impl, ns.toSpan(), st, offset)
+  Tensor(engine: t.engine, node: ViewNode(src: t.node, v: v).to(TensorNode))
+
 proc tn_split*(engine: AnyEngine, x: TensorNode, numParts: int, axis: int = -1): seq[TensorNode] =
   let ix = x.getImpl()
   let s = ix.shape()
@@ -443,6 +519,9 @@ template erasedUpload[E: HwEngine](engine: E, impl: AnyTensorImpl, src: openArra
     if src.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    if t.offset != 0 or not isDenseRowMajor(t.layout.shape, t.layout.stride):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: the engine upload is a flat write, only dense impls accept it")
     engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
   of 2:
     let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
@@ -450,6 +529,9 @@ template erasedUpload[E: HwEngine](engine: E, impl: AnyTensorImpl, src: openArra
     if src.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    if t.offset != 0 or not isDenseRowMajor(t.layout.shape, t.layout.stride):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: the engine upload is a flat write, only dense impls accept it")
     engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
   of 3:
     let t = impl.to(TensorImpl[Mem, Layout[(int, int, int), (int, int, int)]])
@@ -457,6 +539,9 @@ template erasedUpload[E: HwEngine](engine: E, impl: AnyTensorImpl, src: openArra
     if src.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    if t.offset != 0 or not isDenseRowMajor(t.layout.shape, t.layout.stride):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: the engine upload is a flat write, only dense impls accept it")
     engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
   of 4:
     let t = impl.to(TensorImpl[Mem, Layout[(int, int, int, int), (int, int, int, int)]])
@@ -464,6 +549,9 @@ template erasedUpload[E: HwEngine](engine: E, impl: AnyTensorImpl, src: openArra
     if src.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    if t.offset != 0 or not isDenseRowMajor(t.layout.shape, t.layout.stride):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: the engine upload is a flat write, only dense impls accept it")
     engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
   of 5:
     let t = impl.to(TensorImpl[Mem, Layout[(int, int, int, int, int), (int, int, int, int, int)]])
@@ -471,6 +559,9 @@ template erasedUpload[E: HwEngine](engine: E, impl: AnyTensorImpl, src: openArra
     if src.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToDeviceFromHost: expected " & $(numel * sizeof(T)) & " bytes, got " & $src.len)
+    if t.offset != 0 or not isDenseRowMajor(t.layout.shape, t.layout.stride):
+      raise ValueError.newException(
+        "copyToDeviceFromHost: the engine upload is a flat write, only dense impls accept it")
     engine.copyToDeviceFromHost(t.data[], src.toOpenArray(T))
   else:
     raise ValueError.newException("copyToDeviceFromHost: rank " & $impl.shape().len & " unsupported")
@@ -485,35 +576,50 @@ template erasedDownload[E: HwEngine](engine: E, impl: AnyTensorImpl, dst: var op
     if dst.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
-    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    if t.offset == 0 and isDenseRowMajor(t.layout.shape, t.layout.stride):
+      engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    else:
+      gatherToHost(engine, t, dst.toOpenArray(T))
   of 2:
     let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
     let numel = t.layout.shape.getNumElems()
     if dst.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
-    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    if t.offset == 0 and isDenseRowMajor(t.layout.shape, t.layout.stride):
+      engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    else:
+      gatherToHost(engine, t, dst.toOpenArray(T))
   of 3:
     let t = impl.to(TensorImpl[Mem, Layout[(int, int, int), (int, int, int)]])
     let numel = t.layout.shape.getNumElems()
     if dst.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
-    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    if t.offset == 0 and isDenseRowMajor(t.layout.shape, t.layout.stride):
+      engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    else:
+      gatherToHost(engine, t, dst.toOpenArray(T))
   of 4:
     let t = impl.to(TensorImpl[Mem, Layout[(int, int, int, int), (int, int, int, int)]])
     let numel = t.layout.shape.getNumElems()
     if dst.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
-    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    if t.offset == 0 and isDenseRowMajor(t.layout.shape, t.layout.stride):
+      engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    else:
+      gatherToHost(engine, t, dst.toOpenArray(T))
   of 5:
     let t = impl.to(TensorImpl[Mem, Layout[(int, int, int, int, int), (int, int, int, int, int)]])
     let numel = t.layout.shape.getNumElems()
     if dst.len != numel * sizeof(T):
       raise ValueError.newException(
         "copyToHostFromDevice: expected " & $(numel * sizeof(T)) & " bytes, got " & $dst.len)
-    engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    if t.offset == 0 and isDenseRowMajor(t.layout.shape, t.layout.stride):
+      engine.copyToHostFromDevice(dst.toOpenArray(T), t.data[])
+    else:
+      gatherToHost(engine, t, dst.toOpenArray(T))
   else:
     raise ValueError.newException("copyToHostFromDevice: rank " & $impl.shape().len & " unsupported")
 

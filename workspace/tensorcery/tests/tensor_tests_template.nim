@@ -5,11 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import workspace/crucible
+import workspace/ceramic
 import workspace/tensorcery/src/tensor_datatypes
 
 export tensor_datatypes
 
-proc runTest*(engine: AnyEngine, name: string) =
+proc runTest*[E: HwEngine](engine: E, name: string) =
   let x = newTensor(engine, @[2, 4], kBf16)
   let y = newTensor(engine, @[2, 4], kBf16)
   var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
@@ -101,6 +103,71 @@ proc runTest*(engine: AnyEngine, name: string) =
   let z5Got = readBack(z5, 72)
   for i in 0 ..< 72:
     doAssert z5Got[i].to(float32) == 2.0 * x5q[i].to(float32), name & ": rank-5 add " & $i
+
+  # transpose view: shared buffer, one allocation, strided readback
+  let xt = transpose(x)
+  doAssert xt.node.getImpl().shape()[0] == 4
+  doAssert xt.node.getImpl().shape()[1] == 2
+  doAssert xt.node.getImpl().strides()[0] == 1
+  doAssert xt.node.getImpl().strides()[1] == 4
+  doAssert xt.node.getImpl().offset() == 0
+  type MemX = typeof(engine.allocDevice(bfloat16, 0))
+  let xImpl = x.node.getImpl().to(TensorImpl[MemX, Layout[(int, int), (int, int)]])
+  let xtImpl = xt.node.getImpl().to(TensorImpl[MemX, Layout[(int, int), (int, int)]])
+  doAssert not xImpl.isNil and not xtImpl.isNil
+  doAssert xtImpl.data == xImpl.data, name & ": transpose view must alias the source cell"
+  let xtGot = readBack(xt, 8)
+  for i in 0 ..< 4:
+    for j in 0 ..< 2:
+      doAssert xtGot[i * 2 + j].to(float32) == xq[j * 4 + i].to(float32),
+        name & ": transpose " & $i & "," & $j
+
+  # a view over a graph node: eval materializes the source first
+  let zt = transpose(z)
+  eval(zt, z)
+  let ztGot = readBack(zt, 8)
+  for i in 0 ..< 4:
+    for j in 0 ..< 2:
+      doAssert ztGot[i * 2 + j].to(float32) == zGot[j * 4 + i].to(float32),
+        name & ": transpose of add " & $i & "," & $j
+
+  # narrowed window readbacks: an offset window and a strided window
+  let nw = narrow(x, 0, 1, 1)
+  doAssert nw.node.getImpl().shape()[0] == 1
+  doAssert nw.node.getImpl().offset() == 4
+  let nwGot = readBack(nw, 4)
+  for i in 0 ..< 4:
+    doAssert nwGot[i].to(float32) == xq[4 + i].to(float32), name & ": narrow row " & $i
+
+  let nc = narrow(x, 1, 1, 2)
+  doAssert nc.node.getImpl().shape()[1] == 2
+  doAssert nc.node.getImpl().offset() == 1
+  let ncGot = readBack(nc, 4)
+  for r in 0 ..< 2:
+    for c in 0 ..< 2:
+      doAssert ncGot[r * 2 + c].to(float32) == xq[r * 4 + 1 + c].to(float32),
+        name & ": narrow cols " & $r & "," & $c
+  doAssertRaises ValueError:
+    discard narrow(x, 0, 3, 2)
+
+  # host uploads reach dense impls only, a view input raises
+  var junk = newSeq[bfloat16](4)
+  doAssertRaises ValueError:
+    parts[1].copyToDeviceFromHost(junk)
+
+  # inner-axis split: each part addresses its own columns
+  let iparts = split(x, 2, axis = 1)
+  doAssert iparts.len == 2
+  doAssert iparts[0].node.getImpl().offset() == 0
+  doAssert iparts[1].node.getImpl().offset() == 2
+  let i0 = readBack(iparts[0], 4)
+  let i1 = readBack(iparts[1], 4)
+  for r in 0 ..< 2:
+    for c in 0 ..< 2:
+      doAssert i0[r * 2 + c].to(float32) == xq[r * 4 + c].to(float32),
+        name & ": column split part 0 " & $r & "," & $c
+      doAssert i1[r * 2 + c].to(float32) == xq[r * 4 + 2 + c].to(float32),
+        name & ": column split part 1 " & $r & "," & $c
 
   echo "tensorcery Tensor (", name, "): all checks passed"
 
