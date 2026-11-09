@@ -459,9 +459,7 @@ type
     addrPointee*: Table[string, CirType]
       ## pointer param name -> the pointee value type
     paramSnaps*: Table[string, uint32]
-      ## by-value param name -> Function-storage snapshot that element chains
-      ## read through. OpAccessChain indexes through a pointer and a param
-      ## is a value
+      ## by-value param name -> the Function-storage snapshot backing element-chain reads
     loopMerge*: uint32
       ## the merge block of the loop this body belongs to, 0 outside a loop
     loopCont*: uint32
@@ -1015,7 +1013,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     #   a direct local
     #   a struct behind a pointer-typed local
     #   a pointee behind a pointer parameter
-    # access chains run on the root directly
+    # access chains index the root directly
     var rootVar = 0'u32
     var memberIdxs: seq[int]
     var chainOk = true
@@ -1040,7 +1038,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
           rootVar = fn.ptrTargets[walk.derefOperand.name]
           break
         if walk.derefOperand.kind == eSym and fn.addrParams.hasKey(walk.derefOperand.name):
-          # a pointer parameter: the access chain runs on the param directly
+          # a pointer parameter: the access chain indexes the param directly
           rootVar = fn.addrParams[walk.derefOperand.name]
           break
         chainOk = false
@@ -1390,11 +1388,12 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
   discard ctx.builder.opLabel()
   ctx.hoistLocals(fn, procNode.body)
   # every OpVariable precedes the entry block's first non-variable instruction.
-  # Snapshots declare after the locals and store here
+  # snapshot OpVariables are emitted after the locals, each stores its parameter value here
+
   var chainRoots: HashSet[string]
   collectAtChainRoots(procNode.body, chainRoots)
   for p in procNode.params:
-    # only a struct or array param roots a chain whose final base is an array
+    # only a struct or array param has elements for a chain to reach
     if p.typ.kind in {ctStruct, ctArray} and p.name in chainRoots:
       let snapPtrTy = ctx.builder.tyPointer(scFunction,
         ctx.resolveTyId(ctx.valueTy(p.typ)))

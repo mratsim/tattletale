@@ -38,9 +38,10 @@ func registerWgslHoistProgramScopeLocals*(reg: var PassRegistry) =
 
 func registerWgslInlinePointerParamCalls*(reg: var PassRegistry) =
   reg.register("wgslInlinePointerParamCalls", pkTransform,
-    "Inlines device functions that have no WGSL form and value-position" &
-    " calls to them. A crossing pointer or pointer-holding struct" &
-    " argument, or a coordinate-builtin read, removes the form",
+    "Inlines device functions that have no WGSL function form, and the" &
+    " value-position calls to them. A crossing pointer or pointer-holding" &
+    " struct argument, or a coordinate-builtin read, gives the callee no" &
+    " WGSL function form",
     run = inlinePointerParamCalls)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -73,7 +74,6 @@ proc collectCoordReads(kinds: var HashSet[CirCoordBuiltinKind], e: CirExpr) =
     kinds.incl(e.coordBuiltin)
 
 proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CirCoordBuiltinKind] =
-  ## Collects the coordinate builtins a body reads.
   ## WGSL binds coordinate builtins as entrypoint parameters only.
   ## A device function reading one has no callable form.
   var kinds: HashSet[CirCoordBuiltinKind]
@@ -83,9 +83,6 @@ proc collectCoordReadsStmts(ss: seq[CirStmt]): HashSet[CirCoordBuiltinKind] =
   return kinds
 
 proc needsInlineForWgsl(fn: CirProc): bool =
-  ## A device function with no WGSL form inlines into its caller.
-  ## Its signature declares a pointer or a pointer-holding struct parameter.
-  ## Its body may also read a coordinate builtin, an entrypoint-only value.
   fn.hasCrossingPointerParam or fn.body.collectCoordReadsStmts().len > 0
 
 proc containsReturn(ss: seq[CirStmt]): bool =
@@ -107,7 +104,7 @@ proc containsReturn(ss: seq[CirStmt]): bool =
 proc reachesInlineCycle(path: var HashSet[string], fn: CirProc, procs: Table[string, CirProc]): bool =
   ## Returns true when `fn` reaches itself through callees the pass inlines.
   ## Splicing such a cycle would never terminate.
-  ## An acyclic chain inlines one link per fixpoint round.
+  ## The pass inlines an acyclic chain one link per fixpoint round.
   if fn.name in path:
     return true
   path.incl(fn.name)
@@ -122,98 +119,80 @@ proc reachesInlineCycle(path: var HashSet[string], fn: CirProc, procs: Table[str
   path.excl(fn.name)
   return false
 
-proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
-  ## Substitutes parameter reads with their spliced arguments.
-  ## The callee symbol of a call is a function reference and never substitutes.
-  if e.isNil:
-    return
-  if e.kind == eSym:
-    if subst.hasKey(e.name):
-      let arg = subst[e.name]
-      e[] = arg[]
-    return
-  if e.kind == eCall:
-    for a in mitems(e.args):
-      a.substituteArgsExpr(subst)
-    return
-  for ch in getExprChildren(e):
-    ch.substituteArgsExpr(subst)
-
-proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
-  ## Statement-walk overload of `substituteArgsExpr`.
-  ## Hand-rolled walk: a substitution splices the call argument into the symbol node
-  ## and never re-walks the spliced content, its symbols belong to the caller.
-  ## A shared walk would descend into the rewritten node and substitute a second parameter inside the argument.
-  for s in mitems(ss):
-    case s.kind
-    of sVar:
-      s.init.substituteArgsExpr(subst)
-    of sAsgn:
-      s.lhs.substituteArgsExpr(subst)
-      s.rhs.substituteArgsExpr(subst)
-    of sIte:
-      s.cond.substituteArgsExpr(subst)
-      s.thenBody.substituteArgsStmts(subst)
-      s.elseBody.substituteArgsStmts(subst)
-    of sWhile:
-      s.whileCond.substituteArgsExpr(subst)
-      s.whileBody.substituteArgsStmts(subst)
-    of sRet:
-      s.retVal.substituteArgsExpr(subst)
-    of sDiscard:
-      s.discardVal.substituteArgsExpr(subst)
-    of sCall:
-      s.callCallee.substituteArgsExpr(subst)
-      for a in mitems(s.callArgs):
-        a.substituteArgsExpr(subst)
-    of sAsm, sEmit:
-      discard
-
-proc renameLocalsExpr(e: CirExpr, rename: Table[string, string]) =
-  ## Renames the local reads of a cloned callee body to their spliced names.
-  ## The callee symbol of a call is a function reference and never renames.
-  ## Builtin-born symbol reads keep their name.
+proc mapSymLeaves(e: CirExpr, leaf: proc(e: CirExpr)) =
+  ## Applies `leaf` to every symbol read of an expression tree.
+  ## The callee symbol of a call is a function reference and never visited.
+  ## A replacement splices content that belongs to the caller, so the walk
+  ## never descends into a replaced symbol.
   if e.isNil:
     return
   case e.kind
   of eSym:
-    if not e.builtin and rename.hasKey(e.name):
-      e.name = rename[e.name]
+    leaf(e)
   of eCall:
     for a in mitems(e.args):
-      a.renameLocalsExpr(rename)
+      mapSymLeaves(a, leaf)
   else:
     for ch in getExprChildren(e):
-      ch.renameLocalsExpr(rename)
+      mapSymLeaves(ch, leaf)
 
-proc renameLocalsStmts(ss: var seq[CirStmt], rename: Table[string, string]) =
-  ## Statement-walk overload of `renameLocalsExpr`.
+proc mapSymLeaves(ss: var seq[CirStmt], varName: proc(s: CirStmt), leaf: proc(e: CirExpr)) =
+  ## Statement-walk overload of `mapSymLeaves`.
+  ## `varName` renames a declaration's name, nil when the walk leaves declarations alone.
   for s in mitems(ss):
     case s.kind
     of sVar:
-      # a declaration renames too: the reads already carry the spliced name
-      if rename.hasKey(s.name):
-        s.name = rename[s.name]
-      s.init.renameLocalsExpr(rename)
+      if varName != nil:
+        varName(s)
+      mapSymLeaves(s.init, leaf)
     of sAsgn:
-      s.lhs.renameLocalsExpr(rename)
-      s.rhs.renameLocalsExpr(rename)
+      mapSymLeaves(s.lhs, leaf)
+      mapSymLeaves(s.rhs, leaf)
     of sIte:
-      s.cond.renameLocalsExpr(rename)
-      s.thenBody.renameLocalsStmts(rename)
-      s.elseBody.renameLocalsStmts(rename)
+      mapSymLeaves(s.cond, leaf)
+      mapSymLeaves(s.thenBody, varName, leaf)
+      mapSymLeaves(s.elseBody, varName, leaf)
     of sWhile:
-      s.whileCond.renameLocalsExpr(rename)
-      s.whileBody.renameLocalsStmts(rename)
+      mapSymLeaves(s.whileCond, leaf)
+      mapSymLeaves(s.whileBody, varName, leaf)
     of sRet:
-      s.retVal.renameLocalsExpr(rename)
+      mapSymLeaves(s.retVal, leaf)
     of sDiscard:
-      s.discardVal.renameLocalsExpr(rename)
+      mapSymLeaves(s.discardVal, leaf)
     of sCall:
       for a in mitems(s.callArgs):
-        a.renameLocalsExpr(rename)
+        mapSymLeaves(a, leaf)
     of sAsm, sEmit:
       discard
+
+proc substituteLeaf(subst: Table[string, CirExpr]): proc(e: CirExpr) =
+  ## Symbol op of the argument substitution: a parameter read becomes the spliced argument.
+  return proc(e: CirExpr) =
+    if subst.hasKey(e.name):
+      let arg = subst[e.name]
+      e[] = arg[]
+
+proc renameLeaf(rename: Table[string, string]): proc(e: CirExpr) =
+  ## Symbol op of the local rename, builtin-born symbol reads keep their name.
+  return proc(e: CirExpr) =
+    if not e.builtin and rename.hasKey(e.name):
+      e.name = rename[e.name]
+
+proc substituteArgsExpr(e: CirExpr, subst: Table[string, CirExpr]) =
+  e.mapSymLeaves(substituteLeaf(subst))
+
+proc substituteArgsStmts(ss: var seq[CirStmt], subst: Table[string, CirExpr]) =
+  ss.mapSymLeaves(nil, substituteLeaf(subst))
+
+proc renameLocalsExpr(e: CirExpr, rename: Table[string, string]) =
+  e.mapSymLeaves(renameLeaf(rename))
+
+proc renameLocalsStmts(ss: var seq[CirStmt], rename: Table[string, string]) =
+  let varName = proc(s: CirStmt) =
+    # declarations rename too, their reads rename in the same pass
+    if rename.hasKey(s.name):
+      s.name = rename[s.name]
+  ss.mapSymLeaves(varName, renameLeaf(rename))
 
 proc claimSplicedNames(used: var HashSet[string], fresh: var int, callee: CirProc): Table[string, string] =
   ## Renames every declared local of a spliced callee under one `inl<n>_` prefix.
@@ -236,8 +215,8 @@ proc inlineInStmts(ss: var seq[CirStmt], used: var HashSet[string], fresh: var i
 proc retsToAsgns(ss: var seq[CirStmt], host: CirExpr) =
   ## Writes each return of a spliced value body as an assignment to `host`.
   ## `host` is the caller's destination of the call result.
-  ## A return mid-list or inside a loop refuses: the statements after it would run.
-  ## A conditional return with one falling-through branch refuses: `host` then reads a value the original never wrote.
+  ## The splice refuses a return mid-list or inside a loop: the statements after it would run.
+  ## The splice refuses a conditional return with one falling-through branch: `host` then reads a value the original never wrote.
   for i in 0 ..< ss.len:
     let last = i == ss.len - 1
     case ss[i].kind
@@ -355,12 +334,11 @@ proc spliceCalleeBody(callee: CirProc, callArgs: seq[CirExpr], used: var HashSet
   if host != nil:
     body.foldValueReturns(callee.name)
     body.retsToAsgns(host)
-    doAssert not body.containsReturn
   result = bindings & body
 
 proc refuseValuePositionCalls(fn: CirProc, e: CirExpr, procs: Table[string, CirProc]) =
-  ## A call in a value position the splice cannot host: a direct initializer
-  ## or assignment splices, every other position refuses.
+  ## A call in a value position that the splice cannot host: a direct initializer
+  ## or assignment splices, the pass refuses every other position.
   if e.isNil:
     return
   if e.kind == eCall and e.callee.kind == eSym:
@@ -453,10 +431,11 @@ proc inlinePointerParamCalls(m: CirModule) =
   var procs = initTable[string, CirProc]()
   for fn in m.procs:
     procs[fn.name] = fn
-  # Splicing a coordinate-reading callee into a fn can flip that fn
-  # to needs-inline after its callers were processed, stranding their calls.
-  # Sweep again until no body calls a needs-inline callee, so no kept fn
-  # calls a dropped fn.
+  # Callees precede callers in m.procs by declare-before-use order, and nothing enforces that placement.
+  # Inlining a coordinate-reading callee injects a coordinate read into its caller,
+  # flipping the caller to needs-inline after its callers were processed.
+  # A caller processed before such a flip would keep a call to a fn that the pass then drops.
+  # Re-sweep the whole module until no body calls a needs-inline callee.
   while true:
     for fn in mitems(m.procs):
       var used = initHashSet[string]()
