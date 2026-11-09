@@ -386,8 +386,8 @@ macro submit*(batch: Batch): untyped =
   ## on the engine in enqueue order.
   ##
   ## Requires:
-  ## - at least one `enqueue` in this compilation
-  ## - submitting an empty batch is a no-op
+  ## - at least one `enqueue` in this compilation, an empty batch has no
+  ##   artifact to finalize and fails at compile time
   ##
   ## The compilation compiles its device functions once.
   ## Device functions enqueued later recompile it, every `submit` reuses the module.
