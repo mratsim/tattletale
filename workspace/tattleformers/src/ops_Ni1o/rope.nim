@@ -36,6 +36,14 @@ export tile_algebra
 
 type RopeNode* = ref object
   r: AnyTensorImpl
+  enqueued: bool
+    ## Launch-once marker under the eval walk's fan-out re-walks:
+    ## - a downstream op that fans out over a shared input re-walks
+    ##   the whole upstream chain (the FFN's two projections share one input)
+    ## - the repeat visit must not re-run the handler, the launch is
+    ##   already in the batch and its subtree is already scheduled
+    ## Precondition: an op node is constructed per forward and enqueued in
+    ## exactly one eval, so the flag never crosses an eval boundary.
   q, cos, sin: TensorNode
 
 proc eval*(n: RopeNode) =
@@ -94,6 +102,10 @@ proc enqueueRopeNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: Ten
   let asR = n.to(RopeNode)
   if asR.isNil:
     return false
+  if asR.enqueued:
+    # re-visit under the walk's fan-out, the subtree is already scheduled
+    return true
+  asR.enqueued = true
   evalNode[E](engine, batch, asR.q)
   evalNode[E](engine, batch, asR.cos)
   evalNode[E](engine, batch, asR.sin)

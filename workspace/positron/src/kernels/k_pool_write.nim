@@ -58,19 +58,11 @@ proc k_pool_write*(dstK, srcK, dstV, srcV: distinct DeviceView, meta: ptr Unchec
   # Each page covers TokensPerPage token positions.
   # page.k_view[layer_idx] is (PAGE_SIZE, kv_heads, head_dim)
   #
-  # offset = ctx.kv_position avoids a GPU->CPU synchronous read every forward pass.
-  # position_ids.min().item(int) would force that sync every pass.
-  #
-  # Lifecycle overview:
-  #   1. Prefill:  startSequence sets kv_position=0
-  #                forward writes at offset=0
-  #                generate() calls setKvPosition(ids.len)
-  #   2. Decode:   appendToken sets position_ids WITHOUT incrementing.
-  #                forward writes at offset=kv_position, pos_ids.min() matches.
-  #                generate() increments kv_position after forward.
-  #   => Invariant: kv_position == position_ids.min() during forward.
-  # Skip writing cached prefix positions (already in trie from COW)
-  # TODO: how to test usage of cache?
+  # offset is the KV write position of the caller, the layer reads it
+  # from ctx.kv_position, no position_ids device readback.
+  # Lifecycle ownership lives with the attention layer and the orchestrator.
+  # Cached prefix positions keep their previous content, the write covers
+  # only the tokens after the cached prefix.
   let writeStart = max(0'i32, cachedTokens - offset)
 
   for i in countup(tid, int32(numel - 1), int32(stride)):
