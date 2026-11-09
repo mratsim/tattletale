@@ -19,7 +19,6 @@ export tensors_internals
 
 proc runTest*(run: static Runtime, name: string) =
   privateAccess(Tensor)
-  let engine = gEngine(run)
   var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
   var yd = @[2.0'f32, 2, 2, 2, 2, 2, 2, 2]
   var xq: array[8, bfloat16]
@@ -53,35 +52,27 @@ proc runTest*(run: static Runtime, name: string) =
   doAssertRaises AssertionDefect:
     discard toTensor(xq[0 ..< 7], @[2, 4])
 
-  eval(z, parts[0])
-
-  var zGot = newSeq[bfloat16](8)
-  engine.download(zGot, z.node)
-  var xyBuf = newSeq[bfloat16](8)
-  engine.download(xyBuf, x.node)            # split parts share x's buffer
-  var p0Got = newSeq[bfloat16](4)
-  engine.download(p0Got, parts[0].node)
-  var p1Got = newSeq[bfloat16](4)
-  engine.download(p1Got, parts[1].node)
+  let zAt = proc(r, c: int): float32 = z.item(r, c, bfloat16).to(float32)
+  let xAt = proc(r, c: int): float32 = x.item(r, c, bfloat16).to(float32)
+  let p0At = proc(r, c: int): float32 = parts[0].item(r, c, bfloat16).to(float32)
+  let p1At = proc(r, c: int): float32 = parts[1].item(r, c, bfloat16).to(float32)
   # inner-axis split makes strided views, strides inherit the source
   let cols = split(x, 1, 2)
   let w = cols[0] + cols[1]
-  eval(w)
-  var wGot = newSeq[bfloat16](4)
-  engine.download(wGot, w.node)
+  let wAt = proc(r, c: int): float32 = w.item(r, c, bfloat16).to(float32)
   for i in 0 ..< 8:
     let xi = xd[i].to(bfloat16).to(float32)
     let yi = yd[i].to(bfloat16).to(float32)
-    doAssert zGot[i].to(float32) == xi + yi, name & ": add " & $i
-    doAssert xyBuf[i].to(float32) == xi, name & ": split source " & $i
-  for i in 0 ..< 4:
-    doAssert p0Got[i].to(float32) == xd[i].to(bfloat16).to(float32), name & ": part0 " & $i
-    doAssert p1Got[i].to(float32) == xd[4 + i].to(bfloat16).to(float32), name & ": part1 " & $i
+    doAssert zAt(i div 4, i mod 4) == xi + yi, name & ": add " & $i
+    doAssert xAt(i div 4, i mod 4) == xi, name & ": split source " & $i
+  for c in 0 ..< 4:
+    doAssert p0At(0, c) == xd[c].to(bfloat16).to(float32), name & ": part0 " & $c
+    doAssert p1At(0, c) == xd[4 + c].to(bfloat16).to(float32), name & ": part1 " & $c
   for r in 0 ..< 2:
     for c in 0 ..< 2:
       let e0 = xd[r * 4 + c].to(bfloat16).to(float32)
       let e1 = xd[r * 4 + c + 2].to(bfloat16).to(float32)
-      doAssert wGot[r * 2 + c].to(float32) == e0 + e1, name & ": colsplit " & $r & "," & $c
+      doAssert wAt(r, c) == e0 + e1, name & ": colsplit " & $r & "," & $c
 
   echo "tensorcery Tensor (", name, "): all checks passed"
 

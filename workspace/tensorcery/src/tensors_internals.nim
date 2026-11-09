@@ -72,14 +72,20 @@ proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16])
   engine.copyToDeviceFromHost(t.data[], src)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode) =
-  type Mem = typeof(engine.allocDevice(float32, 0))
-  let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-  engine.copyToHostFromDevice(dst, t.data[], t.offset)
+  engine.download(dst, node, 0)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode) =
+  engine.download(dst, node, 0)
+
+proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode, offsetElems: int) =
+  type Mem = typeof(engine.allocDevice(float32, 0))
+  let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+  engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
+
+proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode, offsetElems: int) =
   type Mem = typeof(engine.allocDevice(bfloat16, 0))
   let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-  engine.copyToHostFromDevice(dst, t.data[], t.offset)
+  engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The erased engine
