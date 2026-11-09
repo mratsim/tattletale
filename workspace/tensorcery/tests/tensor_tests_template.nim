@@ -49,6 +49,11 @@ proc runTest*(engine: AnyEngine, name: string) =
   let xyBuf = x.toHost(bfloat16)            # split parts share x's buffer
   let p0Got = parts[0].toHost(bfloat16)
   let p1Got = parts[1].toHost(bfloat16)
+  # inner-axis split makes strided views, strides inherit the source
+  let cols = split(x, 1, 2)
+  let w = cols[0] + cols[1]
+  eval(w)
+  let wGot = w.toHost(bfloat16)
   for i in 0 ..< 8:
     let xi = xd[i].to(bfloat16).to(float32)
     let yi = yd[i].to(bfloat16).to(float32)
@@ -57,6 +62,11 @@ proc runTest*(engine: AnyEngine, name: string) =
   for i in 0 ..< 4:
     doAssert p0Got[i].to(float32) == xd[i].to(bfloat16).to(float32), name & ": part0 " & $i
     doAssert p1Got[i].to(float32) == xd[4 + i].to(bfloat16).to(float32), name & ": part1 " & $i
+  for r in 0 ..< 2:
+    for c in 0 ..< 2:
+      let e0 = xd[r * 4 + c].to(bfloat16).to(float32)
+      let e1 = xd[r * 4 + c + 2].to(bfloat16).to(float32)
+      doAssert wGot[r * 2 + c].to(float32) == e0 + e1, name & ": colsplit " & $r & "," & $c
 
   echo "tensorcery Tensor (", name, "): all checks passed"
 
