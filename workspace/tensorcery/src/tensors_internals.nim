@@ -102,7 +102,7 @@ proc materializeImpl[E: HwEngine, Sh: tuple, St: tuple, T, Mem](engine: E, _: ty
   t
 
 proc materializeNode[E: HwEngine, Sh: tuple, St: tuple, T, Mem](engine: E, _: typedesc[T], layout: Layout[Sh, St]): TensorNode =
-  ## Node face of a materialized tensor, the impl itself is the node
+  ## Erased node of a materialized tensor, the impl itself is the node
   materializeImpl[E, Sh, St, T, Mem](engine, T, layout).to(TensorNode)
 
 proc makeTensorImpl[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, layout: Layout[Sh, St]): AnyTensorImpl =
