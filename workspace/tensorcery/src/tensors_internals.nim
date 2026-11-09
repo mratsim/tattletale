@@ -61,7 +61,6 @@ func opName*[Mem, L](t: TensorImpl[Mem, L]): string =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) =
-  ## Uploads the tensor's values, the element type is the signature
   let impl = node.getImpl()
   type Mem = typeof(engine.allocDevice(float32, 0))
   let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])

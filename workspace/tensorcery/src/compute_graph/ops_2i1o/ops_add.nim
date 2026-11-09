@@ -26,7 +26,7 @@ import workspace/design_by_contract
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_add*(z, x, y: distinct TensorView) =
+proc k_add(z, x, y: distinct TensorView) =
   let thrID = getLocalThreadID()
   var reg: tile(z.T)
   let tiled = make_layout(z.size()).logical_divide(reg.getLayout())
@@ -50,18 +50,18 @@ proc k_add*(z, x, y: distinct TensorView) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  AddNode* = ref object
-    r*: AnyTensorImpl
-    a*, b*: TensorNode
+  AddNode = ref object
+    r: AnyTensorImpl
+    a, b: TensorNode
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl*(n: AddNode): AnyTensorImpl =
+proc getImpl(n: AddNode): AnyTensorImpl =
   n.r
 
-func opName*(n: AddNode): string =
+func opName(n: AddNode): string =
   "add"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -79,7 +79,7 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAdd*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode): bool =
+proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: TensorNode): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil:
     return false
