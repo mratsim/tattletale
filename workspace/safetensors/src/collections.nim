@@ -96,12 +96,23 @@ proc isDirectChildPath(filename: string): bool =
 
 func fileOf(view: SafetensorsCollection, tensorName: string): string =
   ## The safetensor filename that the weight map assigns to `tensorName`.
-  ## Raises ValueError naming the tensor when the collection holds no entry.
+  ## Raises ValueError naming the tensor when the collection contains no entry.
   if not view.weightMap.hasKey(tensorName):
     raise newException(ValueError,
       "safetensors: collection: tensor '" & tensorName &
       "' is absent from the checkpoint")
   view.weightMap[tensorName]
+
+proc tensorInfo*(view: SafetensorsCollection, tensorName: string):
+    tuple[dtype: ST_dtype, shape: seq[int]] {.inline.} =
+  ## Header dtype and shape of one tensor key.
+  ##
+  ## Preconditions: `view` is a collection returned by `open` and still alive,
+  ## `tensorName` is one of its tensor keys.
+  ## Raises ValueError naming the tensor when the collection contains no entry.
+  privateAccess(SafetensorObj)
+  let info = view.files[view.fileOf(tensorName)].tensors[tensorName]
+  (info.dtype, info.shape)
 
 proc getMmapView*(view: SafetensorsCollection, tensorName: string): MemSlice {.inline.} =
   ## Zero-copy `MemSlice` view of the tensor data of `tensorName`, served
@@ -111,7 +122,7 @@ proc getMmapView*(view: SafetensorsCollection, tensorName: string): MemSlice {.i
   ## `tensorName` is one of its tensor keys.
   ## Postconditions: the view borrows the owning file's mapping and follows
   ## the same lifetime contract as `safetensors.getMmapView`.
-  ## Raises ValueError naming the tensor when the collection holds no entry.
+  ## Raises ValueError naming the tensor when the collection contains no entry.
   privateAccess(SafetensorObj)
   view.files[view.fileOf(tensorName)].getMmapView(tensorName)
 
