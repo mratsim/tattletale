@@ -56,20 +56,95 @@ func opName*[Mem, L](t: TensorImpl[Mem, L]): string =
   ## A materialized tensor is a node with no op, the walk leaves it alone
   ""
 
+func crd2Offset*(impl: AnyTensorImpl, crd: openArray[int]): int =
+  ## Flat element offset of a coordinate in an erased impl's layout.
+  ## crd2idx over the impl's runtime shape and stride tuples, one branch per rank.
+  case impl.shape().len
+  of 1:
+    var sh, st, c: (int,)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    fillShape(c, crd.toSpan())
+    crd2idxImpl(c, sh, st)
+  of 2:
+    var sh, st, c: (int, int)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    fillShape(c, crd.toSpan())
+    crd2idxImpl(c, sh, st)
+  of 3:
+    var sh, st, c: (int, int, int)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    fillShape(c, crd.toSpan())
+    crd2idxImpl(c, sh, st)
+  of 4:
+    var sh, st, c: (int, int, int, int)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    fillShape(c, crd.toSpan())
+    crd2idxImpl(c, sh, st)
+  of 5:
+    var sh, st, c: (int, int, int, int, int)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    fillShape(c, crd.toSpan())
+    crd2idxImpl(c, sh, st)
+  else:
+    raise ValueError.newException(
+      "crd2Offset: rank " & $impl.shape().len & " unsupported")
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Typed data path - AnyEngine implementation
 # ═══════════════════════════════════════════════════════════════════════
 
+template withRankedImpl(Mem: typedesc, impl: AnyTensorImpl, body: untyped) =
+  ## Casts an erased impl to its concrete TensorImpl at the impl's own rank,
+  ## binding `t` over `body`. The layout tuple types fill from the erased
+  ## shape and strides spans, so views with custom strides cast too.
+  case impl.shape().len
+  of 1:
+    var sh, st: (int,)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    let t {.inject.} = impl.to(TensorImpl[Mem, Layout[typeof(sh), typeof(st)]])
+    body
+  of 2:
+    var sh, st: (int, int)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    let t {.inject.} = impl.to(TensorImpl[Mem, Layout[typeof(sh), typeof(st)]])
+    body
+  of 3:
+    var sh, st: (int, int, int)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    let t {.inject.} = impl.to(TensorImpl[Mem, Layout[typeof(sh), typeof(st)]])
+    body
+  of 4:
+    var sh, st: (int, int, int, int)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    let t {.inject.} = impl.to(TensorImpl[Mem, Layout[typeof(sh), typeof(st)]])
+    body
+  of 5:
+    var sh, st: (int, int, int, int, int)
+    fillShape(sh, impl.shape())
+    fillShape(st, impl.strides())
+    let t {.inject.} = impl.to(TensorImpl[Mem, Layout[typeof(sh), typeof(st)]])
+    body
+  else:
+    raise ValueError.newException("rank " & $impl.shape().len & " unsupported")
+
 proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) =
-  let impl = node.getImpl()
   type Mem = typeof(engine.allocDevice(float32, 0))
-  let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-  engine.copyToDeviceFromHost(t.data[], src)
+  withRankedImpl(Mem, node.getImpl()):
+    engine.copyToDeviceFromHost(t.data[], src)
 
 proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) =
   type Mem = typeof(engine.allocDevice(bfloat16, 0))
-  let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-  engine.copyToDeviceFromHost(t.data[], src)
+  withRankedImpl(Mem, node.getImpl()):
+    engine.copyToDeviceFromHost(t.data[], src)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode) =
   engine.download(dst, node, 0)
@@ -79,13 +154,23 @@ proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: Tenso
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode, offsetElems: int) =
   type Mem = typeof(engine.allocDevice(float32, 0))
-  let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-  engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
+  withRankedImpl(Mem, node.getImpl()):
+    engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode, offsetElems: int) =
   type Mem = typeof(engine.allocDevice(bfloat16, 0))
-  let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-  engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
+  withRankedImpl(Mem, node.getImpl()):
+    engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
+
+proc downloadItem*[E: HwEngine](engine: E, dst: var float32, node: TensorNode, offsetElems: int) =
+  var one: array[1, float32]
+  engine.download(one, node, offsetElems)
+  dst = one[0]
+
+proc downloadItem*[E: HwEngine](engine: E, dst: var bfloat16, node: TensorNode, offsetElems: int) =
+  var one: array[1, bfloat16]
+  engine.download(one, node, offsetElems)
+  dst = one[0]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The erased engine
@@ -118,8 +203,24 @@ proc makeTensorImpl[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, 
 
 proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): AnyTensorImpl =
   case shape.len
+  of 1:
+    var sh: (int,)
+    fillShape(sh, shape)
+    engine.makeTensorImpl(dtype, make_layout(sh, rowMajorStrides(sh)))
   of 2:
     var sh: (int, int)
+    fillShape(sh, shape)
+    engine.makeTensorImpl(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 3:
+    var sh: (int, int, int)
+    fillShape(sh, shape)
+    engine.makeTensorImpl(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 4:
+    var sh: (int, int, int, int)
+    fillShape(sh, shape)
+    engine.makeTensorImpl(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 5:
+    var sh: (int, int, int, int, int)
     fillShape(sh, shape)
     engine.makeTensorImpl(dtype, make_layout(sh, rowMajorStrides(sh)))
   else:
@@ -128,40 +229,75 @@ proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): An
 proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
   engine.makeTensorImpl(dtype, shape.toSpan())
 
-proc newViewNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
-  ## A graph node shell without a buffer, view ops bind the data at enqueue
+proc newViewNode[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, layout: Layout[Sh, St]): TensorNode =
   case dtype
   of kFp32:
     type Mem = typeof(engine.allocDevice(float32, 0))
-    var sh: (int, int)
-    fillShape(sh, shape)
-    TensorImpl[Mem, Layout[(int, int), (int, int)]](
-      data: nil, offset: 0,
-      layout: make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
+    TensorImpl[Mem, Layout[Sh, St]](data: nil, offset: 0, layout: layout).to(TensorNode)
   of kBf16:
     type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    var sh: (int, int)
-    fillShape(sh, shape)
-    TensorImpl[Mem, Layout[(int, int), (int, int)]](
-      data: nil, offset: 0,
-      layout: make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
+    TensorImpl[Mem, Layout[Sh, St]](data: nil, offset: 0, layout: layout).to(TensorNode)
   else:
     raise ValueError.newException("newViewNode: dtype " & $dtype & " unsupported")
 
-proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
+proc newViewNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
+  ## A graph node shell without a buffer, view ops bind the data at enqueue
   case shape.len
+  of 1:
+    var sh: (int,)
+    fillShape(sh, shape)
+    engine.newViewNode(dtype, make_layout(sh, rowMajorStrides(sh)))
   of 2:
     var sh: (int, int)
     fillShape(sh, shape)
-    let layout = make_layout(sh, rowMajorStrides(sh))
-    case dtype
-    of kFp32:
-      type Mem = typeof(engine.allocDevice(float32, 0))
-      materializeNode[E, (int, int), (int, int), float32, Mem](engine, float32, layout)
-    of kBf16:
-      type Mem = typeof(engine.allocDevice(bfloat16, 0))
-      materializeNode[E, (int, int), (int, int), bfloat16, Mem](engine, bfloat16, layout)
-    else:
-      raise ValueError.newException("newTensorNode: dtype " & $dtype & " unsupported")
+    engine.newViewNode(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 3:
+    var sh: (int, int, int)
+    fillShape(sh, shape)
+    engine.newViewNode(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 4:
+    var sh: (int, int, int, int)
+    fillShape(sh, shape)
+    engine.newViewNode(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 5:
+    var sh: (int, int, int, int, int)
+    fillShape(sh, shape)
+    engine.newViewNode(dtype, make_layout(sh, rowMajorStrides(sh)))
+  else:
+    raise ValueError.newException("newViewNode: rank " & $shape.len & " unsupported")
+
+proc newTensorNode[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, layout: Layout[Sh, St]): TensorNode =
+  case dtype
+  of kFp32:
+    type Mem = typeof(engine.allocDevice(float32, 0))
+    materializeNode[E, Sh, St, float32, Mem](engine, float32, layout)
+  of kBf16:
+    type Mem = typeof(engine.allocDevice(bfloat16, 0))
+    materializeNode[E, Sh, St, bfloat16, Mem](engine, bfloat16, layout)
+  else:
+    raise ValueError.newException("newTensorNode: dtype " & $dtype & " unsupported")
+
+proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
+  case shape.len
+  of 1:
+    var sh: (int,)
+    fillShape(sh, shape)
+    engine.newTensorNode(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 2:
+    var sh: (int, int)
+    fillShape(sh, shape)
+    engine.newTensorNode(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 3:
+    var sh: (int, int, int)
+    fillShape(sh, shape)
+    engine.newTensorNode(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 4:
+    var sh: (int, int, int, int)
+    fillShape(sh, shape)
+    engine.newTensorNode(dtype, make_layout(sh, rowMajorStrides(sh)))
+  of 5:
+    var sh: (int, int, int, int, int)
+    fillShape(sh, shape)
+    engine.newTensorNode(dtype, make_layout(sh, rowMajorStrides(sh)))
   else:
     raise ValueError.newException("newTensorNode: rank " & $shape.len & " unsupported")

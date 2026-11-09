@@ -7,7 +7,8 @@
 
 ## Tensorcery erased tensor layer on metal
 ##
-## Test that the user face (toTensor, add, split, eval) runs end to end on Metal in bfloat16, enqueueing each producer once per eval.
+## Test that the user face (toTensor, add, split, eval) runs end to end on Metal in bfloat16
+## at ranks 1 to 5, enqueueing each producer once per eval.
 ##
 ## Run from the worktree root:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
@@ -21,6 +22,7 @@ import workspace/tensorcery/tests/tensor_tests_template
 proc main =
   runTest(runMetal, "Metal")
   runDedupeTest(runMetal, "Metal")
+  runRankNTest(runMetal, "Metal")
 
 when isMainModule:
   main()

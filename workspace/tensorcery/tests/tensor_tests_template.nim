@@ -153,3 +153,84 @@ proc runDedupeTest*(run: static Runtime, name: string) =
     doAssert ge[i] == eExp, name & ": aliased e[" & $i & "]"
 
   echo "tensorcery dedupe (", name, "): all checks passed"
+
+proc runRankNTest*(run: static Runtime, name: string) =
+  ## Construct-upload-item-download round-trips at ranks 1, 3, 4, 5, bf16.
+  ## The payloads are the integers 1..32, exact in bf16: every comparison is exact.
+  let xd = [1.0'f32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            17.0'f32, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+  var xq: array[32, bfloat16]
+  for i in 0 ..< 32:
+    xq[i] = xd[i].to(bfloat16)
+
+  # rank 1: a vector, an rmsnorm weight shape
+  let v = toTensor(xq[0 ..< 8], @[8])
+  var vShape = @[8]
+  var vStrides = @[1]
+  doAssert v.shape() == vShape.toSpan(), name & ": rank1 shape"
+  doAssert v.strides() == vStrides.toSpan(), name & ": rank1 strides"
+  doAssert v.item(0, bfloat16) == xd[0].to(bfloat16), name & ": rank1 first"
+  doAssert v.item(4, bfloat16) == xd[4].to(bfloat16), name & ": rank1 mid"
+  doAssert v.item(7, bfloat16) == xd[7].to(bfloat16), name & ": rank1 last"
+
+  # rank 3: a q-like projection (batch, heads, head_dim)
+  let q = toTensor(xq[0 ..< 8], @[2, 2, 2])
+  var qStrides = @[4, 2, 1]
+  doAssert q.strides() == qStrides.toSpan(), name & ": rank3 strides"
+  doAssert q.item(0, 0, 0, bfloat16) == xd[0].to(bfloat16), name & ": rank3 first"
+  doAssert q.item(1, 0, 1, bfloat16) == xd[5].to(bfloat16), name & ": rank3 mid"
+  doAssert q.item(1, 1, 1, bfloat16) == xd[7].to(bfloat16), name & ": rank3 last"
+
+  # rank 4: a qkv projection (batch, heads, seq, head_dim)
+  let qkv = toTensor(xq[0 ..< 16], @[2, 2, 2, 2])
+  var qkvStrides = @[8, 4, 2, 1]
+  doAssert qkv.strides() == qkvStrides.toSpan(), name & ": rank4 strides"
+  doAssert qkv.item(0, 0, 0, 0, bfloat16) == xd[0].to(bfloat16), name & ": rank4 first"
+  doAssert qkv.item(1, 0, 1, 0, bfloat16) == xd[10].to(bfloat16), name & ": rank4 mid"
+  doAssert qkv.item(1, 1, 1, 1, bfloat16) == xd[15].to(bfloat16), name & ": rank4 last"
+
+  # rank 5: a pool page slab
+  let page = toTensor(xq, @[2, 2, 2, 2, 2])
+  var pageStrides = @[16, 8, 4, 2, 1]
+  doAssert page.strides() == pageStrides.toSpan(), name & ": rank5 strides"
+  doAssert page.item(0, 0, 0, 0, 0, bfloat16) == xd[0].to(bfloat16), name & ": rank5 first"
+  doAssert page.item(1, 0, 1, 0, 1, bfloat16) == xd[21].to(bfloat16), name & ": rank5 mid"
+  doAssert page.item(1, 1, 1, 1, 1, bfloat16) == xd[31].to(bfloat16), name & ": rank5 last"
+
+  # add walks ranks 3 and 5: one enqueued kernel per node, rank-generic
+  let qy = toTensor(xq[8 ..< 16], @[2, 2, 2])
+  let qz = q + qy
+  doAssert qz.item(1, 1, 1, bfloat16) == (xd[7] + xd[15]).to(bfloat16), name & ": rank3 add"
+  let py = toTensor(xq, @[2, 2, 2, 2, 2])
+  let pz = page + py
+  doAssert pz.item(1, 1, 1, 1, 1, bfloat16) == (xd[31] + xd[31]).to(bfloat16), name & ": rank5 add"
+
+  # erased-engine upload/download round-trip per rank
+  let engine = gEngine(run)
+  for shape in @[@[8], @[2, 2, 2], @[2, 2, 2, 2], @[2, 2, 2, 2, 2]]:
+    var numel = 1
+    for d in shape:
+      numel *= d
+    var src = newSeq[bfloat16](numel)
+    for i in 0 ..< numel:
+      src[i] = xd[i].to(bfloat16)
+    let node = engine.newTensorNode(kBf16, shape.toSpan())
+    engine.upload(node, src)
+    var dst = newSeq[bfloat16](numel)
+    engine.download(dst, node)
+    for i in 0 ..< numel:
+      doAssert dst[i] == src[i], name & ": rank" & $shape.len & " download " & $i
+
+  # single-element readback through the erased engine: a client module
+  # consumes the new AnyEngine vtable method from the public face
+  var vec: array[4, bfloat16]
+  for i in 0 ..< 4:
+    vec[i] = xd[i].to(bfloat16)
+  var vecShape = @[4]
+  let vecNode = engine.newTensorNode(kBf16, vecShape.toSpan())
+  engine.upload(vecNode, vec)
+  var got: bfloat16
+  engine.downloadItem(got, vecNode, 2)
+  doAssert got == xd[2].to(bfloat16), name & ": erased downloadItem"
+
+  echo "tensorcery rank-N (", name, "): all checks passed"
