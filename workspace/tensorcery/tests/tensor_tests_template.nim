@@ -60,5 +60,18 @@ proc runTest*(engine: AnyEngine, name: string) =
     doAssert zGot[i].to(float32) == xi + yi, name & ": add " & $i
     doAssert xyBuf[i].to(float32) == xi, name & ": split source " & $i
 
+  # mixed dtype: an f32 leaf under a bf16 add root walks and evaluates
+  var xf = newTensor(engine, @[2, 4], kFp32)
+  var xfd = @[1.5'f32, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+  xf.copyToDeviceFromHost(xfd)
+  let zm = xf + y
+  doAssert zm.node.getImpl().dtype() == kBf16
+  var zmRoots = @[zm.node]
+  zm.engine.eval(zmRoots.toSpan())
+  let zmGot = readBack(zm, 8)
+  for i in 0 ..< 8:
+    let want = (xfd[i] + yd[i].to(bfloat16).to(float32)).to(bfloat16).to(float32)
+    doAssert zmGot[i].to(float32) == want, name & ": mixed add " & $i
+
   echo "tensorcery Tensor (", name, "): all checks passed"
 

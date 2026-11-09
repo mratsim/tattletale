@@ -50,13 +50,13 @@ type Span*[T] = object
   p*: ptr UncheckedArray[T]
   len*: int
 
-template toSpan(s: tuple): Span[int] =
+template toSpan*(s: tuple): Span[int] =
   Span[int](p: cast[ptr UncheckedArray[int]](unsafeAddr s), len: tupleLen(s))
 
-template toSpan[T](s: seq[T]): Span[T] =
+template toSpan*[T](s: seq[T]): Span[T] =
   Span[T](p: cast[ptr UncheckedArray[T]](unsafeAddr s[0]), len: s.len)
 
-template toSpan[T](s: openArray[T]): Span[T] =
+template toSpan*[T](s: openArray[T]): Span[T] =
   Span[T](p: cast[ptr UncheckedArray[T]](unsafeAddr s[0]), len: s.len)
 
 template toOpenArray[T](bytes: openArray[byte], _: typedesc[T]): openArray[T] =
@@ -99,22 +99,20 @@ type
     offset: int
     layout: Layout[Sh, St]
 
-  PosNode[C] = ref object of RootRef
-    core: C
-    pos: int
-
   AddNode = ref object
     r: AnyTensorImpl
     a, b: TensorNode
 
-  SplitCore = ref object
-    r: seq[AnyTensorImpl]
-    a: TensorNode
-    axis: int
+  ViewNode = ref object
+    ## Lazy shared-buffer view: `v` aliases the source impl's buffer cell,
+    ## eval materializes the view's storage through `src`.
+    src: TensorNode
+    v: AnyTensorImpl
 
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: Span[int]): TensorNode
+    proc makeViewImpl(src: AnyTensorImpl, shape, strides: Span[int], offset: int): AnyTensorImpl
     proc copyToDeviceFromHost(node: TensorNode, src: openArray[byte])
     proc copyToHostFromDevice(dst: var openArray[byte], node: TensorNode)
     proc eval(roots: Span[TensorNode])
@@ -184,17 +182,11 @@ proc eval*(n: AddNode) =
 proc getImpl*(n: AddNode): AnyTensorImpl =
   n.r
 
-proc eval*(n: SplitCore) =
+proc eval*(n: ViewNode) =
   raiseAssert "eval is not implemented yet: graph layer only"
 
-proc getOutput*(n: SplitCore, i: int): AnyTensorImpl =
-  n.r[i]
-
-proc eval*[C](n: PosNode[C]) =
-  n.core.eval()
-
-proc getImpl*[C](n: PosNode[C]): AnyTensorImpl =
-  n.core.getOutput(n.pos)
+proc getImpl*(n: ViewNode): AnyTensorImpl =
+  n.v
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The erased engine
@@ -232,6 +224,59 @@ proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Any
 proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
   makeTensorImpl(engine, dtype, shape.toSpan())
 
+proc makeViewImpl[E: HwEngine, Sh: tuple, St: tuple](
+    engine: E, src: AnyTensorImpl, layout: Layout[Sh, St], offset: int): AnyTensorImpl =
+  ## Shared-buffer view over `src`: aliases the source's `ref DeviceMem` cell
+  ## with a new layout and element offset, no allocation and no copy.
+  ## Contract: the view stays inside the source's storage window,
+  ## offset + cosize(layout) must not exceed the source buffer length.
+  case src.dtype()
+  of kFp32:
+    type Mem = typeof(engine.allocDevice(float32, 0))
+    let s = src.to(TensorImpl[Mem, Layout[Sh, St]])
+    TensorImpl[Mem, Layout[Sh, St]](data: s.data, offset: offset, layout: layout).to(AnyTensorImpl)
+  of kBf16:
+    type Mem = typeof(engine.allocDevice(bfloat16, 0))
+    let s = src.to(TensorImpl[Mem, Layout[Sh, St]])
+    TensorImpl[Mem, Layout[Sh, St]](data: s.data, offset: offset, layout: layout).to(AnyTensorImpl)
+  else:
+    raise ValueError.newException("makeViewImpl: dtype " & $src.dtype() & " unsupported")
+
+proc makeViewImpl*[E: HwEngine](engine: E, src: AnyTensorImpl, shape, strides: Span[int], offset: int): AnyTensorImpl =
+  case shape.len
+  of 1:
+    var sh: (int,)
+    var st: (int,)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    makeViewImpl(engine, src, make_layout(sh, st), offset)
+  of 2:
+    var sh: (int, int)
+    var st: (int, int)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    makeViewImpl(engine, src, make_layout(sh, st), offset)
+  of 3:
+    var sh: (int, int, int)
+    var st: (int, int, int)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    makeViewImpl(engine, src, make_layout(sh, st), offset)
+  of 4:
+    var sh: (int, int, int, int)
+    var st: (int, int, int, int)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    makeViewImpl(engine, src, make_layout(sh, st), offset)
+  of 5:
+    var sh: (int, int, int, int, int)
+    var st: (int, int, int, int, int)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    makeViewImpl(engine, src, make_layout(sh, st), offset)
+  else:
+    raise ValueError.newException("makeViewImpl: rank " & $shape.len & " unsupported")
+
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
   makeTensorImpl(engine, dtype, shape).to(TensorNode)
 
@@ -239,60 +284,87 @@ proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Ten
 #  Eval - pull walk, enqueue into one batch, submit
 # ═══════════════════════════════════════════════════════════════════════
 
-proc evalWalk[E: HwEngine, Sh: tuple, Mem, T](
-    engine: E, batch: Batch[E], n: TensorNode) =
+proc enqueueAdd[E: HwEngine, Sh: tuple, MemZ, MemA, MemB](
+    engine: E, batch: Batch[E], n: AddNode) =
+  ## Enqueues one k_add over the node's impls.
+  ## Each impl's Mem type is a generic argument of this proc.
+  ## A body-local type alias defeats the launch's generic binding.
+  let
+    rz = n.r.to(TensorImpl[MemZ, Layout[Sh, Sh]])
+    ra = n.a.getImpl().to(TensorImpl[MemA, Layout[Sh, Sh]])
+    rb = n.b.getImpl().to(TensorImpl[MemB, Layout[Sh, Sh]])
+    numel = rz.layout.shape.getNumElems()
+    zv = TensorBridge[MemZ, Sh, Sh](data: rz.data[], offset: rz.offset, layout: rz.layout)
+    xv = TensorBridge[MemA, Sh, Sh](data: ra.data[], offset: ra.offset, layout: ra.layout)
+    yv = TensorBridge[MemB, Sh, Sh](data: rb.data[], offset: rb.offset, layout: rb.layout)
+  batch.enqueue<<(ceil_div(numel, 128), 32)>> k_add(zv, xv, yv)
+
+proc dispatchAddInputs[E: HwEngine, Sh: tuple, MemZ](
+    engine: E, batch: Batch[E], n: AddNode) =
+  ## Input-side dtype dispatch of one add node. The result Mem is a generic argument.
+  case n.a.getImpl().dtype()
+  of kFp32:
+    type MemA = typeof(engine.allocDevice(float32, 0))
+    case n.b.getImpl().dtype()
+    of kFp32:
+      type MemB = typeof(engine.allocDevice(float32, 0))
+      enqueueAdd[E, Sh, MemZ, MemA, MemB](engine, batch, n)
+    of kBf16:
+      type MemB = typeof(engine.allocDevice(bfloat16, 0))
+      enqueueAdd[E, Sh, MemZ, MemA, MemB](engine, batch, n)
+    else:
+      raise ValueError.newException("eval: kFp16 add operand unsupported")
+  of kBf16:
+    type MemA = typeof(engine.allocDevice(bfloat16, 0))
+    case n.b.getImpl().dtype()
+    of kFp32:
+      type MemB = typeof(engine.allocDevice(float32, 0))
+      enqueueAdd[E, Sh, MemZ, MemA, MemB](engine, batch, n)
+    of kBf16:
+      type MemB = typeof(engine.allocDevice(bfloat16, 0))
+      enqueueAdd[E, Sh, MemZ, MemA, MemB](engine, batch, n)
+    else:
+      raise ValueError.newException("eval: kFp16 add operand unsupported")
+  else:
+    raise ValueError.newException("eval: kFp16 add operand unsupported")
+
+proc evalWalk[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n: TensorNode) =
   let asAdd = n.to(AddNode)
   if not asAdd.isNil:
-    let rz = asAdd.r.to(TensorImpl[Mem, Layout[Sh, Sh]])
-    evalWalk[E, Sh, Mem, T](engine, batch, asAdd.a)
-    evalWalk[E, Sh, Mem, T](engine, batch, asAdd.b)
-    let
-      xa = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-      xb = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-      numel = rz.layout.shape.getNumElems()
-    let
-      zv = TensorBridge[Mem, Sh, Sh](data: rz.data[], offset: rz.offset, layout: rz.layout)
-      xv = TensorBridge[Mem, Sh, Sh](data: xa.data[], offset: xa.offset, layout: xa.layout)
-      yv = TensorBridge[Mem, Sh, Sh](data: xb.data[], offset: xb.offset, layout: xb.layout)
-    batch.enqueue<<(ceil_div(numel, 128), 32)>> k_add(zv, xv, yv)
+    evalWalk[E, Sh](engine, batch, asAdd.a)
+    evalWalk[E, Sh](engine, batch, asAdd.b)
+    # per-node dtype dispatch: each erased dtype selects the static
+    # Mem of its impl, kFp16 has no erased impls and raises
+    case asAdd.r.dtype()
+    of kFp32:
+      type MemZ = typeof(engine.allocDevice(float32, 0))
+      dispatchAddInputs[E, Sh, MemZ](engine, batch, asAdd)
+    of kBf16:
+      type MemZ = typeof(engine.allocDevice(bfloat16, 0))
+      dispatchAddInputs[E, Sh, MemZ](engine, batch, asAdd)
+    else:
+      raise ValueError.newException("eval: kFp16 add result unsupported")
     return
-  let asChunk = n.to(PosNode[SplitCore])
-  if not asChunk.isNil:
-    let core = asChunk.core
-    evalWalk[E, Sh, Mem, T](engine, batch, core.a)
-    let src = core.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    for i in 0 ..< core.r.len:
-      let v = core.r[i].to(TensorImpl[Mem, Layout[Sh, Sh]])
-      v.data = src.data
+  let asView = n.to(ViewNode)
+  if not asView.isNil:
+    # views alias their source's buffer cell, materialize the source first
+    evalWalk[E, Sh](engine, batch, asView.src)
     return
-  if not n.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]]).isNil:
-    return
-  raise ValueError.newException("eval: unsupported node in the graph")
+  # a node that is neither an add nor a view is a materialized impl,
+  # nothing to enqueue
+  return
 
 proc eval*[E: HwEngine](engine: E, roots: Span[TensorNode]) =
   if roots.len == 0:
     return
-  let impl = roots[0].getImpl()
   var batch = engine.recordBatch()
-  case impl.dtype()
-  of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
-    case impl.shape().len
+  for i in 0 ..< roots.len:
+    case roots[i].getImpl().shape().len
     of 2:
-      for i in 0 ..< roots.len:
-        evalWalk[E, (int, int), Mem, float32](engine, batch, roots[i])
+      evalWalk[E, (int, int)](engine, batch, roots[i])
     else:
-      raise ValueError.newException("eval: rank " & $impl.shape().len & " unsupported")
-  of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    case impl.shape().len
-    of 2:
-      for i in 0 ..< roots.len:
-        evalWalk[E, (int, int), Mem, bfloat16](engine, batch, roots[i])
-    else:
-      raise ValueError.newException("eval: rank " & $impl.shape().len & " unsupported")
-  else:
-    raise ValueError.newException("eval: dtype unsupported")
+      raise ValueError.newException(
+        "eval: rank " & $roots[i].getImpl().shape().len & " unsupported")
   batch.submit()
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -304,30 +376,33 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode =
   let ib = b.getImpl()
   if ia.shape() != ib.shape():
     raise ValueError.newException("tn_add: shape mismatch")
-  if ia.dtype() != ib.dtype():
-    raise ValueError.newException("tn_add: dtype mismatch")
-  AddNode(a: a, b: b, r: engine.newTensorNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
+  # a bfloat16 operand rounds the sum back to bfloat16. The result dtype
+  # is fp32 only when both operands are fp32.
+  let dz = if ia.dtype() == kFp32 and ib.dtype() == kFp32: kFp32 else: kBf16
+  AddNode(a: a, b: b, r: engine.newTensorNode(dz, ia.shape()).getImpl()).to(TensorNode)
 
 proc tn_split*(engine: AnyEngine, x: TensorNode, numParts: int, axis: int = -1): seq[TensorNode] =
   let ix = x.getImpl()
   let s = ix.shape()
-  if axis != 0:
-    # erased impls carry contiguous layouts only, a split on an inner
-    # axis needs the inherited strides of the source layout
+  let st = ix.strides()
+  let ax = if axis == -1: s.len - 1 else: axis
+  if ax < 0 or ax >= s.len:
     raise ValueError.newException(
-      "tn_split: axis " & $axis & " unsupported, only the outer axis splits densely")
-  if s[axis] mod numParts != 0:
+      "tn_split: axis " & $axis & " outside the rank " & $s.len)
+  if s[ax] mod numParts != 0:
     raise ValueError.newException(
-      "tn_split: dimension " & $s[axis] & " not divisible by " & $numParts)
+      "tn_split: dimension " & $s[ax] & " not divisible by " & $numParts)
+  # parts are shared-buffer views over the source impl:
+  # - layout: the source layout narrowed along the split axis
+  # - offset: part i starts at i * partLen * stride[axis] elements
   var partShape = newSeq[int](s.len)
   for i in 0 ..< s.len:
     partShape[i] = s[i]
-  partShape[axis] = s[axis] div numParts
-  let core = SplitCore(a: x, axis: axis)
+  partShape[ax] = s[ax] div numParts
   for i in 0 ..< numParts:
-    core.r.add(engine.newTensorNode(ix.dtype(), partShape.toSpan()).getImpl())
-  for i in 0 ..< numParts:
-    result.add(PosNode[SplitCore](core: core, pos: i).to(TensorNode))
+    let offset = i * partShape[ax] * st[ax]
+    let v = engine.makeViewImpl(ix, partShape.toSpan(), st, offset)
+    result.add(ViewNode(src: x, v: v).to(TensorNode))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Tensor - the erased user face

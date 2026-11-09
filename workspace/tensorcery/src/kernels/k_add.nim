@@ -31,14 +31,15 @@ proc k_add*(z, x, y: distinct DeviceView) =
   let
     cSize = grid.size()
     gridStride = getGridSize()
+  # register tiles share the output's tile map so element slots pair across types
   for tileID in countup(grid.getLocalTileID(), cSize - 1, gridStride):
-    let rx = tile(xv.T).load(xv, thrID, tileID)
-    let ry = tile(yv.T).load(yv, thrID, tileID)
-    var rz: tile(zv.T)
+    let
+      rx = tile(xv.T, reg.getLayout()).load(xv, thrID, tileID)
+      ry = tile(yv.T, reg.getLayout()).load(yv, thrID, tileID)
     for i in 0 ..< rx.size():
       let s = rx[i].to(float32) + ry[i].to(float32)
       when zv.T is bfloat16:
-        rz[i] = s.to(bfloat16)
+        reg[i] = s.to(bfloat16)
       else:
-        rz[i] = s
-    zv.store(rz, thrID, tileID)
+        reg[i] = s
+    zv.store(reg, thrID, tileID)
