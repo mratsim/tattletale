@@ -76,7 +76,7 @@ proc enqueueSplit*[E: HwEngine, Sh: tuple, Mem](
   if asSplit.isNil:
     return false
   let core = asSplit.core
-  evalNode[E, Mem](engine, batch, core.a)
+  evalNode[E](engine, batch, core.a)
   let src = core.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
   for i in 0 ..< core.r.len:
     let v = core.r[i].to(TensorImpl[Mem, Layout[Sh, Sh]])

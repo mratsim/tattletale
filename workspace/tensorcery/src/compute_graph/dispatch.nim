@@ -28,6 +28,19 @@ macro registerOp*(op: static string, handler: typed) =
   ## Registration entry of an op file, the value is the generic symbol
   OpRegistry[op] = handler
 
+template withMem*(engine: HwEngine, dtype: Dtype, body: untyped) =
+  ## Binds Mem over the body from the node's own dtype
+  ## The one place the dtype case exists
+  case dtype
+  of kFp32:
+    type Mem {.inject.} = typeof(engine.allocDevice(float32, 0))
+    body
+  of kBf16:
+    type Mem {.inject.} = typeof(engine.allocDevice(bfloat16, 0))
+    body
+  else:
+    raise ValueError.newException("eval: dtype unsupported")
+
 macro dispatchOp*(E, Sh, Mem, engine, batch, n: typed): untyped =
   ## Expands one typed branch per registered op, each handler symbol
   ## instantiates with the walk's own bindings
@@ -49,19 +62,20 @@ proc evalWalk*[E: HwEngine, Sh: tuple, Mem](
   ## Walks one node: a node with no op is a materialized impl, an op node
   ## enqueues through its registered handler
 
-proc evalNode*[E: HwEngine, Mem](
+proc evalNode*[E: HwEngine](
     engine: E, batch: Batch[E], n: TensorNode) =
-  ## Walks one node at the node's own rank, dispatching the rank tuple.
-  ## Op enqueue handlers recurse into a node's children through this proc.
-  case n.getImpl().shape().len
-  of 1: evalWalk[E, (int,), Mem](engine, batch, n)
-  of 2: evalWalk[E, (int, int), Mem](engine, batch, n)
-  of 3: evalWalk[E, (int, int, int), Mem](engine, batch, n)
-  of 4: evalWalk[E, (int, int, int, int), Mem](engine, batch, n)
-  of 5: evalWalk[E, (int, int, int, int, int), Mem](engine, batch, n)
-  else:
-    raise ValueError.newException(
-      "eval: rank " & $n.getImpl().shape().len & " unsupported")
+  ## Walks one node at its own dtype and rank. Op enqueue handlers recurse
+  ## into a node's children through this proc.
+  withMem(engine, n.getImpl().dtype()):
+    case n.getImpl().shape().len
+    of 1: evalWalk[E, (int,), Mem](engine, batch, n)
+    of 2: evalWalk[E, (int, int), Mem](engine, batch, n)
+    of 3: evalWalk[E, (int, int, int), Mem](engine, batch, n)
+    of 4: evalWalk[E, (int, int, int, int), Mem](engine, batch, n)
+    of 5: evalWalk[E, (int, int, int, int, int), Mem](engine, batch, n)
+    else:
+      raise ValueError.newException(
+        "eval: rank " & $n.getImpl().shape().len & " unsupported")
 
 proc evalWalk*[E: HwEngine, Sh: tuple, Mem](
     engine: E, batch: Batch[E], n: TensorNode) =
