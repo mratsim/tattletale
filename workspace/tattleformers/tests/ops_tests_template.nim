@@ -20,6 +20,8 @@ import workspace/tattleformers/src/ops_1i1o/rmsnorm
 import workspace/tattleformers/src/layers/embedding
 import workspace/tattleformers/src/layers/linear
 import workspace/tattleformers/src/layers/norm
+import workspace/tattleformers/src/ops_Ni1o/rope
+import workspace/tattleformers/src/layers/rope
 
 export tensor_datatypes
 
@@ -436,5 +438,257 @@ proc runTest*[Mem](any: AnyEngine, name: string) =
             let w = float64(wHost[i].to(float32))
             refRes[r * N + i] = float32(v * scale * w)
         gotNormed.checkBf16Ulp(refRes, 2, name & ": RmsNorm residual fused")
+
+
+  # ── rope op, RotaryPositionEmbedding layer, chained q_proj→q_norm→rope ──
+  # bf16 q (8, 16, 128) with f32 cos/sin half tables at the Qwen3 geometry
+  # (head_dim 128, 16 heads, rope_theta 1e6): judged against an f64 host
+  # reference at the kElementwise-class band (2 bf16 ulps)
+  block:
+    const
+      Tokens = 8
+      Heads = 16
+      Dim = 128
+      Half = Dim div 2
+      Theta = 1e6
+    # independent f64 host tables
+    var invFreq = newSeq[float64](Half)
+    for j in 0 ..< Half:
+      invFreq[j] = pow(Theta, -(2.0 * float64(j)) / float64(Dim))
+    var cosHost = newSeq[float32](Tokens * Half)
+    var sinHost = newSeq[float32](Tokens * Half)
+    for t in 0 ..< Tokens:
+      for j in 0 ..< Half:
+        let angle = float64(t) * invFreq[j]
+        cosHost[t * Half + j] = float32(cos(angle))
+        sinHost[t * Half + j] = float32(sin(angle))
+
+    var qHost = newSeq[bfloat16](Tokens * Heads * Dim)
+    for i in 0 ..< qHost.len:
+      qHost[i] = (float32((i * 37) mod 31 - 15) * 0.25'f32).to(bfloat16)
+
+    let q = newTensor(any, @[Tokens, Heads, Dim], kBf16)
+    q.copyToDeviceFromHost(qHost)
+    let rotary = RotaryPositionEmbedding.new(any, Dim, Tokens, Theta)
+    # layer table construction judged against the independent f64 tables
+    block:
+      var gotCos = newSeq[float32](Tokens * Half)
+      var gotSin = newSeq[float32](Tokens * Half)
+      copyToHostFromDevice(gotCos, rotary.cos_cache)
+      copyToHostFromDevice(gotSin, rotary.sin_cache)
+      for i in 0 ..< Tokens * Half:
+        doAssert gotCos[i] == cosHost[i], name & ": cos table " & $i &
+          ": got " & $gotCos[i] & ", want " & $cosHost[i]
+        doAssert gotSin[i] == sinHost[i], name & ": sin table " & $i &
+          ": got " & $gotSin[i] & ", want " & $sinHost[i]
+
+    let o = Tensor(engine: q.engine,
+      node: tn_rope(q.engine, q.node, rotary.cos_cache.node, rotary.sin_cache.node))
+    doAssert o.node.getImpl().shape() == q.node.getImpl().shape()
+    doAssert o.node.getImpl().dtype() == kBf16
+    var oRoots = @[o.node]
+    o.engine.eval(oRoots.toSpan())
+    var gotO = newSeq[bfloat16](qHost.len)
+    copyToHostFromDevice(gotO, o)
+    # f64 host reference of q*cos + rotateHalf(q)*sin over the reference
+    # duplicated half table: entry i reads the table column i mod Half,
+    # its rotateHalf partner sitting Half columns away
+    var refO = newSeq[float32](qHost.len)
+    for t in 0 ..< Tokens:
+      for h in 0 ..< Heads:
+        for i in 0 ..< Dim:
+          let idx = t * Heads * Dim + h * Dim + i
+          let partner = if i < Half: i + Half else: i - Half
+          let qv = float64(qHost[idx].to(float32))
+          let pv = float64(qHost[t * Heads * Dim + h * Dim + partner].to(float32))
+          let rot = if i < Half: -pv else: pv
+          let c = float64(cosHost[t * Half + i mod Half])
+          let s = float64(sinHost[t * Half + i mod Half])
+          refO[idx] = float32(qv * c + rot * s)
+    gotO.checkBf16Ulp(refO, 2, name & ": rope (8, 16, 128)")
+
+    # rotate_half pairing exact: cos=1/sin=0 leaves q unchanged bit for bit,
+    # cos=0/sin=1 swaps the halves with the sign flip on the even columns
+    block:
+      const
+        PTokens = 2
+        PHeads = 3
+        PDim = 8
+        PHalf = PDim div 2
+      var pqHost = newSeq[bfloat16](PTokens * PHeads * PDim)
+      for i in 0 ..< pqHost.len:
+        pqHost[i] = (float32((i * 29) mod 19 - 9) * 0.5'f32).to(bfloat16)
+      let pq = newTensor(any, @[PTokens, PHeads, PDim], kBf16)
+      pq.copyToDeviceFromHost(pqHost)
+      var ones = newSeq[float32](PTokens * PHalf)
+      var zeros = newSeq[float32](PTokens * PHalf)
+      for i in 0 ..< ones.len:
+        ones[i] = 1.0'f32
+        zeros[i] = 0.0'f32
+      let cosId = newTensor(any, @[PTokens, PHalf], kFp32)
+      cosId.copyToDeviceFromHost(ones)
+      let sinId = newTensor(any, @[PTokens, PHalf], kFp32)
+      sinId.copyToDeviceFromHost(zeros)
+      let oid = Tensor(engine: pq.engine,
+        node: tn_rope(pq.engine, pq.node, cosId.node, sinId.node))
+      var oidRoots = @[oid.node]
+      oid.engine.eval(oidRoots.toSpan())
+      var gotId = newSeq[bfloat16](pqHost.len)
+      copyToHostFromDevice(gotId, oid)
+      for i in 0 ..< pqHost.len:
+        doAssert gotId[i].to(float32) == pqHost[i].to(float32),
+          name & ": rope identity " & $i & ": got " & $gotId[i].to(float32) &
+          ", want " & $pqHost[i].to(float32)
+
+      let cosSw = newTensor(any, @[PTokens, PHalf], kFp32)
+      cosSw.copyToDeviceFromHost(zeros)
+      let sinSw = newTensor(any, @[PTokens, PHalf], kFp32)
+      sinSw.copyToDeviceFromHost(ones)
+      let osw = Tensor(engine: pq.engine,
+        node: tn_rope(pq.engine, pq.node, cosSw.node, sinSw.node))
+      var oswRoots = @[osw.node]
+      osw.engine.eval(oswRoots.toSpan())
+      var gotSw = newSeq[bfloat16](pqHost.len)
+      copyToHostFromDevice(gotSw, osw)
+      for t in 0 ..< PTokens:
+        for h in 0 ..< PHeads:
+          for i in 0 ..< PHalf:
+            let base = t * PHeads * PDim + h * PDim
+            doAssert gotSw[base + i].to(float32) ==
+              (-pqHost[base + i + PHalf].to(float32)).to(bfloat16).to(float32),
+              name & ": rope swap even " & $i & ": got " &
+              $gotSw[base + i].to(float32)
+            doAssert gotSw[base + i + PHalf].to(float32) ==
+              pqHost[base + i].to(float32),
+              name & ": rope swap odd " & $i & ": got " &
+              $gotSw[base + i + PHalf].to(float32)
+
+    # face contract: rank, width, dtype and token mismatches raise
+    block:
+      let q2 = newTensor(any, @[Tokens, Dim], kBf16)
+      doAssertRaises ValueError:
+        discard tn_rope(any, q2.node, rotary.cos_cache.node, rotary.sin_cache.node)
+      let qOdd = newTensor(any, @[Tokens, Heads, Dim + 1], kBf16)
+      doAssertRaises ValueError:
+        discard tn_rope(any, qOdd.node, rotary.cos_cache.node, rotary.sin_cache.node)
+      let cosBf = newTensor(any, @[Tokens, Half], kBf16)
+      doAssertRaises ValueError:
+        discard tn_rope(any, q.node, cosBf.node, rotary.sin_cache.node)
+      let cosShort = newTensor(any, @[Tokens, Half - 1], kFp32)
+      doAssertRaises ValueError:
+        discard tn_rope(any, q.node, cosShort.node, rotary.sin_cache.node)
+      let cosMore = newTensor(any, @[Tokens + 1, Half], kFp32)
+      doAssertRaises ValueError:
+        discard tn_rope(any, q.node, cosMore.node, rotary.sin_cache.node)
+
+    # ropeByPositions: the cache entries gather per position id
+    block:
+      let positions = [3, 0, Tokens - 1]
+      let (cosSel, sinSel) = rotary.ropeByPositions(positions)
+      doAssert cosSel.node.getImpl().shape().len == 2
+      doAssert cosSel.node.getImpl().shape()[0] == positions.len
+      doAssert cosSel.node.getImpl().shape()[1] == Half
+      var selRoots = @[cosSel.node, sinSel.node]
+      cosSel.engine.eval(selRoots.toSpan())
+      var gotCosSel = newSeq[float32](positions.len * Half)
+      var gotSinSel = newSeq[float32](positions.len * Half)
+      copyToHostFromDevice(gotCosSel, cosSel)
+      copyToHostFromDevice(gotSinSel, sinSel)
+      for r in 0 ..< positions.len:
+        for j in 0 ..< Half:
+          doAssert gotCosSel[r * Half + j] == cosHost[positions[r] * Half + j],
+            name & ": ropeByPositions cos " & $r & "," & $j
+          doAssert gotSinSel[r * Half + j] == sinHost[positions[r] * Half + j],
+            name & ": ropeByPositions sin " & $r & "," & $j
+      doAssertRaises ValueError:
+        discard rotary.ropeByPositions([Tokens])
+
+    # chained smoke q_proj → q_norm → rope vs reference order at the Qwen3
+    # geometry (hidden 1024, 16 q heads, 8 kv heads, head_dim 128):
+    # intermediates read back so each stage's reference consumes the device's
+    # own previous-stage values
+    block:
+      const
+        CTokens = 4
+        CHidden = 1024
+        CHeads = 16
+        CKvHeads = 8
+      var xHost = newSeq[bfloat16](CTokens * CHidden)
+      for i in 0 ..< xHost.len:
+        xHost[i] = (float32((i * 41) mod 23 - 11) * 0.125'f32).to(bfloat16)
+      var wqHost = newSeq[bfloat16](CHeads * Dim * CHidden)
+      for i in 0 ..< wqHost.len:
+        wqHost[i] = (float32((i * 17) mod 29 - 14) * 0.0625'f32).to(bfloat16)
+      var wkHost = newSeq[bfloat16](CKvHeads * Dim * CHidden)
+      for i in 0 ..< wkHost.len:
+        wkHost[i] = (float32((i * 13) mod 31 - 15) * 0.0625'f32).to(bfloat16)
+      var wnHost = newSeq[bfloat16](Dim)
+      for i in 0 ..< Dim:
+        wnHost[i] = (float32(i mod 11) * 0.1'f32 + 0.5'f32).to(bfloat16)
+
+      let x = newTensor(any, @[CTokens, CHidden], kBf16)
+      x.copyToDeviceFromHost(xHost)
+      let wq = newTensor(any, @[CHeads * Dim, CHidden], kBf16)
+      wq.copyToDeviceFromHost(wqHost)
+      let wk = newTensor(any, @[CKvHeads * Dim, CHidden], kBf16)
+      wk.copyToDeviceFromHost(wkHost)
+      let wn = newTensor(any, @[Dim], kBf16)
+      wn.copyToDeviceFromHost(wnHost)
+      let rotaryC = RotaryPositionEmbedding.new(any, Dim, CTokens, Theta)
+
+      let qProj = Linear.init(wq).forward(x)
+      let kProj = Linear.init(wk).forward(x)
+      let q3 = qProj.reshape([CTokens, CHeads, Dim])
+      let k3 = kProj.reshape([CTokens, CKvHeads, Dim])
+      let qNorm = RmsNorm.init(wn).forward(q3)
+      let kNorm = RmsNorm.init(wn).forward(k3)
+      let (qRot, kRot) = rotaryC.applyRope(
+        qNorm.reshape([1, CTokens, CHeads, Dim]),
+        kNorm.reshape([1, CTokens, CKvHeads, Dim]),
+        rotaryC.cos_cache, rotaryC.sin_cache)
+      doAssert qRot.node.getImpl().shape().len == 4
+      doAssert qRot.node.getImpl().shape()[0] == 1
+      doAssert qRot.node.getImpl().shape()[1] == CTokens
+      doAssert qRot.node.getImpl().shape()[2] == CHeads
+      doAssert qRot.node.getImpl().shape()[3] == Dim
+      doAssert kRot.node.getImpl().shape()[2] == CKvHeads
+      var roots = @[qProj.node, qNorm.node, kNorm.node, qRot.node, kRot.node]
+      qRot.engine.eval(roots.toSpan())
+
+      # q_norm reference over the device's own projected values
+      var gotQ3 = newSeq[bfloat16](CTokens * CHeads * Dim)
+      copyToHostFromDevice(gotQ3, qProj)
+      var gotQn = newSeq[bfloat16](CTokens * CHeads * Dim)
+      copyToHostFromDevice(gotQn, qNorm)
+      var refQn = newSeq[float32](CTokens * CHeads * Dim)
+      for t in 0 ..< CTokens:
+        for h in 0 ..< CHeads:
+          var ss = 0.0'f64
+          for i in 0 ..< Dim:
+            let v = float64(gotQ3[t * CHeads * Dim + h * Dim + i].to(float32))
+            ss += v * v
+          let scale = 1.0 / sqrt(ss / float64(Dim) + 1e-6)
+          for i in 0 ..< Dim:
+            let v = float64(gotQ3[t * CHeads * Dim + h * Dim + i].to(float32))
+            let w = float64(wnHost[i].to(float32))
+            refQn[t * CHeads * Dim + h * Dim + i] = float32(v * scale * w)
+      gotQn.checkBf16Ulp(refQn, 2, name & ": chained q_norm")
+
+      # rope reference over the device's own normed values
+      var gotQr = newSeq[bfloat16](CTokens * CHeads * Dim)
+      copyToHostFromDevice(gotQr, qRot)
+      var refQr = newSeq[float32](CTokens * CHeads * Dim)
+      for t in 0 ..< CTokens:
+        for h in 0 ..< CHeads:
+          for i in 0 ..< Dim:
+            let idx = t * CHeads * Dim + h * Dim + i
+            let partner = if i < Half: i + Half else: i - Half
+            let qv = float64(gotQn[idx].to(float32))
+            let pv = float64(gotQn[t * CHeads * Dim + h * Dim + partner].to(float32))
+            let rot = if i < Half: -pv else: pv
+            let c = float64(cosHost[t * Half + i mod Half])
+            let s = float64(sinHost[t * Half + i mod Half])
+            refQr[idx] = float32(qv * c + rot * s)
+      gotQr.checkBf16Ulp(refQr, 2, name & ": chained rope")
 
   echo "tattleformers ops (", name, "): all checks passed"

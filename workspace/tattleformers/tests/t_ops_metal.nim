@@ -10,8 +10,8 @@
 ## Test that the tattleformers ops and layers run end to end on the Metal
 ## engine in bfloat16:
 ##
-## - ops under test: embed gather, add, matmul, rmsnorm
-## - layers under test: Embedding, Linear, RmsNorm
+## - ops under test: embed gather, add, matmul, rmsnorm, rope
+## - layers under test: Embedding, Linear, RmsNorm, RotaryPositionEmbedding
 ## - one graph through the open eval-walk dispatch, per-node dtype dispatch
 ##
 ## Run from the worktree root:
