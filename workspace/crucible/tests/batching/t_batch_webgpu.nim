@@ -1,7 +1,7 @@
-## Batch suite, webgpu runtime.
+## Batch suite, webgpu backend.
 ##
 ## Test that every batching scenario through the public batch API matches
-## an eager launch on the same engine.
+## a `launchDeviceFn` launch of the same kernel.
 ##
 ## Run from the worktree root:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \

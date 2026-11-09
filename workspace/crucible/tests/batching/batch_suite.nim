@@ -1,22 +1,4 @@
-## Engine-agnostic batching suite: every scenario runs through the batch
-## API (`recordBatch`/`enqueue`/`submit`/`replay`) and is judged against an eager
-## `launchDeviceFn` launch on the same engine.
-##
-## One driver file per runtime instantiates the suite:
-##   t_batch_metal.nim, t_batch_vulkan.nim, t_batch_opencl.nim, t_batch_webgpu.nim
-##
-## Enqueue order is compile-time order:
-## - every batch records its entries before any `submit` runs
-## - each batch then submits and checks
-## - compile streams share their CIR procs between finalizes, a finalize over new enqueues re-runs the lowering passes and fails
-## - one compile per compilation, later finalizes reuse the artifact
-##
-## Every scenario runs on every backend, no skips. A known failure stands
-## as a finding, never as a condition:
-## - WebGPU compiles exactly one global function per module.
-##   The multi-kernel scenarios fail the whole-module compile.
-##
-## Run from the worktree root (metal shown, same command per runtime):
+## Run from the worktree root (metal shown, same command per backend):
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
 ##     --nimcache:nimcache/wip --outdir:build/wip \
 ##     workspace/crucible/tests/batching/t_batch_metal.nim

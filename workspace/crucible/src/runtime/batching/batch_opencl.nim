@@ -128,8 +128,8 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
     entry.slots.add Slot(kind: skBytes, off: off, size: layout.size)
 
 proc newOpenCLBatch*(engine: OpenCLEngine): OpenCLBatch =
-  ## Precondition: the engine's queue preserves entry order.
-  ## Replay relies on in-order-queue semantics.
+  ## Replay executes entries in record order, the engine's queue must
+  ## preserve that order.
   privateAccess(OpenCLEngine)
   privateAccess(OpenCLContext)
   var properties: cl_ulong
