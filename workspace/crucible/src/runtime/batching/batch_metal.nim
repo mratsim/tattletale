@@ -66,6 +66,8 @@ proc `=destroy`*(batch: var MetalBatchObj) =
   ## Releases the batch's own objects, never the borrowed handles.
   if not objc.isNil(batch.recording):
     objc.release(batch.recording)
+  if not objc.isNil(batch.library):
+    objc.release(batch.library)
   for pso in batch.pipelines.values:
     objc.release(pso)
   if not objc.isNil(batch.constants):
@@ -125,7 +127,9 @@ when defined(macosx):
     privateAccess(MetalEngine)
     privateAccess(typeof(engine.cache))
     result = MetalBatch(device: engine.ctx.device, queue: engine.ctx.queue)
-    result.library = engine.cache.library
+    # Engine library cache is a single slot: a re-ingest releases the old library.
+    # Batch construction retains its own reference.
+    result.library = objc.retain(engine.cache.library)
 
   proc recordGlobalFn*(batch: MetalBatch, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
     ## Usage:
