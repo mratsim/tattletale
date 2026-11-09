@@ -11,7 +11,9 @@ import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/engines/engines_common
+import workspace/crucible/src/runtime/engines/opencl_api {.all.}
 import workspace/crucible/src/runtime/launch/launch_serialization
+from std/importutils import privateAccess
 
 export engines_common.LaunchConfig, engines_common.dim3
 
@@ -40,15 +42,29 @@ type
     scalars: seq[byte]
     slots: seq[Slot]
 
+  RetainedKernel* = distinct Pkernel
+    ## An owned cl_kernel, released on destruction.
+
+  RetainedProgram* = distinct Pprogram
+    ## An owned cl_program, released on destruction.
+
   OpenCLBatchObj = object
     context: Pcontext
     queue: Pcommand_queue
     entries: seq[BatchEntry]
-    pipelines*: Table[(string, string), Pkernel]
-    programs: Table[string, Pprogram]
+    pipelines*: Table[(string, string), RetainedKernel]
+    programs: Table[string, RetainedProgram]
     finalized: bool
 
   OpenCLBatch* = ref OpenCLBatchObj
+
+proc `=destroy`(k: var RetainedKernel) =
+  if Pkernel(k) != nil:
+    discard releaseKernel(Pkernel(k))
+
+proc `=destroy`(p: var RetainedProgram) =
+  if Pprogram(p) != nil:
+    discard releaseProgram(Pprogram(p))
 
 const
   QueueDevice = cl_uint(0x1091)
@@ -63,13 +79,6 @@ proc getCommandQueueInfo(
   param_value: pointer,
   param_value_size_ret: ptr cl_size_t
 ): TClResult {.importc: "clGetCommandQueueInfo", dynlib: ClLib.}
-
-proc `=destroy`*(batch: var OpenCLBatchObj) =
-  ## Releases the batch's own objects, never the borrowed handles.
-  for k in batch.pipelines.values:
-    discard releaseKernel(k)
-  for p in batch.programs.values:
-    discard releaseProgram(p)
 
 proc queueDevice(queue: Pcommand_queue): Pdevice_id =
   var device: Pdevice_id
@@ -102,11 +111,16 @@ proc compileEntrypoint(batch: OpenCLBatch, source, entrypoint: string): Pkernel 
     else:
       check status
 
-    batch.programs[source] = program
+    batch.programs[source] = RetainedProgram(program)
 
   var status: TClResult
-  result = createKernel(batch.programs[source], entrypoint.cstring, status.addr)
+  result = createKernel(Pprogram batch.programs[source], entrypoint.cstring, status.addr)
   check status
+
+proc storeEntryArg(entry: var BatchEntry, v: OpenCLBuffer, _: int) =
+  privateAccess(OpenCLBuffer)
+  entry.borrowedBuffers.add v.mem
+  entry.slots.add Slot(kind: skBuffer, buffer: entry.borrowedBuffers.high)
 
 proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
   when typeof(v) is ptr|pointer:
@@ -120,13 +134,16 @@ proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
     entry.scalars.packFrom(w, v, cgOpenCL)
     entry.slots.add Slot(kind: skBytes, off: off, size: layout.size)
 
-proc newOpenCLBatch*(context: Pcontext, queue: Pcommand_queue): OpenCLBatch =
-  ## Borrows context, queue and buffers
+proc newOpenCLBatch*(engine: OpenCLEngine): OpenCLBatch =
+  ## Replay executes entries in record order, the engine's queue must
+  ## preserve that order.
+  privateAccess(OpenCLEngine)
+  privateAccess(OpenCLContext)
   var properties: cl_ulong
-  check getCommandQueueInfo(queue, QueueProperties, cl_size_t(sizeof(cl_ulong)), properties.addr, nil)
+  check getCommandQueueInfo(engine.ctx.commands, QueueProperties, cl_size_t(sizeof(cl_ulong)), properties.addr, nil)
   if (properties and QueueOutOfOrderExec) != 0:
-    raiseAssert("OpenCL batch: replay preserves entry order through in-order-queue semantics, the queue enables out-of-order execution")
-  OpenCLBatch(context: context, queue: queue)
+    raiseAssert("OpenCL batch: the queue enables out-of-order execution, entry order is not preserved")
+  OpenCLBatch(context: engine.ctx.context, queue: engine.ctx.commands)
 
 proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
   if batch.finalized:
@@ -139,12 +156,12 @@ proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg
                 $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z)
   if cfg.sharedMem != 0 or cfg.stream != 0:
     raiseAssert("OpenCL batch: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
-  # One entrypoint name exists in many sources, the kernel is per (source, entrypoint) pair
+  # One entrypoint name exists in many sources, the kernel is per source and entrypoint pair
   let kernelKey = (source, entrypoint)
   if kernelKey notin batch.pipelines:
-    batch.pipelines[kernelKey] = compileEntrypoint(batch, source, entrypoint)
-  var entry = BatchEntry(kernel: batch.pipelines[kernelKey], fleet: cfg.grid, squadron: cfg.blk)
-  bindArgs(entry, output, args, storeEntryArg, Pmem, cgOpenCL)
+    batch.pipelines[kernelKey] = RetainedKernel(compileEntrypoint(batch, source, entrypoint))
+  var entry = BatchEntry(kernel: Pkernel batch.pipelines[kernelKey], fleet: cfg.grid, squadron: cfg.blk)
+  bindArgs(entry, output, args, storeEntryArg, OpenCLBuffer, cgOpenCL)
   batch.entries.add entry
 
 func getScalarSize*(batch: OpenCLBatch): int =
@@ -157,6 +174,11 @@ proc finalize*(batch: OpenCLBatch) =
   if batch.entries.len == 0:
     raiseAssert("finalize: the batch has no entries")
   batch.finalized = true
+
+proc resetRecording*(batch: OpenCLBatch) =
+  ## Drops the recorded entries, the compiled kernels and programs persist.
+  batch.entries.setLen(0)
+  batch.finalized = false
 
 proc replay*(batch: OpenCLBatch) =
   if not batch.finalized:

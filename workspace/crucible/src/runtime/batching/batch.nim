@@ -23,6 +23,10 @@ import workspace/crucible/src/codegen/backends/spirv_encoder
 import workspace/crucible/src/codegen/frontend/nim_to_crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
+import workspace/crucible/src/runtime/batching/batch_metal
+import workspace/crucible/src/runtime/batching/batch_vulkan
+import workspace/crucible/src/runtime/batching/batch_opencl
+import workspace/crucible/src/runtime/batching/batch_webgpu
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Record
@@ -33,6 +37,14 @@ type
     entrypoint*: string
     config*: LaunchConfig
     launch*: proc(engine: E) {.closure.}
+    when E is MetalEngine:
+      record: proc(leg: MetalBatch) {.closure.}
+    elif E is VulkanEngine:
+      record: proc(leg: VulkanBatch) {.closure.}
+    elif E is OpenCLEngine:
+      record: proc(leg: OpenCLBatch) {.closure.}
+    elif E is WebgpuEngine:
+      record: proc(leg: WebgpuBatch) {.closure.}
 
   Batch*[E] = ref object
     engine*: E
@@ -41,6 +53,14 @@ type
       artifact*: SpirvWords
     else:
       artifact*: string
+    when E is MetalEngine:
+      leg: MetalBatch
+    elif E is VulkanEngine:
+      leg: VulkanBatch
+    elif E is OpenCLEngine:
+      leg: OpenCLBatch
+    elif E is WebgpuEngine:
+      leg: WebgpuBatch
 
 proc recordBatch*[E: HwEngine](engine: E): Batch[E] {.inline.} =
   Batch[E](engine: engine)
@@ -71,9 +91,19 @@ func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
 func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
-macro ctgAccumulateCir(procdef: typed): untyped =
+macro ctgAccumulateCirImpl(procdef: typed): untyped =
   let kname = lowerNimAst(ctgFrontend, procdef)
   result = newLit(kname)
+
+macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
+  crucibleCompileTarget = case backend
+    of cgMetal: ctMetal
+    of cgSpirv: ctGlsl
+    of cgOpenCL: ctOpenCL
+    of cgWebGPU: ctWebGPU
+    else: ctNone
+  # delayed symbol resolution
+  result = newCall(bindSym"ctgAccumulateCirImpl", procdef)
 
 proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
   if ctgArtifactPrinted and ctgArtifactKind != kind:
@@ -108,18 +138,36 @@ template appendEntry[E](batch: Batch[E], fnName: string, cfg: LaunchConfig, outp
   var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
   entry.launch = proc(engine: E) {.closure.} =
     engine.launchKernelImpl(output, args, entry.config, fnName)
+  when E is MetalEngine:
+    entry.record = proc(leg: MetalBatch) {.closure.} =
+      leg.recordGlobalFn(fnName, entry.config, output, args)
   batch.entries.add entry
 
-macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, blk: untyped, values: varargs[typed]): untyped =
+template appendEntry[E](batch: Batch[E], fnName: string, artifact: auto, cfg: LaunchConfig, output: auto, args: tuple) =
+  var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
+  entry.launch = proc(engine: E) {.closure.} =
+    engine.launchKernelImpl(output, args, entry.config, fnName)
+  when E is VulkanEngine:
+    entry.record = proc(leg: VulkanBatch) {.closure.} =
+      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
+  elif E is OpenCLEngine:
+    entry.record = proc(leg: OpenCLBatch) {.closure.} =
+      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
+  elif E is WebgpuEngine:
+    entry.record = proc(leg: WebgpuBatch) {.closure.} =
+      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
+  batch.entries.add entry
+
+macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, workgroup: untyped, values: varargs[typed]): untyped =
   var valuesN = nnkBracket.newTree()
   for v in values:
     valuesN.add(v)
   let procdef = buildGlobalFn(deviceFn, statics, valuesN)
-  let wg = getWorkgroupPragma(blk)
-  if not wg.isNil:
-    procdef[4].add(wg)
+  if workgroup.kind != nnkEmpty:
+    procdef[4].add(workgroup)
   procdef[6][0][0] = deviceFn
-  let fnNameN = quote do: ctgAccumulateCir(`procdef`)
+  let backendN = quote do: batchCodegenKind(typeof(`batch`.engine))
+  let fnNameN = quote do: ctgAccumulateCir(`procdef`, `backendN`)
   let outN = values[0]
   var argsTuple = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
@@ -127,7 +175,17 @@ macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg
   result = quote do:
     block:
       const fnName = `fnNameN`
-      `batch`.appendEntry(fnName, `cfg`, `outN`, `argsTuple`)
+      when typeof(`batch`.engine) is VulkanEngine:
+        const entryArtifact = spirv(`procdef`)
+        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
+      elif typeof(`batch`.engine) is OpenCLEngine:
+        const entryArtifact = opencl(`procdef`)
+        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
+      elif typeof(`batch`.engine) is WebgpuEngine:
+        const entryArtifact = webgpu(`procdef`)
+        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
+      else:
+        `batch`.appendEntry(fnName, `cfg`, `outN`, `argsTuple`)
 
 type
   EnqueueSugar*[E] = object
@@ -135,7 +193,12 @@ type
     batch: Batch[E]
 
   EnqueueProxy*[E] = object
-    ## Chevron stage between `<<` and the `>>` call
+    ## Chevron stage between `<<` and `>>`, runtime block size.
+    batch: Batch[E]
+    config: LaunchConfig
+
+  EnqueueProxyCt*[E; blkCt: static Dim3] = object
+    ## Chevron stage between `<<` and `>>`, compile-time block size.
     batch: Batch[E]
     config: LaunchConfig
 
@@ -144,6 +207,8 @@ proc enqueue*[E](batch: Batch[E]): EnqueueSugar[E] {.inline.} =
   EnqueueSugar[E](batch: batch)
 
 macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
+  ## Chevron schedule: `(grid, blk)` or `(grid, blk, sharedMem)`, positional or named.
+  ## Vulkan and WebGPU bake the block size into the artifact, it must be compile-time there.
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   var sharedMemN = newLit(0)
@@ -177,24 +242,22 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
   else:
     error("batch enqueue: chevron schedule expects (grid, blk), got " & cfg.repr)
   let E = r.getTypeInst()[1]
-  let gridCall = bindSym"dim3".newCall(gridN)
-  let blkCall = bindSym"dim3".newCall(blkN)
-  let configCall = nnkObjConstr.newTree(bindSym"LaunchConfig",
-    nnkExprColonExpr.newTree(ident"grid", gridCall),
-    nnkExprColonExpr.newTree(ident"blk", blkCall),
-    nnkExprColonExpr.newTree(ident"sharedMem", sharedMemN))
+  let batchN = nnkDotExpr.newTree(r, ident"batch")
+  let gridRef = bindSym"dim3".newCall(gridN)
+  let smemRef = sharedMemN
   result = quote do:
-    EnqueueProxy[`E`](batch: `r`.batch, config: `configCall`)
+    when `blkN` is static:
+      const blkCt = `blkN`
+      EnqueueProxyCt[`E`, dim3(blkCt)](batch: `batchN`, config: LaunchConfig(
+        grid: `gridRef`, blk: dim3(blkCt), sharedMem: `smemRef`))
+    else:
+      EnqueueProxy[`E`](batch: `batchN`, config: LaunchConfig(
+        grid: `gridRef`, blk: dim3(`blkN`), sharedMem: `smemRef`))
 
-macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
-  var callNode = call
-  if callNode.kind == nnkPar and callNode.len == 1:
-    callNode = callNode[0]
-  doAssert callNode.kind == nnkCall,
-    "batch enqueue RHS must be a device function call, got: " & callNode.repr
-  for a in callNode[1 ..< callNode.len]:
-    doAssert a.kind notin {nnkExprEqExpr, nnkExprColonExpr},
-      "batch enqueue: named arguments are not supported, pass arguments positionally"
+macro enqueueCall[E](batch: Batch[E], cfg: LaunchConfig, workgroup: untyped, deviceFn: typed, values: varargs[untyped]): untyped =
+  var callNode = nnkCall.newTree(deviceFn)
+  for v in values:
+    callNode.add(v)
   let k = callNode.resolveDeviceFnOverload()
   let impl = k.getImpl()
   impl.expectKind(nnkProcDef)
@@ -204,29 +267,56 @@ macro `>>`*(sugar: EnqueueProxy, call: untyped): untyped =
     let f = formals[i]
     for j in 0 ..< f.len - 2:
       formalTypes.add(f[^2])
-  doAssert callNode.len - 1 <= formalTypes.len,
-    "batch enqueue: " & $(callNode.len - 1) & " args for " &
-    $formalTypes.len & " parameters"
   var statics = nnkBracket.newTree()
-  let batchN = quote do: `sugar`.batch
-  let cfgN = quote do: `sugar`.config
-  # Vulkan and WebGPU printers bake blk as the entry's LocalSize
-  var blkN = newEmptyNode()
-  for f in sugar:
-    if f.kind == nnkExprColonExpr and f[0].kind in {nnkIdent, nnkSym} and f[0].strVal == "config":
-      for g in f[1]:
-        if g.kind == nnkExprColonExpr and g[0].kind in {nnkIdent, nnkSym} and g[0].strVal == "blk":
-          blkN = g[1][1]
-  if blkN.kind == nnkEmpty:
-    error("batch enqueue: the enqueue proxy must feed >> inline, a proxy stored in a " &
-      "variable carries no block size for the workgroup pragma, got: " & sugar.repr, sugar)
-  result = bindSym"enqueueDeviceFn".newCall(
-    batchN, k, statics, cfgN, blkN)
-  for i, a in callNode[1 ..< callNode.len]:
+  let entry = bindSym"enqueueDeviceFn".newCall(batch, k, statics, cfg, workgroup)
+  for i, v in values:
     if isCompileTime(formalTypes[i]):
-      statics.add(a)
+      statics.add(v)
     else:
-      result.add(a)
+      entry.add(v)
+  result = entry
+
+macro enqueueCallCt[E](batch: Batch[E], cfg: LaunchConfig, blkCt: static Dim3, deviceFn: typed, values: varargs[untyped]): untyped =
+  let wg = getWorkgroupPragma(blkCt)
+  result = bindSym"enqueueCall".newCall(batch, cfg,
+    if wg.isNil: newEmptyNode() else: wg, deviceFn)
+  for v in values:
+    result.add(v)
+
+macro `>>`*(sugar: EnqueueProxyCt, call: untyped): untyped =
+  var callNode = call
+  if callNode.kind == nnkPar and callNode.len == 1:
+    callNode = callNode[0]
+  doAssert callNode.kind == nnkCall,
+    "batch enqueue RHS must be a device function call, got: " & callNode.repr
+  for a in callNode[1 ..< callNode.len]:
+    doAssert a.kind notin {nnkExprEqExpr, nnkExprColonExpr},
+      "batch enqueue: named arguments are not supported, pass arguments positionally"
+  let batchN = nnkDotExpr.newTree(sugar, ident"batch")
+  let cfgN = nnkDotExpr.newTree(sugar, ident"config")
+  let blkCtN = sugar.getTypeInst()[2]
+  result = bindSym"enqueueCallCt".newCall(batchN, cfgN, blkCtN, callNode[0])
+  for a in callNode[1 ..< callNode.len]:
+    result.add(a)
+
+macro `>>`*[E: VulkanEngine or WebgpuEngine](sugar: EnqueueProxy[E], call: untyped): untyped =
+  error("batch enqueue: Vulkan and WebGPU bake the block size into the artifact, " &
+    "the schedule must be compile-time on those engines")
+
+macro `>>`*[E](sugar: EnqueueProxy[E], call: untyped): untyped =
+  var callNode = call
+  if callNode.kind == nnkPar and callNode.len == 1:
+    callNode = callNode[0]
+  doAssert callNode.kind == nnkCall,
+    "batch enqueue RHS must be a device function call, got: " & callNode.repr
+  for a in callNode[1 ..< callNode.len]:
+    doAssert a.kind notin {nnkExprEqExpr, nnkExprColonExpr},
+      "batch enqueue: named arguments are not supported, pass arguments positionally"
+  let batchN = nnkDotExpr.newTree(sugar, ident"batch")
+  let cfgN = nnkDotExpr.newTree(sugar, ident"config")
+  result = bindSym"enqueueCall".newCall(batchN, cfgN, newEmptyNode(), callNode[0])
+  for a in callNode[1 ..< callNode.len]:
+    result.add(a)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Submission
@@ -271,16 +361,53 @@ proc replay*[E](batch: Batch[E]) {.inline.} =
   else:
     if batch.engine.getArtifact() != batch.artifact:
       batch.engine.ingest(batch.artifact)
-  for entry in batch.entries:
-    entry.launch(batch.engine)
+  when E is MetalEngine:
+    if batch.leg.isNil:
+      batch.leg = newMetalBatch(batch.engine)
+    else:
+      batch.leg.resetRecording()
+    for entry in batch.entries:
+      entry.record(batch.leg)
+    batch.leg.finalize()
+    batch.leg.replay()
+  elif E is VulkanEngine:
+    if batch.leg.isNil:
+      batch.leg = newVulkanBatch(batch.engine)
+    else:
+      batch.leg.resetRecording()
+    for entry in batch.entries:
+      entry.record(batch.leg)
+    batch.leg.finalize()
+    batch.leg.replay()
+  elif E is OpenCLEngine:
+    if batch.leg.isNil:
+      batch.leg = newOpenCLBatch(batch.engine)
+    else:
+      batch.leg.resetRecording()
+    for entry in batch.entries:
+      entry.record(batch.leg)
+    batch.leg.finalize()
+    batch.leg.replay()
+  elif E is WebgpuEngine:
+    if batch.leg.isNil:
+      batch.leg = newWebgpuBatch(batch.engine)
+    else:
+      batch.leg.resetRecording()
+    for entry in batch.entries:
+      entry.record(batch.leg)
+    batch.leg.finalize()
+    batch.leg.replay()
+  else:
+    for entry in batch.entries:
+      entry.launch(batch.engine)
 
 macro submit*(batch: Batch): untyped =
   ## Flushes the batch: finalizes the compiled artifact and launches the entries
   ## on the engine in enqueue order.
   ##
   ## Requires:
-  ## - at least one `enqueue` in this compilation
-  ## - submitting an empty batch is a no-op
+  ## - at least one `enqueue` in this compilation, an empty batch has no
+  ##   artifact to finalize and fails at compile time
   ##
   ## The compilation compiles its device functions once.
   ## Device functions enqueued later recompile it, every `submit` reuses the module.

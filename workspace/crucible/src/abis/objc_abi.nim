@@ -166,6 +166,11 @@ when defined(macosx):
     defer: pool.drainPool()
     body
 
+  proc retain*(obj: ID): ID {.inline.} =
+    ## Retains an Objective-C object, nil-safe, returns the retained object.
+    if not isNil(obj):
+      result = msgSend(obj, $$"retain")
+
   proc release*(obj: ID) {.inline.} =
     ## Releases a +1 Objective-C object, balanced against a `new*`/Create acquisition, nil-safe.
     if not isNil(obj):

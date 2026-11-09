@@ -11,7 +11,9 @@ import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/backends/webgpu_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/engines/engines_common
+from workspace/crucible/src/runtime/engines/webgpu_api import WebgpuEngine
 import workspace/crucible/src/runtime/launch/launch_serialization
+from std/importutils import privateAccess
 
 export engines_common.LaunchConfig, engines_common.dim3
 
@@ -41,42 +43,53 @@ type
     borrowedBuffers: seq[WGPUBuffer]
     scalars: seq[byte]
     slots: seq[Slot]
-    bindGroup: WGPUBindGroup
+    bindGroup: OwnedBindGroup
 
   WebgpuPipeline = object
     pipeline: WGPUComputePipeline
     pipelineLayout: WGPUPipelineLayout
     bindGroupLayout: WGPUBindGroupLayout
 
+  OwnedShaderModule = distinct WGPUShaderModule
+    ## An owned WGPUShaderModule, released on destruction.
+
+  OwnedBindGroup = distinct WGPUBindGroup
+    ## An owned WGPUBindGroup, released on destruction.
+
+  OwnedBuffer = distinct WGPUBuffer
+    ## An owned WGPUBuffer, released on destruction.
+
   WebgpuBatchObj = object
     device: WGPUDevice
     queue: WGPUQueue
-    modules: Table[string, WGPUShaderModule]
+    modules: Table[string, OwnedShaderModule]
     pipelines: Table[(WGPUShaderModule, string), WebgpuPipeline]
     entries: seq[BatchEntry]
-    scalarBuffer: WGPUBuffer
+    scalarBuffer: OwnedBuffer
 
   WebgpuBatch* = ref WebgpuBatchObj
+
+proc `=destroy`(p: var WebgpuPipeline) =
+  wgpuComputePipelineRelease(p.pipeline)
+  wgpuPipelineLayoutRelease(p.pipelineLayout)
+  wgpuBindGroupLayoutRelease(p.bindGroupLayout)
+
+proc `=destroy`(m: var OwnedShaderModule) =
+  wgpuShaderModuleRelease(WGPUShaderModule m)
+
+proc `=destroy`(b: var OwnedBindGroup) =
+  if WGPUBindGroup(b) != nil:
+    wgpuBindGroupRelease(WGPUBindGroup(b))
+
+proc `=destroy`(b: var OwnedBuffer) =
+  if WGPUBuffer(b) != nil:
+    wgpuBufferRelease(WGPUBuffer(b))
 
 const
   MinStorageBufferOffsetAlignment = 256
     ## WebGPU spec default: one storage binding offset is a multiple of minStorageBufferOffsetAlignment.
   MinStorageBindingSizeMultiple = 4
     ## a storage binding size is a multiple of 4 bytes
-
-proc `=destroy`*(batch: var WebgpuBatchObj) =
-  ## Releases the batch's own objects, never the borrowed handles.
-  for m in batch.modules.values:
-    wgpuShaderModuleRelease(m)
-  for p in batch.pipelines.values:
-    wgpuComputePipelineRelease(p.pipeline)
-    wgpuPipelineLayoutRelease(p.pipelineLayout)
-    wgpuBindGroupLayoutRelease(p.bindGroupLayout)
-  for e in batch.entries:
-    if e.bindGroup != nil:
-      wgpuBindGroupRelease(e.bindGroup)
-  if batch.scalarBuffer != nil:
-    wgpuBufferRelease(batch.scalarBuffer)
 
 proc parseShaderSquadron(wgsl: string): Dim3 =
   ## Extracts the shader-baked squadron from the WGSL preamble
@@ -158,12 +171,12 @@ proc compilePipeline(batch: WebgpuBatch, entry: BatchEntry): WebgpuPipeline =
     raiseAssert("WebGPU batch: failed to create compute pipeline")
   result = WebgpuPipeline(pipeline: pipeline, pipelineLayout: pl, bindGroupLayout: bgl)
 
-proc newWebgpuBatch*(device: WGPUDevice, queue: WGPUQueue): WebgpuBatch =
-  ## Borrowsdevice, queue and every bound buffer.
-  WebgpuBatch(device: device, queue: queue)
+proc newWebgpuBatch*(engine: WebgpuEngine): WebgpuBatch =
+  privateAccess(WebgpuEngine)
+  WebgpuBatch(device: engine.ctx.device, queue: engine.ctx.queue)
 
 proc recordGlobalFn*(batch: WebgpuBatch, wgsl: string, entryPoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
-  if batch.entries.len > 0 and batch.entries[0].bindGroup != nil:
+  if batch.entries.len > 0 and WGPUBindGroup(batch.entries[0].bindGroup) != nil:
     raiseAssert("recordGlobalFn: the batch is finalized, entries are frozen")
   if cfg.sharedMem != 0 or cfg.stream != 0:
     raiseAssert("WebGPU batch: launch-time sharedMem/stream are unsupported, they are Metal/CUDA features")
@@ -190,8 +203,8 @@ proc recordGlobalFn*(batch: WebgpuBatch, wgsl: string, entryPoint: string, cfg: 
     let module = wgpuDeviceCreateShaderModule(batch.device, addr shaderDesc)
     if module == nil:
       raiseAssert("WebGPU batch: failed to create shader module")
-    batch.modules[wgsl] = module
-  var entry = BatchEntry(module: batch.modules[wgsl], entryPoint: entryPoint,
+    batch.modules[wgsl] = OwnedShaderModule(module)
+  var entry = BatchEntry(module: WGPUShaderModule batch.modules[wgsl], entryPoint: entryPoint,
                          fleet: cfg.grid, squadron: squadron)
   bindArgs(entry, output, args, storeEntryArg, WGPUBuffer, cgWebGPU)
   batch.entries.add entry
@@ -201,7 +214,7 @@ func getScalarSize*(batch: WebgpuBatch): int =
     result = result + e.scalars.len.round_multiple_up(MinStorageBufferOffsetAlignment)
 
 proc finalize*(batch: WebgpuBatch) =
-  if batch.entries.len > 0 and batch.entries[0].bindGroup != nil:
+  if batch.entries.len > 0 and WGPUBindGroup(batch.entries[0].bindGroup) != nil:
     return
   if batch.entries.len == 0:
     raiseAssert("finalize: the batch has no entries")
@@ -209,8 +222,8 @@ proc finalize*(batch: WebgpuBatch) =
     var desc = WGPUBufferDescriptor(
       usage: wgpuBufferUsageStorage or wgpuBufferUsageCopyDst,
       size: batch.getScalarSize.csize_t)
-    batch.scalarBuffer = wgpuDeviceCreateBuffer(batch.device, addr desc)
-    if batch.scalarBuffer == nil:
+    batch.scalarBuffer = OwnedBuffer(wgpuDeviceCreateBuffer(batch.device, addr desc))
+    if WGPUBuffer(batch.scalarBuffer) == nil:
       raiseAssert("WebGPU batch: failed to create the scalar buffer")
   var windowBase = 0
   for e in batch.entries.mitems:
@@ -220,7 +233,7 @@ proc finalize*(batch: WebgpuBatch) =
       batch.pipelines[pipelineKey] = compilePipeline(batch, e)
     e.pipelineState = batch.pipelines[pipelineKey].pipeline
     if e.scalars.len > 0:
-      wgpuQueueWriteBuffer(batch.queue, batch.scalarBuffer, windowBase.uint64,
+      wgpuQueueWriteBuffer(batch.queue, WGPUBuffer batch.scalarBuffer, windowBase.uint64,
                            e.scalars[0].addr, e.scalars.len.csize_t)
     var bgEntries = newSeq[WGPUBindGroupEntry](e.slots.len)
     for i in 0 ..< e.slots.len:
@@ -233,20 +246,26 @@ proc finalize*(batch: WebgpuBatch) =
       of skWindow:
         bgEntries[i] = WGPUBindGroupEntry(
           binding: i.cuint,
-          buffer: batch.scalarBuffer,
+          buffer: WGPUBuffer batch.scalarBuffer,
           offset: (windowBase + e.slots[i].off).csize_t,
           size: e.slots[i].size.csize_t)
     var bgDesc = WGPUBindGroupDescriptor(
       layout: batch.pipelines[pipelineKey].bindGroupLayout,
       entryCount: e.slots.len.csize_t,
       entries: bgEntries[0].addr)
-    e.bindGroup = wgpuDeviceCreateBindGroup(batch.device, addr bgDesc)
-    if e.bindGroup == nil:
+    e.bindGroup = OwnedBindGroup(wgpuDeviceCreateBindGroup(batch.device, addr bgDesc))
+    if WGPUBindGroup(e.bindGroup) == nil:
       raiseAssert("WebGPU batch: failed to create bind group")
     windowBase = windowBase + e.scalars.len.round_multiple_up(MinStorageBufferOffsetAlignment)
 
+proc resetRecording*(batch: WebgpuBatch) =
+  ## Drops the recorded bind groups and the scalar buffer.
+  ## The compiled modules and pipelines persist.
+  batch.entries.setLen(0)
+  batch.scalarBuffer = OwnedBuffer(WGPUBuffer(nil))
+
 proc replay*(batch: WebgpuBatch) =
-  if batch.entries.len == 0 or batch.entries[0].bindGroup == nil:
+  if batch.entries.len == 0 or WGPUBindGroup(batch.entries[0].bindGroup) == nil:
     raiseAssert("replay: finalize the batch first")
   let encoder = wgpuDeviceCreateCommandEncoder(batch.device, nil)
   if encoder == nil:
@@ -255,9 +274,10 @@ proc replay*(batch: WebgpuBatch) =
   let pass = wgpuCommandEncoderBeginComputePass(encoder, nil)
   for e in batch.entries:
     wgpuComputePassEncoderSetPipeline(pass, e.pipelineState)
-    wgpuComputePassEncoderSetBindGroup(pass, 0, e.bindGroup, 0, nil)
+    wgpuComputePassEncoderSetBindGroup(pass, 0, WGPUBindGroup e.bindGroup, 0, nil)
     wgpuComputePassEncoderDispatchWorkgroups(pass, cuint(e.fleet.x), cuint(e.fleet.y), cuint(e.fleet.z))
   wgpuComputePassEncoderEnd(pass)
+  wgpuComputePassEncoderRelease(pass)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
   wgpuQueueSubmit(batch.queue, 1, cmdBuf.addr)
   wgpuCommandBufferRelease(cmdBuf)

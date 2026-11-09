@@ -244,6 +244,15 @@ func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
     nnkStmtList.newTree(deviceFnCall))
   return procdef
 
+func getWorkgroupPragma(blk: Dim3): NimNode =
+  ## Workgroup pragma `(X, Y, Z)` from a compile-time block size, nil when unit
+  if blk.x == 1 and blk.y == 1 and blk.z == 1:
+    return nil
+  var size = nnkTupleConstr.newTree()
+  for d in [blk.x, blk.y, blk.z]:
+    size.add newLit(d)
+  nnkExprColonExpr.newTree(ident"workgroup", size)
+
 func getWorkgroupPragma(blkN: NimNode): NimNode =
   ## Workgroup pragma `(X, Y, Z)` for a compile-time literal block size, nil otherwise
   var dims: array[3, int] = [1, 1, 1]
