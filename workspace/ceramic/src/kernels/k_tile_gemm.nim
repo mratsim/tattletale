@@ -11,14 +11,16 @@
 ## - `gemm`: D = alpha·A·B + beta·C, beta = 0 skips the C read
 ## - per-lane operand register tiles load through the atom's thread->value map
 ## - ragged edge tiles go through paddedLoad / guardedStore, interior tiles take the unchecked flat path
+##
+## Float32 accumulation runs in the atoms' result registers, one rounding happens at the store through `D.T`'s RNE conversion.
 
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/kernels/k_layout_gemm
 import workspace/ceramic/src/kernels/k_layout_fillwith_gpu
 
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 #  Tile-level matmul
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 
 proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: distinct TensorView, beta: float32, C: distinct TensorView) =
   ## D = alpha·A·B + beta·C.
@@ -46,10 +48,11 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
       gridStride = getGridSize()
     for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
       let (m, n) = idx2crd(cGrid, tileID)
-      var rD: tile(D.T, cLayout)
+      # float32 result registers hold the accumulation, D.T rounds at the store only
+      var rD: tile(float32, cLayout)
       var rA: tile(A.T, mma.getMmaLayout(opA))
       var rB: tile(B.T, mma.getMmaLayout(opB))
-      rD.fillWith(zero(D.T))
+      rD.fillWith(zero(float32))
       for k in 0 ..< kTiles:
         rA.load(A, tvmA, thrID, (m, k))
         rB.load(B, tvmB, thrID, (n, k))
@@ -62,8 +65,8 @@ proc gemm*(mma: static TiledMma, D: distinct TensorView, alpha: float32, A, B: d
       if beta != 0.0'f32:
         let rC = tile(C.T, cLayout).load(C, tvmC, thrID, (m, n))
         for i in 0 ..< cLayout.size():
-          rD[i] += beta * rC[i]
-      D.store(rD, tvmC, thrID, (m, n))
+          rD[i] += beta * rC[i].to(float32)
+      D.store(rD.downcast(D.T), tvmC, thrID, (m, n))
 
 proc matmul*(mma: static TiledMma, D, A, B: distinct TensorView) =
   ## D = A·B, same tile grid and launch mapping as gemm.
