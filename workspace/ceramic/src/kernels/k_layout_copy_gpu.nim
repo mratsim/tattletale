@@ -56,10 +56,7 @@ macro guardWriteDisjointness(shD, stD, shS, stS: typed) =
                  " has stride 0 with shape > 1 and src stride " & $stSv[d] &
                  " is non-zero")))
 
-func copyChunks[T, ShC, StC](C: Layout[ShC, StC]; d: static int;
-                             dstP, srcP: ptr UncheckedArray[T];
-                             dstOff, srcOff, srcStride: int;
-                             W, vecCap: int; elemBits: static int) {.inline.} =
+func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr UncheckedArray[T], dstOff, srcOff, srcStride: int, W, vecCap: int, elemBits: static int) {.inline.} =
   ## Copies dst <- src by chunks
   when d == rank(C):
     let
@@ -95,9 +92,7 @@ func copyChunks[T, ShC, StC](C: Layout[ShC, StC]; d: static int;
                  W, vecCap, elemBits)
 
 
-func copyElementwise[T, ShD, StD, ShS, StS](
-    dst: var TensorView[T, ShD, StD];
-    src: TensorView[T, ShS, StS]) {.inline.} =
+func copyElementwise[T, ShD, StD, ShS, StS](dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]), src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
   for i in 0 ..< size(src):
     dst(i) = src(i)
 
@@ -109,20 +104,18 @@ func copyFrom*[T, ShD, StD, ShS, StS](
   ## For runtime strides, assumes 128B alignment for vectorized copies
   guardWriteDisjointness(dst.shape, dst.stride,
                          src.shape, src.stride)
-  var dstV = when typeof(dst) is TensorOwned: view(dst) else: dst
-  let srcV = when typeof(src) is TensorOwned: view(src) else: src
-  let R = right_inverse(srcV.getLayout())
-  let C = coalesce(compose(dstV.getLayout(), R))
+  let R = right_inverse(src.getLayout())
+  let C = coalesce(compose(dst.getLayout(), R))
   const elemBits = sizeof(T) * 8
   let
     s0 = when typeof(C.stride) is tuple: C.stride[0] else: C.stride
     wV = when typeof(C.shape) is tuple: toInt(C.shape[0]) else: toInt(C.shape)
     vecCap = min(wV and -wV, 128 div elemBits)
-  let spansCover = size(R) === size(srcV)
+  let spansCover = size(R) === size(src)
   if spansCover and s0 === 1:
-    copyChunks(C, 1, dstV.data, srcV.data, 0, 0, wV, wV, vecCap, elemBits)
+    copyChunks(C, 1, dst.getOriginPtr(), src.getOriginPtr(), 0, 0, wV, wV, vecCap, elemBits)
   else:
-    copyElementwise(dstV, srcV)
+    copyElementwise(dst, src)
 
 
 func copyFromIfAsync*[T, Sh, StA, StB, StP](
@@ -137,10 +130,10 @@ func copyFromIfAsync*[T, Sh, StA, StB, StP](
   const atom = getCopyAsyncAtom(T)
   const chunkElems = atom.getVecBytes() div sizeof(T)
   when Sh.rank == 1:
-    copyIf(atom, dst, src, predicate.data[0], chunkElems)
+    copyIf(atom, dst, src, predicate[0], chunkElems)
   else:
     for i in 0 ..< size(predicate):
-      copyIf(atom, dst(_, i), src(_, i), predicate(_, i).data[0], chunkElems)
+      copyIf(atom, dst(_, i), src(_, i), predicate(_, i)[0], chunkElems)
 
 # ═════════════════════════════════════════════════════════════════════════
 #   Partitioned copies
@@ -232,7 +225,7 @@ func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
   ##   copyFromIfAsync(dstChunks, srcChunks, predChunks)
   ##
   ## Example: a (16, 8) int8 tile with 4 threads, thread 2 gets the chunks at flat positions c = 2, 6, element offsets 32, 96.
-  let thrTensor = make_view(src.data, thrfrg_copy(src.getLayout(), atom, blockSize))
+  let thrTensor = make_view(src, src.getLayout().thrfrg_copy(atom, blockSize))
   thrTensor(thrIdx, _, _)
 
 func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
@@ -251,5 +244,5 @@ func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
   ##   copyFromIfAsync(dstChunks, srcChunks, predChunks)
   ##
   ## Example: a (16, 8) int8 tile with 4 threads, thread 2 gets the chunks at flat positions c = 2, 6, element offsets 32, 96.
-  let thrTensor = make_view(dst.data, thrfrg_copy(dst.getLayout(), atom, blockSize))
+  let thrTensor = make_view(dst, dst.getLayout().thrfrg_copy(atom, blockSize))
   thrTensor(thrIdx, _, _)

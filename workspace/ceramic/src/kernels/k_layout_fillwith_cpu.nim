@@ -264,7 +264,7 @@ macro fillWithCpuImpl(dst: typed; val: typed): untyped =
   let rank = flatLen(tvDst[2])
 
   # ── Extract data pointer and layout reference ──
-  let dstData = newTree(nnkDotExpr, dst, ident"data")
+  let dstData = bindSym"getOriginPtr".newCall(dst)
   let dstLay = newTree(nnkCall, ident"getLayout", dst)
   let isZero = isZeroVal(val)
 
@@ -300,11 +300,4 @@ func fillWith_cpu*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
 
 func fillWith_cpu*[T, Sh, St](t: var TensorOwned[T, Sh, St]; val: T) =
   ## Fill every logical element of `t` with `val`.
-  ##
-  ## the fill routes through `view()`:
-  ## - `fillWithCpuImpl` reads the `data` seq from index 0
-  ## - `TensorOwned` may carry a non-zero `offset`
-  ## - the `TensorView` conversion bakes the offset
-  ##   into the data pointer, the layout iteration
-  ##   then hits the right region
   fillWith_cpu(t.view(), val)

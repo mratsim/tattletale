@@ -7,7 +7,6 @@ import std/macros
 import workspace/ceramic/src/int_tuples {.all.}
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/tensors
-import workspace/ceramic/src/ptr_arithmetic
 
 # ═════════════════════════════════════════════════════════════════════════
 #  1. outer_partition — 2D, tuple coord
@@ -18,7 +17,7 @@ import workspace/ceramic/src/ptr_arithmetic
 proc runOuter2dTupleCoord(errors: var int) =
   echo "--- 1. outer 2D tuple coord (8x8) tiler (4,4) coord (1,0) ---"
   var buf = newSeq[float32](64)
-  var t = make_view(buf +% 0, make_layout((8,8)))
+  var t = make_view(buf, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
   let v = t
   let p = outer_partition(v, (4,4), (1,0))
@@ -38,7 +37,7 @@ proc runOuter2dTupleCoord(errors: var int) =
 proc runOuter2dScalarCoord(errors: var int) =
   echo "--- 2. outer 2D scalar coord (8x8) tiler (4,4) coord=5 ---"
   var buf = newSeq[float32](64)
-  var t = make_view(buf +% 0, make_layout((8,8)))
+  var t = make_view(buf, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
   let v = t
   let p = outer_partition(v, (4,4), 5)
@@ -56,7 +55,7 @@ proc runOuter2dScalarCoord(errors: var int) =
 proc runInner2dTupleCoord(errors: var int) =
   echo "--- 3. inner 2D tuple coord (8x8) tiler (4,4) coord (1,0) ---"
   var buf = newSeq[float32](64)
-  var t = make_view(buf +% 0, make_layout((8,8)))
+  var t = make_view(buf, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
   let v = t
   let p = inner_partition(v, (4,4), (1,0))
@@ -77,7 +76,7 @@ proc runInner2dTupleCoord(errors: var int) =
 proc runOuter3dScalarCoord(errors: var int) =
   echo "--- 4. outer 3D scalar (8,4,3) tiler (4,2) coord=0 ---"
   var buf = newSeq[float32](96)
-  var t = make_view(buf +% 0, make_layout((8,4,3)))
+  var t = make_view(buf, make_layout((8,4,3)))
   for i in 0..<96: t(i) = float32(i)
   let v = t
   let p = outer_partition(v, (4,2), 0)
@@ -100,7 +99,7 @@ proc runOuter3dScalarCoord(errors: var int) =
 proc runInner3dScalarCoord(errors: var int) =
   echo "--- 5. inner 3D scalar (8,4,3) tiler (4,2) coord=0 ---"
   var buf = newSeq[float32](96)
-  var t = make_view(buf +% 0, make_layout((8,4,3)))
+  var t = make_view(buf, make_layout((8,4,3)))
   for i in 0..<96: t(i) = float32(i)
   let v = t
   let p = inner_partition(v, (4,2), 0)
@@ -124,7 +123,7 @@ proc runInner3dScalarCoord(errors: var int) =
 proc runInner2dUnderscore(errors: var int) =
   echo "--- 6. inner 2D _ coord (9x9) tiler (3,3) coord (1,X) ---"
   var buf = newSeq[float32](81)
-  var t = make_view(buf +% 0, make_layout((9,9)))
+  var t = make_view(buf, make_layout((9,9)))
   for i in 0..<81: t(i) = float32(i)
   let v = t
   let p = inner_partition(v, (3,3), (1, X()))
@@ -147,7 +146,7 @@ proc runInner2dUnderscore(errors: var int) =
 proc runOuter2dUnderscore(errors: var int) =
   echo "--- 7. outer 2D _ coord (9x9) tiler (3,3) coord (1,X) ---"
   var buf = newSeq[float32](81)
-  var t = make_view(buf +% 0, make_layout((9,9)))
+  var t = make_view(buf, make_layout((9,9)))
   for i in 0..<81: t(i) = float32(i)
   let v = t
   let p = outer_partition(v, (3,3), (1, X()))
@@ -170,7 +169,7 @@ proc runOuter2dUnderscore(errors: var int) =
 proc runInner2dUnderscore3d(errors: var int) =
   echo "--- 8. inner 2D _ coord (3D result) (9x9) tiler (3,3) coord (0,X) ---"
   var buf = newSeq[float32](81)
-  var t = make_view(buf +% 0, make_layout((9,9)))
+  var t = make_view(buf, make_layout((9,9)))
   for i in 0..<81: t(i) = float32(i)
   let v = t
   let p = inner_partition(v, (3,3), (0, X()))
@@ -197,7 +196,7 @@ proc runLocalTileCtaExtraction(errors: var int) =
   # mA: (M,K) strides (1, M) = (1, 512), proj = (Y, X, Y)
   block:
     var buf = newSeq[float32](M * K)
-    var mA = make_view(buf +% 0, make_layout((M, K)))
+    var mA = make_view(buf, make_layout((M, K)))
     for i in 0..<M*K: mA(i) = float32(i)
     let v = mA
     let gA = local_tile(v, tiler, coord0, (Y, X, Y))
@@ -215,7 +214,7 @@ proc runLocalTileCtaExtraction(errors: var int) =
   # mB: (N,K) = (512,64), proj = (X, Y, Y)
   block:
     var buf = newSeq[float32](N * K)
-    var mB = make_view(buf +% 0, make_layout((N, K)))
+    var mB = make_view(buf, make_layout((N, K)))
     for i in 0..<N*K: mB(i) = float32(i)
     let v = mB
     let gB = local_tile(v, tiler, coord0, (X, Y, Y))
@@ -226,7 +225,7 @@ proc runLocalTileCtaExtraction(errors: var int) =
   # mC: (M,N) = (512,512), proj = (Y, Y, X)
   block:
     var buf = newSeq[float32](M * N)
-    var mC = make_view(buf +% 0, make_layout((M, N)))
+    var mC = make_view(buf, make_layout((M, N)))
     for i in 0..<M*N: mC(i) = float32(i)
     let v = mC
     let gC = local_tile(v, tiler, coord0, (Y, Y, X))
@@ -251,7 +250,7 @@ proc runLocalTileCtaExtraction(errors: var int) =
 proc runLocalPartition3Arg2d(errors: var int) =
   echo "--- 10. local_partition 3-arg 2D (8x8) thrLayout (4x4) ---"
   var buf = newSeq[float32](64)
-  var t = make_view(buf +% 0, make_layout((8,8)))
+  var t = make_view(buf, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
   let L = make_layout((4,4))
   let v = t
@@ -278,7 +277,7 @@ proc runLocalPartition3Arg2d(errors: var int) =
 proc runLocalPartition3Arg1d(errors: var int) =
   echo "--- 11. local_partition 3-arg 1D (32,) thrLayout (16,) ---"
   var buf = newSeq[float32](32)
-  var t = make_view(buf +% 0, make_layout((32,)))
+  var t = make_view(buf, make_layout((32,)))
   for i in 0..<32: t(i) = float32(i)
   let L = make_layout((16,))
   let v = t
@@ -295,7 +294,7 @@ proc runLocalPartition3Arg1d(errors: var int) =
 proc runLocalPartition3Arg3d(errors: var int) =
   echo "--- 12. local_partition 3-arg 3D (8x4x2) thrLayout (4x2) ---"
   var buf = newSeq[float32](64)
-  var t = make_view(buf +% 0, make_layout((8,4,2)))
+  var t = make_view(buf, make_layout((8,4,2)))
   for i in 0..<64: t(i) = float32(i)
   let L = make_layout((4,2))
   let v = t
@@ -310,7 +309,7 @@ proc runLocalPartition3Arg3d(errors: var int) =
 proc runLocalPartition3ArgLarge(errors: var int) =
   echo "--- 13. local_partition 3-arg large (32x32) thrLayout (16x16) ---"
   var buf = newSeq[float32](1024)
-  var t = make_view(buf +% 0, make_layout((32,32)))
+  var t = make_view(buf, make_layout((32,32)))
   for i in 0..<1024: t(i) = float32(i)
   let L = make_layout((16,16))
   let v = t
@@ -324,7 +323,7 @@ proc runLocalPartition3ArgLarge(errors: var int) =
 proc runLocalPartition3ArgConst(errors: var int) =
   echo "--- 14. local_partition 3-arg const indirection ---"
   var buf = newSeq[float32](64)
-  var t = make_view(buf +% 0, make_layout((8,8)))
+  var t = make_view(buf, make_layout((8,8)))
   for i in 0..<64: t(i) = float32(i)
   let L = make_layout((4,4))
   let v = t
@@ -338,7 +337,7 @@ proc runLocalPartition3ArgConst(errors: var int) =
 proc runLocalPartition4ArgStep1X(errors: var int) =
   echo "--- 15. local_partition 4-arg Step<_1,X> (128x8) tC(16,16) ---"
   var buf = newSeq[float32](1024)
-  var t = make_view(buf +% 0, make_layout((128,8)))
+  var t = make_view(buf, make_layout((128,8)))
   for i in 0..<1024: t(i) = float32(i)
   let tC = make_layout((16,16))
   let v = t
@@ -356,7 +355,7 @@ proc runLocalPartition4ArgStep1X(errors: var int) =
 proc runLocalPartition4ArgStepX1(errors: var int) =
   echo "--- 16. local_partition 4-arg Step<X,_1> (128x8) tC(16,16) ---"
   var buf = newSeq[float32](1024)
-  var t = make_view(buf +% 0, make_layout((128,8)))
+  var t = make_view(buf, make_layout((128,8)))
   for i in 0..<1024: t(i) = float32(i)
   let tC = make_layout((16,16))
   let v = t
@@ -370,7 +369,7 @@ proc runLocalPartition4ArgStepX1(errors: var int) =
 proc runLocalPartition4ArgStep11(errors: var int) =
   echo "--- 17. local_partition 4-arg Step<_1,_1> (128x128) tC(16,16) ---"
   var buf = newSeq[float32](16384)
-  var t = make_view(buf +% 0, make_layout((128,128)))
+  var t = make_view(buf, make_layout((128,128)))
   for i in 0..<16384: t(i) = float32(i)
   let tC = make_layout((16,16))
   let v = t
@@ -381,6 +380,29 @@ proc runLocalPartition4ArgStep11(errors: var int) =
   block:
     let p = local_partition(v, tC, 255, (Y, Y))
     doAssert p(0,0) == (15.0 + 15.0*128.0).float32
+  echo "  OK"
+
+# ═══════════════════════════════════════════════════════════════════════
+#  18. partitioning an offset view
+#      view (8,8):(1,8) at offset 13, tiler (4,4), coord (1,0)
+# ═══════════════════════════════════════════════════════════════════════
+
+proc runOffsetParent(errors: var int) =
+  echo "--- 18. partitioning an offset view (8x8) tiler (4,4) coord (1,0) ---"
+  var buf = newSeq[float32](77)
+  for i in 0..<77:
+    buf[i] = float32(i)
+  var t = make_view(buf, make_layout((8,8)), 13)
+  let inner = inner_partition(t, (4,4), (1,0))
+  doAssert inner.offset == 13 + 4, "inner composes the parent offset"
+  doAssert inner(0,0) == buf[13 + 4], "inner(0,0)"
+  doAssert inner(3,3) == buf[13 + 4 + 3 + 24], "inner(3,3)"
+  let outer = outer_partition(t, (4,4), (1,0))
+  doAssert outer.offset == 13 + 1, "outer composes the parent offset"
+  doAssert outer(0,0) == buf[13 + 1], "outer(0,0)"
+  doAssert outer(1,1) == buf[13 + 1 + 4 + 32], "outer(1,1)"
+  let tile = local_tile(t, (4,4), (1,0))
+  doAssert tile(0,0) == inner(0,0), "local_tile aliases inner_partition"
   echo "  OK"
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -406,6 +428,7 @@ proc runTests =
   runLocalPartition4ArgStep1X(errors)
   runLocalPartition4ArgStepX1(errors)
   runLocalPartition4ArgStep11(errors)
+  runOffsetParent(errors)
   echo ""
   echo "=== SUMMARY ==="
   if errors == 0:
