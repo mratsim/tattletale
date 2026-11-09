@@ -104,9 +104,9 @@ type
     ## - the DeviceMem leaf contributes the element type the kernel binds
     ## - `.cursor.` borrows the impl's buffer, so a bridge copies without
     ##   touching the move-only handle
-    data {.cursor.}: DevMem
-    offset: int
-    layout: Layout[Sh, St]
+    data* {.cursor.}: DevMem
+    offset*: int
+    layout*: Layout[Sh, St]
 
   ViewNode* = ref object
     ## Lazy shared-buffer view: `v` aliases the source impl's buffer cell,
