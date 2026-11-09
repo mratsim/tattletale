@@ -47,11 +47,16 @@ proc runTest*(engine: AnyEngine, name: string) =
 
   let zGot = z.toHost(bfloat16)
   let xyBuf = x.toHost(bfloat16)            # split parts share x's buffer
+  let p0Got = parts[0].toHost(bfloat16)
+  let p1Got = parts[1].toHost(bfloat16)
   for i in 0 ..< 8:
     let xi = xd[i].to(bfloat16).to(float32)
     let yi = yd[i].to(bfloat16).to(float32)
     doAssert zGot[i].to(float32) == xi + yi, name & ": add " & $i
     doAssert xyBuf[i].to(float32) == xi, name & ": split source " & $i
+  for i in 0 ..< 4:
+    doAssert p0Got[i].to(float32) == xd[i].to(bfloat16).to(float32), name & ": part0 " & $i
+    doAssert p1Got[i].to(float32) == xd[4 + i].to(bfloat16).to(float32), name & ": part1 " & $i
 
   echo "tensorcery Tensor (", name, "): all checks passed"
 

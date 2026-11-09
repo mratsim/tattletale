@@ -54,8 +54,8 @@ proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[
 proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[OpenCLBuffer, T], src: openArray[T]) {.inline.} =
   engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: var openArray[T], src: DeviceMem[OpenCLBuffer, T]) {.inline.} =
-  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
+proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: var openArray[T], src: DeviceMem[OpenCLBuffer, T], offsetElems: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T), offsetElems * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
@@ -105,5 +105,5 @@ proc allocDeviceImpl(engine: OpenCLEngine, n: int): OpenCLBuffer {.inline.} =
 proc copyToDeviceFromHostImpl(engine: OpenCLEngine, dst: OpenCLBuffer, src: pointer, n: int) {.inline.} =
   dst.writeBuffer(src, n)
 
-proc copyToHostFromDeviceImpl(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int) {.inline.} =
-  src.readBuffer(dst, n)
+proc copyToHostFromDeviceImpl(engine: OpenCLEngine, dst: pointer, src: OpenCLBuffer, n: int, offsetBytes: int = 0) {.inline.} =
+  src.readBuffer(dst, n, offsetBytes)

@@ -75,12 +75,12 @@ proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16])
 proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode) =
   type Mem = typeof(engine.allocDevice(float32, 0))
   let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-  engine.copyToHostFromDevice(dst, t.data[])
+  engine.copyToHostFromDevice(dst, t.data[], t.offset)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode) =
   type Mem = typeof(engine.allocDevice(bfloat16, 0))
   let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
-  engine.copyToHostFromDevice(dst, t.data[])
+  engine.copyToHostFromDevice(dst, t.data[], t.offset)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The erased engine

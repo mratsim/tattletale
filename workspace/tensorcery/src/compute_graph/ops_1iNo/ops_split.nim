@@ -51,8 +51,9 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
   let s = ix.shape()
   # erased impls carry contiguous layouts only, a split on an inner
   # axis needs the inherited strides of the source layout
-  {.precondition: (axis == 0, "split: axis " & $axis & " unsupported, only the outer axis splits densely").}
+  precondition: (axis == 0, "split: axis " & $axis & " unsupported, only the outer axis splits densely")
   {.precondition: s[axis] mod k == 0.}
+
   var partShape = newSeq[int](s.len)
   for i in 0 ..< s.len:
     partShape[i] = s[i]
@@ -74,9 +75,11 @@ proc enqueueSplit*[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[
   let core = asSplit.core
   engine.evalNode(batch, core.a)
   let src = core.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
+  let partElems = src.layout.shape.getNumElems() div core.r.len
   for i in 0 ..< core.r.len:
     let v = core.r[i].to(TensorImpl[Mem, Layout[Sh, Sh]])
     v.data = src.data
+    v.offset = src.offset + i * partElems
   true
 
 # ═══════════════════════════════════════════════════════════════════════
