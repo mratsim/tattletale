@@ -28,7 +28,7 @@ type
     a*: TensorNode
     axis*: int
 
-proc getOutput*(n: SplitCore, i: int): AnyTensorImpl =
+func getOutput*(n: SplitCore, i: int): AnyTensorImpl =
   n.r[i]
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -38,7 +38,7 @@ proc getOutput*(n: SplitCore, i: int): AnyTensorImpl =
 proc getImpl*[C](n: PosNode[C]): AnyTensorImpl =
   n.core.getOutput(n.pos)
 
-proc opName*(n: PosNode[SplitCore]): string =
+func opName*(n: PosNode[SplitCore]): string =
   "split"
 
 # ═══════════════════════════════════════════════════════════════════════

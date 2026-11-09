@@ -33,7 +33,7 @@ proc packObj[T](v: T): RootRef {.inline.} =
 
 macro checkRequiredMethod(call: typed, typ: typed): untyped =
   let impl = getImpl(call[0])
-  if impl.kind == nnkProcDef and impl.params.len > 1 and impl.params[1][^2] == typ:
+  if impl.kind in {nnkProcDef, nnkFuncDef} and impl.params.len > 1 and impl.params[1][^2] == typ:
     error "Object does not implement required interface method: " & repr(call)
   result = call
 
@@ -158,11 +158,13 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
   for i, p in body:
     if p.kind in {nnkCommentStmt}:
       continue
-    p.expectKind(nnkProcDef)
+    p.expectKind({nnkProcDef, nnkFuncDef})
     ifaceDecl.add(copyNimTree(p))
     mixins.add(newTree(nnkMixinStmt, p.name))
     let pt = newTree(nnkProcTy, copyNimTree(p.params), newEmptyNode())
     pt.addPragma(ident"nimcall")
+    if p.kind == nnkFuncDef:
+      pt.addPragma(ident"noSideEffect")
     var retType = pt[0][0]
     if retType.kind == nnkEmpty:
       retType = ident"void"
@@ -188,6 +190,8 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
       forceReturnValue(`retType`, checkRequiredMethod(`lambdaCall`, `iName`))
 
     let lam = newTree(nnkLambda, newEmptyNode(), newEmptyNode(), newEmptyNode(), pt[0], newEmptyNode(), newEmptyNode(), lambdaBody)
+    if p.kind == nnkFuncDef:
+      lam.addPragma(ident"noSideEffect")
     # lam.addPragma(newTree(nnkExprColonExpr, ident"stackTrace", ident"off"))
 
     vTableConstr.add newAssignment(newDotExpr(tIdent, fieldName), lam)

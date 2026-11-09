@@ -5,13 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Add: z = x + y, two inputs one output
-##
-## - k_add: one threadgroup per tile, the register tile map tiles all inputs
-## - elements pair by coordinate, 32 lanes x split per tile
-## - add: z.node = an AddNode over a.node and b.node
-## - the handler enqueues k_add over the node's bridges into the batch
-
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/ceramic
@@ -67,7 +60,7 @@ type
 proc getImpl*(n: AddNode): AnyTensorImpl =
   n.r
 
-proc opName*(n: AddNode): string =
+func opName*(n: AddNode): string =
   "add"
 
 # ═══════════════════════════════════════════════════════════════════════
