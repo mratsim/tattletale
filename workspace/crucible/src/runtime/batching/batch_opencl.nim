@@ -110,6 +110,11 @@ proc compileEntrypoint(batch: OpenCLBatch, source, entrypoint: string): Pkernel 
   result = createKernel(batch.programs[source], entrypoint.cstring, status.addr)
   check status
 
+proc storeEntryArg(entry: var BatchEntry, v: OpenCLBuffer, _: int) =
+  privateAccess(OpenCLBuffer)
+  entry.borrowedBuffers.add v.mem
+  entry.slots.add Slot(kind: skBuffer, buffer: entry.borrowedBuffers.high)
+
 proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
   when typeof(v) is ptr|pointer:
     entry.borrowedBuffers.add Pmem(v)
@@ -149,7 +154,7 @@ proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg
   if kernelKey notin batch.pipelines:
     batch.pipelines[kernelKey] = compileEntrypoint(batch, source, entrypoint)
   var entry = BatchEntry(kernel: batch.pipelines[kernelKey], fleet: cfg.grid, squadron: cfg.blk)
-  bindArgs(entry, output, args, storeEntryArg, Pmem, cgOpenCL)
+  bindArgs(entry, output, args, storeEntryArg, OpenCLBuffer, cgOpenCL)
   batch.entries.add entry
 
 func getScalarSize*(batch: OpenCLBatch): int =

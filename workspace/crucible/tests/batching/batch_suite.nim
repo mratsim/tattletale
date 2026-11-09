@@ -15,9 +15,6 @@
 ## as a finding, never as a condition:
 ## - WebGPU compiles exactly one global function per module.
 ##   The multi-kernel scenarios fail the whole-module compile.
-## - OpenCL packs the engine's OpenCLBuffer handle as scalar bytes.
-##   The eager launch path binds handles through a store overload.
-##   Every scenario fails at the first kernel-arg bind.
 ##
 ## Run from the worktree root (metal shown, same command per runtime):
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
