@@ -23,6 +23,10 @@ import workspace/crucible/src/codegen/backends/spirv_encoder
 import workspace/crucible/src/codegen/frontend/nim_to_crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
+import workspace/crucible/src/runtime/batching/batch_metal
+import workspace/crucible/src/runtime/batching/batch_vulkan
+import workspace/crucible/src/runtime/batching/batch_opencl
+import workspace/crucible/src/runtime/batching/batch_webgpu
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Record
@@ -33,6 +37,17 @@ type
     entrypoint*: string
     config*: LaunchConfig
     launch*: proc(engine: E) {.closure.}
+    ## Tier-1 batch of the entry's backend. `replay` constructs it from the engine,
+    ## `record` re-enqueues the entry onto it, `launch` launches eagerly where
+    ## no tier-1 batch exists.
+    when E is MetalEngine:
+      record: proc(leg: MetalBatch) {.closure.}
+    elif E is VulkanEngine:
+      record: proc(leg: VulkanBatch) {.closure.}
+    elif E is OpenCLEngine:
+      record: proc(leg: OpenCLBatch) {.closure.}
+    elif E is WebgpuEngine:
+      record: proc(leg: WebgpuBatch) {.closure.}
 
   Batch*[E] = ref object
     engine*: E
@@ -108,6 +123,25 @@ template appendEntry[E](batch: Batch[E], fnName: string, cfg: LaunchConfig, outp
   var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
   entry.launch = proc(engine: E) {.closure.} =
     engine.launchKernelImpl(output, args, entry.config, fnName)
+  when E is MetalEngine:
+    # Metal records each entry against the engine's ingested library, borrowed by the tier-1 batch at construction after finalize's ingest.
+    entry.record = proc(leg: MetalBatch) {.closure.} =
+      leg.recordGlobalFn(fnName, entry.config, output, args)
+  batch.entries.add entry
+
+template appendEntry[E](batch: Batch[E], fnName: string, artifact: auto, cfg: LaunchConfig, output: auto, args: tuple) =
+  var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
+  entry.launch = proc(engine: E) {.closure.} =
+    engine.launchKernelImpl(output, args, entry.config, fnName)
+  when E is VulkanEngine:
+    entry.record = proc(leg: VulkanBatch) {.closure.} =
+      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
+  elif E is OpenCLEngine:
+    entry.record = proc(leg: OpenCLBatch) {.closure.} =
+      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
+  elif E is WebgpuEngine:
+    entry.record = proc(leg: WebgpuBatch) {.closure.} =
+      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
   batch.entries.add entry
 
 macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, blk: untyped, values: varargs[typed]): untyped =
@@ -127,7 +161,17 @@ macro enqueueDeviceFn[E](batch: Batch[E], deviceFn: typed, statics: untyped, cfg
   result = quote do:
     block:
       const fnName = `fnNameN`
-      `batch`.appendEntry(fnName, `cfg`, `outN`, `argsTuple`)
+      when typeof(`batch`.engine) is VulkanEngine:
+        const entryArtifact = spirv(`procdef`)
+        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
+      elif typeof(`batch`.engine) is OpenCLEngine:
+        const entryArtifact = opencl(`procdef`)
+        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
+      elif typeof(`batch`.engine) is WebgpuEngine:
+        const entryArtifact = webgpu(`procdef`)
+        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
+      else:
+        `batch`.appendEntry(fnName, `cfg`, `outN`, `argsTuple`)
 
 type
   EnqueueSugar*[E] = object
@@ -261,6 +305,10 @@ proc replay*[E](batch: Batch[E]) {.inline.} =
   ## Requires:
   ## - a prior `finalize` in this compilation
   ##
+  ## Routed backends replay through their tier-1 batch: replay constructs it
+  ## from the engine, records the entries onto it, then runs one tier-1
+  ## finalize and replay. Unrouted backends launch each entry eagerly.
+  ##
   ## Re-ingests the batch artifact when the engine ingested something else
   ## since `finalize`.
   if batch.artifact.len == 0:
@@ -271,8 +319,33 @@ proc replay*[E](batch: Batch[E]) {.inline.} =
   else:
     if batch.engine.getArtifact() != batch.artifact:
       batch.engine.ingest(batch.artifact)
-  for entry in batch.entries:
-    entry.launch(batch.engine)
+  when E is MetalEngine:
+    let leg = newMetalBatch(batch.engine)
+    for entry in batch.entries:
+      entry.record(leg)
+    leg.finalize()
+    leg.replay()
+  elif E is VulkanEngine:
+    let leg = newVulkanBatch(batch.engine)
+    for entry in batch.entries:
+      entry.record(leg)
+    leg.finalize()
+    leg.replay()
+  elif E is OpenCLEngine:
+    let leg = newOpenCLBatch(batch.engine)
+    for entry in batch.entries:
+      entry.record(leg)
+    leg.finalize()
+    leg.replay()
+  elif E is WebgpuEngine:
+    let leg = newWebgpuBatch(batch.engine)
+    for entry in batch.entries:
+      entry.record(leg)
+    leg.finalize()
+    leg.replay()
+  else:
+    for entry in batch.entries:
+      entry.launch(batch.engine)
 
 macro submit*(batch: Batch): untyped =
   ## Flushes the batch: finalizes the compiled artifact and launches the entries
