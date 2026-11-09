@@ -213,8 +213,7 @@ macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchCon
       if i > 0:
         valuesTuple.add(a)
   let procdef = buildGlobalFn(k, statics, valuesN)
-  let wg = getWorkgroupPragma(nnkPar.newTree(
-    newLit(cfg.blk.x), newLit(cfg.blk.y), newLit(cfg.blk.z)))
+  let wg = getWorkgroupPragma(cfg.blk)
   if not wg.isNil:
     procdef[4].add(wg)
   procdef[6][0][0] = k
