@@ -264,7 +264,7 @@ macro fillWithCpuImpl(dst: typed; val: typed): untyped =
   let rank = flatLen(tvDst[2])
 
   # ── Extract data pointer and layout reference ──
-  let dstData = bindSym"originPtr".newCall(dst)
+  let dstData = bindSym"getOriginPtr".newCall(dst)
   let dstLay = newTree(nnkCall, ident"getLayout", dst)
   let isZero = isZeroVal(val)
 

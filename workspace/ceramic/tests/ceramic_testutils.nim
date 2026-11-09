@@ -63,7 +63,7 @@ macro `[]=`*(ht: HostTensor, args: varargs[untyped]): untyped =
   result = quote do:
     `ht`.data[`ht`.offset + crd2idx(`ht`.layout, `coord`)] = `val`
 
-func originOffset[Sh, St](layout: Layout[Sh, St]): int =
+func getOriginOffset[Sh, St](layout: Layout[Sh, St]): int =
   ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
   let sh = layout.shape.flatten()
   let st = layout.stride.flatten()
@@ -80,9 +80,9 @@ proc to*[T, Sh, St, U](src: HostTensor[T, Sh, St], _: typedesc[U]): HostTensor[U
   let layout = src.layout
   result = HostTensor[U, Sh, St](
     data: cast[ptr UncheckedArray[U]](allocShared(toInt(layout.cosize()) * sizeof(U))),
-    offset: originOffset(layout),
+    offset: layout.getOriginOffset(),
     layout: layout)
-  let start = src.offset - originOffset(layout)
+  let start = src.offset - src.layout.getOriginOffset()
   for i in 0 ..< toInt(layout.cosize()):
     result.data[i] = src.data[start + i].to(U)
 
@@ -90,14 +90,14 @@ proc makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder)
   let layout = make_layout(shape, order)
   HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
-    offset: originOffset(layout),
+    offset: layout.getOriginOffset(),
     layout: layout)
 
 proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
   let layout = make_layout(shape, strides)
   HostTensor[T, typeof(shape), typeof(strides)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
-    offset: originOffset(layout),
+    offset: layout.getOriginOffset(),
     layout: layout)
 
 template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
@@ -108,7 +108,7 @@ proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, 
   let layout = make_layout(shape, strides)
   result = HostTensor[T, typeof(shape), typeof(strides)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
-    offset: originOffset(layout),
+    offset: layout.getOriginOffset(),
     layout: layout)
   for i in 0 ..< toInt(layout.size()):
     let crd = idx2crd(layout.shape, i)

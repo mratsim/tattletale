@@ -111,7 +111,7 @@ template make_view*(tv: TensorView;
 func getOffset*[T, Sh, St](tv: TensorView[T, Sh, St]): int {.inline.} = tv.offset
 func getOffset*[T, Sh, St](t: TensorOwned[T, Sh, St]): int {.inline.} = 0
 
-func originPtr*[T, Sh, St](tv: TensorView[T, Sh, St]): ptr UncheckedArray[T] {.inline.} =
+func getOriginPtr*[T, Sh, St](tv: TensorView[T, Sh, St]): ptr UncheckedArray[T] {.inline.} =
   cast[ptr UncheckedArray[T]](addr tv.data[tv.offset])
 
 template getLayout*[T, Sh, St](t: TensorOwned[T, Sh, St]): Layout[Sh, St] =

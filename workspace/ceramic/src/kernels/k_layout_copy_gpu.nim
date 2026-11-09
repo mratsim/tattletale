@@ -56,10 +56,7 @@ macro guardWriteDisjointness(shD, stD, shS, stS: typed) =
                  " has stride 0 with shape > 1 and src stride " & $stSv[d] &
                  " is non-zero")))
 
-func copyChunks[T, ShC, StC](C: Layout[ShC, StC]; d: static int;
-                             dstP, srcP: ptr UncheckedArray[T];
-                             dstOff, srcOff, srcStride: int;
-                             W, vecCap: int; elemBits: static int) {.inline.} =
+func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr T, dstOff, srcOff, srcStride: int, W, vecCap: int, elemBits: static int) {.inline.} =
   ## Copies dst <- src by chunks
   when d == rank(C):
     let
@@ -120,7 +117,7 @@ func copyFrom*[T, ShD, StD, ShS, StS](
     vecCap = min(wV and -wV, 128 div elemBits)
   let spansCover = size(R) === size(srcV)
   if spansCover and s0 === 1:
-    copyChunks(C, 1, cast[ptr UncheckedArray[T]](addr dstV[0]), cast[ptr UncheckedArray[T]](addr srcV[0]), 0, 0, wV, wV, vecCap, elemBits)
+    copyChunks(C, 1, addr dstV[0], addr srcV[0], 0, 0, wV, wV, vecCap, elemBits)
   else:
     copyElementwise(dstV, srcV)
 
