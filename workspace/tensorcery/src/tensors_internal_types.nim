@@ -12,6 +12,7 @@ import workspace/ceramic
 import workspace/ceramic/src/macros/static_for
 import workspace/iface
 import tensors_public_types
+import workspace/design_by_contract
 
 export tensors_public_types
 
@@ -97,8 +98,6 @@ func rowMajorStrides*[Sh: tuple](shape: Sh): Sh =
     acc *= shape[tupleLen(Sh) - 1 - j]
 
 func fillShape*[Sh: tuple](shape: var Sh, s: Span[int]) =
-  if s.len != tupleLen(Sh):
-    raise ValueError.newException(
-      "rank " & $s.len & " does not match the context rank " & $tupleLen(Sh))
+  precondition: s.len == tupleLen(Sh)
   staticFor i, 0, tupleLen(Sh):
     shape[i] = s[i]
