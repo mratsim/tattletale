@@ -6,6 +6,9 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/[math, options]
+
+{.experimental: "callOperator".}
+
 import workspace/crucible
 import workspace/ceramic
 import workspace/tensorcery/src/tensor_datatypes
@@ -13,8 +16,10 @@ import workspace/tattleformers/src/ops_2i1o/add
 import workspace/tattleformers/src/ops_2i1o/matmul
 import workspace/ceramic/src/tile_algebra
 import workspace/tattleformers/src/ops_Ni1o/embed_gather
+import workspace/tattleformers/src/ops_1i1o/rmsnorm
 import workspace/tattleformers/src/layers/embedding
 import workspace/tattleformers/src/layers/linear
+import workspace/tattleformers/src/layers/norm
 
 export tensor_datatypes
 
@@ -294,5 +299,137 @@ proc runTest*[E: HwEngine](engine: E, name: string) =
       let x = newTensor(engine, @[2, InF], kBf16)
       doAssertRaises ValueError:
         discard biased.forward(x)
+
+
+  # ── rmsnorm op and RmsNorm layer ─────────────────────────────────────
+  # bf16 x (32, 1024), eps 1e-6, bf16 weight: judged against an f64 host
+  # reference at the kElementwise-class band (2 bf16 ulps)
+  block:
+    const
+      Rows = 32
+      N = 1024
+    var xHost = newSeq[bfloat16](Rows * N)
+    var wHost = newSeq[bfloat16](N)
+    for i in 0 ..< Rows * N:
+      xHost[i] = (float32((i * 37) mod 25 - 12) * 0.5'f32).to(bfloat16)
+    for i in 0 ..< N:
+      wHost[i] = (float32(i mod 11) * 0.1'f32 + 0.5'f32).to(bfloat16)
+
+    # f64 host reference, one axis strip at a time
+    var refO = newSeq[float32](Rows * N)
+    for r in 0 ..< Rows:
+      var ss = 0.0'f64
+      for i in 0 ..< N:
+        let x = float64(xHost[r * N + i].to(float32))
+        ss += x * x
+      let scale = 1.0 / sqrt(ss / float64(N) + 1e-6)
+      for i in 0 ..< N:
+        let x = float64(xHost[r * N + i].to(float32))
+        let w = float64(wHost[i].to(float32))
+        refO[r * N + i] = float32(x * scale * w)
+
+    let x = newTensor(engine, @[Rows, N], kBf16)
+    x.copyToDeviceFromHost(xHost)
+    let w = newTensor(engine, @[N], kBf16)
+    w.copyToDeviceFromHost(wHost)
+
+    let o = Tensor(engine: x.engine,
+      node: tn_rmsnorm(x.engine, x.node, w.node, 1e-6'f32))
+    doAssert o.node.getImpl().shape().len == 2
+    doAssert o.node.getImpl().shape()[0] == Rows
+    doAssert o.node.getImpl().shape()[1] == N
+    doAssert o.node.getImpl().dtype() == kBf16
+    var oRoots = @[o.node]
+    o.engine.eval(oRoots.toSpan())
+    var gotO = newSeq[bfloat16](Rows * N)
+    copyToHostFromDevice(gotO, o)
+    gotO.checkBf16Ulp(refO, 2, name & ": rmsnorm (32, 1024)")
+
+    # rank-1 and rank-3 sources walk at their own rank, the last axis is normalized
+    block:
+      let x1 = newTensor(engine, @[N], kBf16)
+      x1.copyToDeviceFromHost(xHost[0 ..< N])
+      let o1 = Tensor(engine: x1.engine,
+        node: tn_rmsnorm(x1.engine, x1.node, w.node, 1e-6'f32))
+      doAssert o1.node.getImpl().shape().len == 1
+      var o1Roots = @[o1.node]
+      o1.engine.eval(o1Roots.toSpan())
+      var got1 = newSeq[bfloat16](N)
+      copyToHostFromDevice(got1, o1)
+      got1.checkBf16Ulp(refO[0 ..< N], 2, name & ": rmsnorm rank 1")
+
+      let x3 = newTensor(engine, @[2, 3, N], kBf16)
+      var x3Host = newSeq[bfloat16](2 * 3 * N)
+      for i in 0 ..< 2 * 3 * N:
+        x3Host[i] = xHost[i mod (Rows * N)]
+      x3.copyToDeviceFromHost(x3Host)
+      let o3 = Tensor(engine: x3.engine,
+        node: tn_rmsnorm(x3.engine, x3.node, w.node, 1e-6'f32))
+      doAssert o3.node.getImpl().shape().len == 3
+      var o3Roots = @[o3.node]
+      o3.engine.eval(o3Roots.toSpan())
+      var got3 = newSeq[bfloat16](2 * 3 * N)
+      copyToHostFromDevice(got3, o3)
+      got3.checkBf16Ulp(refO[0 ..< 2 * 3 * N], 2, name & ": rmsnorm rank 3")
+
+    # face contract: weight size, weight rank and dtype mismatches raise
+    block:
+      let wShort = newTensor(engine, @[N - 1], kBf16)
+      doAssertRaises ValueError:
+        discard tn_rmsnorm(engine, x.node, wShort.node, 1e-6'f32)
+      let w2d = newTensor(engine, @[1, N], kBf16)
+      doAssertRaises ValueError:
+        discard tn_rmsnorm(engine, x.node, w2d.node, 1e-6'f32)
+      let wF32 = newTensor(engine, @[N], kFp32)
+      doAssertRaises ValueError:
+        discard tn_rmsnorm(engine, x.node, wF32.node, 1e-6'f32)
+
+    # RmsNorm layer port: RmsNorm(w)(x) through the erased face
+    block:
+      let rms = RmsNorm.init(w)
+      doAssert rms.hidden_size == N
+      let y = rms.forward(x)
+      doAssert y.node.getImpl().shape()[0] == Rows
+      doAssert y.node.getImpl().shape()[1] == N
+      var yRoots = @[y.node]
+      y.engine.eval(yRoots.toSpan())
+      var gotY = newSeq[bfloat16](Rows * N)
+      copyToHostFromDevice(gotY, y)
+      gotY.checkBf16Ulp(refO, 2, name & ": RmsNorm layer (32, 1024)")
+
+      # fused residual addition + RMSNorm: (normed, new_residual)
+      block:
+        var rHost = newSeq[bfloat16](Rows * N)
+        for i in 0 ..< Rows * N:
+          rHost[i] = (float32((i * 53) mod 17 - 8) * 0.25'f32).to(bfloat16)
+        let residual = newTensor(engine, @[Rows, N], kBf16)
+        residual.copyToDeviceFromHost(rHost)
+        let (normed, newResidual) = rms.forward_with_residual(x, residual)
+        doAssert normed.node.getImpl().shape()[0] == Rows
+        doAssert newResidual.node.getImpl().shape()[0] == Rows
+        var nRoots = @[normed.node, newResidual.node]
+        normed.engine.eval(nRoots.toSpan())
+        var gotRes = newSeq[bfloat16](Rows * N)
+        copyToHostFromDevice(gotRes, newResidual)
+        for i in 0 ..< Rows * N:
+          let want = (xHost[i].to(float32) + rHost[i].to(float32)).to(bfloat16).to(float32)
+          doAssert gotRes[i].to(float32) == want,
+            name & ": rmsnorm residual " & $i & ": got " & $gotRes[i].to(float32) &
+            ", want " & $want
+        # normed output: the same rmsnorm over x + residual
+        var gotNormed = newSeq[bfloat16](Rows * N)
+        copyToHostFromDevice(gotNormed, normed)
+        var refRes = newSeq[float32](Rows * N)
+        for r in 0 ..< Rows:
+          var ss = 0.0'f64
+          for i in 0 ..< N:
+            let v = float64((xHost[r * N + i].to(float32) + rHost[r * N + i].to(float32)).to(bfloat16).to(float32))
+            ss += v * v
+          let scale = 1.0 / sqrt(ss / float64(N) + 1e-6)
+          for i in 0 ..< N:
+            let v = float64((xHost[r * N + i].to(float32) + rHost[r * N + i].to(float32)).to(bfloat16).to(float32))
+            let w = float64(wHost[i].to(float32))
+            refRes[r * N + i] = float32(v * scale * w)
+        gotNormed.checkBf16Ulp(refRes, 2, name & ": RmsNorm residual fused")
 
   echo "tattleformers ops (", name, "): all checks passed"
