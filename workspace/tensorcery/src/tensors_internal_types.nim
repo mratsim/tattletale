@@ -91,6 +91,20 @@ func getNumElems*[Sh: tuple](shape: Sh): int =
   staticFor i, 0, tupleLen(Sh):
     result *= shape[i]
 
+func atAxis*[Sh: tuple](s: Sh, axis: int): int =
+  ## Tuple element at the runtime axis
+  staticFor i, 0, tupleLen(Sh):
+    if i == axis:
+      result = s[i]
+
+func withAxis*[Sh: tuple](s: Sh, axis: int, val: int): Sh =
+  ## Tuple with the runtime axis element replaced
+  staticFor i, 0, tupleLen(Sh):
+    if i == axis:
+      result[i] = val
+    else:
+      result[i] = s[i]
+
 func rowMajorStrides*[Sh: tuple](shape: Sh): Sh =
   var acc = 1
   staticFor j, 0, tupleLen(Sh):
