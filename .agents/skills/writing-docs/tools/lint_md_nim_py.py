@@ -217,6 +217,15 @@ INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
 
+# The engine-ufcs rule, tensorcery only. The engine leads every tensorcery
+# call in the house spelling engine.evalNode(batch, n); the plain call
+# evalNode(engine, ...) hides the receiver. Bracketed calls stay plain,
+# Nim's method call syntax cannot carry explicit generic arguments
+# (e.f[T](y) misparses as field indexing). Declarations never match, the
+# first argument must be the bare engine followed by a comma or paren.
+ENGINE_UFCS_PLAIN_CALL_RE = re.compile(
+    r"(?<![.\w])([A-Za-z_]\w*)\s*\(\s*engine\s*[,)]")
+
 # The reduction-call-syntax rule. Tile axis reductions read on their source:
 # qk.max(dst, axis = 1, map). A plain dst-first call hides which operand
 # reduces, a positional int hides which axis collapses. The three-arg shape
@@ -671,6 +680,8 @@ RULES = {
                            "a proc, func or template name ending in Of, name the thing directly"),
     "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
+    "engine-ufcs": Rule("engine-ufcs", True,
+                        "an engine-first call in plain syntax, use engine.name(...) method call syntax"),
     "reduction-call-syntax": Rule("reduction-call-syntax", True,
                                   "a tile axis reduction in plain dst-first call syntax or with a positional axis, use src.max(dst, axis = <axis>, map)"),
     "dump-identifier": Rule("dump-identifier", True,
@@ -2031,6 +2042,13 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "inbounds-call-syntax",
                         "inBounds in plain call syntax, use the method call "
                         "coord.inBounds(shape)"))
+                if any("tensorcery" in part for part in path.parts) \
+                        and ENGINE_UFCS_PLAIN_CALL_RE.search(code):
+                    findings.append(Finding(
+                        path, i + 1, "engine-ufcs",
+                        "engine-first call in plain syntax, use the method "
+                        "call engine.%s(...)"
+                        % ENGINE_UFCS_PLAIN_CALL_RE.search(code).group(1)))
                 if REDUCE_PLAIN_CALL_RE.search(code) \
                         and not REDUCE_DECL_RE.match(code):
                     findings.append(Finding(

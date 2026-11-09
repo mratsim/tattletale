@@ -121,12 +121,12 @@ proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Any
   of 2:
     var sh: (int, int)
     fillShape(sh, shape)
-    makeTensorImpl(engine, dtype, make_layout(sh, rowMajorStrides(sh)))
+    engine.makeTensorImpl(dtype, make_layout(sh, rowMajorStrides(sh)))
   else:
     raise ValueError.newException("makeTensorImpl: rank " & $shape.len & " unsupported")
 
 proc makeTensorImpl[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
-  makeTensorImpl(engine, dtype, shape.toSpan())
+  engine.makeTensorImpl(dtype, shape.toSpan())
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
   case shape.len
