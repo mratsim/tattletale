@@ -75,6 +75,14 @@ type JaggedAttnNode* = ref object
   scale: float32
   layer, H, Nkv: int
   windowSize: int               # must be <= 0, the op runs non-windowed
+  enqueued: bool
+    ## Launch-once marker under the eval walk's fan-out re-walks:
+    ## - a downstream op that fans out over a shared input re-walks
+    ##   the whole upstream chain (the FFN's two projections share one input)
+    ## - the repeat visit must not re-run the handler: re-staging
+    ##   the metadata cell would enqueue the launch twice
+    ## Precondition: an op node is constructed per forward and enqueued in
+    ## exactly one eval, so the flag never crosses an eval boundary.
 
 proc eval*(n: JaggedAttnNode) =
   raiseAssert "eval is not implemented yet: graph layer only"
@@ -110,6 +118,8 @@ proc enqueueJaggedAttnNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], 
   let asA = n.to(JaggedAttnNode)
   if asA.isNil:
     return false
+  if asA.enqueued:
+    return true
   proc attnCombo(o, q, kPool, vPool, qOffsets: distinct TensorView,
                  kv: JaggedKv, scale: float32, layer, H, Nkv: int,
                  PageSize, D: static int,
@@ -127,6 +137,8 @@ proc enqueueJaggedAttnNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], 
   proc enqueueJaggedAttn[E: HwEngine, Mem, MemMeta](
       engine: E, batch: Batch[E], n: JaggedAttnNode) =
     ## Enqueues one attnCombo over the node's impls at the Qwen3 statics.
+    if n.enqueued:
+      return
     ##
     ## Literal shape tuples at the call site are the erasedUpload pattern.
     ## Sh-parametric type expressions bind unreliably at launch time.
@@ -184,6 +196,7 @@ proc enqueueJaggedAttnNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], 
     # enqueue wins (see the multi-enqueue reproducer).
     # Qwen3 runs non-windowed (no sliding window).
     # A windowed dispatch needs a separate op instantiation.
+    n.enqueued = true
     batch.enqueue<<((gx, n.H, n.kv.batchSize), (attnTile, 1))>> attnCombo(ob, qb, kb, vb, qOffB, kvB, float32(n.scale), n.layer, n.H, n.Nkv, 256, 128, false, low(int32))
 
 

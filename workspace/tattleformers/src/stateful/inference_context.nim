@@ -24,6 +24,9 @@ type InferenceContext*[T, P] = ref object
   ##   - Discarded when sequence completes
 
   pages*: seq[Page]           # KV pages: matched from trie + newly borrowed
+  pool*: PagePool             # Orchestrator-owned page pool, set at init.
+                              # Attention layers read the pool slabs through
+                              # this field. Stable per orchestrator.
   kv_position*: int            # Write cursor (next token position to write into), for page allocation
   cached_tokens*: int          # Tokens already in trie from LPM (for attention writeStart)
   input_tokens*: seq[T]        # Token sequence tracking (for graftPages at sequence end)
@@ -91,6 +94,15 @@ proc clearState*[T, P](ctx: InferenceContext[T, P]) =
   ctx.cached_tokens = 0
   ctx.input_tokens = default(seq[T])
   ctx.position_ids = default(seq[int])
+
+proc pageSlots*[T, P](ctx: InferenceContext[T, P]): seq[int] =
+  ## Returns the page table consumed by the pool write and jagged
+  ## attention ops: the pool slot of each sequence page, in page order.
+  ## Position p lives in page p div TokensPerPage and its slot is
+  ## pageSlots[p div TokensPerPage].
+  result = newSeq[int](ctx.pages.len)
+  for i in 0 ..< ctx.pages.len:
+    result[i] = int(ctx.pages[i].pageIndex())
 
 proc setPositionIds*[T, P](ctx: InferenceContext[T, P], position_ids: seq[int]) =
   ## Set position_ids for current forward pass.

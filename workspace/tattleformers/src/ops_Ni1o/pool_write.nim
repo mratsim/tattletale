@@ -45,6 +45,14 @@ type PoolWriteNode* = ref object
   seqLen: int              # entries to write
   cachedTokens: int        # entries already in the trie from copy-on-write forks
   pageSlots: seq[int]      # pool slot of each sequence page, in page order
+  enqueued: bool
+    ## Launch-once marker under the eval walk's fan-out re-walks:
+    ## - a downstream op that fans out over a shared input re-walks
+    ##   the whole upstream chain (the FFN's two projections share one input)
+    ## - the repeat visit must not re-run the handler: re-staging
+    ##   the metadata cell would enqueue the launch twice
+    ## Precondition: an op node is constructed per forward and enqueued in
+    ## exactly one eval, so the flag never crosses an eval boundary.
 
 proc eval*(n: PoolWriteNode) =
   raiseAssert "eval is not implemented yet: graph layer only"
@@ -109,6 +117,8 @@ proc enqueuePoolWriteNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n
   let asP = n.to(PoolWriteNode)
   if asP.isNil:
     return false
+  if asP.enqueued:
+    return true
   evalNode[E](engine, batch, asP.kSrc)
   evalNode[E](engine, batch, asP.vSrc)
   # Pool slabs and src entries share one bf16 Mem (checked at the face).
@@ -139,6 +149,7 @@ proc enqueuePoolWriteNode*[E: HwEngine, Sh: tuple](engine: E, batch: Batch[E], n
   engine.copyToDeviceFromHost(metaDev, metaHost)
   enqueuePoolWriteRows[E, (int, int, int, int, int), (int, int, int, int),
                        Mem, typeof(metaDev)](engine, batch, asP, metaDev)
+  asP.enqueued = true
   return true
 
 registerEnqueueNode(enqueuePoolWriteNode)
