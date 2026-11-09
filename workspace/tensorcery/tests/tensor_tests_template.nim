@@ -56,19 +56,19 @@ proc runTest*(run: static Runtime, name: string) =
   eval(z, parts[0])
 
   var zGot = newSeq[bfloat16](8)
-  z.toHost(zGot)
+  engine.download(zGot, z.node)
   var xyBuf = newSeq[bfloat16](8)
-  x.toHost(xyBuf)                           # split parts share x's buffer
+  engine.download(xyBuf, x.node)            # split parts share x's buffer
   var p0Got = newSeq[bfloat16](4)
-  parts[0].toHost(p0Got)
+  engine.download(p0Got, parts[0].node)
   var p1Got = newSeq[bfloat16](4)
-  parts[1].toHost(p1Got)
+  engine.download(p1Got, parts[1].node)
   # inner-axis split makes strided views, strides inherit the source
   let cols = split(x, 1, 2)
   let w = cols[0] + cols[1]
   eval(w)
   var wGot = newSeq[bfloat16](4)
-  w.toHost(wGot)
+  engine.download(wGot, w.node)
   for i in 0 ..< 8:
     let xi = xd[i].to(bfloat16).to(float32)
     let yi = yd[i].to(bfloat16).to(float32)
