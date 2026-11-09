@@ -15,7 +15,9 @@ import workspace/crucible/src/runtime/backends/vulkan_address_runtime {.all.}
 import workspace/crucible/src/runtime/backends/vulkan_compile {.all.}
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/engines/engines_common
+import workspace/crucible/src/runtime/engines/vulkan_api {.all.}
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
+from std/importutils import privateAccess
 import workspace/crucible/src/runtime/launch/launch_serialization
 
 export engines_common.LaunchConfig, engines_common.dim3
@@ -235,6 +237,13 @@ macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchCon
 proc newVulkanBatch*(ctx: VulkanContext): VulkanBatch =
   ## Borrowed: the context, its device and queue, and every bound buffer.
   VulkanBatch(ctx: ctx)
+
+proc newVulkanBatch*(engine: VulkanEngine): VulkanBatch =
+  ## Constructs the batch from the engine.
+  ##
+  ## Borrows the engine's context, its device and queue, and every bound buffer.
+  privateAccess(VulkanEngine)
+  newVulkanBatch(engine.ctx)
 
 func getScalarSize*(batch: VulkanBatch): int =
   for e in batch.entries:

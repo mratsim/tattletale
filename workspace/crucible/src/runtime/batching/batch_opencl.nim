@@ -11,7 +11,9 @@ import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/engines/engines_common
+import workspace/crucible/src/runtime/engines/opencl_api {.all.}
 import workspace/crucible/src/runtime/launch/launch_serialization
+from std/importutils import privateAccess
 
 export engines_common.LaunchConfig, engines_common.dim3
 
@@ -127,6 +129,14 @@ proc newOpenCLBatch*(context: Pcontext, queue: Pcommand_queue): OpenCLBatch =
   if (properties and QueueOutOfOrderExec) != 0:
     raiseAssert("OpenCL batch: replay preserves entry order through in-order-queue semantics, the queue enables out-of-order execution")
   OpenCLBatch(context: context, queue: queue)
+
+proc newOpenCLBatch*(engine: OpenCLEngine): OpenCLBatch =
+  ## Constructs the batch from the engine.
+  ##
+  ## Borrows the engine's context, its command queue and every bound buffer.
+  privateAccess(OpenCLEngine)
+  privateAccess(OpenCLContext)
+  newOpenCLBatch(engine.ctx.context, engine.ctx.commands)
 
 proc recordGlobalFn*(batch: OpenCLBatch, source: string, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
   if batch.finalized:

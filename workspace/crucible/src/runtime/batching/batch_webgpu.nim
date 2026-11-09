@@ -11,7 +11,9 @@ import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/backends/webgpu_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/engines/engines_common
+from workspace/crucible/src/runtime/engines/webgpu_api import WebgpuEngine
 import workspace/crucible/src/runtime/launch/launch_serialization
+from std/importutils import privateAccess
 
 export engines_common.LaunchConfig, engines_common.dim3
 
@@ -161,6 +163,13 @@ proc compilePipeline(batch: WebgpuBatch, entry: BatchEntry): WebgpuPipeline =
 proc newWebgpuBatch*(device: WGPUDevice, queue: WGPUQueue): WebgpuBatch =
   ## Borrowsdevice, queue and every bound buffer.
   WebgpuBatch(device: device, queue: queue)
+
+proc newWebgpuBatch*(engine: WebgpuEngine): WebgpuBatch =
+  ## Constructs the batch from the engine.
+  ##
+  ## Borrows the engine's device, its queue and every bound buffer.
+  privateAccess(WebgpuEngine)
+  newWebgpuBatch(engine.ctx.device, engine.ctx.queue)
 
 proc recordGlobalFn*(batch: WebgpuBatch, wgsl: string, entryPoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
   if batch.entries.len > 0 and batch.entries[0].bindGroup != nil:

@@ -11,7 +11,9 @@ import workspace/crucible/src/crucible_codegen
 import workspace/crucible/src/runtime/backends/metal_runtime
 import workspace/crucible/src/runtime/backends/runtime_utils
 import workspace/crucible/src/runtime/engines/engines_common
+import workspace/crucible/src/runtime/engines/metal_api {.all.}
 import workspace/crucible/src/runtime/launch/launch_serialization
+from std/importutils import privateAccess
 
 export engines_common.LaunchConfig, engines_common.dim3
 
@@ -43,6 +45,7 @@ type
 
   MetalBatchObj = object
     device, queue: objc.ID
+    library: objc.ID
     entries: seq[BatchEntry]
     pipelines: Table[string, objc.ID]
     recording: objc.ID
@@ -123,9 +126,25 @@ when defined(macosx):
     ## Every bound buffer outlives the batch.
     MetalBatch(device: device, queue: queue)
 
-  proc recordGlobalFn*(batch: MetalBatch, library: objc.ID, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
+  proc newMetalBatch*(engine: MetalEngine): MetalBatch =
+    ## Constructs the batch from the engine.
+    ##
+    ## Borrows:
+    ## - the engine's device and queue
+    ## - the engine's ingested library, entrypoints compile against it
+    ##
+    ## Construct after the engine ingested the batch artifact (finalize does):
+    ## recording an entry needs the library to hold it.
+    privateAccess(MetalEngine)
+    privateAccess(typeof(engine.cache))
+    result = newMetalBatch(engine.ctx.device, engine.ctx.queue)
+    result.library = engine.cache.library
+
+  proc recordGlobalFn*(batch: MetalBatch, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =
     ## Usage:
-    ##   batch.recordGlobalFn(library, "saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
+    ##   batch.recordGlobalFn("saxpy", LaunchConfig(grid: dim3(2), blk: dim3(64)), outMem, (xMem, yMem, 3.0'f32))
+    ##
+    ## The entrypoint compiles against the library bound at construction.
     if not objc.isNil(batch.recording):
       raiseAssert("recordGlobalFn: the batch is finalized, entries are frozen")
     if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
@@ -138,9 +157,9 @@ when defined(macosx):
       raiseAssert("Metal batch: cfg.blk " & $cfg.blk.x & "x" & $cfg.blk.y & "x" & $cfg.blk.z &
                   " exceeds the " & $MaxThreadsPerThreadgroup & " threads-per-threadgroup max")
     # Two libraries can export the same entrypoint name
-    let psoKey = $cast[int](library) & "\0" & entrypoint
+    let psoKey = $cast[int](batch.library) & "\0" & entrypoint
     if psoKey notin batch.pipelines:
-      batch.pipelines[psoKey] = compileIndirectPipelineState(batch.device, library, entrypoint)
+      batch.pipelines[psoKey] = compileIndirectPipelineState(batch.device, batch.library, entrypoint)
     var entry = BatchEntry(pipelineState: batch.pipelines[psoKey], fleet: cfg.grid, squadron: cfg.blk,
                            sharedMem: cfg.sharedMem.int)
     bindArgs(entry, output, args, storeEntryArg, objc.ID, cgMetal)
@@ -221,4 +240,7 @@ when defined(macosx):
 
 else:
   proc newMetalBatch*(device, queue: objc.ID): MetalBatch =
+    raiseAssert("cgMetal requires macOS")
+
+  proc newMetalBatch*(engine: MetalEngine): MetalBatch =
     raiseAssert("cgMetal requires macOS")
