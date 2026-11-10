@@ -49,11 +49,13 @@ iface *AnyTensorImpl:
     func dtype(): Dtype
     func shape(): Span[int]
     func strides(): Span[int]
+    proc size(): int
     func isMaterialized(): bool
 
 iface *TensorNode:
     proc getImpl(): AnyTensorImpl
     func opName(): string
+    proc size(): int
 
 type
   TensorImpl*[Mem, L] = ref object
@@ -70,9 +72,9 @@ type
     core*: C
     pos*: int
 
-func initTensorBridge*[DevMem, Sh, St](data: DevMem, offset: int, layout: Layout[Sh, St]): TensorBridge[DevMem, Sh, St] =
+func bridge*[Sh: tuple, St: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, St]]): TensorBridge[Mem, Sh, St] =
   ## Kernel ABI of a materialized tensor, assembled at launch sites
-  TensorBridge[DevMem, Sh, St](data: data, offset: offset, layout: layout)
+  TensorBridge[Mem, Sh, St](data: t.data[], offset: t.offset, layout: t.layout)
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: Span[int]): TensorNode
@@ -84,16 +86,6 @@ iface *AnyEngine:
     proc download(dst: var openArray[float32], node: TensorNode, offsetElems: int)
     proc download(dst: var openArray[bfloat16], node: TensorNode, offsetElems: int)
     proc eval(roots: var Span[TensorNode])
-
-func getNumElems*(shape: Span[int]): int =
-  result = 1
-  for i in 0 ..< shape.len:
-    result *= shape[i]
-
-func getNumElems*[Sh: tuple](shape: Sh): int =
-  result = 1
-  staticFor i, 0, tupleLen(Sh):
-    result *= shape[i]
 
 func atAxis*[Sh: tuple](s: Sh, axis: int): int =
   staticFor i, 0, tupleLen(Sh):

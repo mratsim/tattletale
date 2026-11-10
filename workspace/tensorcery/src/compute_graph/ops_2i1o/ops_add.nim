@@ -65,6 +65,9 @@ proc getImpl*(n: AddNode): AnyTensorImpl =
 func opName*(n: AddNode): string =
   "Add"
 
+proc size*(n: AddNode): int =
+  n.r.size()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
@@ -88,20 +91,13 @@ proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E],
   engine.evalNode(batch, asAdd.a)
   engine.evalNode(batch, asAdd.b)
 
-  var sh: Sh
-  fillShape(sh, asAdd.r.shape())
-  let rz = engine.makeTensorImpl(asAdd.r.dtype(), asAdd.r.shape())
-    .to(TensorImpl[Mem, Layout[Sh, Sh]])
   let
-    xa = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    xb = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    numel = rz.layout.shape.getNumElems()
-  let
-    zv = initTensorBridge(rz.data[], rz.offset, rz.layout)
-    xv = initTensorBridge(xa.data[], xa.offset, xa.layout)
-    yv = initTensorBridge(xb.data[], xb.offset, xb.layout)
-  batch.enqueue<<(ceil_div(numel, 128), 32)>> k_add(zv, xv, yv)
-  n = rz.to(TensorNode)
+    rImpl = asAdd.r.to(TensorImpl[Mem, Layout[Sh, Sh]])
+    aImpl = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
+    bImpl = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
+    size = rImpl.size()
+  asAdd.r.bindPlaceholder(engine, rImpl.layout)
+  batch.enqueue<<(ceil_div(size, 128), 32)>> k_add(rImpl.bridge, aImpl.bridge, bImpl.bridge)
   true
 
 # ═══════════════════════════════════════════════════════════════════════

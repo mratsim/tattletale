@@ -25,7 +25,7 @@ import workspace/design_by_contract
 
 type
   SplitCore* = ref object
-    r: seq[TensorNode]    # view shells, bound at finalization
+    r: seq[TensorNode]    # placeholder parts, bound at finalization
     a: TensorNode
     axis: int
 
@@ -41,6 +41,9 @@ proc getImpl*[C](n: PosNode[C]): AnyTensorImpl =
 
 func opName*(n: PosNode[SplitCore]): string =
   "Split"
+
+proc size*(n: PosNode[SplitCore]): int =
+  n.getImpl().size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public

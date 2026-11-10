@@ -48,6 +48,9 @@ func dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dt
 func isMaterialized*[Mem, L](t: TensorImpl[Mem, L]): bool =
   not t.data.isNil
 
+func size*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): int =
+  t.layout.size()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - TensorNode implementation (materialized tensors)
 # ═══════════════════════════════════════════════════════════════════════
@@ -103,8 +106,25 @@ proc materializeImpl[E: HwEngine, Sh: tuple, St: tuple, T, Mem](engine: E, _: ty
   ## Mem is the engine's device memory for T, bound by the caller's dtype case
   var t = TensorImpl[Mem, Layout[Sh, St]](data: nil, offset: 0, layout: layout)
   t.data.new()
-  t.data[] = engine.allocDevice(T, layout.shape.getNumElems())
+  t.data[] = engine.allocDevice(T, layout.size())
   t
+
+proc bindPlaceholder*[E: HwEngine, Sh: tuple, St: tuple](impl: AnyTensorImpl, engine: E, layout: Layout[Sh, St]) =
+  ## Allocates an unmaterialized impl's buffer in place, every holder sees
+  ## it materialize. The dtype case mirrors makeTensorImpl
+  case impl.dtype()
+  of kFp32:
+    type Mem = typeof(engine.allocDevice(float32, 0))
+    let t = impl.to(TensorImpl[Mem, Layout[Sh, St]])
+    t.data.new()
+    t.data[] = engine.allocDevice(float32, t.layout.size())
+  of kBf16:
+    type Mem = typeof(engine.allocDevice(bfloat16, 0))
+    let t = impl.to(TensorImpl[Mem, Layout[Sh, St]])
+    t.data.new()
+    t.data[] = engine.allocDevice(bfloat16, t.layout.size())
+  else:
+    raiseAssert("bindPlaceholder: dtype unsupported")
 
 proc materializeNode[E: HwEngine, Sh: tuple, St: tuple, T, Mem](engine: E, _: typedesc[T], layout: Layout[Sh, St]): TensorNode =
   ## Erased node of a materialized tensor, the impl itself is the node
