@@ -72,6 +72,10 @@ type
     core*: C
     pos*: int
 
+proc allocData*[E: HwEngine, H, T, L](engine: E, impl: TensorImpl[DeviceMem[H, T], L]) {.inline.} =
+  impl.data.new()
+  impl.data[] = engine.allocDevice(T, impl.layout.size())
+
 func bridge*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): TensorBridge[DeviceMem, L] {.inline.} =
   TensorBridge[DeviceMem, L](data: t.data[], offset: t.offset, layout: t.layout)
 

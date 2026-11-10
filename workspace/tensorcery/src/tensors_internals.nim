@@ -53,29 +53,29 @@ template getTensorImplType*(engine: HwEngine, T: typedesc, layout: Layout): type
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func shape*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): Span[int] {.inline.} =
+func shape*(t: TensorImpl): Span[int] {.inline.} =
   toSpan(t.layout.shape)
 
-func strides*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): Span[int] {.inline.} =
+func strides*(t: TensorImpl): Span[int] {.inline.} =
   toSpan(t.layout.stride)
 
 func dtype*[H, T, L](t: TensorImpl[DeviceMem[H, T], L]): Dtype {.inline.} =
   toDtype(T)
 
-func isMaterialized*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): bool {.inline.} =
+func isMaterialized*(t: TensorImpl): bool {.inline.} =
   not t.data.isNil
 
-func size*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): int {.inline.} =
+func size*(t: TensorImpl): int {.inline.} =
   t.layout.size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - TensorNode interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): AnyTensorImpl {.inline.} =
+proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
   t.to(AnyTensorImpl)
 
-func opName*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): string {.inline.} =
+func opName*(t: TensorImpl): string {.inline.} =
   ""
 
 proc isMaterialized*(n: TensorNode): bool {.inline.} =
@@ -126,18 +126,8 @@ proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout):
 #  Graph
 # ═══════════════════════════════════════════════════════════════════════
 
-proc materialize*[E: HwEngine](engine: E, impl: AnyTensorImpl, layout: Layout) =
-  case impl.dtype()
-  of kFp32:
-    let t = impl.to(engine.getTensorImplType(float32, layout))
-    t.data.new()
-    t.data[] = engine.allocDevice(float32, t.layout.size())
-  of kBf16:
-    let t = impl.to(engine.getTensorImplType(bfloat16, layout))
-    t.data.new()
-    t.data[] = engine.allocDevice(bfloat16, t.layout.size())
-  else:
-    raiseAssert("materialize: dtype unsupported")
+proc materialize*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
+  engine.allocData(impl)
 
 proc newTensorNode*[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout): TensorNode =
   engine.newTensorImpl(T, layout).to(TensorNode)

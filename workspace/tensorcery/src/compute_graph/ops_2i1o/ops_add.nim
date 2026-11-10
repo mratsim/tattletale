@@ -93,7 +93,7 @@ proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
     aImpl = asAdd.a.getImpl().to(engine.getTensorImplType(T, rank))
     bImpl = asAdd.b.getImpl().to(engine.getTensorImplType(T, rank))
     size = rImpl.size()
-  engine.materialize(asAdd.r, rImpl.layout)
+  engine.materialize(rImpl)
   batch.enqueue<<(ceil_div(size, 128), 32)>> k_add(rImpl.bridge, aImpl.bridge, bImpl.bridge)
   true
 
