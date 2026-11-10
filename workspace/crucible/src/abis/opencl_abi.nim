@@ -157,6 +157,10 @@ proc releaseMemObject*(
   memobj: Pmem
 ): TClResult {.importc: "clReleaseMemObject", dynlib: ClLib.}
 
+proc retainMemObject*(
+  memobj: Pmem
+): TClResult {.importc: "clRetainMemObject", dynlib: ClLib.}
+
 proc enqueueWriteBuffer*(
   command_queue: Pcommand_queue,
   buffer: Pmem,

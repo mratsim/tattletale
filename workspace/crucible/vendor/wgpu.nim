@@ -549,6 +549,9 @@ proc wgpuCommandEncoderRelease*(encoder: WGPUCommandEncoder)
 proc wgpuCommandBufferRelease*(cmdBuf: WGPUCommandBuffer)
   {.importc: "wgpuCommandBufferRelease", dynlib: libWgpu.}
 
+proc wgpuBufferReference*(buf: WGPUBuffer)
+  {.importc: "wgpuBufferReference", dynlib: libWgpu.}
+
 proc wgpuBufferRelease*(buf: WGPUBuffer)
   {.importc: "wgpuBufferRelease", dynlib: libWgpu.}
 

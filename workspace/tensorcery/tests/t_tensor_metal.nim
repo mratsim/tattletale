@@ -27,9 +27,7 @@ proc main =
   runCoordPassRebuildTest(runMetal, "Metal")
   runRmsnormTest(runMetal, "Metal")
   runRopeTest(runMetal, "Metal")
-  # multi-tile op-path blocker: see op STATE.md Blockers
-  when not defined(m03pending):
-    runMatmulTest(runMetal, "Metal")
+  runMatmulTest(runMetal, "Metal")
   runRankNTest(runMetal, "Metal")
 
 when isMainModule:

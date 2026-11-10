@@ -214,5 +214,23 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
         "2-arg overload mismatch at " & $i
     echo "[OK] overloads: both entries ran their own overload"
 
+  block:
+    # an intermediate buffer whose only owner left scope before submit: the batch retains what it records,
+    # so both launches still see live memory
+    var outD = engine.allocDevice(float32, N)
+    var chained = engine.recordBatch()
+    block:
+      let tmp = engine.allocDevice(float32, N)
+      chained.enqueue<<(1, 16)>> scaleKernel(tmp, xD, 3.0'f32)
+      chained.enqueue<<(1, 16)>> scaleKernel(outD, tmp, 2.0'f32)
+    doAssert chained.entries.len == 2
+    fillSentinel(engine, outD, N, -1.0'f32)
+    chained.submit()
+    var got: array[N, float32]
+    engine.copyToHostFromDevice(got.toOpenArray(0, N - 1), outD)
+    for i in 0 ..< N:
+      doAssert got[i] == 6.0'f32 * xs[i],
+        "scope-freed intermediate mismatch at " & $i & ": " & $got[i]
+    echo "[OK] scope-freed intermediate: the batch retains what it records"
 
   echo "[OK] batch suite (", engine.deviceName(), "): all scenarios passed"

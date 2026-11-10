@@ -22,6 +22,7 @@ import workspace/crucible/src/codegen/backends/backends_api
 import workspace/crucible/src/codegen/backends/spirv_encoder
 import workspace/crucible/src/codegen/frontend/nim_to_crucible
 import workspace/crucible/src/runtime/engines/engines_api
+import workspace/crucible/src/runtime/engines/engines_common
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
 import workspace/crucible/src/runtime/batching/batch_metal
 import workspace/crucible/src/runtime/batching/batch_vulkan
@@ -36,6 +37,10 @@ type
   BatchEntry*[E] = object
     entrypoint*: string
     config*: LaunchConfig
+    borrows*: DeviceBorrows
+      ## Device buffers this launch borrows, retained at enqueue: the batch owns what it borrows
+      ## for its whole life, so the launches can run after the enqueue site's owner left scope.
+      ## Released with the last entry copy.
     launch*: proc(engine: E) {.closure.}
     when E is MetalEngine:
       record: proc(leg: MetalBatch) {.closure.}
@@ -136,6 +141,9 @@ proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
 
 template appendEntry[E](batch: BatchCommands[E], fnName: string, cfg: LaunchConfig, output: auto, args: tuple) =
   var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
+  entry.borrows.collectBorrows(output)
+  for f in fields(args):
+    entry.borrows.collectBorrows(f)
   entry.launch = proc(engine: E) {.closure.} =
     engine.launchKernelImpl(output, args, entry.config, fnName)
   when E is MetalEngine:
@@ -145,6 +153,9 @@ template appendEntry[E](batch: BatchCommands[E], fnName: string, cfg: LaunchConf
 
 template appendEntry[E](batch: BatchCommands[E], fnName: string, artifact: auto, cfg: LaunchConfig, output: auto, args: tuple) =
   var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
+  entry.borrows.collectBorrows(output)
+  for f in fields(args):
+    entry.borrows.collectBorrows(f)
   entry.launch = proc(engine: E) {.closure.} =
     engine.launchKernelImpl(output, args, entry.config, fnName)
   when E is VulkanEngine:
