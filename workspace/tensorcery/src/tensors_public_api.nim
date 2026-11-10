@@ -42,7 +42,7 @@ proc toTensor*[T: float32 | bfloat16](data: openArray[T], shape: openArray[int],
   when T is dtype:
     let engine = gEngine(run)
     result = Tensor(engine: engine,
-                    node: engine.newTensorNode(toDtype(T), shape.toSpan()))
+                    node: engine.newTensorNode(toDtype(T), shape))
     if data.len > 0:
       engine.upload(result.node, data)
   else:
@@ -69,10 +69,10 @@ proc eval*(ts: varargs[Tensor]) =
     ts[i].node = roots[i]
 
 proc shape*(t: Tensor): Span[int] =
-  t.node.getImpl().shape()
+  Span[int](p: t.node.getImpl().shape())
 
 proc strides*(t: Tensor): Span[int] =
-  t.node.getImpl().strides()
+  Span[int](p: t.node.getImpl().strides())
 
 proc dtype*(t: Tensor): Dtype =
   t.node.getImpl().dtype()
@@ -80,14 +80,13 @@ proc dtype*(t: Tensor): Dtype =
 proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.contracts.} =
   let impl = t.node.getImpl()
   {.precondition: impl.dtype() == toDtype(T).}
-  let strides = impl.strides()
   var roots = newSeq[TensorNode](1)
   roots[0] = t.node
   var span = roots.toSpan()
   t.engine.eval(span)
   t.node = roots[0]
   var one: array[1, T]
-  t.engine.download(one, t.node, i * strides[0] + j * strides[1])
+  t.engine.download(one, t.node, i * impl.strides()[0] + j * impl.strides()[1])
   one[0]
 
 # #######################################################################

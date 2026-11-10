@@ -21,8 +21,7 @@ export tensors_public_types
 type Span*[T] = object
   ## A borrowed, non-owning range of elements.
   ## View rules tie its lifetime to the lvalue given at construction.
-  # We need a Span indirection for shape and strides as iface
-  # interfaces do not support direct openArray.
+  ## The TensorNode and AnyEngine interfaces exchange it for node collections.
   p*: openArray[T]
 
 proc toSpan*[T](s: openArray[T]): Span[T] {.inline.} =
@@ -48,8 +47,8 @@ func `==`*[T](a, b: Span[T]): bool =
 
 iface *AnyTensorImpl:
     func dtype(): Dtype
-    func shape(): Span[int]
-    func strides(): Span[int]
+    func shape(): openArray[int]
+    func strides(): openArray[int]
     func size(): int
     func isMaterialized(): bool
 
@@ -65,7 +64,7 @@ type
     layout*: L
 
   TensorBridge*[DeviceMem; L: Layout] = object
-    data: ref DeviceMem
+    data {.cursor.}: DeviceMem
     offset: int
     layout: L
 
@@ -78,11 +77,11 @@ proc allocData*[E: HwEngine, H, T, L](engine: E, impl: TensorImpl[DeviceMem[H, T
   impl.data[] = engine.allocDevice(T, impl.layout.size())
 
 func bridge*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): TensorBridge[DeviceMem, L] {.inline.} =
-  TensorBridge[DeviceMem, L](data: t.data, offset: t.offset, layout: t.layout)
+  TensorBridge[DeviceMem, L](data: t.data[], offset: t.offset, layout: t.layout)
 
 iface *AnyEngine:
-    proc newTensorNode(dtype: Dtype, shape: Span[int]): TensorNode
-    proc newPlaceholderNode(dtype: Dtype, shape: Span[int]): TensorNode
+    proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode
+    proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorNode
     proc upload(node: TensorNode, src: openArray[float32])
     proc upload(node: TensorNode, src: openArray[bfloat16])
     proc download(dst: var openArray[float32], node: TensorNode)
@@ -109,7 +108,7 @@ func rowMajorStrides*[Sh: tuple](shape: Sh): Sh =
     result[tupleLen(Sh) - 1 - j] = acc
     acc *= shape[tupleLen(Sh) - 1 - j]
 
-func fillShape*[Sh: tuple](shape: var Sh, s: Span[int]) {.contracts.} =
+func fillShape*[Sh: tuple](shape: var Sh, s: openArray[int]) {.contracts.} =
   {.precondition: s.len == tupleLen(Sh).}
   staticFor i, 0, tupleLen(Sh):
     shape[i] = s[i]

@@ -50,19 +50,21 @@ func size*(n: PosNode[SplitCore]): int =
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
+func copyShape(ix: AnyTensorImpl): seq[int] {.inline.} =
+  let s = Span[int](p: ix.shape())
+  result = newSeq[int](s.len)
+  for i in 0 ..< s.len:
+    result[i] = s[i]
+
 proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorNode] {.contracts.} =
   let ix = x.getImpl()
-  let s = ix.shape()
-  {.precondition: axis >= 0 and axis < s.len.}
-  {.precondition: s[axis] mod k == 0.}
-
-  var partShape = newSeq[int](s.len)
-  for i in 0 ..< s.len:
-    partShape[i] = s[i]
-  partShape[axis] = s[axis] div k
+  var partShape = ix.copyShape()
+  {.precondition: axis >= 0 and axis < partShape.len.}
+  {.precondition: partShape[axis] mod k == 0.}
+  partShape[axis] = partShape[axis] div k
   let core = SplitCore(a: x, axis: axis)
   for i in 0 ..< k:
-    core.r.add(engine.newPlaceholderNode(ix.dtype(), partShape.toSpan()))
+    core.r.add(engine.newPlaceholderNode(ix.dtype(), partShape))
   for i in 0 ..< k:
     result.add(PosNode[SplitCore](core: core, pos: i).to(TensorNode))
 

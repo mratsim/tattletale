@@ -57,13 +57,13 @@ template getTensorImplType*(engine: HwEngine, T: typedesc, layout: Layout): type
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func shape*(t: TensorImpl): Span[int] {.inline.} =
-  Span[int](p: toOpenArray(cast[ptr UncheckedArray[int]](
-      unsafeAddr t.layout.shape), 0, tupleLen(t.layout.shape) - 1))
+func shape*(t: TensorImpl): openArray[int] {.inline.} =
+  toOpenArray(cast[ptr UncheckedArray[int]](
+      unsafeAddr t.layout.shape), 0, tupleLen(t.layout.shape) - 1)
 
-func strides*(t: TensorImpl): Span[int] {.inline.} =
-  Span[int](p: toOpenArray(cast[ptr UncheckedArray[int]](
-      unsafeAddr t.layout.stride), 0, tupleLen(t.layout.stride) - 1))
+func strides*(t: TensorImpl): openArray[int] {.inline.} =
+  toOpenArray(cast[ptr UncheckedArray[int]](
+      unsafeAddr t.layout.stride), 0, tupleLen(t.layout.stride) - 1)
 
 func dtype*[H, T, L](t: TensorImpl[DeviceMem[H, T], L]): Dtype {.inline.} =
   toDtype(T)
@@ -139,7 +139,7 @@ proc materialize*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
 proc newTensorNode*[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout): TensorNode =
   engine.newTensorImpl(T, layout).to(TensorNode)
 
-proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
+proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   case dtype
   of kFp32:
     var sh: (int, int)
@@ -152,7 +152,7 @@ proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int])
   else:
     raise ValueError.newException("newPlaceholderNode: dtype " & $dtype & " unsupported")
 
-proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
+proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   case shape.len
   of 2:
     var sh: (int, int)
