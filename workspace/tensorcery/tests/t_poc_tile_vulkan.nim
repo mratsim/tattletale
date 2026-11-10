@@ -131,7 +131,7 @@ proc runTileGemmCase(engine: VulkanEngine, m, n, k: int, msg: string) =
     grid = (ceil_div(m, 32), ceil_div(n, 32))
     blk = (32, 1)
     lang = glsl
-  engine.copyToHostFromDevice(addr dHost.data[0], dDev.data, dHost.len)
+  engine.copyToHostFromDevice(dHost.data.toOpenArray(0, dHost.len - 1), dDev.data)
   gemmRef(expected, aHost, bHost, m, n, k, 1.5'f32)
   assertAllClose(dHost.view(), expected.view(), rtol = 1e-4, abstol = 1e-3,
     msg = msg)

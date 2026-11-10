@@ -429,29 +429,40 @@ proc enqueueJaggedAttnRows[E: HwEngine, Sh: tuple, Mem, MemMeta](
   ## - ro is the finalized output buffer. The node's dataless shell stays
   ##   out of the launch site
   when tupleLen(Sh) == 3:
-    # one move from each sink parameter into a local. The enqueue macro
-    # binds the launch closure's handles from there
-    let
-      kvOffsetsB = kvOffsets
-      kvIndicesB = kvIndices
-      kvSeqlensB = kvSeqlens
-    let
-      ob = initTensorBridge(ro.data[], ro.offset, ro.layout)
-      qb = initTensorBridge(rq.data[], rq.offset, rq.layout)
-      # pool slabs bridge whole: the kernel indexes the layer-major
-      # slab (num_pages, num_layers, page_size, Nkv, D) itself, taking
-      # `layer` as a runtime scalar
-      kb = initTensorBridge(rk.data[], rk.offset, rk.layout)
-      vb = initTensorBridge(rv.data[], rv.offset, rv.layout)
-    # launch dims: (q token blocks, H, num_seqs), attnTile lanes
-    var maxQLen = 0
-    for s in 0 ..< n.kv.seqlens.len:
-      maxQLen = max(maxQLen, n.qOffsets[s + 1] - n.qOffsets[s])
-    let gx = (maxQLen + attnTile - 1) div attnTile
-    batch.enqueue<<((gx, n.H, n.kv.seqlens.len), (attnTile, 1))>> attnCombo(
-      ob, qb, kb, vb, qOffsetsB, kvOffsetsB, kvIndicesB, kvSeqlensB,
-      float32(n.scale), n.layer, n.H, n.Nkv,
-      PageSize, HeadDim, false, low(int32))
+    when batchCodegenKind(typeof(batch.engine)) == cgSpirv:
+      # No Vulkan lowering. The MMA registry resolves one Vulkan-target atom:
+      # VULKAN_32x32x2_F32, the f32-only tile-FMA atom.
+      # Its (32, 32, 2) register fragments do not compose with the attention schedule's rescale broadcasts.
+      # bf16 operands have no Vulkan atom at all.
+      # This handler still instantiates and dispatches. This enqueue refuses loudly.
+      raise ValueError.newException(
+        "eval: the jagged attention op has no Vulkan lowering " &
+        "(no bf16 Vulkan MMA atom; the f32 tile-FMA atom does not compose " &
+        "with the attention schedule)")
+    else:
+      # one move from each sink parameter into a local. The enqueue macro
+      # binds the launch closure's handles from there
+      let
+        kvOffsetsB = kvOffsets
+        kvIndicesB = kvIndices
+        kvSeqlensB = kvSeqlens
+      let
+        ob = initTensorBridge(ro.data[], ro.offset, ro.layout)
+        qb = initTensorBridge(rq.data[], rq.offset, rq.layout)
+        # pool slabs bridge whole: the kernel indexes the layer-major
+        # slab (num_pages, num_layers, page_size, Nkv, D) itself, taking
+        # `layer` as a runtime scalar
+        kb = initTensorBridge(rk.data[], rk.offset, rk.layout)
+        vb = initTensorBridge(rv.data[], rv.offset, rv.layout)
+      # launch dims: (q token blocks, H, num_seqs), attnTile lanes
+      var maxQLen = 0
+      for s in 0 ..< n.kv.seqlens.len:
+        maxQLen = max(maxQLen, n.qOffsets[s + 1] - n.qOffsets[s])
+      let gx = (maxQLen + attnTile - 1) div attnTile
+      batch.enqueue<<((gx, n.H, n.kv.seqlens.len), (attnTile, 1))>> attnCombo(
+        ob, qb, kb, vb, qOffsetsB, kvOffsetsB, kvIndicesB, kvSeqlensB,
+        float32(n.scale), n.layer, n.H, n.Nkv,
+        PageSize, HeadDim, false, low(int32))
   else:
     raise ValueError.newException(
       "eval: the jagged attention op walks rank-3 outputs over rank-5 slabs, " &

@@ -40,7 +40,7 @@ proc runTest() =
     let oDev = engine.allocDevice(uint32, 4)
     engine.launchKernel<<(grid: (1, 1, 1), blk: (4, 1, 1))>>("zerosToUintKernel", oDev, ())
     var res: array[4, uint32]
-    engine.copyToHostFromDevice(addr res[0], oDev, 4)
+    engine.copyToHostFromDevice(res, oDev)
     for lane in 0 ..< 4:
       let want = if lane mod 2 == 0: 0x00000000'u32 else: 0x80000000'u32
       doAssert res[lane] == want,
@@ -53,7 +53,7 @@ proc runTest() =
     let oDev = engine.allocDevice(float32, 4)
     engine.launchKernel<<(grid: (1, 1, 1), blk: (4, 1, 1))>>("uintToZerosKernel", oDev, ())
     var res: array[4, float32]
-    engine.copyToHostFromDevice(addr res[0], oDev, 4)
+    engine.copyToHostFromDevice(res, oDev)
     for lane in 0 ..< 4:
       let want = if lane mod 2 == 0: 0x00000000'u32 else: 0x80000000'u32
       doAssert cast[uint32](res[lane]) == want,

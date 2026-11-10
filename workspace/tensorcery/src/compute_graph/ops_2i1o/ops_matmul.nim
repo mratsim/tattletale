@@ -161,7 +161,14 @@ proc enqueueMatmulRows[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchComma
         accV = initTensorBridge(rAcc.data[], rAcc.offset, rAcc.layout)
     else:
       let accV = initTensorBridge(rr.data[], rr.offset, rr.layout)
-    batch.enqueue<<(tiles, 32)>> k_matmul(accV, xv, wv, tiledMma(float32, Mem.T, Mem.T, 32, 32, 16))
+    when batchCodegenKind(typeof(batch.engine)) == cgSpirv and Mem.T is bfloat16:
+      # No bf16 Vulkan lowering. The MMA registry's Vulkan target resolves only
+      # VULKAN_32x32x2_F32, the f32 tile-FMA atom.
+      # This handler still instantiates and dispatches. This enqueue refuses loudly.
+      raise ValueError.newException(
+        "eval: the matmul op has no bf16 Vulkan lowering (no bf16 Vulkan MMA atom)")
+    else:
+      batch.enqueue<<(tiles, 32)>> k_matmul(accV, xv, wv, tiledMma(float32, Mem.T, Mem.T, 32, 32, 16))
     when Mem.T is bfloat16:
       let ov = initTensorBridge(rr.data[], rr.offset, rr.layout)
       # one threadgroup per output token, 32 lanes stride the output columns

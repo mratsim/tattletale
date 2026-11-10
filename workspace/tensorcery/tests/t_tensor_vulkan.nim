@@ -19,7 +19,7 @@ import workspace/ceramic
 import workspace/tensorcery/tests/tensor_tests_template
 
 proc main =
-  runTest(gVulkanEngine().toAnyEngine(), "Vulkan")
+  runTest(runVulkan, "Vulkan")
 
 when isMainModule:
   main()

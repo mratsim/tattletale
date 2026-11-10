@@ -47,6 +47,7 @@ export launch_device_fn.DeviceFnSugar,
 export batch.recordBatch, batch.enqueue, batch.`<<`, batch.`>>`, batch.submit,
        batch.replay
 export batch.BatchCommands, batch.BatchEntry, batch.EnqueueSugar, batch.EnqueueProxy, batch.EnqueueProxyCt
+export batch.batchCodegenKind
 
 
 # ═══════════════════════════════════════════════════════════════════════

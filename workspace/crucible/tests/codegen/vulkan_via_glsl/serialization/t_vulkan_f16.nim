@@ -1,5 +1,14 @@
-## Vulkan: fp16 storage-buffer arithmetic through the GPU DSL, end to end.
-## Needs a driver with VK_KHR_shader_float16_int8 + 16-bit storage (MoltenVK on Apple Silicon qualifies).
+## Vulkan (GLSL): fp16 storage buffers through the GPU DSL, end to end.
+##
+## Test that fp16 keeps a first-class 16-bit storage identity on the GLSL route:
+##
+## - float16_t buffers round-trip bit-exactly
+## - needs a driver with 16-bit storage, VK_KHR_shader_float16_int8,
+##   MoltenVK on Apple Silicon qualifies
+## - arithmetic runs in f32 through the conversion builtins, the shell's
+##   idiom for sub-f32 dtypes
+## - every value here is exactly representable in f16 and f32, the check
+##   stays bit-exact
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -43,35 +52,35 @@ func f16OfInt(i: int): uint16 =
     bits = bits or 0x8000'u16
   return bits
 
-const f16Vk = glsl:
-  proc f16MulKernel(C: ptr UncheckedArray[float16];
-                    A, B: ptr UncheckedArray[float16]) {.global, workgroup: (64, 1, 1).} =
-    let i = int(thread_position_in_grid.x)
-    C[i] = A[i] * B[i]
+proc f16MulKernel(C, A, B: ptr UncheckedArray[float16]) =
+  let i = int(thread_position_in_grid.x)
+  C[i] = toFp16(toFp32(A[i]) * toFp32(B[i]))
 
 proc runTest() =
   var engine = newEngine(runVulkan)
-  engine.ingest(f16Vk)
   const N = 64
   var rng = initRand(0xF16)
-  var A = newSeq[uint16](N)
-  var B = newSeq[uint16](N)
+  var A = newSeq[float16](N)
+  var B = newSeq[float16](N)
   for i in 0 ..< N:
-    A[i] = f16OfInt(rng.rand(-15 .. 15))
-    B[i] = f16OfInt(rng.rand(-15 .. 15))
-  var C = newSeq[uint16](N)
-  let aDev = engine.allocDevice(uint16, N)
-  let bDev = engine.allocDevice(uint16, N)
-  let cDev = engine.allocDevice(uint16, N)
+    A[i] = cast[float16](f16OfInt(rng.rand(-15 .. 15)))
+    B[i] = cast[float16](f16OfInt(rng.rand(-15 .. 15)))
+  var C = newSeq[float16](N)
+  let aDev = engine.allocDevice(float16, N)
+  let bDev = engine.allocDevice(float16, N)
+  let cDev = engine.allocDevice(float16, N)
   engine.copyToDeviceFromHost(aDev, A.toOpenArray(0, N - 1))
   engine.copyToDeviceFromHost(bDev, B.toOpenArray(0, N - 1))
-  engine.launchKernel("f16MulKernel", cDev, (aDev, bDev))
+  engine.launchDeviceFn f16MulKernel(cDev, aDev, bDev) do:
+    grid = (1, 1)
+    blk = (64, 1)
+    lang = glsl
   engine.copyToHostFromDevice(C.toOpenArray(0, N - 1), cDev)
   # Products ≤ 225 are exact in f16 and f32. The check is bit-exact.
   for i in 0 ..< N:
-    let refVal = f16ToF32(A[i]) * f16ToF32(B[i])
-    doAssert f16ToF32(C[i]) == refVal,
-      "C[" & $i & "] = " & $f16ToF32(C[i]) & ", expected " & $refVal
+    let refVal = f16ToF32(cast[uint16](A[i])) * f16ToF32(cast[uint16](B[i]))
+    doAssert f16ToF32(cast[uint16](C[i])) == refVal,
+      "C[" & $i & "] = " & $f16ToF32(cast[uint16](C[i])) & ", expected " & $refVal
   echo "  OK: fp16 storage-buffer multiply, 64 lanes, bit-exact vs the f32 reference"
 
 when isMainModule:

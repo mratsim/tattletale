@@ -183,6 +183,8 @@ type
     pushBoolFields*: HashSet[string]
       ## GlobalFn struct parameters whose direct bool fields map to u32 words
       ## in the push block, field reads coerce back to bool
+    glslMathSet*: uint32
+      ## GLSL.std.450 ext-inst import id, 0 until a math builtin needs it
     dryRun*: bool
       ## Planning-pass flag: one emission into a throwaway builder that walks
       ## the body and records which locals no load reaches, so the real pass
@@ -1109,6 +1111,28 @@ proc emitBarrier(ctx: var SpvLangCtx) =
     uint64(semWorkgroupMemory or semAcquireRelease))
   ctx.builder.module.emitInstSeq(ssFunctions, OpControlBarrier, @[scope, scope, sem])
 
+const glslMath450Instructions = {
+  ("abs", 32): 4'u32,
+  ("abs", 64): 4'u32,
+  ("exp2", 32): 29'u32,
+  ("rsqrt", 32): 32'u32,
+}.toTable
+  ## GLSL.std.450 instruction numbers for the math builtins (FAbs = 4, Exp2 = 29, InverseSqrt = 32).
+  ## The set matches the target registry's `math` entries for the text backends.
+
+proc emitGlslMathCall(ctx: var SpvLangCtx, name: string, e: CirExpr, fn: var SpvFnCtx): uint32 =
+  ## One scalar math builtin as OpExtInst over the GLSL.std.450 import.
+  let at = ctx.resolveExprType(fn, e.args[0])
+  if at == nil or at.kind != ctFloat:
+    raiseAssert(name & " lowers float arguments only")
+  let instr = glslMath450Instructions.getOrDefault((name, at.bits), 0)
+  if instr == 0:
+    raiseAssert(name & " has no GLSL.std.450 lowering for " & $at.bits & "-bit floats")
+  if ctx.glslMathSet == 0:
+    ctx.glslMathSet = ctx.builder.emitExtInstImport("GLSL.std.450")
+  let x = ctx.emitExpr(fn, e.args[0])
+  ctx.builder.opExtInst(ctx.resolveTyId(spvScalar(at)), ctx.glslMathSet, instr, @[x])
+
 proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   ## Value of a call: builtin vocabulary maps to native instructions
   ## and a device function emits an OpFunctionCall.
@@ -1161,6 +1185,9 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     return ctx.builder.freshInst(OpAtomicFAddEXT,
       @[ctx.resolveTyId(spvScalar(elemTy)), ptrId, scopeDev, sem, value])
   case name
+  of "abs", "exp2", "rsqrt":
+    doAssert e.args.len == 1, name & " takes one argument"
+    return ctx.emitGlslMathCall(name, e, fn)
   of "max", "min":
     doAssert e.args.len == 2, name & " takes two arguments"
     let opTy = ctx.resolveExprType(fn, e.args[0])

@@ -141,6 +141,9 @@ genSpvOpcodeTable:
   op OpUndef: 1: [o(spvIdResultType), o(spvIdResult)]
   op OpExtension: 10: [o(spvLiteralString)]
   op OpExtInstImport: 11: [o(spvIdResult), o(spvLiteralString)]
+  # Instruction operand: the extended set's own instruction number as a literal word
+  # (GLSL.std.450's numbers live in lang_spirv_shader's table)
+  op OpExtInst: 12: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvLiteralInteger), oMany(spvIdRef)]
   op OpMemoryModel: 14: [o(spvAddressingModel), o(spvMemoryModel)]
   op OpEntryPoint: 15: [o(spvExecutionModel), o(spvIdRef), o(spvLiteralString), oMany(spvIdRef)]
   # Per-mode literal operands (LocalSize x y z, ...) are defined by the spec's
@@ -618,6 +621,20 @@ func freshLabel(b: var SpvBuilder): uint32 =
 
 func opLabelAt(b: var SpvBuilder, label: uint32) =
   b.module.emitInstSeq(ssFunctions, OpLabel, @[label])
+
+func emitExtInstImport*(b: var SpvBuilder, name: string): uint32 =
+  ## Imports one extended instruction set by name into the ExtInstImport section, the returned id is OpExtInst's Set operand.
+  result = b.module.allocId()
+  b.module.startInst(ssExtInstImports, OpExtInstImport, 1 + getStringWords(name))
+  b.module.addWord(ssExtInstImports, result)
+  b.module.addString(ssExtInstImports, name)
+
+func opExtInst*(b: var SpvBuilder, resultType, extSet, instruction: uint32, operands: openArray[uint32]): uint32 =
+  ## One extended instruction call: `instruction` is the set's own number.
+  var ops = @[resultType, extSet, instruction]
+  for x in operands:
+    ops.add x
+  b.freshInst(OpExtInst, ops)
 
 func emitExtension(b: var SpvBuilder, name: string) =
   b.module.startInst(ssExtensions, OpExtension, getStringWords(name))

@@ -84,16 +84,16 @@ var ctgArtifactFnCount {.compileTime.}: int
 var ctgTextArtifact {.compileTime.}: string
 var ctgSpirvArtifact {.compileTime.}: SpirvWords
 
-func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
+func batchCodegenKind*(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
 
-func batchCodegenKind(E: typedesc[VulkanEngine]): CodegenKind {.compileTime.} =
+func batchCodegenKind*(E: typedesc[VulkanEngine]): CodegenKind {.compileTime.} =
   cgSpirv
 
-func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
+func batchCodegenKind*(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
   cgWebGPU
 
-func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
+func batchCodegenKind*(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
 macro ctgAccumulateCirImpl(procdef: typed): untyped =
