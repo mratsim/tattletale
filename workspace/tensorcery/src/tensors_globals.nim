@@ -19,6 +19,7 @@ import compute_graph/ops_2i1o/ops_silu_mul
 import compute_graph/ops_1i1o/ops_rmsnorm
 import compute_graph/ops_Ni1o/ops_rope
 import compute_graph/ops_1iNo/ops_split
+import compute_graph/views
 
 var
   gMetalEngineInstance: pointer

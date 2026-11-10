@@ -49,6 +49,8 @@ iface *AnyTensorImpl:
     func dtype(): Dtype
     func shape(): Span[int]
     func strides(): Span[int]
+    func offset(): int
+    func capacity(): int
 
 iface *TensorNode:
     proc getImpl(): AnyTensorImpl
@@ -59,6 +61,7 @@ type
     data*: ref Mem
     offset*: int
     layout*: L
+    capacity*: int
 
   TensorBridge*[DevMem, Sh, St] = object
     data {.cursor.}: DevMem
@@ -76,6 +79,7 @@ func initTensorBridge*[DevMem, Sh, St](data: DevMem, offset: int, layout: Layout
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: Span[int]): TensorNode
     proc newViewNode(dtype: Dtype, shape: Span[int]): TensorNode
+    proc newViewImpl(src: AnyTensorImpl, shape, strides: Span[int], offset: int): TensorNode
     proc upload(node: TensorNode, src: openArray[float32])
     proc upload(node: TensorNode, src: openArray[bfloat16])
     proc download(dst: var openArray[float32], node: TensorNode)

@@ -42,6 +42,17 @@ func shape*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
 func strides*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
   toSpan(t.layout.stride)
 
+func offset*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): int =
+  t.offset
+
+func capacity*[Mem, L](t: TensorImpl[Mem, L]): int =
+  ## Returns the backing buffer's element count:
+  ##
+  ## - a materialized tensor owns exactly its layout's element count
+  ## - a view impl reads the source's buffer, so its capacity is the source's
+  ## - an op-output shell's capacity equals the dense element count of its shape
+  t.capacity
+
 func dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dtype =
   toDtype(T)
 
@@ -181,7 +192,8 @@ proc toAnyEngine*[E: HwEngine](engine: E): AnyEngine =
 
 proc materializeImpl[E: HwEngine, Sh: tuple, St: tuple, T, Mem](engine: E, _: typedesc[T], layout: Layout[Sh, St]): TensorImpl[Mem, Layout[Sh, St]] =
   ## Mem is the engine's device memory for T, bound by the caller's dtype case
-  var t = TensorImpl[Mem, Layout[Sh, St]](data: nil, offset: 0, layout: layout)
+  var t = TensorImpl[Mem, Layout[Sh, St]](
+    data: nil, offset: 0, capacity: layout.shape.getNumElems(), layout: layout)
   t.data.new()
   t.data[] = engine.allocDevice(T, layout.shape.getNumElems())
   t
@@ -233,10 +245,12 @@ proc newViewNode[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, lay
   case dtype
   of kFp32:
     type Mem = typeof(engine.allocDevice(float32, 0))
-    TensorImpl[Mem, Layout[Sh, St]](data: nil, offset: 0, layout: layout).to(TensorNode)
+    TensorImpl[Mem, Layout[Sh, St]](
+      data: nil, offset: 0, capacity: layout.shape.getNumElems(), layout: layout).to(TensorNode)
   of kBf16:
     type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    TensorImpl[Mem, Layout[Sh, St]](data: nil, offset: 0, layout: layout).to(TensorNode)
+    TensorImpl[Mem, Layout[Sh, St]](
+      data: nil, offset: 0, capacity: layout.shape.getNumElems(), layout: layout).to(TensorNode)
   else:
     raise ValueError.newException("newViewNode: dtype " & $dtype & " unsupported")
 
@@ -265,6 +279,73 @@ proc newViewNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Tenso
     engine.newViewNode(dtype, make_layout(sh, rowMajorStrides(sh)))
   else:
     raise ValueError.newException("newViewNode: rank " & $shape.len & " unsupported")
+
+proc spanViewNode[Mem](src: AnyTensorImpl, shape, strides: Span[int], offset: int): TensorNode =
+  ## Body of newViewImpl: one rank branch per tuple shape
+  case shape.len
+  of 1:
+    var sh: (int,)
+    var st: (int,)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    TensorImpl[Mem, Layout[typeof(sh), typeof(st)]](
+      data: nil, offset: offset, capacity: src.capacity(),
+      layout: make_layout(sh, st)).to(TensorNode)
+  of 2:
+    var sh: (int, int)
+    var st: (int, int)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    TensorImpl[Mem, Layout[typeof(sh), typeof(st)]](
+      data: nil, offset: offset, capacity: src.capacity(),
+      layout: make_layout(sh, st)).to(TensorNode)
+  of 3:
+    var sh: (int, int, int)
+    var st: (int, int, int)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    TensorImpl[Mem, Layout[typeof(sh), typeof(st)]](
+      data: nil, offset: offset, capacity: src.capacity(),
+      layout: make_layout(sh, st)).to(TensorNode)
+  of 4:
+    var sh: (int, int, int, int)
+    var st: (int, int, int, int)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    TensorImpl[Mem, Layout[typeof(sh), typeof(st)]](
+      data: nil, offset: offset, capacity: src.capacity(),
+      layout: make_layout(sh, st)).to(TensorNode)
+  of 5:
+    var sh: (int, int, int, int, int)
+    var st: (int, int, int, int, int)
+    fillShape(sh, shape)
+    fillShape(st, strides)
+    TensorImpl[Mem, Layout[typeof(sh), typeof(st)]](
+      data: nil, offset: offset, capacity: src.capacity(),
+      layout: make_layout(sh, st)).to(TensorNode)
+  else:
+    raise ValueError.newException("newViewImpl: rank " & $shape.len & " unsupported")
+
+proc newViewImpl*[E: HwEngine](engine: E, src: AnyTensorImpl, shape, strides: Span[int], offset: int): TensorNode =
+  ## Shared-buffer view node over `src`. The new impl aliases the source's
+  ## buffer cell with its own layout, element offset and capacity. Nothing allocates and nothing copies.
+  ##
+  ## The buffer cell binds at enqueue, after the source's own eval walked.
+  ## The layout, offset and capacity are final here.
+  ##
+  ## Args:
+  ## - offset: the view origin's element offset in the backing buffer,
+  ##   including the source tensor's own offset
+  ## - shape, strides: any rank 1 to 5, any strides, reshape changes the rank
+  case src.dtype()
+  of kFp32:
+    type Mem = typeof(engine.allocDevice(float32, 0))
+    spanViewNode[Mem](src, shape, strides, offset)
+  of kBf16:
+    type Mem = typeof(engine.allocDevice(bfloat16, 0))
+    spanViewNode[Mem](src, shape, strides, offset)
+  else:
+    raise ValueError.newException("newViewImpl: dtype " & $src.dtype() & " unsupported")
 
 proc newTensorNode[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, layout: Layout[Sh, St]): TensorNode =
   case dtype

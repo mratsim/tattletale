@@ -25,9 +25,8 @@ import workspace/design_by_contract
 
 type
   SplitCore* = ref object
-    r: seq[TensorNode]    # view shells, bound at finalization
+    r: seq[TensorNode]    # part view shells, metadata-complete at the face
     a: TensorNode
-    axis: int
 
 proc getOutput(n: SplitCore, i: int): AnyTensorImpl =
   n.r[i].getImpl()
@@ -52,13 +51,19 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
   {.precondition: axis >= 0 and axis < s.len.}
   {.precondition: s[axis] mod k == 0.}
 
+  # parts are shared-buffer views over the source impl:
+  # - layout: the source layout narrowed along the split axis
+  # - offset: part i starts i part-lengths down the split axis,
+  #   from the source tensor's own origin
   var partShape = newSeq[int](s.len)
   for i in 0 ..< s.len:
     partShape[i] = s[i]
   partShape[axis] = s[axis] div k
-  let core = SplitCore(a: x, axis: axis)
+  let st = ix.strides()
+  let core = SplitCore(a: x)
   for i in 0 ..< k:
-    core.r.add(engine.newViewNode(ix.dtype(), partShape.toSpan()))
+    let offset = ix.offset() + i * partShape[axis] * st[axis]
+    core.r.add(engine.newViewImpl(ix, partShape.toSpan(), st, offset))
   for i in 0 ..< k:
     result.add(PosNode[SplitCore](core: core, pos: i).to(TensorNode))
 
@@ -72,16 +77,11 @@ proc enqueueSplit[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E
     return false
   let core = asSplit.core
   engine.evalNode(batch, core.a, visited)
+  # part layouts, offsets and capacity were final at the face, so only the shared
+  # buffer cell binds here, one cell for every part
   let src = core.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-  let
-    axis = core.axis
-    partLen = src.layout.shape.atAxis(axis) div core.r.len
-    partStride = src.layout.stride.atAxis(axis)
   for i in 0 ..< core.r.len:
-    let v = core.r[i].getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    v.data = src.data
-    v.offset = src.offset + i * partLen * partStride
-    v.layout = make_layout(src.layout.shape.withAxis(axis, partLen), src.layout.stride)
+    core.r[i].getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]]).data = src.data
   n = core.r[asSplit.pos]
   true
 
@@ -90,4 +90,3 @@ proc enqueueSplit[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E
 # ═══════════════════════════════════════════════════════════════════════
 
 registerOp("split", enqueueSplit)
-

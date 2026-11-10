@@ -17,6 +17,7 @@ import compute_graph/ops_1i1o/ops_rmsnorm
 import compute_graph/ops_1iNo/ops_split
 import compute_graph/ops_Ni1o/ops_embed_gather
 import compute_graph/ops_Ni1o/ops_rope
+import compute_graph/views
 import tensors_globals
 import workspace/design_by_contract
 
@@ -42,6 +43,7 @@ type Tensor* = ref object
 proc toTensor*[T: float32 | bfloat16](data: openArray[T], shape: openArray[int],
     run: static Runtime = runMetal, dtype: typedesc = T): Tensor {.contracts.} =
   {.precondition: data.len == getNumElems(shape.toSpan()).}
+  {.precondition: nonNegativeDims(shape).}
   when T is dtype:
     let engine = gEngine(run)
     result = Tensor(engine: engine,
@@ -111,6 +113,77 @@ proc `+`*(a, b: Tensor): Tensor =
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] =
   for n in t.engine.tn_split(t.node, axis, k):
     result.add(Tensor(engine: t.engine, node: n))
+
+proc view*(t: Tensor, shape, strides: openArray[int], offset: int): Tensor =
+  ## Layout view of `t` over the same buffer: any rank, any strides.
+  ##
+  ## Args:
+  ## - shape, strides: the view layout, in elements
+  ## - offset: the view origin's element offset from the tensor's origin,
+  ##   including the tensor's own offset
+  ##
+  ## The general case of narrow, transpose, permute, reshape and expand.
+  ## The view builds shape, strides and offset over one shared buffer,
+  ## no allocation and no copy.
+  ##
+  ## A stride-0 axis is allowed here. The view must not feed a device op
+  ## until the launch path handles runtime stride-0 layouts: read it back
+  ## on the host (item) instead.
+  Tensor(engine: t.engine, node: tn_view(t.engine, t.node, shape, strides, offset))
+
+proc reshape*(t: Tensor, shape: openArray[int]): Tensor =
+  ## View of `t` with a new shape, same element order.
+  ##
+  ## Args:
+  ## - shape: the new shape, its element count must match the source's
+  ##
+  ## Requires a dense contiguous source: the new layout is contiguous over
+  ## the same buffer window, and a strided source would need a copy op.
+  ## The tensor's offset is part of the new view, which allocates nothing.
+  Tensor(engine: t.engine, node: tn_reshape(t.engine, t.node, shape))
+
+proc transpose*(t: Tensor): Tensor =
+  ## View of `t` with every axis reversed, matching MLX transpose with no axes argument.
+  ##
+  ## Returns:
+  ## - a view of `t` over the same buffer with the tensor's offset, no allocation, no copy
+  Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node))
+
+proc permute*(t: Tensor, axes: openArray[int]): Tensor =
+  ## View of `t` with the axes reordered: result axis i reads source axis axes[i].
+  ##
+  ## Args:
+  ## - axes: the source axis each result axis reads, one per source axis
+  ##
+  ## Returns:
+  ## - a view of `t` over the same buffer with the tensor's offset, no allocation, no copy
+  Tensor(engine: t.engine, node: tn_permute(t.engine, t.node, axes))
+
+proc narrow*(t: Tensor, axis, start, width: int): Tensor =
+  ## Window view of `t` with the other axes unchanged.
+  ##
+  ## Args:
+  ## - axis: the narrowed dimension
+  ## - start, width: the window inside that dimension
+  ##
+  ## The element offset shifts by start·stride[axis] down the narrowed axis.
+  ## A narrowed tensor keeps its offset under further views and splits.
+  ## The view allocates nothing.
+  Tensor(engine: t.engine, node: tn_narrow(t.engine, t.node, axis, start, width))
+
+proc expand*(t: Tensor, shape: openArray[int]): Tensor =
+  ## Broadcast view of `t`: a size-1 axis stretches to any target size at stride 0, and every other axis keeps its size and stride.
+  ##
+  ## Args:
+  ## - shape: the target shape, one target axis per source axis
+  ##
+  ## Restriction:
+  ## - a stride-0 view reads correctly on the host (item)
+  ## - the launch path misreads a runtime stride-0 axis inside a kernel
+  ##   argument's layout, so every coordinate collapses onto the operand's
+  ##   first entry
+  ## - no op may consume a stride-0 view on the device until that is fixed: materialize the broadcast or fold the axis into the kernel's indexing
+  Tensor(engine: t.engine, node: tn_expand(t.engine, t.node, shape))
 
 proc linear*(x, w: Tensor): Tensor =
   ## y = x·wᵀ: the Linear projection,

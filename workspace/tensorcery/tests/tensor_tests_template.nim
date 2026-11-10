@@ -19,6 +19,7 @@ import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_silu_mul
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/ops_1i1o/ops_rmsnorm
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_rope
+import workspace/tensorcery/src/compute_graph/views
 import workspace/tensorcery/src/compute_graph/eval
 export eval.eval
 
@@ -1239,3 +1240,260 @@ proc runSiluMulTest*(run: static Runtime, name: string) =
         doAssert gz2[t * Cols + c] == exp, name & ": silu fan-out z2 " & $t & "," & $c
 
   echo "tensorcery silu·mul (", name, "): all checks passed"
+
+proc runViewTest*(run: static Runtime, name: string) =
+  ## Shared-buffer views: view, reshape, transpose, permute, narrow, expand.
+  ##
+  ## Checks, all bfloat16 with item() readback against the fixture values.
+  ## The read checks:
+  ##
+  ## - narrow reads the window, and the element offset shifts down the axis
+  ## - transpose round-trips: the transpose of the transpose is the original
+  ## - a view chain (narrow of transpose of narrow) stacks offset on offset
+  ## - reshape keeps the element order over a dense source, and expand
+  ##   broadcasts a size-1 axis at stride 0
+  ##
+  ## The window and split checks:
+  ##
+  ## - the general view face places positive- and negative-stride windows,
+  ##   and rejects the windows that leave the backing buffer, in both signs
+  ## - split of a narrowed tensor keeps the narrowed offset in every part
+  ##
+  ## The dispatch checks:
+  ##
+  ## - a view allocates nothing: evaluating any view of a materialized
+  ##   tensor enqueues zero kernels
+  ## - two views of one producer in one eval enqueue the producer exactly once,
+  ##   and a re-eval enqueues nothing
+  ##
+  ## The contract checks raise AssertionDefect:
+  ##
+  ## - a backing-capacity overflow, and negative dimensions at construction
+  ##   and at the view face
+  ## - a narrow window outside its axis, and a shape/strides rank mismatch
+  ## - a reshape of a strided source or mismatched element count
+  ## - a repeated permutation axis, and an inexpandable target shape
+  var xd: array[8, float32] = [1.0'f32, 2, 3, 4, 5, 6, 7, 8]
+  var xq: array[8, bfloat16]
+  for i in 0 ..< 8:
+    xq[i] = xd[i].to(bfloat16)
+  let x = toTensor(xq, @[2, 4])
+
+  # narrow: the window with its element offset shifted down the axis
+  block:
+    var nShape = @[2, 2]
+    var nStrides = @[4, 1]
+    let n = narrow(x, 1, 1, 2)
+    doAssert n.shape() == nShape.toSpan(), name & ": narrow shape"
+    doAssert n.strides() == nStrides.toSpan(), name & ": narrow strides"
+    for r in 0 ..< 2:
+      for c in 0 ..< 2:
+        doAssert n.item(r, c, bfloat16) == xd[r * 4 + 1 + c].to(bfloat16),
+          name & ": narrow out " & $r & "," & $c
+
+  # transpose round-trip: the transpose of the transpose is the original
+  block:
+    var tShape = @[4, 2]
+    var tStrides = @[1, 4]
+    let t = transpose(x)
+    doAssert t.shape() == tShape.toSpan(), name & ": transpose shape"
+    doAssert t.strides() == tStrides.toSpan(), name & ": transpose strides"
+    for i in 0 ..< 4:
+      for j in 0 ..< 2:
+        doAssert t.item(i, j, bfloat16) == xd[j * 4 + i].to(bfloat16),
+          name & ": transpose out " & $i & "," & $j
+    var ttShape = @[2, 4]
+    var ttStrides = @[4, 1]
+    let tt = transpose(t)
+    doAssert tt.shape() == ttShape.toSpan(), name & ": round-trip shape"
+    doAssert tt.strides() == ttStrides.toSpan(), name & ": round-trip strides"
+    for i in 0 ..< 8:
+      doAssert tt.item(i div 4, i mod 4, bfloat16) == xd[i].to(bfloat16),
+        name & ": round-trip out " & $i
+
+  # view chain: narrow of transpose of narrow, offset stacked on offset
+  block:
+    let v = narrow(transpose(narrow(x, 1, 1, 2)), 0, 1, 1)
+    # inner narrow (2,2):(4,1) at offset 1, transpose (2,2):(1,4) keeps offset 1,
+    # outer narrow (1,2):(1,4) adds 1*1, so the buffer offset reads element 2
+    var vShape = @[1, 2]
+    var vStrides = @[1, 4]
+    doAssert v.shape() == vShape.toSpan(), name & ": chain shape"
+    doAssert v.strides() == vStrides.toSpan(), name & ": chain strides"
+    for c in 0 ..< 2:
+      doAssert v.item(0, c, bfloat16) == xd[2 + c * 4].to(bfloat16),
+        name & ": chain out " & $c
+
+  # reshape keeps the element order, and a dense narrowed source keeps its offset
+  block:
+    let r = reshape(x, @[8])
+    for i in 0 ..< 8:
+      doAssert r.item(i, bfloat16) == xd[i].to(bfloat16),
+        name & ": reshape out " & $i
+    let nr = reshape(narrow(x, 0, 1, 1), @[4])
+    for i in 0 ..< 4:
+      doAssert nr.item(i, bfloat16) == xd[4 + i].to(bfloat16),
+        name & ": reshape offset out " & $i
+
+  # permute: one index per axis, result axis i reads the source axis axes[i]
+  block:
+    let p = permute(x, @[1, 0])
+    for i in 0 ..< 4:
+      for j in 0 ..< 2:
+        doAssert p.item(i, j, bfloat16) == xd[j * 4 + i].to(bfloat16),
+          name & ": permute out " & $i & "," & $j
+
+  # expand: a size-1 axis broadcasts at stride 0, readback on the host
+  block:
+    let col = narrow(x, 1, 0, 1)
+    let e = expand(col, @[2, 4])
+    var eShape = @[2, 4]
+    var eStrides = @[4, 0]
+    doAssert e.shape() == eShape.toSpan(), name & ": expand shape"
+    doAssert e.strides() == eStrides.toSpan(), name & ": expand strides"
+    for r in 0 ..< 2:
+      for c in 0 ..< 4:
+        doAssert e.item(r, c, bfloat16) == xd[r * 4].to(bfloat16),
+          name & ": expand out " & $r & "," & $c
+
+  # general view face: windows in both stride signs, offsets included
+  block:
+    let y = toTensor(xq[0 ..< 4], @[1, 4])
+    let pos = view(y, @[3], @[1], 1)
+    for i in 0 ..< 3:
+      doAssert pos.item(i, bfloat16) == xd[1 + i].to(bfloat16),
+        name & ": view pos out " & $i
+    let neg = view(y, @[4], @[-1], 3)
+    for i in 0 ..< 4:
+      doAssert neg.item(i, bfloat16) == xd[3 - i].to(bfloat16),
+        name & ": view neg out " & $i
+
+  # split of a narrowed tensor keeps the narrowed offset in every part
+  block:
+    let n = narrow(x, 0, 1, 1)
+    let parts = split(n, 1, 2)
+    doAssert parts.len == 2, name & ": split of narrow part count"
+    for c in 0 ..< 2:
+      doAssert parts[0].item(0, c, bfloat16) == xd[4 + c].to(bfloat16),
+        name & ": split of narrow part0 " & $c
+      doAssert parts[1].item(0, c, bfloat16) == xd[6 + c].to(bfloat16),
+        name & ": split of narrow part1 " & $c
+
+  # contracts raise AssertionDefect
+  block:
+    let y = toTensor(xq[0 ..< 4], @[1, 4])
+    # a window that leaves the backing buffer, positive and negative strides
+    doAssertRaises AssertionDefect:
+      discard view(y, @[4], @[1], 1)
+    doAssertRaises AssertionDefect:
+      discard view(y, @[4], @[-1], 4)
+    # negative dimensions, at construction and at the view face
+    doAssertRaises AssertionDefect:
+      discard toTensor(xq, @[-2, -4])
+    doAssertRaises AssertionDefect:
+      discard view(x, @[-2, 4], @[4, 1], 0)
+    # a narrow window outside its axis, and an axis outside the rank
+    doAssertRaises AssertionDefect:
+      discard narrow(x, 1, 3, 2)
+    doAssertRaises AssertionDefect:
+      discard narrow(x, 2, 0, 1)
+    # a shape/strides rank mismatch
+    doAssertRaises AssertionDefect:
+      discard view(x, @[2], @[2, 1], 0)
+    # reshape of a strided source, and a mismatched element count
+    doAssertRaises AssertionDefect:
+      discard reshape(transpose(x), @[8])
+    doAssertRaises AssertionDefect:
+      discard reshape(x, @[7])
+    # a repeated permutation axis
+    doAssertRaises AssertionDefect:
+      discard permute(x, @[0, 0])
+    # an inexpandable target shape
+    doAssertRaises AssertionDefect:
+      discard expand(x, @[3, 4])
+
+  # a view allocates nothing: evaluating any view of a materialized tensor
+  # enqueues zero kernels
+  block:
+    let engine = newEngine(run)
+    var shape = @[2, 4]
+    let xn = engine.newTensorNode(kBf16, shape.toSpan())
+    engine.upload(xn, xq)
+    let views = @[engine.tn_narrow(xn, 1, 1, 2),
+                  engine.tn_transpose(xn),
+                  engine.tn_permute(xn, @[1, 0]),
+                  engine.tn_reshape(xn, @[8]),
+                  engine.tn_expand(engine.tn_narrow(xn, 1, 0, 1), @[2, 4]),
+                  engine.tn_view(xn, @[8], @[1], 0)]
+    for v in views:
+      var nv = v
+      var batch = engine.recordBatch()
+      var visited: VisitedNodes
+      engine.evalNode(batch, nv, visited)
+      doAssert batch.entries.len == 0,
+        name & ": view eval enqueued " & $batch.entries.len & " kernels, expected 0"
+
+  # eval-through-view kernel counts: two views of one producer enqueue it once,
+  # a re-eval enqueues nothing, source and view in one eval enqueue once
+  block:
+    var yd: array[8, float32] = [2.0'f32, 2, 2, 2, 2, 2, 2, 2]
+    var yq: array[8, bfloat16]
+    for i in 0 ..< 8:
+      yq[i] = yd[i].to(bfloat16)
+    let engine = newEngine(run)
+    var shape = @[2, 4]
+    let xn = engine.newTensorNode(kBf16, shape.toSpan())
+    let yn = engine.newTensorNode(kBf16, shape.toSpan())
+    engine.upload(xn, xq)
+    engine.upload(yn, yq)
+
+    let p = engine.tn_add(xn, yn)
+    let v1 = engine.tn_narrow(p, 1, 1, 2)
+    let v2 = engine.tn_transpose(p)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var nv1 = v1
+    var nv2 = v2
+    engine.evalNode(batch, nv1, visited)
+    engine.evalNode(batch, nv2, visited)
+    doAssert batch.entries.len == 1,
+      name & ": two views of one producer enqueued " & $batch.entries.len &
+      " kernels, expected 1"
+    batch.submit()
+    for r in 0 ..< 2:
+      for c in 0 ..< 2:
+        let want = (xd[r * 4 + 1 + c] + yd[r * 4 + 1 + c]).to(bfloat16)
+        var got: bfloat16
+        engine.downloadItem(got, nv1, r * 4 + c)
+        doAssert got == want, name & ": narrow of add " & $r & "," & $c
+    for i in 0 ..< 4:
+      for j in 0 ..< 2:
+        let want = (xd[j * 4 + i] + yd[j * 4 + i]).to(bfloat16)
+        var got: bfloat16
+        engine.downloadItem(got, nv2, i + j * 4)
+        doAssert got == want, name & ": transpose of add " & $i & "," & $j
+
+    # a re-eval of both views enqueues nothing, since the buffers are materialized
+    var reBatch = engine.recordBatch()
+    var reVisited: VisitedNodes
+    var rv1 = nv1
+    var rv2 = nv2
+    engine.evalNode(reBatch, rv1, reVisited)
+    engine.evalNode(reBatch, rv2, reVisited)
+    doAssert reBatch.entries.len == 0,
+      name & ": view re-eval enqueued " & $reBatch.entries.len & " kernels, expected 0"
+
+    # source and view in one eval, source root first: still one kernel
+    let p2 = engine.tn_add(xn, yn)
+    let v3 = engine.tn_transpose(p2)
+    var batch2 = engine.recordBatch()
+    var visited2: VisitedNodes
+    var np2 = p2
+    var nv3 = v3
+    engine.evalNode(batch2, np2, visited2)
+    engine.evalNode(batch2, nv3, visited2)
+    doAssert batch2.entries.len == 1,
+      name & ": source and view enqueued " & $batch2.entries.len &
+      " kernels, expected 1"
+
+  echo "tensorcery views (", name, "): all checks passed"

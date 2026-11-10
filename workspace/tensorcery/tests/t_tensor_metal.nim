@@ -8,7 +8,7 @@
 ## Tensorcery erased tensor layer on metal
 ##
 ## Test that the user face runs end to end on Metal in bfloat16 at ranks 1 to 5:
-## toTensor, add, split, embed_gather, linear and eval.
+## toTensor, add, split, embed_gather, linear, shared-buffer views and eval.
 ## Every producer enqueues once per eval.
 ##
 ## Run from the worktree root:
@@ -30,6 +30,7 @@ proc main =
   runSiluMulTest(runMetal, "Metal")
   runMatmulTest(runMetal, "Metal")
   runRankNTest(runMetal, "Metal")
+  runViewTest(runMetal, "Metal")
 
 when isMainModule:
   main()
