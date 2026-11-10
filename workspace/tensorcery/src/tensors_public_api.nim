@@ -99,9 +99,9 @@ proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.con
 #
 # #######################################################################
 
-proc `+`*(a, b: Tensor): Tensor =
+proc `+`*(a, b: Tensor): Tensor {.inline.} =
   Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
 
-proc split*(t: Tensor, axis: int, k: int): seq[Tensor] =
+proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
   for n in t.engine.tn_split(t.node, axis, k):
     result.add(Tensor(engine: t.engine, node: n))
