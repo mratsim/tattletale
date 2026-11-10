@@ -18,33 +18,6 @@ import workspace/design_by_contract
 
 export tensors_public_types
 
-type Span*[T] = object
-  ## A borrowed, non-owning range of elements.
-  ## View rules tie its lifetime to the lvalue given at construction.
-  ## The TensorNode and AnyEngine interfaces exchange it for node collections.
-  p*: openArray[T]
-
-proc toSpan*[T](s: openArray[T]): Span[T] {.inline.} =
-  Span[T](p: s)
-
-template `[]`*[T](s: Span[T], i: int): T =
-  s.p[i]
-
-template len*[T](s: Span[T]): int =
-  s.p.len
-
-iterator items[T](s: Span[T]): T =
-  for i in 0 ..< s.p.len:
-    yield s.p[i]
-
-func `==`*[T](a, b: Span[T]): bool =
-  if a.p.len != b.p.len:
-    return false
-  for i in 0 ..< a.p.len:
-    if a.p[i] != b.p[i]:
-      return false
-  true
-
 iface *AnyTensorImpl:
     func dtype(): Dtype
     func shape(): openArray[int]
@@ -64,7 +37,7 @@ type
     layout*: L
 
   TensorBridge*[DeviceMem; L: Layout] = object
-    data {.cursor.}: DeviceMem
+    data: ref DeviceMem
     offset: int
     layout: L
 
@@ -77,7 +50,7 @@ proc allocData*[E: HwEngine, H, T, L](engine: E, impl: TensorImpl[DeviceMem[H, T
   impl.data[] = engine.allocDevice(T, impl.layout.size())
 
 func bridge*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): TensorBridge[DeviceMem, L] {.inline.} =
-  TensorBridge[DeviceMem, L](data: t.data[], offset: t.offset, layout: t.layout)
+  TensorBridge[DeviceMem, L](data: t.data, offset: t.offset, layout: t.layout)
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode
@@ -88,7 +61,7 @@ iface *AnyEngine:
     proc download(dst: var openArray[bfloat16], node: TensorNode)
     proc download(dst: var openArray[float32], node: TensorNode, offsetElems: int)
     proc download(dst: var openArray[bfloat16], node: TensorNode, offsetElems: int)
-    proc eval(roots: var Span[TensorNode])
+    proc eval(roots: var openArray[TensorNode])
 
 func atAxis*[Sh: tuple](s: Sh, axis: int): int {.inline.} =
   staticFor i, 0, tupleLen(Sh):

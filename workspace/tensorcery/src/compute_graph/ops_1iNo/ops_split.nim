@@ -51,10 +51,9 @@ func size*(n: PosNode[SplitCore]): int =
 # ═══════════════════════════════════════════════════════════════════════
 
 func copyShape(ix: AnyTensorImpl): seq[int] {.inline.} =
-  let s = Span[int](p: ix.shape())
-  result = newSeq[int](s.len)
-  for i in 0 ..< s.len:
-    result[i] = s[i]
+  result = newSeq[int](ix.shape().len)
+  for i in 0 ..< result.len:
+    result[i] = ix.shape()[i]
 
 proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorNode] {.contracts.} =
   let ix = x.getImpl()

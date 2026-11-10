@@ -62,17 +62,22 @@ proc eval*(ts: varargs[Tensor]) =
   var roots = newSeq[TensorNode](ts.len)
   for i in 0 ..< ts.len:
     roots[i] = ts[i].node
-  var span = roots.toSpan()
-  ts[0].engine.eval(span)
+  ts[0].engine.eval(roots)
   # op nodes leave the walk materialized
   for i in 0 ..< ts.len:
     ts[i].node = roots[i]
 
-proc shape*(t: Tensor): Span[int] =
-  Span[int](p: t.node.getImpl().shape())
+proc shape*(t: Tensor): seq[int] =
+  let impl = t.node.getImpl()
+  result = newSeq[int](impl.shape().len)
+  for i in 0 ..< result.len:
+    result[i] = impl.shape()[i]
 
-proc strides*(t: Tensor): Span[int] =
-  Span[int](p: t.node.getImpl().strides())
+proc strides*(t: Tensor): seq[int] =
+  let impl = t.node.getImpl()
+  result = newSeq[int](impl.strides().len)
+  for i in 0 ..< result.len:
+    result[i] = impl.strides()[i]
 
 proc dtype*(t: Tensor): Dtype =
   t.node.getImpl().dtype()
@@ -82,8 +87,7 @@ proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.con
   {.precondition: impl.dtype() == toDtype(T).}
   var roots = newSeq[TensorNode](1)
   roots[0] = t.node
-  var span = roots.toSpan()
-  t.engine.eval(span)
+  t.engine.eval(roots)
   t.node = roots[0]
   var one: array[1, T]
   t.engine.download(one, t.node, i * impl.strides()[0] + j * impl.strides()[1])

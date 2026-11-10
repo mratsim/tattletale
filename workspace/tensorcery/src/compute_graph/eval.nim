@@ -16,7 +16,7 @@ import ../compute_graph/dispatch
 import ../compute_graph/ops_2i1o/ops_add
 import ../compute_graph/ops_1iNo/ops_split
 
-proc eval*[E: HwEngine](engine: E, roots: var Span[TensorNode]) =
+proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorNode]) =
   if roots.len == 0:
     return
   var batch = engine.recordBatch()
