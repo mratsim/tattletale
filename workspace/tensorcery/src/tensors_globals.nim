@@ -22,27 +22,27 @@ var
   gCudaEngineInstance: pointer
 
 proc gMetalEngineErased(_: static Runtime = runMetal): AnyEngine {.inline.} =
-  if gMetalEngineInstance.isNil:
+  if gMetalEngineInstance.isNil():
     gMetalEngineInstance = cast[pointer](newEngine(runMetal))
   cast[MetalEngine](gMetalEngineInstance).toAnyEngine()
 
 proc gOpenCLEngineErased(_: static Runtime = runOpenCL): AnyEngine {.inline.} =
-  if gOpenCLEngineInstance.isNil:
+  if gOpenCLEngineInstance.isNil():
     gOpenCLEngineInstance = cast[pointer](newEngine(runOpenCL))
   cast[OpenCLEngine](gOpenCLEngineInstance).toAnyEngine()
 
 proc gVulkanEngineErased(_: static Runtime = runVulkan): AnyEngine {.inline.} =
-  if gVulkanEngineInstance.isNil:
+  if gVulkanEngineInstance.isNil():
     gVulkanEngineInstance = cast[pointer](newEngine(runVulkan))
   cast[VulkanEngine](gVulkanEngineInstance).toAnyEngine()
 
 proc gWebgpuEngineErased(_: static Runtime = runWebGPU): AnyEngine {.inline.} =
-  if gWebgpuEngineInstance.isNil:
+  if gWebgpuEngineInstance.isNil():
     gWebgpuEngineInstance = cast[pointer](newEngine(runWebGPU))
   cast[WebgpuEngine](gWebgpuEngineInstance).toAnyEngine()
 
 proc gCudaEngineErased(_: static Runtime = runCuda): AnyEngine {.inline.} =
-  if gCudaEngineInstance.isNil:
+  if gCudaEngineInstance.isNil():
     gCudaEngineInstance = cast[pointer](newEngine(runCuda))
   cast[CudaEngine](gCudaEngineInstance).toAnyEngine()
 

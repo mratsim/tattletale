@@ -214,6 +214,13 @@ OF_SUFFIX_DECL_RE = re.compile(
 # The inbounds-call-syntax rule. Plain call sites of inBounds, the house
 # convention is the method call coord.inBounds(shape). Definitions and
 # the inBoundsImpl internals never match, the name boundary is exact.
+# The isNil rule. Nil checks read on their receiver with method call
+# syntax and parens: x.isNil(). The bare postfix hides the call,
+# declarations never match, the name boundary is exact.
+ISNIL_BARE_RE = re.compile(r"\.\s*isNil(?![\w(])")
+ISNIL_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+isNil\*?\s*[\(\[=,:]")
+
 INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
@@ -681,6 +688,8 @@ RULES = {
                            "a proc, func or template name ending in Of, name the thing directly"),
     "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
+    "isnil-call-syntax": Rule("isnil-call-syntax", True,
+                              "a bare isNil postfix, use the method call syntax x.isNil()"),
     "engine-ufcs": Rule("engine-ufcs", True,
                         "an engine-first call in plain syntax, use engine.name(...) method call syntax"),
     "reduction-call-syntax": Rule("reduction-call-syntax", True,
@@ -2123,6 +2132,12 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "inbounds-call-syntax",
                         "inBounds in plain call syntax, use the method call "
                         "coord.inBounds(shape)"))
+                if ISNIL_BARE_RE.search(code) \
+                        and not ISNIL_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "isnil-call-syntax",
+                        "bare isNil postfix, use the method call syntax "
+                        "x.isNil()"))
                 if any("tensorcery" in part for part in path.parts) \
                         and ENGINE_UFCS_PLAIN_CALL_RE.search(code):
                     findings.append(Finding(
@@ -3316,6 +3331,48 @@ BANNED_VOCAB_SELFTEST_CASES = (
 )
 
 
+ISNIL_SELFTEST_CASES = (
+    ("isnil bare convicts, parens and declarations stay clean", (
+        ("src/tensorcery/isnil_demo.nim",
+         'if t.data.isNil:\n'
+         '  discard\n'
+         'let a = x.isNil()\n'
+         'proc isNil*(n: TensorNode): bool {.inline.} =\n'
+         '  n.private_obj.isNil()\n'),
+    ), (
+        ("src/tensorcery/isnil_demo.nim", 1, "isnil-call-syntax", False),
+    )),
+)
+
+
+def isnil_selftest(quiet=False):
+    """Runs the isNil fixtures through check_line, one PASS or FAIL line
+    per case unless quiet. Returns the failed case count, 0 means the
+    bare postfix convicts and every legal spelling passes.
+    """
+    failed = 0
+    for name, files, expected in ISNIL_SELFTEST_CASES:
+        got = []
+        for path, text in files:
+            findings = []
+            nim_structure_checks(Path(path), text, [], findings)
+            got += sorted(set((str(f.path), f.line, f.rule, f.warning)
+                          for f in findings if f.rule == "isnil-call-syntax"))
+        want = sorted(expected)
+        if got == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in rows if False else got:
+                    print("  got      %s" % (row,))
+    return failed
+
+
 def banned_vocab_selftest(quiet=False):
     """Runs the banned-vocab fixtures through check_line, one PASS or FAIL
     line per case unless quiet. Returns the failed case count, 0 means
@@ -4478,7 +4535,7 @@ def main(argv):
         args = args[:i] + args[i + 2:]
     base = base or os.environ.get("DOC_LINT_BASE") or None
     if "--selftest-refusal" in args:
-        failed = refusal_selftest() + agent_verb_selftest()
+        failed = refusal_selftest() + agent_verb_selftest() + isnil_selftest()
         return 1 if failed else 0
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]

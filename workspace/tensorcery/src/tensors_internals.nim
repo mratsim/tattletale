@@ -50,7 +50,7 @@ func dtype*[H, T; Rank: static int](t: TensorImpl[DeviceMem[H, T], Rank]): Dtype
   toDtype(T)
 
 func isMaterialized*(t: TensorImpl): bool {.inline.} =
-  not t.data.isNil
+  not t.data.isNil()
 
 func size*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {.inline.} =
   result = 1
