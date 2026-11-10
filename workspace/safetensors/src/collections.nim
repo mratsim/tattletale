@@ -103,6 +103,17 @@ func fileOf(view: SafetensorsCollection, tensorName: string): string =
       "' is absent from the checkpoint")
   view.weightMap[tensorName]
 
+proc tensorInfo*(view: SafetensorsCollection, tensorName: string):
+    tuple[dtype: ST_dtype, shape: seq[int]] {.inline.} =
+  ## Header dtype and shape of one tensor key.
+  ##
+  ## Preconditions: `view` is a collection returned by `open` and still alive,
+  ## `tensorName` is one of its tensor keys.
+  ## Raises ValueError naming the tensor when the collection contains no entry.
+  privateAccess(SafetensorObj)
+  let info = view.files[view.fileOf(tensorName)].tensors[tensorName]
+  (info.dtype, info.shape)
+
 proc getMmapView*(view: SafetensorsCollection, tensorName: string): MemSlice {.inline.} =
   ## Zero-copy `MemSlice` view of the tensor data of `tensorName`, served
   ## by the file that owns the key.
