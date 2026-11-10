@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/times
+import std/[math, times]
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/iface
@@ -16,6 +16,7 @@ import workspace/tensorcery/src/compute_graph/dispatch
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_matmul
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
+import workspace/tensorcery/src/compute_graph/ops_1i1o/ops_rmsnorm
 import workspace/tensorcery/src/compute_graph/eval
 export eval.eval
 
@@ -580,3 +581,232 @@ proc runRankNTest*(run: static Runtime, name: string) =
   doAssert got == xd[2].to(bfloat16), name & ": erased downloadItem"
 
   echo "tensorcery rank-N (", name, "): all checks passed"
+
+proc runRmsnormTest*(run: static Runtime, name: string) =
+  ## RmsNorm op end to end: x (tokens, width) -> normed, per-axis weight.
+  ##
+  ## Checks:
+  ## - public face at (4, 8), bfloat16: the readback equals the f32 host reference exactly,
+  ##   one rounding into the output. The numerics record is the composition's single-rounding order:
+  ##   exact upcast, f32 normalize, one rounding at the final store
+  ## - f32 input: one launch of the stock weighted kernel,
+  ##   the readback inside a 1e-6 relative band for the kernel's native rsqrt against the reference's 1/sqrt
+  ## - face contracts raise AssertionDefect on a non-rank-2 input, a non-rank-1 weight, a weight size mismatch and a dtype mismatch
+  ## - wide smoke at (32, 1024) through manual enqueues of the op's kernels, exact vs the f32 reference,
+  ##   and the fan-out memo: two add consumers of one rmsnorm output see its three launches enqueued
+  ##   exactly once (5 batch entries) and both results read back exact
+  var xh = newSeq[bfloat16](4 * 8)
+  var wh = newSeq[bfloat16](8)
+  for i in 0 ..< 4 * 8:
+    xh[i] = (float32((i * 37 mod 19) - 9) * 0.125'f32).to(bfloat16)
+  for i in 0 ..< 8:
+    wh[i] = (float32((i * 29 mod 17) - 8) * 0.125'f32).to(bfloat16)
+
+  # public face: toTensor + rmsnorm + eval + item readback, exact
+  let x = toTensor(xh, @[4, 8])
+  let w = toTensor(wh, @[8])
+  let y = rmsnorm(x, w)
+  doAssert y.shape().len == 2, name & ": rmsnorm rank"
+  doAssert y.shape()[0] == 4, name & ": rmsnorm tokens"
+  doAssert y.shape()[1] == 8, name & ": rmsnorm width"
+  doAssert y.dtype() == kBf16, name & ": rmsnorm dtype"
+  eval(y)
+  for t in 0 ..< 4:
+    var ss = 0.0'f32
+    for c in 0 ..< 8:
+      let x = xh[t * 8 + c].to(float32)
+      ss += x * x
+    let scale = 1.0'f32 / sqrt(ss / 8.0'f32 + 1e-6'f32)
+    for c in 0 ..< 8:
+      let want = (xh[t * 8 + c].to(float32) * scale * wh[c].to(float32)).to(bfloat16)
+      doAssert y.item(t, c, bfloat16) == want,
+        name & ": rmsnorm out " & $t & "," & $c
+
+  # face contracts raise AssertionDefect
+  let x3 = toTensor(xh[0 ..< 8], @[2, 2, 2])
+  doAssertRaises AssertionDefect:
+    discard rmsnorm(x3, w)
+  let w2 = toTensor(wh, @[2, 4])
+  doAssertRaises AssertionDefect:
+    discard rmsnorm(x, w2)
+  let wShort = toTensor(wh[0 ..< 7], @[7])
+  doAssertRaises AssertionDefect:
+    discard rmsnorm(x, wShort)
+  var wf = newSeq[float32](8)
+  for i in 0 ..< 8:
+    wf[i] = wh[i].to(float32)
+  let wF32 = toTensor(wf, @[8])
+  doAssertRaises AssertionDefect:
+    discard rmsnorm(x, wF32)
+
+  # f32 input: single launch of the stock weighted kernel
+  block:
+    var xf = newSeq[float32](4 * 8)
+    for i in 0 ..< 4 * 8:
+      xf[i] = xh[i].to(float32)
+    let x32 = toTensor(xf, @[4, 8])
+    let w32 = toTensor(wf, @[8])
+    let y32 = rmsnorm(x32, w32)
+    doAssert y32.dtype() == kFp32, name & ": rmsnorm f32 dtype"
+    eval(y32)
+    var worstRel = 0.0'f32
+    for t in 0 ..< 4:
+      var ss = 0.0'f32
+      for c in 0 ..< 8:
+        ss += xf[t * 8 + c] * xf[t * 8 + c]
+      let scale = 1.0'f32 / sqrt(ss / 8.0'f32 + 1e-6'f32)
+      for c in 0 ..< 8:
+        let want = xf[t * 8 + c] * scale * wf[c]
+        let got = y32.item(t, c, float32)
+        if want == 0.0'f32:
+          # zero fixture weights produce zero outputs where a relative band
+          # would divide by zero, so those elements compare exactly
+          doAssert got == want,
+            name & ": rmsnorm f32 out " & $t & "," & $c & ": got " & $got &
+            ", reference " & $want
+        else:
+          let rel = abs(got - want) / abs(want)
+          if rel > worstRel:
+            worstRel = rel
+          doAssert rel <= 1e-6'f32,
+            name & ": rmsnorm f32 out " & $t & "," & $c & ": got " & $got &
+            ", reference " & $want
+    echo name, ": rmsnorm f32 worst rel ", worstRel
+
+  # wide smoke at (32, 1024) through manual enqueues of the op's kernels:
+  # composition numerics at the transformer width, exact vs the f32 reference
+  block:
+    const R = 32
+    const D = 1024
+    var wx = newSeq[bfloat16](R * D)
+    var ww = newSeq[bfloat16](D)
+    for i in 0 ..< R * D:
+      wx[i] = (float32((i * 37 mod 19) - 9) * 0.125'f32).to(bfloat16)
+    for i in 0 ..< D:
+      ww[i] = (float32((i * 29 mod 17) - 8) * 0.125'f32).to(bfloat16)
+    let engine = newEngine(run)
+    var xShape = @[R, D]
+    var wShape = @[D]
+    let xNode = engine.newTensorNode(kBf16, xShape.toSpan())
+    let wNode = engine.newTensorNode(kBf16, wShape.toSpan())
+    engine.upload(xNode, wx)
+    engine.upload(wNode, ww)
+    let oNode = engine.newTensorNode(kBf16, xShape.toSpan())
+    let
+      rx = xNode.getImpl().to(TensorImpl[typeof(engine.allocDevice(bfloat16, 0)), Layout[(int, int), (int, int)]])
+      rw = wNode.getImpl().to(TensorImpl[typeof(engine.allocDevice(bfloat16, 0)), Layout[(int,), (int,)]])
+      ro = oNode.getImpl().to(TensorImpl[typeof(engine.allocDevice(bfloat16, 0)), Layout[(int, int), (int, int)]])
+      xv = initTensorBridge(rx.data[], rx.offset, rx.layout)
+      wv = initTensorBridge(rw.data[], rw.offset, rw.layout)
+      ov = initTensorBridge(ro.data[], ro.offset, ro.layout)
+    let rAcc = engine.makeTensorImpl(kFp32, xShape.toSpan())
+      .to(TensorImpl[typeof(engine.allocDevice(float32, 0)), Layout[(int, int), (int, int)]])
+    let accV = initTensorBridge(rAcc.data[], rAcc.offset, rAcc.layout)
+    var batch = engine.recordBatch()
+    batch.enqueue<<(R, 32)>> k_cast(accV, xv)
+    batch.enqueue<<(R, 32)>> k_rmsnorm_unweighted(accV, accV, 1e-6'f32)
+    batch.enqueue<<(R, 32)>> k_weighted_round_to_output(ov, accV, wv)
+    doAssert batch.entries.len == 3, name & ": wide smoke enqueued " &
+      $batch.entries.len & ", expected 3"
+    batch.submit()
+    for t in 0 ..< R:
+      var ss = 0.0'f32
+      for c in 0 ..< D:
+        let x = wx[t * D + c].to(float32)
+        ss += x * x
+      let scale = 1.0'f32 / sqrt(ss / float32(D) + 1e-6'f32)
+      for c in 0 ..< D:
+        let want = (wx[t * D + c].to(float32) * scale * ww[c].to(float32)).to(bfloat16)
+        var got: bfloat16
+        engine.downloadItem(got, oNode, t * D + c)
+        doAssert got == want,
+          name & ": wide smoke out " & $t & "," & $c & ": got " &
+          $got.to(float32) & ", reference " & $want.to(float32)
+
+  # Wide op-path dispatch runs only without -d:m03pending: a multi-enqueue dispatch blocker
+  # miscomputes wide shapes while the small shape above covers the op dispatch
+  when not defined(m03pending):
+    block:
+      const R = 32
+      const D = 1024
+      var wx = newSeq[bfloat16](R * D)
+      var ww = newSeq[bfloat16](D)
+      for i in 0 ..< R * D:
+        wx[i] = (float32((i * 37 mod 19) - 9) * 0.125'f32).to(bfloat16)
+      for i in 0 ..< D:
+        ww[i] = (float32((i * 29 mod 17) - 8) * 0.125'f32).to(bfloat16)
+      let engine = newEngine(run)
+      var xShape = @[R, D]
+      var wShape = @[D]
+      let xNode = engine.newTensorNode(kBf16, xShape.toSpan())
+      let wNode = engine.newTensorNode(kBf16, wShape.toSpan())
+      engine.upload(xNode, wx)
+      engine.upload(wNode, ww)
+      let y = engine.tn_rmsnorm(xNode, wNode, 1e-6'f32)
+      var batch = engine.recordBatch()
+      var visited: VisitedNodes
+      var ny = y
+      engine.evalNode(batch, ny, visited)
+      doAssert batch.entries.len == 3, name & ": wide op enqueued " &
+        $batch.entries.len & ", expected 3"
+      batch.submit()
+      for t in 0 ..< R:
+        var ss = 0.0'f32
+        for c in 0 ..< D:
+          let x = wx[t * D + c].to(float32)
+          ss += x * x
+        let scale = 1.0'f32 / sqrt(ss / float32(D) + 1e-6'f32)
+        for c in 0 ..< D:
+          let want = (wx[t * D + c].to(float32) * scale * ww[c].to(float32)).to(bfloat16)
+          var got: bfloat16
+          engine.downloadItem(got, ny, t * D + c)
+          doAssert got == want,
+            name & ": wide op out " & $t & "," & $c & ": got " &
+            $got.to(float32) & ", reference " & $want.to(float32)
+
+  # fan-out: two add consumers of one rmsnorm output enqueue its three
+  # launches exactly once
+  block:
+    let engine = newEngine(run)
+    var xShape = @[4, 8]
+    var wShape = @[8]
+    let xNode = engine.newTensorNode(kBf16, xShape.toSpan())
+    let wNode = engine.newTensorNode(kBf16, wShape.toSpan())
+    engine.upload(xNode, xh)
+    engine.upload(wNode, wh)
+    var ch = newSeq[bfloat16](4 * 8)
+    for i in 0 ..< 4 * 8:
+      ch[i] = (float32((i * 23 mod 13) - 6) * 0.125'f32).to(bfloat16)
+    let cx = engine.newTensorNode(kBf16, xShape.toSpan())
+    let cy = engine.newTensorNode(kBf16, xShape.toSpan())
+    engine.upload(cx, ch)
+    engine.upload(cy, ch)
+    let p = engine.tn_rmsnorm(xNode, wNode, 1e-6'f32)
+    let z1 = engine.tn_add(p, cx)
+    let z2 = engine.tn_add(p, cy)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var nz1 = z1
+    var nz2 = z2
+    engine.evalNode(batch, nz1, visited)
+    engine.evalNode(batch, nz2, visited)
+    doAssert batch.entries.len == 5,
+      name & ": fan-out enqueued " & $batch.entries.len & ", expected 5"
+    batch.submit()
+    var gz1, gz2: array[4 * 8, bfloat16]
+    engine.download(gz1, nz1)
+    engine.download(gz2, nz2)
+    for t in 0 ..< 4:
+      var ss = 0.0'f32
+      for c in 0 ..< 8:
+        let x = xh[t * 8 + c].to(float32)
+        ss += x * x
+      let scale = 1.0'f32 / sqrt(ss / 8.0'f32 + 1e-6'f32)
+      for c in 0 ..< 8:
+        let pVal = (xh[t * 8 + c].to(float32) * scale * wh[c].to(float32)).to(bfloat16)
+        let cVal = ch[t * 8 + c].to(float32)
+        let exp = (pVal.to(float32) + cVal).to(bfloat16)
+        doAssert gz1[t * 8 + c] == exp, name & ": fan-out z1 " & $t & "," & $c
+        doAssert gz2[t * 8 + c] == exp, name & ": fan-out z2 " & $t & "," & $c
+
+  echo "tensorcery rmsnorm (", name, "): all checks passed"

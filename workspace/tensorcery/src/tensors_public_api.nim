@@ -12,6 +12,7 @@ import tensors_internals
 import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_2i1o/ops_matmul
+import compute_graph/ops_1i1o/ops_rmsnorm
 import compute_graph/ops_1iNo/ops_split
 import compute_graph/ops_Ni1o/ops_embed_gather
 import tensors_globals
@@ -122,6 +123,20 @@ proc linear*(x, w: Tensor): Tensor =
   ## - a tensor of shape (tokens, outFeatures) with the operands' dtype:
   ##   bfloat16 operands accumulate in float32, then round once into the bfloat16 output
   Tensor(engine: x.engine, node: tn_matmul(x.engine, x.node, w.node))
+
+proc rmsnorm*(x, w: Tensor, eps: float32 = 1e-6'f32): Tensor =
+  ## y = x·rsqrt(mean(x²) + eps)·w over the last axis: the RmsNorm layer.
+  ##
+  ## Args:
+  ## - x: the input tensor of shape (tokens, width)
+  ## - w: the weight tensor of shape (width,), one slot per width position
+  ## - eps: the stability constant added to the mean of squares,
+  ##   the Qwen3 reference default
+  ##
+  ## Returns:
+  ## - a tensor of x's shape and dtype: the math runs in float32 with one
+  ##   rounding at the store
+  Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w.node, eps))
 
 proc embed_gather*(w: Tensor, inputIds: openArray[int]): Tensor =
   ## Gathers one weight entry per token id.

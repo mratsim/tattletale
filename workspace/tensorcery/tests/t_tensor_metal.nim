@@ -25,6 +25,7 @@ proc main =
   runDedupeTest(runMetal, "Metal")
   runEmbedGatherTest(runMetal, "Metal")
   runCoordPassRebuildTest(runMetal, "Metal")
+  runRmsnormTest(runMetal, "Metal")
   # multi-tile op-path blocker: see op STATE.md Blockers
   when not defined(m03pending):
     runMatmulTest(runMetal, "Metal")

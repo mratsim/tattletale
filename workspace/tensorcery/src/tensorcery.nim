@@ -16,6 +16,7 @@ import workspace/tensorcery/src/tensors_globals
 import workspace/tensorcery/src/compute_graph/dispatch
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_matmul
+import workspace/tensorcery/src/compute_graph/ops_1i1o/ops_rmsnorm
 import workspace/tensorcery/src/compute_graph/ops_1iNo/ops_split
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/eval as graph_eval
