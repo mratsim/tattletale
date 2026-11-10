@@ -33,6 +33,7 @@ proc main =
   runRankNTest(runMetal, "Metal")
   runViewTest(runMetal, "Metal")
   runFactoryTest(runMetal, "Metal")
+  runPoolWriteTest(runMetal, "Metal")
 
 when isMainModule:
   main()

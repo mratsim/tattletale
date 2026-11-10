@@ -19,6 +19,7 @@ import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_silu_mul
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/ops_1i1o/ops_rmsnorm
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_rope
+import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_pool_write
 import workspace/tensorcery/src/compute_graph/views
 import workspace/tensorcery/src/compute_graph/eval
 export eval.eval
@@ -1548,6 +1549,248 @@ proc runViewTest*(run: static Runtime, name: string) =
     doAssert v.item(1, 1, bfloat16) == xq[5], name & ": composed origin (1,1)"
 
   echo "tensorcery views (", name, "): all checks passed"
+
+proc k_write_once_probe*(dst: distinct TensorView, hits: ptr UncheckedArray[int32]) =
+  ## Write-once test of the pool write kernel's grid-stride skeleton.
+  ##
+  ## Contract:
+  ##
+  ## - keeps the kernel's exact launch shape and stride expression
+  ## - counts the writes per entry through an atomic
+  ## - a stride that does not cover the thread space exactly once fails
+  ##
+  ## The op's copy is idempotent: a bad stride writes each entry several
+  ## times concurrently with identical values, which no value comparison can observe.
+  let
+    numel = dst.layout.shape[0]
+    tid = thread_position_in_grid.x
+    stride = threadgroups_per_grid.x * threads_per_threadgroup.x
+  for i in countup(tid, int32(numel - 1), stride):
+    dst[(int(i),)] = (float32(i) * 0.5'f32).to(dst.T)
+    discard atomicFetchAdd(hits[i].addr, 1'i32)
+
+proc runPoolWriteTest*(run: static Runtime, name: string) =
+  ## Pool write op checks:
+  ##
+  ## - grid-stride write-once at multi-workgroup launches
+  ## - page-decomposition round-trips
+  ## - face contracts raise
+  ## - the fan-out memo dedupes a re-walk to one batch entry
+  ##
+  ## Everything runs on one concrete engine: the write-once test, the round-trips and the fan-out write their kernels into one artifact set.
+  const
+    NumPages = 4
+    NumLayers = 2
+    KvHeads = 2
+    HeadDim = 4
+    PageSize = 256
+    SlotElems = PageSize * KvHeads * HeadDim
+    SlabElems = NumPages * NumLayers * SlotElems
+
+  proc slabIdx(page, layer, pos, h, d: int): int =
+    (((page * NumLayers + layer) * PageSize + pos) * KvHeads + h) * HeadDim + d
+
+  proc srcIdx(t, h, d: int): int =
+    (t * KvHeads + h) * HeadDim + d
+
+  let engine = newEngine(run)
+  var slabShapeSeq = @[NumPages, NumLayers, PageSize, KvHeads, HeadDim]
+  let slabShape = slabShapeSeq.toSpan()
+  var srcShapeSeq = @[1, 10, KvHeads, HeadDim]
+  let srcShape = srcShapeSeq.toSpan()
+
+  proc slabNode(seed: int): TensorNode =
+    ## Sentinel-filled slab, device and host copies in lockstep
+    var host = newSeq[bfloat16](SlabElems)
+    for i in 0 ..< SlabElems:
+      host[i] = (float32((i * 31 + seed) mod 251) * 0.125'f32 - 8.0'f32).to(bfloat16)
+    result = engine.newTensorNode(kBf16, slabShape)
+    engine.upload(result, host)
+
+  proc slabHostCopy(seed: int): seq[bfloat16] =
+    result = newSeq[bfloat16](SlabElems)
+    for i in 0 ..< SlabElems:
+      result[i] = (float32((i * 31 + seed) mod 251) * 0.125'f32 - 8.0'f32).to(bfloat16)
+
+  proc srcNodes(seqLen: int, seed: int): tuple[k, v: TensorNode, kh, vh: seq[bfloat16]] =
+    ## (1, seq_len, kv_heads, head_dim) src entries, device and host copies
+    var shapeSeq = @[1, seqLen, KvHeads, HeadDim]
+    let shape = shapeSeq.toSpan()
+    result.kh = newSeq[bfloat16](seqLen * KvHeads * HeadDim)
+    result.vh = newSeq[bfloat16](seqLen * KvHeads * HeadDim)
+    for i in 0 ..< result.kh.len:
+      result.kh[i] = (float32((i * 7 + seed) mod 97) * 0.25'f32 - 4.0'f32).to(bfloat16)
+      result.vh[i] = (float32((i * 11 + seed) mod 89) * 0.25'f32 - 4.0'f32).to(bfloat16)
+    result.k = engine.newTensorNode(kBf16, shape)
+    result.v = engine.newTensorNode(kBf16, shape)
+    engine.upload(result.k, result.kh)
+    engine.upload(result.v, result.vh)
+
+  proc evalOne(n: TensorNode): TensorNode =
+    ## One batch, one root, the node's replacement returned
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var nn = n
+    engine.evalNode(batch, nn, visited)
+    batch.submit()
+    nn
+
+  # grid-stride write-once at a multi-workgroup launch: 4096 entries over
+  # 16 threadgroups of 256 threads. Each element must carry exactly one
+  # write and the copied value must be exact.
+  block:
+    const Numel = 4096
+    let
+      dstDev = engine.allocDevice(bfloat16, Numel)
+      hitsDev = engine.allocDevice(int32, Numel)
+      db = initTensorBridge(dstDev, 0, make_layout((int(Numel),), (int(1),)))
+    var zeroHits = newSeq[int32](Numel)
+    engine.copyToDeviceFromHost(hitsDev, zeroHits)
+    var batch = engine.recordBatch()
+    batch.enqueue<<((Numel + 255) div 256, 256)>> k_write_once_probe(db, hitsDev)
+    batch.submit()
+    var gotHits = newSeq[int32](Numel)
+    engine.copyToHostFromDevice(gotHits, hitsDev, 0)
+    var gotDst = newSeq[bfloat16](Numel)
+    engine.copyToHostFromDevice(gotDst, dstDev, 0)
+    for i in 0 ..< Numel:
+      doAssert gotHits[i] == 1,
+        "entry " & $i & " written " & $gotHits[i] & " times, expected exactly 1"
+      doAssert gotDst[i].to(float32) == (float32(i) * 0.5'f32).to(bfloat16).to(float32),
+        "entry " & $i & " value mismatch"
+
+  # multi-page write across three pages at 19 threadgroups
+  block:
+    let kSlab = slabNode(4)
+    let vSlab = slabNode(5)
+    let kHost = slabHostCopy(4)
+    let (kSrc, vSrc, kh, vh) = srcNodes(600, 6)
+    let w = engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 1, 200, 600, 0, @[0, 1, 2, 3])
+    discard evalOne(w)
+    var gotK = newSeq[bfloat16](SlabElems)
+    var gotV = newSeq[bfloat16](SlabElems)
+    engine.download(gotK, kSlab)
+    engine.download(gotV, vSlab)
+    for t in 0 ..< 600:
+      let globalPos = 200 + t
+      let page = globalPos div PageSize
+      let pos = globalPos mod PageSize
+      for h in 0 ..< KvHeads:
+        for d in 0 ..< HeadDim:
+          doAssert gotK[slabIdx(page, 1, pos, h, d)].to(float32) == kh[srcIdx(t, h, d)].to(float32),
+            "K multi (" & $t & " @" & $globalPos & "," & $h & "," & $d & ")"
+          doAssert gotV[slabIdx(page, 1, pos, h, d)].to(float32) == vh[srcIdx(t, h, d)].to(float32),
+            "V multi (" & $t & " @" & $globalPos & "," & $h & "," & $d & ")"
+    for page in 0 .. 2:
+      for pos in 0 ..< PageSize:
+        for h in 0 ..< KvHeads:
+          for d in 0 ..< HeadDim:
+            doAssert gotK[slabIdx(page, 0, pos, h, d)].to(float32) == kHost[slabIdx(page, 0, pos, h, d)].to(float32),
+              "K multi layer0 sentinel (" & $page & "," & $pos & ")"
+
+  # remapped page table: sequence page 0 -> pool slot 2, page 1 -> slot 0
+  block:
+    let kSlab = slabNode(9)
+    let vSlab = slabNode(10)
+    let (kSrc, vSrc, kh, vh) = srcNodes(PageSize + 10, 11)
+    let w = engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 1, 0, PageSize + 10, 0, @[2, 0, 1, 3])
+    discard evalOne(w)
+    var gotK = newSeq[bfloat16](SlabElems)
+    var gotV = newSeq[bfloat16](SlabElems)
+    engine.download(gotK, kSlab)
+    engine.download(gotV, vSlab)
+    for t in 0 ..< PageSize + 10:
+      let seqPage = t div PageSize
+      let poolPage = [2, 0, 1, 3][seqPage]
+      let pos = t mod PageSize
+      for h in 0 ..< KvHeads:
+        for d in 0 ..< HeadDim:
+          doAssert gotK[slabIdx(poolPage, 1, pos, h, d)].to(float32) == kh[srcIdx(t, h, d)].to(float32),
+            "K remapped (" & $t & " seqPage " & $seqPage & " slot " & $poolPage & ")"
+          doAssert gotV[slabIdx(poolPage, 1, pos, h, d)].to(float32) == vh[srcIdx(t, h, d)].to(float32),
+            "V remapped (" & $t & " seqPage " & $seqPage & " slot " & $poolPage & ")"
+
+  # cached-prefix skip: offset 100, 10 entries, cachedTokens 105
+  block:
+    let kSlab = slabNode(7)
+    let vSlab = slabNode(8)
+    let kHost = slabHostCopy(7)
+    let (kSrc, vSrc, kh, vh) = srcNodes(10, 12)
+    let w = engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 0, 100, 10, 105, @[0, 1, 2, 3])
+    discard evalOne(w)
+    var gotK = newSeq[bfloat16](SlabElems)
+    var gotV = newSeq[bfloat16](SlabElems)
+    engine.download(gotK, kSlab)
+    engine.download(gotV, vSlab)
+    # writeStart = max(0, 105 - 100) = 5: global positions 105..109 written
+    for t in 0 ..< 10:
+      let pos = (100 + t) mod PageSize
+      for h in 0 ..< KvHeads:
+        for d in 0 ..< HeadDim:
+          if t < 5:
+            doAssert gotK[slabIdx(0, 0, pos, h, d)].to(float32) == kHost[slabIdx(0, 0, pos, h, d)].to(float32),
+              "K cached sentinel (" & $t & "," & $h & "," & $d & ")"
+          else:
+            doAssert gotK[slabIdx(0, 0, pos, h, d)].to(float32) == kh[srcIdx(t, h, d)].to(float32),
+              "K cached (" & $t & "," & $h & "," & $d & ")"
+            doAssert gotV[slabIdx(0, 0, pos, h, d)].to(float32) == vh[srcIdx(t, h, d)].to(float32),
+              "V cached (" & $t & "," & $h & "," & $d & ")"
+
+  # contracts raise: dtype, pool geometry, layer, write range, page table
+  block:
+    let kSlab = slabNode(1)
+    let vSlab = slabNode(2)
+    let (kSrc, vSrc, _, _) = srcNodes(10, 3)
+    var f32ShapeSeq = @[NumPages, NumLayers, PageSize, KvHeads, HeadDim]
+    let f32Slab = engine.newTensorNode(kFp32, f32ShapeSeq.toSpan())
+    engine.upload(f32Slab, newSeq[float32](SlabElems))
+    var smallShapeSeq = @[NumPages, NumLayers, PageSize, KvHeads, HeadDim + 1]
+    let smallSlab = engine.newTensorNode(kBf16, smallShapeSeq.toSpan())
+    engine.upload(smallSlab, newSeq[bfloat16](NumPages * NumLayers * PageSize * KvHeads * (HeadDim + 1)))
+    doAssertRaises AssertionDefect:
+      discard engine.tn_pool_write(kSlab, smallSlab, kSrc, vSrc, 0, 0, 10, 0, @[0, 1, 2, 3])
+    doAssertRaises AssertionDefect:
+      discard engine.tn_pool_write(kSlab, vSlab, f32Slab, vSrc, 0, 0, 10, 0, @[0, 1, 2, 3])
+    doAssertRaises AssertionDefect:
+      discard engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 2, 0, 10, 0, @[0, 1, 2, 3])
+    doAssertRaises AssertionDefect:
+      discard engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 0, 0, 0, 0, @[0, 1, 2, 3])
+    doAssertRaises AssertionDefect:
+      discard engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 0, 999, 10, 0, @[0, 1, 2])
+    doAssertRaises AssertionDefect:
+      discard engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 0, 0, 10, 0, @[0, 1, 2, 4])
+    doAssertRaises AssertionDefect:
+      discard engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 0, 0, 10, 0, @[0, 1, 2, -1])
+
+  # Fan-out memo: a re-walk of the pool-write node in one eval must not
+  # re-stage the metadata or re-enqueue the launch. One batch entry, the write happens once.
+  block:
+    let kSlab = slabNode(13)
+    let vSlab = slabNode(14)
+    let (kSrc, vSrc, kh, vh) = srcNodes(10, 15)
+    let w = engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 0, 0, 10, 0, @[0, 1, 2, 3])
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var n1 = w
+    var n2 = w
+    engine.evalNode(batch, n1, visited)
+    engine.evalNode(batch, n2, visited)
+    doAssert batch.entries.len == 1, name & ": re-walk enqueued " &
+      $batch.entries.len & ", expected 1 (the visited memo dedupes the write)"
+    batch.submit()
+    var gotK = newSeq[bfloat16](SlabElems)
+    var gotV = newSeq[bfloat16](SlabElems)
+    engine.download(gotK, kSlab)
+    engine.download(gotV, vSlab)
+    for t in 0 ..< 10:
+      for h in 0 ..< KvHeads:
+        for d in 0 ..< HeadDim:
+          doAssert gotK[slabIdx(0, 0, t, h, d)].to(float32) == kh[srcIdx(t, h, d)].to(float32),
+            "fan-out K (" & $t & "," & $h & "," & $d & ")"
+          doAssert gotV[slabIdx(0, 0, t, h, d)].to(float32) == vh[srcIdx(t, h, d)].to(float32),
+            "fan-out V (" & $t & "," & $h & "," & $d & ")"
+
+  echo "pool write op (", name, "): all checks passed"
 
 proc runFactoryTest*(run: static Runtime, name: string) =
   ## Host tensor factories and the layout-aware host readback (toSeq).

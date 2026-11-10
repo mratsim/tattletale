@@ -17,6 +17,7 @@ import compute_graph/ops_1i1o/ops_rmsnorm
 import compute_graph/ops_1iNo/ops_split
 import compute_graph/ops_Ni1o/ops_embed_gather
 import compute_graph/ops_Ni1o/ops_rope
+import compute_graph/ops_Ni1o/ops_pool_write
 import compute_graph/views
 import tensors_globals
 import std/math
@@ -59,6 +60,18 @@ proc toTensor*[T: float32 | bfloat16](data: openArray[T], shape: openArray[int],
     result = toTensor(converted, shape, run, dtype)
 
 # #######################################################################
+proc upload*[T: float32 | bfloat16](t: Tensor, data: openArray[T]) {.contracts.} =
+  ## Writes `data` over the tensor's own storage in ascending flat order.
+  ##
+  ## Args:
+  ## - t: a materialized tensor with its origin at the buffer base
+  ## - data: one element per tensor position, in toTensor order
+  let impl = t.node.getImpl()
+  {.precondition: impl.offset() == 0.}
+  {.precondition: impl.dtype() == toDtype(T).}
+  {.precondition: data.len == getNumElems(impl.shape()).}
+  t.engine.upload(t.node, data)
+
 #
 #                            Evaluation
 #
@@ -211,6 +224,22 @@ proc full_like*(t: Tensor, value: float32): Tensor =
   of kFp32: likeTensor(t, value)
   of kBf16: likeTensor(t, value.to(bfloat16))
   else: raise ValueError.newException("full_like: dtype " & $t.dtype() & " unsupported")
+
+proc empty*(shape: openArray[int], run: static Runtime = runMetal, T: typedesc[float32 | bfloat16] = bfloat16): Tensor {.contracts.} =
+  ## Tensor of `shape` over fresh device storage, the values uninitialized.
+  ##
+  ## Args:
+  ## - shape: the tensor shape, rank 1 to 5
+  ## - run: the engine runtime
+  ## - T: the element type
+  ##
+  ## The caller writes every element before the first read: the paged KV
+  ## pool allocates its slabs this way, pages are written before they are
+  ## read and the allocation does no zero fill.
+  {.precondition: shape.len in 1 .. 5.}
+  {.precondition: nonNegativeDims(shape).}
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.newTensorNode(toDtype(T), shape.toSpan()))
 
 proc arange*(start, stop: float32, step: float32 = 1'f32,
     run: static Runtime = runMetal,
@@ -406,3 +435,30 @@ proc embed_gather*(w: Tensor, inputIds: openArray[int]): Tensor =
   ## - a tensor of shape (numTokens, hidden), token t's vector copied from
   ##   the weight entry ids[t]
   Tensor(engine: w.engine, node: tn_embed_gather(w.engine, w.node, inputIds))
+
+proc pool_write*(poolK, poolV, kSrc, vSrc: Tensor, layer: int, offset, seqLen, cachedTokens: int, pageSlots: openArray[int]): Tensor =
+  ## Writes post-rope K/V entries into pool pages, in graph.
+  ##
+  ## Args:
+  ## - poolK, poolV: (num_pages, num_layers, PAGE_SIZE, kv_heads, head_dim) pool slabs
+  ##   `layer` selects the slab layer the write targets
+  ## - kSrc, vSrc: (1, seq_len, kv_heads, head_dim) post-rope entries
+  ## - offset: the global token position of src entry 0
+  ## - seqLen: entries to write, at least one
+  ##
+  ## Write range:
+  ##
+  ## - cachedTokens: entries already cached from copy-on-write forks
+  ## - positions before max(0, cachedTokens - offset) stay untouched
+  ##
+  ## Page table:
+  ##
+  ## - pageSlots: the pool slot of each sequence page, in page order
+  ##
+  ## Returns: a tensor aliasing the K pool slab
+  ##
+  ## - eval enqueues the write before any node reading the pool
+  ## - one launch writes both pools
+  ## - reading the result reads the written pool
+  Tensor(engine: poolK.engine, node: tn_pool_write(poolK.engine, poolK.node,
+    poolV.node, kSrc.node, vSrc.node, layer, offset, seqLen, cachedTokens, pageSlots))
