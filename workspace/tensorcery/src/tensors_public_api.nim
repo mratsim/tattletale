@@ -19,6 +19,7 @@ import compute_graph/ops_Ni1o/ops_embed_gather
 import compute_graph/ops_Ni1o/ops_rope
 import compute_graph/views
 import tensors_globals
+import std/math
 import workspace/design_by_contract
 
 export tensors_public_types
@@ -100,6 +101,160 @@ proc item*[T: float32 | bfloat16](t: Tensor, idx: varargs[int], _: typedesc[T]):
   t.engine.eval(span)
   t.node = roots[0]
   t.engine.downloadItem(result, t.node, crd2Offset(impl, idx))
+
+proc toSeq*[T: float32 | bfloat16](t: Tensor, _: typedesc[T]): seq[T] {.contracts.} =
+  ## Reads the tensor's elements back to the host.
+  ##
+  ## Args:
+  ## - T: the element type, must match the tensor's dtype
+  ##
+  ## Returns:
+  ## - the elements in ascending flat index order, matching toTensor
+  ##
+  ## eval (like item) -> one flat DMA over the layout's reachable window -> host gather by layout
+  ##
+  ## Strided and offset views read back without per-element round-trips.
+  let impl = t.node.getImpl()
+  {.precondition: impl.dtype() == toDtype(T).}
+  var roots = newSeq[TensorNode](1)
+  roots[0] = t.node
+  var span = roots.toSpan()
+  t.engine.eval(span)
+  t.node = roots[0]
+  result = newSeq[T](getNumElems(impl.shape()))
+  if result.len > 0:
+    t.engine.gatherToHost(result, t.node)
+
+# #######################################################################
+#
+#                            Host factories
+#
+# #######################################################################
+#
+# Construction-time host ops: the values compute on the host, then upload in one DMA.
+# Each tensor materializes at construction like toTensor's inputs.
+# Names match the MLX vocabulary: zeros, ones, full, zeros_like,
+# ones_like, full_like, arange, eye and linspace. MLX's trailing stream
+# parameter is not ported: the engine binds via run, or via the like-source's engine for the like-faces.
+
+proc likeTensor[T: float32 | bfloat16](t: Tensor, value: T): Tensor =
+  ## Dense tensor of t's shape and dtype, every element `value`
+  let engine = t.engine
+  let shape = t.shape()
+  var host = newSeq[T](getNumElems(shape))
+  for i in 0 ..< host.len:
+    host[i] = value
+  result = Tensor(engine: engine, node: engine.newTensorNode(toDtype(T), shape))
+  if host.len > 0:
+    engine.upload(result.node, host)
+
+proc zeros*(shape: openArray[int], run: static Runtime = runMetal, T: typedesc[float32 | bfloat16] = bfloat16): Tensor {.contracts.} =
+  ## Tensor of `shape` filled with zeros.
+  ##
+  ## Args:
+  ## - shape: the tensor shape, rank 1 to 5
+  ## - run: the engine runtime
+  ## - T: the element type
+  {.precondition: shape.len in 1 .. 5.}
+  {.precondition: nonNegativeDims(shape).}
+  var host = newSeq[T](getNumElems(shape.toSpan()))
+  toTensor(host, shape, run, T)
+
+proc ones*(shape: openArray[int], run: static Runtime = runMetal, T: typedesc[float32 | bfloat16] = bfloat16): Tensor {.contracts.} =
+  ## Tensor of `shape` filled with ones.
+  ##
+  ## Args:
+  ## - shape: the tensor shape, rank 1 to 5
+  ## - run: the engine runtime
+  ## - T: the element type
+  {.precondition: shape.len in 1 .. 5.}
+  {.precondition: nonNegativeDims(shape).}
+  var host = newSeq[T](getNumElems(shape.toSpan()))
+  for i in 0 ..< host.len:
+    host[i] = 1'f32.to(T)
+  toTensor(host, shape, run, T)
+
+proc full*(shape: openArray[int], value: float32, run: static Runtime = runMetal,
+    T: typedesc[float32 | bfloat16] = bfloat16): Tensor {.contracts.} =
+  ## Tensor of `shape` filled with `value`, rounded to the element type.
+  ##
+  ## Args:
+  ## - shape: the tensor shape, rank 1 to 5
+  ## - value: the fill scalar
+  ## - run: the engine runtime
+  ## - T: the element type
+  {.precondition: shape.len in 1 .. 5.}
+  {.precondition: nonNegativeDims(shape).}
+  var host = newSeq[T](getNumElems(shape.toSpan()))
+  for i in 0 ..< host.len:
+    host[i] = value.to(T)
+  toTensor(host, shape, run, T)
+
+proc zeros_like*(t: Tensor): Tensor =
+  ## Tensor of t's shape and dtype filled with zeros, a fresh dense buffer.
+  case t.dtype()
+  of kFp32: likeTensor(t, 0'f32)
+  of kBf16: likeTensor(t, 0'f32.to(bfloat16))
+  else: raise ValueError.newException("zeros_like: dtype " & $t.dtype() & " unsupported")
+
+proc ones_like*(t: Tensor): Tensor =
+  ## Tensor of t's shape and dtype filled with ones, a fresh dense buffer.
+  case t.dtype()
+  of kFp32: likeTensor(t, 1'f32)
+  of kBf16: likeTensor(t, 1'f32.to(bfloat16))
+  else: raise ValueError.newException("ones_like: dtype " & $t.dtype() & " unsupported")
+
+proc full_like*(t: Tensor, value: float32): Tensor =
+  ## Tensor of t's shape and dtype filled with `value`,
+  ## rounded to the element type, a fresh dense buffer.
+  case t.dtype()
+  of kFp32: likeTensor(t, value)
+  of kBf16: likeTensor(t, value.to(bfloat16))
+  else: raise ValueError.newException("full_like: dtype " & $t.dtype() & " unsupported")
+
+proc arange*(start, stop: float32, step: float32 = 1'f32,
+    run: static Runtime = runMetal,
+    T: typedesc[float32 | bfloat16] = bfloat16): Tensor {.contracts.} =
+  ## Rank-1 tensor of start, start+step, ... up to but excluding stop.
+  ##
+  ## Args:
+  ## - start, stop, step: the sequence bounds, step must be nonzero
+  ##
+  ## The element count is ceil((stop - start) / step), clamped to 0.
+  {.precondition: step != 0'f32.}
+  let count = max(0, ceil((stop - start) / step).int)
+  var host = newSeq[T](count)
+  for i in 0 ..< count:
+    host[i] = (start + step * float32(i)).to(T)
+  toTensor(host, @[count], run, T)
+
+proc eye*(n: int, run: static Runtime = runMetal, T: typedesc[float32 | bfloat16] = bfloat16): Tensor {.contracts.} =
+  ## Rank-2 (n, n) identity: ones on the diagonal, zeros elsewhere.
+  {.precondition: n >= 0.}
+  var host = newSeq[T](n * n)
+  for i in 0 ..< n:
+    host[i * n + i] = 1'f32.to(T)
+  toTensor(host, @[n, n], run, T)
+
+proc linspace*(start, stop: float32, num: int,
+    run: static Runtime = runMetal,
+    T: typedesc[float32 | bfloat16] = bfloat16): Tensor {.contracts.} =
+  ## Rank-1 tensor of num evenly spaced values from start to stop,
+  ## both endpoints included.
+  ##
+  ## Args:
+  ## - start, stop: the interval bounds, both included
+  ## - num: the element count, at least 2
+  ##
+  ## The last element is the stop exactly. The others are start + i*step
+  ## with step = (stop - start) / (num - 1).
+  {.precondition: num >= 2.}
+  var host = newSeq[T](num)
+  let step = (stop - start) / float32(num - 1)
+  for i in 0 ..< num - 1:
+    host[i] = (start + step * float32(i)).to(T)
+  host[num - 1] = stop.to(T)
+  toTensor(host, @[num], run, T)
 
 # #######################################################################
 #

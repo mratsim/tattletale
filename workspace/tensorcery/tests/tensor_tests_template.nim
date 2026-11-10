@@ -1497,3 +1497,199 @@ proc runViewTest*(run: static Runtime, name: string) =
       " kernels, expected 1"
 
   echo "tensorcery views (", name, "): all checks passed"
+
+proc runFactoryTest*(run: static Runtime, name: string) =
+  ## Host tensor factories and the layout-aware host readback (toSeq).
+  ##
+  ## Checks:
+  ## - zeros, ones, full and the like-faces round-trip: toSeq returns
+  ##   the constructed values, bf16 and f32
+  ## - arange, linspace and eye are exact at the boundaries: a negative-step
+  ##   arange excludes the stop, linspace endpoints are included,
+  ##   eye is the identity
+  ## - toSeq of narrowed+transposed, negative-stride and stride-0 views
+  ##   equals the host-computed strided read
+  ## - toSeq materializes an op output first, and the contracts raise:
+  ##   rank outside 1..5, zero arange step, linspace num below 2, negative eye,
+  ##   dtype-mismatched toSeq
+  var xd: array[32, float32] = [1.0'f32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+    13, 14, 15, 16, 17.0'f32, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+    30, 31, 32]
+  var xq: array[32, bfloat16]
+  for i in 0 ..< 32:
+    xq[i] = xd[i].to(bfloat16)
+
+  # zeros/ones/full round-trip through toSeq, bf16 and f32
+  block:
+    let z = zeros(@[2, 4], run)
+    var zShape = @[2, 4]
+    var zStrides = @[4, 1]
+    doAssert z.shape() == zShape.toSpan(), name & ": zeros shape"
+    doAssert z.strides() == zStrides.toSpan(), name & ": zeros strides"
+    doAssert z.dtype() == kBf16, name & ": zeros dtype"
+    var gz = toSeq(z, bfloat16)
+    doAssert gz.len == 8, name & ": zeros numel"
+    for i in 0 ..< gz.len:
+      doAssert gz[i] == 0'f32.to(bfloat16), name & ": zeros " & $i
+    let o = ones(@[2, 2, 2], run, float32)
+    doAssert o.dtype() == kFp32, name & ": ones dtype"
+    var go = toSeq(o, float32)
+    for i in 0 ..< go.len:
+      doAssert go[i] == 1.0'f32, name & ": ones " & $i
+    let f = full(@[2, 3], 2.5'f32, run)
+    var gf = toSeq(f, bfloat16)
+    for i in 0 ..< gf.len:
+      doAssert gf[i] == 2.5'f32.to(bfloat16), name & ": full " & $i
+    let ff = full(@[4], -1.5'f32, run, float32)
+    var gff = toSeq(ff, float32)
+    for i in 0 ..< gff.len:
+      doAssert gff[i] == -1.5'f32, name & ": full f32 " & $i
+
+  # like-faces: the source's shape and dtype, a fresh dense buffer
+  block:
+    let x = toTensor(xq[0 ..< 8], @[2, 4])
+    let zl = zeros_like(x)
+    var zlStrides = @[4, 1]
+    doAssert zl.dtype() == kBf16, name & ": zeros_like dtype"
+    doAssert zl.strides() == zlStrides.toSpan(), name & ": zeros_like strides"
+    var gzl = toSeq(zl, bfloat16)
+    for i in 0 ..< gzl.len:
+      doAssert gzl[i] == 0'f32.to(bfloat16), name & ": zeros_like " & $i
+    let ol = ones_like(x)
+    var gol = toSeq(ol, bfloat16)
+    for i in 0 ..< gol.len:
+      doAssert gol[i] == 1'f32.to(bfloat16), name & ": ones_like " & $i
+    let fl = full_like(x, 3.5'f32)
+    var gfl = toSeq(fl, bfloat16)
+    for i in 0 ..< gfl.len:
+      doAssert gfl[i] == 3.5'f32.to(bfloat16), name & ": full_like " & $i
+    # a like-face over a view source: the view's shape, dense strides again
+    let n = narrow(x, 0, 1, 1)
+    let nl = ones_like(n)
+    var nlShape = @[1, 4]
+    doAssert nl.shape() == nlShape.toSpan(), name & ": ones_like of narrow shape"
+    doAssert nl.strides() == zlStrides.toSpan(), name & ": ones_like of narrow strides"
+    var gnl = toSeq(nl, bfloat16)
+    for i in 0 ..< gnl.len:
+      doAssert gnl[i] == 1'f32.to(bfloat16), name & ": ones_like of narrow " & $i
+    # f32 source
+    let xf = toTensor(@[1.5'f32, 2.5], @[2], run, float32)
+    let zfl = zeros_like(xf)
+    doAssert zfl.dtype() == kFp32, name & ": zeros_like f32 dtype"
+    var gzfl = toSeq(zfl, float32)
+    for i in 0 ..< gzfl.len:
+      doAssert gzfl[i] == 0.0'f32, name & ": zeros_like f32 " & $i
+
+  # arange: exact values, a negative step excludes the stop
+  block:
+    let a = arange(0, 8, 1'f32, run, float32)
+    var aShape = @[8]
+    doAssert a.shape() == aShape.toSpan(), name & ": arange shape"
+    var ga = toSeq(a, float32)
+    for i in 0 ..< 8:
+      doAssert ga[i] == float32(i), name & ": arange " & $i
+    let aneg = arange(10, 0, -2'f32, run)
+    var ganeg = toSeq(aneg, bfloat16)
+    doAssert ganeg.len == 5, name & ": arange negative step count"
+    for i in 0 ..< 5:
+      doAssert ganeg[i] == float32(10 - 2 * i).to(bfloat16),
+        name & ": arange negative step " & $i
+    let astep = arange(0, 1, 0.25'f32, run, float32)
+    var gastep = toSeq(astep, float32)
+    doAssert gastep.len == 4, name & ": arange f32 step count"
+    for i in 0 ..< 4:
+      doAssert gastep[i] == float32(i) * 0.25'f32, name & ": arange f32 step " & $i
+
+  # linspace: both endpoints included. The last element is exactly the stop.
+  block:
+    let l = linspace(0, 1, 5, run, float32)
+    var gl = toSeq(l, float32)
+    doAssert gl.len == 5, name & ": linspace count"
+    doAssert gl[0] == 0.0'f32, name & ": linspace first endpoint"
+    doAssert gl[4] == 1.0'f32, name & ": linspace last endpoint"
+    for i in 1 ..< 4:
+      doAssert gl[i] == float32(i) * 0.25'f32, name & ": linspace " & $i
+    let lb = linspace(2, 3, 3, run)
+    var glb = toSeq(lb, bfloat16)
+    doAssert glb[0] == 2'f32.to(bfloat16), name & ": linspace bf16 start"
+    doAssert glb[1] == 2.5'f32.to(bfloat16), name & ": linspace bf16 mid"
+    doAssert glb[2] == 3'f32.to(bfloat16), name & ": linspace bf16 stop"
+
+  # eye: the identity
+  block:
+    let e = eye(3, run, float32)
+    var eShape = @[3, 3]
+    doAssert e.shape() == eShape.toSpan(), name & ": eye shape"
+    var ge = toSeq(e, float32)
+    for i in 0 ..< 3:
+      for j in 0 ..< 3:
+        doAssert ge[i * 3 + j] == (if i == j: 1.0'f32 else: 0.0'f32),
+          name & ": eye " & $i & "," & $j
+    let eb = eye(2, run)
+    var geb = toSeq(eb, bfloat16)
+    doAssert geb[0] == 1'f32.to(bfloat16), name & ": eye bf16 diag"
+    doAssert geb[1] == 0'f32.to(bfloat16), name & ": eye bf16 off"
+
+  # toSeq of views: the strided read matches the host-computed layout walk
+  block:
+    let x = toTensor(xq, @[4, 8])
+    # narrow the first axis to entries 1..2, then transpose: (8,2) strides (1,8), offset 8
+    let v = transpose(narrow(x, 0, 1, 2))
+    var vShape = @[8, 2]
+    var vStrides = @[1, 8]
+    doAssert v.shape() == vShape.toSpan(), name & ": view gather shape"
+    doAssert v.strides() == vStrides.toSpan(), name & ": view gather strides"
+    let gv = toSeq(v, bfloat16)
+    doAssert gv.len == 16, name & ": view gather numel"
+    for i in 0 ..< 8:
+      for j in 0 ..< 2:
+        doAssert gv[i * 2 + j] == xd[(1 + j) * 8 + i].to(bfloat16),
+          name & ": view gather " & $i & "," & $j
+    # a negative-stride window: the readback stays inside the buffer
+    let y = toTensor(xq[0 ..< 4], @[1, 4])
+    let neg = view(y, @[4], @[-1], 3)
+    var gneg = toSeq(neg, bfloat16)
+    for i in 0 ..< 4:
+      doAssert gneg[i] == xd[3 - i].to(bfloat16),
+        name & ": negative-stride gather " & $i
+    # a stride-0 expand: host readback only, element (r, c) reads the source element at (r, 0)
+    let e = expand(narrow(x, 1, 0, 1), @[4, 8])
+    var ge = toSeq(e, bfloat16)
+    doAssert ge.len == 32, name & ": expand gather numel"
+    for r in 0 ..< 4:
+      for c in 0 ..< 8:
+        doAssert ge[r * 8 + c] == xd[r * 8].to(bfloat16),
+          name & ": expand gather " & $r & "," & $c
+
+  # toSeq materializes an op output before reading it
+  block:
+    var yd: array[8, float32] = [2.0'f32, 2, 2, 2, 2, 2, 2, 2]
+    var yq: array[8, bfloat16]
+    for i in 0 ..< 8:
+      yq[i] = yd[i].to(bfloat16)
+    let x = toTensor(xq[0 ..< 8], @[2, 4])
+    let y = toTensor(yq, @[2, 4])
+    let s = x + y
+    let gs = toSeq(s, bfloat16)
+    for i in 0 ..< 8:
+      doAssert gs[i] == (xd[i] + yd[i]).to(bfloat16), name & ": add gather " & $i
+
+  # contracts raise AssertionDefect
+  block:
+    let z = zeros(@[2, 4], run)
+    doAssertRaises AssertionDefect:
+      discard zeros(@[], run)
+    doAssertRaises AssertionDefect:
+      discard zeros(@[2, 2, 2, 2, 2, 2], run)
+    doAssertRaises AssertionDefect:
+      discard zeros(@[-2, 4], run)
+    doAssertRaises AssertionDefect:
+      discard arange(0, 10, 0'f32, run)
+    doAssertRaises AssertionDefect:
+      discard linspace(0, 1, 1, run)
+    doAssertRaises AssertionDefect:
+      discard eye(-1, run)
+    doAssertRaises AssertionDefect:
+      discard toSeq(z, float32)
+
+  echo "tensorcery factories (", name, "): all checks passed"

@@ -5,11 +5,13 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import std/typetraits
 import workspace/crucible
 import workspace/crucible/src/builtins/builtins_gpu_types
 export builtins_gpu_types
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/ceramic
+import workspace/ceramic/src/macros/static_for
 import workspace/math
 import workspace/iface
 import tensors_internal_types
@@ -182,6 +184,52 @@ proc downloadItem*[E: HwEngine](engine: E, dst: var bfloat16, node: TensorNode, 
   var one: array[1, bfloat16]
   engine.download(one, node, offsetElems)
   dst = one[0]
+
+proc gatherToHost[E: HwEngine, Sh: tuple, St: tuple, Mem, T](engine: E, t: TensorImpl[Mem, Layout[Sh, St]], dst: var openArray[T]) =
+  ## Reads back a strided or offset view: one flat DMA over the layout's reachable window,
+  ## then a host-side gather by the layout.
+  ##
+  ## The engine DMA is flat over the whole buffer. The view's reachable window
+  ## copies into a host scratch first:
+  ##
+  ## - window: buffer addresses 0 .. maxAddr, maxAddr being the highest
+  ##   element address the layout reaches
+  ## - dst[i]: the window entry at element i's layout address (elements ordered by ascending flat index)
+  ## - addr(i) = t.offset + sum_a crd_a(i) * stride_a, crd decomposed so the last axis varies fastest
+  ##
+  ## A negative stride reaches below t.offset, so the window starts at the buffer base.
+  ## The view contracts keep every reachable address inside [0, capacity).
+  let numel = t.layout.shape.getNumElems()
+  var maxAddr = t.offset
+  staticFor a, 0, tupleLen(Sh):
+    let reach = t.layout.stride[a] * (t.layout.shape[a] - 1)
+    if reach > 0:
+      maxAddr += reach
+  var window = newSeq[T](maxAddr + 1)
+  engine.copyToHostFromDevice(window, t.data[], 0)
+  var crd: Sh
+  for i in 0 ..< numel:
+    dst[i] = window[t.offset + crd2idxImpl(crd, t.layout.shape, t.layout.stride)]
+    # carry the coordinate: the last axis varies fastest
+    var carry = true
+    staticFor a, 0, tupleLen(Sh):
+      const ax = tupleLen(Sh) - 1 - a
+      if carry:
+        inc crd[ax]
+        if crd[ax] < t.layout.shape[ax]:
+          carry = false
+        else:
+          crd[ax] = 0
+
+proc gatherToHost*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode) =
+  type Mem = typeof(engine.allocDevice(float32, 0))
+  withRankedImpl(Mem, node.getImpl()):
+    engine.gatherToHost(t, dst)
+
+proc gatherToHost*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode) =
+  type Mem = typeof(engine.allocDevice(bfloat16, 0))
+  withRankedImpl(Mem, node.getImpl()):
+    engine.gatherToHost(t, dst)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The erased engine
