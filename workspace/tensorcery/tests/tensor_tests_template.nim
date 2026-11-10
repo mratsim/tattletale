@@ -1400,6 +1400,13 @@ proc runViewTest*(run: static Runtime, name: string) =
     # a shape/strides rank mismatch
     doAssertRaises AssertionDefect:
       discard view(x, @[2], @[2, 1], 0)
+    # a rank outside 1..5, on view and reshape
+    doAssertRaises AssertionDefect:
+      discard view(x, @[], @[], 0)
+    doAssertRaises AssertionDefect:
+      discard view(x, @[2, 2, 2, 2, 2, 2], @[8, 4, 2, 1, 1, 1], 0)
+    doAssertRaises AssertionDefect:
+      discard reshape(x, @[2, 2, 2, 2, 2, 2])
     # reshape of a strided source, and a mismatched element count
     doAssertRaises AssertionDefect:
       discard reshape(transpose(x), @[8])
@@ -1495,6 +1502,50 @@ proc runViewTest*(run: static Runtime, name: string) =
     doAssert batch2.entries.len == 1,
       name & ": source and view enqueued " & $batch2.entries.len &
       " kernels, expected 1"
+
+  # a view chain consumed twice through one eval: the producer still
+  # enqueues exactly once, and the chain's offsets compose at readback
+  block:
+    var yd: array[8, float32] = [2.0'f32, 2, 2, 2, 2, 2, 2, 2]
+    var yq: array[8, bfloat16]
+    for i in 0 ..< 8:
+      yq[i] = yd[i].to(bfloat16)
+    let engine = newEngine(run)
+    var shape = @[2, 4]
+    let xn = engine.newTensorNode(kBf16, shape.toSpan())
+    let yn = engine.newTensorNode(kBf16, shape.toSpan())
+    engine.upload(xn, xq)
+    engine.upload(yn, yq)
+
+    let p = engine.tn_add(xn, yn)
+    let chain = engine.tn_narrow(engine.tn_transpose(engine.tn_narrow(p, 1, 1, 2)), 0, 0, 2)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var c1 = chain
+    var c2 = chain
+    engine.evalNode(batch, c1, visited)
+    engine.evalNode(batch, c2, visited)
+    doAssert batch.entries.len == 1,
+      name & ": chain consumed twice enqueued " & $batch.entries.len &
+      " kernels, expected 1"
+    batch.submit()
+    for i in 0 ..< 2:
+      for j in 0 ..< 2:
+        let want = (xd[j * 4 + 1 + i] + yd[j * 4 + 1 + i]).to(bfloat16)
+        var got: bfloat16
+        engine.downloadItem(got, c1, i + j * 4)
+        doAssert got == want, name & ": chain readback " & $i & "," & $j
+
+  # offset composition: a view's origin includes the source's own offset,
+  # so a view of a narrowed tensor reads through the composed origin,
+  # not the buffer origin
+  block:
+    let t = toTensor(xq, @[2, 4])
+    let v = view(narrow(t, 1, 1, 2), @[2, 2], @[2, 1], 1)
+    # composed origin = narrow's offset 1 + view's offset 1 = 2
+    # a dropped source term would read from 1
+    doAssert v.item(0, 0, bfloat16) == xq[2], name & ": composed origin (0,0)"
+    doAssert v.item(1, 1, bfloat16) == xq[5], name & ": composed origin (1,1)"
 
   echo "tensorcery views (", name, "): all checks passed"
 
