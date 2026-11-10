@@ -35,6 +35,24 @@ proc statKernel*(outP: ptr UncheckedArray[uint32], n: static int, v: uint32) =
   if i < n:
     outP[i] = v + uint32(n)
 
+type
+  Phant[V: static int] = object
+    ## Phantom value type: no fields, the value is the static argument V.
+  BroadcastLayout = object
+    ## Static shape over runtime strides: the type split `make_layout`
+    ## produces for constant shapes. The shape leaves are phantoms.
+    ## The strides travel as runtime words.
+    shape: tuple[tokens: Phant[4], heads: Phant[2], half: Phant[4]]
+    stride: tuple[token, head, lane: int32]
+
+proc broadcastGatherKernel*(outP: ptr UncheckedArray[float32], src: ptr UncheckedArray[float32], lay: BroadcastLayout) =
+  ## Computes out[token*4 + lane] = src[token*stride.token + lane*stride.lane]:
+  ## - the head stride is 0 and broadcasts
+  ## - the token stride reaches each token's own source entry
+  let token = int(threadgroup_position_in_grid.x)
+  let lane = int(thread_position_in_threadgroup.x)
+  outP[token * 4 + lane] = src[token * lay.stride.token + lane * lay.stride.lane]
+
 proc fillSentinel[E: HwEngine](engine: E, dst: auto, len: int, v: auto) =
   var host = newSeq[typeof(v)](len)
   for i in 0 ..< len:
@@ -232,5 +250,30 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
       doAssert got[i] == 6.0'f32 * xs[i],
         "scope-freed intermediate mismatch at " & $i & ": " & $got[i]
     echo "[OK] scope-freed intermediate: the batch retains what it records"
+
+  block:
+    # a struct argument whose shape leaves are phantom statics and whose
+    # strides are runtime words. The device-read struct layout must line
+    # up with the packed words. The stride-0 head axis must broadcast.
+    # Each token's stride must reach its own entry
+    var srcH: array[20, float32]
+    for i in 0 ..< 20:
+      srcH[i] = float32(i)
+    var srcD = engine.allocDevice(float32, 20)
+    var outD = engine.allocDevice(float32, 16)
+    engine.copyToDeviceFromHost(srcD, srcH.toOpenArray(0, 19))
+    var lay = BroadcastLayout(
+      shape: (Phant[4](), Phant[2](), Phant[4]()),
+      stride: (5'i32, 0'i32, 1'i32))
+    var bcast = engine.recordBatch()
+    bcast.enqueue<<(4, 4)>> broadcastGatherKernel(outD, srcD, lay)
+    bcast.submit()
+    var got: array[16, float32]
+    engine.copyToHostFromDevice(got.toOpenArray(0, 15), outD)
+    for t in 0 ..< 4:
+      for j in 0 ..< 4:
+        doAssert got[t * 4 + j] == srcH[t * 5 + j],
+          "phantom-shape struct mismatch at token " & $t & " lane " & $j & ": " & $got[t * 4 + j]
+    echo "[OK] phantom-shape struct arg: static shape words and runtime strides line up"
 
   echo "[OK] batch suite (", engine.deviceName(), "): all scenarios passed"

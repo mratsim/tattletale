@@ -8,6 +8,7 @@
 import std/macros
 import std/typetraits
 import workspace/crucible/src/crucible_codegen
+import workspace/crucible/src/codegen/frontend/nim_type_resolvers
 import workspace/crucible/src/runtime/engines/engines_common
 import workspace/crucible/src/runtime/backends/runtime_utils
 
@@ -83,20 +84,47 @@ func isBlobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} 
 func explodesStructArgs(backend: static CodegenKind): bool {.compileTime.} =
   backend in {cgMetal, cgWebGPU, cgOpenCL}
 
+func unwrapTypeDesc(n: NimNode): NimNode {.compileTime.} =
+  ## A typedesc macro parameter is the `typeDesc[T]` instantiation
+  ## whenever the argument is a generic's type parameter.
+  ## Returns the type itself.
+  if n.kind == nnkSym and n.typeKind == ntyTypeDesc:
+    result = n.getTypeInst()[1]
+  else:
+    result = n
+
+macro isPhantomStatic(t: typedesc): bool =
+  ## Returns true for a phantom value type:
+  ## - an object with no fields
+  ## - the value is the static argument V, Ceramic's `Int[V]` convention
+  ##
+  ## The frontend's `getPhantomStaticArg` defines the shape.
+  result = newLit(not getPhantomStaticArg(unwrapTypeDesc(t)).isNil)
+
+macro phantomStaticValue(t: typedesc): int =
+  ## Returns the static argument V of a phantom value type `Int[V]`.
+  ## Both the CIR type lowering (a 32-bit int) and the serializer
+  ## consume this value.
+  let arg = getPhantomStaticArg(unwrapTypeDesc(t))
+  doAssert arg != nil
+  result = newLit(arg.intVal.int)
+
 func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple[size, align: int] {.compileTime.} =
-  ## Device size and alignment of `T` on `backend`: phantom and static types
-  ## contribute zero bytes, Nim int/uint lower to 4 bytes
+  ## Returns the device size and alignment of `T` on `backend`.
+  ## A phantom value packs one 4-byte word: its static argument.
+  ## The CIR lowers the type to a 32-bit int, the same form.
+  ## Nim int/uint lower to 4 bytes
   when T is DeviceMem:
     result = (8, 8)  # 8 bytes, one device address slot
+  elif isPhantomStatic(T):
+    result = (4, 4)
   elif T is object|tuple:
-    when isStaticArg(T):
-      result = (0, 1)
-    else:
-      result.align = 1
-      for f in fields(default(T)):
-        let fl = computeDeviceLayout(typeof(f), backend)
-        result.size = result.size.round_multiple_up(fl.align) + fl.size
-        result.align = max(result.align, fl.align)
+    result.align = 1
+    for f in fields(default(T)):
+      let fl = computeDeviceLayout(typeof(f), backend)
+      result.size = result.size.round_multiple_up(fl.align) + fl.size
+      result.align = max(result.align, fl.align)
+    if result.size > 0:
       result.size = result.size.round_multiple_up(result.align)
   elif T is array:
     when backend == cgGlsl and hasBoolLeaf(T):
@@ -157,13 +185,22 @@ proc putBytes[T](dst: var openArray[byte], off: int, v: T, w: int) {.inline.} =
 
 proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static CodegenKind) {.inline.} =
   ## Packs one value at its device layout, aligned, ints lowered to 32-bit
-  when T is object|tuple:
-    when not isStaticArg(T):
-      let a = computeDeviceLayout(T, backend).align
-      off = off.round_multiple_up(a)
-      for f in fields(v):
-        dst.packFrom(off, f, backend)
-      off = off.round_multiple_up(a)
+  when isPhantomStatic(T):
+    # a phantom value packs its static argument as the 32-bit word read
+    # back through the device struct field for the type
+    const a = getArgWidth(int32, backend)
+    off = off.round_multiple_up(a)
+    putBytes(dst, off, phantomStaticValue(T), a)
+    off += a
+  elif T is object|tuple:
+    # whole static arguments never reach packing (serialize skips them),
+    # every field packs. A phantom field contributes its static argument
+    # as the 32-bit word that matches the computeDeviceLayout byte count
+    let a = computeDeviceLayout(T, backend).align
+    off = off.round_multiple_up(a)
+    for f in fields(v):
+      dst.packFrom(off, f, backend)
+    off = off.round_multiple_up(a)
   elif T is array:
     when backend == cgGlsl and hasBoolLeaf(T):
       # element-wise packing, one 4-byte std430 word per bool, same as the scalar getArgWidth rule

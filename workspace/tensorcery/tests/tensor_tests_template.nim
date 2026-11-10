@@ -1253,6 +1253,8 @@ proc runViewTest*(run: static Runtime, name: string) =
   ## - a view chain (narrow of transpose of narrow) stacks offset on offset
   ## - reshape keeps the element order over a dense source, and expand
   ##   broadcasts a size-1 axis at stride 0
+  ## - an op consumes a stride-0 expand view per position on the device,
+  ##   with the stride-0 axis last and first
   ##
   ## The window and split checks:
   ##
@@ -1356,6 +1358,26 @@ proc runViewTest*(run: static Runtime, name: string) =
       for c in 0 ..< 4:
         doAssert e.item(r, c, bfloat16) == xd[r * 4].to(bfloat16),
           name & ": expand out " & $r & "," & $c
+
+  # a stride-0 expand consumed by an op: the device reads the broadcast
+  # operand per position, in both axis orientations
+  block:
+    let col = narrow(x, 1, 0, 1)
+    let lastAxis = expand(col, @[2, 4]) + x
+    eval(lastAxis)
+    for r in 0 ..< 2:
+      for c in 0 ..< 4:
+        doAssert lastAxis.item(r, c, bfloat16) ==
+          (xd[r * 4].to(float32) + xd[r * 4 + c].to(float32)).to(bfloat16),
+          name & ": expand add last axis " & $r & "," & $c
+    let row = narrow(x, 0, 0, 1)
+    let firstAxis = expand(row, @[2, 4]) + x
+    eval(firstAxis)
+    for r in 0 ..< 2:
+      for c in 0 ..< 4:
+        doAssert firstAxis.item(r, c, bfloat16) ==
+          (xd[c].to(float32) + xd[r * 4 + c].to(float32)).to(bfloat16),
+          name & ": expand add first axis " & $r & "," & $c
 
   # general view face: windows in both stride signs, offsets included
   block:

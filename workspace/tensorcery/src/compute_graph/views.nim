@@ -233,12 +233,8 @@ proc tn_expand*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): Tensor
   ## Args:
   ## - shape: the target shape, one target axis per source axis
   ##
-  ## Restriction:
-  ## - a stride-0 view reads correctly on the host (item)
-  ## - the launch path misreads a runtime stride-0 axis inside a kernel
-  ##   argument's layout, so every coordinate collapses onto the operand's
-  ##   first entry
-  ## - no op may consume a stride-0 view on the device until that is fixed: materialize the broadcast or fold the axis into the kernel's indexing
+  ## A stride-0 axis reads correctly everywhere: on the host (item, toSeq),
+  ## and ops consume the broadcast view per position on the device.
   let ix = x.getImpl()
   let s = ix.shape()
   let st = ix.strides()
