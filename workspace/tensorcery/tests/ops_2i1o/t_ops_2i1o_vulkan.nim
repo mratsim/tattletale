@@ -7,21 +7,14 @@
 
 {.experimental: "views".}
 
-## Tensorcery erased tensor layer on metal
-##
-## Test that the user face (toTensor, add, split, eval) runs end to end on the Metal engine in bfloat16.
-##
-## Run from the worktree root:
-##   nim c -r --hints:off --warnings:off \
-##     --nimcache:nimcache/wip --outdir:build/wip \
-##     workspace/tensorcery/tests/t_tensor_metal.nim
+## Tensorcery ops_2i1o ops on Vulkan
 
 import workspace/crucible
 import workspace/ceramic
-import workspace/tensorcery/tests/tensor_tests_template
+import workspace/tensorcery/tests/ops_2i1o/ops_add_template
 
 proc main =
-  runTest(runMetal, "Metal")
+  runAddTest(runVulkan, "Vulkan")
 
 when isMainModule:
   main()

@@ -5,21 +5,16 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Tensorcery erased tensor layer on vulkan
-##
-## Test that the erased user face compiles and runs the same loop on the Vulkan engine.
-##
-## Run from the worktree root:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
-##     --nimcache:nimcache/wip --outdir:build/wip \
-##     workspace/tensorcery/tests/t_tensor_vulkan.nim
+{.experimental: "views".}
+
+## Tensorcery ops_1iNo ops on WebGPU
 
 import workspace/crucible
 import workspace/ceramic
-import workspace/tensorcery/tests/tensor_tests_template
+import workspace/tensorcery/tests/ops_1iNo/ops_split_template
 
 proc main =
-  runTest(gVulkanEngine().toAnyEngine(), "Vulkan")
+  runSplitTest(runWebGPU, "WebGPU")
 
 when isMainModule:
   main()

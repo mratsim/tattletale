@@ -5,19 +5,15 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-{.experimental: "views".}
-
-import workspace/tensorcery/src/tensorcery
+import workspace/tensorcery/tests/tensorcery_testutils
+import workspace/tensorcery/src/tensors_internal_types
 import workspace/tensorcery/src/tensors_internals
 import workspace/tensorcery/src/tensors_globals
 import workspace/tensorcery/src/compute_graph/eval
-export eval.eval
 
-export tensorcery
-# erased layer imports, the vtable mixins resolve at the outermost scope
-export tensors_internals
+export tensorcery_testutils
 
-proc runTest*(run: static Runtime, name: string) =
+proc runAddTest*(run: static Runtime, name: string) =
   var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
   var yd = @[2.0'f32, 2, 2, 2, 2, 2, 2, 2]
   var xq: array[8, bfloat16]
@@ -37,18 +33,10 @@ proc runTest*(run: static Runtime, name: string) =
   doAssert x.size() == 8
 
   let z = x + y
-  let parts = split(x, 0, 2)
-  doAssert parts.len == 2
-  for p in parts:
-    doAssert p.shape()[0] == 1
-    doAssert p.shape()[1] == 4
-
   let small = toTensor(yq[0 ..< 4], @[1, 4])
   # face checks are contracts, they raise AssertionDefect
   doAssertRaises AssertionDefect:
     discard x + small
-  doAssertRaises AssertionDefect:
-    discard split(x, 0, 3)
   doAssertRaises AssertionDefect:
     discard toTensor(xq[0 ..< 7], @[2, 4])
 
@@ -56,18 +44,7 @@ proc runTest*(run: static Runtime, name: string) =
     let xi = xd[i].to(bfloat16).to(float32)
     let yi = yd[i].to(bfloat16).to(float32)
     doAssert z.item(i div 4, i mod 4, bfloat16) == (xi + yi).to(bfloat16), name & ": add " & $i
-    doAssert x.item(i div 4, i mod 4, bfloat16) == xd[i].to(bfloat16), name & ": split source " & $i
-  for c in 0 ..< 4:
-    doAssert parts[0].item(0, c, bfloat16) == xd[c].to(bfloat16), name & ": part0 " & $c
-    doAssert parts[1].item(0, c, bfloat16) == xd[4 + c].to(bfloat16), name & ": part1 " & $c
-  # inner-axis split makes strided views, strides inherit the source
-  let cols = split(x, 1, 2)
-  let w = cols[0] + cols[1]
-  for r in 0 ..< 2:
-    for c in 0 ..< 2:
-      let e0 = xd[r * 4 + c].to(bfloat16).to(float32)
-      let e1 = xd[r * 4 + c + 2].to(bfloat16).to(float32)
-      doAssert w.item(r, c, bfloat16) == (e0 + e1).to(bfloat16), name & ": colsplit " & $r & "," & $c
+    doAssert x.item(i div 4, i mod 4, bfloat16) == xd[i].to(bfloat16), name & ": add source " & $i
 
   # Memoize computation and drop ancestor nodes
   let d = x + y
@@ -79,4 +56,4 @@ proc runTest*(run: static Runtime, name: string) =
       (xd[i].to(bfloat16).to(float32) * 2'f32 + yd[i].to(bfloat16).to(float32)).to(bfloat16),
       name & ": diamond " & $i
 
-  echo "tensorcery Tensor (", name, "): all checks passed"
+  echo "tensorcery add (", name, "): all checks passed"

@@ -13,8 +13,10 @@ import tensors_internals
 import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_1iNo/ops_split
+import compute_graph/ops_metadata/ops_swapaxes
 import tensors_globals
 import workspace/design_by_contract
+from std/math import sqrt
 
 export tensors_public_types
 export bfloat16
@@ -102,3 +104,6 @@ proc `+`*(a, b: Tensor): Tensor {.inline.} =
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
   for n in t.engine.tn_split(t.node, axis, k):
     result.add(Tensor(engine: t.engine, node: n))
+
+proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =
+  Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))
