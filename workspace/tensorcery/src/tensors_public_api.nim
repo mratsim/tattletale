@@ -17,6 +17,7 @@ import ./compute_graph/ops_2i1o/ops_add
 import ./compute_graph/ops_1iNo/ops_split
 import ./compute_graph/ops_metadata/ops_swapaxes
 import ./compute_graph/ops_reductions/ops_allClose
+import ./compute_graph/ops_neuralnets/ops_rmsnorm
 import ./compute_graph/eval
 
 export tensors_public_types
@@ -120,6 +121,10 @@ proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equa
   Tensor(engine: tested.engine,
       node: tn_allClose(tested.engine, tested.node, reference.node, atol, rtol, equal_nan)
     ).item(float32) == 0.0'f32
+
+proc rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor {.inline.} =
+  let w = if weight.isNil(): NilTensorNode() else: weight.node
+  Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w, eps))
 
 proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))
