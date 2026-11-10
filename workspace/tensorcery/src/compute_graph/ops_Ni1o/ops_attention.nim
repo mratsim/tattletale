@@ -283,21 +283,20 @@ type
     ## to the PagePool. The metadata walks the kernel to each sequence's
     ## pages inside it.
     ##
-    ##   indices  len = capacity                offsets  len = batchSize + 1
+    ##   indices  len = capacity                offsets  len = seqlens.len + 1
     ##   [ 0 ][ 2 ][ 0 ][ 1 ][ 3 ]              [ 0 ][ 2 ][ 5 ]
     ##
-    ##   seqlens  len = batchSize
+    ##   seqlens  len = the batch's sequence count
     ##   [ 8 ][ 9 ]
     ##
     ## - the page ids of sequence s are indices[offsets[s] ..< offsets[s + 1]]
     ## - page 0 above serves both sequences, the page ids interleave, each
     ##   new page goes to whichever sequence appends next
-    ## - offsets[batchSize] marks where the newest sequence ends
+    ## - offsets[^1] marks where the newest sequence ends
     ## - seqlens[s] is sequence s's token count
     offsets*: seq[int]
     indices*: seq[int]
     seqlens*: seq[int]
-    batchSize*: int
 
   JaggedAttnNode* = ref object
     ## Jagged attention over the page pool, in graph.
@@ -306,7 +305,7 @@ type
     r: AnyTensorImpl
     q: TensorNode                 # (q_total, H, D) post-rope queries
     poolK, poolV: TensorNode      # (num_pages, num_layers, PAGE_SIZE, Nkv, D) slabs
-    qOffsets: seq[int]            # per segment q start, batchSize + 1 entries
+    qOffsets: seq[int]            # per segment q start, seqlens.len + 1 entries
     kv: JaggedKvMeta
     scale: float32
     layer, H, Nkv: int
@@ -342,11 +341,11 @@ func kvTablesValid(kv: JaggedKvMeta, numPages: int): bool =
   ## True when every segment's KV metadata is consistent:
   ## monotone offsets, positive seqlens, page ids inside the pool,
   ## every staged value inside the int32 domain
-  if kv.offsets.len != kv.batchSize + 1 or kv.seqlens.len != kv.batchSize:
+  if kv.offsets.len != kv.seqlens.len + 1:
     return false
   if kv.offsets[0] != 0:
     return false
-  for s in 0 ..< kv.batchSize:
+  for s in 0 ..< kv.seqlens.len:
     if kv.seqlens[s] <= 0 or kv.offsets[s + 1] < kv.offsets[s] or
         not fitsInt32(kv.seqlens[s]) or not fitsInt32(kv.offsets[s + 1]):
       return false
@@ -369,8 +368,8 @@ proc tn_jagged_attention*(engine: AnyEngine, q, poolK, poolV: TensorNode,
   ## - q: (q_total, H, D) post-rope queries in bfloat16
   ## - poolK, poolV: (num_pages, num_layers, page_size, Nkv, D) pool slabs
   ##   in bfloat16, the layer selection happens in-kernel through `layer`
-  ## - qOffsets: per segment q start, batchSize + 1 entries, cumulative,
-  ##   qOffsets[batchSize] == q_total
+  ## - qOffsets: per segment q start, seqlens.len + 1 entries, cumulative,
+  ##   qOffsets[^1] == q_total
   ## - kv: the jagged KV metadata, the JaggedKvMeta contract above
   ##
   ## - scale: the softmax scale, 1/sqrt(D) for the Qwen3 geometry
@@ -403,8 +402,8 @@ proc tn_jagged_attention*(engine: AnyEngine, q, poolK, poolV: TensorNode,
   {.precondition: H mod Nkv == 0.}
   {.precondition: layer >= 0 and layer < sk[1].}
   {.precondition: windowSize <= 0.}
-  {.precondition: kv.batchSize > 0.}
-  {.precondition: qOffsetsValid(qOffsets, kv.batchSize, sq[0]).}
+  {.precondition: kv.seqlens.len > 0.}
+  {.precondition: qOffsetsValid(qOffsets, kv.seqlens.len, sq[0]).}
   {.precondition: kvTablesValid(kv, sk[0]).}
   JaggedAttnNode(
     r: engine.newViewNode(kBf16, sq).getImpl(),
@@ -446,10 +445,10 @@ proc enqueueJaggedAttnRows[E: HwEngine, Sh: tuple, Mem, MemMeta](
       vb = initTensorBridge(rv.data[], rv.offset, rv.layout)
     # launch dims: (q token blocks, H, num_seqs), attnTile lanes
     var maxQLen = 0
-    for s in 0 ..< n.kv.batchSize:
+    for s in 0 ..< n.kv.seqlens.len:
       maxQLen = max(maxQLen, n.qOffsets[s + 1] - n.qOffsets[s])
     let gx = (maxQLen + attnTile - 1) div attnTile
-    batch.enqueue<<((gx, n.H, n.kv.batchSize), (attnTile, 1))>> attnCombo(
+    batch.enqueue<<((gx, n.H, n.kv.seqlens.len), (attnTile, 1))>> attnCombo(
       ob, qb, kb, vb, qOffsetsB, kvOffsetsB, kvIndicesB, kvSeqlensB,
       float32(n.scale), n.layer, n.H, n.Nkv,
       PageSize, HeadDim, false, low(int32))
@@ -486,7 +485,7 @@ proc enqueueJaggedAttn[E: HwEngine, Sh: tuple, Mem](
   # A face contract bounds the int32 domain.
   # Kernel binding: the typed device buffers bind the kernel's pointer formals.
   type MemMeta = typeof(engine.allocDevice(int32, 0))
-  var qOffHost = newSeq[int32](asA.kv.batchSize + 1)
+  var qOffHost = newSeq[int32](asA.qOffsets.len)
   for i in 0 ..< qOffHost.len:
     qOffHost[i] = int32(asA.qOffsets[i])
   var kvOffHost = newSeq[int32](asA.kv.offsets.len)

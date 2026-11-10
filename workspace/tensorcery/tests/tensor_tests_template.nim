@@ -1813,6 +1813,60 @@ proc runPoolWriteTest*(run: static Runtime, name: string) =
           doAssert gotV[slabIdx(0, 0, t, h, d)].to(float32) == vh[srcIdx(t, h, d)].to(float32),
             "fan-out V (" & $t & "," & $h & "," & $d & ")"
 
+  # Two-add fan-out over a pool-write output at rank 5. The write enqueues once for both consumers, and the readbacks below compare
+  # every slab element against the post-write reference, so a dropped write cannot hide behind a correct entry count.
+  block:
+    let kSlab = slabNode(16)
+    let vSlab = slabNode(17)
+    let kHost = slabHostCopy(16)
+    let (kSrc, vSrc, kh, vh) = srcNodes(10, 18)
+    let w = engine.tn_pool_write(kSlab, vSlab, kSrc, vSrc, 0, 0, 10, 0, @[0, 1, 2, 3])
+    proc addendHost(seed: int): seq[bfloat16] =
+      ## Rank-5 add operand over the whole slab shape
+      result = newSeq[bfloat16](SlabElems)
+      for i in 0 ..< result.len:
+        result[i] = (float32((i * 17 + seed) mod 61) * 0.5'f32 - 12.0'f32).to(bfloat16)
+    let c1H = addendHost(20)
+    let c2H = addendHost(21)
+    let c1 = engine.newTensorNode(kBf16, slabShape)
+    engine.upload(c1, c1H)
+    let c2 = engine.newTensorNode(kBf16, slabShape)
+    engine.upload(c2, c2H)
+    let z1 = engine.tn_add(w, c1)
+    let z2 = engine.tn_add(w, c2)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var nz1 = z1
+    var nz2 = z2
+    engine.evalNode(batch, nz1, visited)
+    engine.evalNode(batch, nz2, visited)
+    doAssert batch.entries.len == 3,
+      name & ": two-add fan-out enqueued " & $batch.entries.len &
+      ", expected 3 (the write once, one add per consumer)"
+    batch.submit()
+    # post-write slab reference: the write overwrites 10 tokens at layer 0,
+    # offset 0, page 0
+    var expSlab = kHost
+    for t in 0 ..< 10:
+      for h in 0 ..< KvHeads:
+        for d in 0 ..< HeadDim:
+          expSlab[slabIdx(0, 0, t, h, d)] = kh[srcIdx(t, h, d)]
+    var gotK = newSeq[bfloat16](SlabElems)
+    engine.download(gotK, kSlab)
+    for i in 0 ..< SlabElems:
+      doAssert gotK[i].to(float32) == expSlab[i].to(float32),
+        name & ": fan-out slab (" & $i & ")"
+    var gz1 = newSeq[bfloat16](SlabElems)
+    var gz2 = newSeq[bfloat16](SlabElems)
+    engine.download(gz1, nz1)
+    engine.download(gz2, nz2)
+    for i in 0 ..< SlabElems:
+      # add judgment: one f32 sum and one bf16 rounding, exact
+      let want1 = (expSlab[i].to(float32) + c1H[i].to(float32)).to(bfloat16).to(float32)
+      let want2 = (expSlab[i].to(float32) + c2H[i].to(float32)).to(bfloat16).to(float32)
+      doAssert gz1[i].to(float32) == want1, name & ": fan-out z1 (" & $i & ")"
+      doAssert gz2[i].to(float32) == want2, name & ": fan-out z2 (" & $i & ")"
+
   echo "pool write op (", name, "): all checks passed"
 
 proc runFactoryTest*(run: static Runtime, name: string) =
@@ -2153,8 +2207,7 @@ proc runJaggedAttentionTest*(run: static Runtime, name: string) =
       poolK = toTensor(kH, @[sc.numPages, NumLayers, PageSize, sc.nkv, D])
       poolV = toTensor(vH, @[sc.numPages, NumLayers, PageSize, sc.nkv, D])
     let kvMeta = JaggedKvMeta(
-      offsets: kvOffsets, indices: kvIndices, seqlens: kvSeqlens,
-      batchSize: sc.qLens.len)
+      offsets: kvOffsets, indices: kvIndices, seqlens: kvSeqlens)
     let o = jagged_attention(q, poolK, poolV, qOffsets, kvMeta,
       1.0'f32 / sqrt(float32(D)), sc.layer, H, sc.nkv)
     doAssert o.shape().len == 3, name & ": " & label & " output rank"
@@ -2237,7 +2290,7 @@ proc runJaggedAttentionTest*(run: static Runtime, name: string) =
     engine.upload(kNode, slabH)
     engine.upload(vNode, slabH)
     let kvMeta = JaggedKvMeta(
-      offsets: @[0, 1], indices: @[0], seqlens: @[1], batchSize: 1)
+      offsets: @[0, 1], indices: @[0], seqlens: @[1])
     proc attnValid(): auto =
       engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvMeta,
         1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
@@ -2261,12 +2314,12 @@ proc runJaggedAttentionTest*(run: static Runtime, name: string) =
       discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 2], kvMeta,
         1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
     let kvBad = JaggedKvMeta(
-      offsets: @[0, 1], indices: @[5], seqlens: @[1], batchSize: 1)
+      offsets: @[0, 1], indices: @[5], seqlens: @[1])
     doAssertRaises AssertionDefect:
       discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvBad,
         1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
     let kvEmpty = JaggedKvMeta(
-      offsets: @[0, 1], indices: @[0], seqlens: @[0], batchSize: 1)
+      offsets: @[0], indices: @[], seqlens: @[0])
     doAssertRaises AssertionDefect:
       discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvEmpty,
         1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
@@ -2324,6 +2377,47 @@ proc runJaggedAttentionTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard engine.tn_jagged_attention(qD64, kNode, vNode, @[0, 1], kvMeta,
         1.0'f32 / sqrt(64.0'f32), 0, 16, 8)
+    # pool-slab dtype contracts fire independently of q's dtype
+    var f32SlabShape = @[1, 1, 256, 8, 128]
+    let kF32Slab = engine.newTensorNode(kFp32, f32SlabShape.toSpan())
+    var f32SlabH = newSeq[float32](256 * 8 * 128)
+    for i in 0 ..< f32SlabH.len:
+      f32SlabH[i] = float32(i mod 13) * 0.125'f32
+    engine.upload(kF32Slab, f32SlabH)
+    let vF32Slab = engine.newTensorNode(kFp32, f32SlabShape.toSpan())
+    engine.upload(vF32Slab, f32SlabH)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kF32Slab, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vF32Slab, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    # H mod Nkv == 0 fires on a geometry where every earlier head-count
+    # contract passes: 6 query heads over a 4-kv-head slab
+    var h6Shape = @[1, 6, 128]
+    let qH6 = engine.newTensorNode(kBf16, h6Shape.toSpan())
+    var h6H = newSeq[bfloat16](6 * 128)
+    for i in 0 ..< h6H.len:
+      h6H[i] = (float32(i mod 5) * 0.25'f32).to(bfloat16)
+    engine.upload(qH6, h6H)
+    var nkv4Shape = @[1, 1, 256, 4, 128]
+    let kNkv4 = engine.newTensorNode(kBf16, nkv4Shape.toSpan())
+    let vNkv4 = engine.newTensorNode(kBf16, nkv4Shape.toSpan())
+    var nkv4H = newSeq[bfloat16](256 * 4 * 128)
+    for i in 0 ..< nkv4H.len:
+      nkv4H[i] = (float32(i mod 9) * 0.125'f32).to(bfloat16)
+    engine.upload(kNkv4, nkv4H)
+    engine.upload(vNkv4, nkv4H)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qH6, kNkv4, vNkv4, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 6, 4)
+    # Batch-count contract falsifier over an empty-q geometry: q is a zero-size view of a real buffer and every metadata table is
+    # consistent with an empty batch, so the batch count alone fails.
+    let qEmpty = engine.tn_view(qNode, @[0, 16, 128], @[2048, 128, 1], 0)
+    let kvZeroBatch = JaggedKvMeta(offsets: @[0], indices: @[], seqlens: @[])
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qEmpty, kNode, vNode, @[0], kvZeroBatch,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
 
   # fan-out: two add consumers of one attention output see one
   # attention launch enqueued exactly once
@@ -2346,7 +2440,7 @@ proc runJaggedAttentionTest*(run: static Runtime, name: string) =
     engine.upload(kNode, kH)
     engine.upload(vNode, vH)
     let kvMeta = JaggedKvMeta(
-      offsets: @[0, 2], indices: @[0, 1], seqlens: @[300], batchSize: 1)
+      offsets: @[0, 2], indices: @[0, 1], seqlens: @[300])
     let p = engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvMeta,
       1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
     var cx = engine.newTensorNode(kBf16, qShape.toSpan())

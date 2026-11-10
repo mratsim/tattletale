@@ -89,7 +89,7 @@ proc runCase(pool: PagePool, sc: Scenario, seed: int, name: string) =
     qTotal += sc.qLens[s]
     qOffsets.add qTotal
   var kvMeta = JaggedKvMeta(
-    offsets: @[0], indices: @[], seqlens: @[], batchSize: numSeqs)
+    offsets: @[0], indices: @[], seqlens: @[])
   for s in 0 ..< numSeqs:
     # offsets are the cumulative page counts, the page ids of segment s are
     # kvMeta.indices[offsets[s] ..< offsets[s + 1]]

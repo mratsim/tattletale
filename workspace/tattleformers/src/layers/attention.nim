@@ -320,7 +320,7 @@ proc forward*[QKNorm](self: RopeGQAttention[QKNorm], ctx: var InferenceContext[u
   let kvLen = offset + seq_len
   let q_flat = qRotated.reshape([numSeq * seq_len, self.gqa_attn.num_qo_head, self.gqa_attn.head_dim])
   var kvMeta = JaggedKvMeta(
-    offsets: @[0], indices: @[], seqlens: @[kvLen], batchSize: 1)
+    offsets: @[0], indices: @[], seqlens: @[kvLen])
   let numKvPages = (kvLen + TokensPerPage - 1) div TokensPerPage
   kvMeta.offsets.add numKvPages
   for i in 0 ..< numKvPages:

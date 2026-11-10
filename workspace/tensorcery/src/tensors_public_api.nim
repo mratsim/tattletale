@@ -489,7 +489,7 @@ proc jagged_attention*(q, poolK, poolV: Tensor, qOffsets: openArray[int],
   ## - q: (q_total, H, D) post-rope queries in bfloat16
   ## - poolK, poolV: (num_pages, num_layers, page_size, Nkv, D) pool slabs
   ##   in bfloat16, `layer` selects the slab layer the attention reads
-  ## - qOffsets, kv: segment q starts (batchSize + 1 entries) and the jagged KV metadata
+  ## - qOffsets, kv: segment q starts (seqlens.len + 1 entries) and the jagged KV metadata
   ## - scale, H, Nkv: the softmax scale and the head counts, H a multiple of Nkv
   ##
   ## Returns:
