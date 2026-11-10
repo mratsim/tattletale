@@ -38,12 +38,26 @@ proc statKernel*(outP: ptr UncheckedArray[uint32], n: static int, v: uint32) =
 type
   Phant[V: static int] = object
     ## Phantom value type: no fields, the value is the static argument V.
+  ShapeAlias = Phant[7]
+    ## Alias over the phantom value type: the same shape through the alias.
   BroadcastLayout = object
     ## Static shape over runtime strides: the type split `make_layout`
     ## produces for constant shapes. The shape leaves are phantoms.
     ## The strides travel as runtime words.
     shape: tuple[tokens: Phant[4], heads: Phant[2], half: Phant[4]]
     stride: tuple[token, head, lane: int32]
+  PhantomArrayLayout = object
+    ## Array-of-phantoms field over runtime words: each array element packs its static argument as one 4-byte word.
+    ## The runtime words occupy the device offsets behind the elements, never the Nim `sizeof` offsets.
+    dims: array[2, Phant[4]]
+    base: int32
+    tag: int32
+  AliasLayout = object
+    ## Alias-over-phantom field over runtime words: the field packs its static argument as one 4-byte word.
+    ## The runtime words occupy the device offsets behind the field, never the Nim `sizeof` offsets.
+    shape: ShapeAlias
+    stride: int32
+    tag: int32
 
 proc broadcastGatherKernel*(outP: ptr UncheckedArray[float32], src: ptr UncheckedArray[float32], lay: BroadcastLayout) =
   ## Computes out[token*4 + lane] = src[token*stride.token + lane*stride.lane]:
@@ -52,6 +66,18 @@ proc broadcastGatherKernel*(outP: ptr UncheckedArray[float32], src: ptr Unchecke
   let token = int(threadgroup_position_in_grid.x)
   let lane = int(thread_position_in_threadgroup.x)
   outP[token * 4 + lane] = src[token * lay.stride.token + lane * lay.stride.lane]
+
+proc phantomArrayKernel*(outP: ptr UncheckedArray[int32], lay: PhantomArrayLayout) =
+  ## Reads the runtime words behind the array-of-phantoms field.
+  ## The device struct layout places them after the elements' static-argument words.
+  outP[0] = lay.base
+  outP[1] = lay.tag
+
+proc aliasLayoutKernel*(outP: ptr UncheckedArray[int32], lay: AliasLayout) =
+  ## Reads the runtime words behind the alias-over-phantom field.
+  ## The device struct layout places them after the field's static-argument word.
+  outP[0] = lay.stride
+  outP[1] = lay.tag
 
 proc fillSentinel[E: HwEngine](engine: E, dst: auto, len: int, v: auto) =
   var host = newSeq[typeof(v)](len)
@@ -275,5 +301,37 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
         doAssert got[t * 4 + j] == srcH[t * 5 + j],
           "phantom-shape struct mismatch at token " & $t & " lane " & $j & ": " & $got[t * 4 + j]
     echo "[OK] phantom-shape struct arg: static shape words and runtime strides line up"
+
+  block:
+    # an array-of-phantoms field: each element packs its static argument as one 4-byte word.
+    # Runtime words behind the array read at the device struct offsets, never the Nim sizeof offsets.
+    var lay = PhantomArrayLayout(dims: [Phant[4](), Phant[4]()], base: 42'i32, tag: 99'i32)
+    var outD = engine.allocDevice(int32, 2)
+    var arrBatch = engine.recordBatch()
+    arrBatch.enqueue<<(1, 1)>> phantomArrayKernel(outD, lay)
+    arrBatch.submit()
+    var got: array[2, int32]
+    engine.copyToHostFromDevice(got.toOpenArray(0, 1), outD)
+    doAssert got[0] == 42'i32,
+      "array-of-phantoms: the word behind the array read " & $got[0] & ", expected 42"
+    doAssert got[1] == 99'i32,
+      "array-of-phantoms: the second runtime word read " & $got[1] & ", expected 99"
+    echo "[OK] array-of-phantoms arg: the runtime words read behind the static-argument words"
+
+  block:
+    # an alias over the phantom value type as a struct field: the field packs its static argument as one 4-byte word.
+    # Runtime words behind the field read at the device offsets, never the Nim sizeof offsets.
+    var lay = AliasLayout(shape: ShapeAlias(), stride: 5'i32, tag: 8'i32)
+    var outD = engine.allocDevice(int32, 2)
+    var aliasBatch = engine.recordBatch()
+    aliasBatch.enqueue<<(1, 1)>> aliasLayoutKernel(outD, lay)
+    aliasBatch.submit()
+    var got: array[2, int32]
+    engine.copyToHostFromDevice(got.toOpenArray(0, 1), outD)
+    doAssert got[0] == 5'i32,
+      "alias-over-phantom: the stride word read " & $got[0] & ", expected 5"
+    doAssert got[1] == 8'i32,
+      "alias-over-phantom: the tag word read " & $got[1] & ", expected 8"
+    echo "[OK] alias-over-phantom arg: the runtime words read behind the static-argument word"
 
   echo "[OK] batch suite (", engine.deviceName(), "): all scenarios passed"

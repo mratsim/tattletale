@@ -85,13 +85,16 @@ func explodesStructArgs(backend: static CodegenKind): bool {.compileTime.} =
   backend in {cgMetal, cgWebGPU, cgOpenCL}
 
 func unwrapTypeDesc(n: NimNode): NimNode {.compileTime.} =
-  ## A typedesc macro parameter is the `typeDesc[T]` instantiation
-  ## whenever the argument is a generic's type parameter.
+  ## A typedesc macro parameter wraps the type in a `typeDesc[T]` instantiation.
+  ## A generic's type parameter passes a symbol node.
+  ## A type computed from a value, an array's element, passes a `typeof` expression.
   ## Returns the type itself.
-  if n.kind == nnkSym and n.typeKind == ntyTypeDesc:
-    result = n.getTypeInst()[1]
-  else:
-    result = n
+  var t = n
+  if (t.kind == nnkSym and t.typeKind == ntyTypeDesc) or t.kind == nnkTypeOfExpr:
+    t = t.getTypeInst()
+  if t.kind == nnkBracketExpr and t.len == 2 and t[0].strVal == "typeDesc":
+    t = t[1]
+  result = t
 
 macro isPhantomStatic(t: typedesc): bool =
   ## Returns true for a phantom value type:
@@ -112,8 +115,8 @@ macro phantomStaticValue(t: typedesc): int =
 func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple[size, align: int] {.compileTime.} =
   ## Returns the device size and alignment of `T` on `backend`.
   ## A phantom value packs one 4-byte word: its static argument.
-  ## The CIR lowers the type to a 32-bit int, the same form.
-  ## Nim int/uint lower to 4 bytes
+  ## The frontend's `resolveCirType` lowers a phantom value type to `tInt(32)`,
+  ## the same form. Nim int/uint lower to 4 bytes
   when T is DeviceMem:
     result = (8, 8)  # 8 bytes, one device address slot
   elif isPhantomStatic(T):
@@ -127,7 +130,12 @@ func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple
     if result.size > 0:
       result.size = result.size.round_multiple_up(result.align)
   elif T is array:
-    when backend == cgGlsl and hasBoolLeaf(T):
+    when default(T).len > 0 and isPhantomStatic(typeof(default(T)[0])):
+      # one 4-byte static-argument word per element (the phantom scalar layout),
+      # never Nim's 1-byte empty object
+      let el = computeDeviceLayout(typeof(default(T)[0]), backend)
+      result = (default(T).len * el.size, el.align)
+    elif backend == cgGlsl and hasBoolLeaf(T):
       # one 4-byte std430 word per bool, array elements stride at the device element layout, never Nim's 1-byte bool
       let el = computeDeviceLayout(typeof(default(T)[0]), backend)
       result = (default(T).len * el.size, el.align)
@@ -202,8 +210,10 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
       dst.packFrom(off, f, backend)
     off = off.round_multiple_up(a)
   elif T is array:
-    when backend == cgGlsl and hasBoolLeaf(T):
-      # element-wise packing, one 4-byte std430 word per bool, same as the scalar getArgWidth rule
+    when (backend == cgGlsl and hasBoolLeaf(T)) or
+        (default(T).len > 0 and isPhantomStatic(typeof(default(T)[0]))):
+      # element-wise packing: a GLSL bool array element takes one 4-byte std430 word.
+      # A phantom array element takes its 4-byte static-argument word, matching the scalar getArgWidth rule.
       let a = computeDeviceLayout(T, backend).align
       off = off.round_multiple_up(a)
       for el in v:

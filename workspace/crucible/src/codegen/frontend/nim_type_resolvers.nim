@@ -294,10 +294,12 @@ func getPhantomStaticArg*(n: NimNode): NimNode =
   ## Returns:
   ## - the static argument node, or nil for every other type
   var t = n
-  if t.kind == nnkSym and t.typeKind == ntyGenericInst:
-    # an instantiation symbol reads back as its bracket form `Phantom[V]`
+  while t.kind == nnkSym and t.typeKind in {ntyGenericInst, ntyAlias}:
+    # an instantiation symbol reads back as its bracket form `Phantom[V]`.
+    # An alias keeps the aliased type as its definition body.
+    # Each iteration reads one definition body deeper, until the loop reaches the `Phantom[V]` bracket or a non-phantom shape.
     let impl = t.getImpl()
-    if impl.kind != nnkTypeDef or impl[2].kind != nnkSym:
+    if impl.kind != nnkTypeDef or impl[2].kind notin {nnkSym, nnkBracketExpr}:
       return nil
     t = impl[2]
   if t.kind != nnkBracketExpr or t.len != 2:
