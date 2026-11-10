@@ -79,15 +79,26 @@ proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) 
   let t = impl.to(engine.getTensorImplType(float32, 2))
   engine.copyToDeviceFromHost(t.data[], src)
 
+proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float16]) {.inline.} =
+  let t = node.getImpl().to(engine.getTensorImplType(float16, 2))
+  engine.copyToDeviceFromHost(t.data[], src)
+
 proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) {.inline.} =
   let t = node.getImpl().to(engine.getTensorImplType(bfloat16, 2))
   engine.copyToDeviceFromHost(t.data[], src)
+
+proc download*[E: HwEngine](engine: E, dst: var openArray[float16], node: TensorNode) {.inline.} =
+  engine.download(dst, node, 0)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode) {.inline.} =
   engine.download(dst, node, 0)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode) {.inline.} =
   engine.download(dst, node, 0)
+
+proc download*[E: HwEngine](engine: E, dst: var openArray[float16], node: TensorNode, offsetElems: int) {.inline.} =
+  let t = node.getImpl().to(engine.getTensorImplType(float16, 2))
+  engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode, offsetElems: int) {.inline.} =
   let t = node.getImpl().to(engine.getTensorImplType(float32, 2))

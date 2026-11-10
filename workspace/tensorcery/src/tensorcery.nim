@@ -15,7 +15,4 @@ import workspace/tensorcery/src/compute_graph/ops_1iNo/ops_split
 import workspace/tensorcery/src/compute_graph/eval
 import workspace/tensorcery/src/tensors_public_api
 
-# op files register at this import, the walk expands at the engine accessor's scope
-import workspace/tensorcery/src/tensors_public_api
-
 export tensors_public_api

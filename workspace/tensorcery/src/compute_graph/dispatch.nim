@@ -25,13 +25,16 @@ macro registerOp*(op: static string, handler: typed) =
 #  The walk
 # ═══════════════════════════════════════════════════════════════════════
 
-template withElemType(engine: HwEngine, T: untyped, dtype: Dtype, body: untyped) =
+template withElemType(engine: HwEngine, ElemType: untyped, dtype: Dtype, body: untyped) =
   case dtype
+  of kFp16:
+    type ElemType = float16
+    body
   of kFp32:
-    type T = float32
+    type ElemType = float32
     body
   of kBf16:
-    type T = bfloat16
+    type ElemType = bfloat16
     body
   else:
     raise ValueError.newException("eval: dtype unsupported")

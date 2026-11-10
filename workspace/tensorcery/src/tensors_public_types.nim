@@ -15,5 +15,8 @@ type Dtype* = enum
 template toDtype*(_: typedesc[float32]): Dtype =
   kFp32
 
+template toDtype*(_: typedesc[float16]): Dtype =
+  kFp16
+
 template toDtype*(_: typedesc[bfloat16]): Dtype =
   kBf16

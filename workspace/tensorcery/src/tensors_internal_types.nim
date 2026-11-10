@@ -136,5 +136,6 @@ macro match*(elemBinding, dtypeValue, rankBinding, rankValue: untyped, body: unt
     raise ValueError.newException("Tensorcery: unsupported dtype " & $`dtypeValue`))
   result = nnkStmtList.newTree(dtypeCase)
 
+registerElemType(kFp16, float16)
 registerElemType(kFp32, float32)
 registerElemType(kBf16, bfloat16)

@@ -34,6 +34,7 @@ proc runTest*(run: static Runtime, name: string) =
   doAssert x.strides()[0] == 4
   doAssert x.strides()[1] == 1
   doAssert x.dtype() == kBf16
+  doAssert x.size() == 8
 
   let z = x + y
   let parts = split(x, 0, 2)

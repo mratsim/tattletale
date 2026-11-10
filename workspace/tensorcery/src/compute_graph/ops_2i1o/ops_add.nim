@@ -39,8 +39,8 @@ proc k_add(D, A, B: distinct TensorView) =
     let rB = tile(B.T).load(B, thrID, tileID)
     var rD: tile(D.T)
     for i in 0 ..< rA.size():
-      when typeof(rA[i]) is bfloat16 and ccGetBackend() != ctCuda:
-        rD[i] = (rA[i].to(float32) + rB[i].to(float32)).to(bfloat16)
+      when typeof(rA[i]) is (bfloat16|float16) and ccGetBackend() != ctCuda:
+        rD[i] = (rA[i].to(float32) + rB[i].to(float32)).to(typeof(rA[i]))
       else:
         rD[i] = rA[i] + rB[i]
     D.store(rD, thrID, tileID)

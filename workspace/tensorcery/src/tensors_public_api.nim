@@ -35,7 +35,7 @@ type Tensor* = ref object
 #
 # #######################################################################
 
-proc toTensor*[T: float32 | bfloat16](data: openArray[T], shape: openArray[int],
+proc toTensor*[T: float16 | float32 | bfloat16](data: openArray[T], shape: openArray[int],
     run: static Runtime = runMetal, dtype: typedesc = T): Tensor {.contracts.} =
   {.precondition: shape.len == 2.}
   {.precondition: data.len == shape[0] * shape[1].}
@@ -76,7 +76,10 @@ template strides*(t: Tensor): openArray[int] =
 proc dtype*(t: Tensor): Dtype {.inline.} =
   t.node.getImpl().dtype()
 
-proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.contracts.} =
+proc size*(t: Tensor): int {.inline.} =
+  t.node.size()
+
+proc item*[T: float16 | float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.contracts.} =
   let impl = t.node.getImpl()
   {.precondition: impl.dtype() == toDtype(T).}
   var roots = newSeq[TensorNode](1)
