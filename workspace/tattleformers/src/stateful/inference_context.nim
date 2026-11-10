@@ -11,6 +11,8 @@
 ## embedding layer and comes with the transformer layers port.
 
 import
+  workspace/tensorcery/src/tensorcery,
+  ../layers/rope,
   ./kvcache,
   ./page_pool
 
@@ -33,6 +35,8 @@ type InferenceContext*[T, P] = ref object
   input_tokens*: seq[T]        # Token sequence tracking (for graftPages at sequence end)
 
   position_ids*: seq[int]      # [0,1,2] for prefill, [3] for decode, [6,3,11] for ragged
+  cos*: Tensor                 ## (seq_len, head_dim div 2) rope half table, valid after setRopeForPositions()
+  sin*: Tensor                 ## (seq_len, head_dim div 2) rope half table, valid after setRopeForPositions()
   ## Debug metadata, describes the context configuration
   num_layers*: int
   batch_size*: int
@@ -67,12 +71,24 @@ proc init*[T, P](
     head_dim: head_dim
   )
 
+proc setRopeForPositions*[T, P](ctx: InferenceContext[T, P], rotary: RotaryPositionEmbedding) =
+  ## Populate ctx.cos and ctx.sin from the model's RoPE cache.
+  ##
+  ## Postcondition: ctx.cos/ctx.sin hold the (positions, half_dim) cache slices, ready for attention layers.
+  ##
+  ## Internally calls `rotary.ropeByPositions(ctx.position_ids)`. Called once per forward pass by the model,
+  ## so the orchestrator stays ignorant of rope variants.
+  (ctx.cos, ctx.sin) = rotary.ropeByPositions(ctx.position_ids)
+
 proc clearState*[T, P](ctx: InferenceContext[T, P]) =
   ## Clear KV state for reuse in a new sequence.
   ##
   ## Postcondition: pages, kv_position, cached_tokens, input_tokens, position_ids reset to their empty state.
   ## Metadata fields (num_layers, head_dim, etc.) stay for reuse.
   ## Page references drop (GC may recycle to pool).
+  ##
+  ## cos/sin (RoPE) are NOT cleared: stable per model, overwritten by the next `setRopeForPositions` call.
+  ## That call always runs before any forward pass, so stale values cannot leak between sequences.
   ctx.pages = default(seq[Page])
   ctx.kv_position = 0
   ctx.cached_tokens = 0
