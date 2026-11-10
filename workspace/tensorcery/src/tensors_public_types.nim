@@ -12,8 +12,8 @@ export crucible.Runtime
 type Dtype* = enum
     kFp16, kBf16, kFp32
 
-func toDtype*(_: typedesc[float32]): Dtype =
+template toDtype*(_: typedesc[float32]): Dtype =
   kFp32
 
-func toDtype*(_: typedesc[bfloat16]): Dtype =
+template toDtype*(_: typedesc[bfloat16]): Dtype =
   kBf16

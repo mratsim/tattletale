@@ -58,13 +58,13 @@ type
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func getImpl*(n: AddNode): AnyTensorImpl =
+func getImpl*(n: AddNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: AddNode): string =
+func opName*(n: AddNode): string {.inline.} =
   "Add"
 
-func size*(n: AddNode): int =
+func size*(n: AddNode): int {.inline.} =
   n.r.size()
 
 # ═══════════════════════════════════════════════════════════════════════

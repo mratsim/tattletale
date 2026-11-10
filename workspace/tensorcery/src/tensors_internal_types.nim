@@ -22,16 +22,16 @@ type Span*[T] = object
   p*: openArray[T]
 
 iface *AnyTensorImpl:
-    func dtype(): Dtype
-    func shape(): Span[int]
-    func strides(): Span[int]
-    func size(): int
-    func isMaterialized(): bool
+    func dtype(): Dtype {.inline.}
+    func shape(): Span[int] {.inline.}
+    func strides(): Span[int] {.inline.}
+    func size(): int {.inline.}
+    func isMaterialized(): bool {.inline.}
 
 iface *TensorNode:
-    proc getImpl(): AnyTensorImpl
-    func opName(): string
-    func size(): int
+    proc getImpl(): AnyTensorImpl {.inline.}
+    func opName(): string {.inline.}
+    func size(): int {.inline.}
 
 type
   TensorImpl*[DeviceMem; Rank: static int] = ref object
@@ -49,7 +49,7 @@ type
     core*: C
     pos*: int
 
-proc allocData*[E: HwEngine, H, T; Rank: static int](engine: E, impl: TensorImpl[DeviceMem[H, T], Rank]) {.inline.} =
+proc allocDataIn*[E: HwEngine, H, T; Rank: static int](engine: E, impl: TensorImpl[DeviceMem[H, T], Rank]) {.inline.} =
   impl.data.new()
   impl.data[] = engine.allocDevice(T, impl.size())
 
@@ -72,15 +72,15 @@ func bridge*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): lent 
   return cast[ptr TensorBridge[DeviceMem, getLayoutType(Rank)]](t)[]
 
 iface *AnyEngine:
-    proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode
-    proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorNode
-    proc upload(node: TensorNode, src: openArray[float32])
-    proc upload(node: TensorNode, src: openArray[bfloat16])
-    proc download(dst: var openArray[float32], node: TensorNode)
-    proc download(dst: var openArray[bfloat16], node: TensorNode)
-    proc download(dst: var openArray[float32], node: TensorNode, offsetElems: int)
-    proc download(dst: var openArray[bfloat16], node: TensorNode, offsetElems: int)
-    proc eval(roots: var openArray[TensorNode])
+    proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
+    proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
+    proc upload(node: TensorNode, src: openArray[float32]) {.inline.}
+    proc upload(node: TensorNode, src: openArray[bfloat16]) {.inline.}
+    proc download(dst: var openArray[float32], node: TensorNode) {.inline.}
+    proc download(dst: var openArray[bfloat16], node: TensorNode) {.inline.}
+    proc download(dst: var openArray[float32], node: TensorNode, offsetElems: int) {.inline.}
+    proc download(dst: var openArray[bfloat16], node: TensorNode, offsetElems: int) {.inline.}
+    proc eval(roots: var openArray[TensorNode]) {.inline.}
 
 func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: array[Rank, int]) {.inline.} =
   var acc = 1

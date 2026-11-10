@@ -73,7 +73,7 @@ template shape*(t: Tensor): openArray[int] =
 template strides*(t: Tensor): openArray[int] =
   t.node.getImpl().strides().p
 
-proc dtype*(t: Tensor): Dtype =
+proc dtype*(t: Tensor): Dtype {.inline.} =
   t.node.getImpl().dtype()
 
 proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.contracts.} =

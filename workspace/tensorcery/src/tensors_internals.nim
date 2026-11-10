@@ -126,7 +126,7 @@ proc newTensorImpl[E: HwEngine, T](
 # ═══════════════════════════════════════════════════════════════════════
 
 proc materialize*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
-  engine.allocData(impl)
+  engine.allocDataIn(impl)
 
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   match(ElemType, dtype, Rank, shape.len):

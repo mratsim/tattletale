@@ -37,13 +37,13 @@ proc getOutput(n: SplitCore, i: int): AnyTensorImpl =
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl*[C](n: PosNode[C]): AnyTensorImpl =
+proc getImpl*[C](n: PosNode[C]): AnyTensorImpl {.inline.} =
   n.core.getOutput(n.pos)
 
-func opName*(n: PosNode[SplitCore]): string =
+func opName*(n: PosNode[SplitCore]): string {.inline.} =
   "Split"
 
-func size*(n: PosNode[SplitCore]): int =
+func size*(n: PosNode[SplitCore]): int {.inline.} =
   n.core.r[n.pos].size()
 
 # ═══════════════════════════════════════════════════════════════════════
