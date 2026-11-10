@@ -312,9 +312,8 @@ proc view*(t: Tensor, shape, strides: openArray[int], offset: int): Tensor =
   ## The view builds shape, strides and offset over one shared buffer,
   ## no allocation and no copy.
   ##
-  ## A stride-0 axis is allowed here. The view must not feed a device op
-  ## until the launch path handles runtime stride-0 layouts: read it back
-  ## on the host (item) instead.
+  ## A stride-0 axis is allowed here and on device: the serializer packs
+  ## the static shape leaves, so the kernel reads the true layout.
   Tensor(engine: t.engine, node: tn_view(t.engine, t.node, shape, strides, offset))
 
 proc reshape*(t: Tensor, shape: openArray[int]): Tensor =

@@ -124,9 +124,8 @@ proc tn_view*(engine: AnyEngine, x: TensorNode, shape, strides: openArray[int], 
   ## The general case of narrow, transpose, permute, reshape and expand:
   ## one shared buffer, no allocation, no copy.
   ##
-  ## A stride-0 axis is allowed here. The view must not feed a device op
-  ## until the launch path handles runtime stride-0 layouts: read it back
-  ## on the host (item) instead.
+  ## A stride-0 axis is allowed here and on device: the serializer packs
+  ## the static shape leaves, so the kernel reads the true layout.
   let ix = x.getImpl()
   {.precondition: shape.len == strides.len.}
   {.precondition: shape.len in 1 .. 5.}
