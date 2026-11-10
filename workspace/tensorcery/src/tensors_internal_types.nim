@@ -65,7 +65,7 @@ type
     layout*: L
 
   TensorBridge*[DeviceMem; L: Layout] = object
-    data {.cursor.}: DeviceMem
+    data: ref DeviceMem
     offset: int
     layout: L
 
@@ -78,7 +78,7 @@ proc allocData*[E: HwEngine, H, T, L](engine: E, impl: TensorImpl[DeviceMem[H, T
   impl.data[] = engine.allocDevice(T, impl.layout.size())
 
 func bridge*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): TensorBridge[DeviceMem, L] {.inline.} =
-  TensorBridge[DeviceMem, L](data: t.data[], offset: t.offset, layout: t.layout)
+  TensorBridge[DeviceMem, L](data: t.data, offset: t.offset, layout: t.layout)
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: Span[int]): TensorNode
