@@ -48,13 +48,13 @@ proc getArtifact*(engine: OpenCLEngine): string {.inline.} =
 proc deviceName*(engine: OpenCLEngine): string {.inline.} =
   engine.ctx.device.getName()
 
-proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[OpenCLBuffer, T] {.inline.} =
-  DeviceMem[OpenCLBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+proc allocDevice*[T](engine: OpenCLEngine, _: typedesc[T], len: int): DeviceMem[runOpenCL, T] {.inline.} =
+  DeviceMem[runOpenCL, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[OpenCLBuffer, T], src: openArray[T]) {.inline.} =
+proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[runOpenCL, T], src: openArray[T]) {.inline.} =
   engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: var openArray[T], src: DeviceMem[OpenCLBuffer, T]) {.inline.} =
+proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: var openArray[T], src: DeviceMem[runOpenCL, T]) {.inline.} =
   engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════

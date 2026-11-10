@@ -64,13 +64,13 @@ proc deviceName*(engine: CudaEngine): string {.inline.} =
   check cuDeviceGetName(addr name[0], cint(name.len), engine.nvrtc.device)
   $cast[cstring](addr name[0])
 
-proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[CUdeviceptr, T] {.inline.} =
-  DeviceMem[CUdeviceptr, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[runCuda, T] {.inline.} =
+  DeviceMem[runCuda, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[CUdeviceptr, T], src: openArray[T]) {.inline.} =
+proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[runCuda, T], src: openArray[T]) {.inline.} =
   engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: CudaEngine, dst: var openArray[T], src: DeviceMem[CUdeviceptr, T]) {.inline.} =
+proc copyToHostFromDevice*[T](engine: CudaEngine, dst: var openArray[T], src: DeviceMem[runCuda, T]) {.inline.} =
   engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════

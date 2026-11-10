@@ -19,6 +19,14 @@ import workspace/crucible/src/runtime/backends/opencl_runtime
 import workspace/crucible/src/runtime/backends/vulkan_common
 
 type
+  Runtime* = enum
+    runCuda
+    runWebGPU
+    runOpenCL
+    runVulkan
+    runMetal
+    runCpu
+
   Dim3* = object
     x*, y*, z* = 1
 
@@ -58,13 +66,27 @@ when defined(macosx):
       objc.release(h)
 
 type
-  DeviceMem*[H, T] = object
+  DeviceMem*[R: static Runtime, T] = object
     ## Typed on-device memory buffer owning its memory: released on scope
     ## exit and move-only.
-    mem*: H
+    when R == runCuda:
+      mem*: CUdeviceptr
+    elif R == runOpenCL:
+      mem*: OpenCLBuffer
+    elif R == runVulkan:
+      mem*: VulkanBuffer
+    elif R == runWebGPU:
+      mem*: WGPUBuffer
+    elif R == runMetal:
+      mem*: objc.ID
+    else:
+      mem*: pointer
 
-proc `=destroy`*[H, T](mem: var DeviceMem[H, T]) {.inline.} =
-  freeDeviceImpl(mem.mem)
+proc `=destroy`*[R: static Runtime, T](mem: var DeviceMem[R, T]) {.inline.} =
+  when R == runCpu:
+    {.error: "TODO: The CPU backend does use the same alloc/dealloc code path as GPU backends at the moment".}
+  else:
+    freeDeviceImpl(mem.mem)
 
-proc `=copy`*[H, T](dst: var DeviceMem[H, T], src: DeviceMem[H, T]) {.
+proc `=copy`*[R: static Runtime, T](dst: var DeviceMem[R, T], src: DeviceMem[R, T]) {.
     error: "DeviceMem owns its buffer and is move-only".}

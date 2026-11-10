@@ -24,15 +24,6 @@ type
     proc copyToDeviceFromHost(engine: E, dst: auto, src: auto, n: int)
     proc copyToHostFromDevice(engine: E, dst: auto, src: auto, n: int)
 
-type
-  Runtime* = enum
-    runCuda
-    runWebGPU
-    runOpenCL
-    runVulkan
-    runMetal
-    runCpu
-
 proc newEngine*(runtime: static Runtime): auto {.inline.} =
   when runtime == runCuda:
     newCudaEngine()
@@ -50,7 +41,7 @@ proc newEngine*(runtime: static Runtime): auto {.inline.} =
     {.error: "newEngine: unknown Runtime".}
 
 export engines_common.CodegenKind, engines_common.Dim3, engines_common.LaunchConfig,
-       engines_common.dim3, engines_common.DeviceMem
+       engines_common.dim3, engines_common.DeviceMem, engines_common.Runtime
 export cuda_api.CudaEngine, opencl_api.OpenCLEngine, vulkan_api.VulkanEngine,
        webgpu_api.WebgpuEngine, metal_api.MetalEngine
 export cuda_api.newCudaEngine,   cuda_api.ingest, cuda_api.getArtifact, cuda_api.deviceName,

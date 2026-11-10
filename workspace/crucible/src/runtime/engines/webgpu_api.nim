@@ -92,13 +92,13 @@ proc getArtifact*(engine: WebgpuEngine): string {.inline.} =
 proc deviceName*(engine: WebgpuEngine): string {.inline.} =
   engine.ctx.deviceName()
 
-proc allocDevice*[T](engine: WebgpuEngine, _: typedesc[T], len: int): DeviceMem[WGPUBuffer, T] {.inline.} =
-  DeviceMem[WGPUBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+proc allocDevice*[T](engine: WebgpuEngine, _: typedesc[T], len: int): DeviceMem[runWebGPU, T] {.inline.} =
+  DeviceMem[runWebGPU, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: WebgpuEngine, dst: DeviceMem[WGPUBuffer, T], src: openArray[T]) {.inline.} =
+proc copyToDeviceFromHost*[T](engine: WebgpuEngine, dst: DeviceMem[runWebGPU, T], src: openArray[T]) {.inline.} =
   engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: var openArray[T], src: DeviceMem[WGPUBuffer, T]) {.inline.} =
+proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: var openArray[T], src: DeviceMem[runWebGPU, T]) {.inline.} =
   engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════

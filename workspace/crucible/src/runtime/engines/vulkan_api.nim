@@ -131,13 +131,13 @@ func getSpirV*(engine: VulkanEngine): SpirvWords {.inline.} =
 proc deviceName*(engine: VulkanEngine): string {.inline.} =
   engine.ctx.deviceName(engine.ctx.physicalDevice)
 
-proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[VulkanBuffer, T] {.inline.} =
-  DeviceMem[VulkanBuffer, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[runVulkan, T] {.inline.} =
+  DeviceMem[runVulkan, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[VulkanBuffer, T], src: openArray[T]) {.inline.} =
+proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[runVulkan, T], src: openArray[T]) {.inline.} =
   engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: DeviceMem[VulkanBuffer, T]) {.inline.} =
+proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: DeviceMem[runVulkan, T]) {.inline.} =
   engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
