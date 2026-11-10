@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible
+import workspace/crucible/src/builtins/builtins_compilermagic
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/ceramic
 import workspace/ceramic/src/tile_algebra
@@ -26,24 +27,24 @@ import workspace/design_by_contract
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_add(z, x, y: distinct TensorView) =
+proc k_add(D, A, B: distinct TensorView) =
   let thrID = getLocalThreadID()
-  var reg: tile(z.T)
-  let tiled = make_layout(z.size()).logical_divide(reg.getLayout())
+  var reg: tile(D.T)
+  let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
   let grid = tiled.getTileGrid()
   let
     cSize = grid.size()
     gridStride = getGridSize()
   for tileID in countup(grid.getLocalTileID(), cSize - 1, gridStride):
-    let rx = tile(x.T).load(x, thrID, tileID)
-    let ry = tile(y.T).load(y, thrID, tileID)
-    var rz: tile(z.T)
-    for i in 0 ..< rx.size():
-      when typeof(rx[i]) is bfloat16:
-        rz[i] = (rx[i].to(float32) + ry[i].to(float32)).to(bfloat16)
+    let rA = tile(A.T).load(A, thrID, tileID)
+    let rB = tile(B.T).load(B, thrID, tileID)
+    var rD: tile(D.T)
+    for i in 0 ..< rA.size():
+      when typeof(rA[i]) is bfloat16 and ccGetBackend() != ctCuda:
+        rD[i] = (rA[i].to(float32) + rB[i].to(float32)).to(bfloat16)
       else:
-        rz[i] = rx[i] + ry[i]
-    z.store(rz, thrID, tileID)
+        rD[i] = rA[i] + rB[i]
+    D.store(rD, thrID, tileID)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Defunctionalization
