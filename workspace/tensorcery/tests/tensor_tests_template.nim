@@ -724,46 +724,45 @@ proc runRmsnormTest*(run: static Runtime, name: string) =
           name & ": wide smoke out " & $t & "," & $c & ": got " &
           $got.to(float32) & ", reference " & $want.to(float32)
 
-  # Wide op-path dispatch runs only without -d:m03pending: a multi-enqueue dispatch blocker
-  # miscomputes wide shapes while the small shape above covers the op dispatch
-  when not defined(m03pending):
-    block:
-      const R = 32
-      const D = 1024
-      var wx = newSeq[bfloat16](R * D)
-      var ww = newSeq[bfloat16](D)
-      for i in 0 ..< R * D:
-        wx[i] = (float32((i * 37 mod 19) - 9) * 0.125'f32).to(bfloat16)
-      for i in 0 ..< D:
-        ww[i] = (float32((i * 29 mod 17) - 8) * 0.125'f32).to(bfloat16)
-      let engine = newEngine(run)
-      var xShape = @[R, D]
-      var wShape = @[D]
-      let xNode = engine.newTensorNode(kBf16, xShape.toSpan())
-      let wNode = engine.newTensorNode(kBf16, wShape.toSpan())
-      engine.upload(xNode, wx)
-      engine.upload(wNode, ww)
-      let y = engine.tn_rmsnorm(xNode, wNode, 1e-6'f32)
-      var batch = engine.recordBatch()
-      var visited: VisitedNodes
-      var ny = y
-      engine.evalNode(batch, ny, visited)
-      doAssert batch.entries.len == 3, name & ": wide op enqueued " &
-        $batch.entries.len & ", expected 3"
-      batch.submit()
-      for t in 0 ..< R:
-        var ss = 0.0'f32
-        for c in 0 ..< D:
-          let x = wx[t * D + c].to(float32)
-          ss += x * x
-        let scale = 1.0'f32 / sqrt(ss / float32(D) + 1e-6'f32)
-        for c in 0 ..< D:
-          let want = (wx[t * D + c].to(float32) * scale * ww[c].to(float32)).to(bfloat16)
-          var got: bfloat16
-          engine.downloadItem(got, ny, t * D + c)
-          doAssert got == want,
-            name & ": wide op out " & $t & "," & $c & ": got " &
-            $got.to(float32) & ", reference " & $want.to(float32)
+  # Wide op-path dispatch: the retained-buffer fix keeps multi-launch handlers
+  # correct at wide shapes (the small shape above covers the op dispatch)
+  block:
+    const R = 32
+    const D = 1024
+    var wx = newSeq[bfloat16](R * D)
+    var ww = newSeq[bfloat16](D)
+    for i in 0 ..< R * D:
+      wx[i] = (float32((i * 37 mod 19) - 9) * 0.125'f32).to(bfloat16)
+    for i in 0 ..< D:
+      ww[i] = (float32((i * 29 mod 17) - 8) * 0.125'f32).to(bfloat16)
+    let engine = newEngine(run)
+    var xShape = @[R, D]
+    var wShape = @[D]
+    let xNode = engine.newTensorNode(kBf16, xShape.toSpan())
+    let wNode = engine.newTensorNode(kBf16, wShape.toSpan())
+    engine.upload(xNode, wx)
+    engine.upload(wNode, ww)
+    let y = engine.tn_rmsnorm(xNode, wNode, 1e-6'f32)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var ny = y
+    engine.evalNode(batch, ny, visited)
+    doAssert batch.entries.len == 3, name & ": wide op enqueued " &
+      $batch.entries.len & ", expected 3"
+    batch.submit()
+    for t in 0 ..< R:
+      var ss = 0.0'f32
+      for c in 0 ..< D:
+        let x = wx[t * D + c].to(float32)
+        ss += x * x
+      let scale = 1.0'f32 / sqrt(ss / float32(D) + 1e-6'f32)
+      for c in 0 ..< D:
+        let want = (wx[t * D + c].to(float32) * scale * ww[c].to(float32)).to(bfloat16)
+        var got: bfloat16
+        engine.downloadItem(got, ny, t * D + c)
+        doAssert got == want,
+          name & ": wide op out " & $t & "," & $c & ": got " &
+          $got.to(float32) & ", reference " & $want.to(float32)
 
   # fan-out: two add consumers of one rmsnorm output enqueue its three
   # launches exactly once
