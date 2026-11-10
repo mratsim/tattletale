@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[math, times]
+import std/[math, times, random]
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/iface
@@ -20,6 +20,7 @@ import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/ops_1i1o/ops_rmsnorm
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_rope
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_pool_write
+import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_attention
 import workspace/tensorcery/src/compute_graph/views
 import workspace/tensorcery/src/compute_graph/eval
 export eval.eval
@@ -2009,3 +2010,383 @@ proc runFactoryTest*(run: static Runtime, name: string) =
       discard toSeq(z, float32)
 
   echo "tensorcery factories (", name, "): all checks passed"
+
+proc runJaggedAttentionTest*(run: static Runtime, name: string) =
+  ## Jagged attention op end to end over the page pool slabs.
+  ##
+  ## Test that every scenario replays through the public face inside
+  ## the pre-stated bf16 band (rtol 1e-2, abstol 1e-2).
+  ##
+  ## The reference side computes in f64 over the same bf16-rounded inputs.
+  ##
+  ## Staging: covered pool tokens random in [-1, 1]. Every other slot
+  ## stays NaN garbage, so a 0*NaN in the P*V mma would poison the output.
+  ##
+  ## Checks:
+  ##
+  ## - five scenarios (decode, prefill, mixed shared-prefix, grid-stride multi-workgroup, MLA)
+  ## - face contracts raise on shape, dtype, statics, head counts and metadata
+  ## - fan-out memo: two add consumers of one attention output enqueue it once, 3 batch entries
+  const
+    H = 16
+    D = 128
+    PageSize = 256
+    NumLayers = 2
+    AttnTile = 32
+    Bf16Rtol = 1e-2'f64
+    Bf16Abstol = 1e-2'f64
+
+  type JaggedScenario = object
+    ## One replay's geometry and page table, host-authored.
+    qLens: seq[int]
+    kvLens: seq[int]
+    pageIds: seq[int]
+    kvPageBounds: seq[int]
+    layer: int
+    numPages: int
+    nkv: int
+
+  proc poolPos(pageId, layer, pos, kvHead: int, sc: JaggedScenario): int =
+    (((pageId * NumLayers + layer) * PageSize + pos) * sc.nkv + kvHead) * D
+
+  proc jaggedTables(sc: JaggedScenario):
+      tuple[qOffsets, kvOffsets, kvIndices, kvSeqlens: seq[int]] =
+    ## Cumulative q offsets and the JaggedKv metadata tables of one scenario.
+    result.qOffsets = @[0]
+    for s in 0 ..< sc.qLens.len:
+      result.qOffsets.add result.qOffsets[^1] + sc.qLens[s]
+    result.kvOffsets = @[0]
+    result.kvSeqlens = @[]
+    for s in 0 ..< sc.qLens.len:
+      for b in sc.kvPageBounds[s] ..< sc.kvPageBounds[s + 1]:
+        result.kvIndices.add sc.pageIds[b]
+      result.kvOffsets.add result.kvOffsets[^1] +
+        sc.kvPageBounds[s + 1] - sc.kvPageBounds[s]
+      result.kvSeqlens.add sc.kvLens[s]
+
+  proc jaggedStage(sc: JaggedScenario, seed: int):
+      tuple[q, k, v: seq[bfloat16]] =
+    ## Seeded inputs: q and the covered pool tokens random in [-1, 1],
+    ## every other slot NaN garbage. The kernel bounds at the covered tokens.
+    var rng = initRand(seed)
+    template randBf16(): bfloat16 =
+      rng.rand(-1.0 .. 1.0).to(bfloat16)
+    template nanBf16(): bfloat16 =
+      cast[bfloat16](uint16(0x7FC0))
+    var qTotal = 0
+    for s in 0 ..< sc.qLens.len:
+      qTotal += sc.qLens[s]
+    result.q = newSeq[bfloat16](qTotal * H * D)
+    for i in 0 ..< result.q.len:
+      result.q[i] = randBf16()
+    let slabElems = sc.numPages * NumLayers * PageSize * sc.nkv * D
+    result.k = newSeq[bfloat16](slabElems)
+    result.v = newSeq[bfloat16](slabElems)
+    for i in 0 ..< slabElems:
+      result.k[i] = nanBf16()
+      result.v[i] = nanBf16()
+    for s in 0 ..< sc.qLens.len:
+      for t in 0 ..< sc.kvLens[s]:
+        let
+          pageIdx = sc.kvPageBounds[s] + t div PageSize
+          base = poolPos(sc.pageIds[pageIdx], sc.layer, t mod PageSize, 0, sc)
+        for h in 0 ..< sc.nkv:
+          for d in 0 ..< D:
+            let idx = base + h * D + d
+            result.k[idx] = randBf16()
+            result.v[idx] = randBf16()
+
+  proc jaggedHostReference(sc: JaggedScenario, qH, kH, vH: seq[bfloat16]):
+      seq[float64] =
+    ## f64 reference over the same bf16-rounded inputs:
+    ## - prefill (qLen >= 2): query token j attends keys [0, kvLen - qLen + j],
+    ##   flash-attn varlen semantics
+    ## - decode (qLen == 1): attends keys [0, kvLen)
+    ## - GQA: kvHead = head div (H div Nkv)
+    ## - the softmax runs in the exp form, identical in exact arithmetic
+    ##   to the kernel's exp2 shape up to one log2(e) factor
+    let (qOffsets, _, _, _) = jaggedTables(sc)
+    result = newSeq[float64](qOffsets[^1] * H * D)
+    let scale = 1.0 / sqrt(float64(D))
+    for s in 0 ..< sc.qLens.len:
+      let
+        q0 = qOffsets[s]
+        qLen = sc.qLens[s]
+        kvLen = sc.kvLens[s]
+      for h in 0 ..< H:
+        let kvHead = h div (H div sc.nkv)
+        for j in 0 ..< qLen:
+          let lastKey = (if qLen == 1: kvLen - 1 else: kvLen - qLen + j)
+          var scores = newSeq[float64](lastKey + 1)
+          var m = -1.0e300
+          for k in 0 .. lastKey:
+            var acc = 0.0'f64
+            for d in 0 ..< D:
+              let pageIdx = sc.kvPageBounds[s] + k div PageSize
+              let pos = poolPos(sc.pageIds[pageIdx], sc.layer,
+                                k mod PageSize, kvHead, sc)
+              acc += float64(qH[((q0 + j) * H + h) * D + d].to(float32)) *
+                     float64(kH[pos + d].to(float32))
+            scores[k] = acc * scale
+            m = max(m, scores[k])
+          var l = 0.0'f64
+          var ps = newSeq[float64](lastKey + 1)
+          for k in 0 .. lastKey:
+            ps[k] = exp(scores[k] - m)
+            l += ps[k]
+          for d in 0 ..< D:
+            var acc = 0.0'f64
+            for k in 0 .. lastKey:
+              let pageIdx = sc.kvPageBounds[s] + k div PageSize
+              let pos = poolPos(sc.pageIds[pageIdx], sc.layer,
+                                k mod PageSize, kvHead, sc)
+              acc += ps[k] * float64(vH[pos + d].to(float32))
+            result[((q0 + j) * H + h) * D + d] = acc / l
+
+  proc replay(sc: JaggedScenario, seed: int, label: string) =
+    ## One scenario through the public face, per-element band judgment.
+    let (qOffsets, kvOffsets, kvIndices, kvSeqlens) = jaggedTables(sc)
+    let (qH, kH, vH) = jaggedStage(sc, seed)
+    let refO = jaggedHostReference(sc, qH, kH, vH)
+    let
+      q = toTensor(qH, @[qOffsets[^1], H, D])
+      poolK = toTensor(kH, @[sc.numPages, NumLayers, PageSize, sc.nkv, D])
+      poolV = toTensor(vH, @[sc.numPages, NumLayers, PageSize, sc.nkv, D])
+    let kvMeta = JaggedKvMeta(
+      offsets: kvOffsets, indices: kvIndices, seqlens: kvSeqlens,
+      batchSize: sc.qLens.len)
+    let o = jagged_attention(q, poolK, poolV, qOffsets, kvMeta,
+      1.0'f32 / sqrt(float32(D)), sc.layer, H, sc.nkv)
+    doAssert o.shape().len == 3, name & ": " & label & " output rank"
+    doAssert o.shape()[0] == qOffsets[^1], name & ": " & label & " output tokens"
+    doAssert o.shape()[1] == H, name & ": " & label & " output heads"
+    doAssert o.shape()[2] == D, name & ": " & label & " output dim"
+    doAssert o.dtype() == kBf16, name & ": " & label & " output dtype"
+    eval(o)
+    let got = toSeq(o, bfloat16)
+    var oBad = 0
+    var worst = 0.0'f64
+    for i in 0 ..< got.len:
+      let g = float64(got[i].to(float32))
+      let want = refO[i]
+      let bar = Bf16Rtol * abs(want) + Bf16Abstol
+      let diff = abs(g - want)
+      # NaN counts as out-of-band only under the not-(<=) form.
+      # A `>` comparison would let a NaN output pass judgment silently
+      if not (diff <= bar):
+        inc oBad
+      elif diff / bar > worst:
+        worst = diff / bar
+    echo "  " & label & ": worstBar=" & $worst & " mismatches=" & $oBad & "/" & $got.len
+    doAssert oBad == 0,
+      name & ": " & label & ": " & $oBad & " of " & $got.len &
+      " output elements outside the band"
+
+  # decode: one segment, q_len 1, kv_len 300 over 2 pages, the last page
+  # partially covered (300 = 256 + 44), one spare page pure garbage
+  replay(JaggedScenario(
+    qLens: @[1], kvLens: @[300], pageIds: @[0, 1], kvPageBounds: @[0, 2],
+    layer: 0, numPages: 3, nkv: 8), 20261111, "decode_partial_last_page")
+
+  # prefill: one segment, q_len 8 == kv_len 8, layer 1
+  replay(JaggedScenario(
+    qLens: @[8], kvLens: @[8], pageIds: @[0], kvPageBounds: @[0, 1],
+    layer: 1, numPages: 2, nkv: 8), 20261112, "prefill_layer1")
+
+  # mixed batch sharing a prefix page, GQA 16Q/8KV:
+  # - segment 0: prefill q_len 8, kv_len 8, page [0]
+  # - segment 1: prefill q_len 8, kv_len 264, pages [0, 2], shared page 0,
+  #   second page partially covered (264 = 256 + 8)
+  # - segment 2: decode q_len 1, kv_len 520, pages [0, 1, 3], shared page 0
+  #   (520 = 2*256 + 8)
+  replay(JaggedScenario(
+    qLens: @[8, 8, 1], kvLens: @[8, 264, 520],
+    pageIds: @[0, 0, 2, 0, 1, 3], kvPageBounds: @[0, 1, 3, 6],
+    layer: 0, numPages: 4, nkv: 8), 20261113, "mixed_shared_prefix")
+
+  # grid-stride / multi-workgroup: the shared-prefix batch with one
+  # segment grown to a 40-token prefill. The op-computed launch grid
+  # spans several query tiles per head, one softmax state per tile
+  replay(JaggedScenario(
+    qLens: @[40, 8, 1], kvLens: @[40, 264, 520],
+    pageIds: @[0, 0, 2, 0, 1, 3], kvPageBounds: @[0, 1, 3, 6],
+    layer: 0, numPages: 4, nkv: 8), 20261114, "grid_stride_multi_workgroup")
+
+  # MLA shape: kv_heads 1, the compressed latent in the K slab.
+  # Every head reads kv head 0. Prefill and decode share one batch
+  replay(JaggedScenario(
+    qLens: @[3, 1], kvLens: @[3, 300], pageIds: @[0, 1, 2],
+    kvPageBounds: @[0, 1, 3],
+    layer: 0, numPages: 3, nkv: 1), 20261115, "mla_kv_heads_1")
+
+  # face contracts raise
+  block:
+    let engine = newEngine(run)
+    var qShape = @[1, 16, 128]
+    let qNode = engine.newTensorNode(kBf16, qShape.toSpan())
+    var slabShape = @[1, 1, 256, 8, 128]
+    let kNode = engine.newTensorNode(kBf16, slabShape.toSpan())
+    let vNode = engine.newTensorNode(kBf16, slabShape.toSpan())
+    var qH = newSeq[bfloat16](16 * 128)
+    for i in 0 ..< qH.len:
+      qH[i] = (float32((i * 13) mod 17 - 8) * 0.25'f32).to(bfloat16)
+    engine.upload(qNode, qH)
+    var slabH = newSeq[bfloat16](256 * 8 * 128)
+    for i in 0 ..< slabH.len:
+      slabH[i] = (float32((i * 7) mod 31 - 15) * 0.125'f32).to(bfloat16)
+    engine.upload(kNode, slabH)
+    engine.upload(vNode, slabH)
+    let kvMeta = JaggedKvMeta(
+      offsets: @[0, 1], indices: @[0], seqlens: @[1], batchSize: 1)
+    proc attnValid(): auto =
+      engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    discard attnValid()
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8, windowSize = 64)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 1, 16, 8)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 15, 8)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 3)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 2], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    let kvBad = JaggedKvMeta(
+      offsets: @[0, 1], indices: @[5], seqlens: @[1], batchSize: 1)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvBad,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    let kvEmpty = JaggedKvMeta(
+      offsets: @[0, 1], indices: @[0], seqlens: @[0], batchSize: 1)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvEmpty,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    # a float32 q and a rank-2 q refuse at the face
+    var f32Shape = @[1, 16, 128]
+    let qF32 = engine.newTensorNode(kFp32, f32Shape.toSpan())
+    var f32H = newSeq[float32](16 * 128)
+    for i in 0 ..< f32H.len:
+      f32H[i] = float32(i mod 7) * 0.25'f32
+    engine.upload(qF32, f32H)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qF32, kNode, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    var r2Shape = @[16, 128]
+    let qR2 = engine.newTensorNode(kBf16, r2Shape.toSpan())
+    var r2H = newSeq[bfloat16](16 * 128)
+    for i in 0 ..< r2H.len:
+      r2H[i] = (float32(i mod 5) * 0.25'f32).to(bfloat16)
+    engine.upload(qR2, r2H)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qR2, kNode, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    # a rank-4 slab and mismatched slab shapes refuse at the face
+    var r4Shape = @[1, 256, 8, 128]
+    let kR4 = engine.newTensorNode(kBf16, r4Shape.toSpan())
+    var r4H = newSeq[bfloat16](256 * 8 * 128)
+    for i in 0 ..< r4H.len:
+      r4H[i] = (float32(i mod 11) * 0.125'f32).to(bfloat16)
+    engine.upload(kR4, r4H)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kR4, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    var smallShape = @[1, 1, 128, 8, 128]
+    let kSmall = engine.newTensorNode(kBf16, smallShape.toSpan())
+    var smallH = newSeq[bfloat16](128 * 8 * 128)
+    for i in 0 ..< smallH.len:
+      smallH[i] = (float32(i mod 9) * 0.125'f32).to(bfloat16)
+    engine.upload(kSmall, smallH)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kNode, kSmall, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    # page-size and head-dim statics refuse other geometries
+    var pgShape = @[1, 1, 128, 8, 128]
+    let kPg = engine.newTensorNode(kBf16, pgShape.toSpan())
+    engine.upload(kPg, smallH)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qNode, kPg, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    var d64QShape = @[1, 16, 64]
+    let qD64 = engine.newTensorNode(kBf16, d64QShape.toSpan())
+    var d64H = newSeq[bfloat16](16 * 64)
+    for i in 0 ..< d64H.len:
+      d64H[i] = (float32(i mod 5) * 0.25'f32).to(bfloat16)
+    engine.upload(qD64, d64H)
+    doAssertRaises AssertionDefect:
+      discard engine.tn_jagged_attention(qD64, kNode, vNode, @[0, 1], kvMeta,
+        1.0'f32 / sqrt(64.0'f32), 0, 16, 8)
+
+  # fan-out: two add consumers of one attention output see one
+  # attention launch enqueued exactly once
+  block:
+    let engine = newEngine(run)
+    var qShape = @[1, 16, 128]
+    let qNode = engine.newTensorNode(kBf16, qShape.toSpan())
+    var qH = newSeq[bfloat16](16 * 128)
+    for i in 0 ..< qH.len:
+      qH[i] = (float32((i * 13) mod 17 - 8) * 0.25'f32).to(bfloat16)
+    engine.upload(qNode, qH)
+    var slabShape = @[2, 2, 256, 8, 128]
+    let kNode = engine.newTensorNode(kBf16, slabShape.toSpan())
+    let vNode = engine.newTensorNode(kBf16, slabShape.toSpan())
+    var kH = newSeq[bfloat16](2 * 2 * 256 * 8 * 128)
+    var vH = newSeq[bfloat16](2 * 2 * 256 * 8 * 128)
+    for i in 0 ..< kH.len:
+      kH[i] = (float32((i * 7) mod 31 - 15) * 0.125'f32).to(bfloat16)
+      vH[i] = (float32((i * 11) mod 29 - 14) * 0.125'f32).to(bfloat16)
+    engine.upload(kNode, kH)
+    engine.upload(vNode, vH)
+    let kvMeta = JaggedKvMeta(
+      offsets: @[0, 2], indices: @[0, 1], seqlens: @[300], batchSize: 1)
+    let p = engine.tn_jagged_attention(qNode, kNode, vNode, @[0, 1], kvMeta,
+      1.0'f32 / sqrt(128.0'f32), 0, 16, 8)
+    var cx = engine.newTensorNode(kBf16, qShape.toSpan())
+    var cy = engine.newTensorNode(kBf16, qShape.toSpan())
+    var cH = newSeq[bfloat16](16 * 128)
+    for i in 0 ..< cH.len:
+      cH[i] = (float32((i * 23) mod 13 - 6) * 0.25'f32).to(bfloat16)
+    engine.upload(cx, cH)
+    engine.upload(cy, cH)
+    let z1 = engine.tn_add(p, cx)
+    let z2 = engine.tn_add(p, cy)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var nz1 = z1
+    var nz2 = z2
+    engine.evalNode(batch, nz1, visited)
+    engine.evalNode(batch, nz2, visited)
+    doAssert batch.entries.len == 3,
+      name & ": attention fan-out enqueued " & $batch.entries.len & ", expected 3"
+    batch.submit()
+    # numerics: the reference output plus the addend, one bf16 rounding
+    var sc = JaggedScenario(
+      qLens: @[1], kvLens: @[300], pageIds: @[0, 1], kvPageBounds: @[0, 2],
+      layer: 0, numPages: 2, nkv: 8)
+    let refO = jaggedHostReference(sc, qH, kH, vH)
+    var gz1, gz2: seq[bfloat16]
+    gz1 = newSeq[bfloat16](16 * 128)
+    gz2 = newSeq[bfloat16](16 * 128)
+    engine.download(gz1, nz1)
+    engine.download(gz2, nz2)
+    for i in 0 ..< refO.len:
+      # band judgment: the attention output stays inside the pre-stated
+      # bf16 band around the f64 reference. The add on top is exact.
+      let want = refO[i] + float64(cH[i].to(float32))
+      let bar = Bf16Rtol * abs(want) + Bf16Abstol
+      doAssert abs(float64(gz1[i].to(float32)) - want) <= bar,
+        name & ": fan-out z1 " & $i & ": got " & $gz1[i].to(float32) &
+        ", want " & $want
+      doAssert abs(float64(gz2[i].to(float32)) - want) <= bar,
+        name & ": fan-out z2 " & $i & ": got " & $gz2[i].to(float32) &
+        ", want " & $want
+
+  echo "tensorcery jagged attention (", name, "): all checks passed"

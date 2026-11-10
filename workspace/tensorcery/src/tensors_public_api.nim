@@ -18,6 +18,7 @@ import compute_graph/ops_1iNo/ops_split
 import compute_graph/ops_Ni1o/ops_embed_gather
 import compute_graph/ops_Ni1o/ops_rope
 import compute_graph/ops_Ni1o/ops_pool_write
+import compute_graph/ops_Ni1o/ops_attention
 import compute_graph/views
 import tensors_globals
 import std/math
@@ -25,6 +26,7 @@ import workspace/design_by_contract
 
 export tensors_public_types
 export bfloat16
+export ops_attention.JaggedKvMeta
 
 # #######################################################################
 #
@@ -458,3 +460,23 @@ proc pool_write*(poolK, poolV, kSrc, vSrc: Tensor, layer: int, offset, seqLen, c
   ## - reading the result reads the written pool
   Tensor(engine: poolK.engine, node: tn_pool_write(poolK.engine, poolK.node,
     poolV.node, kSrc.node, vSrc.node, layer, offset, seqLen, cachedTokens, pageSlots))
+
+proc jagged_attention*(q, poolK, poolV: Tensor, qOffsets: openArray[int],
+    kv: JaggedKvMeta, scale: float32, layer, H, Nkv: int,
+    windowSize: int = 0): Tensor =
+  ## Runs jagged attention over the page pool slabs, in graph.
+  ##
+  ## Args:
+  ## - q: (q_total, H, D) post-rope queries in bfloat16
+  ## - poolK, poolV: (num_pages, num_layers, page_size, Nkv, D) pool slabs
+  ##   in bfloat16, `layer` selects the slab layer the attention reads
+  ## - qOffsets, kv: segment q starts (batchSize + 1 entries) and the jagged KV metadata
+  ## - scale, H, Nkv: the softmax scale and the head counts, H a multiple of Nkv
+  ##
+  ## Returns:
+  ## - a tensor of shape (q_total, H, D) in bfloat16, fully overwritten.
+  ##   The op instantiates the Qwen3 statics (page_size 256, head dim 128)
+  ##   and refuses any other geometry. windowSize must be <= 0. A windowed dispatch
+  ##   needs its own op instantiation
+  Tensor(engine: q.engine, node: tn_jagged_attention(q.engine, q.node,
+    poolK.node, poolV.node, qOffsets, kv, scale, layer, H, Nkv, windowSize))

@@ -20,6 +20,7 @@ import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_silu_mul
 import workspace/tensorcery/src/compute_graph/ops_1i1o/ops_rmsnorm
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_rope
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_pool_write
+import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_attention
 import workspace/tensorcery/src/compute_graph/ops_1iNo/ops_split
 import workspace/tensorcery/src/compute_graph/views
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather

@@ -34,6 +34,7 @@ proc main =
   runViewTest(runMetal, "Metal")
   runFactoryTest(runMetal, "Metal")
   runPoolWriteTest(runMetal, "Metal")
+  runJaggedAttentionTest(runMetal, "Metal")
 
 when isMainModule:
   main()
