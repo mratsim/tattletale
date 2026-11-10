@@ -96,7 +96,7 @@ proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E],
     aImpl = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
     bImpl = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
     size = rImpl.size()
-  asAdd.r.bindPlaceholder(engine, rImpl.layout)
+  engine.materialize(asAdd.r, rImpl.layout)
   batch.enqueue<<(ceil_div(size, 128), 32)>> k_add(rImpl.bridge, aImpl.bridge, bImpl.bridge)
   true
 

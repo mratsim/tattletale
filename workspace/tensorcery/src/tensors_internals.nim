@@ -33,7 +33,7 @@ export tensors_internal_types
 # Furthermore, when backprop is added, the graph can be reused for backward propagation.
 
 # ═══════════════════════════════════════════════════════════════════════
-#  TensorImpl - AnyTensorImpl implementation
+#  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
 func shape*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] {.inline.} =
@@ -52,106 +52,82 @@ func size*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): int {.inline.} =
   t.layout.size()
 
 # ═══════════════════════════════════════════════════════════════════════
-#  TensorImpl - TensorNode implementation (materialized tensors)
+#  TensorImpl - TensorNode interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl*[Mem, L](t: TensorImpl[Mem, L]): AnyTensorImpl =
+proc getImpl*[Mem, L](t: TensorImpl[Mem, L]): AnyTensorImpl {.inline.} =
   t.to(AnyTensorImpl)
 
-func opName*[Mem, L](t: TensorImpl[Mem, L]): string =
+func opName*[Mem, L](t: TensorImpl[Mem, L]): string {.inline.} =
   ""
 
 proc isMaterialized*(n: TensorNode): bool {.inline.} =
   n.getImpl().isMaterialized()
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Typed data path - AnyEngine implementation
+#  Host<->Device copies
 # ═══════════════════════════════════════════════════════════════════════
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) =
+proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) {.inline.} =
   let impl = node.getImpl()
   type Mem = typeof(engine.allocDevice(float32, 0))
   let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
   engine.copyToDeviceFromHost(t.data[], src)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) =
+proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) {.inline.} =
   type Mem = typeof(engine.allocDevice(bfloat16, 0))
   let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
   engine.copyToDeviceFromHost(t.data[], src)
 
-proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode) =
+proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode) {.inline.} =
   engine.download(dst, node, 0)
 
-proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode) =
+proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode) {.inline.} =
   engine.download(dst, node, 0)
 
-proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode, offsetElems: int) =
+proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode, offsetElems: int) {.inline.} =
   type Mem = typeof(engine.allocDevice(float32, 0))
   let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
   engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
 
-proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode, offsetElems: int) =
+proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode, offsetElems: int) {.inline.} =
   type Mem = typeof(engine.allocDevice(bfloat16, 0))
   let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
   engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  The erased engine
+#  TensorImpl
 # ═══════════════════════════════════════════════════════════════════════
 
-proc toAnyEngine*[E: HwEngine](engine: E): AnyEngine =
-  engine.to(AnyEngine)
+func newPlaceholderImpl[E: HwEngine, Mem](engine: E, layout: Layout, _: typedesc[Mem]): TensorImpl[Mem, Layout] {.inline.} =
+  TensorImpl[Mem, Layout](data: nil, offset: 0, layout: layout)
 
-proc materializeImpl[E: HwEngine, Sh: tuple, St: tuple, T, Mem](engine: E, _: typedesc[T], layout: Layout[Sh, St]): TensorImpl[Mem, Layout[Sh, St]] =
-  ## Mem is the engine's device memory for T, bound by the caller's dtype case
-  var t = TensorImpl[Mem, Layout[Sh, St]](data: nil, offset: 0, layout: layout)
-  t.data.new()
-  t.data[] = engine.allocDevice(T, layout.size())
-  t
+proc newTensorImpl[E: HwEngine, T, Mem](engine: E, _: typedesc[T], layout: Layout, _: typedesc[Mem]): TensorImpl[Mem, Layout] {.inline.} =
+  result.data.new()
+  result.data[] = engine.allocDevice(T, layout.size())
+  result.layout = layout
 
-proc bindPlaceholder*[E: HwEngine, Sh: tuple, St: tuple](impl: AnyTensorImpl, engine: E, layout: Layout[Sh, St]) =
-  ## Allocates an unmaterialized impl's buffer in place, every holder sees
-  ## it materialize. The dtype case mirrors makeTensorImpl
+# ═══════════════════════════════════════════════════════════════════════
+#  Graph
+# ═══════════════════════════════════════════════════════════════════════
+
+proc materialize*[E: HwEngine](engine: E, impl: AnyTensorImpl, layout: Layout) =
   case impl.dtype()
   of kFp32:
     type Mem = typeof(engine.allocDevice(float32, 0))
-    let t = impl.to(TensorImpl[Mem, Layout[Sh, St]])
+    let t = impl.to(TensorImpl[Mem, Layout])
     t.data.new()
     t.data[] = engine.allocDevice(float32, t.layout.size())
   of kBf16:
     type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    let t = impl.to(TensorImpl[Mem, Layout[Sh, St]])
+    let t = impl.to(TensorImpl[Mem, Layout])
     t.data.new()
     t.data[] = engine.allocDevice(bfloat16, t.layout.size())
   else:
-    raiseAssert("bindPlaceholder: dtype unsupported")
+    raiseAssert("materialize: dtype unsupported")
 
-proc materializeNode[E: HwEngine, Sh: tuple, St: tuple, T, Mem](engine: E, _: typedesc[T], layout: Layout[Sh, St]): TensorNode =
-  ## Erased node of a materialized tensor, the impl itself is the node
-  materializeImpl[E, Sh, St, T, Mem](engine, T, layout).to(TensorNode)
-
-proc makeTensorImpl[E: HwEngine, Sh: tuple, St: tuple](engine: E, dtype: Dtype, layout: Layout[Sh, St]): AnyTensorImpl =
-  case dtype
-  of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
-    materializeImpl[E, Sh, St, float32, Mem](engine, float32, layout).to(AnyTensorImpl)
-  of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    materializeImpl[E, Sh, St, bfloat16, Mem](engine, bfloat16, layout).to(AnyTensorImpl)
-  else:
-    raise ValueError.newException("makeTensorImpl: dtype " & $dtype & " unsupported")
-
-proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): AnyTensorImpl =
-  case shape.len
-  of 2:
-    var sh: (int, int)
-    fillShape(sh, shape)
-    engine.makeTensorImpl(dtype, make_layout(sh, rowMajorStrides(sh)))
-  else:
-    raise ValueError.newException("makeTensorImpl: rank " & $shape.len & " unsupported")
-
-proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
-  engine.makeTensorImpl(dtype, shape.toSpan())
+proc newTensorNode*[E: HwEngine, T, Mem](engine: E, _: typedesc[T], layout: Layout, _: typedesc[Mem]): TensorNode =
+  engine.newTensorImpl(T, layout, Mem).to(TensorNode)
 
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
   case dtype
@@ -159,16 +135,12 @@ proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int])
     type Mem = typeof(engine.allocDevice(float32, 0))
     var sh: (int, int)
     fillShape(sh, shape)
-    TensorImpl[Mem, Layout[(int, int), (int, int)]](
-      data: nil, offset: 0,
-      layout: make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
+    engine.newPlaceholderImpl(make_layout(sh, rowMajorStrides(sh)), Mem).to(TensorNode)
   of kBf16:
     type Mem = typeof(engine.allocDevice(bfloat16, 0))
     var sh: (int, int)
     fillShape(sh, shape)
-    TensorImpl[Mem, Layout[(int, int), (int, int)]](
-      data: nil, offset: 0,
-      layout: make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
+    engine.newPlaceholderImpl(make_layout(sh, rowMajorStrides(sh)), Mem).to(TensorNode)
   else:
     raise ValueError.newException("newPlaceholderNode: dtype " & $dtype & " unsupported")
 
@@ -181,10 +153,10 @@ proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Ten
     case dtype
     of kFp32:
       type Mem = typeof(engine.allocDevice(float32, 0))
-      materializeNode[E, (int, int), (int, int), float32, Mem](engine, float32, layout)
+      engine.newTensorNode(float32, layout, Mem)
     of kBf16:
       type Mem = typeof(engine.allocDevice(bfloat16, 0))
-      materializeNode[E, (int, int), (int, int), bfloat16, Mem](engine, bfloat16, layout)
+      engine.newTensorNode(bfloat16, layout, Mem)
     else:
       raise ValueError.newException("newTensorNode: dtype " & $dtype & " unsupported")
   else:

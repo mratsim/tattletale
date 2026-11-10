@@ -73,7 +73,6 @@ type
     pos*: int
 
 func bridge*[Sh: tuple, St: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, St]]): TensorBridge[Mem, Sh, St] {.inline.} =
-  ## Kernel ABI of a materialized tensor, assembled at launch sites
   TensorBridge[Mem, Sh, St](data: t.data[], offset: t.offset, layout: t.layout)
 
 iface *AnyEngine:
