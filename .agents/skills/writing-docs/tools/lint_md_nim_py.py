@@ -3616,6 +3616,7 @@ def scan(path, text, findings):
                     and prev_prose[0] + 1 == n and c[:1].islower()
                     and not trailing and not prev_prose[3]):
                 prev_txt = re.sub(r"`[^`]*`", " XcodeX ", prev_prose[1].rstrip())
+                prev_txt = _mask_nested_spans(prev_txt)
                 tail = re.split(r"[,;:.]", prev_txt)[-1].strip()
                 wc = len(tail.split())
                 if 0 < wc < 3:
@@ -3626,6 +3627,20 @@ def scan(path, text, findings):
             prev_prose = (n, c, kind, trailing)
         flush_wall(path, run, findings)
         flush_wall_no_air(path, air_run, findings)
+
+
+def _mask_nested_spans(text):
+    """Replaces quoted, bracketed and parenthesized spans with placeholders,
+    their delimiters are not clause boundaries. One nesting level per pass,
+    iterated until stable."""
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(r'"[^"]*"', ' XquotedX ', text)
+        text = re.sub(r'\([^()]*\)', ' XparenX ', text)
+        text = re.sub(r'\[[^\[\]]*\]', ' XbracketX ', text)
+        text = re.sub(r'\{[^{}]*\}', ' XbraceX ', text)
+    return text
 
 
 def _repo_root():
