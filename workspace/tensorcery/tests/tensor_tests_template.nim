@@ -17,6 +17,7 @@ import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_matmul
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/ops_1i1o/ops_rmsnorm
+import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_rope
 import workspace/tensorcery/src/compute_graph/eval
 export eval.eval
 
@@ -810,3 +811,234 @@ proc runRmsnormTest*(run: static Runtime, name: string) =
         doAssert gz2[t * 8 + c] == exp, name & ": fan-out z2 " & $t & "," & $c
 
   echo "tensorcery rmsnorm (", name, "): all checks passed"
+
+proc ropeTables(Tokens, Half, Dim: int, theta: float64): tuple[c, s: seq[float32]] =
+  ## Half-width RoPE tables computed host-side.
+  ## Entry (t, i) pairs with the columns (i, i + dim div 2) of token t,
+  ## invFreq = theta^(-2i/dim)
+  result.c.newSeq(Tokens * Half)
+  result.s.newSeq(Tokens * Half)
+  for t in 0 ..< Tokens:
+    for j in 0 ..< Half:
+      let invFreq = pow(theta, -(2.0 * float64(j)) / float64(Dim))
+      let angle = float64(t) * invFreq
+      result.c[t * Half + j] = float32(cos(angle))
+      result.s[t * Half + j] = float32(sin(angle))
+
+proc runRopeTest*(run: static Runtime, name: string) =
+  ## RoPE op end to end: NEOX half-repeat rotation over q's last axis.
+  ##
+  ## Numerics checks, each exact against the f32 host reference with one
+  ## rounding into bfloat16:
+  ##
+  ## - public face at (4, 2, 8), theta 100, kernel pairing and op order
+  ## - sentinels at (2, 3, 8): cos=1/sin=0 leaves q bit for bit unchanged,
+  ##   cos=0/sin=1 swaps the halves with the sign flip on the even columns
+  ## - wide smoke at the Qwen3 geometry (8, 16, 128), theta 1e6, one launch
+  ##   through the op path
+  ##
+  ## Contract and dispatch checks:
+  ##
+  ## - face contracts raise AssertionDefect on a rank-2 q, an odd last axis,
+  ##   a float32 q, a bfloat16 table, a table token count or width mismatch
+  ## - fan-out memo: two add consumers of one rope output see the rope's
+  ##   single launch enqueued exactly once (3 batch entries)
+
+  # public face: toTensor + rope + eval + item readback, exact
+  block:
+    const Tokens = 4
+    const Heads = 2
+    const Dim = 8
+    const Half = Dim div 2
+    let (cosH, sinH) = ropeTables(Tokens, Half, Dim, 100.0)
+    var qH = newSeq[bfloat16](Tokens * Heads * Dim)
+    for i in 0 ..< qH.len:
+      qH[i] = (float32((i * 37) mod 31 - 15) * 0.25'f32).to(bfloat16)
+    let q = toTensor(qH, @[Tokens, Heads, Dim])
+    let cosT = toTensor(cosH, @[Tokens, Half])
+    let sinT = toTensor(sinH, @[Tokens, Half])
+    let o = rope(q, cosT, sinT)
+    doAssert o.shape().len == 3, name & ": rope rank"
+    doAssert o.shape()[0] == Tokens, name & ": rope tokens"
+    doAssert o.shape()[1] == Heads, name & ": rope heads"
+    doAssert o.shape()[2] == Dim, name & ": rope dim"
+    doAssert o.dtype() == kBf16, name & ": rope dtype"
+    eval(o)
+    for t in 0 ..< Tokens:
+      for h in 0 ..< Heads:
+        for i in 0 ..< Dim:
+          let partner = if i < Half: i + Half else: i - Half
+          let qv = qH[t * Heads * Dim + h * Dim + i].to(float32)
+          let pv = qH[t * Heads * Dim + h * Dim + partner].to(float32)
+          let c = cosH[t * Half + i mod Half]
+          let s = sinH[t * Half + i mod Half]
+          let want = (if i < Half: qv * c - pv * s else: qv * c + pv * s).to(bfloat16)
+          doAssert o.item(t, h, i, bfloat16) == want,
+            name & ": rope out " & $t & "," & $h & "," & $i & ": got " &
+            $o.item(t, h, i, bfloat16).to(float32) & ", want " & $want.to(float32)
+
+  # sentinels: identity and half swap
+  block:
+    const Tokens = 2
+    const Heads = 3
+    const Dim = 8
+    const Half = Dim div 2
+    var pqH = newSeq[bfloat16](Tokens * Heads * Dim)
+    for i in 0 ..< pqH.len:
+      pqH[i] = (float32((i * 29) mod 19 - 9) * 0.5'f32).to(bfloat16)
+    let pq = toTensor(pqH, @[Tokens, Heads, Dim])
+    var ones = newSeq[float32](Tokens * Half)
+    var zeros = newSeq[float32](Tokens * Half)
+    for i in 0 ..< ones.len:
+      ones[i] = 1.0'f32
+      zeros[i] = 0.0'f32
+    let cosId = toTensor(ones, @[Tokens, Half])
+    let sinId = toTensor(zeros, @[Tokens, Half])
+    let oid = rope(pq, cosId, sinId)
+    eval(oid)
+    for i in 0 ..< pqH.len:
+      doAssert oid.item(i div (Heads * Dim), (i div Dim) mod Heads, i mod Dim, bfloat16).to(float32) ==
+        pqH[i].to(float32),
+        name & ": rope identity " & $i & ": got " &
+        $oid.item(i div (Heads * Dim), (i div Dim) mod Heads, i mod Dim, bfloat16).to(float32) &
+        ", want " & $pqH[i].to(float32)
+    let cosSw = toTensor(zeros, @[Tokens, Half])
+    let sinSw = toTensor(ones, @[Tokens, Half])
+    let osw = rope(pq, cosSw, sinSw)
+    eval(osw)
+    for t in 0 ..< Tokens:
+      for h in 0 ..< Heads:
+        for i in 0 ..< Half:
+          let base = t * Heads * Dim + h * Dim
+          doAssert osw.item(t, h, i, bfloat16).to(float32) ==
+            (-pqH[base + i + Half].to(float32)).to(bfloat16).to(float32),
+            name & ": rope swap even " & $t & "," & $h & "," & $i
+          doAssert osw.item(t, h, i + Half, bfloat16).to(float32) ==
+            pqH[base + i].to(float32),
+            name & ": rope swap odd " & $t & "," & $h & "," & $i
+
+  # face contracts raise AssertionDefect
+  block:
+    const Tokens = 4
+    const Heads = 2
+    const Dim = 8
+    const Half = Dim div 2
+    let (cosH, sinH) = ropeTables(Tokens, Half, Dim, 100.0)
+    var qH = newSeq[bfloat16](Tokens * Heads * Dim)
+    for i in 0 ..< qH.len:
+      qH[i] = (float32((i * 37) mod 31 - 15) * 0.25'f32).to(bfloat16)
+    let q = toTensor(qH, @[Tokens, Heads, Dim])
+    let cosT = toTensor(cosH, @[Tokens, Half])
+    let sinT = toTensor(sinH, @[Tokens, Half])
+    let q2 = toTensor(qH[0 ..< Tokens * Half], @[Tokens, Half])
+    doAssertRaises AssertionDefect:
+      discard rope(q2, cosT, sinT)
+    let qOdd = toTensor(qH & qH[0 ..< 8], @[Tokens, Heads, Dim + 1])
+    doAssertRaises AssertionDefect:
+      discard rope(qOdd, cosT, sinT)
+    var qf = newSeq[float32](Tokens * Heads * Dim)
+    for i in 0 ..< qf.len:
+      qf[i] = qH[i].to(float32)
+    let q32 = toTensor(qf, @[Tokens, Heads, Dim])
+    doAssertRaises AssertionDefect:
+      discard rope(q32, cosT, sinT)
+    var cosBfH = newSeq[bfloat16](Tokens * Half)
+    for i in 0 ..< cosBfH.len:
+      cosBfH[i] = cosH[i].to(bfloat16)
+    let cosBf = toTensor(cosBfH, @[Tokens, Half])
+    doAssertRaises AssertionDefect:
+      discard rope(q, cosBf, sinT)
+    let cosShort = toTensor(cosH[0 ..< (Tokens - 1) * Half], @[Tokens - 1, Half])
+    doAssertRaises AssertionDefect:
+      discard rope(q, cosShort, sinT)
+    let cosNarrow = toTensor(cosH[0 ..< Tokens * (Half - 1)], @[Tokens, Half - 1])
+    doAssertRaises AssertionDefect:
+      discard rope(q, cosNarrow, sinT)
+
+  # wide smoke at the Qwen3 geometry: (8, 16, 128), theta 1e6, single launch
+  block:
+    const Tokens = 8
+    const Heads = 16
+    const Dim = 128
+    const Half = Dim div 2
+    let (cosH, sinH) = ropeTables(Tokens, Half, Dim, 1e6)
+    var qH = newSeq[bfloat16](Tokens * Heads * Dim)
+    for i in 0 ..< qH.len:
+      qH[i] = (float32((i * 37) mod 31 - 15) * 0.25'f32).to(bfloat16)
+    let q = toTensor(qH, @[Tokens, Heads, Dim])
+    let cosT = toTensor(cosH, @[Tokens, Half])
+    let sinT = toTensor(sinH, @[Tokens, Half])
+    let o = rope(q, cosT, sinT)
+    eval(o)
+    for t in 0 ..< Tokens:
+      for h in 0 ..< Heads:
+        for i in 0 ..< Dim:
+          let partner = if i < Half: i + Half else: i - Half
+          let qv = qH[t * Heads * Dim + h * Dim + i].to(float32)
+          let pv = qH[t * Heads * Dim + h * Dim + partner].to(float32)
+          let c = cosH[t * Half + i mod Half]
+          let s = sinH[t * Half + i mod Half]
+          let want = (if i < Half: qv * c - pv * s else: qv * c + pv * s).to(bfloat16)
+          let got = o.item(t, h, i, bfloat16)
+          doAssert got == want,
+            name & ": rope wide " & $t & "," & $h & "," & $i & ": got " &
+            $got.to(float32) & ", want " & $want.to(float32)
+
+  # fan-out: two add consumers of one rope output enqueue the rope ONCE
+  block:
+    const Tokens = 4
+    const Heads = 2
+    const Dim = 8
+    const Half = Dim div 2
+    let (cosH, sinH) = ropeTables(Tokens, Half, Dim, 100.0)
+    var qH = newSeq[bfloat16](Tokens * Heads * Dim)
+    for i in 0 ..< qH.len:
+      qH[i] = (float32((i * 37) mod 31 - 15) * 0.25'f32).to(bfloat16)
+    var cH = newSeq[bfloat16](Tokens * Heads * Dim)
+    for i in 0 ..< cH.len:
+      cH[i] = (float32((i * 23) mod 13 - 6) * 0.25'f32).to(bfloat16)
+    let engine = newEngine(run)
+    var qShape = @[Tokens, Heads, Dim]
+    let qNode = engine.newTensorNode(kBf16, qShape.toSpan())
+    engine.upload(qNode, qH)
+    var cShape = @[Tokens, Half]
+    let cosNode = engine.newTensorNode(kFp32, cShape.toSpan())
+    engine.upload(cosNode, cosH)
+    let sinNode = engine.newTensorNode(kFp32, cShape.toSpan())
+    engine.upload(sinNode, sinH)
+    let cx = engine.newTensorNode(kBf16, qShape.toSpan())
+    let cy = engine.newTensorNode(kBf16, qShape.toSpan())
+    engine.upload(cx, cH)
+    engine.upload(cy, cH)
+    let p = engine.tn_rope(qNode, cosNode, sinNode)
+    let z1 = engine.tn_add(p, cx)
+    let z2 = engine.tn_add(p, cy)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var nz1 = z1
+    var nz2 = z2
+    engine.evalNode(batch, nz1, visited)
+    engine.evalNode(batch, nz2, visited)
+    doAssert batch.entries.len == 3,
+      name & ": rope fan-out enqueued " & $batch.entries.len & ", expected 3"
+    batch.submit()
+    var gz1, gz2: array[Tokens * Heads * Dim, bfloat16]
+    engine.download(gz1, nz1)
+    engine.download(gz2, nz2)
+    for t in 0 ..< Tokens:
+      for h in 0 ..< Heads:
+        for i in 0 ..< Dim:
+          let partner = if i < Half: i + Half else: i - Half
+          let qv = qH[t * Heads * Dim + h * Dim + i].to(float32)
+          let pv = qH[t * Heads * Dim + h * Dim + partner].to(float32)
+          let c = cosH[t * Half + i mod Half]
+          let s = sinH[t * Half + i mod Half]
+          let pVal = (if i < Half: qv * c - pv * s else: qv * c + pv * s).to(bfloat16)
+          let cVal = cH[t * Heads * Dim + h * Dim + i].to(float32)
+          let exp = (pVal.to(float32) + cVal).to(bfloat16)
+          doAssert gz1[t * Heads * Dim + h * Dim + i] == exp,
+            name & ": rope fan-out z1 " & $t & "," & $h & "," & $i
+          doAssert gz2[t * Heads * Dim + h * Dim + i] == exp,
+            name & ": rope fan-out z2 " & $t & "," & $h & "," & $i
+
+  echo "tensorcery rope (", name, "): all checks passed"

@@ -15,6 +15,7 @@ import compute_graph/ops_2i1o/ops_matmul
 import compute_graph/ops_1i1o/ops_rmsnorm
 import compute_graph/ops_1iNo/ops_split
 import compute_graph/ops_Ni1o/ops_embed_gather
+import compute_graph/ops_Ni1o/ops_rope
 import tensors_globals
 import workspace/design_by_contract
 
@@ -137,6 +138,21 @@ proc rmsnorm*(x, w: Tensor, eps: float32 = 1e-6'f32): Tensor =
   ## - a tensor of x's shape and dtype: the math runs in float32 with one
   ##   rounding at the store
   Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w.node, eps))
+
+proc rope*(q, cos, sin: Tensor): Tensor =
+  ## Applies the NEOX RoPE rotation over q's last axis.
+  ##
+  ## Args:
+  ## - q: the input tensor of shape (tokens, heads, dim) in bfloat16,
+  ##   last axis even
+  ## - cos, sin: the half-table tensors, shape (tokens, dim div 2), f32.
+  ##   Entry (t, i) pairs with the columns (i, i + dim div 2) of token t.
+  ##   The table entries do not depend on the head
+  ##
+  ## Returns:
+  ## - a tensor of q's shape and dtype. The rotation runs in f32 with one
+  ##   rounding at the store
+  Tensor(engine: q.engine, node: tn_rope(q.engine, q.node, cos.node, sin.node))
 
 proc embed_gather*(w: Tensor, inputIds: openArray[int]): Tensor =
   ## Gathers one weight entry per token id.
