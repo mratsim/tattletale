@@ -46,6 +46,7 @@ Rule table (rule | trigger | severity):
 | hidden-context       | an advisory hidden-context word ("mirrors"), the audience is a CS undergraduate that just cloned   | advisory |
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
+| run-command-path     | a comment carries --path:, paths come from config.nims                                            | counted  |
 | test-header-testthat | a test file header with a "Test that" line after the run command                          | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
@@ -1264,6 +1265,11 @@ def check_line(path, n, c, kind, is_nim, prev_text, prev_kind, findings):
             path, n, "nim-cpp",
             "nim cpp only for workspace/libtorch and workspace/transformers "
             "(C++ interop), use nim c (host-only C backend)"))
+        return
+    if is_nim and "--path:" in c:
+        findings.append(Finding(
+            path, n, "run-command-path",
+            "a comment carries --path:, paths come from config.nims"))
         return
     bare = strip_backticks(c)
     if code_like(c) or is_table(c) or is_diagram(c) or is_url_line(c) or is_math(c):

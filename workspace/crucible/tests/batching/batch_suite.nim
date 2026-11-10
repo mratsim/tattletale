@@ -1,5 +1,5 @@
 ## Run from the worktree root (metal shown, same command per backend):
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --nimcache:nimcache/wip --outdir:build/wip \
 ##     workspace/crucible/tests/batching/t_batch_metal.nim
 

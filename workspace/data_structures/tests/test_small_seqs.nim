@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 ## Run from the repo root, artifacts outside the tree:
-##   nim c --path:. --nimcache:/tmp/x --outdir:/tmp/x -r workspace/data_structures/tests/test_small_seqs.nim
+##   nim c --nimcache:/tmp/x --outdir:/tmp/x -r workspace/data_structures/tests/test_small_seqs.nim
 ##
 ## Pass `-d:nimAllocStats` to enable the allocation-count assertions.
 ## Pass `--checks:off` or `-d:danger` to compile without the negative bounds checks.

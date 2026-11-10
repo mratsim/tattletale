@@ -9,7 +9,7 @@
 ##
 ## Run (the compile must fail, pooled mode only, the serial launch stores no environment size):
 ##   nim c --hints:off --warnings:off --threads:on \
-##     --path:. --outdir:build/tests --nimcache:nimcache/tests \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/cpu/manual_cpu_huge_param_refused.nim
 
 import workspace/crucible

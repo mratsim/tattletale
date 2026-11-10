@@ -4,7 +4,7 @@
 ## statement-expression: the if-expression's value reads 11, not the local's name.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_ifexpr_branch_temp_name.nim
 

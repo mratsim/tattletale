@@ -3,7 +3,7 @@
 ## Test that a splice in the while condition runs before every condition evaluation, including the first.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/red --nimcache:nimcache/red \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_while_cond_splice_order.nim
 
