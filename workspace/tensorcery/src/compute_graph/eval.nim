@@ -12,7 +12,7 @@ import workspace/ceramic
 import workspace/iface
 import workspace/math
 import ../tensors_internals
-import ../compute_graph/dispatch
+import ../compute_graph/batching
 import ../compute_graph/ops_2i1o/ops_add
 import ../compute_graph/ops_1iNo/ops_split
 
@@ -21,7 +21,7 @@ proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorNode]) =
     return
   var batch = engine.recordBatch()
   for i in 0 ..< roots.len:
-    engine.evalNode(batch, roots[i])
+    engine.enqueueNode(batch, roots[i])
   if batch.entries.len == 0:
     # a leaf-only graph, the values are already materialized
     return

@@ -21,7 +21,7 @@ proc runSwapaxesTest*(run: static Runtime, name: string) =
   let x = toTensor(xq, @[2, 4])
 
   # view semantics are metadata-only until finalization
-  # shape permutes at construction, data/offset/strides bind at the walk
+  # shape permutes at construction, data/offset/strides bind at finalization
   let sx = swapaxes(x, 0, 1)
   doAssert sx.shape()[0] == 4 and sx.shape()[1] == 2
   doAssert sx.dtype() == kBf16

@@ -65,7 +65,7 @@ proc eval*(ts: varargs[Tensor]) =
   for i in 0 ..< ts.len:
     roots[i] = ts[i].node
   ts[0].engine.eval(roots)
-  # op nodes leave the walk materialized
+  # op nodes come out materialized
   for i in 0 ..< ts.len:
     ts[i].node = roots[i]
 

@@ -22,7 +22,7 @@ macro registerOp*(op: static string, handler: typed) =
   OpRegistry[op] = handler
 
 # ═══════════════════════════════════════════════════════════════════════
-#  The walk
+#  Graph batching
 # ═══════════════════════════════════════════════════════════════════════
 
 template withElemType(engine: HwEngine, ElemType: untyped, dtype: Dtype, body: untyped) =
@@ -52,20 +52,18 @@ macro dispatchOp(E, T, engine, batch, n, rank: typed): untyped =
   ifStmt.add elseBranch
   result.add ifStmt
 
-proc evalWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int)
-
-proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNode) =
-  engine.withElemType(T, n.getImpl().dtype()):
-    case n.getImpl().shape().p.len
-    of 1: engine.evalWalk(batch, n, T, 1)
-    of 2: engine.evalWalk(batch, n, T, 2)
-    of 3: engine.evalWalk(batch, n, T, 3)
-    of 4: engine.evalWalk(batch, n, T, 4)
-    of 5: engine.evalWalk(batch, n, T, 5)
-    else:
-      raiseAssert("Tensorcery internal error: rank " & $n.getImpl().shape().p.len & " unsupported")
-
-proc evalWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int) =
+proc enqueueWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int) =
   if n.isMaterialized():
     return
   dispatchOp(E, T, engine, batch, n, rank)
+
+proc enqueueNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNode) =
+  engine.withElemType(T, n.getImpl().dtype()):
+    case n.getImpl().shape().p.len
+    of 1: engine.enqueueWalk(batch, n, T, 1)
+    of 2: engine.enqueueWalk(batch, n, T, 2)
+    of 3: engine.enqueueWalk(batch, n, T, 3)
+    of 4: engine.enqueueWalk(batch, n, T, 4)
+    of 5: engine.enqueueWalk(batch, n, T, 5)
+    else:
+      raiseAssert("Tensorcery internal error: rank " & $n.getImpl().shape().p.len & " unsupported")

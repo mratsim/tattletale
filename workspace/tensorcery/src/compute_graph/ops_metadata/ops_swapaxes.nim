@@ -12,7 +12,7 @@ import workspace/ceramic
 import workspace/iface
 import workspace/math
 import ../../tensors_internals
-import ../dispatch
+import ../batching
 import workspace/design_by_contract
 
 # ############################################################
@@ -65,9 +65,9 @@ proc tn_swapaxes*(engine: AnyEngine, x: TensorNode, axis1, axis2: int): TensorNo
 
 proc enqueueSwapaxes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asSwap = n.to(SwapaxesNode)
-  if asSwap.isNil:
+  if asSwap.isNil():
     return false
-  engine.evalNode(batch, asSwap.a)
+  engine.enqueueNode(batch, asSwap.a)
   let src = asSwap.a.getImpl().to(engine.getTensorImplType(T, rank))
   let r = asSwap.r.to(engine.getTensorImplType(T, rank))
   # a strided view over the source storage: same data and offset,

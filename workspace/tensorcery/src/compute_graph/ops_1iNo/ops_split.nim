@@ -11,7 +11,7 @@ import workspace/crucible
 import workspace/ceramic
 import workspace/iface
 import ../../tensors_internals
-import ../dispatch
+import ../batching
 import workspace/design_by_contract
 
 # ############################################################
@@ -68,10 +68,10 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
 
 proc enqueueSplit[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asSplit = n.to(PosNode[SplitCore])
-  if asSplit.isNil:
+  if asSplit.isNil():
     return false
   let core = asSplit.core
-  engine.evalNode(batch, core.a)
+  engine.enqueueNode(batch, core.a)
   let src = core.a.getImpl().to(engine.getTensorImplType(T, rank))
   let
     axis = core.axis

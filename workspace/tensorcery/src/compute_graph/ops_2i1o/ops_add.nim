@@ -13,7 +13,7 @@ import workspace/ceramic/src/tile_algebra
 import workspace/iface
 import workspace/math
 import ../../tensors_internals
-import ../dispatch
+import ../batching
 import workspace/design_by_contract
 
 # ############################################################
@@ -85,10 +85,10 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
 
 proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asAdd = n.to(AddNode)
-  if asAdd.isNil:
+  if asAdd.isNil():
     return false
-  engine.evalNode(batch, asAdd.a)
-  engine.evalNode(batch, asAdd.b)
+  engine.enqueueNode(batch, asAdd.a)
+  engine.enqueueNode(batch, asAdd.b)
 
   let
     rImpl = asAdd.r.to(engine.getTensorImplType(T, rank))
