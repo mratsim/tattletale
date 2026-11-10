@@ -45,7 +45,7 @@ macro dispatchOp(E, T, engine, batch, n, rank: typed): untyped =
     ifStmt.add nnkElifBranch.newTree(call, nnkReturnStmt.newTree(newEmptyNode()))
   var elseBranch = newNimNode(nnkElse)
   elseBranch.add quote do:
-    raiseAssert("Tensorcery internal error: somehow there is a graph node with no handlers")
+    raiseAssert("Tensorcery internal error: no handlers for node with opName [" & n.opName() & "]")
   ifStmt.add elseBranch
   result.add ifStmt
 

@@ -76,8 +76,8 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
   let ib = b.getImpl()
   {.precondition: ia.shape() == ib.shape().}
   {.precondition: ia.dtype() == ib.dtype().}
-  AddNode(a: a, b: b,
-          r: engine.newPlaceholderNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
+  return AddNode(a: a, b: b,
+      r: engine.newPlaceholderNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal

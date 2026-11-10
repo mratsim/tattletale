@@ -28,6 +28,7 @@ export bfloat16
 type Tensor* = ref object
   engine: AnyEngine
   node: TensorNode
+  impl: AnyTensorImpl
 
 # #######################################################################
 #
@@ -41,8 +42,8 @@ proc toTensor*[T: float32 | bfloat16](data: openArray[T], shape: openArray[int],
   {.precondition: data.len == shape[0] * shape[1].}
   when T is dtype:
     let engine = gEngine(run)
-    result = Tensor(engine: engine,
-                    node: engine.newTensorNode(toDtype(T), shape))
+    let node = engine.newTensorNode(toDtype(T), shape)
+    result = Tensor(engine: engine, node: node, impl: node.getImpl())
     if data.len > 0:
       engine.upload(result.node, data)
   else:
@@ -66,6 +67,7 @@ proc eval*(ts: varargs[Tensor]) =
   # op nodes leave the walk materialized
   for i in 0 ..< ts.len:
     ts[i].node = roots[i]
+    ts[i].impl = roots[i].getImpl()
 
 proc shape*(t: Tensor): seq[int] =
   let impl = t.node.getImpl()
@@ -100,8 +102,9 @@ proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.con
 # #######################################################################
 
 proc `+`*(a, b: Tensor): Tensor =
-  Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
+  let node = tn_add(a.engine, a.node, b.node)
+  Tensor(engine: a.engine, node: node, impl: node.getImpl())
 
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] =
   for n in t.engine.tn_split(t.node, axis, k):
-    result.add(Tensor(engine: t.engine, node: n))
+    result.add(Tensor(engine: t.engine, node: n, impl: n.getImpl()))
