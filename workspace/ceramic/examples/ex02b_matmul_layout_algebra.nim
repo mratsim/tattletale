@@ -29,13 +29,13 @@ type Activation* = enum
   akIdentity
   akReLU
 
+## Generate an epilogue proc with the activation inlined.
+## Inside `activationBody`, use `x` for the AB accumulator value.
 template genEpilogue(epilogueName: untyped; activationBody: untyped): untyped =
-  ## Generate an epilogue proc with the activation inlined.
-  ## Inside `activationBody`, use `x` for the AB accumulator value.
-  proc `epilogueName`[T; MR, NR: static int; Sh, St](
-      C: TensorView[T, Sh, St];
-      AB: array[MR, array[NR, T]];
-      mr, nr: int;
+  proc `epilogueName`[T; MR, NR: static int; L](
+      C: TensorView[T, L],
+      AB: array[MR, array[NR, T]],
+      mr, nr: int,
       alpha, beta: T) =
     if beta == T(0):
       for i in 0 ..< mr:

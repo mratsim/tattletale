@@ -56,7 +56,7 @@ macro guardWriteDisjointness(shD, stD, shS, stS: typed) =
                  " has stride 0 with shape > 1 and src stride " & $stSv[d] &
                  " is non-zero")))
 
-func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr UncheckedArray[T], dstOff, srcOff, srcStride: int, W, vecCap: int, elemBits: static int) {.inline.} =
+func copyChunks[T](C: Layout, d: static int, dstP, srcP: ptr UncheckedArray[T], dstOff, srcOff, srcStride: int, W, vecCap: int, elemBits: static int) {.inline.} =
   ## Copies dst <- src by chunks
   when d == rank(C):
     let
@@ -92,13 +92,13 @@ func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr
                  W, vecCap, elemBits)
 
 
-func copyElementwise[T, ShD, StD, ShS, StS](dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]), src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
+func copyElementwise[T, LD, LS](dst: var (TensorView[T, LD] or TensorOwned[T, LD]), src: (TensorView[T, LS] or TensorOwned[T, LS])) {.inline.} =
   for i in 0 ..< size(src):
     dst(i) = src(i)
 
-func copyFrom*[T, ShD, StD, ShS, StS](
-    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
-    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
+func copyFrom*[T, LD, LS](
+    dst: var (TensorView[T, LD] or TensorOwned[T, LD]),
+    src: (TensorView[T, LS] or TensorOwned[T, LS])) {.inline.} =
   ## Copies every element of src to dst, dst(flat k) = src(flat k).
   ##
   ## For runtime strides, assumes 128B alignment for vectorized copies
@@ -118,10 +118,10 @@ func copyFrom*[T, ShD, StD, ShS, StS](
     copyElementwise(dst, src)
 
 
-func copyFromIfAsync*[T, Sh, StA, StB, StP](
-    dst: var TensorView[T, Sh, StB];
-    src: TensorView[T, Sh, StA];
-    predicate: (TensorView[bool, Sh, StP] or TensorOwned[bool, Sh, StP])) {.inline.} =
+func copyFromIfAsync*[T, LDA, LDB, LP](
+    dst: var TensorView[T, LDB],
+    src: TensorView[T, LDA],
+    predicate: (TensorView[bool, LP] or TensorOwned[bool, LP])) {.inline.} =
   ## Predicated **async** copy
   ##
   ## This requires commit_group to actually enqueue the copy
@@ -129,7 +129,7 @@ func copyFromIfAsync*[T, Sh, StA, StB, StP](
 
   const atom = getCopyAsyncAtom(T)
   const chunkElems = atom.getVecBytes() div sizeof(T)
-  when Sh.rank == 1:
+  when dst.rank() == 1:
     copyIf(atom, dst, src, predicate[0], chunkElems)
   else:
     for i in 0 ..< size(predicate):
@@ -209,10 +209,7 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   let ur = zipped_divide(L, makeIntTuple(tilerMN(atom)))
   tiled_divide(dimension(ur, 1), makeIntTuple((chunkCols, kRows)))
 
-func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
-                             atom: typedesc[Atom];
-                             blockSize: static int;
-                             thrIdx: int): auto =
+func partition_S*[Atom](src: TensorView, atom: typedesc[Atom], blockSize: static int, thrIdx: int): auto =
   ## Slice the copy partition (thrfrg_copy) of the source tile at the flat thread id:
   ## the thread's chunks to copy.
   ## S = Source, the gmem side of the copy.
@@ -228,10 +225,7 @@ func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
   let thrTensor = make_view(src, src.getLayout().thrfrg_copy(atom, blockSize))
   thrTensor(thrIdx, _, _)
 
-func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
-                             atom: typedesc[Atom];
-                             blockSize: static int;
-                             thrIdx: int): auto =
+func partition_D*[Atom](dst: TensorView, atom: typedesc[Atom], blockSize: static int, thrIdx: int): auto =
   ## Slice the copy partition (thrfrg_copy) of the destination tile at the flat thread id:
   ## the thread's chunks to receive the copy.
   ## D = Destination, the smem side of the copy.

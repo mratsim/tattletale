@@ -218,7 +218,7 @@ template reducePartials(partials: var array, op, identity: untyped, src: Tile,
     staticFor k, 0, keptCount:
       partials[k] = op(partials[k], simd_shuffle_xor(partials[k], static(treeDelta(l, axis, x))))
 
-proc finalReduce[T, ShD, StD, Sh, St](dst: var Tile[T, ShD, StD], l: static Layout[Sh, St], axis: static int, keptCount: static int, partials: array[keptCount, T]) =
+proc finalReduce[T, LD, Sh, St](dst: var Tile[T, LD], l: static Layout[Sh, St], axis: static int, keptCount: static int, partials: array[keptCount, T]) =
   ## Stores the per-lane partials into `dst`.
   ## A collapsed stats tile stores one slot per kept coordinate.
   ## A keepdims register tile stores every slot's kept coordinate's total
@@ -231,7 +231,7 @@ proc finalReduce[T, ShD, StD, Sh, St](dst: var Tile[T, ShD, StD], l: static Layo
     staticFor i, 0, dstLen:
       dst.data[i] = partials[static(keptRank(l, axis, i))]
 
-proc sum*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St], axis: static int, map: static ThreadValueMap) {.inline.} =
+proc sum*[T, L, LD](dst: var Tile[T, LD], src: Tile[T, L], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Sums one axis of the register tile `src` into `dst`, one axis sum per kept coordinate per lane.
   ##
   ## Precondition:
@@ -252,7 +252,7 @@ proc sum*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St],
   partials.reducePartials(`+`, zero, src, l, axis, kc, span)
   dst.finalReduce(l, axis, kc, partials)
 
-proc max*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St], axis: static int, map: static ThreadValueMap) {.inline.} =
+proc max*[T, L, LD](dst: var Tile[T, LD], src: Tile[T, L], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Takes the maximum of one axis of the register tile `src` into `dst`, one axis maximum per kept
   ## coordinate per lane.
   ##
@@ -274,7 +274,7 @@ proc max*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St],
   partials.reducePartials(max, negInf, src, l, axis, kc, span)
   dst.finalReduce(l, axis, kc, partials)
 
-proc min*[T, Sh, St, ShD, StD](dst: var Tile[T, ShD, StD], src: Tile[T, Sh, St], axis: static int, map: static ThreadValueMap) {.inline.} =
+proc min*[T, L, LD](dst: var Tile[T, LD], src: Tile[T, L], axis: static int, map: static ThreadValueMap) {.inline.} =
   ## Takes the minimum of one axis of the register tile `src` into `dst`, one axis minimum per kept
   ## coordinate per lane.
   ##

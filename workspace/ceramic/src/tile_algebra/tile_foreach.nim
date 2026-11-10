@@ -41,7 +41,7 @@ func unwrapTensorType(tensor: NimNode): NimNode =
   var ty = tensor.getTypeInst()
   while ty.kind in {nnkVarTy, nnkRefTy, nnkStaticTy}:
     ty = ty[0]
-  if not (ty.kind == nnkBracketExpr and ty.len == 4 and
+  if not (ty.kind == nnkBracketExpr and ty.len == 3 and
       $ty[0] in ["TensorOwned", "Tile"]):
     error "forEach: expected a Tile (TensorOwned), got " & ty.repr, tensor
   ty
@@ -54,8 +54,8 @@ template forEachBody(broadcast: static bool): untyped {.dirty.} =
   # All tensors share the type through the caller's generic instantiation,
   # the first tensor's layout governs the loop nest.
   let ty = tensors[0].unwrapTensorType()
-  let shape = toSeqStaticInts(ty[2])
-  let strides = toSeqStaticInts(ty[3])
+  let shape = toSeqStaticInts(ty[2][1])
+  let strides = toSeqStaticInts(ty[2][2])
   let filteredDims = strideSortedDims(shape, strides)
 
   for i, tensor in tensors:
@@ -75,8 +75,8 @@ template forEachBody(broadcast: static bool): untyped {.dirty.} =
         aliasesStmt.add bindSym"evalOnceAs".newCall(ti, tensor)
         ti
 
-    let shapeI = toSeqStaticInts(tensor.unwrapTensorType()[2])
-    let stridesI = toSeqStaticInts(tensor.unwrapTensorType()[3])
+    let shapeI = toSeqStaticInts(tensor.unwrapTensorType()[2][1])
+    let stridesI = toSeqStaticInts(tensor.unwrapTensorType()[2][2])
     doAssert shapeI.len == shape.len, "forEach: same rank"
     when broadcast:
       for d in 0 ..< shape.len:

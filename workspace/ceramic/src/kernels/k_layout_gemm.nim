@@ -93,7 +93,7 @@ macro gemm_atom_at*(mma: static MmaAtom, dTile, dLoc, aTile, aLoc, bTile, bLoc, 
 
   result = nnkBlockStmt.newTree(genSym(nskLabel, "gemmAtomAt"), result)
 
-func gemm_tile*[T, Sh, St](mma: static MmaAtom, dTile: var TensorOwned[T, Sh, St], aTile, bTile: distinct TensorOwned, cTile: var TensorOwned[T, Sh, St]) =
+func gemm_tile*[T, L](mma: static MmaAtom, dTile: var TensorOwned[T, L], aTile, bTile: distinct TensorOwned, cTile: var TensorOwned[T, L]) =
   ## Tile-level GEneralized Matrix-Multiply (GEMM)
   ##
   ## Args:

@@ -5874,18 +5874,62 @@ def tile_scan(path, text, findings, consts, builtins, generic_map=None):
 
 
 
+def _bracket_spans(code):
+    """All matched bracket spans as (start, end, opener) over one string."""
+    stack = []
+    spans = []
+    for i, c in enumerate(code):
+        if c in "[({":
+            stack.append((c, i))
+        elif c in "])}" and stack:
+            op, st = stack.pop()
+            if (op == "[" and c == "]") or (op == "(" and c == ")") or (op == "{" and c == "}"):
+                spans.append((st, i, op))
+    return spans
+
+def _flagged_semicolon_offsets(code):
+    """Offsets of the statement-separator `;`. A `;` is a generic-group
+    separator, and legal, only when its innermost enclosing opener is `[`
+    and that bracket span carries a constraint `:`: `[T; L: Layout]` keeps
+    T unconstrained and the comma form misparses (`[A, B: static int, C]`
+    is a parse error). A `;` inside a nested `(...)` — a proc type's
+    parameter list — is no separator; a `;` in a [...] span without a
+    constraint groups nothing."""
+    spans = _bracket_spans(code)
+    out = []
+    for i, c in enumerate(code):
+        if c != ";":
+            continue
+        innermost = None
+        for st, en, op in spans:
+            if st < i < en and (innermost is None or st > innermost[0]):
+                innermost = (st, en, op)
+        if innermost is None or innermost[2] != "[" or ":" not in code[innermost[0] + 1:innermost[1]]:
+            out.append(i)
+    return out
+
+def _flagged_semicolons(code):
+    return _flagged_semicolon_offsets(code)
+
 def nim_callable_semicolon_checks(path, text, findings):
     """Flags a `;` inside a callable definition's parameter list over one
-    Nim file's raw lines, comma-separated params are the required form."""
+    Nim file's raw lines, comma-separated params are the required form.
+    The generic list classifies over its complete multiline span, each
+    `;` reported on its physical line."""
     lines = text.splitlines()
     for d in decls(lines):
         if d["eq_line"] is None:
             continue
+        joined = []
+        line_of = []
         for no in range(d["start"], d["eq_line"] + 1):
             code, _c = _strip_comment(lines[no - 1])
-            if ";" in _blank_nim_strings(code):
+            joined.append(_blank_nim_strings(code))
+            line_of.extend([no] * (len(code) + 1))
+        for i in _flagged_semicolon_offsets("\n".join(joined)):
+            if i < len(line_of):
                 findings.append(Finding(
-                    path, no, "callable-semicolon",
+                    path, line_of[i], "callable-semicolon",
                     "a `;` in a callable definition's parameter list, use "
                     "comma-separated params"))
 
@@ -6129,7 +6173,13 @@ def tile_phase(path, text, findings, added):
             code, comment_only = _strip_comment(lines[no - 1])
             if comment_only:
                 continue
-            if ";" in _blank_nim_strings(code):
+            # the generic list may span lines: classify against the full
+            # file text so a constraint on a later line still exempts
+            full = _blank_nim_strings("\n".join(text.splitlines()))
+            head = len("\n".join(text.splitlines()[:no - 1])) + (1 if no > 1 else 0)
+            mine = [i - head for i in _flagged_semicolon_offsets(full)
+                    if head <= i < head + len(code)]
+            if mine:
                 findings.append(Finding(
                     path, no, "semicolons",
                     "a `;` on a Nim code line, split the statement or "

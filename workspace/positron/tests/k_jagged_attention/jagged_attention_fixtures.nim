@@ -81,7 +81,7 @@ proc loadRank1FixtureTensor*(fixtureDir: string, file: string, n: int): auto =
   ## `originOffset` dies with a type mismatch on the `(n,)` layout
   ## (ceramic_testutils.nim stride loop), so the layout is built here.
   let layout = make_layout((n,))
-  result = HostTensor[int32, typeof(layout.shape), typeof(layout.stride)](
+  result = HostTensor[int32, typeof(layout)](
     data: cast[ptr UncheckedArray[int32]](allocShared(n * sizeof(int32))),
     offset: 0,
     layout: layout)

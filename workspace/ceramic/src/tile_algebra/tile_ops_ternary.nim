@@ -44,30 +44,30 @@ func mulsub*(a, b, c: Tile): Tile {.inline.} =
 # Selection
 # ---------
 
-func where*[TC, T, Sh, St](dst: var Tile[T, Sh, St], cond: Tile[TC, Sh, St], a, b: Tile[T, Sh, St]) {.inline.} =
+func where*[TC, T, L](dst: var Tile[T, L], cond: Tile[TC, L], a, b: Tile[T, L]) {.inline.} =
   forEach var d in dst, c in cond, x in a, y in b:
     d = if c: x else: y
 
-func where*[TC, T, Sh, St](dst: var Tile[T, Sh, St], cond: Tile[TC, Sh, St], a: Tile[T, Sh, St], b: T) {.inline.} =
+func where*[TC, T, L](dst: var Tile[T, L], cond: Tile[TC, L], a: Tile[T, L], b: T) {.inline.} =
   forEach var d in dst, c in cond, x in a:
     d = if c: x else: b
 
-func where*[TC, T, Sh, St](dst: var Tile[T, Sh, St], cond: Tile[TC, Sh, St], a, b: T) {.inline.} =
+func where*[TC, T, L](dst: var Tile[T, L], cond: Tile[TC, L], a, b: T) {.inline.} =
   forEach var d in dst, c in cond:
     d = if c: a else: b
 
-func where*[TC, T, Sh, St](dst: var Tile[T, Sh, St], cond: Tile[TC, Sh, St], a: T, b: Tile[T, Sh, St]) {.inline.} =
+func where*[TC, T, L](dst: var Tile[T, L], cond: Tile[TC, L], a: T, b: Tile[T, L]) {.inline.} =
   forEach var d in dst, c in cond, y in b:
     d = if c: a else: y
 
-func where*[TC, T, Sh, St](cond: Tile[TC, Sh, St], a, b: Tile[T, Sh, St]): Tile[T, Sh, St] {.inline.} =
+func where*[TC, T, L](cond: Tile[TC, L], a, b: Tile[T, L]): Tile[T, L] {.inline.} =
   result.where(cond, a, b)
 
-func where*[TC, T, Sh, St](cond: Tile[TC, Sh, St], a: Tile[T, Sh, St], b: T): Tile[T, Sh, St] {.inline.} =
+func where*[TC, T, L](cond: Tile[TC, L], a: Tile[T, L], b: T): Tile[T, L] {.inline.} =
   result.where(cond, a, b)
 
-func where*[TC, T, Sh, St](cond: Tile[TC, Sh, St], a: T, b: Tile[T, Sh, St]): Tile[T, Sh, St] {.inline.} =
+func where*[TC, T, L](cond: Tile[TC, L], a: T, b: Tile[T, L]): Tile[T, L] {.inline.} =
   result.where(cond, a, b)
 
-func where*[TC, T, Sh, St](cond: Tile[TC, Sh, St], a, b: T): Tile[T, Sh, St] {.inline.} =
+func where*[TC, T, L](cond: Tile[TC, L], a, b: T): Tile[T, L] {.inline.} =
   result.where(cond, a, b)

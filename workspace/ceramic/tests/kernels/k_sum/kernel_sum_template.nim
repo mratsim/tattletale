@@ -30,14 +30,14 @@ export k_tile_sum
 #  fp32 host reference
 # ═══════════════════════════════════════════════════════════════
 
-func refSum*[T, Sh, St](src: TensorView[T, Sh, St]): float32 =
+func refSum*(src: TensorView): float32 =
   ## Sum of the tensor, f64 accumulation
   var acc = 0.0
   for i in 0 ..< src.size():
     acc += float64(src[i])
   float32(acc)
 
-func refSum[T, ShS, StS, ShD, StD](dst: TensorView[T, ShD, StD], src: TensorView[T, ShS, StS], axis: static int) =
+func refSum[T, LS, LD](dst: TensorView[T, LD], src: TensorView[T, LS], axis: static int) =
   ## Sums over `axis`, one f64 accumulator per output slot
   let dstSlots = make_layout(dst.shape)
   var acc = newSeq[float64](toInt(dst.size()))

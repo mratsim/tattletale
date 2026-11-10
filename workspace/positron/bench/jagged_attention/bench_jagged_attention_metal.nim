@@ -55,13 +55,13 @@ proc jaggedBenchLoop(o, q, kPool, vPool: distinct TensorView,
 proc makeOffsetsTensor(n: int): auto =
   ## One-dimensional int32 host tensor over `n` zeroed elements
   let layout = make_layout((n,))
-  result = HostTensor[int32, typeof(layout.shape), typeof(layout.stride)](
+  result = HostTensor[int32, typeof(layout)](
     data: cast[ptr UncheckedArray[int32]](allocShared(n * sizeof(int32))),
     offset: 0,
     layout: layout)
   zeroMem(cast[pointer](result.data), n * sizeof(int32))
 
-proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
+proc fillPattern[T, L](tv: var TensorView[T, L]) =
   ## Logical position mod 7, times 0.25 plus 0.5
   for i in 0 ..< tv.size():
     tv(i) = to(float32(i mod 7) * 0.25'f32 + 0.5'f32, T)

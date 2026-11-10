@@ -56,7 +56,7 @@ proc xorhashChecksum*(meta: SdpaFixtureMetadata, file: string): uint32 =
       return chk
   doAssert false, "no recorded checksum for " & file & " in " & meta.name
 
-func xorHash*[T, Sh, St](ht: HostTensor[T, Sh, St]): uint32 =
+func xorHash*[T, L](ht: HostTensor[T, L]): uint32 =
   ## Order-independent checksum over the raw bit patterns of a host tensor
   for i in 0 ..< ht.len():
     when sizeof(T) == 4:

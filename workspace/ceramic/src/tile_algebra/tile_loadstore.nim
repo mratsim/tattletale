@@ -27,7 +27,7 @@ template tileInBounds*(tiled, tileCrd, sel, domain): bool =
   let farCorner = tiled.crd2idx(sel) + tileCrd.crd2idx(tileCrd.size() - 1)
   farCorner.inBounds(domain.shape)
 
-func paddedLoad*[T, Sh, St](src: TensorView[T, Sh, St], crd: int or tuple, padWith: T): T {.inline.} =
+func paddedLoad*[T](src: TensorView, crd: int or tuple, padWith: T): T {.inline.} =
   ## Guarded read of `src` at `crd`: in bounds reads the element,
   ## out of bounds reads `padWith`.
   if crd.inBounds(src.shape):
@@ -35,7 +35,7 @@ func paddedLoad*[T, Sh, St](src: TensorView[T, Sh, St], crd: int or tuple, padWi
   else:
     padWith
 
-func guardedStore[T, Sh, St](dst: TensorView[T, Sh, St], crd: int or tuple, val: T) {.inline.} =
+func guardedStore[T](dst: TensorView, crd: int or tuple, val: T) {.inline.} =
   ## Guarded store into `dst` at `crd`: in bounds stores `val`,
   ## out of bounds drops the store.
   if crd.inBounds(dst.shape):
@@ -45,8 +45,8 @@ func guardedStore[T, Sh, St](dst: TensorView[T, Sh, St], crd: int or tuple, val:
 #  Tile load / store for tensor cores
 # ═══════════════════════════════════════════════════════════════
 
-proc load*[T, ShD, StD, ShS, StS, Sh, St, TSh](
-    dst: var Tile[T, ShD, StD], src: TensorView[T, ShS, StS],
+proc load*[T, LD, LS, Sh, St, TSh](
+    dst: var Tile[T, LD], src: TensorView[T, LS],
     tvm: static ThreadValueMap[Sh, St, TSh], threadIdx: int,
     tileID: (int, int), padWith: T = zero(T)) =
   ## Tile load, global memory -> register tile, through the operand's
@@ -80,8 +80,8 @@ proc load*[T, ShD, StD, ShS, StS, Sh, St, TSh](
     for i in 0 ..< srcReg.size():
       dst[i] = src.paddedLoad(crdBase + regCrd.crd2idx(i), padWith)
 
-proc store*[T, ShD, StD, ShS, StS, Sh, St, TSh](
-    dst: TensorView[T, ShD, StD], src: Tile[T, ShS, StS],
+proc store*[T, LD, LS, Sh, St, TSh](
+    dst: TensorView[T, LD], src: Tile[T, LS],
     tvm: static ThreadValueMap[Sh, St, TSh], threadIdx: int,
     tileID: (int, int)) =
   ## Tile store, register tile -> global memory, through the operand's
@@ -118,8 +118,8 @@ proc store*[T, ShD, StD, ShS, StS, Sh, St, TSh](
 #  Tile load / store for general case
 # ═══════════════════════════════════════════════════════════
 
-proc load*[T, Sh, St, ShS, StS](
-    dst: var Tile[T, Sh, St], src: TensorView[T, ShS, StS],
+proc load*[T, L, LS](
+    dst: var Tile[T, L], src: TensorView[T, LS],
     threadIdx: int, tileID: int, padWith: T = zero(T)) {.inline.} =
   ## Tile load over the element positions: the register tile's map
   ## divides the position list, each position reads the element through
@@ -142,8 +142,8 @@ proc load*[T, Sh, St, ShS, StS](
     for e in 0 ..< box.size():
       dst.data[e] = src.paddedLoad(offset + box.crd2idx(e), padWith)
 
-proc store*[T, Sh, St, ShD, StD](
-    dst: TensorView[T, ShD, StD], src: Tile[T, Sh, St],
+proc store*[T, L, LD](
+    dst: TensorView[T, LD], src: Tile[T, L],
     threadIdx: int, tileID: int) {.inline.} =
   ## Tile store over the element positions: out-of-bounds positions drop.
   ##
@@ -164,15 +164,15 @@ proc store*[T, Sh, St, ShD, StD](
     for e in 0 ..< box.size():
       dst.guardedStore(offset + box.crd2idx(e), src.data[e])
 
-proc load*[T, ShD, StD, ShS, StS, Sh, St, TSh](
-    _: typedesc[Tile[T, ShD, StD]], src: TensorView[T, ShS, StS],
+proc load*[T, LD, LS, Sh, St, TSh](
+    _: typedesc[Tile[T, LD]], src: TensorView[T, LS],
     tvm: static ThreadValueMap[Sh, St, TSh], threadIdx: int,
-    tileID: (int, int), padWith: T = zero(T)): Tile[T, ShD, StD] {.inline.} =
+    tileID: (int, int), padWith: T = zero(T)): Tile[T, LD] {.inline.} =
   load(result, src, tvm, threadIdx, tileID, padWith)
 
-proc load*[T, Sh, St, ShS, StS](
-    _: typedesc[Tile[T, Sh, St]], src: TensorView[T, ShS, StS],
-    threadIdx: int, tileID: int, padWith: T = zero(T)): Tile[T, Sh, St] {.inline.} =
+proc load*[T, L, LS](
+    _: typedesc[Tile[T, L]], src: TensorView[T, LS],
+    threadIdx: int, tileID: int, padWith: T = zero(T)): Tile[T, L] {.inline.} =
   load(result, src, threadIdx, tileID, padWith)
 
 # ═══════════════════════════════════════════════════════════════

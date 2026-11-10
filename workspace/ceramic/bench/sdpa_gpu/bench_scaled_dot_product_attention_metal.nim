@@ -52,7 +52,7 @@ proc sdpaBenchLoop(o, q, k, v: distinct TensorView, scale: float32, Dk, Dv: stat
       tiledMma(float32, Elem, Elem, MT, NT, 32),
       o, q, k, v, scale, Dk, Dv, Causal)
 
-proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
+proc fillPattern[T, L](tv: var TensorView[T, L]) =
   ## Logical position mod 7, times 0.25 plus 0.5
   for i in 0 ..< tv.size():
     tv(i) = to(float32(i mod 7) * 0.25'f32 + 0.5'f32, T)

@@ -324,13 +324,13 @@ proc launchHadamardGrid*[E: HwEngine](engine: E, v: ScaleVariant,
     lineLay = make_layout((C,), (1,))
     # DeviceMem handles are move-only, each BridgeTensor value is built inline
     # over one handle
-    srcView = BridgeTensor[typeof(srcMem), typeof(srcLay.shape), typeof(srcLay.stride)](
+    srcView = BridgeTensor[typeof(srcMem), typeof(srcLay)](
       data: srcMem, layout: srcLay)
-    dstView = BridgeTensor[typeof(dstMem), typeof(srcLay.shape), typeof(srcLay.stride)](
+    dstView = BridgeTensor[typeof(dstMem), typeof(srcLay)](
       data: dstMem, layout: srcLay)
-    preView = BridgeTensor[typeof(preMem), typeof(lineLay.shape), typeof(lineLay.stride)](
+    preView = BridgeTensor[typeof(preMem), typeof(lineLay)](
       data: preMem, layout: lineLay)
-    postView = BridgeTensor[typeof(postMem), typeof(lineLay.shape), typeof(lineLay.stride)](
+    postView = BridgeTensor[typeof(postMem), typeof(lineLay)](
       data: postMem, layout: lineLay)
     normVal = norm
   template launchVariant(withPreScale, withPostScale: static bool) =

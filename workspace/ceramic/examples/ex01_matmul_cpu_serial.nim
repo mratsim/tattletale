@@ -144,11 +144,11 @@ proc gemm_ukernel[T; MR, NR: static int](
 #  smaller at matrix edges).
 # ═══════════════════════════════════════════════════════════════════════════
 
-proc gemm_epilogue[T; MR, NR: static int; Sh, St](
-    C: TensorView[T, Sh, St];
-    AB: array[MR, array[NR, T]];
-    mr, nr: int;
-    alpha, beta: T;
+proc gemm_epilogue[T; MR, NR: static int; L](
+    C: TensorView[T, L],
+    AB: array[MR, array[NR, T]],
+    mr, nr: int,
+    alpha, beta: T,
     activation: ActivationFn[T]) =
   if beta == 0.T:
     for i in 0 ..< mr:

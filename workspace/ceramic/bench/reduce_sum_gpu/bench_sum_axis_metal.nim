@@ -27,7 +27,7 @@ import workspace/ceramic/bench/reduce_sum_gpu/bench_sum_template
 
 export bench_sum_template
 
-proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
+proc fillPattern[T, L](tv: var TensorView[T, L]) =
   ## Logical position mod 7, times 0.25: slot permutations change sums
   for i in 0 ..< tv.size():
     tv(i) = T(i mod 7) * T(0.25)

@@ -36,20 +36,20 @@ proc makeHostVector[T](_: typedesc[T], size: int): auto =
   ## The shared rank-N makeHostTensor rejects that shape.
   ## This constructor serves the weight vector case.
   let layout = make_layout((size,), (1,))
-  HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
+  HostTensor[T, typeof(layout)](
     data: cast[ptr UncheckedArray[T]](allocShared(size * sizeof(T))),
     offset: 0,
     layout: layout)
 
-proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
+proc fillPattern[T, L](tv: var TensorView[T, L]) =
   ## Logical position mod 7, times 0.25 plus 0.5: slot permutations change sums
-  when tupleLen(Sh) == 2:
+  when tv.rank() == 2:
     var logical = 0
     for i in 0 ..< tv.getLayout().shape[0]:
       for j in 0 ..< tv.getLayout().shape[1]:
         tv[i, j] = T(logical mod 7) * T(0.25) + T(0.5)
         logical.inc
-  elif tupleLen(Sh) == 3:
+  elif tv.rank() == 3:
     var logical = 0
     for i in 0 ..< tv.getLayout().shape[0]:
       for j in 0 ..< tv.getLayout().shape[1]:
@@ -65,7 +65,7 @@ proc fillPattern[T, Sh, St](tv: var TensorView[T, Sh, St]) =
             tv[i, j, k, l] = T(logical mod 7) * T(0.25) + T(0.5)
             logical.inc
 
-proc fillWeight[T, Sh, St](tv: var TensorView[T, Sh, St]) =
+proc fillWeight[T, L](tv: var TensorView[T, L]) =
   ## Position mod 5, times 0.25 plus 1.0: per-axis weights in [1.0, 2.0],
   ## the same pattern the MLX runner fills.
   let data = cast[ptr UncheckedArray[T]](tv.data)
