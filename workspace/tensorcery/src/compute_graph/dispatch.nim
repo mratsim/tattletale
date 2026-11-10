@@ -53,14 +53,14 @@ proc evalWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorN
 
 proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNode) =
   engine.withElemType(T, n.getImpl().dtype()):
-    case n.getImpl().shape().len
+    case n.getImpl().shape().p.len
     of 1: engine.evalWalk(batch, n, T, 1)
     of 2: engine.evalWalk(batch, n, T, 2)
     of 3: engine.evalWalk(batch, n, T, 3)
     of 4: engine.evalWalk(batch, n, T, 4)
     of 5: engine.evalWalk(batch, n, T, 5)
     else:
-      raiseAssert("Tensorcery internal error: rank " & $n.getImpl().shape().len & " unsupported")
+      raiseAssert("Tensorcery internal error: rank " & $n.getImpl().shape().p.len & " unsupported")
 
 proc evalWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int) =
   if n.isMaterialized():

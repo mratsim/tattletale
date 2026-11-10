@@ -18,10 +18,13 @@ import workspace/design_by_contract
 
 export tensors_public_types
 
+type Span*[T] = object
+  p*: openArray[T]
+
 iface *AnyTensorImpl:
     func dtype(): Dtype
-    func shape(): openArray[int]
-    func strides(): openArray[int]
+    func shape(): Span[int]
+    func strides(): Span[int]
     func size(): int
     func isMaterialized(): bool
 
@@ -49,8 +52,9 @@ proc allocData*[E: HwEngine, H, T, L](engine: E, impl: TensorImpl[DeviceMem[H, T
   impl.data.new()
   impl.data[] = engine.allocDevice(T, impl.layout.size())
 
-func bridge*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): TensorBridge[DeviceMem, L] {.inline.} =
-  TensorBridge[DeviceMem, L](data: t.data, offset: t.offset, layout: t.layout)
+func bridge*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): lent TensorBridge[DeviceMem, L] {.inline.} =
+  static: doAssert sizeof(t[]) == sizeof(result)
+  result = cast[ptr TensorBridge[DeviceMem, L]](t)[]
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode

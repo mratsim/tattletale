@@ -74,10 +74,10 @@ func size*(n: AddNode): int =
 proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
   let ia = a.getImpl()
   let ib = b.getImpl()
-  {.precondition: ia.shape() == ib.shape().}
+  {.precondition: ia.shape().p == ib.shape().p.}
   {.precondition: ia.dtype() == ib.dtype().}
   return AddNode(a: a, b: b,
-      r: engine.newPlaceholderNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
+      r: engine.newPlaceholderNode(ia.dtype(), ia.shape().p).getImpl()).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal

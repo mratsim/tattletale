@@ -67,17 +67,11 @@ proc eval*(ts: varargs[Tensor]) =
   for i in 0 ..< ts.len:
     ts[i].node = roots[i]
 
-proc shape*(t: Tensor): seq[int] =
-  let impl = t.node.getImpl()
-  result = newSeq[int](impl.shape().len)
-  for i in 0 ..< result.len:
-    result[i] = impl.shape()[i]
+template shape*(t: Tensor): openArray[int] =
+  t.node.getImpl().shape().p
 
-proc strides*(t: Tensor): seq[int] =
-  let impl = t.node.getImpl()
-  result = newSeq[int](impl.strides().len)
-  for i in 0 ..< result.len:
-    result[i] = impl.strides()[i]
+template strides*(t: Tensor): openArray[int] =
+  t.node.getImpl().strides().p
 
 proc dtype*(t: Tensor): Dtype =
   t.node.getImpl().dtype()
@@ -90,7 +84,7 @@ proc item*[T: float32 | bfloat16](t: Tensor, i, j: int, _: typedesc[T]): T {.con
   t.engine.eval(roots)
   t.node = roots[0]
   var one: array[1, T]
-  t.engine.download(one, t.node, i * impl.strides()[0] + j * impl.strides()[1])
+  t.engine.download(one, t.node, i * impl.strides().p[0] + j * impl.strides().p[1])
   one[0]
 
 # #######################################################################

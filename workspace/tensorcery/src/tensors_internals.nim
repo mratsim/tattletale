@@ -57,13 +57,13 @@ template getTensorImplType*(engine: HwEngine, T: typedesc, layout: Layout): type
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func shape*(t: TensorImpl): openArray[int] {.inline.} =
-  toOpenArray(cast[ptr UncheckedArray[int]](
-      unsafeAddr t.layout.shape), 0, tupleLen(t.layout.shape) - 1)
+func shape*(t: TensorImpl): Span[int] {.inline.} =
+  Span[int](p: toOpenArray(cast[ptr UncheckedArray[int]](
+      unsafeAddr t.layout.shape), 0, tupleLen(t.layout.shape) - 1))
 
-func strides*(t: TensorImpl): openArray[int] {.inline.} =
-  toOpenArray(cast[ptr UncheckedArray[int]](
-      unsafeAddr t.layout.stride), 0, tupleLen(t.layout.stride) - 1)
+func strides*(t: TensorImpl): Span[int] {.inline.} =
+  Span[int](p: toOpenArray(cast[ptr UncheckedArray[int]](
+      unsafeAddr t.layout.stride), 0, tupleLen(t.layout.stride) - 1))
 
 func dtype*[H, T, L](t: TensorImpl[DeviceMem[H, T], L]): Dtype {.inline.} =
   toDtype(T)

@@ -52,9 +52,9 @@ func size*(n: PosNode[SplitCore]): int =
 
 proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorNode] {.contracts.} =
   let ix = x.getImpl()
-  {.precondition: axis >= 0 and axis < ix.shape().len.}
-  {.precondition: ix.shape()[axis] mod k == 0.}
-  var partShape = @(ix.shape())
+  {.precondition: axis >= 0 and axis < ix.shape().p.len.}
+  {.precondition: ix.shape().p[axis] mod k == 0.}
+  var partShape = @(ix.shape().p)
   partShape[axis] = partShape[axis] div k
   let core = SplitCore(a: x, axis: axis)
   for i in 0 ..< k:
