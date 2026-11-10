@@ -72,7 +72,7 @@ type
     core*: C
     pos*: int
 
-func bridge*[Sh: tuple, St: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, St]]): TensorBridge[Mem, Sh, St] {.inline.} =
+func bridge*[Mem, Sh, St](t: TensorImpl[Mem, Layout[Sh, St]]): TensorBridge[Mem, Sh, St] {.inline.} =
   TensorBridge[Mem, Sh, St](data: t.data[], offset: t.offset, layout: t.layout)
 
 iface *AnyEngine:

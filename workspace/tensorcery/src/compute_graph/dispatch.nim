@@ -35,12 +35,12 @@ template withMem(engine: HwEngine, dtype: Dtype, body: untyped) =
   else:
     raise ValueError.newException("eval: dtype unsupported")
 
-macro dispatchOp(E, Sh, Mem, engine, batch, n: typed): untyped =
+macro dispatchOp(E, L, Mem, engine, batch, n: typed): untyped =
   result = nnkStmtList.newTree()
   var ifStmt = newNimNode(nnkIfStmt)
   for name, h in pairs(OpRegistry):
     let call = nnkCall.newTree(
-      nnkBracketExpr.newTree(h, E, Sh, Mem), engine, batch, n)
+      nnkBracketExpr.newTree(h, E, L, Mem), engine, batch, n)
     ifStmt.add nnkElifBranch.newTree(call, nnkReturnStmt.newTree(newEmptyNode()))
   var elseBranch = newNimNode(nnkElse)
   elseBranch.add quote do:
@@ -48,20 +48,20 @@ macro dispatchOp(E, Sh, Mem, engine, batch, n: typed): untyped =
   ifStmt.add elseBranch
   result.add ifStmt
 
-proc evalWalk[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode)
+proc evalWalk[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode)
 
 proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNode) =
   engine.withMem(n.getImpl().dtype()):
     case n.getImpl().shape().len
-    of 1: evalWalk[E, (int,), Mem](engine, batch, n)
-    of 2: evalWalk[E, (int, int), Mem](engine, batch, n)
-    of 3: evalWalk[E, (int, int, int), Mem](engine, batch, n)
-    of 4: evalWalk[E, (int, int, int, int), Mem](engine, batch, n)
-    of 5: evalWalk[E, (int, int, int, int, int), Mem](engine, batch, n)
+    of 1: evalWalk[E, Layout[(int,), (int,)], Mem](engine, batch, n)
+    of 2: evalWalk[E, Layout[(int, int), (int, int)], Mem](engine, batch, n)
+    of 3: evalWalk[E, Layout[(int, int, int), (int, int, int)], Mem](engine, batch, n)
+    of 4: evalWalk[E, Layout[(int, int, int, int), (int, int, int, int)], Mem](engine, batch, n)
+    of 5: evalWalk[E, Layout[(int, int, int, int, int), (int, int, int, int, int)], Mem](engine, batch, n)
     else:
       raiseAssert("Tensorcery internal error: rank " & $n.getImpl().shape().len & " unsupported")
 
-proc evalWalk[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode) =
+proc evalWalk[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode) =
   if n.isMaterialized():
     return
-  dispatchOp(E, Sh, Mem, engine, batch, n)
+  dispatchOp(E, L, Mem, engine, batch, n)

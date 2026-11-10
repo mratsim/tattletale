@@ -69,19 +69,19 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueSplit[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
+proc enqueueSplit[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
   let asSplit = n.to(PosNode[SplitCore])
   if asSplit.isNil:
     return false
   let core = asSplit.core
   engine.evalNode(batch, core.a)
-  let src = core.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
+  let src = core.a.getImpl().to(TensorImpl[Mem, L])
   let
     axis = core.axis
     partLen = src.layout.shape.atAxis(axis) div core.r.len
     partStride = src.layout.stride.atAxis(axis)
   for i in 0 ..< core.r.len:
-    let v = core.r[i].getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
+    let v = core.r[i].getImpl().to(TensorImpl[Mem, L])
     v.data = src.data
     v.offset = src.offset + i * partLen * partStride
     v.layout = make_layout(src.layout.shape.withAxis(axis, partLen), src.layout.stride)

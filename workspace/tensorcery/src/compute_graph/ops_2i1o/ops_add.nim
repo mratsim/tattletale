@@ -84,7 +84,7 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
+proc enqueueAdd[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil:
     return false
@@ -92,9 +92,9 @@ proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E],
   engine.evalNode(batch, asAdd.b)
 
   let
-    rImpl = asAdd.r.to(TensorImpl[Mem, Layout[Sh, Sh]])
-    aImpl = asAdd.a.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
-    bImpl = asAdd.b.getImpl().to(TensorImpl[Mem, Layout[Sh, Sh]])
+    rImpl = asAdd.r.to(TensorImpl[Mem, L])
+    aImpl = asAdd.a.getImpl().to(TensorImpl[Mem, L])
+    bImpl = asAdd.b.getImpl().to(TensorImpl[Mem, L])
     size = rImpl.size()
   engine.materialize(asAdd.r, rImpl.layout)
   batch.enqueue<<(ceil_div(size, 128), 32)>> k_add(rImpl.bridge, aImpl.bridge, bImpl.bridge)
