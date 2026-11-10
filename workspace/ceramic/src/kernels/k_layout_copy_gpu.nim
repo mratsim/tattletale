@@ -209,10 +209,7 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   let ur = zipped_divide(L, makeIntTuple(tilerMN(atom)))
   tiled_divide(dimension(ur, 1), makeIntTuple((chunkCols, kRows)))
 
-func partition_S*[T, LA, Atom](src: TensorView[T, LA],
-                             atom: typedesc[Atom];
-                             blockSize: static int;
-                             thrIdx: int): auto =
+func partition_S*[T, LA, Atom](src: TensorView[T, LA], atom: typedesc[Atom], blockSize: static int, thrIdx: int): auto =
   ## Slice the copy partition (thrfrg_copy) of the source tile at the flat thread id:
   ## the thread's chunks to copy.
   ## S = Source, the gmem side of the copy.
@@ -228,10 +225,7 @@ func partition_S*[T, LA, Atom](src: TensorView[T, LA],
   let thrTensor = make_view(src, src.getLayout().thrfrg_copy(atom, blockSize))
   thrTensor(thrIdx, _, _)
 
-func partition_D*[T, LB, Atom](dst: TensorView[T, LB],
-                             atom: typedesc[Atom];
-                             blockSize: static int;
-                             thrIdx: int): auto =
+func partition_D*[T, LB, Atom](dst: TensorView[T, LB], atom: typedesc[Atom], blockSize: static int, thrIdx: int): auto =
   ## Slice the copy partition (thrfrg_copy) of the destination tile at the flat thread id:
   ## the thread's chunks to receive the copy.
   ## D = Destination, the smem side of the copy.

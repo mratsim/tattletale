@@ -5874,16 +5874,45 @@ def tile_scan(path, text, findings, consts, builtins, generic_map=None):
 
 
 
+def _generic_group_semicolons(code):
+    """Offsets of the `;` that sit inside a [...] bracket span carrying a
+    constraint. Nim generic lists separate groups with `;` whenever a
+    constrained group precedes: `[T; L: Layout]` keeps T unconstrained and
+    a comma there misparses (`[A, B: static int, C]` is a parse error).
+    Such a `;` is a group separator, not a statement separator."""
+    out = []
+    stack = []
+    spans = []
+    for i, c in enumerate(code):
+        if c == "[":
+            stack.append(i)
+        elif c == "]" and stack:
+            spans.append((stack.pop(), i))
+    for st, en in spans:
+        inner = code[st + 1:en]
+        if ";" not in inner or ":" not in inner:
+            continue
+        out.extend(st + 1 + j for j, c in enumerate(inner) if c == ";")
+    return set(out)
+
+def _flagged_semicolons(code):
+    """The `;` offsets that are statement separators: every `;` except the
+    generic-group separators inside a constrained [...] span."""
+    exempt = _generic_group_semicolons(code)
+    return [i for i, c in enumerate(code) if c == ";" and i not in exempt]
+
 def nim_callable_semicolon_checks(path, text, findings):
     """Flags a `;` inside a callable definition's parameter list over one
-    Nim file's raw lines, comma-separated params are the required form."""
+    Nim file's raw lines, comma-separated params are the required form.
+    A `;` inside the generic list before a constrained group separates
+    groups and stays legal."""
     lines = text.splitlines()
     for d in decls(lines):
         if d["eq_line"] is None:
             continue
         for no in range(d["start"], d["eq_line"] + 1):
             code, _c = _strip_comment(lines[no - 1])
-            if ";" in _blank_nim_strings(code):
+            if _flagged_semicolons(_blank_nim_strings(code)):
                 findings.append(Finding(
                     path, no, "callable-semicolon",
                     "a `;` in a callable definition's parameter list, use "
@@ -6129,7 +6158,7 @@ def tile_phase(path, text, findings, added):
             code, comment_only = _strip_comment(lines[no - 1])
             if comment_only:
                 continue
-            if ";" in _blank_nim_strings(code):
+            if _flagged_semicolons(_blank_nim_strings(code)):
                 findings.append(Finding(
                     path, no, "semicolons",
                     "a `;` on a Nim code line, split the statement or "
