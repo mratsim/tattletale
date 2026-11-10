@@ -9,7 +9,7 @@ import
   std/options,
   std/os,
   std/tables,
-  pkg/iface,
+  workspace/iface,
   pkg/packedjson,
   workspace/libtorch as F,
   workspace/safetensors,

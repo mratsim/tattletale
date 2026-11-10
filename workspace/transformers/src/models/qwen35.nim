@@ -10,7 +10,7 @@ import
   std/os,
   std/strutils,
   std/tables,
-  pkg/iface,
+  workspace/iface,
   pkg/packedjson,
   workspace/libtorch as F,
   workspace/safetensors,
