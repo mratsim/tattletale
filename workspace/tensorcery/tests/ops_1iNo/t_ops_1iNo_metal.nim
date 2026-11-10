@@ -11,7 +11,7 @@
 
 import workspace/crucible
 import workspace/ceramic
-import workspace/tensorcery/tests/ops_1iNo/ops_split_template
+import ./ops_split_template
 
 proc main =
   runSplitTest(runMetal, "Metal")

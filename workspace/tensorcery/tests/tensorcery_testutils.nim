@@ -7,18 +7,21 @@
 
 {.experimental: "views".}
 
+import std/random
 import workspace/tensorcery
-import workspace/tensorcery/src/tensors_public_types
-import workspace/tensorcery/src/tensors_internal_types
-import workspace/tensorcery/src/tensors_internals
-import workspace/tensorcery/src/tensors_globals
-import workspace/tensorcery/src/compute_graph/batching
-import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
-import workspace/tensorcery/src/compute_graph/ops_1iNo/ops_split
-import workspace/tensorcery/src/compute_graph/ops_reductions/ops_allClose
-import workspace/tensorcery/src/compute_graph/eval
 
 export tensorcery
-# erased layer imports, the vtable mixins resolve at the outermost scope
-export tensors_internals
-export eval.eval
+
+proc randomSeq*[T](rng: var Rand, _: typedesc[T], size: int, bounds: HSlice[float32, float32] = 1.0'f32 .. 2.0'f32): seq[T] =
+  result.newSeq(size)
+  for i in 0 ..< size:
+    when T is float32:
+      result[i] = rng.rand(bounds)
+    else:
+      result[i] = rng.rand(bounds.a .. bounds.b).to(T)
+
+proc randomTensor*[T](rng: var Rand, _: typedesc[T], shape: varargs[int], bounds: HSlice[float32, float32] = 1.0'f32 .. 2.0'f32): Tensor =
+  var size = 1
+  for dim in shape:
+    size *= dim
+  rng.randomSeq(T, size, bounds).toTensor(shape)

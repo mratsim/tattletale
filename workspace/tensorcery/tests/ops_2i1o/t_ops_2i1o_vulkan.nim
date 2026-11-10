@@ -11,7 +11,7 @@
 
 import workspace/crucible
 import workspace/ceramic
-import workspace/tensorcery/tests/ops_2i1o/ops_add_template
+import ./ops_add_template
 
 proc main =
   runAddTest(runVulkan, "Vulkan")

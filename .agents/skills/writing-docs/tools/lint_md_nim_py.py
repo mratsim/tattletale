@@ -221,6 +221,14 @@ ISNIL_BARE_RE = re.compile(r"\.\s*isNil(?![\w(])")
 ISNIL_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+isNil\*?\s*[\(\[=,:]")
 
+# The randomSeq/randomTensor rule. Random data draws from the rng:
+# rng.randomSeq(...), rng.randomTensor(...). The rng-first plain call
+# hides the receiver, declarations never match, the name boundary is
+# exact.
+RANDOM_PLAIN_CALL_RE = re.compile(r"(?<![.\w])random(?:Seq|Tensor)\s*\(")
+RANDOM_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+random(?:Seq|Tensor)\*?\s*[\(\[=,:]")
+
 # The allClose rule. Approximate equality reads on the tested tensor:
 # tested.allClose(reference). The tested-first plain call hides the
 # receiver, declarations never match, the name boundary is exact.
@@ -470,6 +478,9 @@ BANNED = [
            "(the schema before X, absent keys, the pre-005 frames)"),
     (r"\brows?\b",
      None, "'row' says nothing, state the section, the entry, the mapping or the line"),
+    (r"\bface\b",
+     lambda l: bool(re.search(r"interface|typeface", l)),
+     "'face' says nothing, name the surface: the public API, the operator set, the entry point"),
     (r"\bpin\b|\bpins\b|\bpinned\b|\bpinning\b",
      None, "use verified against, checked by, locked"),
     (r"\bgate\b|\bgates\b|\bgating\b",
@@ -708,6 +719,8 @@ RULES = {
                                  "a data-first toTensor call, use the method call syntax data.toTensor(shape)"),
     "allclose-call-syntax": Rule("allclose-call-syntax", True,
                                  "a tested-first allClose call, use the method call syntax tested.allClose(reference)"),
+    "random-call-syntax": Rule("random-call-syntax", True,
+                               "an rng-first randomSeq or randomTensor call, use the method call syntax rng.randomSeq(...)"),
     "engine-ufcs": Rule("engine-ufcs", True,
                         "an engine-first call in plain syntax, use engine.name(...) method call syntax"),
     "reduction-call-syntax": Rule("reduction-call-syntax", True,
@@ -2168,6 +2181,12 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "allclose-call-syntax",
                         "tested-first allClose call, use the method call "
                         "syntax tested.allClose(reference)"))
+                if RANDOM_PLAIN_CALL_RE.search(code) \
+                        and not RANDOM_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "random-call-syntax",
+                        "rng-first randomSeq or randomTensor call, use the "
+                        "method call syntax rng.randomSeq(...)"))
                 if any("tensorcery" in part for part in path.parts) \
                         and ENGINE_UFCS_PLAIN_CALL_RE.search(code):
                     findings.append(Finding(
@@ -3359,6 +3378,48 @@ BANNED_VOCAB_SELFTEST_CASES = (
         ("src/codegen/backends/vocab_demo2.nim", 1, "banned-vocab", False),
     )),
 )
+
+
+RANDOM_SELFTEST_CASES = (
+    ("random rng-first convicts, method call and declarations stay clean", (
+        ("src/tensorcery/random_demo.nim",
+         'let a = randomSeq(rng, float32, 4)\n'
+         'let b = rng.randomSeq(float32, 4)\n'
+         'proc randomSeq*[T](rng: var Rand, _: typedesc[T], size: int): seq[T] = discard\n'
+         'proc randomTensor*[T](rng: var Rand, _: typedesc[T], shape: varargs[int]): Tensor = discard\n'),
+    ), (
+        ("src/tensorcery/random_demo.nim", 1, "random-call-syntax", False),
+    )),
+)
+
+
+def random_selftest(quiet=False):
+    """Runs the randomSeq/randomTensor fixtures through nim_structure_checks,
+    one PASS or FAIL line per case unless quiet. Returns the failed case
+    count, 0 means the rng-first call convicts and the method call and
+    declarations pass.
+    """
+    failed = 0
+    for name, files, expected in RANDOM_SELFTEST_CASES:
+        got = []
+        for path, text in files:
+            findings = []
+            nim_structure_checks(Path(path), text, [], findings)
+            got += sorted(set((str(f.path), f.line, f.rule, f.warning)
+                          for f in findings if f.rule == "random-call-syntax"))
+        want = sorted(expected)
+        if got == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in got:
+                    print("  got      %s" % (row,))
+    return failed
 
 
 ALLCLOSE_SELFTEST_CASES = (
@@ -4660,7 +4721,7 @@ def main(argv):
         args = args[:i] + args[i + 2:]
     base = base or os.environ.get("DOC_LINT_BASE") or None
     if "--selftest-refusal" in args:
-        failed = refusal_selftest() + agent_verb_selftest() + isnil_selftest() + totensor_selftest() + allclose_selftest()
+        failed = refusal_selftest() + agent_verb_selftest() + isnil_selftest() + totensor_selftest() + allclose_selftest() + random_selftest()
         return 1 if failed else 0
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]

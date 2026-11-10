@@ -10,9 +10,9 @@
 import workspace/crucible
 import workspace/ceramic
 import workspace/iface
+import workspace/design_by_contract
 import ../../tensors_internals
 import ../batching
-import workspace/design_by_contract
 
 # ############################################################
 #

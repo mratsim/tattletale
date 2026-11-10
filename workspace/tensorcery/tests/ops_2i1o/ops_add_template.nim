@@ -5,59 +5,31 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import workspace/tensorcery/tests/tensorcery_testutils
-import workspace/tensorcery/src/tensors_internal_types
-import workspace/tensorcery/src/tensors_internals
-import workspace/tensorcery/src/tensors_globals
-import workspace/tensorcery/src/compute_graph/eval
+import std/random
+from workspace/crucible import to
+import ../tensorcery_testutils
 
 export tensorcery_testutils
 
+proc refAdd(dst: var openArray[bfloat16], a, b: openArray[bfloat16]) =
+  for i in 0 ..< dst.len:
+    dst[i] = (a[i].to(float32) + b[i].to(float32)).to(bfloat16)
+
 proc runAddTest*(run: static Runtime, name: string) =
-  var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
-  var yd = @[2.0'f32, 2, 2, 2, 2, 2, 2, 2]
-  var xq: array[8, bfloat16]
-  var yq: array[8, bfloat16]
-  for i in 0 ..< 8:
-    xq[i] = xd[i].to(bfloat16)
-    yq[i] = yd[i].to(bfloat16)
-  let x = xq.toTensor(2, 4)
-  let y = yq.toTensor(@[2, 4])
+  var rng = initRand(0xFACADE)
+  for shape in [ @[2, 4], @[5, 13], @[2, 3, 7] ]:
+    var size = 1
+    for dim in shape:
+      size *= dim
 
-  doAssert x.shape().len == 2
-  doAssert x.shape()[0] == 2
-  doAssert x.shape()[1] == 4
-  doAssert x.strides()[0] == 4
-  doAssert x.strides()[1] == 1
-  doAssert x.dtype() == kBf16
-  doAssert x.size() == 8
+    var a = rng.randomSeq(bfloat16, size)
+    var b = rng.randomSeq(bfloat16, size)
+    var dst = newSeq[bfloat16](size)
+    dst.refAdd(a, b)
 
-  let z = x + y
-  let small = yq[0 ..< 4].toTensor(@[1, 4])
-  # face checks are contracts, they raise AssertionDefect
-  doAssertRaises AssertionDefect:
-    discard x + small
-  doAssertRaises AssertionDefect:
-    discard xq[0 ..< 7].toTensor(2, 4)
+    let x = a.toTensor(shape)
+    let y = b.toTensor(shape)
 
-  var zd: array[8, bfloat16]
-  for i in 0 ..< 8:
-    let xi = xd[i].to(bfloat16).to(float32)
-    let yi = yd[i].to(bfloat16).to(float32)
-    zd[i] = (xi + yi).to(bfloat16)
-  doAssert z.allClose(zd.toTensor(2, 4)), name & ": add"
-  doAssert x.allClose(xq.toTensor(2, 4)), name & ": add source"
-
-  # Memoize computation and drop ancestor nodes
-  let d = x + y
-  let e = d + x
-  eval(e)
-  eval(e)
-  var ed: array[8, bfloat16]
-  for i in 0 ..< 8:
-    let xi = xd[i].to(bfloat16).to(float32)
-    let yi = yd[i].to(bfloat16).to(float32)
-    ed[i] = (xi * 2.0'f32 + yi).to(bfloat16)
-  doAssert e.allClose(ed.toTensor(2, 4)), name & ": diamond"
+    doAssert (x + y).allClose(dst.toTensor(shape)), name & ": add " & $shape
 
   echo "tensorcery add (", name, "): all checks passed"

@@ -11,7 +11,7 @@
 
 import workspace/crucible
 import workspace/ceramic
-import workspace/tensorcery/tests/ops_metadata/ops_swapaxes_template
+import ./ops_swapaxes_template
 
 proc main =
   runSwapaxesTest(runWebGPU, "WebGPU")

@@ -9,18 +9,23 @@
 
 import workspace/crucible
 import workspace/iface
-import tensors_internals
-import tensors_public_types
-import compute_graph/ops_2i1o/ops_add
-import compute_graph/ops_1iNo/ops_split
-import compute_graph/ops_metadata/ops_swapaxes
-import compute_graph/ops_reductions/ops_allClose
-import tensors_globals
 import workspace/design_by_contract
-from std/math import sqrt
+import ./tensors_internals
+import ./tensors_public_types
+import ./tensors_globals
+import ./compute_graph/ops_2i1o/ops_add
+import ./compute_graph/ops_1iNo/ops_split
+import ./compute_graph/ops_metadata/ops_swapaxes
+import ./compute_graph/ops_reductions/ops_allClose
+import ./compute_graph/eval
 
 export tensors_public_types
 export bfloat16
+
+# Export internal symbols to workaround visibility limitations
+export tensors_internal_types
+export tensors_internals
+export eval
 
 # #######################################################################
 #
@@ -38,9 +43,13 @@ type Tensor* = ref object
 #
 # #######################################################################
 
+func product(a: openArray[int]): int {.inline.} =
+  result = 1
+  for dim in a:
+    result *= dim
+
 proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime, dtype: typedesc = T): Tensor {.contracts.} =
-  {.precondition: shape.len == 2.}
-  {.precondition: data.len == shape[0] * shape[1].}
+  {.precondition: data.len == product(shape).}
   when T is dtype:
     let engine = gEngine(run)
     result = Tensor(engine: engine,
@@ -56,7 +65,6 @@ proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime
 
 proc toTensor*[T](data: openArray[T], shape: varargs[int]): Tensor {.inline.} =
   data.toTensor(shape, runMetal, T)
-
 
 # #######################################################################
 #

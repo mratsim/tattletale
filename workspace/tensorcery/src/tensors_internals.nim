@@ -8,12 +8,11 @@
 {.experimental: "views".}
 
 import std/typetraits
-
 import workspace/crucible
 import workspace/ceramic
 import workspace/math
 import workspace/iface
-import tensors_internal_types
+import ./tensors_internal_types
 
 export tensors_internal_types
 

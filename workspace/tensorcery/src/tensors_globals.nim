@@ -8,11 +8,11 @@
 import workspace/crucible
 import workspace/ceramic
 import workspace/iface
-import tensors_internals
-import tensors_internal_types
-import compute_graph/eval
-import compute_graph/ops_2i1o/ops_add
-import compute_graph/ops_1iNo/ops_split
+import ./tensors_internals
+import ./tensors_internal_types
+import ./compute_graph/eval
+import ./compute_graph/ops_2i1o/ops_add
+import ./compute_graph/ops_1iNo/ops_split
 
 var
   gMetalEngineInstance: pointer

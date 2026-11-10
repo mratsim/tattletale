@@ -6,11 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import std/math
-import workspace/tensorcery/tests/tensorcery_testutils
-import workspace/tensorcery/src/tensors_internal_types
-import workspace/tensorcery/src/tensors_internals
-import workspace/tensorcery/src/tensors_globals
-import workspace/tensorcery/src/compute_graph/eval
+import ../tensorcery_testutils
 
 export tensorcery_testutils
 

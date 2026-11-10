@@ -11,7 +11,7 @@
 
 import workspace/crucible
 import workspace/ceramic
-import workspace/tensorcery/tests/ops_reductions/ops_allClose_template
+import ./ops_allClose_template
 
 proc main =
   runallCloseTest(runWebGPU, "WebGPU")

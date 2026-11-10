@@ -13,8 +13,8 @@ import workspace/crucible
 import workspace/ceramic
 import workspace/ceramic/src/macros/static_for
 import workspace/iface
-import tensors_public_types
 import workspace/design_by_contract
+import ./tensors_public_types
 
 export tensors_public_types
 

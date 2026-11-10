@@ -5,11 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import workspace/tensorcery/tests/tensorcery_testutils
-import workspace/tensorcery/src/tensors_internal_types
-import workspace/tensorcery/src/tensors_internals
-import workspace/tensorcery/src/tensors_globals
-import workspace/tensorcery/src/compute_graph/eval
+import ../tensorcery_testutils
 
 export tensorcery_testutils
 
