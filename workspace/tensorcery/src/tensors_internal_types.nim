@@ -49,13 +49,13 @@ iface *AnyTensorImpl:
     func dtype(): Dtype
     func shape(): Span[int]
     func strides(): Span[int]
-    proc size(): int
+    func size(): int
     func isMaterialized(): bool
 
 iface *TensorNode:
     proc getImpl(): AnyTensorImpl
     func opName(): string
-    proc size(): int
+    func size(): int
 
 type
   TensorImpl*[Mem, L] = ref object
@@ -72,7 +72,7 @@ type
     core*: C
     pos*: int
 
-func bridge*[Sh: tuple, St: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, St]]): TensorBridge[Mem, Sh, St] =
+func bridge*[Sh: tuple, St: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, St]]): TensorBridge[Mem, Sh, St] {.inline.} =
   ## Kernel ABI of a materialized tensor, assembled at launch sites
   TensorBridge[Mem, Sh, St](data: t.data[], offset: t.offset, layout: t.layout)
 
@@ -87,12 +87,12 @@ iface *AnyEngine:
     proc download(dst: var openArray[bfloat16], node: TensorNode, offsetElems: int)
     proc eval(roots: var Span[TensorNode])
 
-func atAxis*[Sh: tuple](s: Sh, axis: int): int =
+func atAxis*[Sh: tuple](s: Sh, axis: int): int {.inline.} =
   staticFor i, 0, tupleLen(Sh):
     if i == axis:
       result = s[i]
 
-func withAxis*[Sh: tuple](s: Sh, axis: int, val: int): Sh =
+func withAxis*[Sh: tuple](s: Sh, axis: int, val: int): Sh {.inline.} =
   staticFor i, 0, tupleLen(Sh):
     if i == axis:
       result[i] = val

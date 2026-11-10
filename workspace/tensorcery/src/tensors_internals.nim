@@ -36,19 +36,19 @@ export tensors_internal_types
 #  TensorImpl - AnyTensorImpl implementation
 # ═══════════════════════════════════════════════════════════════════════
 
-func shape*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
+func shape*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] {.inline.} =
   toSpan(t.layout.shape)
 
-func strides*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
+func strides*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] {.inline.} =
   toSpan(t.layout.stride)
 
-func dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dtype =
+func dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dtype {.inline.} =
   toDtype(T)
 
-func isMaterialized*[Mem, L](t: TensorImpl[Mem, L]): bool =
+func isMaterialized*[Mem, L](t: TensorImpl[Mem, L]): bool {.inline.} =
   not t.data.isNil
 
-func size*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): int =
+func size*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): int {.inline.} =
   t.layout.size()
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -61,7 +61,7 @@ proc getImpl*[Mem, L](t: TensorImpl[Mem, L]): AnyTensorImpl =
 func opName*[Mem, L](t: TensorImpl[Mem, L]): string =
   ""
 
-proc isMaterialized*(n: TensorNode): bool =
+proc isMaterialized*(n: TensorNode): bool {.inline.} =
   n.getImpl().isMaterialized()
 
 # ═══════════════════════════════════════════════════════════════════════

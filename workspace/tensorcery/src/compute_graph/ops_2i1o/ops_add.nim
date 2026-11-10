@@ -59,13 +59,13 @@ type
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl*(n: AddNode): AnyTensorImpl =
+func getImpl*(n: AddNode): AnyTensorImpl =
   n.r
 
 func opName*(n: AddNode): string =
   "Add"
 
-proc size*(n: AddNode): int =
+func size*(n: AddNode): int =
   n.r.size()
 
 # ═══════════════════════════════════════════════════════════════════════

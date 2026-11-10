@@ -42,8 +42,8 @@ proc getImpl*[C](n: PosNode[C]): AnyTensorImpl =
 func opName*(n: PosNode[SplitCore]): string =
   "Split"
 
-proc size*(n: PosNode[SplitCore]): int =
-  n.getImpl().size()
+func size*(n: PosNode[SplitCore]): int =
+  n.core.r[n.pos].size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
