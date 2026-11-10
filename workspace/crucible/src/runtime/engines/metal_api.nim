@@ -91,13 +91,13 @@ when defined(macosx):
     objc.withMemPool:
       result = objc.nsStringToNimString(objc.msgSend(engine.ctx.device, objc.`$$`("name")))
 
-  proc allocDevice*[T](engine: MetalEngine, _: typedesc[T], len: int): DeviceMem[objc.ID, T] {.inline.} =
-    DeviceMem[objc.ID, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
+  proc allocDevice*[T](engine: MetalEngine, _: typedesc[T], len: int): DeviceMem[runMetal, T] {.inline.} =
+    DeviceMem[runMetal, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
-  proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[objc.ID, T], src: openArray[T]) {.inline.} =
+  proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[runMetal, T], src: openArray[T]) {.inline.} =
     engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
   
-  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: var openArray[T], src: DeviceMem[objc.ID, T]) {.inline.} =
+  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: var openArray[T], src: DeviceMem[runMetal, T]) {.inline.} =
     engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
   # ════════════════════════════════════════════════════════════════════════
