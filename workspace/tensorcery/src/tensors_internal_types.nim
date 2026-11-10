@@ -5,6 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+{.experimental: "views".}
+
 import std/macros
 import std/typetraits
 import workspace/crucible
@@ -17,33 +19,32 @@ import workspace/design_by_contract
 export tensors_public_types
 
 type Span*[T] = object
-  p*: ptr UncheckedArray[T]
-  len*: int
+  ## A borrowed, non-owning range of elements.
+  ## View rules tie its lifetime to the lvalue given at construction.
+  # We need a Span indirection for shape and strides as iface
+  # interfaces do not support direct openArray.
+  p*: openArray[T]
 
-template toSpan*(s: tuple): Span[int] =
-  Span[int](p: cast[ptr UncheckedArray[int]](unsafeAddr s), len: tupleLen(s))
-
-template toSpan*[T](s: seq[T]): Span[T] =
-  Span[T](p: cast[ptr UncheckedArray[T]](unsafeAddr s[0]), len: s.len)
-
-template toSpan*[T](s: openArray[T]): Span[T] =
-  Span[T](p: cast[ptr UncheckedArray[T]](unsafeAddr s[0]), len: s.len)
+proc toSpan*[T](s: openArray[T]): Span[T] {.inline.} =
+  Span[T](p: s)
 
 template `[]`*[T](s: Span[T], i: int): T =
   s.p[i]
 
+template len*[T](s: Span[T]): int =
+  s.p.len
+
 iterator items[T](s: Span[T]): T =
-  for i in 0 ..< s.len:
+  for i in 0 ..< s.p.len:
     yield s.p[i]
 
 func `==`*[T](a, b: Span[T]): bool =
-  if a.len != b.len:
+  if a.p.len != b.p.len:
     return false
-  for i in 0 ..< a.len:
-    if a[i] != b[i]:
+  for i in 0 ..< a.p.len:
+    if a.p[i] != b.p[i]:
       return false
   true
-
 
 iface *AnyTensorImpl:
     func dtype(): Dtype

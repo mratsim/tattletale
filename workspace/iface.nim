@@ -1,6 +1,8 @@
 ## Upstream: https://github.com/yglukhov/iface - MIT License, Yuriy Glukhov
 ## Patch: https://github.com/mratsim/iface/pull/17
 
+{.experimental: "views".}
+
 import macros, tables
 
 type

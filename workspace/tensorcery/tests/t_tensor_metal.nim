@@ -5,12 +5,14 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+{.experimental: "views".}
+
 ## Tensorcery erased tensor layer on metal
 ##
 ## Test that the user face (toTensor, add, split, eval) runs end to end on the Metal engine in bfloat16.
 ##
 ## Run from the worktree root:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --nimcache:nimcache/wip --outdir:build/wip \
 ##     workspace/tensorcery/tests/t_tensor_metal.nim
 

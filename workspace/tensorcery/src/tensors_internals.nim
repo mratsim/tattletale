@@ -5,6 +5,10 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+{.experimental: "views".}
+
+import std/typetraits
+
 import workspace/crucible
 import workspace/ceramic
 import workspace/math
@@ -54,10 +58,12 @@ template getTensorImplType*(engine: HwEngine, T: typedesc, layout: Layout): type
 # ═══════════════════════════════════════════════════════════════════════
 
 func shape*(t: TensorImpl): Span[int] {.inline.} =
-  toSpan(t.layout.shape)
+  Span[int](p: toOpenArray(cast[ptr UncheckedArray[int]](
+      unsafeAddr t.layout.shape), 0, tupleLen(t.layout.shape) - 1))
 
 func strides*(t: TensorImpl): Span[int] {.inline.} =
-  toSpan(t.layout.stride)
+  Span[int](p: toOpenArray(cast[ptr UncheckedArray[int]](
+      unsafeAddr t.layout.stride), 0, tupleLen(t.layout.stride) - 1))
 
 func dtype*[H, T, L](t: TensorImpl[DeviceMem[H, T], L]): Dtype {.inline.} =
   toDtype(T)
@@ -119,6 +125,7 @@ func newPlaceholderImpl[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layou
 proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout):
     engine.getTensorImplType(T, layout) {.inline.} =
   result = (engine.getTensorImplType(T, layout))()
+  result.layout = layout
   result.data.new()
   result.data[] = engine.allocDevice(T, layout.size())
 
