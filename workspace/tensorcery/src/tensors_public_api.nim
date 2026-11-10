@@ -89,6 +89,26 @@ proc eval*(ts: varargs[Tensor]) =
   for i in 0 ..< ts.len:
     ts[i].node = roots[i]
 
+proc evalAll*(ts: openArray[Tensor]) =
+  ## Evaluates a runtime-sized root list in one eval over all roots.
+  ##
+  ## Args:
+  ## - ts: the roots. Every root's walk materializes and each root's node
+  ##   field updates in place, like the varargs eval
+  ##
+  ## Unlike the varargs eval, whose call sites fix the root list size
+  ## at compile time, this form covers callers that collect the roots
+  ## into a seq at runtime, such as the orchestrator's per-layer
+  ## COW write list.
+  var roots = newSeq[TensorNode](ts.len)
+  for i in 0 ..< ts.len:
+    roots[i] = ts[i].node
+  var span = roots.toSpan()
+  ts[0].engine.eval(span)
+  # op nodes leave the walk materialized
+  for i in 0 ..< ts.len:
+    ts[i].node = roots[i]
+
 proc shape*(t: Tensor): Span[int] =
   t.node.getImpl().shape()
 

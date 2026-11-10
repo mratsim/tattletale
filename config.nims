@@ -399,6 +399,11 @@ task test_ttf_jagged_attention, "Suite: jagged attention op over pool slabs (Met
   runTattleformerSuite("test_jagged_attention_op.nim")
 task test_ttf_inference_context, "Suite: InferenceContext state flows over pool + trie (Metal)":
   runTattleformerSuite("test_inference_context.nim")
+# The model smoke loads the real Qwen3-0.6B checkpoint (about 1.2 GB of
+# weights): TTT_QWEN3_PATH env override,
+# default /Users/pi/Documents/Programming/MODELS/Qwen3-0.6B.
+task test_ttf_model_qwen3, "Suite: Qwen3-0.6B model smoke, greedy generate + LPM/COW restart (Metal, local checkpoint)":
+  runTattleformerSuite("test_model_qwen3.nim")
 
 task test_tf_kvcache_kvcache, "Suite: kvcache core (cpu-only, model-free)":
   runTransformerSuite("kvcache", "test_kvcache.nim")
