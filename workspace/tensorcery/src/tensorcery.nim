@@ -7,6 +7,7 @@
 
 import workspace/crucible
 import workspace/ceramic
+import workspace/ceramic/src/tile_algebra
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/tensorcery/src/tensors_public_types
 import workspace/tensorcery/src/tensors_internal_types
@@ -14,6 +15,7 @@ import workspace/tensorcery/src/tensors_internals
 import workspace/tensorcery/src/tensors_globals
 import workspace/tensorcery/src/compute_graph/dispatch
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
+import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_matmul
 import workspace/tensorcery/src/compute_graph/ops_1iNo/ops_split
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/eval as graph_eval
@@ -32,9 +34,12 @@ export tensors_public_api
 #   concept members that constrain the erased generics
 # - crucible and ceramic: enqueue macros and view types that op dispatch
 #   instantiates at the eval call site
+# - tile_algebra: the tile kernel templates that enqueue walks resolve
+#   at the eval call site: tile load/store and the matmul thread->value maps
 export tensors_internals
 export graph_eval.eval
 export tensors_globals
 export engines_api
 export crucible
 export ceramic
+export tile_algebra

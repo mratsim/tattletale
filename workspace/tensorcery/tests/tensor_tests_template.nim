@@ -5,13 +5,16 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+import std/times
 import workspace/crucible
 import workspace/crucible/src/runtime/engines/engines_api
+import workspace/iface
 import workspace/tensorcery/src/tensorcery
 import workspace/tensorcery/src/tensors_internals
 import workspace/tensorcery/src/tensors_globals
 import workspace/tensorcery/src/compute_graph/dispatch
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
+import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_matmul
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/eval
 export eval.eval
@@ -231,6 +234,271 @@ proc runEmbedGatherTest*(run: static Runtime, name: string) =
       doAssert gz2[t * 8 + c] == exp, name & ": gather z2 " & $t & "," & $c
 
   echo "tensorcery embed gather (", name, "): all checks passed"
+
+proc runCoordPassRebuildTest*(run: static Runtime, name: string) =
+  ## Two artifact builds in one binary over one set of device functions.
+  ##
+  ## Sequence:
+  ## - first build: the matmul op's submit compiles the tile gemm chain.
+  ##   Its device functions gain their coordinate parameters
+  ## - between the builds: a harvest-only enqueue of the op's kernels adds
+  ##   new wrappers with literal statics to the compilation, never executed
+  ## - second build: the add op's submit re-runs the MSL lowering pass over
+  ##   the accumulated module, which still contains the gemm chain's device
+  ##   functions
+  ##
+  ## Both results read back exact, so the second build serves the first
+  ## build's kernels unchanged.
+  var xh = newSeq[bfloat16](4 * 8)
+  var wh = newSeq[bfloat16](6 * 8)
+  for i in 0 ..< 4 * 8:
+    xh[i] = (float32((i * 37 mod 19) - 9) * 0.125'f32).to(bfloat16)
+  for i in 0 ..< 6 * 8:
+    wh[i] = (float32((i * 29 mod 17) - 8) * 0.125'f32).to(bfloat16)
+  let engine = newEngine(run)
+  var xShape = @[4, 8]
+  var wShape = @[6, 8]
+  let xNode = engine.newTensorNode(kBf16, xShape.toSpan())
+  let wNode = engine.newTensorNode(kBf16, wShape.toSpan())
+  engine.upload(xNode, xh)
+  engine.upload(wNode, wh)
+
+  # first build: the matmul chain, whose device functions gain their coordinate parameters here
+  let y = engine.tn_matmul(xNode, wNode)
+  var batch1 = engine.recordBatch()
+  var visited: VisitedNodes
+  var ny = y
+  engine.evalNode(batch1, ny, visited)
+  doAssert batch1.entries.len == 2, name & ": first build enqueued " &
+    $batch1.entries.len & ", expected 2"
+  batch1.submit()
+  for mm in 0 ..< 4:
+    for nn in 0 ..< 6:
+      var acc = 0.0'f32
+      for kk in 0 ..< 8:
+        acc += xh[mm * 8 + kk].to(float32) * wh[nn * 8 + kk].to(float32)
+      var got: bfloat16
+      engine.downloadItem(got, ny, mm * 6 + nn)
+      doAssert got == acc.to(bfloat16),
+        name & ": first build matmul " & $mm & "," & $nn
+
+  # between the builds: enqueue the op's kernels with literal statics into a batch that never submits,
+  # so the compilation gains new wrappers and the second build re-runs the lowering pass over the first chain
+  block:
+    var oShape = @[4, 6]
+    let oMan = engine.newTensorNode(kBf16, oShape.toSpan())
+    let
+      rx = xNode.getImpl().to(TensorImpl[typeof(engine.allocDevice(bfloat16, 0)), Layout[(int, int), (int, int)]])
+      rw = wNode.getImpl().to(TensorImpl[typeof(engine.allocDevice(bfloat16, 0)), Layout[(int, int), (int, int)]])
+      roMan = oMan.getImpl().to(TensorImpl[typeof(engine.allocDevice(bfloat16, 0)), Layout[(int, int), (int, int)]])
+      xv = initTensorBridge(rx.data[], rx.offset, rx.layout)
+      wv = initTensorBridge(rw.data[], rw.offset, rw.layout)
+      ovMan = initTensorBridge(roMan.data[], roMan.offset, roMan.layout)
+    type MemAcc = typeof(engine.allocDevice(float32, 0))
+    let rAcc = engine.makeTensorImpl(kFp32, oShape.toSpan())
+      .to(TensorImpl[MemAcc, Layout[(int, int), (int, int)]])
+    let accV = initTensorBridge(rAcc.data[], rAcc.offset, rAcc.layout)
+    var batchMan = engine.recordBatch()
+    batchMan.enqueue<<(1, 32)>> k_matmul(accV, xv, wv, tiledMma(float32, bfloat16, bfloat16, 32, 32, 16))
+    batchMan.enqueue<<(4, 32)>> k_round_to_output(ovMan, accV)
+    doAssert batchMan.entries.len == 2, name & ": harvest enqueue " &
+      $batchMan.entries.len & ", expected 2"
+
+  # second build: the add chain shares the gemm chain's device functions,
+  # so the lowering pass re-runs over a module containing both chains
+  var ah = newSeq[bfloat16](2 * 3)
+  var bh = newSeq[bfloat16](2 * 3)
+  for i in 0 ..< 2 * 3:
+    ah[i] = (float32(i + 1) * 0.125'f32).to(bfloat16)
+    bh[i] = (float32(10 * (i + 1)) * 0.125'f32).to(bfloat16)
+  var aShape = @[2, 3]
+  let aNode = engine.newTensorNode(kBf16, aShape.toSpan())
+  let bNode = engine.newTensorNode(kBf16, aShape.toSpan())
+  engine.upload(aNode, ah)
+  engine.upload(bNode, bh)
+  let c = engine.tn_add(aNode, bNode)
+  var batch2 = engine.recordBatch()
+  var visited2: VisitedNodes
+  var nc = c
+  engine.evalNode(batch2, nc, visited2)
+  doAssert batch2.entries.len == 1, name & ": second build enqueued " &
+    $batch2.entries.len & ", expected 1"
+  batch2.submit()
+  for i in 0 ..< 2 * 3:
+    var got: bfloat16
+    engine.downloadItem(got, nc, i)
+    let want = (ah[i].to(float32) + bh[i].to(float32)).to(bfloat16)
+    doAssert got == want, name & ": second build add " & $i
+
+  echo "tensorcery coord pass rebuild (", name, "): all checks passed"
+
+func bf16UlpKey(x: bfloat16): int32 =
+  ## Ordered key of a bfloat16 word: sign-magnitude bits mapped so keys
+  ## increase with the value, -0 and +0 collide, and the distance of two
+  ## keys counts bfloat16 ulps
+  let u = cast[uint16](x)
+  if (u and 0x8000'u16) != 0'u16:
+    -int32(u and 0x7FFF'u16)
+  else:
+    int32(u)
+
+proc runMatmulTest*(run: static Runtime, name: string) =
+  ## Matmul op end to end: x (tokens, in) x w (out, in)^T -> (tokens, out).
+  ##
+  ## Checks:
+  ## - public face: the toTensor, linear, eval and item readback results
+  ##   equal the sequential f32 host reference rounded once into bfloat16, exactly:
+  ##   every f32 product and partial sum of the 2^-3-granular
+  ##   fixtures is exact in f32, and K = 8 fits one 16-deep k-tile
+  ## - face contracts raise AssertionDefect: a K mismatch, a dtype mismatch
+  ## - LMHead-shaped smoke, M = 8, N = 151936, K = 1024, bf16: the enqueue
+  ##   launches the f32 accumulation and the rounding pass, and the spot-checked
+  ##   outputs sit within the band of the f32 host reference.
+  ##   The f32 partial-sum order differs from the kernel's k-tile order, so a 0-ulp match is not expected
+  ## - fan-out: two add consumers of one matmul output see the matmul's two
+  ##   launches enqueued exactly once (4 batch entries), and both results
+  ##   read back exact
+  var xh = newSeq[bfloat16](4 * 8)
+  var wh = newSeq[bfloat16](6 * 8)
+  for i in 0 ..< 4 * 8:
+    xh[i] = (float32((i * 37 mod 19) - 9) * 0.125'f32).to(bfloat16)
+  for i in 0 ..< 6 * 8:
+    wh[i] = (float32((i * 29 mod 17) - 8) * 0.125'f32).to(bfloat16)
+
+  # public face: toTensor + linear + eval + item readback
+  let x = toTensor(xh, @[4, 8])
+  let w = toTensor(wh, @[6, 8])
+  let y = linear(x, w)
+  doAssert y.shape().len == 2, name & ": linear rank"
+  doAssert y.shape()[0] == 4, name & ": linear tokens"
+  doAssert y.shape()[1] == 6, name & ": linear outFeatures"
+  doAssert y.dtype() == kBf16, name & ": linear dtype"
+  eval(y)
+  for mm in 0 ..< 4:
+    for nn in 0 ..< 6:
+      var acc = 0.0'f32
+      for kk in 0 ..< 8:
+        acc += xh[mm * 8 + kk].to(float32) * wh[nn * 8 + kk].to(float32)
+      doAssert y.item(mm, nn, bfloat16) == acc.to(bfloat16),
+        name & ": linear out " & $mm & "," & $nn
+
+  # face contracts raise AssertionDefect: an inFeatures mismatch, a dtype mismatch
+  let wShort = toTensor(wh[0 ..< 6 * 7], @[6, 7])
+  doAssertRaises AssertionDefect:
+    discard linear(x, wShort)
+  var wHost32 = newSeq[float32](6 * 8)
+  for i in 0 ..< 6 * 8:
+    wHost32[i] = wh[i].to(float32)
+  let wF32 = toTensor(wHost32, @[6, 8])
+  doAssertRaises AssertionDefect:
+    discard linear(x, wF32)
+
+  # LMHead-shaped smoke: enqueue and spot-check against the f32 reference
+  block:
+    const
+      LM = 8
+      LN = 151936
+      LK = 1024
+    var lx = newSeq[bfloat16](LM * LK)
+    var lw = newSeq[bfloat16](LN * LK)
+    # positive fill: the running partial sum grows monotonically without cancellation,
+    # so the band is relative to the reference's own magnitude
+    for i in 0 ..< LM * LK:
+      lx[i] = (float32((i * 37 mod 19) + 1) * 0.125'f32).to(bfloat16)
+    for i in 0 ..< LN * LK:
+      lw[i] = (float32((i * 29 mod 17) + 1) * 0.125'f32).to(bfloat16)
+    let engine = newEngine(run)
+    var lxShape = @[LM, LK]
+    var lwShape = @[LN, LK]
+    let lxNode = engine.newTensorNode(kBf16, lxShape.toSpan())
+    let lwNode = engine.newTensorNode(kBf16, lwShape.toSpan())
+    engine.upload(lxNode, lx)
+    engine.upload(lwNode, lw)
+    let lo = engine.tn_matmul(lxNode, lwNode)
+    doAssert lo.getImpl().shape().len == 2, name & ": lmhead rank"
+    doAssert lo.getImpl().shape()[0] == LM, name & ": lmhead tokens"
+    doAssert lo.getImpl().shape()[1] == LN, name & ": lmhead outFeatures"
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var lno = lo
+    let tEnq0 = epochTime()
+    engine.evalNode(batch, lno, visited)
+    let tEnq1 = epochTime()
+    doAssert batch.entries.len == 2,
+      name & ": lmhead enqueued " & $batch.entries.len & ", expected 2"
+    batch.submit()
+    let tWall = epochTime()
+    const spots = [(0, 0), (4, LN - 1), (7, LN div 2), (3, 12345)]
+    var worstRel = 0.0'f32
+    var worstUlp = 0'i32
+    for (mm, nn) in spots:
+      var acc = 0.0'f32
+      for kk in 0 ..< LK:
+        acc += lx[mm * LK + kk].to(float32) * lw[nn * LK + kk].to(float32)
+      var got: bfloat16
+      engine.downloadItem(got, lno, mm * LN + nn)
+      let g = got.to(float32)
+      doAssert g == g and abs(g) < 1e30'f32,
+        name & ": lmhead spot " & $mm & "," & $nn & " is not finite"
+      let rel = abs(g - acc) / abs(acc)
+      let want = acc.to(bfloat16)
+      let dist = abs(bf16UlpKey(got) - bf16UlpKey(want))
+      if rel > worstRel:
+        worstRel = rel
+      if dist > worstUlp:
+        worstUlp = dist
+      doAssert rel <= 0.05'f32,
+        name & ": lmhead spot " & $mm & "," & $nn & ": got " & $g &
+        ", reference " & $acc & ", drift " & $(rel * 100.0'f32) & "%"
+    echo name, ": lmhead enqueue ", (tEnq1 - tEnq0), " s, wall ",
+      (tWall - tEnq0), " s, worst spot drift ",
+      (worstRel * 100.0'f32), "% / ", worstUlp, " bf16 ulps"
+
+  # fan-out: two add consumers of one matmul output enqueue the matmul once
+  # (its 2 launches: the f32 accumulation and the rounding pass)
+  block:
+    let engine = newEngine(run)
+    var wShape = @[6, 8]
+    let wNode = engine.newTensorNode(kBf16, wShape.toSpan())
+    engine.upload(wNode, wh)
+    var xShape = @[4, 8]
+    let xNode = engine.newTensorNode(kBf16, xShape.toSpan())
+    engine.upload(xNode, xh)
+    var ch = newSeq[bfloat16](4 * 6)
+    for i in 0 ..< 4 * 6:
+      ch[i] = (float32((i * 23 mod 13) - 6) * 0.125'f32).to(bfloat16)
+    var cShape = @[4, 6]
+    let cx = engine.newTensorNode(kBf16, cShape.toSpan())
+    let cy = engine.newTensorNode(kBf16, cShape.toSpan())
+    engine.upload(cx, ch)
+    engine.upload(cy, ch)
+    let p = engine.tn_matmul(xNode, wNode)
+    let z1 = engine.tn_add(p, cx)
+    let z2 = engine.tn_add(p, cy)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var nz1 = z1
+    var nz2 = z2
+    engine.evalNode(batch, nz1, visited)
+    engine.evalNode(batch, nz2, visited)
+    doAssert batch.entries.len == 4,
+      name & ": fan-out enqueued " & $batch.entries.len & ", expected 4"
+    batch.submit()
+    var gz1, gz2: array[4 * 6, bfloat16]
+    engine.download(gz1, nz1)
+    engine.download(gz2, nz2)
+    for mm in 0 ..< 4:
+      for nn in 0 ..< 6:
+        var acc = 0.0'f32
+        for kk in 0 ..< 8:
+          acc += xh[mm * 8 + kk].to(float32) * wh[nn * 8 + kk].to(float32)
+        let pVal = acc.to(bfloat16)
+        let cVal = ch[mm * 6 + nn].to(float32)
+        let exp = (pVal.to(float32) + cVal).to(bfloat16)
+        doAssert gz1[mm * 6 + nn] == exp, name & ": fan-out z1 " & $mm & "," & $nn
+        doAssert gz2[mm * 6 + nn] == exp, name & ": fan-out z2 " & $mm & "," & $nn
+
+  echo "tensorcery matmul (", name, "): all checks passed"
 
 proc runRankNTest*(run: static Runtime, name: string) =
   ## Construct-upload-item-download round-trips at ranks 1, 3, 4, 5, bf16.

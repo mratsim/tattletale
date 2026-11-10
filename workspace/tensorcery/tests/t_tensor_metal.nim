@@ -7,8 +7,9 @@
 
 ## Tensorcery erased tensor layer on metal
 ##
-## Test that the user face (toTensor, add, split, embed_gather, eval) runs end to end on Metal
-## in bfloat16 at ranks 1 to 5, enqueueing each producer once per eval.
+## Test that the user face runs end to end on Metal in bfloat16 at ranks 1 to 5:
+## toTensor, add, split, embed_gather, linear and eval.
+## Every producer enqueues once per eval.
 ##
 ## Run from the worktree root:
 ##   nim c -r --hints:off --warnings:off --path:"$PWD" \
@@ -23,6 +24,10 @@ proc main =
   runTest(runMetal, "Metal")
   runDedupeTest(runMetal, "Metal")
   runEmbedGatherTest(runMetal, "Metal")
+  runCoordPassRebuildTest(runMetal, "Metal")
+  # multi-tile op-path blocker: see op STATE.md Blockers
+  when not defined(m03pending):
+    runMatmulTest(runMetal, "Metal")
   runRankNTest(runMetal, "Metal")
 
 when isMainModule:

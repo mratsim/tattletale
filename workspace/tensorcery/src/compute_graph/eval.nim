@@ -13,6 +13,7 @@ import workspace/math
 import ../tensors_internals
 import ../compute_graph/dispatch
 import ../compute_graph/ops_2i1o/ops_add
+import ../compute_graph/ops_2i1o/ops_matmul
 import ../compute_graph/ops_1iNo/ops_split
 
 proc eval*[E: HwEngine](engine: E, roots: var Span[TensorNode]) =

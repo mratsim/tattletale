@@ -11,6 +11,7 @@ import workspace/iface
 import tensors_internals
 import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
+import compute_graph/ops_2i1o/ops_matmul
 import compute_graph/ops_1iNo/ops_split
 import compute_graph/ops_Ni1o/ops_embed_gather
 import tensors_globals
@@ -107,6 +108,20 @@ proc `+`*(a, b: Tensor): Tensor =
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] =
   for n in t.engine.tn_split(t.node, axis, k):
     result.add(Tensor(engine: t.engine, node: n))
+
+proc linear*(x, w: Tensor): Tensor =
+  ## y = x·wᵀ: the Linear projection,
+  ## (tokens, inFeatures) × (outFeatures, inFeatures)ᵀ → (tokens, outFeatures).
+  ##
+  ## Args:
+  ## - x: the input tensor of shape (tokens, inFeatures)
+  ## - w: the weight tensor of shape (outFeatures, inFeatures), stored so
+  ##   that the output's n-th column reads w's n-th weight vector
+  ##
+  ## Returns:
+  ## - a tensor of shape (tokens, outFeatures) with the operands' dtype:
+  ##   bfloat16 operands accumulate in float32, then round once into the bfloat16 output
+  Tensor(engine: x.engine, node: tn_matmul(x.engine, x.node, w.node))
 
 proc embed_gather*(w: Tensor, inputIds: openArray[int]): Tensor =
   ## Gathers one weight entry per token id.

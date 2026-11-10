@@ -226,13 +226,23 @@ proc appendCoordParam(fn: CirProc, k: CirCoordBuiltinKind) =
   ## A parameter uses the builtin's canonical identifier so the body's
   ## builtin-marked reads print it unchanged, in a kernel the identifier
   ## binds to the attributed parameter, in a device function to this parameter.
+  ##
+  ## Idempotent across pass re-runs:
+  ## - the pass re-runs over the accumulated module at every artifact build
+  ##   that adds harvests, and a proc harvested by several chains already
+  ##   has the parameter
+  ## - a param of the builtin's name with any other type is a user collision
+  ##   and stays an error
   let name = $k
+  let builtinTyp = getBuiltinParamType(k)
   for p in fn.params:
     if p.name == name:
+      if sameType(p.typ, builtinTyp):
+        return
       raiseAssert("parameter " & name &
         " is named like the coordinate builtin the function needs," &
         " the call sites cannot supply both")
-  fn.params.add(param(name, getBuiltinParamType(k)))
+  fn.params.add(param(name, builtinTyp))
 
 proc appendCoordCallArgs(args: var seq[CirExpr], fn: CirProc, calleeProc: CirProc, callee: CirExpr,
                          needs: Table[string, HashSet[CirCoordBuiltinKind]]) =
@@ -243,6 +253,10 @@ proc appendCoordCallArgs(args: var seq[CirExpr], fn: CirProc, calleeProc: CirPro
   if callee.kind != eSym or not needs.hasKey(callee.name):
     return
   let calleeKinds = orderedCoordKinds(needs[callee.name])
+  if callee.typ.kind == ctProc and callee.typ.params.len == calleeProc.params.len:
+    # an earlier pass run over the accumulated module already extended this callee symbol,
+    # its call sites already pass the arguments
+    return
   if callee.typ.kind == ctProc and
       callee.typ.params.len == calleeProc.params.len - calleeKinds.len:
     # one extension per callee symbol, call sites can share the node
