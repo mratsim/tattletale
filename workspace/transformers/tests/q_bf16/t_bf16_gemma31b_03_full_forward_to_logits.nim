@@ -20,7 +20,7 @@ import
   std/options,
   std/importutils,
   std/strutils,
-  pkg/iface,
+  workspace/iface,
   pkg/packedjson,
   workspace/libtorch as F,
   workspace/libtorch_testutils,

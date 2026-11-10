@@ -8,7 +8,7 @@
 import
   std/options,
   std/tables,
-  pkg/iface,
+  workspace/iface,
   workspace/libtorch,
   workspace/safetensors,
   workspace/toktoktok/src/bpe_codec,

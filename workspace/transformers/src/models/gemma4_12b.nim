@@ -11,7 +11,7 @@ import
   std/options,
   std/tables,
   std/os,
-  pkg/iface,
+  workspace/iface,
   pkg/packedjson,
   workspace/libtorch as F,
   workspace/safetensors,
