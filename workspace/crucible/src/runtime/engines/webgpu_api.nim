@@ -101,6 +101,9 @@ proc copyToDeviceFromHost*[T](engine: WebgpuEngine, dst: DeviceMem[runWebGPU, T]
 proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: var openArray[T], src: DeviceMem[runWebGPU, T]) {.inline.} =
   engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
 
+proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: var T, src: DeviceMem[runWebGPU, T]) {.inline.} =
+  engine.copyToHostFromDeviceImpl(dst.addr, src.mem, sizeof(T))
+
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ═══════════════════════════════════════════════════════════════════════

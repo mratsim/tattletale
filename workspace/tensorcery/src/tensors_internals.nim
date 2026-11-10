@@ -74,12 +74,13 @@ proc isMaterialized*(n: TensorNode): bool {.inline.} =
 #  Host<->Device copies
 # ═══════════════════════════════════════════════════════════════════════
 
-template withDeviceImpl[E: HwEngine](engine: E, impl: AnyTensorImpl, T: typedesc, concreteTensor, body: untyped) =
+template withDeviceImpl*[E: HwEngine](engine: E, impl: AnyTensorImpl, T: typedesc, concreteTensor, body: untyped) =
   ## Casts the type-erased impl tensor to its concrete TensorImpl[T, Rank] type
   ## and make it available as the symbol passed as "concreteTensor"
   ##
-  ## engine.withDeviceImpl(node.getImpl(), float32, t):
-  ##   engine.copyToHostFromDevice(dst, t.data[], t.offset)
+  ## Usage:
+  ##   engine.withDeviceImpl(node.getImpl(), float32, t):
+  ##     engine.copyToHostFromDevice(dst, t.data[], t.offset)
   case impl.shape().p.len
   of 1:
     let concreteTensor = impl.to(engine.getTensorImplType(T, 1))
@@ -99,15 +100,21 @@ template withDeviceImpl[E: HwEngine](engine: E, impl: AnyTensorImpl, T: typedesc
   else:
     raiseAssert("Tensorcery internal error: rank out of range")
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) {.inline.} =
+proc download1*[E: HwEngine](engine: E, dst: pointer, node: TensorNode) =
+  let impl = node.getImpl()
+  match(ElemType, impl.dtype(), Rank, impl.shape().p.len):
+    let ci = impl.to(engine.getTensorImplType(ElemType, Rank))
+    engine.copyToHostFromDevice(cast[ptr ElemType](dst)[], ci.data[], ci.offset)
+
+proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) =
   engine.withDeviceImpl(node.getImpl(), float32, t):
     engine.copyToDeviceFromHost(t.data[], src)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float16]) {.inline.} =
+proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float16]) =
   engine.withDeviceImpl(node.getImpl(), float16, t):
     engine.copyToDeviceFromHost(t.data[], src)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) {.inline.} =
+proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) =
   engine.withDeviceImpl(node.getImpl(), bfloat16, t):
     engine.copyToDeviceFromHost(t.data[], src)
 

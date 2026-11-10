@@ -87,8 +87,7 @@ proc item*[T](t: Tensor, _: typedesc[T]): T {.contracts.} =
   var node = [t.node]
   t.engine.eval(node)
   t.node = node[0]
-  t.engine.withDeviceImpl(impl, T, ci):
-    t.engine.copyToHostFromDevice(result, ci.data[], ci.offset)
+  t.engine.download1(addr result, t.node)
 
 # #######################################################################
 #
@@ -108,7 +107,7 @@ proc allclose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equa
   ## Same-sign infinities are equal, NaN equal only with equal_nan
   Tensor(engine: tested.engine,
       node: tn_allclose(tested.engine, tested.node, reference.node, atol, rtol, equal_nan)
-    ).item(float32) != 0.0'f32
+    ).item(float32) == 0.0'f32
 
 proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))

@@ -57,6 +57,9 @@ proc copyToDeviceFromHost*[T](engine: OpenCLEngine, dst: DeviceMem[runOpenCL, T]
 proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: var openArray[T], src: DeviceMem[runOpenCL, T], offsetElems: int = 0) {.inline.} =
   engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T), offsetElems * sizeof(T))
 
+proc copyToHostFromDevice*[T](engine: OpenCLEngine, dst: var T, src: DeviceMem[runOpenCL, T], offsetElems: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(dst.addr, src.mem, sizeof(T), offsetElems * sizeof(T))
+
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ═══════════════════════════════════════════════════════════════════════

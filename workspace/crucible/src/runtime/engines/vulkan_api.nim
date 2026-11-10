@@ -140,6 +140,9 @@ proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[runVulkan, T]
 proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: DeviceMem[runVulkan, T], offsetElems: int = 0) {.inline.} =
   engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T), offsetElems * sizeof(T))
 
+proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var T, src: DeviceMem[runVulkan, T], offsetElems: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(dst.addr, src.mem, sizeof(T), offsetElems * sizeof(T))
+
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ═══════════════════════════════════════════════════════════════════════

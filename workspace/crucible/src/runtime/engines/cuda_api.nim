@@ -73,6 +73,9 @@ proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[runCuda, T], sr
 proc copyToHostFromDevice*[T](engine: CudaEngine, dst: var openArray[T], src: DeviceMem[runCuda, T], offsetElems: int = 0) {.inline.} =
   engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T), offsetElems * sizeof(T))
 
+proc copyToHostFromDevice*[T](engine: CudaEngine, dst: var T, src: DeviceMem[runCuda, T], offsetElems: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(dst.addr, src.mem, sizeof(T), offsetElems * sizeof(T))
+
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
 # ═══════════════════════════════════════════════════════════════════════

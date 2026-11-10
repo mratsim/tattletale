@@ -76,10 +76,7 @@ iface *AnyEngine:
     proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
     proc upload(node: TensorNode, src: openArray[float32]) {.inline.}
     proc upload(node: TensorNode, src: openArray[bfloat16]) {.inline.}
-    proc download(dst: var openArray[float32], node: TensorNode) {.inline.}
-    proc download(dst: var openArray[bfloat16], node: TensorNode) {.inline.}
-    proc download(dst: var openArray[float32], node: TensorNode, offsetElems: int) {.inline.}
-    proc download(dst: var openArray[bfloat16], node: TensorNode, offsetElems: int) {.inline.}
+    proc download1(dst: pointer, node: TensorNode) {.inline.}
     proc eval(roots: var openArray[TensorNode]) {.inline.}
 
 func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: array[Rank, int]) {.inline.} =
