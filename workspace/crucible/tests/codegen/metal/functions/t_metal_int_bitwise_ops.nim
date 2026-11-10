@@ -4,7 +4,7 @@
 ## form and reads back the same values Nim computes.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/wip --nimcache:nimcache/wip \
 ##     workspace/crucible/tests/codegen/metal/functions/t_metal_int_bitwise_ops.nim
 

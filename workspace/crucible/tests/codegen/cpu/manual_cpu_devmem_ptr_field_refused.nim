@@ -13,10 +13,10 @@
 ##
 ## Run (the compile must fail, both thread modes):
 ##   nim c --hints:off --warnings:off --threads:off \
-##     --path:. --outdir:build/tests --nimcache:nimcache/tests \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/cpu/manual_cpu_devmem_ptr_field_refused.nim
 ##   nim c --hints:off --warnings:off --threads:on \
-##     --path:. --outdir:build/tests --nimcache:nimcache/tests \
+##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/cpu/manual_cpu_devmem_ptr_field_refused.nim
 
 import workspace/crucible

@@ -4,7 +4,7 @@
 ## a `launchDeviceFn` launch of the same kernel.
 ##
 ## Run from the worktree root:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --nimcache:nimcache/wip --outdir:build/wip \
 ##     workspace/crucible/tests/batching/t_batch_metal.nim
 

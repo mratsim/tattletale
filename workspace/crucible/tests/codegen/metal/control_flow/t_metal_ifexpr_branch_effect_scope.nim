@@ -3,7 +3,7 @@
 ## Test that only the taken branch of an if-expression evaluates.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/red --nimcache:nimcache/red \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_ifexpr_branch_effect_scope.nim
 

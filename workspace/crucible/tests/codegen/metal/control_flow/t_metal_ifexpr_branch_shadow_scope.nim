@@ -3,7 +3,7 @@
 ## Test that a branch-local shadow leaves the outer binding readable.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_ifexpr_branch_shadow_scope.nim
 

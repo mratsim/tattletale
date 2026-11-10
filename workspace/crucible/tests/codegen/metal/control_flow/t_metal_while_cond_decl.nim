@@ -4,7 +4,7 @@
 ## every test and terminates at the recomputed bound.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_while_cond_decl.nim
 

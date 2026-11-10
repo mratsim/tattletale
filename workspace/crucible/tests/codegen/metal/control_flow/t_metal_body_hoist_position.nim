@@ -3,7 +3,7 @@
 ## Test that a hoisted statement runs at its source statement, never at the front or the end of the body.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/red --nimcache:nimcache/red \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_body_hoist_position.nim
 

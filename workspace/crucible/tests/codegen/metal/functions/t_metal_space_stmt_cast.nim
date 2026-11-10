@@ -7,7 +7,7 @@
 ## - launch + byte-exact readback
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/metal/functions/t_metal_space_stmt_cast.nim
 

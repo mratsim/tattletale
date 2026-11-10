@@ -3,7 +3,7 @@
 ## Test that the rhs of a false `and` and the rhs of a true `or` never evaluate.
 ##
 ## Run:
-##   nim c -r --hints:off --warnings:off --path:"$PWD" \
+##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/red --nimcache:nimcache/red \
 ##     workspace/crucible/tests/codegen/metal/control_flow/t_metal_and_or_short_circuit.nim
 
