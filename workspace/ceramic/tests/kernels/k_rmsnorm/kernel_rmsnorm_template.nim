@@ -91,7 +91,7 @@ proc randomHostVector*[T](rng: var Rand, _: typedesc[T], size: int, bounds: HSli
   for i in 0 ..< size:
     result.data[i] = rng.rand(bounds)
 
-func fillCanary[T, L](ht: var HostTensor[T, L]) =
+func fillCanary(ht: var HostTensor) =
   ## Fills every element, garbage slots included, with the sentinel 12345:
   ## the kernel under test must overwrite every slot and never read dst
   for i in 0 ..< ht.len():

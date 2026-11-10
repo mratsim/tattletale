@@ -30,7 +30,7 @@ export k_tile_sum
 #  fp32 host reference
 # ═══════════════════════════════════════════════════════════════
 
-func refSum*[T, L](src: TensorView[T, L]): float32 =
+func refSum*(src: TensorView): float32 =
   ## Sum of the tensor, f64 accumulation
   var acc = 0.0
   for i in 0 ..< src.size():

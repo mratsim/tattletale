@@ -56,7 +56,7 @@ macro guardWriteDisjointness(shD, stD, shS, stS: typed) =
                  " has stride 0 with shape > 1 and src stride " & $stSv[d] &
                  " is non-zero")))
 
-func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr UncheckedArray[T], dstOff, srcOff, srcStride: int, W, vecCap: int, elemBits: static int) {.inline.} =
+func copyChunks[T](C: Layout, d: static int, dstP, srcP: ptr UncheckedArray[T], dstOff, srcOff, srcStride: int, W, vecCap: int, elemBits: static int) {.inline.} =
   ## Copies dst <- src by chunks
   when d == rank(C):
     let
@@ -209,7 +209,7 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   let ur = zipped_divide(L, makeIntTuple(tilerMN(atom)))
   tiled_divide(dimension(ur, 1), makeIntTuple((chunkCols, kRows)))
 
-func partition_S*[T, LA, Atom](src: TensorView[T, LA], atom: typedesc[Atom], blockSize: static int, thrIdx: int): auto =
+func partition_S*[Atom](src: TensorView, atom: typedesc[Atom], blockSize: static int, thrIdx: int): auto =
   ## Slice the copy partition (thrfrg_copy) of the source tile at the flat thread id:
   ## the thread's chunks to copy.
   ## S = Source, the gmem side of the copy.
@@ -225,7 +225,7 @@ func partition_S*[T, LA, Atom](src: TensorView[T, LA], atom: typedesc[Atom], blo
   let thrTensor = make_view(src, src.getLayout().thrfrg_copy(atom, blockSize))
   thrTensor(thrIdx, _, _)
 
-func partition_D*[T, LB, Atom](dst: TensorView[T, LB], atom: typedesc[Atom], blockSize: static int, thrIdx: int): auto =
+func partition_D*[Atom](dst: TensorView, atom: typedesc[Atom], blockSize: static int, thrIdx: int): auto =
   ## Slice the copy partition (thrfrg_copy) of the destination tile at the flat thread id:
   ## the thread's chunks to receive the copy.
   ## D = Destination, the smem side of the copy.

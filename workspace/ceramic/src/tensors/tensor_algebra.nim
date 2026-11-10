@@ -13,7 +13,7 @@ import std/macros
 export layout_indexing.slice, layout_indexing.dice
 export layout_indexing.sliceAxes, layout_indexing.diceAxes
 
-macro sliceAxes*[T, L](t: TensorOwned[T, L], axes: varargs[int]{lit|`const`}): untyped =
+macro sliceAxes*(t: TensorOwned, axes: varargs[int]{lit|`const`}): untyped =
   ## Sliced layout over the tensor's axes, the others keep their place.
   result = bindSym"sliceAxes".newCall(newDotExpr(t, bindSym"getLayout"))
   for a in axes:
@@ -25,7 +25,7 @@ macro sliceAxes*(tv: TensorView, axes: varargs[int]{lit|`const`}): untyped =
   for a in axes:
     result.add(a)
 
-macro diceAxes*[T, L](t: TensorOwned[T, L], axes: varargs[int]{lit|`const`}): untyped =
+macro diceAxes*(t: TensorOwned, axes: varargs[int]{lit|`const`}): untyped =
   ## Layout over the picked axes alone, in the given order.
   result = bindSym"diceAxes".newCall(newDotExpr(t, bindSym"getLayout"))
   for a in axes:
@@ -37,23 +37,23 @@ macro diceAxes*(tv: TensorView, axes: varargs[int]{lit|`const`}): untyped =
   for a in axes:
     result.add(a)
 
-template logical_divide*[T, L](t: TensorOwned[T, L], tiler: Layout): auto =
+template logical_divide*(t: TensorOwned, tiler: Layout): auto =
   ## A view aliasing the caller's storage, a by-value param would dangle
   ## for small inline arrays.
   make_view(addr t.data[0], t.getLayout().logical_divide(tiler), getOffset(t))
 
-func logical_divide*[T, L](t: TensorView[T, L], tiler: Layout): auto {.inline.} =
+func logical_divide*(t: TensorView, tiler: Layout): auto {.inline.} =
   make_view(addr t.data[0], t.getLayout().logical_divide(tiler), getOffset(t))
 
-func getIdentityLayout*[T, L](t: TensorView[T, L]): auto {.inline.} =
+func getIdentityLayout*(t: TensorView): auto {.inline.} =
   ## Identity layout over the tensor's shape, its coordinate space.
   make_identity_layout(t.shape)
 
-func getIdentityLayout*[T, L](t: TensorOwned[T, L]): auto {.inline.} =
+func getIdentityLayout*(t: TensorOwned): auto {.inline.} =
   ## Identity layout over the tensor's shape, its coordinate space.
   make_identity_layout(t.shape)
 
-func atAxisIndex*[T, L](src: TensorView[T, L], axis: static int, idx: int): auto =
+func atAxisIndex*(src: TensorView, axis: static int, idx: int): auto =
   ## View of `src` with `axis` fixed at `idx` and removed from the shape.
   ##
   ##   atAxisIndex(src, axis = 1, idx = 2)  # src (2, 3, 4) -> view (2, 4), view[a, b] aliases src[a, 2, b]
@@ -65,7 +65,7 @@ func atAxisIndex*[T, L](src: TensorView[T, L], axis: static int, idx: int): auto
     let axisAlone = src.diceAxes(axis)
     make_view(src.data, others, src.offset + crd2idx(axisAlone, idx))
 
-func alongAxisAt*[T, L](src: TensorView[T, L], axis: static int, idx: int): auto =
+func alongAxisAt*(src: TensorView, axis: static int, idx: int): auto =
   ## Returns a rank-1 view of the `axis` strip of `src`.
   ## `idx` is the flat position over the other axes, dimension 0 fastest.
   ##

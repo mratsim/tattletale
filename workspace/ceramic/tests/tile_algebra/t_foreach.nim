@@ -61,7 +61,7 @@ proc testRank3 =
 
 proc testGenericProcContext =
   # forEach inside a generic proc, `in` desugars to contains
-  func scale[T, L](a: var Tile[T, L], s: T) =
+  func scale[T](a: var Tile, s: T) =
     forEach var d in a:
       d = d * s
 

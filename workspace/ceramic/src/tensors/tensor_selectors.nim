@@ -292,7 +292,7 @@ template local_partition*(tv: AnyTensor; tile: Layout; idx: int or Int; proj: ty
 #  displace
 # ═════════════════════════════════════════════════════════════════════════
 
-func displace*[T, L](t: TensorView[T, L], coord: IntOrIntTuple): auto {.inline, noInit.} =
+func displace*(t: TensorView, coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset TensorView by `coord` (logical coords).
   ## Returns: a sub-view with shape `original_shape - coord` (element-wise),
   ## the offset advanced by `crd2idx(layout, coord)`, strides preserved.
@@ -301,7 +301,7 @@ func displace*[T, L](t: TensorView[T, L], coord: IntOrIntTuple): auto {.inline, 
     it_a - it_b
   make_view(t.data, make_layout(ns, t.stride), t.offset + off)
 
-func displace*[T, L](t: TensorOwned[T, L], coord: IntOrIntTuple): auto {.inline, noInit.} =
+func displace*(t: TensorOwned, coord: IntOrIntTuple): auto {.inline, noInit.} =
   ## Offset TensorOwned by `coord` (logical coords). Returns a sub-view whose shape is
   ## `original_shape - coord` (element-wise).
   displace(t.view(), coord)

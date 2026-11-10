@@ -20,13 +20,13 @@ import workspace/crucible
 
 {.experimental: "callOperator".}
 
-proc fillWith*[T, L](tv: var TensorView[T, L], val: T) =
+proc fillWith*[T](tv: var TensorView, val: T) =
   ## Set every logical element of `tv` to `val`.
   ## Uses flat-index iteration — acceptable on GPU, slow on CPU.
   for i in 0 ..< size(tv):
     tv(i) = val
 
-proc fillWith*[T, L](t: var TensorOwned[T, L], val: T) =
+proc fillWith*[T](t: var TensorOwned, val: T) =
   ## Set every logical element of `t` to `val`.
   for i in 0 ..< size(t):
     t(i) = val

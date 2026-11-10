@@ -50,10 +50,10 @@ func make_tensor_like*[T, L](t: TensorView[T, L]): auto {.inline.} =
 func make_tensor_like*[T, L](t: TensorOwned[T, L]): auto {.inline.} =
   make_tensor(T, make_layout_like(t.getLayout()))
 
-func make_tensor_like*[T, L, NewT](t: TensorView[T, L], _: typedesc[NewT]): auto {.inline.} =
+func make_tensor_like*[NewT](t: TensorView, _: typedesc[NewT]): auto {.inline.} =
   make_tensor(NewT, make_layout_like(t.getLayout()))
 
-func make_tensor_like*[T, L, NewT](t: TensorOwned[T, L], _: typedesc[NewT]): auto {.inline.} =
+func make_tensor_like*[NewT](t: TensorOwned, _: typedesc[NewT]): auto {.inline.} =
   make_tensor(NewT, make_layout_like(t.getLayout()))
 
 
@@ -71,7 +71,7 @@ template make_view*[P: ptr | ptr UncheckedArray, ShT, StT: IntOrIntTuple](
     data: P; shape: ShT; stride: StT): untyped =
   make_view(data, make_layout(shape, stride))
 
-template slice*[T, L](t: AnyTensor[T, L], R: Layout, sel: untyped): auto =
+template slice*(t: AnyTensor, R: Layout, sel: untyped): auto =
   make_view(addr t.data[0], slice(R, sel), getOffset(t) + crd2idx(R, sel))
 
 # ── Non-owning: make_view(openArray, Layout) — zero-copy ───────────────
@@ -106,8 +106,8 @@ template make_view*(tv: TensorView;
 #  Layout accessors
 # ═════════════════════════════════════════════════════════════════════════
 
-func getOffset*[T, L](tv: TensorView[T, L]): int {.inline.} = tv.offset
-func getOffset*[T, L](t: TensorOwned[T, L]): int {.inline.} = 0
+func getOffset*(tv: TensorView): int {.inline.} = tv.offset
+func getOffset*(t: TensorOwned): int {.inline.} = 0
 
 func getOriginPtr*[T, L](tv: TensorView[T, L]): ptr UncheckedArray[T] {.inline.} =
   cast[ptr UncheckedArray[T]](addr tv.data[tv.offset])
@@ -136,25 +136,25 @@ template stride*[T, Sh, St](t: TensorOwned[T, Layout[Sh, St]]): untyped =
   default(St)
 template stride*(tv: TensorView): untyped = tv.layout.stride
 
-template rank*[T, L](t: TensorOwned[T, L]): untyped =
+template rank*(t: TensorOwned): untyped =
   t.getLayout().rank()
 template rank*(tv: TensorView): untyped = tv.layout.rank()
 
-template size*[T, L](t: TensorOwned[T, L]): untyped =
+template size*(t: TensorOwned): untyped =
   ## size folds the shape leaves only.
   t.getLayout().size()
 template size*(tv: TensorView): untyped = tv.layout.size()
 
 template cosize*(tv: TensorView): untyped = tv.layout.cosize()
-template cosize*[T, L](t: TensorOwned[T, L]): untyped =
+template cosize*(t: TensorOwned): untyped =
   t.getLayout().cosize()
 
 # ═════════════════════════════════════════════════════════════════════════
 #  Display
 # ═════════════════════════════════════════════════════════════════════════
 
-proc `$`*[T, L](t: TensorOwned[T, L]): string =
+proc `$`*(t: TensorOwned): string =
   "TensorOwned o (" & $t.shape & "):(" & $t.stride & ")"
 
-proc `$`*[T, L](tv: TensorView[T, L]): string =
+proc `$`*(tv: TensorView): string =
   "TensorView o (" & $tv.layout.shape & "):(" & $tv.layout.stride & ")"

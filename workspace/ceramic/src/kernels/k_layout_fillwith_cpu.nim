@@ -293,11 +293,11 @@ macro fillWithCpuImpl(dst: typed; val: typed): untyped =
 
 # ── Public API ──
 
-func fillWith_cpu*[T, L](tv: var TensorView[T, L], val: T) =
+func fillWith_cpu*[T](tv: var TensorView, val: T) =
   ## Fill every logical element of `tv` with `val`.
   ## Uses zeroMem for zero-fill of contiguous suffix.
   fillWithCpuImpl(tv, val)
 
-func fillWith_cpu*[T, L](t: var TensorOwned[T, L], val: T) =
+func fillWith_cpu*[T](t: var TensorOwned, val: T) =
   ## Fill every logical element of `t` with `val`.
   fillWith_cpu(t.view(), val)

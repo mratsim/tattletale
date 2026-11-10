@@ -63,7 +63,7 @@ macro `[]=`*(ht: HostTensor, args: varargs[untyped]): untyped =
   result = quote do:
     `ht`.data[`ht`.offset + crd2idx(`ht`.layout, `coord`)] = `val`
 
-func getOriginOffset[Sh, St](layout: Layout[Sh, St]): int =
+func getOriginOffset(layout: Layout): int =
   ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
   let sh = layout.shape.flatten()
   let st = layout.stride.flatten()
@@ -117,7 +117,7 @@ proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, 
     else:
       result.data[result.offset + toInt crd2idx(layout, crd)] = to(rng.rand(bounds.a .. bounds.b), T)
 
-func len*[T, L](ht: HostTensor[T, L]): int =
+func len*(ht: HostTensor): int =
   toInt(ht.layout.cosize())
 
 func view*[T, L](ht: HostTensor[T, L]): TensorView[T, L] =
