@@ -97,7 +97,7 @@ proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
     size = rImpl.size()
   engine.materialize(rImpl)
   batch.enqueue<<(ceil_div(size, 128), 32)>> k_add(rImpl.bridge, aImpl.bridge, bImpl.bridge)
-  true
+  return true
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration

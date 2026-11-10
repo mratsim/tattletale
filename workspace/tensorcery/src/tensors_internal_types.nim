@@ -34,10 +34,11 @@ iface *TensorNode:
     func size(): int
 
 type
-  TensorImpl*[DeviceMem; L: Layout] = ref object
+  TensorImpl*[DeviceMem; Rank: static int] = ref object
     data*: ref DeviceMem
     offset*: int
-    layout*: L
+    shape*: array[Rank, int]
+    stride*: array[Rank, int]
 
   TensorBridge*[DeviceMem; L: Layout] = object
     data: ref DeviceMem
@@ -48,13 +49,27 @@ type
     core*: C
     pos*: int
 
-proc allocData*[E: HwEngine, H, T, L](engine: E, impl: TensorImpl[DeviceMem[H, T], L]) {.inline.} =
+proc allocData*[E: HwEngine, H, T; Rank: static int](engine: E, impl: TensorImpl[DeviceMem[H, T], Rank]) {.inline.} =
   impl.data.new()
-  impl.data[] = engine.allocDevice(T, impl.layout.size())
+  impl.data[] = engine.allocDevice(T, impl.size())
 
-func bridge*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): lent TensorBridge[DeviceMem, L] {.inline.} =
-  static: doAssert sizeof(t[]) == sizeof(result)
-  result = cast[ptr TensorBridge[DeviceMem, L]](t)[]
+template getLayoutType*(rank: static int): typedesc =
+  when rank == 1:
+    Layout[(int,), (int,)]
+  elif rank == 2:
+    Layout[(int, int), (int, int)]
+  elif rank == 3:
+    Layout[(int, int, int), (int, int, int)]
+  elif rank == 4:
+    Layout[(int, int, int, int), (int, int, int, int)]
+  elif rank == 5:
+    Layout[(int, int, int, int, int), (int, int, int, int, int)]
+  else:
+    {.error: "getLayoutType: rank " & $rank & " unsupported".}
+
+func bridge*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): lent TensorBridge[DeviceMem, getLayoutType(Rank)] {.inline.} =
+  static: doAssert sizeof(t[]) == sizeof(TensorBridge[DeviceMem, getLayoutType(Rank)])
+  return cast[ptr TensorBridge[DeviceMem, getLayoutType(Rank)]](t)[]
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode
@@ -67,25 +82,8 @@ iface *AnyEngine:
     proc download(dst: var openArray[bfloat16], node: TensorNode, offsetElems: int)
     proc eval(roots: var openArray[TensorNode])
 
-func atAxis*[Sh: tuple](s: Sh, axis: int): int {.inline.} =
-  staticFor i, 0, tupleLen(Sh):
-    if i == axis:
-      result = s[i]
-
-func withAxis*[Sh: tuple](s: Sh, axis: int, val: int): Sh {.inline.} =
-  staticFor i, 0, tupleLen(Sh):
-    if i == axis:
-      result[i] = val
-    else:
-      result[i] = s[i]
-
-func rowMajorStrides*[Sh: tuple](shape: Sh): Sh =
+func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: array[Rank, int]) {.inline.} =
   var acc = 1
-  staticFor j, 0, tupleLen(Sh):
-    result[tupleLen(Sh) - 1 - j] = acc
-    acc *= shape[tupleLen(Sh) - 1 - j]
-
-func fillShape*[Sh: tuple](shape: var Sh, s: openArray[int]) {.contracts.} =
-  {.precondition: s.len == tupleLen(Sh).}
-  staticFor i, 0, tupleLen(Sh):
-    shape[i] = s[i]
+  for j in 1 ..< Rank + 1:
+    strides[Rank - j] = acc
+    acc *= shape[Rank - j]

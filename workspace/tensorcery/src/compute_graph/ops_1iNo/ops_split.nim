@@ -75,15 +75,16 @@ proc enqueueSplit[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Ten
   let src = core.a.getImpl().to(engine.getTensorImplType(T, rank))
   let
     axis = core.axis
-    partLen = src.layout.shape.atAxis(axis) div core.r.len
-    partStride = src.layout.stride.atAxis(axis)
+    partLen = src.shape[axis] div core.r.len
+    partStride = src.stride[axis]
   for i in 0 ..< core.r.len:
     let v = core.r[i].getImpl().to(engine.getTensorImplType(T, rank))
     v.data = src.data
     v.offset = src.offset + i * partLen * partStride
-    v.layout = make_layout(src.layout.shape.withAxis(axis, partLen), src.layout.stride)
+    v.stride = src.stride
+    v.shape[axis] = partLen
   n = core.r[asSplit.pos]
-  true
+  return true
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration

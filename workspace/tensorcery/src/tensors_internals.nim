@@ -33,46 +33,29 @@ export tensors_internal_types
 # This allows batching compute all-at-once, reducing the CPU<->GPU synchronization overhead.
 # Furthermore, when backprop is added, the graph can be reused for backward propagation.
 
-template getLayoutType(rank: static int): typedesc =
-  when rank == 1:
-    (int,)
-  elif rank == 2:
-    (int, int)
-  elif rank == 3:
-    (int, int, int)
-  elif rank == 4:
-    (int, int, int, int)
-  elif rank == 5:
-    (int, int, int, int, int)
-  else:
-    {.error: "getLayoutType: rank " & $rank & " unsupported".}
-
 template getTensorImplType*(engine: HwEngine, T: typedesc, rank: static int): typedesc =
-  TensorImpl[engine.getMemHandleType(T), Layout[getLayoutType(rank), getLayoutType(rank)]]
-
-template getTensorImplType*(engine: HwEngine, T: typedesc, layout: Layout): typedesc =
-  TensorImpl[engine.getMemHandleType(T), typeof(layout)]
+  TensorImpl[engine.getMemHandleType(T), rank]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func shape*(t: TensorImpl): Span[int] {.inline.} =
-  Span[int](p: toOpenArray(cast[ptr UncheckedArray[int]](
-      unsafeAddr t.layout.shape), 0, tupleLen(t.layout.shape) - 1))
+func shape*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): Span[int] {.inline.} =
+  Span[int](p: toOpenArray(t.shape, 0, Rank - 1))
 
-func strides*(t: TensorImpl): Span[int] {.inline.} =
-  Span[int](p: toOpenArray(cast[ptr UncheckedArray[int]](
-      unsafeAddr t.layout.stride), 0, tupleLen(t.layout.stride) - 1))
+func strides*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): Span[int] {.inline.} =
+  Span[int](p: toOpenArray(t.stride, 0, Rank - 1))
 
-func dtype*[H, T, L](t: TensorImpl[DeviceMem[H, T], L]): Dtype {.inline.} =
+func dtype*[H, T; Rank: static int](t: TensorImpl[DeviceMem[H, T], Rank]): Dtype {.inline.} =
   toDtype(T)
 
 func isMaterialized*(t: TensorImpl): bool {.inline.} =
   not t.data.isNil
 
-func size*(t: TensorImpl): int {.inline.} =
-  t.layout.size()
+func size*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {.inline.} =
+  result = 1
+  for i in 0 ..< Rank:
+    result *= t.shape[i]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - TensorNode interface
@@ -118,16 +101,25 @@ proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: Tenso
 #  TensorImpl
 # ═══════════════════════════════════════════════════════════════════════
 
-func newPlaceholderImpl[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout):
-    engine.getTensorImplType(T, layout) {.inline.} =
-  (engine.getTensorImplType(T, layout))(data: nil, offset: 0, layout: layout)
+func newPlaceholderImpl[E: HwEngine, T](
+        engine: E,
+        _: typedesc[T],
+        rank: static int,
+        shape: openArray[int]): engine.getTensorImplType(T, rank) {.inline.} =
+  result = (engine.getTensorImplType(T, rank))()
+  result.shape[0 ..< rank] = shape
+  rowMajorStrides(result.stride, result.shape)
 
-proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout):
-    engine.getTensorImplType(T, layout) {.inline.} =
-  result = (engine.getTensorImplType(T, layout))()
-  result.layout = layout
+proc newTensorImpl[E: HwEngine, T](
+      engine: E,
+      _: typedesc[T],
+      rank: static int,
+      shape: openArray[int]): engine.getTensorImplType(T, rank) {.inline.} =
+  result = (engine.getTensorImplType(T, rank))()
+  result.shape[0 ..< rank] = shape
+  rowMajorStrides(result.stride, result.shape)
   result.data.new()
-  result.data[] = engine.allocDevice(T, layout.size())
+  result.data[] = engine.allocDevice(T, result.size())
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph
@@ -136,33 +128,27 @@ proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout):
 proc materialize*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
   engine.allocData(impl)
 
-proc newTensorNode*[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout): TensorNode =
-  engine.newTensorImpl(T, layout).to(TensorNode)
-
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
-  case dtype
-  of kFp32:
-    var sh: (int, int)
-    fillShape(sh, shape)
-    engine.newPlaceholderImpl(float32, make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
-  of kBf16:
-    var sh: (int, int)
-    fillShape(sh, shape)
-    engine.newPlaceholderImpl(bfloat16, make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
+  case shape.len
+  of 2:
+    case dtype
+    of kFp32:
+      engine.newPlaceholderImpl(float32, 2, shape).to(TensorNode)
+    of kBf16:
+      engine.newPlaceholderImpl(bfloat16, 2, shape).to(TensorNode)
+    else:
+      raise ValueError.newException("newPlaceholderNode: dtype " & $dtype & " unsupported")
   else:
-    raise ValueError.newException("newPlaceholderNode: dtype " & $dtype & " unsupported")
+    raise ValueError.newException("newPlaceholderNode: rank " & $shape.len & " unsupported")
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   case shape.len
   of 2:
-    var sh: (int, int)
-    fillShape(sh, shape)
-    let layout = make_layout(sh, rowMajorStrides(sh))
     case dtype
     of kFp32:
-      engine.newTensorNode(float32, layout)
+      engine.newTensorImpl(float32, 2, shape).to(TensorNode)
     of kBf16:
-      engine.newTensorNode(bfloat16, layout)
+      engine.newTensorImpl(bfloat16, 2, shape).to(TensorNode)
     else:
       raise ValueError.newException("newTensorNode: dtype " & $dtype & " unsupported")
   else:
