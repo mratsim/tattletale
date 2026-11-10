@@ -8,7 +8,6 @@
 import std/tables
 import std/macros
 import workspace/crucible
-import workspace/crucible/src/runtime/engines/engines_api
 import ../tensors_internals
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -24,23 +23,23 @@ macro registerOp*(op: static string, handler: typed) =
 #  The walk
 # ═══════════════════════════════════════════════════════════════════════
 
-template withMem(engine: HwEngine, dtype: Dtype, body: untyped) =
+template withElemType(engine: HwEngine, T: untyped, dtype: Dtype, body: untyped) =
   case dtype
   of kFp32:
-    type Mem {.inject.} = typeof(engine.allocDevice(float32, 0))
+    type T = float32
     body
   of kBf16:
-    type Mem {.inject.} = typeof(engine.allocDevice(bfloat16, 0))
+    type T = bfloat16
     body
   else:
     raise ValueError.newException("eval: dtype unsupported")
 
-macro dispatchOp(E, L, Mem, engine, batch, n: typed): untyped =
+macro dispatchOp(E, T, engine, batch, n, rank: typed): untyped =
   result = nnkStmtList.newTree()
   var ifStmt = newNimNode(nnkIfStmt)
   for name, h in pairs(OpRegistry):
     let call = nnkCall.newTree(
-      nnkBracketExpr.newTree(h, E, L, Mem), engine, batch, n)
+      h, engine, batch, n, T, rank)
     ifStmt.add nnkElifBranch.newTree(call, nnkReturnStmt.newTree(newEmptyNode()))
   var elseBranch = newNimNode(nnkElse)
   elseBranch.add quote do:
@@ -48,20 +47,20 @@ macro dispatchOp(E, L, Mem, engine, batch, n: typed): untyped =
   ifStmt.add elseBranch
   result.add ifStmt
 
-proc evalWalk[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode)
+proc evalWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int)
 
 proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNode) =
-  engine.withMem(n.getImpl().dtype()):
+  engine.withElemType(T, n.getImpl().dtype()):
     case n.getImpl().shape().len
-    of 1: evalWalk[E, Layout[(int,), (int,)], Mem](engine, batch, n)
-    of 2: evalWalk[E, Layout[(int, int), (int, int)], Mem](engine, batch, n)
-    of 3: evalWalk[E, Layout[(int, int, int), (int, int, int)], Mem](engine, batch, n)
-    of 4: evalWalk[E, Layout[(int, int, int, int), (int, int, int, int)], Mem](engine, batch, n)
-    of 5: evalWalk[E, Layout[(int, int, int, int, int), (int, int, int, int, int)], Mem](engine, batch, n)
+    of 1: engine.evalWalk(batch, n, T, 1)
+    of 2: engine.evalWalk(batch, n, T, 2)
+    of 3: engine.evalWalk(batch, n, T, 3)
+    of 4: engine.evalWalk(batch, n, T, 4)
+    of 5: engine.evalWalk(batch, n, T, 5)
     else:
       raiseAssert("Tensorcery internal error: rank " & $n.getImpl().shape().len & " unsupported")
 
-proc evalWalk[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode) =
+proc evalWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int) =
   if n.isMaterialized():
     return
-  dispatchOp(E, L, Mem, engine, batch, n)
+  dispatchOp(E, T, engine, batch, n, rank)

@@ -7,7 +7,7 @@
 
 import std/macros
 import std/typetraits
-import workspace/crucible/src/builtins/builtins_gpu_types
+import workspace/crucible
 import workspace/ceramic
 import workspace/ceramic/src/macros/static_for
 import workspace/iface
@@ -58,22 +58,22 @@ iface *TensorNode:
     func size(): int
 
 type
-  TensorImpl*[Mem, L] = ref object
-    data*: ref Mem
+  TensorImpl*[DeviceMem; L: Layout] = ref object
+    data*: ref DeviceMem
     offset*: int
     layout*: L
 
-  TensorBridge*[DevMem, Sh, St] = object
-    data {.cursor.}: DevMem
+  TensorBridge*[DeviceMem; L: Layout] = object
+    data {.cursor.}: DeviceMem
     offset: int
-    layout: Layout[Sh, St]
+    layout: L
 
   PosNode*[C] = ref object of RootRef
     core*: C
     pos*: int
 
-func bridge*[Mem, Sh, St](t: TensorImpl[Mem, Layout[Sh, St]]): TensorBridge[Mem, Sh, St] {.inline.} =
-  TensorBridge[Mem, Sh, St](data: t.data[], offset: t.offset, layout: t.layout)
+func bridge*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): TensorBridge[DeviceMem, L] {.inline.} =
+  TensorBridge[DeviceMem, L](data: t.data[], offset: t.offset, layout: t.layout)
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: Span[int]): TensorNode

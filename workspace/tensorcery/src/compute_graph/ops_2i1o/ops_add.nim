@@ -6,11 +6,8 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible
-import workspace/crucible/src/builtins/builtins_compilermagic
-import workspace/crucible/src/runtime/engines/engines_api
 import workspace/ceramic
 import workspace/ceramic/src/tile_algebra
-import workspace/crucible/src/builtins/builtins_gpu_types
 import workspace/iface
 import workspace/math
 import ../../tensors_internals
@@ -84,7 +81,7 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAdd[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
+proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil:
     return false
@@ -92,9 +89,9 @@ proc enqueueAdd[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var 
   engine.evalNode(batch, asAdd.b)
 
   let
-    rImpl = asAdd.r.to(TensorImpl[Mem, L])
-    aImpl = asAdd.a.getImpl().to(TensorImpl[Mem, L])
-    bImpl = asAdd.b.getImpl().to(TensorImpl[Mem, L])
+    rImpl = asAdd.r.to(engine.getTensorImplType(T, rank))
+    aImpl = asAdd.a.getImpl().to(engine.getTensorImplType(T, rank))
+    bImpl = asAdd.b.getImpl().to(engine.getTensorImplType(T, rank))
     size = rImpl.size()
   engine.materialize(asAdd.r, rImpl.layout)
   batch.enqueue<<(ceil_div(size, 128), 32)>> k_add(rImpl.bridge, aImpl.bridge, bImpl.bridge)

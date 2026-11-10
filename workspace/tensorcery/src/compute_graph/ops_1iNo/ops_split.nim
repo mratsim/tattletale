@@ -6,7 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible
-import workspace/crucible/src/runtime/engines/engines_api
 import workspace/ceramic
 import workspace/iface
 import ../../tensors_internals
@@ -69,19 +68,19 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueSplit[E: HwEngine, L, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode): bool =
+proc enqueueSplit[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asSplit = n.to(PosNode[SplitCore])
   if asSplit.isNil:
     return false
   let core = asSplit.core
   engine.evalNode(batch, core.a)
-  let src = core.a.getImpl().to(TensorImpl[Mem, L])
+  let src = core.a.getImpl().to(engine.getTensorImplType(T, rank))
   let
     axis = core.axis
     partLen = src.layout.shape.atAxis(axis) div core.r.len
     partStride = src.layout.stride.atAxis(axis)
   for i in 0 ..< core.r.len:
-    let v = core.r[i].getImpl().to(TensorImpl[Mem, L])
+    let v = core.r[i].getImpl().to(engine.getTensorImplType(T, rank))
     v.data = src.data
     v.offset = src.offset + i * partLen * partStride
     v.layout = make_layout(src.layout.shape.withAxis(axis, partLen), src.layout.stride)

@@ -6,9 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible
-import workspace/crucible/src/builtins/builtins_gpu_types
-export builtins_gpu_types
-import workspace/crucible/src/runtime/engines/engines_api
 import workspace/ceramic
 import workspace/math
 import workspace/iface
@@ -32,33 +29,53 @@ export tensors_internal_types
 # This allows batching compute all-at-once, reducing the CPU<->GPU synchronization overhead.
 # Furthermore, when backprop is added, the graph can be reused for backward propagation.
 
+template getLayoutType(rank: static int): typedesc =
+  when rank == 1:
+    (int,)
+  elif rank == 2:
+    (int, int)
+  elif rank == 3:
+    (int, int, int)
+  elif rank == 4:
+    (int, int, int, int)
+  elif rank == 5:
+    (int, int, int, int, int)
+  else:
+    {.error: "getLayoutType: rank " & $rank & " unsupported".}
+
+template getTensorImplType*(engine: HwEngine, T: typedesc, rank: static int): typedesc =
+  TensorImpl[engine.getMemHandleType(T), Layout[getLayoutType(rank), getLayoutType(rank)]]
+
+template getTensorImplType*(engine: HwEngine, T: typedesc, layout: Layout): typedesc =
+  TensorImpl[engine.getMemHandleType(T), typeof(layout)]
+
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func shape*[Mem, L](t: TensorImpl[Mem, L]): Span[int] {.inline.} =
+func shape*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): Span[int] {.inline.} =
   toSpan(t.layout.shape)
 
-func strides*[Mem, L](t: TensorImpl[Mem, L]): Span[int] {.inline.} =
+func strides*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): Span[int] {.inline.} =
   toSpan(t.layout.stride)
 
 func dtype*[H, T, L](t: TensorImpl[DeviceMem[H, T], L]): Dtype {.inline.} =
   toDtype(T)
 
-func isMaterialized*[Mem, L](t: TensorImpl[Mem, L]): bool {.inline.} =
+func isMaterialized*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): bool {.inline.} =
   not t.data.isNil
 
-func size*[Mem, L](t: TensorImpl[Mem, L]): int {.inline.} =
+func size*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): int {.inline.} =
   t.layout.size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - TensorNode interface
 # ═══════════════════════════════════════════════════════════════════════
 
-proc getImpl*[Mem, L](t: TensorImpl[Mem, L]): AnyTensorImpl {.inline.} =
+proc getImpl*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): AnyTensorImpl {.inline.} =
   t.to(AnyTensorImpl)
 
-func opName*[Mem, L](t: TensorImpl[Mem, L]): string {.inline.} =
+func opName*[DeviceMem, L](t: TensorImpl[DeviceMem, L]): string {.inline.} =
   ""
 
 proc isMaterialized*(n: TensorNode): bool {.inline.} =
@@ -70,13 +87,11 @@ proc isMaterialized*(n: TensorNode): bool {.inline.} =
 
 proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) {.inline.} =
   let impl = node.getImpl()
-  type Mem = typeof(engine.allocDevice(float32, 0))
-  let t = impl.to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+  let t = impl.to(engine.getTensorImplType(float32, 2))
   engine.copyToDeviceFromHost(t.data[], src)
 
 proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) {.inline.} =
-  type Mem = typeof(engine.allocDevice(bfloat16, 0))
-  let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+  let t = node.getImpl().to(engine.getTensorImplType(bfloat16, 2))
   engine.copyToDeviceFromHost(t.data[], src)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode) {.inline.} =
@@ -86,26 +101,26 @@ proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: Tenso
   engine.download(dst, node, 0)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[float32], node: TensorNode, offsetElems: int) {.inline.} =
-  type Mem = typeof(engine.allocDevice(float32, 0))
-  let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+  let t = node.getImpl().to(engine.getTensorImplType(float32, 2))
   engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
 
 proc download*[E: HwEngine](engine: E, dst: var openArray[bfloat16], node: TensorNode, offsetElems: int) {.inline.} =
-  type Mem = typeof(engine.allocDevice(bfloat16, 0))
-  let t = node.getImpl().to(TensorImpl[Mem, Layout[(int, int), (int, int)]])
+  let t = node.getImpl().to(engine.getTensorImplType(bfloat16, 2))
   engine.copyToHostFromDevice(dst, t.data[], t.offset + offsetElems)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl
 # ═══════════════════════════════════════════════════════════════════════
 
-func newPlaceholderImpl[E: HwEngine, Mem](engine: E, layout: Layout, _: typedesc[Mem]): TensorImpl[Mem, Layout] {.inline.} =
-  TensorImpl[Mem, Layout](data: nil, offset: 0, layout: layout)
+func newPlaceholderImpl[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout):
+    engine.getTensorImplType(T, layout) {.inline.} =
+  (engine.getTensorImplType(T, layout))(data: nil, offset: 0, layout: layout)
 
-proc newTensorImpl[E: HwEngine, T, Mem](engine: E, _: typedesc[T], layout: Layout, _: typedesc[Mem]): TensorImpl[Mem, Layout] {.inline.} =
+proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout):
+    engine.getTensorImplType(T, layout) {.inline.} =
+  result = (engine.getTensorImplType(T, layout))()
   result.data.new()
   result.data[] = engine.allocDevice(T, layout.size())
-  result.layout = layout
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph
@@ -114,33 +129,29 @@ proc newTensorImpl[E: HwEngine, T, Mem](engine: E, _: typedesc[T], layout: Layou
 proc materialize*[E: HwEngine](engine: E, impl: AnyTensorImpl, layout: Layout) =
   case impl.dtype()
   of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
-    let t = impl.to(TensorImpl[Mem, Layout])
+    let t = impl.to(engine.getTensorImplType(float32, layout))
     t.data.new()
     t.data[] = engine.allocDevice(float32, t.layout.size())
   of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
-    let t = impl.to(TensorImpl[Mem, Layout])
+    let t = impl.to(engine.getTensorImplType(bfloat16, layout))
     t.data.new()
     t.data[] = engine.allocDevice(bfloat16, t.layout.size())
   else:
     raiseAssert("materialize: dtype unsupported")
 
-proc newTensorNode*[E: HwEngine, T, Mem](engine: E, _: typedesc[T], layout: Layout, _: typedesc[Mem]): TensorNode =
-  engine.newTensorImpl(T, layout, Mem).to(TensorNode)
+proc newTensorNode*[E: HwEngine, T](engine: E, _: typedesc[T], layout: Layout): TensorNode =
+  engine.newTensorImpl(T, layout).to(TensorNode)
 
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
   case dtype
   of kFp32:
-    type Mem = typeof(engine.allocDevice(float32, 0))
     var sh: (int, int)
     fillShape(sh, shape)
-    engine.newPlaceholderImpl(make_layout(sh, rowMajorStrides(sh)), Mem).to(TensorNode)
+    engine.newPlaceholderImpl(float32, make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
   of kBf16:
-    type Mem = typeof(engine.allocDevice(bfloat16, 0))
     var sh: (int, int)
     fillShape(sh, shape)
-    engine.newPlaceholderImpl(make_layout(sh, rowMajorStrides(sh)), Mem).to(TensorNode)
+    engine.newPlaceholderImpl(bfloat16, make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
   else:
     raise ValueError.newException("newPlaceholderNode: dtype " & $dtype & " unsupported")
 
@@ -152,11 +163,9 @@ proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Ten
     let layout = make_layout(sh, rowMajorStrides(sh))
     case dtype
     of kFp32:
-      type Mem = typeof(engine.allocDevice(float32, 0))
-      engine.newTensorNode(float32, layout, Mem)
+      engine.newTensorNode(float32, layout)
     of kBf16:
-      type Mem = typeof(engine.allocDevice(bfloat16, 0))
-      engine.newTensorNode(bfloat16, layout, Mem)
+      engine.newTensorNode(bfloat16, layout)
     else:
       raise ValueError.newException("newTensorNode: dtype " & $dtype & " unsupported")
   else:

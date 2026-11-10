@@ -698,6 +698,8 @@ RULES = {
                               "hand-built IR construction in a tests/codegen or tests/runtime Nim file, the test dies on every IR change; drive the public API or the verifier under tests/verify"),
     "method-call-syntax": Rule("method-call-syntax", True,
                                "a tile_algebra view method written in dst-first free-call syntax, the receiver is the first argument, write receiver.method(...)"),
+    "generic-param-derivation": Rule("generic-param-derivation", True,
+                                     "a generic param appears in no parameter of the routine, a caller cannot derive it, pass it as a parameter (typedesc or static formal) or derive it from one"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
     "registration-top": Rule("registration-top", True,
@@ -1794,6 +1796,79 @@ def _type_has_field_docs(lines, decl_idx):
         j += 1
     return False
 
+
+
+# The generic-param-derivation rule. A generic param of a routine must be
+# derivable from a call argument: it appears in a formal's type, or it is
+# itself a typedesc or static formal. A param appearing in no parameter
+# leaves the caller nothing to derive it from; the erased layers made this
+# the recurring failure (typedesc threading that no call site could spell).
+GENERIC_DECL_RE = re.compile(
+    r"^\s*(?:proc|func|template|macro|iterator|converter)\s+`?([A-Za-z_][\w.]*)`?\*?\s*\[")
+
+def match_delim(text, open_idx, open_c, close_c):
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == open_c:
+            depth += 1
+        elif text[i] == close_c:
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+def nim_generic_param_checks(path, text, findings):
+    lines = text.split("\n")
+    n = 0
+    while n < len(lines):
+        m = GENERIC_DECL_RE.match(lines[n])
+        if not m:
+            n += 1
+            continue
+        decl_line = n + 1
+        name = m.group(1)
+        # accumulate lines until both the generic bracket and the formal parens close
+        k = n
+        while k + 1 < len(lines) and k < n + 24:
+            joined = "\n".join(lines[n:k + 1])
+            gb = joined.find("[")
+            ge = match_delim(joined, gb, "[", "]") if gb >= 0 else -1
+            pb = joined.find("(", ge + 1) if ge >= 0 else joined.find("(")
+            pe = match_delim(joined, pb, "(", ")") if pb >= 0 else -1
+            if ge >= 0 and (pe >= 0 or pb < 0):
+                break
+            k += 1
+        joined = "\n".join(lines[n:k + 1])
+        gb = joined.find("[")
+        ge = match_delim(joined, gb, "[", "]")
+        pb = joined.find("(", ge + 1)
+        pe = match_delim(joined, pb, "(", ")") if pb >= 0 else -1
+        gen_list = joined[gb + 1:ge]
+        formals = joined[pb + 1:pe] if pb >= 0 and pe > pb else ""
+        # top-level split on both group separators, bracket-aware
+        parts, depth, cur = [], 0, ""
+        for c in gen_list:
+            if c in "[(":
+                depth += 1
+            elif c in "])":
+                depth -= 1
+            if c in ",;" and depth == 0:
+                parts.append(cur)
+                cur = ""
+            else:
+                cur += c
+        if cur.strip():
+            parts.append(cur)
+        for item in parts:
+            pm = re.match(r"\s*`?([A-Za-z_]\w*)`?", item)
+            if not pm:
+                continue
+            gp = pm.group(1)
+            if not re.search(r"(?<![\w`])" + re.escape(gp) + r"(?![\w`])", formals):
+                findings.append(Finding(
+                    path, decl_line, "generic-param-derivation",
+                    f"generic param `{gp}` of `{name}` appears in no parameter"))
+        n = k + 1
 
 def check_doc_above_type(path, text, findings):
     """Fires the doc-above-type rule on a ## block placed directly above a type declaration.
@@ -3357,6 +3432,7 @@ def scan(path, text, findings):
             nim_method_call_syntax_checks(path, text, findings)
             nim_callable_semicolon_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
+            nim_generic_param_checks(path, text, findings)
             check_license_driveby(path, text, findings)
         if is_py and meta is not None:
             tree = None

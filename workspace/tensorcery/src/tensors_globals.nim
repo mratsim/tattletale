@@ -6,8 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible
-import workspace/crucible/src/builtins/builtins_gpu_types
-import workspace/crucible/src/runtime/engines/engines_api
 import workspace/ceramic
 import workspace/iface
 import tensors_internals

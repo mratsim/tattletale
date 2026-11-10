@@ -17,6 +17,8 @@
 ## | Codegen       | `cuda`, `opencl`, `glsl`, `webgpu`, `metal`, `hlsl` (+ `HlslFlavor`), `spirv`                                                                     |
 
 import
+  ./builtins/builtins_gpu_types,
+  ./builtins/builtins_compilermagic,
   ./codegen/gpu_compiler,
   ./runtime/engines/engines_api,
   ./runtime/launch/launch_kernel,
@@ -29,6 +31,12 @@ import
 # ═══════════════════════════════════════════════════════════════════════
 
 export engines_api
+
+# GPU builtin vocabulary: scalar types and compile-time backend queries
+export builtins_gpu_types.float16, builtins_gpu_types.bfloat16,
+       builtins_gpu_types.`==`, builtins_gpu_types.to,
+       builtins_compilermagic.CompileTarget, builtins_compilermagic.ccGetBackend,
+       builtins_compilermagic.crucibleCompileTarget
 
 export launch_kernel.launchKernel
 export launch_device_fn.launchDeviceFn

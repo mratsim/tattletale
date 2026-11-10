@@ -6,7 +6,6 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import workspace/crucible
-import workspace/crucible/src/runtime/engines/engines_api
 import workspace/iface
 import tensors_internals
 import tensors_public_types
