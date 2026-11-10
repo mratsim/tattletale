@@ -405,6 +405,25 @@ task test_ttf_inference_context, "Suite: InferenceContext state flows over pool 
 task test_ttf_model_qwen3, "Suite: Qwen3-0.6B model smoke, greedy generate + LPM/COW restart (Metal, local checkpoint)":
   runTattleformerSuite("test_model_qwen3.nim")
 
+proc runTattleformerSuiteIn(dir, filename: string) =
+  withDir(ProjectRoot):
+    runCmd(testerCmd("workspace/tattleformers/tests/" & dir & "/" & filename))
+
+# Harness selftests and the recorded fixture suites (Qwen3-0.6B bf16 replay
+# against the committed .json.zst frames). The recorded suites load the
+# local checkpoint: TTT_QWEN3_PATH env override,
+# default /Users/pi/Documents/Programming/MODELS/Qwen3-0.6B.
+task test_ttf_harness_selftest, "Suite: harness selftest, band math + accept/reject cases + the tail-edge record (Metal)":
+  runTattleformerSuiteIn("harness", "t_harness_selftest.nim")
+task test_ttf_readback_protocol, "Suite: harness readback protocol smoke over a 2-op graph (Metal)":
+  runTattleformerSuiteIn("harness", "t_readback_protocol.nim")
+task test_ttf_bf16_qwen3_02, "Suite: bf16 chain replay, first 8 blocks + depth-28 tail checkpoint (Metal, local checkpoint)":
+  runTattleformerSuiteIn("q_bf16", "t_bf16_qwen3_02_first_8_layers_plus_final.nim")
+task test_ttf_bf16_qwen3_03, "Suite: bf16 full forward to logits, 28 layers + 6 recorded argmax positions (Metal, local checkpoint)":
+  runTattleformerSuiteIn("q_bf16", "t_bf16_qwen3_03_full_forward_to_logits.nim")
+task test_ttf_bf16_qwen3_04, "Suite: bf16 greedy text generation, 2 recorded chains teacher-forced (Metal, local checkpoint)":
+  runTattleformerSuiteIn("q_bf16", "t_bf16_qwen3_04_greedy_text_generation.nim")
+
 task test_tf_kvcache_kvcache, "Suite: kvcache core (cpu-only, model-free)":
   runTransformerSuite("kvcache", "test_kvcache.nim")
 task test_tf_kvcache_page_pool, "Suite: page pool lifecycle (cpu-only, model-free)":
