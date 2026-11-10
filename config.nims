@@ -395,6 +395,10 @@ task test_ttf_page_pool, "Suite: page pool lifecycle (Metal)":
   runTattleformerSuite("test_page_pool.nim")
 task test_ttf_pool_write, "Suite: pool write op over pool slabs (Metal)":
   runTattleformerSuite("test_pool_write.nim")
+task test_ttf_jagged_attention, "Suite: jagged attention op over pool slabs (Metal)":
+  runTattleformerSuite("test_jagged_attention_op.nim")
+task test_ttf_inference_context, "Suite: InferenceContext state flows over pool + trie (Metal)":
+  runTattleformerSuite("test_inference_context.nim")
 
 task test_tf_kvcache_kvcache, "Suite: kvcache core (cpu-only, model-free)":
   runTransformerSuite("kvcache", "test_kvcache.nim")
