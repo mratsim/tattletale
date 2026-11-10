@@ -3,6 +3,7 @@
 ##     --nimcache:nimcache/wip --outdir:build/wip \
 ##     workspace/crucible/tests/batching/t_batch_metal.nim
 
+import std/strutils
 import workspace/crucible
 
 const
@@ -78,6 +79,24 @@ proc aliasLayoutKernel*(outP: ptr UncheckedArray[int32], lay: AliasLayout) =
   ## The device struct layout places them after the field's static-argument word.
   outP[0] = lay.stride
   outP[1] = lay.tag
+
+proc bf16PromoteKernel*(outF: ptr UncheckedArray[float32], x: ptr UncheckedArray[bfloat16], n: int32) =
+  ## Reads the bf16 storage word and widens exactly into f32.
+  let i = int(thread_position_in_grid.x)
+  if i < n:
+    outF[i] = x[i].to(float32)
+
+proc bf16DemoteKernel*(outB: ptr UncheckedArray[bfloat16], x: ptr UncheckedArray[float32], n: int32) =
+  ## Stores the f32 input as its bf16 bit pattern, round-to-nearest-even.
+  let i = int(thread_position_in_grid.x)
+  if i < n:
+    outB[i] = x[i].to(bfloat16)
+
+proc bf16AddKernel*(outB, a, b: ptr UncheckedArray[bfloat16], n: int32) =
+  ## Adds two bf16 buffers in f32 and rounds once into the bf16 output.
+  let i = int(thread_position_in_grid.x)
+  if i < n:
+    outB[i] = (a[i].to(float32) + b[i].to(float32)).to(bfloat16)
 
 proc fillSentinel[E: HwEngine](engine: E, dst: auto, len: int, v: auto) =
   var host = newSeq[typeof(v)](len)
@@ -333,5 +352,64 @@ proc runBatchSuite*[E: HwEngine](engine: E) =
     doAssert got[1] == 8'i32,
       "alias-over-phantom: the tag word read " & $got[1] & ", expected 8"
     echo "[OK] alias-over-phantom arg: the runtime words read behind the static-argument word"
+
+  block:
+    # bf16 storage round trip: the buffer element stores its u16 bit pattern.
+    # Loads widen exactly into f32.
+    # Stores truncate back with round-to-nearest-even, judged against the host conversion builtins.
+    # 0: bf16-representable, exact promotion
+    # 1: half-ulp tie below an even mantissa, RNE rounds down
+    # 2: half-ulp tie above an odd mantissa, RNE rounds up
+    # 3: a negative bf16 value
+    # 4: positive infinity
+    # 5: a quiet NaN
+    let vals: array[6, float32] = [1.0'f32, 1.00390625'f32, 1.01171875'f32,
+      -2.5'f32, Inf, NaN]
+    var bh: array[6, bfloat16]
+    for i in 0 ..< 6:
+      bh[i] = vals[i].to(bfloat16)
+
+    let xB = engine.allocDevice(bfloat16, 6)
+    let outF32 = engine.allocDevice(float32, 6)
+    let outB16 = engine.allocDevice(bfloat16, 6)
+    engine.copyToDeviceFromHost(xB, bh)
+
+    var batch = engine.recordBatch()
+    batch.enqueue<<(1, 6)>> bf16PromoteKernel(outF32, xB, 6'i32)
+    batch.enqueue<<(1, 6)>> bf16DemoteKernel(outB16, outF32, 6'i32)
+    batch.submit()
+
+    var gotF: array[6, float32]
+    engine.copyToHostFromDevice(gotF.toOpenArray(0, 5), outF32)
+    var gotB: array[6, bfloat16]
+    engine.copyToHostFromDevice(gotB.toOpenArray(0, 5), outB16)
+    for i in 0 ..< 6:
+      doAssert cast[uint32](gotF[i]) == cast[uint32](bh[i].to(float32)),
+        "bf16 promote " & $i & ": got " & $gotF[i] & ", want " & $bh[i].to(float32)
+      let want = vals[i].to(bfloat16)
+      doAssert cast[uint16](gotB[i]) == cast[uint16](want),
+        "bf16 demote " & $i & ": got bits 0x" & toHex(cast[uint16](gotB[i]), 4) &
+        ", want 0x" & toHex(cast[uint16](want), 4)
+
+    var ah: array[6, bfloat16]
+    for i in 0 ..< 6:
+      ah[i] = float32(i + 1).to(bfloat16)
+    let aB = engine.allocDevice(bfloat16, 6)
+    let bB = engine.allocDevice(bfloat16, 6)
+    let sumB = engine.allocDevice(bfloat16, 6)
+    engine.copyToDeviceFromHost(aB, ah)
+    engine.copyToDeviceFromHost(bB, bh)
+
+    var addBatch = engine.recordBatch()
+    addBatch.enqueue<<(1, 6)>> bf16AddKernel(sumB, aB, bB, 6'i32)
+    addBatch.submit()
+    var gotS: array[6, bfloat16]
+    engine.copyToHostFromDevice(gotS.toOpenArray(0, 5), sumB)
+    for i in 0 ..< 6:
+      let want = (ah[i].to(float32) + bh[i].to(float32)).to(bfloat16)
+      doAssert cast[uint16](gotS[i]) == cast[uint16](want),
+        "bf16 add " & $i & ": got bits 0x" & toHex(cast[uint16](gotS[i]), 4) &
+        ", want 0x" & toHex(cast[uint16](want), 4)
+    echo "[OK] bf16 round trip: u16 storage, exact f32 promotion and RNE truncation"
 
   echo "[OK] batch suite (", engine.deviceName(), "): all scenarios passed"

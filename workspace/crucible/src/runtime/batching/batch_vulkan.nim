@@ -87,9 +87,11 @@ const
   VK_ACCESS_SHADER_READ_BIT = 0x00000020
   VK_ACCESS_SHADER_WRITE_BIT = 0x00000040
 
-proc checkPushRoom(pushConstantCursor, need: int) {.inline.} =
-  if pushConstantCursor + need > 128:
-    raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+proc checkPushRoom(limit, pushConstantCursor, need: int) {.inline.} =
+  ## Push-constant capacity check for the batch route against the device's own maxPushConstantsSize.
+  if pushConstantCursor + need > limit:
+    raiseAssert("Vulkan push constants exceed the device maxPushConstantsSize of " &
+      $limit & " bytes")
 
 type
   EntryPack = object
@@ -102,7 +104,7 @@ type
 
 proc write8(pack: var EntryPack, x: uint64) =
   pack.pushConstantCursor = pack.pushConstantCursor.round_multiple_up(8)
-  checkPushRoom(pack.pushConstantCursor, 8)
+  checkPushRoom(pack.vctx.maxPushConstantsSize, pack.pushConstantCursor, 8)
   pack.scalars.setLen(pack.pushConstantCursor + 8)
   copyMem(pack.scalars[pack.pushConstantCursor].addr, x.unsafeAddr, 8)
   inc pack.pushConstantCursor, 8
@@ -117,7 +119,7 @@ proc store[T](pack: var EntryPack, v: T, _: int) =
   const lay = computeDeviceLayout(T, cgGlsl)
   if lay.align > 1:
     pack.pushConstantCursor = pack.pushConstantCursor.round_multiple_up(lay.align)
-  checkPushRoom(pack.pushConstantCursor, lay.size)
+  checkPushRoom(pack.vctx.maxPushConstantsSize, pack.pushConstantCursor, lay.size)
   pack.scalars.setLen(pack.pushConstantCursor + lay.size)
   var blob: array[lay.size, byte]
   var off = 0
