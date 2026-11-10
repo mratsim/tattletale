@@ -87,3 +87,54 @@ func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: ar
   for j in 1 ..< Rank + 1:
     strides[Rank - j] = acc
     acc *= shape[Rank - j]
+
+# ═══════════════════════════════════════════════════════════════════════
+#  2D dispatch: one body over (element type, rank), registry-driven
+# ═══════════════════════════════════════════════════════════════════════
+
+var ElemTypes {.compileTime.}: seq[tuple[kind, elemType: NimNode]]
+
+macro registerElemType(kind, elemType: untyped) =
+  ## Declares the element type backing a Dtype value for match dispatch.
+  ElemTypes.add (kind, elemType)
+
+func replaceNode(ast, toReplace, replaceBy: NimNode): NimNode =
+  func inspect(node: NimNode): NimNode =
+    case node.kind
+    of {nnkIdent, nnkSym}:
+      if node.eqIdent(toReplace):
+        return replaceBy
+      return node
+    of nnkEmpty, nnkLiterals:
+      return node
+    else:
+      var rTree = node.kind.newTree()
+      for child in node:
+        rTree.add inspect(child)
+      return rTree
+  result = inspect(ast)
+
+macro match*(elemBinding, dtypeValue, rankBinding, rankValue: untyped, body: untyped) =
+  ## Dispatches runtime dtype and rank to compile-time type and Rank
+  ##
+  ## Usage:
+  ##   match(ElemType, dtype, Rank, shape.len):
+  ##     engine.newPlaceholderImpl(ElemType, Rank, shape).to(TensorNode)
+  var dtypeCase = nnkCaseStmt.newTree(dtypeValue)
+  for registered in ElemTypes:
+    var rankCase = nnkCaseStmt.newTree(rankValue)
+    for rank in 1 .. 5:
+      rankCase.add nnkOfBranch.newTree(
+        newLit(rank),
+        body
+          .replaceNode(elemBinding, registered.elemType.copyNimTree())
+          .replaceNode(rankBinding, newLit(rank)))
+    rankCase.add nnkElse.newTree(quote do:
+      raise ValueError.newException("Tensorcery: unsupported rank " & $`rankValue`))
+    dtypeCase.add nnkOfBranch.newTree(registered.kind, nnkStmtList.newTree(rankCase))
+  dtypeCase.add nnkElse.newTree(quote do:
+    raise ValueError.newException("Tensorcery: unsupported dtype " & $`dtypeValue`))
+  result = nnkStmtList.newTree(dtypeCase)
+
+registerElemType(kFp32, float32)
+registerElemType(kBf16, bfloat16)

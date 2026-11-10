@@ -129,27 +129,9 @@ proc materialize*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
   engine.allocData(impl)
 
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
-  case shape.len
-  of 2:
-    case dtype
-    of kFp32:
-      engine.newPlaceholderImpl(float32, 2, shape).to(TensorNode)
-    of kBf16:
-      engine.newPlaceholderImpl(bfloat16, 2, shape).to(TensorNode)
-    else:
-      raise ValueError.newException("newPlaceholderNode: dtype " & $dtype & " unsupported")
-  else:
-    raise ValueError.newException("newPlaceholderNode: rank " & $shape.len & " unsupported")
+  match(ElemType, dtype, Rank, shape.len):
+    engine.newPlaceholderImpl(ElemType, Rank, shape).to(TensorNode)
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
-  case shape.len
-  of 2:
-    case dtype
-    of kFp32:
-      engine.newTensorImpl(float32, 2, shape).to(TensorNode)
-    of kBf16:
-      engine.newTensorImpl(bfloat16, 2, shape).to(TensorNode)
-    else:
-      raise ValueError.newException("newTensorNode: dtype " & $dtype & " unsupported")
-  else:
-    raise ValueError.newException("newTensorNode: rank " & $shape.len & " unsupported")
+  match(ElemType, dtype, Rank, shape.len):
+    engine.newTensorImpl(ElemType, Rank, shape).to(TensorNode)
