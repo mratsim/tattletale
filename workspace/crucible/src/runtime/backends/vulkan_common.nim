@@ -46,6 +46,7 @@ type
     pipelineCache*: VkPipelineCache
     vkLib*: LibHandle
     getProcAddr*: pointer  ## vkGetInstanceProcAddr
+    maxPushConstantsSize*: int  ## Push-constant block capacity of the device, in bytes
 
 
 proc `=destroy`(p: var VulkanPipelineObj) =
@@ -140,6 +141,23 @@ proc deviceName*(ctx: VulkanContext, dev: VkPhysicalDevice): string =
     if c == '\0':
       break
     result.add c
+
+proc maxPushConstantsSize*(ctx: VulkanContext, dev: VkPhysicalDevice): int =
+  ## Push-constant block capacity of `dev` in bytes,
+  ## the VkPhysicalDeviceLimits.maxPushConstantsSize value.
+  ##
+  ## Read at its ABI offset. The vendored VkPhysicalDeviceProperties binding
+  ## declares only the leading fields:
+  ## - deviceName: bytes 20..276
+  ## - pipelineCacheUUID: bytes 276..292
+  ## - VkPhysicalDeviceLimits declares 8-byte VkDeviceSize members and starts
+  ##   at byte 296, the next 8-aligned offset
+  ## - maxPushConstantsSize is the limits struct's 9th uint32, byte 296 + 32
+  let vkGetProps = cast[proc(physicalDevice: VkPhysicalDevice,
+    pProperties: ptr VkPhysicalDeviceProperties) {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkGetPhysicalDeviceProperties"))
+  var propsBuf: array[4096, byte]
+  vkGetProps(dev, cast[ptr VkPhysicalDeviceProperties](propsBuf[0].addr))
+  result = cast[ptr uint32](propsBuf[328].addr)[].int
 
 # ═══════════════════════════════════════════════════════════════════════
 # Vulkan initialization
@@ -245,6 +263,7 @@ proc newVulkanContext*(): VulkanContext =
   if bestScore < 0:
     raiseAssert("No Vulkan device with a compute-capable queue family found")
   result.physicalDevice = devices[bestIdx]
+  result.maxPushConstantsSize = maxPushConstantsSize(result, result.physicalDevice)
   echo "  Vulkan device: ", bestName
 
   var qfCount: uint32 = 0

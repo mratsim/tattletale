@@ -146,13 +146,14 @@ proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: 
 
 type SerializationCtx = object
   vctx: VulkanContext
-  pushBuf: array[128, byte]
+  pushBuf: seq[byte]  ## sized to the device's maxPushConstantsSize at construction
   pn: int
 
 proc write8(ctx: var SerializationCtx, x: uint64) =
   ctx.pn = ctx.pn.round_multiple_up(8)
-  if ctx.pn + 8 > 128:
-    raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+  if ctx.pn + 8 > ctx.pushBuf.len:
+    raiseAssert("Vulkan push constants exceed the device maxPushConstantsSize of " &
+             $ctx.pushBuf.len & " bytes")
   copyMem(ctx.pushBuf[ctx.pn].addr, x.unsafeAddr, 8)
   inc ctx.pn, 8
 
@@ -165,8 +166,9 @@ proc store[T](ctx: var SerializationCtx, v: T, _: int) =
   const lay = computeDeviceLayout(T, cgGlsl)
   if lay.align > 1:
     ctx.pn = ctx.pn.round_multiple_up(lay.align)
-  if ctx.pn + lay.size > 128:
-    raiseAssert("Vulkan push constants exceed the spec-guaranteed 128-byte max")
+  if ctx.pn + lay.size > ctx.pushBuf.len:
+    raiseAssert("Vulkan push constants exceed the device maxPushConstantsSize of " &
+             $ctx.pushBuf.len & " bytes")
   var blob: array[lay.size, byte]
   var off = 0
   when T is object|tuple and hasBufferLeaf(T, VulkanBuffer):
@@ -303,7 +305,8 @@ proc launchKernelImpl*(engine: VulkanEngine, output: auto, args: tuple, cfg: Lau
 
 proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: SpirvWords,
                         output: auto, args: tuple, cfg: LaunchConfig, squadron: Dim3) =
-  var dctx = SerializationCtx(vctx: engine.ctx)
+  var dctx = SerializationCtx(vctx: engine.ctx,
+    pushBuf: newSeq[byte](engine.ctx.maxPushConstantsSize))
   bindArgs(dctx, output, args, store, VulkanBuffer, cgGlsl)
   let pushConstLen = dctx.pn
 
