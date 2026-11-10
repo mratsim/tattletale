@@ -27,6 +27,7 @@ proc main =
   runCoordPassRebuildTest(runMetal, "Metal")
   runRmsnormTest(runMetal, "Metal")
   runRopeTest(runMetal, "Metal")
+  runSiluMulTest(runMetal, "Metal")
   runMatmulTest(runMetal, "Metal")
   runRankNTest(runMetal, "Metal")
 

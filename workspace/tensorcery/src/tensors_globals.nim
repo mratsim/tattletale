@@ -15,6 +15,7 @@ import tensors_internal_types
 import compute_graph/eval
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_2i1o/ops_matmul
+import compute_graph/ops_2i1o/ops_silu_mul
 import compute_graph/ops_1i1o/ops_rmsnorm
 import compute_graph/ops_Ni1o/ops_rope
 import compute_graph/ops_1iNo/ops_split

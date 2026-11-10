@@ -15,6 +15,7 @@ import workspace/tensorcery/src/tensors_globals
 import workspace/tensorcery/src/compute_graph/dispatch
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_matmul
+import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_silu_mul
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_embed_gather
 import workspace/tensorcery/src/compute_graph/ops_1i1o/ops_rmsnorm
 import workspace/tensorcery/src/compute_graph/ops_Ni1o/ops_rope
@@ -1041,3 +1042,200 @@ proc runRopeTest*(run: static Runtime, name: string) =
             name & ": rope fan-out z2 " & $t & "," & $h & "," & $i
 
   echo "tensorcery rope (", name, "): all checks passed"
+
+proc runSiluMulTest*(run: static Runtime, name: string) =
+  ## Silu·mul op end to end: out = silu(gate)·up for the gated FFN activation.
+  ##
+  ## Numerics checks, judged against the f64 host reference
+  ## (silu(g) = g / (1 + exp(-g)) in f64, one rounding into bfloat16):
+  ##
+  ## - public face at (4, 8), bfloat16: exact
+  ## - the exp2 boundary set at the float32 limits: silu inputs from -200
+  ##   up to the bfloat16 max against multipliers up to the bfloat16 max,
+  ##   at a 2 bf16 ulp band. Above the exp2 overflow threshold,
+  ##   silu(-89)·1e38 reads -19.75, never -0
+  ## - f32 input: same face, a 1e-6 relative band
+  ##
+  ## Contract and dispatch checks:
+  ##
+  ## - face contracts raise AssertionDefect: a rank-3 operand, a shape mismatch, a dtype mismatch
+  ## - fan-out memo: with two add consumers downstream, one silu·mul output enqueues exactly once (3 batch entries), readback exact
+  block:
+    const Rows = 4
+    const Cols = 8
+    var gh = newSeq[bfloat16](Rows * Cols)
+    var vh = newSeq[bfloat16](Rows * Cols)
+    for i in 0 ..< Rows * Cols:
+      gh[i] = (float32((i * 37) mod 41 - 20) * 0.5'f32).to(bfloat16)
+      vh[i] = (float32((i * 29) mod 31 - 15) * 0.25'f32).to(bfloat16)
+    let gate = toTensor(gh, @[Rows, Cols])
+    let up = toTensor(vh, @[Rows, Cols])
+    let o = silu_mul(gate, up)
+    doAssert o.shape().len == 2, name & ": silu rank"
+    doAssert o.shape()[0] == Rows, name & ": silu tokens"
+    doAssert o.shape()[1] == Cols, name & ": silu cols"
+    doAssert o.dtype() == kBf16, name & ": silu dtype"
+    eval(o)
+    for t in 0 ..< Rows:
+      for c in 0 ..< Cols:
+        let g = float64(gh[t * Cols + c].to(float32))
+        let v = float64(vh[t * Cols + c].to(float32))
+        let want = float32(g / (1.0 + exp(-g)) * v).to(bfloat16)
+        doAssert o.item(t, c, bfloat16) == want,
+          name & ": silu out " & $t & "," & $c & ": got " &
+          $o.item(t, c, bfloat16).to(float32) & ", want " & $want.to(float32)
+
+  # exp2 boundary set at the float32 limits. The exp2 of the stock formula
+  # overflows float32 once -g·Log2e passes 128, so silu inputs below -88.72.
+  # Each product must keep the reference value and must never read -0.
+  # From -192 down, both sides round to -0 in bfloat16
+  block:
+    const Rows = 2
+    const Cols = 14
+    let gh = [(3.3e38'f32).to(bfloat16), (-3.3e38'f32).to(bfloat16),
+              (-100.0'f32).to(bfloat16), (-90.0'f32).to(bfloat16),
+              (-89.0'f32).to(bfloat16), (-88.5'f32).to(bfloat16),
+              (-88.0'f32).to(bfloat16), (88.0'f32).to(bfloat16),
+              (0.0'f32).to(bfloat16), (-150.0'f32).to(bfloat16),
+              (-176.0'f32).to(bfloat16), (-192.0'f32).to(bfloat16),
+              (-193.0'f32).to(bfloat16), (-200.0'f32).to(bfloat16)]
+    let vh = [(1.0'f32).to(bfloat16), (2.0'f32).to(bfloat16),
+              (1e38'f32).to(bfloat16), (1e38'f32).to(bfloat16),
+              (1e38'f32).to(bfloat16), (1e38'f32).to(bfloat16),
+              (1e38'f32).to(bfloat16), (2.0'f32).to(bfloat16),
+              (3.0'f32).to(bfloat16), (1e38'f32).to(bfloat16),
+              (3.3e38'f32).to(bfloat16), (3.3e38'f32).to(bfloat16),
+              (3.3e38'f32).to(bfloat16), (3.3e38'f32).to(bfloat16)]
+    var ghFull = newSeq[bfloat16](Rows * Cols)
+    var vhFull = newSeq[bfloat16](Rows * Cols)
+    var refO = newSeq[float32](Rows * Cols)
+    for t in 0 ..< Rows:
+      for c in 0 ..< Cols:
+        ghFull[t * Cols + c] = gh[c]
+        vhFull[t * Cols + c] = vh[c]
+        let g = float64(gh[c].to(float32))
+        let v = float64(vh[c].to(float32))
+        refO[t * Cols + c] = float32(g / (1.0 + exp(-g)) * v)
+    let gate = toTensor(ghFull, @[Rows, Cols])
+    let up = toTensor(vhFull, @[Rows, Cols])
+    let o = silu_mul(gate, up)
+    eval(o)
+    for t in 0 ..< Rows:
+      for c in 0 ..< Cols:
+        let got = o.item(t, c, bfloat16)
+        let want = refO[t * Cols + c].to(bfloat16)
+        let dist = abs(bf16UlpKey(got) - bf16UlpKey(want))
+        doAssert dist <= 2,
+          name & ": silu boundary " & $t & "," & $c & " (gate " &
+          $gh[c].to(float32) & "): got " & $got.to(float32) & ", want " &
+          $want.to(float32) & ", " & $dist & " bf16 ulps"
+      # silu inputs above the exp2 overflow threshold, large multipliers:
+      # each product is an ordinary magnitude, never -0
+      for c in [2, 3, 4, 9, 10]:
+        doAssert o.item(t, c, bfloat16).to(float32) != 0.0'f32,
+          name & ": silu boundary " & $t & "," & $c & " (gate " &
+          $gh[c].to(float32) & ") collapsed to zero"
+
+  # f32 input: same face, math in f32 against the f64 reference
+  block:
+    const Rows = 4
+    const Cols = 8
+    var gh = newSeq[float32](Rows * Cols)
+    var vh = newSeq[float32](Rows * Cols)
+    for i in 0 ..< Rows * Cols:
+      gh[i] = float32((i * 37) mod 41 - 20) * 0.5'f32
+      vh[i] = float32((i * 29) mod 31 - 15) * 0.25'f32
+    let gate = toTensor(gh, @[Rows, Cols])
+    let up = toTensor(vh, @[Rows, Cols])
+    let o = silu_mul(gate, up)
+    doAssert o.dtype() == kFp32, name & ": silu f32 dtype"
+    eval(o)
+    var worstRel = 0.0'f32
+    for t in 0 ..< Rows:
+      for c in 0 ..< Cols:
+        let g = float64(gh[t * Cols + c])
+        let v = float64(vh[t * Cols + c])
+        let want = float32(g / (1.0 + exp(-g)) * v)
+        let got = o.item(t, c, float32)
+        if want == 0.0'f32:
+          doAssert got == want, name & ": silu f32 out " & $t & "," & $c
+        else:
+          let rel = abs(got - want) / abs(want)
+          if rel > worstRel:
+            worstRel = rel
+          doAssert rel <= 1e-6'f32,
+            name & ": silu f32 out " & $t & "," & $c & ": got " & $got &
+            ", reference " & $want
+    echo name, ": silu f32 worst rel ", worstRel
+
+  # face contracts raise AssertionDefect
+  block:
+    const Rows = 4
+    const Cols = 8
+    var gh = newSeq[bfloat16](Rows * Cols)
+    var vh = newSeq[bfloat16](Rows * Cols)
+    for i in 0 ..< Rows * Cols:
+      gh[i] = (float32((i * 37) mod 41 - 20) * 0.5'f32).to(bfloat16)
+      vh[i] = (float32((i * 29) mod 31 - 15) * 0.25'f32).to(bfloat16)
+    let gate = toTensor(gh, @[Rows, Cols])
+    let up = toTensor(vh, @[Rows, Cols])
+    let gate3 = toTensor(gh[0 ..< 8], @[2, 2, 2])
+    doAssertRaises AssertionDefect:
+      discard silu_mul(gate3, up)
+    let upShort = toTensor(vh[0 ..< Rows * (Cols - 1)], @[Rows, Cols - 1])
+    doAssertRaises AssertionDefect:
+      discard silu_mul(gate, upShort)
+    var vf = newSeq[float32](Rows * Cols)
+    for i in 0 ..< Rows * Cols:
+      vf[i] = vh[i].to(float32)
+    let upF32 = toTensor(vf, @[Rows, Cols])
+    doAssertRaises AssertionDefect:
+      discard silu_mul(gate, upF32)
+
+  # fan-out: two add consumers of one silu·mul output enqueue it ONCE
+  block:
+    const Rows = 4
+    const Cols = 8
+    var gh = newSeq[bfloat16](Rows * Cols)
+    var vh = newSeq[bfloat16](Rows * Cols)
+    var ch = newSeq[bfloat16](Rows * Cols)
+    for i in 0 ..< Rows * Cols:
+      gh[i] = (float32((i * 37) mod 41 - 20) * 0.5'f32).to(bfloat16)
+      vh[i] = (float32((i * 29) mod 31 - 15) * 0.25'f32).to(bfloat16)
+      ch[i] = (float32((i * 23) mod 13 - 6) * 0.25'f32).to(bfloat16)
+    let engine = newEngine(run)
+    var shape = @[Rows, Cols]
+    let gateNode = engine.newTensorNode(kBf16, shape.toSpan())
+    let upNode = engine.newTensorNode(kBf16, shape.toSpan())
+    let cxNode = engine.newTensorNode(kBf16, shape.toSpan())
+    let cyNode = engine.newTensorNode(kBf16, shape.toSpan())
+    engine.upload(gateNode, gh)
+    engine.upload(upNode, vh)
+    engine.upload(cxNode, ch)
+    engine.upload(cyNode, ch)
+    let p = engine.tn_silu_mul(gateNode, upNode)
+    let z1 = engine.tn_add(p, cxNode)
+    let z2 = engine.tn_add(p, cyNode)
+    var batch = engine.recordBatch()
+    var visited: VisitedNodes
+    var nz1 = z1
+    var nz2 = z2
+    engine.evalNode(batch, nz1, visited)
+    engine.evalNode(batch, nz2, visited)
+    doAssert batch.entries.len == 3,
+      name & ": silu fan-out enqueued " & $batch.entries.len & ", expected 3"
+    batch.submit()
+    var gz1, gz2: array[Rows * Cols, bfloat16]
+    engine.download(gz1, nz1)
+    engine.download(gz2, nz2)
+    for t in 0 ..< Rows:
+      for c in 0 ..< Cols:
+        let g = float64(gh[t * Cols + c].to(float32))
+        let v = float64(vh[t * Cols + c].to(float32))
+        let pVal = float32(g / (1.0 + exp(-g)) * v).to(bfloat16)
+        let cVal = ch[t * Cols + c].to(float32)
+        let exp = (pVal.to(float32) + cVal).to(bfloat16)
+        doAssert gz1[t * Cols + c] == exp, name & ": silu fan-out z1 " & $t & "," & $c
+        doAssert gz2[t * Cols + c] == exp, name & ": silu fan-out z2 " & $t & "," & $c
+
+  echo "tensorcery silu·mul (", name, "): all checks passed"

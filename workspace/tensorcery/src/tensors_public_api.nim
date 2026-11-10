@@ -12,6 +12,7 @@ import tensors_internals
 import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_2i1o/ops_matmul
+import compute_graph/ops_2i1o/ops_silu_mul
 import compute_graph/ops_1i1o/ops_rmsnorm
 import compute_graph/ops_1iNo/ops_split
 import compute_graph/ops_Ni1o/ops_embed_gather
@@ -124,6 +125,18 @@ proc linear*(x, w: Tensor): Tensor =
   ## - a tensor of shape (tokens, outFeatures) with the operands' dtype:
   ##   bfloat16 operands accumulate in float32, then round once into the bfloat16 output
   Tensor(engine: x.engine, node: tn_matmul(x.engine, x.node, w.node))
+
+proc silu_mul*(gate, up: Tensor): Tensor =
+  ## out = silu(gate)·up elementwise: the gated FFN activation.
+  ##
+  ## Args:
+  ## - gate: the operand feeding silu (x·sigmoid(x)), shape (tokens, cols)
+  ## - up: the multiplier operand, shape (tokens, cols)
+  ##
+  ## Returns:
+  ## - a tensor of the operands' shape and dtype: the math runs in float32
+  ##   with one rounding at the store
+  Tensor(engine: gate.engine, node: tn_silu_mul(gate.engine, gate.node, up.node))
 
 proc rmsnorm*(x, w: Tensor, eps: float32 = 1e-6'f32): Tensor =
   ## y = x·rsqrt(mean(x²) + eps)·w over the last axis: the RmsNorm layer.
