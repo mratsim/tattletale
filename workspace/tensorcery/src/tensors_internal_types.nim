@@ -49,6 +49,7 @@ iface *AnyTensorImpl:
     func dtype(): Dtype
     func shape(): Span[int]
     func strides(): Span[int]
+    func isMaterialized(): bool
 
 iface *TensorNode:
     proc getImpl(): AnyTensorImpl
@@ -75,7 +76,7 @@ func initTensorBridge*[DevMem, Sh, St](data: DevMem, offset: int, layout: Layout
 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: Span[int]): TensorNode
-    proc newViewNode(dtype: Dtype, shape: Span[int]): TensorNode
+    proc newPlaceholderNode(dtype: Dtype, shape: Span[int]): TensorNode
     proc upload(node: TensorNode, src: openArray[float32])
     proc upload(node: TensorNode, src: openArray[bfloat16])
     proc download(dst: var openArray[float32], node: TensorNode)

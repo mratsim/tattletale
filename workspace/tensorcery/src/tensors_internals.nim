@@ -32,7 +32,7 @@ export tensors_internal_types
 # This allows batching compute all-at-once, reducing the CPU<->GPU synchronization overhead.
 # Furthermore, when backprop is added, the graph can be reused for backward propagation.
 
-
+# ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - AnyTensorImpl implementation
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -45,6 +45,9 @@ func strides*[Sh: tuple, Mem](t: TensorImpl[Mem, Layout[Sh, Sh]]): Span[int] =
 func dtype*[Sh: tuple, H, T](t: TensorImpl[DeviceMem[H, T], Layout[Sh, Sh]]): Dtype =
   toDtype(T)
 
+func isMaterialized*[Mem, L](t: TensorImpl[Mem, L]): bool =
+  not t.data.isNil
+
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - TensorNode implementation (materialized tensors)
 # ═══════════════════════════════════════════════════════════════════════
@@ -53,8 +56,10 @@ proc getImpl*[Mem, L](t: TensorImpl[Mem, L]): AnyTensorImpl =
   t.to(AnyTensorImpl)
 
 func opName*[Mem, L](t: TensorImpl[Mem, L]): string =
-  ## A materialized tensor is a node with no op, the walk leaves it alone
   ""
+
+proc isMaterialized*(n: TensorNode): bool =
+  n.getImpl().isMaterialized()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Typed data path - AnyEngine implementation
@@ -128,8 +133,7 @@ proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): An
 proc makeTensorImpl*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): AnyTensorImpl =
   engine.makeTensorImpl(dtype, shape.toSpan())
 
-proc newViewNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
-  ## A graph node shell without a buffer, view ops bind the data at enqueue
+proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
   case dtype
   of kFp32:
     type Mem = typeof(engine.allocDevice(float32, 0))
@@ -146,7 +150,7 @@ proc newViewNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): Tenso
       data: nil, offset: 0,
       layout: make_layout(sh, rowMajorStrides(sh))).to(TensorNode)
   else:
-    raise ValueError.newException("newViewNode: dtype " & $dtype & " unsupported")
+    raise ValueError.newException("newPlaceholderNode: dtype " & $dtype & " unsupported")
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: Span[int]): TensorNode =
   case shape.len

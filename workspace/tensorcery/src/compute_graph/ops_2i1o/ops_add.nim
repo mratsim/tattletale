@@ -62,7 +62,7 @@ proc getImpl*(n: AddNode): AnyTensorImpl =
   n.r
 
 func opName*(n: AddNode): string =
-  "add"
+  "Add"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
@@ -74,7 +74,7 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
   {.precondition: ia.shape() == ib.shape().}
   {.precondition: ia.dtype() == ib.dtype().}
   AddNode(a: a, b: b,
-          r: engine.newViewNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
+          r: engine.newPlaceholderNode(ia.dtype(), ia.shape()).getImpl()).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
@@ -86,7 +86,7 @@ proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E],
     return false
   engine.evalNode(batch, asAdd.a)
   engine.evalNode(batch, asAdd.b)
-  # finalization: the full graph is known, the output buffer allocates here
+
   var sh: Sh
   fillShape(sh, asAdd.r.shape())
   let rz = engine.makeTensorImpl(asAdd.r.dtype(), asAdd.r.shape())
@@ -107,4 +107,4 @@ proc enqueueAdd[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E],
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("add", enqueueAdd)
+registerOp("Add", enqueueAdd)

@@ -40,7 +40,7 @@ proc getImpl*[C](n: PosNode[C]): AnyTensorImpl =
   n.core.getOutput(n.pos)
 
 func opName*(n: PosNode[SplitCore]): string =
-  "split"
+  "Split"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
@@ -58,7 +58,7 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
   partShape[axis] = s[axis] div k
   let core = SplitCore(a: x, axis: axis)
   for i in 0 ..< k:
-    core.r.add(engine.newViewNode(ix.dtype(), partShape.toSpan()))
+    core.r.add(engine.newPlaceholderNode(ix.dtype(), partShape.toSpan()))
   for i in 0 ..< k:
     result.add(PosNode[SplitCore](core: core, pos: i).to(TensorNode))
 
@@ -89,5 +89,5 @@ proc enqueueSplit[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("split", enqueueSplit)
+registerOp("Split", enqueueSplit)
 

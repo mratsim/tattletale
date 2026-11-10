@@ -16,10 +16,8 @@ import ../tensors_internals
 # ═══════════════════════════════════════════════════════════════════════
 
 var OpRegistry {.compileTime.}: Table[string, NimNode]
-  ## OpName to handler symbol, populated by op files at sem
 
 macro registerOp*(op: static string, handler: typed) =
-  ## Registration entry of an op file, the value is the generic symbol
   OpRegistry[op] = handler
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -27,8 +25,6 @@ macro registerOp*(op: static string, handler: typed) =
 # ═══════════════════════════════════════════════════════════════════════
 
 template withMem(engine: HwEngine, dtype: Dtype, body: untyped) =
-  ## Binds Mem over the body from the node's own dtype
-  ## The one place the dtype case exists
   case dtype
   of kFp32:
     type Mem {.inject.} = typeof(engine.allocDevice(float32, 0))
@@ -48,8 +44,7 @@ macro dispatchOp(E, Sh, Mem, engine, batch, n: typed): untyped =
     ifStmt.add nnkElifBranch.newTree(call, nnkReturnStmt.newTree(newEmptyNode()))
   var elseBranch = newNimNode(nnkElse)
   elseBranch.add quote do:
-    raise ValueError.newException(
-      "eval: op '" & `n`.opName() & "' unsupported")
+    raiseAssert("Tensorcery internal error: somehow there is a graph node with no handlers")
   ifStmt.add elseBranch
   result.add ifStmt
 
@@ -64,10 +59,9 @@ proc evalNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNod
     of 4: evalWalk[E, (int, int, int, int), Mem](engine, batch, n)
     of 5: evalWalk[E, (int, int, int, int, int), Mem](engine, batch, n)
     else:
-      raise ValueError.newException(
-        "eval: rank " & $n.getImpl().shape().len & " unsupported")
+      raiseAssert("Tensorcery internal error: rank " & $n.getImpl().shape().len & " unsupported")
 
 proc evalWalk[E: HwEngine, Sh: tuple, Mem](engine: E, batch: BatchCommands[E], n: var TensorNode) =
-  if n.opName() == "":
+  if n.isMaterialized():
     return
   dispatchOp(E, Sh, Mem, engine, batch, n)
