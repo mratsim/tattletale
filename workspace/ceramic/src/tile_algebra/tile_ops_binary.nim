@@ -196,7 +196,7 @@ func `*`*(a: Tile, s: a.T): Tile {.inline.} =
   forEach var r in result, x in a:
     r = x * s
 
-template `*`[T, L](s: T, a: Tile[T, L]): Tile[T, L] =
+template `*`*[T, L](s: T, a: Tile[T, L]): Tile[T, L] =
   a * s
 
 func `/`*(a: Tile, s: a.T): Tile {.inline.} =
@@ -211,10 +211,10 @@ func `-.`*(a: Tile, s: a.T): Tile {.inline.} =
   forEach var r in result, x in a:
     r = x - s
 
-func `+.`[T, L](s: T, a: Tile[T, L]): Tile[T, L] {.inline.} =
+func `+.`*[T, L](s: T, a: Tile[T, L]): Tile[T, L] {.inline.} =
   forEach var r in result, x in a:
     r = s + x
 
-func `-.`[T, L](s: T, a: Tile[T, L]): Tile[T, L] {.inline.} =
+func `-.`*[T, L](s: T, a: Tile[T, L]): Tile[T, L] {.inline.} =
   forEach var r in result, x in a:
     r = s - x

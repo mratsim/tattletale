@@ -35,12 +35,12 @@ type Activation* = enum
   akIdentity
   akReLU
 
+## Generate an epilogue proc with the activation inlined.
+## Inside `activationBody`, use `x` for the AB accumulator value.
+## `relu` selects the NEON fast path's activation (same fmax semantics).
 template genEpilogue*(epilogueName: untyped, relu: static bool, activationBody: untyped): untyped =
-  ## Generate an epilogue proc with the activation inlined.
-  ## Inside `activationBody`, use `x` for the AB accumulator value.
-  ## `relu` selects the NEON fast path's activation (same fmax semantics).
-  proc `epilogueName`[T; MR, NR: static int; Sh, St](
-      C: TensorView[T, Sh, St],
+  proc `epilogueName`[T; MR, NR: static int; L](
+      C: TensorView[T, L],
       AB: array[MR, array[NR, T]],
       mr, nr: int,
       alpha, beta: T) =

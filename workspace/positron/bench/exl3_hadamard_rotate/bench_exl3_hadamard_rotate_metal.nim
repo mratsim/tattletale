@@ -80,13 +80,13 @@ template stageViews(engine: MetalEngine, rows, cols, np: int, pattern, preHost, 
     srcLay = make_layout((rows, cols), (cols, 1))
     lineLay = make_layout((cols,), (1,))
     # each BridgeTensor value is built inline over one handle
-    srcView = BridgeTensor[typeof(srcDev), typeof(srcLay.shape), typeof(srcLay.stride)](
+    srcView = BridgeTensor[typeof(srcDev), typeof(srcLay)](
       data: srcDev, layout: srcLay)
-    dstView = BridgeTensor[typeof(dstDev), typeof(srcLay.shape), typeof(srcLay.stride)](
+    dstView = BridgeTensor[typeof(dstDev), typeof(srcLay)](
       data: dstDev, layout: srcLay)
-    preView = BridgeTensor[typeof(preDev), typeof(lineLay.shape), typeof(lineLay.stride)](
+    preView = BridgeTensor[typeof(preDev), typeof(lineLay)](
       data: preDev, layout: lineLay)
-    postView = BridgeTensor[typeof(postDev), typeof(lineLay.shape), typeof(lineLay.stride)](
+    postView = BridgeTensor[typeof(postDev), typeof(lineLay)](
       data: postDev, layout: lineLay)
   (dstView, srcView, preView, postView)
 
