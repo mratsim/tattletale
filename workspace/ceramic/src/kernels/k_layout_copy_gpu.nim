@@ -92,13 +92,13 @@ func copyChunks[T, ShC, StC](C: Layout[ShC, StC], d: static int, dstP, srcP: ptr
                  W, vecCap, elemBits)
 
 
-func copyElementwise[T, ShD, StD, ShS, StS](dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]), src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
+func copyElementwise[T, LD, LS](dst: var (TensorView[T, LD] or TensorOwned[T, LD]), src: (TensorView[T, LS] or TensorOwned[T, LS])) {.inline.} =
   for i in 0 ..< size(src):
     dst(i) = src(i)
 
-func copyFrom*[T, ShD, StD, ShS, StS](
-    dst: var (TensorView[T, ShD, StD] or TensorOwned[T, ShD, StD]);
-    src: (TensorView[T, ShS, StS] or TensorOwned[T, ShS, StS])) {.inline.} =
+func copyFrom*[T, LD, LS](
+    dst: var (TensorView[T, LD] or TensorOwned[T, LD]),
+    src: (TensorView[T, LS] or TensorOwned[T, LS])) {.inline.} =
   ## Copies every element of src to dst, dst(flat k) = src(flat k).
   ##
   ## For runtime strides, assumes 128B alignment for vectorized copies
@@ -118,10 +118,10 @@ func copyFrom*[T, ShD, StD, ShS, StS](
     copyElementwise(dst, src)
 
 
-func copyFromIfAsync*[T, Sh, StA, StB, StP](
-    dst: var TensorView[T, Sh, StB];
-    src: TensorView[T, Sh, StA];
-    predicate: (TensorView[bool, Sh, StP] or TensorOwned[bool, Sh, StP])) {.inline.} =
+func copyFromIfAsync*[T, LDA, LDB, LP](
+    dst: var TensorView[T, LDB],
+    src: TensorView[T, LDA],
+    predicate: (TensorView[bool, LP] or TensorOwned[bool, LP])) {.inline.} =
   ## Predicated **async** copy
   ##
   ## This requires commit_group to actually enqueue the copy
@@ -129,7 +129,7 @@ func copyFromIfAsync*[T, Sh, StA, StB, StP](
 
   const atom = getCopyAsyncAtom(T)
   const chunkElems = atom.getVecBytes() div sizeof(T)
-  when Sh.rank == 1:
+  when dst.rank() == 1:
     copyIf(atom, dst, src, predicate[0], chunkElems)
   else:
     for i in 0 ..< size(predicate):
@@ -209,7 +209,7 @@ func thrfrg_copy*[Sh, St, Atom](L: Layout[Sh, St];
   let ur = zipped_divide(L, makeIntTuple(tilerMN(atom)))
   tiled_divide(dimension(ur, 1), makeIntTuple((chunkCols, kRows)))
 
-func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
+func partition_S*[T, LA, Atom](src: TensorView[T, LA],
                              atom: typedesc[Atom];
                              blockSize: static int;
                              thrIdx: int): auto =
@@ -228,7 +228,7 @@ func partition_S*[T, ShA, StA, Atom](src: TensorView[T, ShA, StA];
   let thrTensor = make_view(src, src.getLayout().thrfrg_copy(atom, blockSize))
   thrTensor(thrIdx, _, _)
 
-func partition_D*[T, ShB, StB, Atom](dst: TensorView[T, ShB, StB];
+func partition_D*[T, LB, Atom](dst: TensorView[T, LB],
                              atom: typedesc[Atom];
                              blockSize: static int;
                              thrIdx: int): auto =

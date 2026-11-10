@@ -390,11 +390,11 @@ proc genContiguityCode(
 macro copySameShapeImpl(dst: typed; src: typed; blockSize: static int): untyped =
   let tvDst = dst.getTypeInst()
   let tvSrc = src.getTypeInst()
-  let rawSrcSh = toSeqStaticInts(tvSrc[2])
-  let rawSrcSt = toSeqStaticInts(tvSrc[3])
-  let rawDstSh = toSeqStaticInts(tvDst[2])
-  let rawDstSt = toSeqStaticInts(tvDst[3])
-  let R = max(flatTupleLen(tvSrc[2]), flatTupleLen(tvDst[2]))
+  let rawSrcSh = toSeqStaticInts(tvSrc[2][1])
+  let rawSrcSt = toSeqStaticInts(tvSrc[2][2])
+  let rawDstSh = toSeqStaticInts(tvDst[2][1])
+  let rawDstSt = toSeqStaticInts(tvDst[2][2])
+  let R = max(flatTupleLen(tvSrc[2][1]), flatTupleLen(tvDst[2][1]))
   let bs = blockSize
 
   # ── Extract data pointers and layout references ──
@@ -436,10 +436,10 @@ macro copyPermutedImpl[Rank: static int](
 ): untyped =
   let tvDst = dst.getTypeInst()
   let tvSrc = src.getTypeInst()
-  let rawDstSh = toSeqStaticInts(tvDst[2])
-  let rawDstSt = toSeqStaticInts(tvDst[3])
-  let rawSrcSh = toSeqStaticInts(tvSrc[2])
-  let rawSrcSt = toSeqStaticInts(tvSrc[3])
+  let rawDstSh = toSeqStaticInts(tvDst[2][1])
+  let rawDstSt = toSeqStaticInts(tvDst[2][2])
+  let rawSrcSh = toSeqStaticInts(tvSrc[2][1])
+  let rawSrcSt = toSeqStaticInts(tvSrc[2][2])
   let R = Rank
   let bs = blockSize
   let dstData = newTree(nnkDotExpr, dst, ident"data")

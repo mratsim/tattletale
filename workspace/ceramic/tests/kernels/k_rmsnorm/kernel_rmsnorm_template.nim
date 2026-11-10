@@ -27,9 +27,9 @@ export k_tile_rmsnorm
 #  fp64 host reference
 # ═══════════════════════════════════════════════════════════════════════
 
-func refRmsnorm[T, ShS, StS, ShD, StD, ShW, StW](
-    dst: TensorView[T, ShD, StD], src: TensorView[T, ShS, StS],
-    weight: TensorView[T, ShW, StW], eps: float32, axis: static int) =
+func refRmsnorm[T, LD, LS, LW](
+    dst: TensorView[T, LD], src: TensorView[T, LS],
+    weight: TensorView[T, LW], eps: float32, axis: static int) =
   ## RMSNorm with weight, one f64 row at a time through each tensor's own layout
   let
     rowSize = toInt(src.shape[axis])
@@ -51,8 +51,8 @@ func refRmsnorm[T, ShS, StS, ShD, StD, ShW, StW](
       dst.data[toInt crd2idx(dstL, crd)] = float32(
           float64(src.data[toInt crd2idx(srcL, crd)]) * scale * w)
 
-func refRmsnorm[T, ShS, StS, ShD, StD](
-    dst: TensorView[T, ShD, StD], src: TensorView[T, ShS, StS],
+func refRmsnorm[T, LD, LS](
+    dst: TensorView[T, LD], src: TensorView[T, LS],
     eps: float32, axis: static int) =
   ## RMSNorm without weight, one f64 row at a time
   let
@@ -84,14 +84,14 @@ proc randomHostVector*[T](rng: var Rand, _: typedesc[T], size: int, bounds: HSli
   ## Rank-1 layouts flatten single-element shape and stride tuples into scalars, the shared rank-N host tensor constructors reject that shape.
   ## This constructor serves the vector case.
   let layout = make_layout((size,), (1,))
-  result = HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
+  result = HostTensor[T, typeof(layout)](
     data: cast[ptr UncheckedArray[T]](allocShared(size * sizeof(T))),
     offset: 0,
     layout: layout)
   for i in 0 ..< size:
     result.data[i] = rng.rand(bounds)
 
-func fillCanary[T, Sh, St](ht: var HostTensor[T, Sh, St]) =
+func fillCanary[T, L](ht: var HostTensor[T, L]) =
   ## Fills every element, garbage slots included, with the sentinel 12345:
   ## the kernel under test must overwrite every slot and never read dst
   for i in 0 ..< ht.len():

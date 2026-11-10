@@ -65,7 +65,7 @@ template getDefaultTileLayout*(T: typedesc): untyped =
 #  Tile datatype
 # ═══════════════════════════════════════════════════════════════════════
 
-type Tile*[T, Sh, St] = TensorOwned[T, Sh, St]
+type Tile*[T; L: Layout] = TensorOwned[T, L]
 
 macro tile*(T: typedesc, L: typed): typedesc =
   ## Register tile type from a layout, e.g. an atom's thread->value map.
@@ -75,7 +75,7 @@ macro tile*(T: typedesc, L: typed): typedesc =
   let ty = getTypeInst(L)
   doAssert ty.kind == nnkBracketExpr and ty.len == 3,
     "tile: expected a Layout[Shape, Stride] type, got " & ty.repr
-  result = nnkBracketExpr.newTree(bindSym"Tile", T, ty[1], ty[2])
+  result = nnkBracketExpr.newTree(bindSym"Tile", T, ty)
 
 template tile*(T: typedesc): typedesc =
   ## Register tile with the default tile map

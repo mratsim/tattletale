@@ -28,9 +28,9 @@ export k_tile_axpy
 #  fp32 host reference
 # ═══════════════════════════════════════════════════════════════
 
-func refAxpy[T, ShX, StX, ShY, StY, ShR, StR](
-    alpha: float32, x: TensorView[T, ShX, StX], y: TensorView[T, ShY, StY],
-    res: TensorView[T, ShR, StR]): void =
+func refAxpy[T, LX, LY, LR](
+    alpha: float32, x: TensorView[T, LX], y: TensorView[T, LY],
+    res: TensorView[T, LR]): void =
   ## out = alpha*x + y on the host, through each tensor's own layout
   for r in 0 ..< y.shape[0]:
     for c in 0 ..< y.shape[1]:

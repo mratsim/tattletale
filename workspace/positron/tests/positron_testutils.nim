@@ -107,21 +107,21 @@ proc addSequence*(o: var JaggedKvHost, tokens: int, pageIds: openArray[int32]) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  HostTensor*[T, Sh, St] = object
+  HostTensor*[T; L: Layout] = object
     data*: ptr UncheckedArray[T]
     offset*: int
-    layout*: Layout[Sh, St]
+    layout*: L
 
-  BridgeTensor*[DevMem, Sh, St] = object
+  BridgeTensor*[DevMem; L: Layout] = object
     data*: DevMem
-    layout*: Layout[Sh, St]
+    layout*: L
 
-proc `=destroy`*[T, Sh, St](ht: var HostTensor[T, Sh, St]) =
+proc `=destroy`*[T, L](ht: var HostTensor[T, L]) =
   if ht.data != nil:
     freeShared(ht.data)
     ht.data = nil
 
-proc `=copy`*[T, Sh, St](dst: var HostTensor[T, Sh, St], src: HostTensor[T, Sh, St]) {.error: "HostTensor is move-only".}
+proc `=copy`*[T, L](dst: var HostTensor[T, L], src: HostTensor[T, L]) {.error: "HostTensor is move-only".}
 
 proc popNode(tree: var NimNode): NimNode {.compileTime.} =
   result = tree[tree.len - 1]
@@ -150,9 +150,9 @@ func originOffset[Sh, St](layout: Layout[Sh, St]): int =
       result += (toInt(f) - 1) * (-strides[i])
     i.inc
 
-proc to*[T, Sh, St, U](src: HostTensor[T, Sh, St], _: typedesc[U]): HostTensor[U, Sh, St] =
+proc to*[T, L, U](src: HostTensor[T, L], _: typedesc[U]): HostTensor[U, L] =
   let layout = src.layout
-  result = HostTensor[U, Sh, St](
+  result = HostTensor[U, L](
     data: cast[ptr UncheckedArray[U]](allocShared(toInt(layout.cosize()) * sizeof(U))),
     offset: originOffset(layout),
     layout: layout)
@@ -161,14 +161,14 @@ proc to*[T, Sh, St, U](src: HostTensor[T, Sh, St], _: typedesc[U]): HostTensor[U
 
 proc makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder): auto =
   let layout = make_layout(shape, order)
-  HostTensor[T, typeof(layout.shape), typeof(layout.stride)](
+  HostTensor[T, typeof(layout)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
     offset: originOffset(layout),
     layout: layout)
 
 proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
   let layout = make_layout(shape, strides)
-  HostTensor[T, typeof(shape), typeof(strides)](
+  HostTensor[T, typeof(layout)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
     offset: originOffset(layout),
     layout: layout)
@@ -179,7 +179,7 @@ template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
 
 proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds[float32](1, 2)): auto =
   let layout = make_layout(shape, strides)
-  result = HostTensor[T, typeof(shape), typeof(strides)](
+  result = HostTensor[T, typeof(layout)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
     offset: originOffset(layout),
     layout: layout)
@@ -190,19 +190,19 @@ proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, 
     else:
       result.data[result.offset + toInt crd2idx(layout, crd)] = to(rng.rand(bounds.a .. bounds.b), T)
 
-func len*[T, Sh, St](ht: HostTensor[T, Sh, St]): int =
+func len*[T, L](ht: HostTensor[T, L]): int =
   toInt(ht.layout.cosize())
 
-func view*[T, Sh, St](ht: HostTensor[T, Sh, St]): TensorView[T, Sh, St] =
-  TensorView[T, Sh, St](data: ht.data +% ht.offset, layout: ht.layout)
+func view*[T, L](ht: HostTensor[T, L]): TensorView[T, L] =
+  TensorView[T, L](data: ht.data +% ht.offset, layout: ht.layout)
 
-proc bridge*[E: HwEngine, T, Sh, St](engine: E, ht: HostTensor[T, Sh, St]): auto =
+proc bridge*[E: HwEngine, T, L](engine: E, ht: HostTensor[T, L]): auto =
   let n = ht.layout.cosize()
   let dev = engine.allocDevice(T, n)
   engine.copyToDeviceFromHost(dev, ht.data.toOpenArray(ht.offset, ht.offset + n - 1))
-  BridgeTensor[typeof(dev), Sh, St](data: dev, layout: ht.layout)
+  BridgeTensor[typeof(dev), L](data: dev, layout: ht.layout)
 
-func xorHash*[T, Sh, St](ht: HostTensor[T, Sh, St]): uint32 =
+func xorHash*[T, L](ht: HostTensor[T, L]): uint32 =
   ## Order-independent checksum over the raw bit patterns of a host tensor
   for i in 0 ..< ht.len():
     when sizeof(T) == 4:
@@ -236,8 +236,8 @@ type AllCloseReport* = object
   worst*, firstGot*, firstWant*: float64
   firstCrd*: string
 
-proc allClose*[T, ShA, StA, ShB, StB](
-    actual: TensorView[T, ShA, StA], expected: TensorView[T, ShB, StB],
+proc allClose*[T, LA, LB](
+    actual: TensorView[T, LA], expected: TensorView[T, LB],
     rtol, abstol: float64): AllCloseReport =
   ## Element-wise closeness, |a - e| <= abstol + rtol*|e| per element,
   ## compared in float64, same shape required, strides may differ.

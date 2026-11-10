@@ -10,6 +10,7 @@ import workspace/ceramic/src/int_tuples/int_tuples_compiletime
 import workspace/ceramic/src/integer_semi_modules
 import ./tiles
 import ./tile_foreach
+import ../layout_algebra/layouts
 
 # ############################################################
 #
@@ -66,19 +67,19 @@ func `/=`*(a: var Tile, b: Tile) {.inline.} =
 # Broadcast compound assignment: the right operand broadcasts over size-1 modes
 # -----------------------------------------------------------------------------
 
-func `+.=`*[TA, ShA, StA, TB, ShB, StB](a: var Tile[TA, ShA, StA], b: Tile[TB, ShB, StB]) {.inline.} =
+func `+.=`*[TA, LA, TB, LB](a: var Tile[TA, LA], b: Tile[TB, LB]) {.inline.} =
   forEachBroadcast var d in a, x in b:
     d += x
 
-func `-.=`*[TA, ShA, StA, TB, ShB, StB](a: var Tile[TA, ShA, StA], b: Tile[TB, ShB, StB]) {.inline.} =
+func `-.=`*[TA, LA, TB, LB](a: var Tile[TA, LA], b: Tile[TB, LB]) {.inline.} =
   forEachBroadcast var d in a, x in b:
     d -= x
 
-func `*.=`*[TA, ShA, StA, TB, ShB, StB](a: var Tile[TA, ShA, StA], b: Tile[TB, ShB, StB]) {.inline.} =
+func `*.=`*[TA, LA, TB, LB](a: var Tile[TA, LA], b: Tile[TB, LB]) {.inline.} =
   forEachBroadcast var d in a, x in b:
     d = d * x
 
-func `/.=`*[TA, ShA, StA, TB, ShB, StB](a: var Tile[TA, ShA, StA], b: Tile[TB, ShB, StB]) {.inline.} =
+func `/.=`*[TA, LA, TB, LB](a: var Tile[TA, LA], b: Tile[TB, LB]) {.inline.} =
   forEachBroadcast var d in a, x in b:
     d = d / x
 
@@ -163,26 +164,26 @@ macro broadcastShape(shA, shB: typed): untyped =
 
   result = walk(shA.getTypeInst(), shB.getTypeInst())
 
-func `*.`*[TA, ShA, StA, TB, ShB, StB](a: Tile[TA, ShA, StA], b: Tile[TB, ShB, StB]): auto {.inline.} =
+func `*.`*[TA, ShA, StA, TB, ShB, StB](a: Tile[TA, Layout[ShA, StA]], b: Tile[TB, Layout[ShB, StB]]): auto {.inline.} =
   ## Element-wise multiply, broadcasting over size-1 modes.
   var outTile: tile(TA, make_layout(broadcastShape(ShA, ShB)))
   forEachBroadcast var r in outTile, x in a, y in b:
     r = x * y
   outTile
 
-func `+.`*[TA, ShA, StA, TB, ShB, StB](a: Tile[TA, ShA, StA], b: Tile[TB, ShB, StB]): auto {.inline.} =
+func `+.`*[TA, ShA, StA, TB, ShB, StB](a: Tile[TA, Layout[ShA, StA]], b: Tile[TB, Layout[ShB, StB]]): auto {.inline.} =
   var outTile: tile(TA, make_layout(broadcastShape(ShA, ShB)))
   forEachBroadcast var r in outTile, x in a, y in b:
     r = x + y
   outTile
 
-func `-.`*[TA, ShA, StA, TB, ShB, StB](a: Tile[TA, ShA, StA], b: Tile[TB, ShB, StB]): auto {.inline.} =
+func `-.`*[TA, ShA, StA, TB, ShB, StB](a: Tile[TA, Layout[ShA, StA]], b: Tile[TB, Layout[ShB, StB]]): auto {.inline.} =
   var outTile: tile(TA, make_layout(broadcastShape(ShA, ShB)))
   forEachBroadcast var r in outTile, x in a, y in b:
     r = x - y
   outTile
 
-func `/.`*[TA, ShA, StA, TB, ShB, StB](a: Tile[TA, ShA, StA], b: Tile[TB, ShB, StB]): auto {.inline.} =
+func `/.`*[TA, ShA, StA, TB, ShB, StB](a: Tile[TA, Layout[ShA, StA]], b: Tile[TB, Layout[ShB, StB]]): auto {.inline.} =
   var outTile: tile(TA, make_layout(broadcastShape(ShA, ShB)))
   forEachBroadcast var r in outTile, x in a, y in b:
     r = x / y
@@ -195,7 +196,7 @@ func `*`*(a: Tile, s: a.T): Tile {.inline.} =
   forEach var r in result, x in a:
     r = x * s
 
-template `*`*[T, Sh, St](s: T, a: Tile[T, Sh, St]): Tile[T, Sh, St] =
+template `*`[T, L](s: T, a: Tile[T, L]): Tile[T, L] =
   a * s
 
 func `/`*(a: Tile, s: a.T): Tile {.inline.} =
@@ -210,10 +211,10 @@ func `-.`*(a: Tile, s: a.T): Tile {.inline.} =
   forEach var r in result, x in a:
     r = x - s
 
-func `+.`*[T, Sh, St](s: T, a: Tile[T, Sh, St]): Tile[T, Sh, St] {.inline.} =
+func `+.`[T, L](s: T, a: Tile[T, L]): Tile[T, L] {.inline.} =
   forEach var r in result, x in a:
     r = s + x
 
-func `-.`*[T, Sh, St](s: T, a: Tile[T, Sh, St]): Tile[T, Sh, St] {.inline.} =
+func `-.`[T, L](s: T, a: Tile[T, L]): Tile[T, L] {.inline.} =
   forEach var r in result, x in a:
     r = s - x

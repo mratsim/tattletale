@@ -252,8 +252,8 @@ proc genFillContiguityCode(
 
 macro fillWithCpuImpl(dst: typed; val: typed): untyped =
   let tvDst = dst.getTypeInst()
-  let rawSh = toSeqStaticInts(tvDst[2])
-  let rawSt = toSeqStaticInts(tvDst[3])
+  let rawSh = toSeqStaticInts(tvDst[2][1])
+  let rawSt = toSeqStaticInts(tvDst[2][2])
   # Count leaf elements in shape type
   proc flatLen(t: NimNode): int {.compileTime.} =
     if t.kind == nnkTupleConstr:
@@ -261,7 +261,7 @@ macro fillWithCpuImpl(dst: typed; val: typed): untyped =
         result += flatLen(t[i])
     else:
       result = 1
-  let rank = flatLen(tvDst[2])
+  let rank = flatLen(tvDst[2][1])
 
   # ── Extract data pointer and layout reference ──
   let dstData = bindSym"getOriginPtr".newCall(dst)
@@ -293,11 +293,11 @@ macro fillWithCpuImpl(dst: typed; val: typed): untyped =
 
 # ── Public API ──
 
-func fillWith_cpu*[T, Sh, St](tv: var TensorView[T, Sh, St]; val: T) =
+func fillWith_cpu*[T, L](tv: var TensorView[T, L], val: T) =
   ## Fill every logical element of `tv` with `val`.
   ## Uses zeroMem for zero-fill of contiguous suffix.
   fillWithCpuImpl(tv, val)
 
-func fillWith_cpu*[T, Sh, St](t: var TensorOwned[T, Sh, St]; val: T) =
+func fillWith_cpu*[T, L](t: var TensorOwned[T, L], val: T) =
   ## Fill every logical element of `t` with `val`.
   fillWith_cpu(t.view(), val)

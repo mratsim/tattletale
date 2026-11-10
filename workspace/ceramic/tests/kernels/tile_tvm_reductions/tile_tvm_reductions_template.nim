@@ -26,7 +26,7 @@ export layout_algebra
 export tensors
 export tile_algebra
 
-func refSum[T, Sh, St](dst, src: TensorView[T, Sh, St], axis: static int) =
+func refSum[T, L](dst, src: TensorView[T, L], axis: static int) =
   ## Axis sum over `src` into the keepdims tile `dst`: every slot of a kept
   ## coordinate stores its total, f64 accumulation
   for i in 0 ..< toInt(dst.size()):
@@ -38,7 +38,7 @@ func refSum[T, Sh, St](dst, src: TensorView[T, Sh, St], axis: static int) =
       acc += float64(src[srcCrd])
     dst[crd] = float32(acc)
 
-func refMax[T, Sh, St](dst, src: TensorView[T, Sh, St], axis: static int) =
+func refMax[T, L](dst, src: TensorView[T, L], axis: static int) =
   ## Axis max over `src` into the keepdims tile `dst`
   for i in 0 ..< toInt(dst.size()):
     var crd = idx2crd(dst.shape, i)
@@ -49,7 +49,7 @@ func refMax[T, Sh, St](dst, src: TensorView[T, Sh, St], axis: static int) =
       acc = max(acc, float64(src[srcCrd]))
     dst[crd] = float32(acc)
 
-func refMin[T, Sh, St](dst, src: TensorView[T, Sh, St], axis: static int) =
+func refMin[T, L](dst, src: TensorView[T, L], axis: static int) =
   ## Axis min over `src` into the keepdims tile `dst`
   for i in 0 ..< toInt(dst.size()):
     var crd = idx2crd(dst.shape, i)

@@ -114,8 +114,8 @@ func log*(a: var Tile) {.inline.} =
   forEach var d in a:
     d = ln(d)
 
-template downcast*[TIn: SomeFloat, TOut: float16 or bfloat16 or fp8e4m3 or fp8e5m2, Sh, St](
-    src: Tile[TIn, Sh, St],
+template downcast*[TIn: SomeFloat, TOut: float16 or bfloat16 or fp8e4m3 or fp8e5m2, L](
+    src: Tile[TIn, L],
     _: typedesc[TOut]): auto =
   var outTile: tile(TOut, src.getLayout())
   forEach var d in outTile, x in src:
@@ -129,11 +129,11 @@ template downcast*[TIn: SomeFloat, TOut: float16 or bfloat16 or fp8e4m3 or fp8e5
       d = toFp8e5m2(x)
   outTile
 
-template downcast*[T: SomeFloat, Sh, St](src: Tile[T, Sh, St], _: typedesc[T]): Tile[T, Sh, St] =
+template downcast*[T: SomeFloat, L](src: Tile[T, L], _: typedesc[T]): Tile[T, L] =
   src
 
-template upcast*[TIn: float16 or bfloat16 or fp8e4m3 or fp8e5m2, Sh, St](
-    src: Tile[TIn, Sh, St],
+template upcast*[TIn: float16 or bfloat16 or fp8e4m3 or fp8e5m2, L](
+    src: Tile[TIn, L],
     _: typedesc[float32]): auto =
   var outTile: tile(float32, src.getLayout())
   forEach var d in outTile, x in src:
