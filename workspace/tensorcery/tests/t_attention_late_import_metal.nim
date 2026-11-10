@@ -99,7 +99,7 @@ proc main =
     poolK = toTensor(kH, @[NumPages, NumLayers, PageSize, Nkv, D], runMetal)
     poolV = toTensor(vH, @[NumPages, NumLayers, PageSize, Nkv, D], runMetal)
   let kvMeta = JaggedKvMeta(
-    offsets: @[0, 2], indices: @[0, 1], seqlens: @[KvLen], batchSize: 1)
+    offsets: @[0, 2], indices: @[0, 1], seqlens: @[KvLen])
   let o = jagged_attention(q, poolK, poolV, @[0, 1], kvMeta,
     float32(scale), 0, H, Nkv)
   doAssert o.shape().len == 3, "late import: attention rank"
