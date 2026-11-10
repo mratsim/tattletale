@@ -21,8 +21,8 @@ proc runAddTest*(run: static Runtime, name: string) =
   for i in 0 ..< 8:
     xq[i] = xd[i].to(bfloat16)
     yq[i] = yd[i].to(bfloat16)
-  let x = toTensor(xq, @[2, 4])
-  let y = toTensor(yq, @[2, 4])
+  let x = xq.toTensor(2, 4)
+  let y = yq.toTensor(@[2, 4])
 
   doAssert x.shape().len == 2
   doAssert x.shape()[0] == 2
@@ -33,27 +33,31 @@ proc runAddTest*(run: static Runtime, name: string) =
   doAssert x.size() == 8
 
   let z = x + y
-  let small = toTensor(yq[0 ..< 4], @[1, 4])
+  let small = yq[0 ..< 4].toTensor(@[1, 4])
   # face checks are contracts, they raise AssertionDefect
   doAssertRaises AssertionDefect:
     discard x + small
   doAssertRaises AssertionDefect:
-    discard toTensor(xq[0 ..< 7], @[2, 4])
+    discard xq[0 ..< 7].toTensor(2, 4)
 
+  var zd: array[8, bfloat16]
   for i in 0 ..< 8:
     let xi = xd[i].to(bfloat16).to(float32)
     let yi = yd[i].to(bfloat16).to(float32)
-    doAssert z.item(i div 4, i mod 4, bfloat16) == (xi + yi).to(bfloat16), name & ": add " & $i
-    doAssert x.item(i div 4, i mod 4, bfloat16) == xd[i].to(bfloat16), name & ": add source " & $i
+    zd[i] = (xi + yi).to(bfloat16)
+  doAssert z.allClose(zd.toTensor(2, 4)), name & ": add"
+  doAssert x.allClose(xq.toTensor(2, 4)), name & ": add source"
 
   # Memoize computation and drop ancestor nodes
   let d = x + y
   let e = d + x
   eval(e)
   eval(e)
+  var ed: array[8, bfloat16]
   for i in 0 ..< 8:
-    doAssert e.item(i div 4, i mod 4, bfloat16) ==
-      (xd[i].to(bfloat16).to(float32) * 2'f32 + yd[i].to(bfloat16).to(float32)).to(bfloat16),
-      name & ": diamond " & $i
+    let xi = xd[i].to(bfloat16).to(float32)
+    let yi = yd[i].to(bfloat16).to(float32)
+    ed[i] = (xi * 2.0'f32 + yi).to(bfloat16)
+  doAssert e.allClose(ed.toTensor(2, 4)), name & ": diamond"
 
   echo "tensorcery add (", name, "): all checks passed"

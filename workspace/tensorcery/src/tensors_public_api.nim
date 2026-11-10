@@ -14,7 +14,7 @@ import tensors_public_types
 import compute_graph/ops_2i1o/ops_add
 import compute_graph/ops_1iNo/ops_split
 import compute_graph/ops_metadata/ops_swapaxes
-import compute_graph/ops_reductions/ops_allclose
+import compute_graph/ops_reductions/ops_allClose
 import tensors_globals
 import workspace/design_by_contract
 from std/math import sqrt
@@ -38,7 +38,7 @@ type Tensor* = ref object
 #
 # #######################################################################
 
-proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime = runMetal, dtype: typedesc = T): Tensor {.contracts.} =
+proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime, dtype: typedesc = T): Tensor {.contracts.} =
   {.precondition: shape.len == 2.}
   {.precondition: data.len == shape[0] * shape[1].}
   when T is dtype:
@@ -52,7 +52,11 @@ proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime
     converted.newSeq(data.len)
     for i in 0 ..< data.len:
       converted[i] = data[i].to(dtype)
-    result = toTensor(converted, shape, run, dtype)
+    result = converted.toTensor(shape, run, dtype)
+
+proc toTensor*[T](data: openArray[T], shape: varargs[int]): Tensor {.inline.} =
+  data.toTensor(shape, runMetal, T)
+
 
 # #######################################################################
 #
@@ -102,11 +106,11 @@ proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
   for n in t.engine.tn_split(t.node, axis, k):
     result.add(Tensor(engine: t.engine, node: n))
 
-proc allclose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool {.inline.} =
+proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool {.inline.} =
   ## True when every element satisfies |tested - reference| <= atol + rtol * |reference|.
   ## Same-sign infinities are equal, NaN equal only with equal_nan
   Tensor(engine: tested.engine,
-      node: tn_allclose(tested.engine, tested.node, reference.node, atol, rtol, equal_nan)
+      node: tn_allClose(tested.engine, tested.node, reference.node, atol, rtol, equal_nan)
     ).item(float32) == 0.0'f32
 
 proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =

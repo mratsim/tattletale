@@ -221,6 +221,20 @@ ISNIL_BARE_RE = re.compile(r"\.\s*isNil(?![\w(])")
 ISNIL_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+isNil\*?\s*[\(\[=,:]")
 
+# The allClose rule. Approximate equality reads on the tested tensor:
+# tested.allClose(reference). The tested-first plain call hides the
+# receiver, declarations never match, the name boundary is exact.
+ALLCLOSE_PLAIN_CALL_RE = re.compile(r"(?<![.\w])allClose\s*\(")
+ALLCLOSE_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+allClose\*?\s*[\(\[=,:]")
+
+# The toTensor rule. Construction reads on the data: data.toTensor(shape).
+# The data-first plain call hides the receiver, declarations never match,
+# the name boundary is exact.
+TOTENSOR_PLAIN_CALL_RE = re.compile(r"(?<![.\w])toTensor\s*\(")
+TOTENSOR_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+toTensor\*?\s*[\(\[=,:]")
+
 INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
@@ -690,6 +704,10 @@ RULES = {
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
     "isnil-call-syntax": Rule("isnil-call-syntax", True,
                               "a bare isNil postfix, use the method call syntax x.isNil()"),
+    "totensor-call-syntax": Rule("totensor-call-syntax", True,
+                                 "a data-first toTensor call, use the method call syntax data.toTensor(shape)"),
+    "allclose-call-syntax": Rule("allclose-call-syntax", True,
+                                 "a tested-first allClose call, use the method call syntax tested.allClose(reference)"),
     "engine-ufcs": Rule("engine-ufcs", True,
                         "an engine-first call in plain syntax, use engine.name(...) method call syntax"),
     "reduction-call-syntax": Rule("reduction-call-syntax", True,
@@ -2138,6 +2156,18 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "isnil-call-syntax",
                         "bare isNil postfix, use the method call syntax "
                         "x.isNil()"))
+                if TOTENSOR_PLAIN_CALL_RE.search(code) \
+                        and not TOTENSOR_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "totensor-call-syntax",
+                        "data-first toTensor call, use the method call "
+                        "syntax data.toTensor(shape)"))
+                if ALLCLOSE_PLAIN_CALL_RE.search(code) \
+                        and not ALLCLOSE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "allclose-call-syntax",
+                        "tested-first allClose call, use the method call "
+                        "syntax tested.allClose(reference)"))
                 if any("tensorcery" in part for part in path.parts) \
                         and ENGINE_UFCS_PLAIN_CALL_RE.search(code):
                     findings.append(Finding(
@@ -3329,6 +3359,86 @@ BANNED_VOCAB_SELFTEST_CASES = (
         ("src/codegen/backends/vocab_demo2.nim", 1, "banned-vocab", False),
     )),
 )
+
+
+ALLCLOSE_SELFTEST_CASES = (
+    ("allclose tested-first convicts, method call and declarations stay clean", (
+        ("src/tensorcery/allclose_demo.nim",
+         'doAssert allClose(x, y)\n'
+         'doAssert x.allClose(y)\n'
+         'proc allClose*(tested, reference: Tensor): bool = discard\n'),
+    ), (
+        ("src/tensorcery/allclose_demo.nim", 1, "allclose-call-syntax", False),
+    )),
+)
+
+
+def allclose_selftest(quiet=False):
+    """Runs the allClose fixtures through nim_structure_checks, one PASS or
+    FAIL line per case unless quiet. Returns the failed case count, 0 means
+    the tested-first call convicts and the method call and declarations pass.
+    """
+    failed = 0
+    for name, files, expected in ALLCLOSE_SELFTEST_CASES:
+        got = []
+        for path, text in files:
+            findings = []
+            nim_structure_checks(Path(path), text, [], findings)
+            got += sorted(set((str(f.path), f.line, f.rule, f.warning)
+                          for f in findings if f.rule == "allclose-call-syntax"))
+        want = sorted(expected)
+        if got == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in got:
+                    print("  got      %s" % (row,))
+    return failed
+
+
+TOTENSOR_SELFTEST_CASES = (
+    ("totensor data-first convicts, method call and declarations stay clean", (
+        ("src/tensorcery/totensor_demo.nim",
+         'let x = toTensor(data, [2, 4])\n'
+         'let y = data.toTensor([2, 4])\n'
+         'proc toTensor*[T](data: openArray[T], shape: openArray[int]): Tensor = discard\n'),
+    ), (
+        ("src/tensorcery/totensor_demo.nim", 1, "totensor-call-syntax", False),
+    )),
+)
+
+
+def totensor_selftest(quiet=False):
+    """Runs the toTensor fixtures through nim_structure_checks, one PASS or
+    FAIL line per case unless quiet. Returns the failed case count, 0 means
+    the data-first call convicts and the method call and declarations pass.
+    """
+    failed = 0
+    for name, files, expected in TOTENSOR_SELFTEST_CASES:
+        got = []
+        for path, text in files:
+            findings = []
+            nim_structure_checks(Path(path), text, [], findings)
+            got += sorted(set((str(f.path), f.line, f.rule, f.warning)
+                          for f in findings if f.rule == "totensor-call-syntax"))
+        want = sorted(expected)
+        if got == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in got:
+                    print("  got      %s" % (row,))
+    return failed
 
 
 ISNIL_SELFTEST_CASES = (
@@ -4550,7 +4660,7 @@ def main(argv):
         args = args[:i] + args[i + 2:]
     base = base or os.environ.get("DOC_LINT_BASE") or None
     if "--selftest-refusal" in args:
-        failed = refusal_selftest() + agent_verb_selftest() + isnil_selftest()
+        failed = refusal_selftest() + agent_verb_selftest() + isnil_selftest() + totensor_selftest() + allclose_selftest()
         return 1 if failed else 0
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]

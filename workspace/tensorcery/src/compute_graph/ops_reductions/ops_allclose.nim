@@ -18,7 +18,7 @@ import workspace/design_by_contract
 
 # ############################################################
 #
-#                   Allclose
+#                   allClose
 #
 # ############################################################
 
@@ -26,7 +26,7 @@ import workspace/design_by_contract
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_allclose(D, tested, reference: distinct TensorView, atol, rtol, equalNan: float32) =
+proc k_allClose(D, tested, reference: distinct TensorView, atol, rtol, equalNan: float32) =
   ## Accumulates the failure count at D[0], D[0] == 0 when every element
   ## satisfies |tested - reference| <= atol + rtol * |reference|.
   ## Same-sign infinities are equal, NaN counts as equal only with equalNan.
@@ -76,7 +76,7 @@ proc k_allclose(D, tested, reference: distinct TensorView, atol, rtol, equalNan:
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  AllcloseNode* = ref object
+  allCloseNode* = ref object
     r: AnyTensorImpl      # rank-1 float32 scalar, 1.0 or 0.0
     tested: TensorNode
     reference: TensorNode
@@ -88,13 +88,13 @@ type
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func getImpl*(n: AllcloseNode): AnyTensorImpl {.inline.} =
+func getImpl*(n: allCloseNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: AllcloseNode): string {.inline.} =
-  "Allclose"
+func opName*(n: allCloseNode): string {.inline.} =
+  "allClose"
 
-func size*(n: AllcloseNode): int {.inline.} =
+func size*(n: allCloseNode): int {.inline.} =
   n.r.size()
 
 func sameShape(a, b: openArray[int]): bool {.inline.} =
@@ -109,23 +109,23 @@ func sameShape(a, b: openArray[int]): bool {.inline.} =
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_allclose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: float32, equalNan: bool): TensorNode {.contracts.} =
+proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: float32, equalNan: bool): TensorNode {.contracts.} =
   let
     ia = tested.getImpl()
     ib = reference.getImpl()
   {.precondition: ia.dtype() == ib.dtype().}
   {.precondition: sameShape(ia.shape().p, ib.shape().p).}
-  return AllcloseNode(tested: tested, reference: reference, atol: atol, rtol: rtol,
+  return allCloseNode(tested: tested, reference: reference, atol: atol, rtol: rtol,
       equalNan: if equalNan: 1.0'f32 else: 0.0'f32,
-      r: engine.newPlaceholderNode(kFp32, @[1]).getImpl()
+      r: engine.newPlaceholderNode(kFp32, [1]).getImpl()
     ).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAllclose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
-  let asAll = n.to(AllcloseNode)
+proc enqueueallClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+  let asAll = n.to(allCloseNode)
   if asAll.isNil():
     return false
   engine.enqueueNode(batch, asAll.tested)
@@ -142,13 +142,13 @@ proc enqueueAllclose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var 
       let
         aView = ai.to(engine.getTensorImplType(ElemType, ARank)).bridge
         bView = bi.to(engine.getTensorImplType(ElemType, ARank)).bridge
-      batch.enqueue<<(ceil_div(asAll.size(), 128), 32)>> k_allclose(rImpl.bridge, aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
+      batch.enqueue<<(ceil_div(asAll.size(), 128), 32)>> k_allClose(rImpl.bridge, aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
   else:
-    raiseAssert("allclose: the output is a rank-1 float32 scalar")
+    raiseAssert("allClose: the output is a rank-1 float32 scalar")
   return true
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Allclose", enqueueAllclose)
+registerOp("allClose", enqueueallClose)

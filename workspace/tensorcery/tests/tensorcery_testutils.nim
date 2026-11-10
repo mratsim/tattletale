@@ -15,7 +15,7 @@ import workspace/tensorcery/src/tensors_globals
 import workspace/tensorcery/src/compute_graph/batching
 import workspace/tensorcery/src/compute_graph/ops_2i1o/ops_add
 import workspace/tensorcery/src/compute_graph/ops_1iNo/ops_split
-import workspace/tensorcery/src/compute_graph/ops_reductions/ops_allclose
+import workspace/tensorcery/src/compute_graph/ops_reductions/ops_allClose
 import workspace/tensorcery/src/compute_graph/eval
 
 export tensorcery

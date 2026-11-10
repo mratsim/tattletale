@@ -11,10 +11,10 @@
 
 import workspace/crucible
 import workspace/ceramic
-import workspace/tensorcery/tests/ops_reductions/ops_allclose_template
+import workspace/tensorcery/tests/ops_reductions/ops_allClose_template
 
 proc main =
-  runAllcloseTest(runWebGPU, "WebGPU")
+  runallCloseTest(runWebGPU, "WebGPU")
 
 when isMainModule:
   main()
