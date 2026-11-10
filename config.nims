@@ -377,6 +377,25 @@ task test_tf_exl3_qwen3_03_full_forward_to_logits, "Suite: Qwen3-0.6B-EXL3 ids t
   runTransformerSuite("q_exl3", "t_exl3_qwen3_03_full_forward_to_logits.nim")
 task test_tf_exl3_qwen3_04_greedy_text_generation, "Suite: Qwen3-0.6B-EXL3 greedy decoding":
   runTransformerSuite("q_exl3", "t_exl3_qwen3_04_greedy_text_generation.nim")
+# Tattleformers stateful suites (trie, page pool, pool write op).
+# The trie suites are cpu-only; the pool suites allocate and launch on Metal.
+proc runTattleformerSuite(filename: string) =
+  withDir(ProjectRoot):
+    runCmd(testerCmd("workspace/tattleformers/tests/stateful/" & filename))
+
+task test_ttf_kvcache, "Suite: kvcache trie core (cpu-only, model-free)":
+  runTattleformerSuite("test_kvcache.nim")
+task test_ttf_kvcache_lpm, "Suite: kvcache longest prefix match (cpu-only, model-free)":
+  runTattleformerSuite("test_kvcache_lpm.nim")
+task test_ttf_radix_invariants, "Suite: radix trie invariants (cpu-only, model-free)":
+  runTattleformerSuite("test_radix_invariants.nim")
+task test_ttf_fork_stability, "Suite: fork stability incl. the sub-page fork (cpu-only, model-free)":
+  runTattleformerSuite("test_fork_stability.nim")
+task test_ttf_page_pool, "Suite: page pool lifecycle (Metal)":
+  runTattleformerSuite("test_page_pool.nim")
+task test_ttf_pool_write, "Suite: pool write op over pool slabs (Metal)":
+  runTattleformerSuite("test_pool_write.nim")
+
 task test_tf_kvcache_kvcache, "Suite: kvcache core (cpu-only, model-free)":
   runTransformerSuite("kvcache", "test_kvcache.nim")
 task test_tf_kvcache_page_pool, "Suite: page pool lifecycle (cpu-only, model-free)":
