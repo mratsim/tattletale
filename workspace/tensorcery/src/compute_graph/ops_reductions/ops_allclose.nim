@@ -102,14 +102,6 @@ func size*(n: AllCloseNode): int {.inline.} =
 func isMaterialized*(n: AllCloseNode): bool {.inline.} =
   n.getImpl().isMaterialized()
 
-func sameShape(a, b: openArray[int]): bool {.inline.} =
-  if a.len != b.len:
-    return false
-  for i in 0 ..< a.len:
-    if a[i] != b[i]:
-      return false
-  true
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
@@ -119,7 +111,7 @@ proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: 
     ia = tested.getImpl()
     ib = reference.getImpl()
   {.precondition: ia.dtype() == ib.dtype().}
-  {.precondition: sameShape(ia.shape().p, ib.shape().p).}
+  {.precondition: ia.shape().p == ib.shape().p.}
   return AllCloseNode(tested: tested, reference: reference, atol: atol, rtol: rtol,
       equalNan: if equalNan: 1.0'f32 else: 0.0'f32,
       r: engine.newPlaceholderNode(kFp32, [1]).getImpl()
