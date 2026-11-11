@@ -14,7 +14,7 @@ proc runSwapaxesTest*(run: static Runtime, name: string) =
   var xq: array[8, bfloat16]
   for i in 0 ..< 8:
     xq[i] = xd[i].to(bfloat16)
-  let x = xq.toTensor(2, 4)
+  let x = xq.toTensor(run, 2, 4)
 
   # view semantics are metadata-only until finalization
   # shape permutes at construction, data/offset/strides bind at finalization
@@ -33,8 +33,8 @@ proc runSwapaxesTest*(run: static Runtime, name: string) =
       sd[j * 2 + i] = xq[i * 4 + j]
       let e2 = xd[i * 4 + j].to(bfloat16).to(float32) * 2.0'f32
       wd[j * 2 + i] = e2.to(bfloat16)
-  doAssert sx.allClose(sd.toTensor(4, 2)), name & ": swapaxes"
-  doAssert sw.allClose(wd.toTensor(4, 2)), name & ": swapaxes add"
+  doAssert sx.allClose(sd.toTensor(run, 4, 2)), name & ": swapaxes"
+  doAssert sw.allClose(wd.toTensor(run, 4, 2)), name & ": swapaxes add"
 
   doAssertRaises AssertionDefect:
     discard swapaxes(x, 0, 2)

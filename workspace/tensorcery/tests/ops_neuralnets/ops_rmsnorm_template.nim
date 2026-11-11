@@ -41,14 +41,14 @@ proc runRmsnormTest*(run: static Runtime, name: string) =
     var expectUnweighted = newSeq[float32](src.len)
     expectUnweighted.refRmsnorm(src, leading, cols, 1e-5'f32)
 
-    let x = src.toTensor(shape)
-    let w = weight.toTensor(cols)
+    let x = src.toTensor(run, shape)
+    let w = weight.toTensor(run, cols)
     let got = x.rms_norm(w)
     let gotUnweighted = x.rms_norm()
 
-    doAssert got.allClose(expect.toTensor(shape), rtol = 1e-5'f32, atol = 1e-4'f32),
+    doAssert got.allClose(expect.toTensor(run, shape), rtol = 1e-5'f32, atol = 1e-4'f32),
         name & ": weighted " & $shape
-    doAssert gotUnweighted.allClose(expectUnweighted.toTensor(shape), rtol = 1e-5'f32, atol = 1e-4'f32),
+    doAssert gotUnweighted.allClose(expectUnweighted.toTensor(run, shape), rtol = 1e-5'f32, atol = 1e-4'f32),
         name & ": unweighted " & $shape
 
   echo "tensorcery rmsnorm (", name, "): all checks passed"

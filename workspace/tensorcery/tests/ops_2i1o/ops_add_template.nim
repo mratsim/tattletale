@@ -27,9 +27,9 @@ proc runAddTest*(run: static Runtime, name: string) =
     var dst = newSeq[bfloat16](size)
     dst.refAdd(a, b)
 
-    let x = a.toTensor(shape)
-    let y = b.toTensor(shape)
+    let x = a.toTensor(run, shape)
+    let y = b.toTensor(run, shape)
 
-    doAssert (x + y).allClose(dst.toTensor(shape)), name & ": add " & $shape
+    doAssert (x + y).allClose(dst.toTensor(run, shape)), name & ": add " & $shape
 
   echo "tensorcery add (", name, "): all checks passed"

@@ -14,15 +14,15 @@ proc runSplitTest*(run: static Runtime, name: string) =
   var xq: array[8, bfloat16]
   for i in 0 ..< 8:
     xq[i] = xd[i].to(bfloat16)
-  let x = xq.toTensor(2, 4)
+  let x = xq.toTensor(run, 2, 4)
 
   let parts = split(x, 0, 2)
   doAssert parts.len == 2
   for p in parts:
     doAssert p.shape()[0] == 1
     doAssert p.shape()[1] == 4
-  doAssert parts[0].allClose(xq[0 ..< 4].toTensor(1, 4)), name & ": part0"
-  doAssert parts[1].allClose(xq[4 ..< 8].toTensor(1, 4)), name & ": part1"
+  doAssert parts[0].allClose(xq[0 ..< 4].toTensor(run, 1, 4)), name & ": part0"
+  doAssert parts[1].allClose(xq[4 ..< 8].toTensor(run, 1, 4)), name & ": part1"
 
   # inner-axis split makes strided views, strides inherit the source
   let cols = split(x, 1, 2)
@@ -33,7 +33,7 @@ proc runSplitTest*(run: static Runtime, name: string) =
       let e0 = xd[r * 4 + c].to(bfloat16).to(float32)
       let e1 = xd[r * 4 + c + 2].to(bfloat16).to(float32)
       wd[r * 2 + c] = (e0 + e1).to(bfloat16)
-  doAssert w.allClose(wd.toTensor(2, 2)), name & ": colsplit"
+  doAssert w.allClose(wd.toTensor(run, 2, 2)), name & ": colsplit"
 
   doAssertRaises AssertionDefect:
     discard split(x, 0, 3)

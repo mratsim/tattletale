@@ -64,8 +64,8 @@ proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime
       converted[i] = data[i].to(dtype)
     result = converted.toTensor(shape, run, dtype)
 
-proc toTensor*[T](data: openArray[T], shape: varargs[int]): Tensor {.inline.} =
-  data.toTensor(shape, runMetal, T)
+proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]): Tensor {.inline.} =
+  data.toTensor(shape, run, T)
 
 # #######################################################################
 #
