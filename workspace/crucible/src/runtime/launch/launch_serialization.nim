@@ -93,7 +93,7 @@ func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple
   when T is DeviceMem:
     result = (8, 8)  # 8 bytes, one device address slot
   elif T is ref:
-    result = computeDeviceLayout(typeof(default(T)[]), backend)
+    result = (8, 8)  # one pointer-width slot for the address the packers write
   elif T is object|tuple:
     when isStaticArg(T):
       result = (0, 1)
