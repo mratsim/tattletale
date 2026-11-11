@@ -46,8 +46,6 @@ func getImpl*(n: RmsNormNode): AnyTensorImpl {.inline.} =
 func opName*(n: RmsNormNode): string {.inline.} =
   "RmsNorm"
 
-func size*(n: RmsNormNode): int {.inline.} =
-  n.r.size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public

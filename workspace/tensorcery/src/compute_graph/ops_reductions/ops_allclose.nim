@@ -94,10 +94,7 @@ func getImpl*(n: AllCloseNode): AnyTensorImpl {.inline.} =
   n.r
 
 func opName*(n: AllCloseNode): string {.inline.} =
-  "allClose"
-
-func size*(n: AllCloseNode): int {.inline.} =
-  n.r.size()
+  "AllClose"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public

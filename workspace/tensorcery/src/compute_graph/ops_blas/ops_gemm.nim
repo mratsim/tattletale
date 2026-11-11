@@ -92,8 +92,6 @@ func getImpl*(n: GemmNode): AnyTensorImpl {.inline.} =
 func opName*(n: GemmNode): string {.inline.} =
   "Gemm"
 
-func size*(n: GemmNode): int {.inline.} =
-  n.r.size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public

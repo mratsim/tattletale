@@ -41,8 +41,6 @@ func getImpl*(n: SwapaxesNode): AnyTensorImpl {.inline.} =
 func opName*(n: SwapaxesNode): string {.inline.} =
   "Swapaxes"
 
-func size*(n: SwapaxesNode): int {.inline.} =
-  n.r.size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public

@@ -95,8 +95,6 @@ func getImpl*(n: LinearNode): AnyTensorImpl {.inline.} =
 func opName*(n: LinearNode): string {.inline.} =
   "Linear"
 
-func size*(n: LinearNode): int {.inline.} =
-  n.r.size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
