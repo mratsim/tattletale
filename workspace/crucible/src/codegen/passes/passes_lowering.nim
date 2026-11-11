@@ -136,6 +136,7 @@ proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int, byref: Table
 proc addrWrapByrefStmt(pre: var seq[CirStmt], tmpCount: var int, s: CirStmt, byref: Table[string, seq[int]]) =
   case s.kind
   of sAsgn:
+    addrWrapByrefArgs(pre, tmpCount, s.lhs, byref)
     addrWrapByrefArgs(pre, tmpCount, s.rhs, byref)
   of sIte:
     addrWrapByrefArgs(pre, tmpCount, s.cond, byref)
