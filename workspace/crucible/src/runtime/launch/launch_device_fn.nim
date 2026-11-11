@@ -100,6 +100,13 @@ func isCompileTime(ftype: NimNode): bool =
 func isDeviceMemType(t: NimNode): bool =
   t.kind == nnkBracketExpr and t[0].eqIdent("DeviceMem")
 
+func unwrapDeviceMemArg(t: NimNode): NimNode =
+  if t.kind == nnkRefTy and isDeviceMemType(t[0]):
+    return t[0]
+  if isDeviceMemType(t):
+    return t
+  return newEmptyNode()
+
 func getElemType(formal: NimNode): NimNode =
   formal.expectKind(nnkPtrTy)
   let p = formal[0]
@@ -117,8 +124,8 @@ func assertValidDeviceMem(deviceFn, pname, formal, vtype: NimNode) =
       getElemType(formal).repr & ", the DeviceMem argument holds " & vtype[2].repr)
 
 func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
-  let t = v.getTypeInst()
-  if isDeviceMemType(t):
+  let t = unwrapDeviceMemArg(v.getTypeInst())
+  if t.kind != nnkEmpty:
     result.add((name: "", t: t))
     return
   let impl = v.getTypeImpl()
@@ -129,13 +136,15 @@ func getDeviceMemFields(v: NimNode): seq[tuple[name: string, t: NimNode]] =
       return
     for f in rec:
       f.expectKind(nnkIdentDefs)
-      if isDeviceMemType(f[^2]):
+      let ft = unwrapDeviceMemArg(f[^2])
+      if ft.kind != nnkEmpty:
         for j in 0 ..< f.len - 2:
-          result.add((name: $f[j], t: f[^2]))
+          result.add((name: $f[j], t: ft))
   of nnkTupleTy:
     for i, f in impl:
-      if isDeviceMemType(f[^2]):
-        result.add((name: "field" & $i, t: f[^2]))
+      let ft = unwrapDeviceMemArg(f[^2])
+      if ft.kind != nnkEmpty:
+        result.add((name: "field" & $i, t: ft))
   else:
     discard
 
@@ -169,21 +178,21 @@ func bindFormalGenericArgs(formal, v: NimNode): NimNode =
     return formal
   var args = nnkBracketExpr.newTree(tsym)
   for j in 1 ..< vt.len:
-    let a = vt[j]
-    if isDeviceMemType(a):
+    let a = unwrapDeviceMemArg(vt[j])
+    if a.kind != nnkEmpty:
       args.add(a[^1])
     else:
-      args.add(a)
+      args.add(vt[j])
   return args
 
 func getBridgeParamType(deviceFn: NimNode, formalName, formalType, arg: NimNode): NimNode =
-  let argType = arg.getTypeInst()
-  if isDeviceMemType(argType):
-    assertValidDeviceMem(deviceFn, formalName, formalType, argType)
+  let dm = unwrapDeviceMemArg(arg.getTypeInst())
+  if dm.kind != nnkEmpty:
+    assertValidDeviceMem(deviceFn, formalName, formalType, dm)
     return formalType
   if getDeviceMemFields(arg).len > 0:
     return bindFormalGenericArgs(formalType, arg)
-  return argType
+  return arg.getTypeInst()
 
 func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
   ## ```
@@ -239,7 +248,7 @@ func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
     ident($deviceFn & "_" & base58(int(h))),
     newEmptyNode(), newEmptyNode(),
     params,
-    nnkPragma.newTree(ident"global"),
+    nnkPragma.newTree(bindSym"global"),
     newEmptyNode(),
     nnkStmtList.newTree(deviceFnCall))
   return procdef
@@ -251,7 +260,7 @@ func getWorkgroupPragma(blk: Dim3): NimNode =
   var size = nnkTupleConstr.newTree()
   for d in [blk.x, blk.y, blk.z]:
     size.add newLit(d)
-  nnkExprColonExpr.newTree(ident"workgroup", size)
+  nnkExprColonExpr.newTree(bindSym"workgroup", size)
 
 func getWorkgroupPragma(blkN: NimNode): NimNode =
   ## Workgroup pragma `(X, Y, Z)` for a compile-time literal block size, nil otherwise
@@ -271,7 +280,7 @@ func getWorkgroupPragma(blkN: NimNode): NimNode =
   var size = nnkTupleConstr.newTree()
   for d in dims:
     size.add newLit(d)
-  nnkExprColonExpr.newTree(ident"workgroup", size)
+  nnkExprColonExpr.newTree(bindSym"workgroup", size)
 
 macro launchGlobalFn(engine: HwEngine, deviceFn: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, lang: static string, values: varargs[typed]): untyped =
   ## Builds and launches the `{.global.}` wrapper: the first value is the output.

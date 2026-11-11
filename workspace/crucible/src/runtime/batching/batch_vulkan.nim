@@ -41,14 +41,14 @@ type
     device: VkDevice
     handle: VkPipeline
     layout: VkPipelineLayout
-    destroyPipeline: proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
-    destroyLayout: proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
+    destroyPipeline: proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl, raises: [].}
+    destroyLayout: proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl, raises: [].}
 
   OwnedCommandPool = object
     ## An owned VkCommandPool, its recorded command buffers die with it.
     device: VkDevice
     handle: VkCommandPool
-    destroy: proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}
+    destroy: proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl, raises: [].}
 
   VulkanBatchObj = object
     ctx: VulkanContext
@@ -129,6 +129,15 @@ proc store[T](pack: var EntryPack, v: T, _: int) =
         let a = deviceAddress(f.mem, pack.vctx)
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
+      elif typeof(f) is ref:
+        when typeof(f[]) is DeviceMem:
+          off = off.round_multiple_up(8)
+          pack.buffers.add f[].mem
+          let a = deviceAddress(f[].mem, pack.vctx)
+          copyMem(blob[off].addr, a.unsafeAddr, 8)
+          inc off, 8
+        else:
+          {.error: "[Tattletale-Crucible] unsupported reference type on GPU \'" & $typeof(f) & "\'.".}
       else:
         blob.packFrom(off, f, cgGlsl)
     off = off.round_multiple_up(lay.align)
@@ -250,22 +259,22 @@ proc createBatchPipeline(batch: VulkanBatch, entry: BatchEntry): BatchPipeline =
   let ctx = batch.ctx
   result.device = ctx.device
   result.destroyPipeline = cast[
-    proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl.}
+    proc(device: VkDevice, pipeline: VkPipeline, pAllocator: pointer) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyPipeline"))
   result.destroyLayout = cast[
-    proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl.}
+    proc(device: VkDevice, pipelineLayout: VkPipelineLayout, pAllocator: pointer) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyPipelineLayout"))
   let vkCreatePipelineLayout = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkPipelineLayoutCreateInfo,
          pAllocator: pointer,
-         pPipelineLayout: ptr VkPipelineLayout): VkResult {.cdecl.}
+         pPipelineLayout: ptr VkPipelineLayout): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCreatePipelineLayout"))
   let vkCreateComputePipelines = cast[
     proc(device: VkDevice, pipelineCache: VkPipelineCache,
          createInfoCount: uint32,
          pCreateInfos: ptr VkComputePipelineCreateInfo,
          pAllocator: pointer,
-         pPipelines: ptr VkPipeline): VkResult {.cdecl.}
+         pPipelines: ptr VkPipeline): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCreateComputePipelines"))
   var pushConstRange: VkPushConstantRange
   var plCI = VkPipelineLayoutCreateInfo(
@@ -299,30 +308,30 @@ proc finalize*(batch: VulkanBatch) =
   if batch.entries.len == 0:
     raiseAssert("finalize: the batch has no entries")
   let ctx = batch.ctx
-  let vkCreateCommandPool = cast[proc(device: VkDevice, pCreateInfo: ptr VkCommandPoolCreateInfo, pAllocator: pointer, pCommandPool: ptr VkCommandPool): VkResult {.cdecl.}](ctx.gpaAddr(ctx.instance, "vkCreateCommandPool"))
+  let vkCreateCommandPool = cast[proc(device: VkDevice, pCreateInfo: ptr VkCommandPoolCreateInfo, pAllocator: pointer, pCommandPool: ptr VkCommandPool): VkResult {.cdecl, raises: [].}](ctx.gpaAddr(ctx.instance, "vkCreateCommandPool"))
   let vkAllocateCommandBuffers = cast[
-    proc(device: VkDevice, pAllocateInfo: ptr VkCommandBufferAllocateInfo, pCommandBuffers: ptr VkCommandBuffer): VkResult {.cdecl.}
+    proc(device: VkDevice, pAllocateInfo: ptr VkCommandBufferAllocateInfo, pCommandBuffers: ptr VkCommandBuffer): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkAllocateCommandBuffers"))
   let vkBeginCommandBuffer = cast[
-    proc(commandBuffer: VkCommandBuffer, pBeginInfo: ptr VkCommandBufferBeginInfo): VkResult {.cdecl.}
+    proc(commandBuffer: VkCommandBuffer, pBeginInfo: ptr VkCommandBufferBeginInfo): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkBeginCommandBuffer"))
   let vkEndCommandBuffer = cast[
-    proc(commandBuffer: VkCommandBuffer): VkResult {.cdecl.}
+    proc(commandBuffer: VkCommandBuffer): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkEndCommandBuffer"))
   let vkCmdBindPipeline = cast[
-    proc(commandBuffer: VkCommandBuffer, pipelineBindPoint: VkPipelineBindPoint, pipeline: VkPipeline) {.cdecl.}
+    proc(commandBuffer: VkCommandBuffer, pipelineBindPoint: VkPipelineBindPoint, pipeline: VkPipeline) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCmdBindPipeline"))
   let vkCmdPushConstants = cast[
-    proc(commandBuffer: VkCommandBuffer, layout: VkPipelineLayout, stageFlags: uint32, offset: uint32, size: uint32, pValues: pointer) {.cdecl.}
+    proc(commandBuffer: VkCommandBuffer, layout: VkPipelineLayout, stageFlags: uint32, offset: uint32, size: uint32, pValues: pointer) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCmdPushConstants"))
   let vkCmdDispatch = cast[
-    proc(commandBuffer: VkCommandBuffer, groupCountX: uint32, groupCountY: uint32, groupCountZ: uint32) {.cdecl.}
+    proc(commandBuffer: VkCommandBuffer, groupCountX: uint32, groupCountY: uint32, groupCountZ: uint32) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCmdDispatch"))
   let vkCmdPipelineBarrier = cast[
     proc(commandBuffer: VkCommandBuffer, srcStageMask: VkFlags, dstStageMask: VkFlags,
          dependencyFlags: VkFlags, memoryBarrierCount: uint32, pMemoryBarriers: ptr VkMemoryBarrier,
          bufferMemoryBarrierCount: uint32, pBufferMemoryBarriers: pointer,
-         imageMemoryBarrierCount: uint32, pImageMemoryBarriers: pointer) {.cdecl.}
+         imageMemoryBarrierCount: uint32, pImageMemoryBarriers: pointer) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCmdPipelineBarrier"))
   if batch.cmdPool.handle == nil:
     var cpc = VkCommandPoolCreateInfo(
@@ -334,7 +343,7 @@ proc finalize*(batch: VulkanBatch) =
       device: ctx.device,
       handle: batch.cmdPool.handle,
       destroy: cast[
-        proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl.}
+        proc(device: VkDevice, commandPool: VkCommandPool, pAllocator: pointer) {.cdecl, raises: [].}
       ](ctx.gpaAddr(ctx.instance, "vkDestroyCommandPool")))
   var allocInfo = VkCommandBufferAllocateInfo(
     sType: VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -383,16 +392,16 @@ proc replay*(batch: VulkanBatch) =
     raiseAssert("replay: finalize the batch first")
   let ctx = batch.ctx
   let vkCreateFence = cast[
-    proc(device: VkDevice, pCreateInfo: ptr VkFenceCreateInfo, pAllocator: pointer, pFence: ptr VkFence): VkResult {.cdecl.}
+    proc(device: VkDevice, pCreateInfo: ptr VkFenceCreateInfo, pAllocator: pointer, pFence: ptr VkFence): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCreateFence"))
   let vkQueueSubmit = cast[
-    proc(queue: VkQueue, submitCount: uint32, pSubmits: ptr VkSubmitInfo, fence: VkFence): VkResult {.cdecl.}
+    proc(queue: VkQueue, submitCount: uint32, pSubmits: ptr VkSubmitInfo, fence: VkFence): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkQueueSubmit"))
   let vkWaitForFences = cast[
-    proc(device: VkDevice, fenceCount: uint32, pFences: ptr VkFence, waitAll: VkBool32, timeout: uint64): VkResult {.cdecl.}
+    proc(device: VkDevice, fenceCount: uint32, pFences: ptr VkFence, waitAll: VkBool32, timeout: uint64): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkWaitForFences"))
   let vkDestroyFence = cast[
-    proc(device: VkDevice, fence: VkFence, pAllocator: pointer) {.cdecl.}
+    proc(device: VkDevice, fence: VkFence, pAllocator: pointer) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyFence"))
   var fence: VkFence
   var fci = VkFenceCreateInfo(sType: VK_STRUCTURE_TYPE_FENCE_CREATE_INFO)

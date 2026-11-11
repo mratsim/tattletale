@@ -55,25 +55,25 @@ when defined(macosx):
   # msgSend
   # ═════════════════════════════════════════════════
 
-  {.pragma: objcImport, cdecl, importc, dynlib: ObjcLibName.}
+  {.pragma: objcImport, cdecl, importc, dynlib: ObjcLibName, raises: [].}
 
   proc objc_msgSend(self: ID, op: SEL): ID {.objcimport, varargs.}
 
   type
-    MsgSend0 = proc (self: ID, op: SEL): ID {.cdecl.}
-    MsgSendCstr = proc (self: ID, op: SEL, a: cstring): ID {.cdecl.}
-    MsgSendID = proc (self: ID, op: SEL, a: ID): ID {.cdecl.}
-    MsgSendIDPtr = proc (self: ID, op: SEL, a: ID, b: ptr ID): ID {.cdecl.}
-    MsgSendIDIDPtr = proc (self: ID, op: SEL, a: ID, b: ID, c: ptr ID): ID {.cdecl.}
-    MsgSendIDUIntPtr2 = proc (self: ID, op: SEL, a: ID, b: NSUInteger, c: ptr ID, d: ptr ID): ID {.cdecl.}
-    MsgSendUInt2 = proc (self: ID, op: SEL, a: NSUInteger, b: NSUInteger): ID {.cdecl.}
-    MsgSendIDUInt2 = proc (self: ID, op: SEL, a: ID, b: NSUInteger, c: NSUInteger): ID {.cdecl.}
-    MsgSendPtrUInt2 = proc (self: ID, op: SEL, a: pointer, b: NSUInteger, c: NSUInteger): ID {.cdecl.}
-    MsgSendPtrUInt2ID = proc (self: ID, op: SEL, a: pointer, b: NSUInteger, c: NSUInteger, d: ID): ID {.cdecl.}
-    MsgSendSize2 = proc (self: ID, op: SEL, a: MTLSize, b: MTLSize): ID {.cdecl.}
-    MsgSendBOOL = proc (self: ID, op: SEL, a: BOOL): ID {.cdecl.}
-    MsgSendUInt1 = proc (self: ID, op: SEL, a: NSUInteger): ID {.cdecl.}
-    MsgSendUInt0 = proc (self: ID, op: SEL): NSUInteger {.cdecl.}
+    MsgSend0 = proc (self: ID, op: SEL): ID {.cdecl, raises: [].}
+    MsgSendCstr = proc (self: ID, op: SEL, a: cstring): ID {.cdecl, raises: [].}
+    MsgSendID = proc (self: ID, op: SEL, a: ID): ID {.cdecl, raises: [].}
+    MsgSendIDPtr = proc (self: ID, op: SEL, a: ID, b: ptr ID): ID {.cdecl, raises: [].}
+    MsgSendIDIDPtr = proc (self: ID, op: SEL, a: ID, b: ID, c: ptr ID): ID {.cdecl, raises: [].}
+    MsgSendIDUIntPtr2 = proc (self: ID, op: SEL, a: ID, b: NSUInteger, c: ptr ID, d: ptr ID): ID {.cdecl, raises: [].}
+    MsgSendUInt2 = proc (self: ID, op: SEL, a: NSUInteger, b: NSUInteger): ID {.cdecl, raises: [].}
+    MsgSendIDUInt2 = proc (self: ID, op: SEL, a: ID, b: NSUInteger, c: NSUInteger): ID {.cdecl, raises: [].}
+    MsgSendPtrUInt2 = proc (self: ID, op: SEL, a: pointer, b: NSUInteger, c: NSUInteger): ID {.cdecl, raises: [].}
+    MsgSendPtrUInt2ID = proc (self: ID, op: SEL, a: pointer, b: NSUInteger, c: NSUInteger, d: ID): ID {.cdecl, raises: [].}
+    MsgSendSize2 = proc (self: ID, op: SEL, a: MTLSize, b: MTLSize): ID {.cdecl, raises: [].}
+    MsgSendBOOL = proc (self: ID, op: SEL, a: BOOL): ID {.cdecl, raises: [].}
+    MsgSendUInt1 = proc (self: ID, op: SEL, a: NSUInteger): ID {.cdecl, raises: [].}
+    MsgSendUInt0 = proc (self: ID, op: SEL): NSUInteger {.cdecl, raises: [].}
 
   template msgSend*(self: ID, op: SEL): ID =
     cast[MsgSend0](objc_msgSend)(self, op)
@@ -117,15 +117,15 @@ when defined(macosx):
   template msgSendUInt*(self: ID, op: SEL): NSUInteger =
     cast[MsgSendUInt0](objc_msgSend)(self, op)
 
-  proc selRegisterName(str: cstring): SEL {.objcimport, importc: "sel_registerName".}
+  proc selRegisterName(str: cstring): SEL {.objcimport, importc: "sel_registerName", raises: [].}
 
   proc `$$`*(str: string): SEL {.inline.} =
     ## Returns the registered selector for `str`, `$$"alloc"` for example.
     selRegisterName(str.cstring)
 
-  proc getClass*(name: cstring): Class {.objcimport, importc: "objc_$1".}
+  proc getClass*(name: cstring): Class {.objcimport, importc: "objc_$1", raises: [].}
 
-  proc lookUpClass*(name: cstring): Class {.objcimport, importc: "objc_$1".}
+  proc lookUpClass*(name: cstring): Class {.objcimport, importc: "objc_$1", raises: [].}
 
   # ═════════════════════════════════════════════════
   # NSString bridge
@@ -182,7 +182,7 @@ when defined(macosx):
 
   import workspace/cpuplatforms/loadtime_functions
 
-  proc dlopen(path: cstring, mode: cint): pointer {.importc, header: "<dlfcn.h>".}
+  proc dlopen(path: cstring, mode: cint): pointer {.importc, header: "<dlfcn.h>", raises: [].}
   const RtlNow = 2  # RTLD_NOW on macOS (and Linux)
 
   proc loadFoundation() {.loadTime.} =
@@ -190,5 +190,5 @@ when defined(macosx):
     ## From here on, NS* classes are visible to `objc.getClass` and `objc.lookUpClass`.
     discard dlopen("/System/Library/Frameworks/Foundation.framework/Foundation", RtlNow)
 
-  proc MTLCreateSystemDefaultDevice*(): ID {.importc: "MTLCreateSystemDefaultDevice", cdecl, dynlib: "/System/Library/Frameworks/Metal.framework/Metal".}
+  proc MTLCreateSystemDefaultDevice*(): ID {.importc: "MTLCreateSystemDefaultDevice", cdecl, dynlib: "/System/Library/Frameworks/Metal.framework/Metal", raises: [].}
 

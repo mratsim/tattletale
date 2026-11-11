@@ -40,17 +40,13 @@ when defined(macosx):
 
   proc allocDeviceImpl(engine: MetalEngine, n: int): objc.ID
   proc copyToDeviceFromHostImpl(engine: MetalEngine, dst: objc.ID, src: pointer, n: int)
-  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int)
+  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int, offsetBytes: int = 0)
 
 
   proc newMetalContext(): MetalContext =
     result = MetalContext()
     result.device = objc.MTLCreateSystemDefaultDevice()
-    if objc.isNil(result.device):
-      raiseAssert("no Metal device")
     result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
-    if objc.isNil(result.queue):
-      raiseAssert("newCommandQueue returned nil")
 
   proc `=destroy`(cache: var MetalCache) =
     objc.withMemPool:
@@ -95,10 +91,13 @@ when defined(macosx):
     DeviceMem[runMetal, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
   proc copyToDeviceFromHost*[T](engine: MetalEngine, dst: DeviceMem[runMetal, T], src: openArray[T]) {.inline.} =
-    engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
+    engine.copyToDeviceFromHostImpl(dst.mem, unsafeAddr src[0], src.len * sizeof(T))
   
-  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: var openArray[T], src: DeviceMem[runMetal, T]) {.inline.} =
-    engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
+  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: var openArray[T], src: DeviceMem[runMetal, T], offset: int = 0) {.inline.} =
+    engine.copyToHostFromDeviceImpl(addr dst[0], src.mem, dst.len * sizeof(T), offset * sizeof(T))
+
+  proc copyToHostFromDevice*[T](engine: MetalEngine, dst: var T, src: DeviceMem[runMetal, T], offset: int = 0) {.inline.} =
+    engine.copyToHostFromDeviceImpl(dst.addr, src.mem, sizeof(T), offset * sizeof(T))
 
   # ════════════════════════════════════════════════════════════════════════
   # ▸ Launch serialization
@@ -148,10 +147,10 @@ when defined(macosx):
       raiseAssert("copyToDeviceFromHost: n must be positive, got " & $n)
     copyMem(readBufferContents(dst), src, n)
 
-  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int) =
+  proc copyToHostFromDeviceImpl(engine: MetalEngine, dst: pointer, src: objc.ID, n: int, offsetBytes: int = 0) =
     if n <= 0:
       raiseAssert("copyToHostFromDevice: n must be positive, got " & $n)
-    copyMem(dst, readBufferContents(src), n)
+    copyMem(dst, cast[pointer](cast[int](readBufferContents(src)) + offsetBytes), n)
 
   proc launchKernelImpl*(engine: MetalEngine, output: auto, args: tuple, cfg: LaunchConfig, kernel: string) =
     ## Compiles the kernel's pipeline state on first use.

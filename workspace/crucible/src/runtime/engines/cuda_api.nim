@@ -68,10 +68,13 @@ proc allocDevice*[T](engine: CudaEngine, _: typedesc[T], len: int): DeviceMem[ru
   DeviceMem[runCuda, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: CudaEngine, dst: DeviceMem[runCuda, T], src: openArray[T]) {.inline.} =
-  engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
+  engine.copyToDeviceFromHostImpl(dst.mem, unsafeAddr src[0], src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: CudaEngine, dst: var openArray[T], src: DeviceMem[runCuda, T]) {.inline.} =
-  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
+proc copyToHostFromDevice*[T](engine: CudaEngine, dst: var openArray[T], src: DeviceMem[runCuda, T], offset: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(addr dst[0], src.mem, dst.len * sizeof(T), offset * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: CudaEngine, dst: var T, src: DeviceMem[runCuda, T], offset: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(dst.addr, src.mem, sizeof(T), offset * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
@@ -132,8 +135,8 @@ proc allocDeviceImpl(engine: CudaEngine, n: int): CUdeviceptr {.inline.} =
 proc copyToDeviceFromHostImpl(engine: CudaEngine, dst: CUdeviceptr, src: pointer, n: int) {.inline.} =
   check cuMemcpyHtoD(dst, src, csize_t(n))
 
-proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int) {.inline.} =
-  check cuMemcpyDtoH(dst, src, csize_t(n))
+proc copyToHostFromDeviceImpl(engine: CudaEngine, dst: pointer, src: CUdeviceptr, n: int, offsetBytes: int = 0) {.inline.} =
+  check cuMemcpyDtoH(dst, cast[CUdeviceptr](cast[int](src) + offsetBytes), csize_t(n))
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ PRIVATE

@@ -96,10 +96,13 @@ proc allocDevice*[T](engine: WebgpuEngine, _: typedesc[T], len: int): DeviceMem[
   DeviceMem[runWebGPU, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: WebgpuEngine, dst: DeviceMem[runWebGPU, T], src: openArray[T]) {.inline.} =
-  engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
+  engine.copyToDeviceFromHostImpl(dst.mem, unsafeAddr src[0], src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: var openArray[T], src: DeviceMem[runWebGPU, T]) {.inline.} =
-  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
+proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: var openArray[T], src: DeviceMem[runWebGPU, T], offset: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(addr dst[0], src.mem, dst.len * sizeof(T), offset * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: WebgpuEngine, dst: var T, src: DeviceMem[runWebGPU, T], offset: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(dst.addr, src.mem, sizeof(T), offset * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
@@ -312,7 +315,7 @@ proc launchKernelImpl*(engine: WebgpuEngine, output: auto, args: tuple, cfg: Lau
     wgpuBindGroupRelease(bg)
 
   if scalarBytes.len > 0:
-    wgpuQueueWriteBuffer(queue, scratch, 0, scalarBytes[0].addr, scalarBytes.len.csize_t)
+    wgpuQueueWriteBuffer(queue, scratch, 0, scalarBytes)
 
   let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
   if encoder == nil:
@@ -362,9 +365,9 @@ proc allocDeviceImpl(engine: WebgpuEngine, n: int): WGPUBuffer =
     raiseAssert("WebGPU: failed to create a " & $n & "-byte device buffer")
 
 proc copyToDeviceFromHostImpl(engine: WebgpuEngine, dst: WGPUBuffer, src: pointer, n: int) {.inline.} =
-  wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, src, n.csize_t)
+  wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, cast[ptr UncheckedArray[byte]](src).toOpenArray(0, n - 1))
 
-proc copyToHostFromDeviceImpl(engine: WebgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
+proc copyToHostFromDeviceImpl(engine: WebgpuEngine, dst: pointer, src: WGPUBuffer, n: int, offsetBytes: int = 0) =
   let device = engine.ctx.device
   let queue  = engine.ctx.queue
   var stagingDesc = WGPUBufferDescriptor(
@@ -381,7 +384,7 @@ proc copyToHostFromDeviceImpl(engine: WebgpuEngine, dst: pointer, src: WGPUBuffe
     raiseAssert("WebGPU: failed to create command encoder")
   defer:
     wgpuCommandEncoderRelease(encoder)
-  wgpuCommandEncoderCopyBufferToBuffer(encoder, src, 0, stagingBuf, 0, n.csize_t)
+  wgpuCommandEncoderCopyBufferToBuffer(encoder, src, offsetBytes.csize_t, stagingBuf, 0, n.csize_t)
   let cmdBuf = wgpuCommandEncoderFinish(encoder, nil)
   wgpuQueueSubmit(queue, 1, cmdBuf.addr)
   defer:

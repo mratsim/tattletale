@@ -27,7 +27,7 @@ A measurement without the master comparison measures nothing.
 | Runs | 3 runs per tree, alternate the trees (branch, master, branch, master), report each tree's median |
 | Master checkout | measure master in the same batch, always, comparing a branch only against its own earlier commit can miss a regression that both commits share |
 | Shell timeout | one command runs one round of both kernels on both trees, a full 3-round sweep needs several commands to stay inside the 300 s cap |
-| Reference | on the M4 Max workstation, master compiles the GEMM bench in about 4.2 s and the SDPA bench in about 8.3 s |
+| Reference | on the M4 Max workstation, master compiles the SDPA bench in about 5.7 s. The GEMM bench is broken on master and branches alike (`tensor_selectors.nim:85` `[]=` type mismatch via `fillGemmInputs`, pre-existing) and its compile time is unmeasurable until fixed |
 
 ### Emitted code size
 

@@ -233,8 +233,7 @@ proc finalize*(batch: WebgpuBatch) =
       batch.pipelines[pipelineKey] = compilePipeline(batch, e)
     e.pipelineState = batch.pipelines[pipelineKey].pipeline
     if e.scalars.len > 0:
-      wgpuQueueWriteBuffer(batch.queue, WGPUBuffer batch.scalarBuffer, windowBase.uint64,
-                           e.scalars[0].addr, e.scalars.len.csize_t)
+      wgpuQueueWriteBuffer(batch.queue, WGPUBuffer batch.scalarBuffer, windowBase.uint64, e.scalars)
     var bgEntries = newSeq[WGPUBindGroupEntry](e.slots.len)
     for i in 0 ..< e.slots.len:
       case e.slots[i].kind

@@ -24,6 +24,20 @@ type
     proc copyToDeviceFromHost(engine: E, dst: auto, src: auto, n: int)
     proc copyToHostFromDevice(engine: E, dst: auto, src: auto, n: int)
 
+template getMemHandleType*(engine: HwEngine, T: typedesc): typedesc =
+  when engine is CudaEngine:
+    DeviceMem[runCuda, T]
+  elif engine is MetalEngine:
+    DeviceMem[runMetal, T]
+  elif engine is OpenCLEngine:
+    DeviceMem[runOpenCL, T]
+  elif engine is VulkanEngine:
+    DeviceMem[runVulkan, T]
+  elif engine is WebgpuEngine:
+    DeviceMem[runWebGPU, T]
+  else:
+    DeviceMem[runCpu, T]
+
 proc newEngine*(runtime: static Runtime): auto {.inline.} =
   when runtime == runCuda:
     newCudaEngine()

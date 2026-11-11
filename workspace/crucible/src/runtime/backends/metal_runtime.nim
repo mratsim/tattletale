@@ -65,7 +65,7 @@ when defined(macosx):
       version: array[256, char]
       machine: array[256, char]
 
-  proc uname(uts: ptr UtSName): cint {.importc, header: "<sys/utsname.h>".}
+  proc uname(uts: ptr UtSName): cint {.importc, header: "<sys/utsname.h>", raises: [].}
 
   proc getMslLanguageVersion(): objc.NSUInteger =
     ## MSL language version for this OS, from the `uname()` Darwin release:

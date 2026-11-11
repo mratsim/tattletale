@@ -27,6 +27,7 @@
 ##   - host: macOS 26.6.1, Nim 2.2.10
 
 import std/os
+import workspace/crucible/src/abis/c_abi
 
 # ═══════════════════════════════════════════════════════════════════════
 # Path configuration
@@ -349,120 +350,119 @@ const libWgpu = (
 
 # --- Instance / Adapter / Device ---
 proc wgpuCreateInstance*(desc: ptr WGPUInstanceDescriptor): WGPUInstance
-  {.importc: "wgpuCreateInstance", dynlib: libWgpu.}
+  {.importc: "wgpuCreateInstance", dynlib: libWgpu, raises: [].}
 
 proc wgpuInstanceRequestAdapter*(
     instance: WGPUInstance,
     options: ptr WGPURequestAdapterOptions,
     callbackInfo: WGPURequestAdapterCallbackInfo): WGPUFuture
-  {.importc: "wgpuInstanceRequestAdapter", dynlib: libWgpu.}
+  {.importc: "wgpuInstanceRequestAdapter", dynlib: libWgpu, raises: [].}
 
 const WGPUFeatureName_ShaderF16* = 0x0000000B'u32
 const WGPUFeatureName_Subgroups* = 0x00000012'u32
 
 proc wgpuAdapterHasFeature*(adapter: WGPUAdapter, feature: uint32): uint32
-  {.importc: "wgpuAdapterHasFeature", dynlib: libWgpu.}
+  {.importc: "wgpuAdapterHasFeature", dynlib: libWgpu, raises: [].}
 
 proc wgpuAdapterRequestDevice*(
     adapter: WGPUAdapter,
     descriptor: ptr WGPUDeviceDescriptor,
     callbackInfo: WGPURequestDeviceCallbackInfo): WGPUFuture
-  {.importc: "wgpuAdapterRequestDevice", dynlib: libWgpu.}
+  {.importc: "wgpuAdapterRequestDevice", dynlib: libWgpu, raises: [].}
 
 proc wgpuAdapterGetInfo*(adapter: WGPUAdapter, info: ptr WGPUAdapterInfo)
-  {.importc: "wgpuAdapterGetInfo", dynlib: libWgpu.}
+  {.importc: "wgpuAdapterGetInfo", dynlib: libWgpu, raises: [].}
 
 proc wgpuInstanceProcessEvents*(instance: WGPUInstance)
-  {.importc: "wgpuInstanceProcessEvents", dynlib: libWgpu.}
+  {.importc: "wgpuInstanceProcessEvents", dynlib: libWgpu, raises: [].}
 
 proc wgpuDeviceGetQueue*(device: WGPUDevice): WGPUQueue
-  {.importc: "wgpuDeviceGetQueue", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceGetQueue", dynlib: libWgpu, raises: [].}
 
 # --- Error scopes ---
 proc wgpuDevicePushErrorScope*(device: WGPUDevice, filter: WGPUErrorFilter)
-  {.importc: "wgpuDevicePushErrorScope", dynlib: libWgpu.}
+  {.importc: "wgpuDevicePushErrorScope", dynlib: libWgpu, raises: [].}
 
 proc wgpuDevicePopErrorScope*(device: WGPUDevice,
                               callbackInfo: WGPUPopErrorScopeCallbackInfo): WGPUFuture
-  {.importc: "wgpuDevicePopErrorScope", dynlib: libWgpu.}
+  {.importc: "wgpuDevicePopErrorScope", dynlib: libWgpu, raises: [].}
 
 # --- Shader & Pipeline ---
 proc wgpuDeviceCreateShaderModule*(device: WGPUDevice,
                                     desc: ptr WGPUShaderModuleDescriptor): WGPUShaderModule
-  {.importc: "wgpuDeviceCreateShaderModule", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceCreateShaderModule", dynlib: libWgpu, raises: [].}
 
 proc wgpuDeviceCreateComputePipeline*(device: WGPUDevice,
                                        desc: ptr WGPUComputePipelineDescriptor): WGPUComputePipeline
-  {.importc: "wgpuDeviceCreateComputePipeline", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceCreateComputePipeline", dynlib: libWgpu, raises: [].}
 
 # --- Buffers ---
 proc wgpuDeviceCreateBuffer*(device: WGPUDevice,
                               desc: ptr WGPUBufferDescriptor): WGPUBuffer
-  {.importc: "wgpuDeviceCreateBuffer", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceCreateBuffer", dynlib: libWgpu, raises: [].}
 
 
 # --- Bind groups ---
 proc wgpuDeviceCreateBindGroupLayout*(device: WGPUDevice,
                                        desc: ptr WGPUBindGroupLayoutDescriptor): WGPUBindGroupLayout
-  {.importc: "wgpuDeviceCreateBindGroupLayout", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceCreateBindGroupLayout", dynlib: libWgpu, raises: [].}
 
 proc wgpuDeviceCreatePipelineLayout*(device: WGPUDevice,
                                       desc: ptr WGPUPipelineLayoutDescriptor): WGPUPipelineLayout
-  {.importc: "wgpuDeviceCreatePipelineLayout", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceCreatePipelineLayout", dynlib: libWgpu, raises: [].}
 
 proc wgpuDeviceCreateBindGroup*(device: WGPUDevice,
                                  desc: ptr WGPUBindGroupDescriptor): WGPUBindGroup
-  {.importc: "wgpuDeviceCreateBindGroup", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceCreateBindGroup", dynlib: libWgpu, raises: [].}
 
 # --- Command recording ---
 proc wgpuDeviceCreateCommandEncoder*(device: WGPUDevice,
                                       desc: ptr WGPUCommandEncoderDescriptor): WGPUCommandEncoder
-  {.importc: "wgpuDeviceCreateCommandEncoder", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceCreateCommandEncoder", dynlib: libWgpu, raises: [].}
 
 proc wgpuCommandEncoderBeginComputePass*(encoder: WGPUCommandEncoder,
                                           desc: ptr WGPUComputePassDescriptor): WGPUComputePassEncoder
-  {.importc: "wgpuCommandEncoderBeginComputePass", dynlib: libWgpu.}
+  {.importc: "wgpuCommandEncoderBeginComputePass", dynlib: libWgpu, raises: [].}
 
 proc wgpuComputePassEncoderSetPipeline*(encoder: WGPUComputePassEncoder,
                                          pipeline: WGPUComputePipeline)
-  {.importc: "wgpuComputePassEncoderSetPipeline", dynlib: libWgpu.}
+  {.importc: "wgpuComputePassEncoderSetPipeline", dynlib: libWgpu, raises: [].}
 
 proc wgpuComputePassEncoderSetBindGroup*(encoder: WGPUComputePassEncoder,
                                           groupIndex: cuint,
                                           group: WGPUBindGroup,
                                           dynamicOffsetCount: csize_t,
                                           dynamicOffsets: pointer)
-  {.importc: "wgpuComputePassEncoderSetBindGroup", dynlib: libWgpu.}
+  {.importc: "wgpuComputePassEncoderSetBindGroup", dynlib: libWgpu, raises: [].}
 
 proc wgpuComputePassEncoderDispatchWorkgroups*(encoder: WGPUComputePassEncoder,
                                                 x: cuint, y: cuint, z: cuint)
-  {.importc: "wgpuComputePassEncoderDispatchWorkgroups", dynlib: libWgpu.}
+  {.importc: "wgpuComputePassEncoderDispatchWorkgroups", dynlib: libWgpu, raises: [].}
 
 proc wgpuComputePassEncoderEnd*(encoder: WGPUComputePassEncoder)
-  {.importc: "wgpuComputePassEncoderEnd", dynlib: libWgpu.}
+  {.importc: "wgpuComputePassEncoderEnd", dynlib: libWgpu, raises: [].}
 
 proc wgpuComputePassEncoderRelease*(encoder: WGPUComputePassEncoder)
-  {.importc: "wgpuComputePassEncoderRelease", dynlib: libWgpu.}
+  {.importc: "wgpuComputePassEncoderRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuCommandEncoderFinish*(encoder: WGPUCommandEncoder,
                                 desc: ptr WGPUCommandBufferDescriptor): WGPUCommandBuffer
-  {.importc: "wgpuCommandEncoderFinish", dynlib: libWgpu.}
+  {.importc: "wgpuCommandEncoderFinish", dynlib: libWgpu, raises: [].}
 
 # --- Queue submission ---
 
 proc wgpuQueueSubmit*(queue: WGPUQueue,
                        commandCount: csize_t,
                        commands: ptr WGPUCommandBuffer)
-  {.importc: "wgpuQueueSubmit", dynlib: libWgpu.}
+  {.importc: "wgpuQueueSubmit", dynlib: libWgpu, raises: [].}
 
 # --- Buffer mapping ---
 proc wgpuQueueWriteBuffer*(
     queue: WGPUQueue,
     buffer: WGPUBuffer,
     offset: uint64,
-    data: pointer,
-    size: csize_t)
-  {.importc: "wgpuQueueWriteBuffer", dynlib: libWgpu.}
+    data: openArray[byte])
+  {.wrapOpenArrayLenType: csize_t, importc: "wgpuQueueWriteBuffer", dynlib: libWgpu, raises: [].}
 
 proc wgpuBufferMapAsync*(
     buffer: WGPUBuffer,
@@ -470,15 +470,15 @@ proc wgpuBufferMapAsync*(
     offset: csize_t,
     size: csize_t,
     callbackInfo: WGPUBufferMapCallbackInfo): WGPUFuture
-  {.importc: "wgpuBufferMapAsync", dynlib: libWgpu.}
+  {.importc: "wgpuBufferMapAsync", dynlib: libWgpu, raises: [].}
 
 proc wgpuBufferGetMappedRange*(buffer: WGPUBuffer,
                                       offset: csize_t,
                                       size: csize_t): pointer
-  {.importc: "wgpuBufferGetMappedRange", dynlib: libWgpu.}
+  {.importc: "wgpuBufferGetMappedRange", dynlib: libWgpu, raises: [].}
 
 proc wgpuBufferUnmap*(buffer: WGPUBuffer)
-  {.importc: "wgpuBufferUnmap", dynlib: libWgpu.}
+  {.importc: "wgpuBufferUnmap", dynlib: libWgpu, raises: [].}
 
 # --- Compilation diagnostics ---
 type
@@ -501,13 +501,13 @@ type
 
 proc wgpuShaderModuleGetCompilationInfo*(module: WGPUShaderModule;
     callback: WGPUCompilationInfoCallback; userdata: pointer)
-  {.importc: "wgpuShaderModuleGetCompilationInfo", dynlib: libWgpu.}
+  {.importc: "wgpuShaderModuleGetCompilationInfo", dynlib: libWgpu, raises: [].}
 
 # --- Polling ---
 proc wgpuDevicePoll*(device: WGPUDevice,
                       wait: bool,
                       submissionIndex: ptr uint64): bool
-  {.importc: "wgpuDevicePoll", dynlib: libWgpu.}
+  {.importc: "wgpuDevicePoll", dynlib: libWgpu, raises: [].}
 
 proc wgpuCommandEncoderCopyBufferToBuffer*(
     encoder: WGPUCommandEncoder,
@@ -516,41 +516,41 @@ proc wgpuCommandEncoderCopyBufferToBuffer*(
     destination: WGPUBuffer,
     destinationOffset: csize_t,
     size: csize_t)
-  {.importc: "wgpuCommandEncoderCopyBufferToBuffer", dynlib: libWgpu.}
+  {.importc: "wgpuCommandEncoderCopyBufferToBuffer", dynlib: libWgpu, raises: [].}
 
 # --- Destructors ---
 proc wgpuInstanceRelease*(instance: WGPUInstance)
-  {.importc: "wgpuInstanceRelease", dynlib: libWgpu.}
+  {.importc: "wgpuInstanceRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuAdapterRelease*(adapter: WGPUAdapter)
-  {.importc: "wgpuAdapterRelease", dynlib: libWgpu.}
+  {.importc: "wgpuAdapterRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuDeviceRelease*(device: WGPUDevice)
-  {.importc: "wgpuDeviceRelease", dynlib: libWgpu.}
+  {.importc: "wgpuDeviceRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuShaderModuleRelease*(module: WGPUShaderModule)
-  {.importc: "wgpuShaderModuleRelease", dynlib: libWgpu.}
+  {.importc: "wgpuShaderModuleRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuComputePipelineRelease*(pipeline: WGPUComputePipeline)
-  {.importc: "wgpuComputePipelineRelease", dynlib: libWgpu.}
+  {.importc: "wgpuComputePipelineRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuBindGroupLayoutRelease*(layout: WGPUBindGroupLayout)
-  {.importc: "wgpuBindGroupLayoutRelease", dynlib: libWgpu.}
+  {.importc: "wgpuBindGroupLayoutRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuPipelineLayoutRelease*(layout: WGPUPipelineLayout)
-  {.importc: "wgpuPipelineLayoutRelease", dynlib: libWgpu.}
+  {.importc: "wgpuPipelineLayoutRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuBindGroupRelease*(group: WGPUBindGroup)
-  {.importc: "wgpuBindGroupRelease", dynlib: libWgpu.}
+  {.importc: "wgpuBindGroupRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuCommandEncoderRelease*(encoder: WGPUCommandEncoder)
-  {.importc: "wgpuCommandEncoderRelease", dynlib: libWgpu.}
+  {.importc: "wgpuCommandEncoderRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuCommandBufferRelease*(cmdBuf: WGPUCommandBuffer)
-  {.importc: "wgpuCommandBufferRelease", dynlib: libWgpu.}
+  {.importc: "wgpuCommandBufferRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuBufferRelease*(buf: WGPUBuffer)
-  {.importc: "wgpuBufferRelease", dynlib: libWgpu.}
+  {.importc: "wgpuBufferRelease", dynlib: libWgpu, raises: [].}
 
 proc wgpuBufferGetSize*(buf: WGPUBuffer): uint64
-  {.importc: "wgpuBufferGetSize", dynlib: libWgpu.}
+  {.importc: "wgpuBufferGetSize", dynlib: libWgpu, raises: [].}

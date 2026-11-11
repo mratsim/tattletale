@@ -761,8 +761,8 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       # a pointer-typed local, its value is the pointee variable's address
       return fn.ptrTargets[e.name]
     if fn.addrParams.hasKey(e.name):
-      let t = ctx.resolveExprType(fn, e)
-      return ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(t)), fn.addrParams[e.name])
+      # A by-ref parameter is the pointer itself, deref sites load the pointee
+      return fn.addrParams[e.name]
     raiseAssert("unknown symbol " & e.name & " in " & fn.name)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let opTy = e.opType
@@ -995,6 +995,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     # a pointer-typed local: the access chain runs on the variable directly
     var rootVar = 0'u32
     var memberIdxs: seq[int]
+    var atIdxs: seq[uint32]
     var chainOk = true
     var walk = e.atBase
     while chainOk:
@@ -1014,6 +1015,9 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
         if walk.derefOperand.kind == eSym and fn.ptrTargets.hasKey(walk.derefOperand.name):
           rootVar = fn.ptrTargets[walk.derefOperand.name]
           break
+        if walk.derefOperand.kind == eSym and fn.addrParams.hasKey(walk.derefOperand.name):
+          rootVar = fn.addrParams[walk.derefOperand.name]
+          break
         chainOk = false
       of eDot:
         let innerTy = ctx.resolveExprType(fn, walk.dotBase)
@@ -1026,6 +1030,12 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
           break
         memberIdxs.insert(mi, 0)
         walk = walk.dotBase
+      of eAt:
+        # nested indexing: the index joins the access chain and the walk continues below it
+        let iVal = ctx.emitExpr(fn, walk.atIndex)
+        let iInt = ctx.convertValue(iVal, ctx.resolveExprType(fn, walk.atIndex), cirInt32())
+        atIdxs.insert(iInt, 0)
+        walk = walk.atBase
       else:
         chainOk = false
     let arrTy = ctx.resolveExprType(fn, e.atBase)
@@ -1037,6 +1047,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       var idxs: seq[uint32]
       for mi in memberIdxs:
         idxs.add ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(mi))
+      idxs.add atIdxs
       idxs.add idxInt
       let ptrId = ctx.builder.opAccessChain(elemPtrTy, rootVar, idxs)
       result = (ptrId, arrTy.aElem, false, false)
@@ -1337,6 +1348,8 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
     if p.typ.kind == ctPtr:
       # a var parameter: the caller passes the address of a local
       paramTyIds.add ctx.builder.tyPointer(scFunction, ctx.resolveTyId(ctx.valueTy(p.typ.pElem)))
+    elif p.passByRef:
+      paramTyIds.add ctx.builder.tyPointer(scFunction, ctx.resolveTyId(ctx.valueTy(p.typ)))
     else:
       paramTyIds.add ctx.resolveTyId(ctx.valueTy(p.typ))
   let fnTy = ctx.builder.tyFunction(retTyId, paramTyIds)
@@ -1348,6 +1361,9 @@ proc emitDeviceFn(ctx: var SpvLangCtx, procNode: CirProc): uint32 =
     if p.typ.kind == ctPtr:
       fn.addrParams[p.name] = pid
       fn.addrPointee[p.name] = p.typ.pElem
+    elif p.passByRef:
+      fn.addrParams[p.name] = pid
+      fn.addrPointee[p.name] = p.typ
     else:
       fn.params[p.name] = pid
   discard ctx.builder.opLabel()

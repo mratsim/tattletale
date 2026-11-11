@@ -25,6 +25,7 @@ import ./passes/passes_lowering_msl
 import ./passes/passes_lowering_opencl
 import ./passes/passes_lowering_cfamily
 import ./passes/analysis_hlsl
+import ./passes/analysis_passbyref
 import ./passes/analysis_module_requirements
 import ./passes/passes_validations
 import ./passes/passes_low_reserved
@@ -71,6 +72,7 @@ proc registerGpuPasses*(reg: var PassRegistry, B: CodegenKind) {.compileTime.} =
   of cgCuda:
     reg.registerRenameReservedIdentifiers("cudaReservedIdentifiers", CudaReserved)
     registerDecomposeArrayAssign(reg)
+    reg.registerTagPassByRef("cudaTagPassByRef", minStructSize = 24, tagAllArrays = false)
     registerSmemInitRewrite(reg)
     registerInstantiateAddressSpaceGenerics(reg)
     registerCudaFeatureScan(reg)
@@ -81,7 +83,8 @@ proc registerGpuPasses*(reg: var PassRegistry, B: CodegenKind) {.compileTime.} =
     registerExplodeStructWithPtrFields(reg)
     registerSmemInitRewrite(reg)
     registerOpenclHoistProgramScopeConstants(reg)
-    registerOpenclLowerByrefParams(reg)
+    reg.registerTagPassByRef("openclTagPassByRef", minStructSize = 24, tagAllArrays = false)
+    registerLowerByrefParams(reg)
     registerInstantiateAddressSpaceGenerics(reg)
     registerOpenclFeatureScan(reg)
     registerValidationPostPasses(reg)
@@ -95,6 +98,8 @@ proc registerGpuPasses*(reg: var PassRegistry, B: CodegenKind) {.compileTime.} =
     registerGlslFeatureScan(reg)
     registerValidationPostPasses(reg)
   of cgSpirv:
+    reg.registerTagPassByRef("spirvTagPassByRef", minStructSize = 24, tagAllArrays = true)
+    registerLowerByrefParams(reg)
     registerValidationPostPasses(reg)
   of cgWebGPU:
     registerFoldMaxMinToBuiltins(reg)

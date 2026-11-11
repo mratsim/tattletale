@@ -214,9 +214,58 @@ OF_SUFFIX_DECL_RE = re.compile(
 # The inbounds-call-syntax rule. Plain call sites of inBounds, the house
 # convention is the method call coord.inBounds(shape). Definitions and
 # the inBoundsImpl internals never match, the name boundary is exact.
+# The isNil rule. Nil checks read on their receiver with method call
+# syntax and parens: x.isNil(). The bare postfix hides the call,
+# declarations never match, the name boundary is exact.
+ISNIL_BARE_RE = re.compile(r"\.\s*isNil(?![\w(])")
+ISNIL_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+isNil\*?\s*[\(\[=,:]")
+
+# The randomSeq/randomTensor rule. Random data draws from the rng:
+# rng.randomSeq(...), rng.randomTensor(...). The rng-first plain call
+# hides the receiver, declarations never match, the name boundary is
+# exact.
+RANDOM_PLAIN_CALL_RE = re.compile(r"(?<![.\w])random(?:Seq|Tensor)\s*\(")
+RANDOM_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+random(?:Seq|Tensor)\*?\s*[\(\[=,:]")
+
+# The allClose rule. Approximate equality reads on the tested tensor:
+# tested.allClose(reference). The tested-first plain call hides the
+# receiver, declarations never match, the name boundary is exact.
+ALLCLOSE_PLAIN_CALL_RE = re.compile(r"(?<![.\w])allClose\s*\(")
+ALLCLOSE_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+allClose\*?\s*[\(\[=,:]")
+
+# The toTensor rule. Construction reads on the data: data.toTensor(shape).
+# The data-first plain call hides the receiver, declarations never match,
+# the name boundary is exact.
+TOTENSOR_PLAIN_CALL_RE = re.compile(r"(?<![.\w])toTensor\s*\(")
+TOTENSOR_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+toTensor\*?\s*[\(\[=,:]")
+
+# The bridge rule. The erased crossing reads on the impl with method
+# call syntax and parens: impl.bridge(). The plain call and the bare
+# postfix hide the crossing, declarations never match, the name
+# boundary is exact.
+BRIDGE_PLAIN_CALL_RE = re.compile(r"(?<![.\w])bridge\s*\(")
+BRIDGE_BARE_RE = re.compile(r"\.\s*bridge(?![\w(])")
+BRIDGE_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+bridge\*?\s*[\(\[=,:]")
+
 INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
+
+# The engine-ufcs rule, tensorcery only. The engine leads every tensorcery
+# call in the house spelling engine.evalNode(batch, n); the plain call
+# evalNode(engine, ...) hides the receiver. Bracketed calls stay plain,
+# Nim's method call syntax cannot carry explicit generic arguments
+# (e.f[T](y) misparses as field indexing). Declarations never match, the
+# first argument must be the bare engine followed by a comma or paren.
+ENGINE_UFCS_PLAIN_CALL_RE = re.compile(
+    r"(?<![.\w])([A-Za-z_]\w*)\s*\(\s*engine\s*[,)]")
+CALLABLE_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator|converter|method)\s+\w+\*?")
 
 # The reduction-call-syntax rule. Tile axis reductions read on their source:
 # qk.max(dst, axis = 1, map). A plain dst-first call hides which operand
@@ -440,6 +489,9 @@ BANNED = [
            "(the schema before X, absent keys, the pre-005 frames)"),
     (r"\brows?\b",
      None, "'row' says nothing, state the section, the entry, the mapping or the line"),
+    (r"\bface\b",
+     lambda l: bool(re.search(r"interface|typeface", l)),
+     "'face' says nothing, name the surface: the public API, the operator set, the entry point"),
     (r"\bpin\b|\bpins\b|\bpinned\b|\bpinning\b",
      None, "use verified against, checked by, locked"),
     (r"\bgate\b|\bgates\b|\bgating\b",
@@ -672,6 +724,18 @@ RULES = {
                            "a proc, func or template name ending in Of, name the thing directly"),
     "inbounds-call-syntax": Rule("inbounds-call-syntax", True,
                                 "a plain call of inBounds, use method call syntax coord.inBounds(shape)"),
+    "isnil-call-syntax": Rule("isnil-call-syntax", True,
+                              "a bare isNil postfix, use the method call syntax x.isNil()"),
+    "totensor-call-syntax": Rule("totensor-call-syntax", True,
+                                 "a data-first toTensor call, use the method call syntax data.toTensor(shape)"),
+    "bridge-call-syntax": Rule("bridge-call-syntax", True,
+                               "a plain or bare bridge call, use the method call syntax impl.bridge()"),
+    "allclose-call-syntax": Rule("allclose-call-syntax", True,
+                                 "a tested-first allClose call, use the method call syntax tested.allClose(reference)"),
+    "random-call-syntax": Rule("random-call-syntax", True,
+                               "an rng-first randomSeq or randomTensor call, use the method call syntax rng.randomSeq(...)"),
+    "engine-ufcs": Rule("engine-ufcs", True,
+                        "an engine-first call in plain syntax, use engine.name(...) method call syntax"),
     "reduction-call-syntax": Rule("reduction-call-syntax", True,
                                   "a tile axis reduction in plain dst-first call syntax or with a positional axis, use src.max(dst, axis = <axis>, map)"),
     "dump-identifier": Rule("dump-identifier", True,
@@ -687,6 +751,8 @@ RULES = {
                               "hand-built IR construction in a tests/codegen or tests/runtime Nim file, the test dies on every IR change; drive the public API or the verifier under tests/verify"),
     "method-call-syntax": Rule("method-call-syntax", True,
                                "a tile_algebra view method written in dst-first free-call syntax, the receiver is the first argument, write receiver.method(...)"),
+    "generic-param-derivation": Rule("generic-param-derivation", True,
+                                     "a generic param appears in no parameter of the routine, a caller cannot derive it, pass it as a parameter (typedesc or static formal) or derive it from one"),
     "stmt-inline": Rule("stmt-inline", True,
                         "a statement keyword carries its body on the same line, one statement per line"),
     "registration-top": Rule("registration-top", True,
@@ -1784,6 +1850,79 @@ def _type_has_field_docs(lines, decl_idx):
     return False
 
 
+
+# The generic-param-derivation rule. A generic param of a routine must be
+# derivable from a call argument: it appears in a formal's type, or it is
+# itself a typedesc or static formal. A param appearing in no parameter
+# leaves the caller nothing to derive it from; the erased layers made this
+# the recurring failure (typedesc threading that no call site could spell).
+GENERIC_DECL_RE = re.compile(
+    r"^\s*(?:proc|func|template|macro|iterator|converter)\s+`?([A-Za-z_][\w.]*)`?\*?\s*\[")
+
+def match_delim(text, open_idx, open_c, close_c):
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == open_c:
+            depth += 1
+        elif text[i] == close_c:
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+def nim_generic_param_checks(path, text, findings):
+    lines = text.split("\n")
+    n = 0
+    while n < len(lines):
+        m = GENERIC_DECL_RE.match(lines[n])
+        if not m:
+            n += 1
+            continue
+        decl_line = n + 1
+        name = m.group(1)
+        # accumulate lines until both the generic bracket and the formal parens close
+        k = n
+        while k + 1 < len(lines) and k < n + 24:
+            joined = "\n".join(lines[n:k + 1])
+            gb = joined.find("[")
+            ge = match_delim(joined, gb, "[", "]") if gb >= 0 else -1
+            pb = joined.find("(", ge + 1) if ge >= 0 else joined.find("(")
+            pe = match_delim(joined, pb, "(", ")") if pb >= 0 else -1
+            if ge >= 0 and (pe >= 0 or pb < 0):
+                break
+            k += 1
+        joined = "\n".join(lines[n:k + 1])
+        gb = joined.find("[")
+        ge = match_delim(joined, gb, "[", "]")
+        pb = joined.find("(", ge + 1)
+        pe = match_delim(joined, pb, "(", ")") if pb >= 0 else -1
+        gen_list = joined[gb + 1:ge]
+        formals = joined[pb + 1:pe] if pb >= 0 and pe > pb else ""
+        # top-level split on both group separators, bracket-aware
+        parts, depth, cur = [], 0, ""
+        for c in gen_list:
+            if c in "[(":
+                depth += 1
+            elif c in "])":
+                depth -= 1
+            if c in ",;" and depth == 0:
+                parts.append(cur)
+                cur = ""
+            else:
+                cur += c
+        if cur.strip():
+            parts.append(cur)
+        for item in parts:
+            pm = re.match(r"\s*`?([A-Za-z_]\w*)`?", item)
+            if not pm:
+                continue
+            gp = pm.group(1)
+            if not re.search(r"(?<![\w`])" + re.escape(gp) + r"(?![\w`])", formals):
+                findings.append(Finding(
+                    path, decl_line, "generic-param-derivation",
+                    f"generic param `{gp}` of `{name}` appears in no parameter"))
+        n = k + 1
+
 def check_doc_above_type(path, text, findings):
     """Fires the doc-above-type rule on a ## block placed directly above a type declaration.
 
@@ -1848,12 +1987,16 @@ SIG_WRAP_MAX = 140
 def nim_sig_wrap_checks(path, text, findings):
     """Flags a callable signature (proc, func, macro, template, iterator,
     converter) wrapped across lines while the joined single-line form fits
-    the 100-column code budget. Only the comma-join shape counts, a first
-    line ending on a comma and continuations that complete the parameter
-    list; a signature too long to join stays legal."""
+    the 140-column budget. Two wrap shapes count: a first line ending on a
+    comma, and a first line ending on the generic bracket plus open paren
+    `](`; continuations must complete the parameter list. A signature too
+    long to join stays legal."""
     lines = text.splitlines()
     for i, raw in enumerate(lines):
-        if not SIG_HEAD_RE.match(raw) or not raw.rstrip().endswith(","):
+        stripped = raw.rstrip()
+        if not SIG_HEAD_RE.match(raw):
+            continue
+        if not (stripped.endswith(",") or stripped.endswith("](")):
             continue
         parts = [raw.strip()]
         j = i + 1
@@ -1862,9 +2005,13 @@ def nim_sig_wrap_checks(path, text, findings):
             if not seg:
                 break
             parts.append(seg)
-            if not seg.endswith(","):
-                break
-            j += 1
+            if seg.endswith(","):
+                j += 1
+                continue
+            if ")" not in seg and "=" not in seg:
+                j += 1
+                continue
+            break
         if len(parts) < 2 or parts[-1].endswith(","):
             continue
         joined = " ".join(p for seg in parts for p in seg.split())
@@ -2033,6 +2180,44 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "inbounds-call-syntax",
                         "inBounds in plain call syntax, use the method call "
                         "coord.inBounds(shape)"))
+                if ISNIL_BARE_RE.search(code) \
+                        and not ISNIL_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "isnil-call-syntax",
+                        "bare isNil postfix, use the method call syntax "
+                        "x.isNil()"))
+                if TOTENSOR_PLAIN_CALL_RE.search(code) \
+                        and not TOTENSOR_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "totensor-call-syntax",
+                        "data-first toTensor call, use the method call "
+                        "syntax data.toTensor(shape)"))
+                if (BRIDGE_PLAIN_CALL_RE.search(code) or BRIDGE_BARE_RE.search(code)) \
+                        and not BRIDGE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "bridge-call-syntax",
+                        "plain or bare bridge call, use the method call "
+                        "syntax impl.bridge()"))
+                if ALLCLOSE_PLAIN_CALL_RE.search(code) \
+                        and not ALLCLOSE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "allclose-call-syntax",
+                        "tested-first allClose call, use the method call "
+                        "syntax tested.allClose(reference)"))
+                if RANDOM_PLAIN_CALL_RE.search(code) \
+                        and not RANDOM_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "random-call-syntax",
+                        "rng-first randomSeq or randomTensor call, use the "
+                        "method call syntax rng.randomSeq(...)"))
+                if any("tensorcery" in part for part in path.parts) \
+                        and ENGINE_UFCS_PLAIN_CALL_RE.search(code) \
+                        and not CALLABLE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "engine-ufcs",
+                        "engine-first call in plain syntax, use the method "
+                        "call engine.%s(...)"
+                        % ENGINE_UFCS_PLAIN_CALL_RE.search(code).group(1)))
                 if REDUCE_PLAIN_CALL_RE.search(code) \
                         and not REDUCE_DECL_RE.match(code):
                     findings.append(Finding(
@@ -2791,174 +2976,6 @@ def refusal_slop_files(entries, base=None, added_cache=None):
 # - expected: (relpath, line, rule, warning) rows, sorted comparison
 # - convicted specimens must fire their rules
 # - honest one-liners must stay clean
-REFUSAL_SELFTEST_CASES = (
-    ("hlsl 64-bit essay (classifyParams specimen)", (
-        ("src/codegen/backends/hlsl_demo.nim", '''proc classifyDemo(ctx: var PrintCtx, fn: CirProc, p: CirParam) =
-  if p.typ.bits != 32:
-    ctx.fail("64-bit integer parameter " & p.name & " in `" & fn.name &
-      "` is rejected: int64_t is a parse error in the HLSL frontend and" &
-      " uint64_t pulls the SPIR-V Int64 capability")
-'''),
-    ), (
-        ("src/codegen/backends/hlsl_demo.nim", 3, "one-line-refusal", False),
-        ("src/codegen/backends/hlsl_demo.nim", 3, "refusal-essay", False),
-    )),
-    ("wgsl ptr-struct two-line message specimen", (
-        ("src/codegen/backends/wgsl_demo.nim", '''proc printDemo(ctx: var PrintCtx, e: CirExpr) =
-  if e.name notin ctx.paramNames:
-    ctx.fail("pointer local " & e.name & " used as a value, WGSL has no" &
-      " pointer values, the WGSL lowering pass rewrites pointer locals to their pointees")
-'''),
-    ), (
-        ("src/codegen/backends/wgsl_demo.nim", 3, "one-line-refusal", False),
-        ("src/codegen/backends/wgsl_demo.nim", 3, "refusal-essay", False),
-    )),
-    ("smem multi-line refusal specimen", (
-        ("src/codegen/backends/cuda_demo.nim", '''proc printVarDemo(ctx: var PrintCtx, s: CirVar) =
-  if s.init != nil:
-    ctx.fail("smem local " & s.name & " with an initializer, CUDA C++ forbids" &
-      " initializing __shared__ variables")
-'''),
-    ), (
-        ("src/codegen/backends/cuda_demo.nim", 3, "one-line-refusal", False),
-    )),
-    ("duplicate coverage across two printers", (
-        ("src/codegen/backends/glsl_barrier_demo.nim", '''proc printBuiltinDemo(ctx: var PrintCtx, e: CirExpr) =
-  ctx.fail("barrier is a statement, a value-position barrier is outside the GLSL subset")
-'''),
-        ("src/codegen/backends/wgsl_barrier_demo.nim", '''proc printBuiltinDemo(ctx: var PrintCtx, e: CirExpr) =
-  ctx.fail("barrier is a statement, a value-position barrier is outside the WGSL subset")
-'''),
-    ), (
-        ("src/codegen/backends/glsl_barrier_demo.nim", 2,
-         "duplicate-refusal-coverage", False),
-        ("src/codegen/backends/wgsl_barrier_demo.nim", 2,
-         "duplicate-refusal-coverage", False),
-    )),
-    ("genTargets row literal duplicate", (
-        ("src/codegen/backends/targets_rows_demo.nim", '''target demo:
-  bitcast:
-    rule srcKinds {ctFloat}, dstKinds {ctInt}, sameWidth, refusal "bit cast of a 64-bit float has no emission, only the 32-bit builtins"
-    rule srcKinds {ctInt}, dstKinds {ctFloat}, sameWidth, refusal "bit cast to a 64-bit float has no emission, only the 32-bit builtins"
-'''),
-    ), (
-        ("src/codegen/backends/targets_rows_demo.nim", 3,
-         "duplicate-refusal-coverage", False),
-        ("src/codegen/backends/targets_rows_demo.nim", 4,
-         "duplicate-refusal-coverage", False),
-    )),
-    ("density hard violation, six refusals, no doc", (
-        ("src/codegen/backends/dense_demo.nim", '''proc denseDemo(ctx: var PrintCtx, p: CirParam) =
-  case p.typ.kind
-  of ctInt:
-    ctx.fail("int parameter " & p.name & " has no form one")
-  of ctUint:
-    ctx.fail("uint parameter " & p.name & " has no form two")
-  of ctFloat:
-    ctx.fail("float parameter " & p.name & " has no form three")
-  of ctBool:
-    ctx.fail("bool parameter " & p.name & " has no form four")
-  of ctVector:
-    ctx.fail("vector parameter " & p.name & " has no form five")
-  else:
-    ctx.fail("parameter " & p.name & " has no form six")
-'''),
-    ), (
-        ("src/codegen/backends/dense_demo.nim", 1, "refusal-density", False),
-    )),
-    ("density validator carve-out (targets_macros parse proc)", (
-        ("src/codegen/backends/targets_macros.nim", '''proc parseDemoRows(node: NimNode, display: string) =
-  for entry in node:
-    if entry.kind != nnkBracket:
-      error("genTargets: expected a row in " & display)
-    if entry[0].kind != nnkStrLit:
-      error("genTargets: expected a name in " & display)
-    if entry[1].kind != nnkStrLit:
-      error("genTargets: expected a spelling in " & display)
-    if entry[2].kind != nnkIntLit:
-      error("genTargets: expected a width in " & display)
-    if entry.len < 4:
-      error("genTargets: expected a kind in " & display)
-    if entry.len > 5:
-      error("genTargets: unexpected trailing entries in " & display)
-'''),
-    ), (
-        ("src/codegen/backends/targets_macros.nim", 1, "refusal-density", True),
-    )),
-    ("density one-liner doc carve-out", (
-        ("src/codegen/backends/doc_demo.nim", '''proc checkDemoTypes(ctx: var PrintCtx, t: CirType) =
-  ## Validates the scalar kinds the target prints, one refusal per kind.
-  case t.kind
-  of ctInt:
-    ctx.fail("int has no form one")
-  of ctUint:
-    ctx.fail("uint has no form two")
-  of ctFloat:
-    ctx.fail("float has no form three")
-  of ctBool:
-    ctx.fail("bool has no form four")
-  of ctVector:
-    ctx.fail("vector has no form five")
-  else:
-    ctx.fail("kind has no form six")
-'''),
-    ), (
-        ("src/codegen/backends/doc_demo.nim", 1, "refusal-density", True),
-    )),
-    ("honest one-liners stay clean", (
-        ("src/codegen/backends/ok_demo.nim", '''proc okDemo(ctx: var PrintCtx, p: CirParam, fn: CirProc, t: CirType) =
-  if t.bits == 64:
-    ctx.fail("f64 unsupported")
-  if t.bits == 32:
-    ctx.fail("wgsl: no f64 — wgpu-native cannot request shader-f64")
-  ctx.fail("procedure parameter " & p.name & " in `" & fn.name & "` has no binding")
-  ctx.fail("buffer parameter " & p.name & " in " & $p.typ.space & " space, buffers address device memory")
-'''),
-    ), (
-    )),
-    ("essay marker fires on a one-liner", (
-        ("src/codegen/backends/marker_demo.nim", '''proc markerDemo(ctx: var PrintCtx, lit: CirLit) =
-  ctx.fail("the u64 literal is not accepted here because the WGSL lexer has no form for it")
-'''),
-    ), (
-        ("src/codegen/backends/marker_demo.nim", 2, "refusal-essay", False),
-    )),
-)
-
-
-def refusal_selftest(quiet=False):
-    """Runs the refusal-slop fixtures through refusal_slop_files and prints
-    one PASS or FAIL line per case unless quiet.
-
-    Returns the failed case count, 0 means every convicted specimen fires
-    its rules and every honest one-liner stays clean.
-    """
-    failed = 0
-    for name, files, expected in REFUSAL_SELFTEST_CASES:
-        got = refusal_slop_files([(Path(p), t) for p, t in files])
-        rows = sorted((str(f.path), f.line, f.rule, f.warning) for f in got)
-        want = sorted(expected)
-        if rows == want:
-            if not quiet:
-                print("PASS %s" % name)
-        else:
-            failed += 1
-            if not quiet:
-                print("FAIL %s" % name)
-                for row in want:
-                    print("  expected %s" % (row,))
-                for row in rows:
-                    print("  got      %s" % (row,))
-    return failed
-
-
-# Agent-verb slop rule: agent-verb
-# A comment may not give agency to a non-agent. A type, a value, a text, or a
-# name never refuses, keeps, stays, pairs, travels, carries, takes, meets, or names no X. The subject
-# of the verb is the code that acts (the pass, the printer, the compiler) or
-# the specification that rules (the spec, the row, the table). A file, a row,
-# a module, or a doc never states its contents: a file declares or contains,
-# a row lists, an invocation carries.
 AGENT_VERB_RE = re.compile(
     r"\b(refuses?|kept|keeps?|stays?|pairs|travels?|carries|names no|states|takes?|meets)\b")
 
@@ -3105,151 +3122,6 @@ def _agent_verb_hit(comment):
     return None
 
 
-AGENT_VERB_SELFTEST_CASES = (
-    ("agent-verb convicted specimens fire", (
-        ("src/codegen/backends/doc_demo.nim", '''## `bfloat16` names no MSL type here, values travel as raw bits.
-## `float16` keeps a first-class `half` identity: its conversions are plain native calls.
-## `flavor` stays untyped so overload resolution never sees the body.
-## an unprovenanced integer names no storage, only the default device.
-## Identity stays the registry's int key.
-## a 16-bit float pair refuses on the printer wiring state.
-## `float16` has no HLSL form, the value emits as its bits.
-## `ternary` states its own type.
-## a builtin takes the vocabulary name.
-## a literal meets the row's refusal.
-## the value carries the fallback bodies.
-'''),
-    ), (
-        ("src/codegen/backends/doc_demo.nim", 1, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 2, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 3, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 4, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 5, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 6, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 8, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 9, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 10, "agent-verb", False),
-        ("src/codegen/backends/doc_demo.nim", 11, "agent-verb", False),
-    )),
-    ("agent-verb honest agents and specifications stay clean", (
-        ("src/codegen/backends/ok_demo.nim", '''## the pass refuses the input.
-## the printer keeps the shape guard on the relocated declarations.
-## the spec keeps f16 out of the MSL surface.
-## the row refuses an omitted cell at the lookup.
-## the table stays at one row per kind.
-## the value is passed as raw bits.
-## retains a guard, a guard remains.
-## no MSL type exists for bfloat16, the value emits as raw bits.
-## `mslRewriteSmemLocals`, which keeps the kernel-owned arenas in-body.
-## the walk keeps going and the printer returns the recorded message.
-## the kept locals use the renamed names their body already references.
-## the compiler state stays consistent across runs.
-## the spec states the contract once.
-'''),
-    ), (
-    )),
-    ("agent-verb states class convicts the content carriers", (
-        ("src/codegen/backends/states_demo.nim", '''## a scalar row states any subset of the cells.
-## one invocation states every target's rows.
-## `targets_registry.nim` states every family of all six targets.
-## the doc states the field order.
-'''),
-    ), (
-        ("src/codegen/backends/states_demo.nim", 1, "agent-verb", False),
-        ("src/codegen/backends/states_demo.nim", 2, "agent-verb", False),
-        ("src/codegen/backends/states_demo.nim", 3, "agent-verb", False),
-        ("src/codegen/backends/states_demo.nim", 4, "agent-verb", False),
-    )),
-    ("agent-verb trailing comments join the scan", (
-        ("src/codegen/backends/trail_demo.nim", '''proc demo() =
-  discard # the value keeps its default
-
-proc demo2() =
-  discard # the pass keeps its default
-'''),
-    ), (
-        ("src/codegen/backends/trail_demo.nim", 2, "agent-verb", False),
-    )),
-)
-
-
-def agent_verb_selftest(quiet=False):
-    """Runs the agent-verb fixtures through agent_verb_slop_files and prints
-    one PASS or FAIL line per case unless quiet.
-
-    Returns the failed case count, 0 means every convicted specimen fires
-    and every honest agent or specification subject stays clean.
-    """
-    failed = 0
-    for name, files, expected in AGENT_VERB_SELFTEST_CASES:
-        got = agent_verb_slop_files([(Path(p), t) for p, t in files])
-        rows = sorted((str(f.path), f.line, f.rule, f.warning) for f in got)
-        want = sorted(expected)
-        if rows == want:
-            if not quiet:
-                print("PASS %s" % name)
-        else:
-            failed += 1
-            if not quiet:
-                print("FAIL %s" % name)
-                for row in want:
-                    print("  expected %s" % (row,))
-                for row in rows:
-                    print("  got      %s" % (row,))
-    return failed
-
-
-BANNED_VOCAB_SELFTEST_CASES = (
-    ("banned-vocab fact convicts (operator ban)", (
-        ("src/codegen/backends/vocab_demo.nim",
-         '## the fact is the width is 32.\n'
-         '## non-derivable facts only.\n'
-         '## this needs no extension.\n'),
-    ), (
-        ("src/codegen/backends/vocab_demo.nim", 1, "banned-vocab", False),
-        ("src/codegen/backends/vocab_demo.nim", 2, "banned-vocab", False),
-        ("src/codegen/backends/vocab_demo.nim", 3, "banned-vocab", False),
-    )),
-    ("banned-vocab bare convicts (operator ban)", (
-        ("src/codegen/backends/vocab_demo2.nim",
-         '## the bare name is the identifier.\n'),
-    ), (
-        ("src/codegen/backends/vocab_demo2.nim", 1, "banned-vocab", False),
-    )),
-)
-
-
-def banned_vocab_selftest(quiet=False):
-    """Runs the banned-vocab fixtures through check_line, one PASS or FAIL
-    line per case unless quiet. Returns the failed case count, 0 means
-    every blocklist word convicts.
-    """
-    failed = 0
-    for name, files, expected in BANNED_VOCAB_SELFTEST_CASES:
-        got = []
-        for path, text in files:
-            lines = text.splitlines()
-            findings = []
-            for no, line in enumerate(lines, 1):
-                check_line(Path(path), no, line, "doc", True,
-                           lines[no - 2] if no > 1 else None, "doc", findings)
-            got += sorted(set((str(f.path), f.line, f.rule, f.warning)
-                          for f in findings if f.rule == "banned-vocab"))
-        want = sorted(expected)
-        if got == want:
-            if not quiet:
-                print("PASS %s" % name)
-        else:
-            failed += 1
-            if not quiet:
-                print("FAIL %s" % name)
-                for row in want:
-                    print("  expected %s" % (row,))
-                for row in got:
-                    print("  got      %s" % (row,))
-    return failed
-
-
 def agent_verb_slop_files(entries, base=None, added_cache=None):
     """Runs the agent-verb rule over the .nim files of one lint run,
     returns the sorted findings.
@@ -3335,6 +3207,7 @@ def scan(path, text, findings):
             nim_method_call_syntax_checks(path, text, findings)
             nim_callable_semicolon_checks(path, text, findings)
             check_doc_above_type(path, text, findings)
+            nim_generic_param_checks(path, text, findings)
             check_license_driveby(path, text, findings)
         if is_py and meta is not None:
             tree = None
@@ -3461,6 +3334,7 @@ def scan(path, text, findings):
                     and prev_prose[0] + 1 == n and c[:1].islower()
                     and not trailing and not prev_prose[3]):
                 prev_txt = re.sub(r"`[^`]*`", " XcodeX ", prev_prose[1].rstrip())
+                prev_txt = _mask_nested_spans(prev_txt)
                 tail = re.split(r"[,;:.]", prev_txt)[-1].strip()
                 wc = len(tail.split())
                 if 0 < wc < 3:
@@ -3471,6 +3345,20 @@ def scan(path, text, findings):
             prev_prose = (n, c, kind, trailing)
         flush_wall(path, run, findings)
         flush_wall_no_air(path, air_run, findings)
+
+
+def _mask_nested_spans(text):
+    """Replaces quoted, bracketed and parenthesized spans with placeholders,
+    their delimiters are not clause boundaries. One nesting level per pass,
+    iterated until stable."""
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(r'"[^"]*"', ' XquotedX ', text)
+        text = re.sub(r'\([^()]*\)', ' XparenX ', text)
+        text = re.sub(r'\[[^\[\]]*\]', ' XbracketX ', text)
+        text = re.sub(r'\{[^{}]*\}', ' XbraceX ', text)
+    return text
 
 
 def _repo_root():
@@ -4379,9 +4267,6 @@ def main(argv):
         base = args[i + 1]
         args = args[:i] + args[i + 2:]
     base = base or os.environ.get("DOC_LINT_BASE") or None
-    if "--selftest-refusal" in args:
-        failed = refusal_selftest() + agent_verb_selftest()
-        return 1 if failed else 0
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]
         if not paths:

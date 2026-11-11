@@ -71,7 +71,7 @@ proc `=destroy`(o: var RetainedMetalObject) =
 
 when defined(macosx):
 
-  proc msgSendUseResource(self: objc.ID, op: objc.SEL, resource: objc.ID, usage: objc.NSUInteger): objc.ID {.importc: "objc_msgSend", dynlib: "libobjc.A.dylib".}
+  proc msgSendUseResource(self: objc.ID, op: objc.SEL, resource: objc.ID, usage: objc.NSUInteger): objc.ID {.importc: "objc_msgSend", dynlib: "libobjc.A.dylib", raises: [].}
 
   proc compileIndirectPipelineState(device, library: objc.ID, entrypoint: string): objc.ID =
     let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"),
@@ -122,7 +122,7 @@ when defined(macosx):
     privateAccess(typeof(engine.cache))
     result = MetalBatch(device: engine.ctx.device, queue: engine.ctx.queue)
     # Engine library cache is a single slot: a re-ingest releases the old library.
-    # Batch construction retains its own reference.
+    # BatchCommands construction retains its own reference.
     result.library = RetainedMetalObject(objc.retain(engine.cache.library))
 
   proc recordGlobalFn*(batch: MetalBatch, entrypoint: string, cfg: LaunchConfig, output: auto, args: tuple) =

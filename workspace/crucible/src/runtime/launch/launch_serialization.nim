@@ -42,6 +42,8 @@ func hasBufferLeaf*[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} 
   ## True when `T` contains a pointer, handle or DeviceMem anywhere
   when T is H or T is DeviceMem or T is ptr or T is pointer:
     true
+  elif T is ref:
+    hasBufferLeaf(typeof(default(T)[]), H)
   elif T is object|tuple:
     for f in fields(default(T)):
       if hasBufferLeaf(typeof(f), H):
@@ -75,6 +77,8 @@ func isBlobPackable[T, H](_: typedesc[T], _: typedesc[H]): bool {.compileTime.} 
     for f in fields(default(T)):
       when typeof(f) is H or typeof(f) is DeviceMem or typeof(f) is ptr or typeof(f) is pointer:
         discard
+      elif typeof(f) is ref:
+        discard
       elif not supportsCopyMem(typeof(f)):
         return false
     result = true
@@ -88,6 +92,11 @@ func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple
   ## contribute zero bytes, Nim int/uint lower to 4 bytes
   when T is DeviceMem:
     result = (8, 8)  # 8 bytes, one device address slot
+  elif T is ref:
+    when typeof(default(T)[]) is DeviceMem:
+      result = (8, 8)  # one device address slot matching the width the packers write
+    else:
+      raiseAssert("[Tattletale-Crucible] unsupported reference type on GPU \'" & $T & "\'.")
   elif T is object|tuple:
     when isStaticArg(T):
       result = (0, 1)
@@ -113,6 +122,8 @@ func countArgs[T, H](_: typedesc[T], _: typedesc[H], backend: static CodegenKind
   ## Device args one launch value delivers
   when T is H or T is DeviceMem or T is ptr or T is pointer:
     1
+  elif T is ref:
+    countArgs(typeof(default(T)[]), H, backend)
   elif T is object|tuple:
     when isStaticArg(T):
       0
@@ -193,6 +204,13 @@ macro serialize(ctx: var auto, pos: var int, v: auto, store: untyped, H: typedes
       else:
         `store`(`ctx`, `v`, `pos`)
       inc `pos`
+    elif typeof(`v`) is ref:
+      when typeof(`v`[]) is DeviceMem:
+        `store`(`ctx`, `v`[].mem, `pos`)
+        inc `pos`
+      else:
+        `store`(`ctx`, `v`, `pos`)
+        inc `pos`
     elif typeof(`v`) is object|tuple:
       when isStaticArg(typeof(`v`)):
         discard

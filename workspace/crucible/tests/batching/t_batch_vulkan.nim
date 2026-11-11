@@ -1,4 +1,4 @@
-## Batch suite, vulkan backend.
+## BatchCommands suite, vulkan backend.
 ##
 ## Test that every batching scenario through the public batch API matches
 ## a `launchDeviceFn` launch of the same kernel.

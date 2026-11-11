@@ -7,6 +7,7 @@
 
 import std/[compilesettings, macros, md5, os, strutils, tables]
 
+import workspace/crucible/src/builtins/builtins
 import workspace/crucible/src/codegen/cpu_compiler
 import workspace/crucible/src/codegen/ir/cirv2_lang
 import workspace/crucible/src/runtime/engines/engines_common
@@ -172,7 +173,7 @@ proc buildCpuKernel(kernel: NimNode, statics, values: NimNode, siteSuffix: strin
     ident($kernel & "_cpuk" & siteSuffix),
     newEmptyNode(), newEmptyNode(),
     params,
-    nnkPragma.newTree(ident"global"),
+    nnkPragma.newTree(bindSym"global"),
     newEmptyNode(),
     nnkStmtList.newTree(kcall))
 

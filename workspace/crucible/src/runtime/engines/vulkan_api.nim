@@ -135,10 +135,13 @@ proc allocDevice*[T](engine: VulkanEngine, _: typedesc[T], len: int): DeviceMem[
   DeviceMem[runVulkan, T](mem: engine.allocDeviceImpl(len * sizeof(T)))
 
 proc copyToDeviceFromHost*[T](engine: VulkanEngine, dst: DeviceMem[runVulkan, T], src: openArray[T]) {.inline.} =
-  engine.copyToDeviceFromHostImpl(dst.mem, cast[ptr T](unsafeAddr src[0]), src.len * sizeof(T))
+  engine.copyToDeviceFromHostImpl(dst.mem, unsafeAddr src[0], src.len * sizeof(T))
 
-proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: DeviceMem[runVulkan, T]) {.inline.} =
-  engine.copyToHostFromDeviceImpl(cast[ptr T](addr dst[0]), src.mem, dst.len * sizeof(T))
+proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var openArray[T], src: DeviceMem[runVulkan, T], offset: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(addr dst[0], src.mem, dst.len * sizeof(T), offset * sizeof(T))
+
+proc copyToHostFromDevice*[T](engine: VulkanEngine, dst: var T, src: DeviceMem[runVulkan, T], offset: int = 0) {.inline.} =
+  engine.copyToHostFromDeviceImpl(dst.addr, src.mem, sizeof(T), offset * sizeof(T))
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Launch serialization
@@ -176,11 +179,18 @@ proc store[T](ctx: var SerializationCtx, v: T, _: int) =
         let a = deviceAddress(f.mem, ctx.vctx)
         copyMem(blob[off].addr, a.unsafeAddr, 8)
         inc off, 8
+      elif typeof(f) is ref:
+        when typeof(f[]) is DeviceMem:
+          off = off.round_multiple_up(8)
+          let a = deviceAddress(f[].mem, ctx.vctx)
+          copyMem(blob[off].addr, a.unsafeAddr, 8)
+          inc off, 8
+        else:
+          {.error: "[Tattletale-Crucible] unsupported reference type on GPU \'" & $typeof(f) & "\'.".}
       else:
         blob.packFrom(off, f, cgGlsl)
     off = off.round_multiple_up(lay.align)
-    doAssert off == lay.size,
-      "host packing of " & $T & " does not match the device layout"
+    doAssert off == lay.size, "host packing of " & $T & " does not match the device layout"
   else:
     blob.packFrom(off, v, cgGlsl)
   if lay.size > 0:
@@ -312,7 +322,7 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: Spir
     let vkCreateShaderModule = cast[
       proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
            pAllocator: pointer,
-           pShaderModule: ptr VkShaderModule): VkResult {.cdecl.}
+           pShaderModule: ptr VkShaderModule): VkResult {.cdecl, raises: [].}
     ](engine.ctx.gpaAddr(engine.ctx.instance, "vkCreateShaderModule"))
     var smCI = VkShaderModuleCreateInfo(
       sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -323,7 +333,7 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: Spir
     check vkCreateShaderModule(engine.ctx.device, smCI.addr, nil, shaderModule.addr)
     defer:
       let vkDestroyShaderModule = cast[
-        proc(device: VkDevice, shaderModule: VkShaderModule, pAllocator: pointer) {.cdecl.}
+        proc(device: VkDevice, shaderModule: VkShaderModule, pAllocator: pointer) {.cdecl, raises: [].}
       ](engine.ctx.gpaAddr(engine.ctx.instance, "vkDestroyShaderModule"))
       if shaderModule != nil and vkDestroyShaderModule != nil:
         vkDestroyShaderModule(engine.ctx.device, shaderModule, nil)
@@ -381,6 +391,6 @@ proc copyToDeviceFromHostImpl(engine: VulkanEngine, dst: VulkanBuffer, src: poin
   var dst = dst
   engine.ctx.writeBuffer(dst, src, n)
 
-proc copyToHostFromDeviceImpl(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int) =
+proc copyToHostFromDeviceImpl(engine: VulkanEngine, dst: pointer, src: VulkanBuffer, n: int, offsetBytes: int = 0) =
   let res = readBuffer[byte](engine.ctx, src)
-  copyMem(dst, res[0].addr, n)
+  copyMem(dst, res[offsetBytes].addr, n)
