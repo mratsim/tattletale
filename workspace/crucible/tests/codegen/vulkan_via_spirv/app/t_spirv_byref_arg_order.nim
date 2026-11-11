@@ -1,16 +1,6 @@
 ## Direct SPIR-V: by-ref argument temporaries versus evaluation order
 ## Test that documents the argument-temporary limitation of the by-ref lowering
 ##
-## Nim evaluates arguments left to right and evaluates only the selected
-## ternary branch. The by-ref pass instead hoists a non-lvalue struct argument
-## into a temporary in front of the statement. Two deviations follow:
-##
-## - the temporary's effects run before an earlier argument's effects
-## - the temporary's effects run inside an unselected ternary branch
-##
-## Both deviations are observable in this test and recorded as the documented behavior.
-## The fix is expression-level statement extraction in a dedicated pass.
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
@@ -48,6 +38,12 @@ const byrefTernSpv = spirv:
   proc ternKernel(output: ptr UncheckedArray[int32]) {.global.} =
     output[4] = if output[0] > 100'i32: pickSlot(Count(n: bump(output, 5'i32))) else: 5'i32
 
+# Documented by-ref lowering limitation.
+# Nim evaluates arguments left to right and only the selected ternary branch.
+# By-ref lowering hoists a non-lvalue struct argument into a temporary instead.
+# Temporary effects precede an earlier argument's effects.
+# Temporary effects also run inside an unselected ternary branch.
+# Fix: expression-level statement extraction in a dedicated pass.
 proc runTest() =
   let spirvVal = findExe("spirv-val")
   doAssert spirvVal.len > 0,

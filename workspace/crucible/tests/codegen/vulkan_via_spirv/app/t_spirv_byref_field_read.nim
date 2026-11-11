@@ -1,9 +1,6 @@
 ## Direct SPIR-V: `{.device.}` function parameters carrying structs pass as pointers
 ## Test that a scalar field read of a by-ref struct parameter emits valid SPIR-V
 ##
-## The callee reads a by-ref parameter through a dereference of the renamed
-## pointer symbol. OpLoad yields the pointee struct and the read chains over it.
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \

@@ -1,9 +1,6 @@
 ## OpenCL: a by-ref device call can take a kernel parameter struct
 ## Test that a kernel calling a device function taking a struct by reference reads back exact values
 ##
-## Kernel parameters are kernel arguments with no addressable storage.
-## The call site materializes a local and passes that local's address.
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \

@@ -2,9 +2,6 @@
 ## Test that a kernel passing a local array to an array-parameter device
 ## function reads back exact values
 ##
-## The SPIR-V pipeline tags array formals pass-by-ref.
-## The callee receives a pointer to the array, the call site passes the address.
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \

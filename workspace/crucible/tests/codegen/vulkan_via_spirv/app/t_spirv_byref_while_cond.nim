@@ -1,11 +1,6 @@
 ## Direct SPIR-V: while conditions calling by-ref device functions
 ## Test that a while condition rebuilds its fresh struct argument per test
 ##
-## The loop condition passes a struct built from the induction variable by reference.
-## A per-test rebuild runs 2 iterations.
-## A struct hoisted before the loop freezes the first iteration's value and runs 3.
-## The last output cell separates the two.
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \

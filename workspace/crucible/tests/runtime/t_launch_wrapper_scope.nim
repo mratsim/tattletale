@@ -9,7 +9,6 @@
 ##
 ## Test that a batch launch wrapper compiles and runs when the instantiating
 ## module sees only a downstream wrapper module, never crucible.
-## The generated wrapper's pragmas bind at the launch machinery itself.
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \

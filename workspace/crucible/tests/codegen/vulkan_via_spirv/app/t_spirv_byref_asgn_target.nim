@@ -1,10 +1,6 @@
 ## Direct SPIR-V: assignments whose target indexes through a by-ref device call
 ## Test that a by-ref call inside an assignment target passes a pointer
 ##
-## `output[chooseSlot(sel)] = v` keeps the call in the target's index expression.
-## The callee receives the struct as a hidden pointer.
-## The call site wraps the argument even when the call sits in the target.
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
