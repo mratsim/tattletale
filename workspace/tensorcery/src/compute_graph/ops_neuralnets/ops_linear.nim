@@ -139,7 +139,7 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
     let
       rImpl = asLinear.r.to(engine.getTensorImplType(T, rank))
       xImpl = asLinear.x.getImpl().to(engine.getTensorImplType(T, rank))
-      wImpl = asLinear.w.getImpl().to(engine.getTensorImplType(T, rank))
+      wImpl = asLinear.w.getImpl().to(engine.getTensorImplType(T, 2))
       cols = rImpl.shape[rank - 1]
       rows = rImpl.size() div cols
       tiles = ceil_div(rows, Fleet.tileM) * ceil_div(cols, Fleet.tileN)
