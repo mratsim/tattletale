@@ -11,6 +11,7 @@ import workspace/crucible
 import workspace/ceramic
 import workspace/ceramic/src/tile_algebra
 import workspace/ceramic/src/kernels/k_tile_gemm
+import workspace/ceramic/src/hardware/h_mma_properties
 import workspace/iface
 import workspace/math
 import ../../tensors_internals
@@ -22,6 +23,10 @@ import workspace/design_by_contract
 #                   Gemm
 #
 # ############################################################
+
+template GemmMma*(T: typedesc): untyped =
+  ## TODO: the (32, 32, 16) tile schedule is hardcoded
+  tiledMma(float32, T, T, 32, 32, 16)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Device kernel
@@ -40,9 +45,10 @@ proc k_gemm(mma: static TiledMma, D: distinct TensorView, alpha: float32,
 type
   GemmNode* = ref object
     r: AnyTensorImpl      # output slot, metadata only until finalization
+    alpha: float32
     a, b: TensorNode
+    beta: float32
     c: TensorNode         # nil when beta = 0
-    alpha, beta: float32
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Interface
@@ -75,9 +81,10 @@ proc tn_gemm*(
   {.precondition: ia.shape().p[1] == ib.shape().p[0].}
   if not c.isNil():
     let ic = c.getImpl()
-    {.precondition: ic.dtype() == ia.dtype().}
+    # accumulator staging is f32 in the atom, C in f32
+    {.precondition: ic.dtype() == kFp32.}
     {.precondition: ic.shape().p == [ia.shape().p[0], ib.shape().p[1]].}
-  return GemmNode(a: a, b: b, c: c, alpha: alpha, beta: beta,
+  return GemmNode(alpha: alpha, a: a, b: b, beta: beta, c: c,
       r: engine.newPlaceholderNode(kFp32, [ia.shape().p[0], ib.shape().p[1]]).getImpl()
     ).to(TensorNode)
 
@@ -92,23 +99,24 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
   engine.enqueueNode(batch, asGemm.a)
   engine.enqueueNode(batch, asGemm.b)
 
-  when rank == 2 and T is float32:
+  when rank == 2 and T is (float32 | float16 | bfloat16):
     let
-      rImpl = asGemm.r.to(engine.getTensorImplType(T, rank))
+      rImpl = asGemm.r.to(engine.getTensorImplType(float32, rank))
       aImpl = asGemm.a.getImpl().to(engine.getTensorImplType(T, rank))
       bImpl = asGemm.b.getImpl().to(engine.getTensorImplType(T, rank))
       tiles = ceil_div(rImpl.shape[0], 32) * ceil_div(rImpl.shape[1], 32)
-    if not asGemm.c.isNil():
-      engine.enqueueNode(batch, asGemm.c)
-    let cImpl = if asGemm.c.isNil():
-      rImpl  # dummy, never loaded at beta = 0
-    else:
-      asGemm.c.getImpl().to(engine.getTensorImplType(T, rank))
     engine.materialize(rImpl)
-    batch.enqueue<<(tiles, 32)>> k_gemm(tiledMma(float32, T, T, 32, 32, 16),
-      rImpl.bridge, asGemm.alpha, aImpl.bridge, bImpl.bridge, asGemm.beta, cImpl.bridge)
+    if asGemm.c.isNil():
+      # beta = 0, the C view is a dummy, never loaded
+      batch.enqueue<<(tiles, 32)>> k_gemm(GemmMma(T),
+        rImpl.bridge(), asGemm.alpha, aImpl.bridge(), bImpl.bridge(), asGemm.beta, rImpl.bridge())
+    else:
+      engine.enqueueNode(batch, asGemm.c)
+      let cImpl = asGemm.c.getImpl().to(engine.getTensorImplType(float32, rank))
+      batch.enqueue<<(tiles, 32)>> k_gemm(GemmMma(T),
+        rImpl.bridge(), asGemm.alpha, aImpl.bridge(), bImpl.bridge(), asGemm.beta, cImpl.bridge())
   else:
-    raiseAssert("gemm: rank " & $rank & " or dtype unsupported, the op is rank 2 float32")
+    raiseAssert("gemm: rank " & $rank & " or dtype unsupported, the op is rank 2, float16, bfloat16 or float32")
 
   return true
 

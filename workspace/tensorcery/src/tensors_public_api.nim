@@ -18,6 +18,7 @@ import ./compute_graph/ops_1iNo/ops_split
 import ./compute_graph/ops_metadata/ops_swapaxes
 import ./compute_graph/ops_reductions/ops_allClose
 import ./compute_graph/ops_neuralnets/ops_rmsnorm
+import ./compute_graph/ops_neuralnets/ops_linear
 import ./compute_graph/ops_blas/ops_gemm
 import ./compute_graph/eval
 
@@ -174,3 +175,11 @@ proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equa
 proc rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor {.inline.} =
   let w = if weight.isNil(): NilTensorNode() else: weight.node
   Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w, eps))
+
+# Layers
+# ----------------------------------------------------------
+
+proc linear*(x, weight: Tensor, bias: Tensor = nil): Tensor {.inline.} =
+  ## o = x·Wᵀ + b: (M, K) × (out, K) → (M, out), bias nil when the layer has none
+  let bn = if bias.isNil(): NilTensorNode() else: bias.node
+  Tensor(engine: x.engine, node: tn_linear(x.engine, x.node, weight.node, bn))

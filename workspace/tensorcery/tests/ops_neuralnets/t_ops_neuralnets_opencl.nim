@@ -12,9 +12,11 @@
 import workspace/crucible
 import workspace/ceramic
 import ./ops_rmsnorm_template
+import ./ops_linear_template
 
 proc main =
   runRmsnormTest(runOpenCL, "OpenCL")
+  runLinearTest(runOpenCL, "OpenCL")
 
 when isMainModule:
   main()
