@@ -38,4 +38,16 @@ proc runSplitTest*(run: static Runtime, name: string) =
   doAssertRaises AssertionDefect:
     discard split(x, 0, 3)
 
+  # split over an unevaluated producer: the parts enqueue it at eval
+  let ad = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
+  let bd = @[8.0'f32, 7, 6, 5, 4, 3, 2, 1]
+  let a = ad.toTensor(run, 2, 4)
+  let b = bd.toTensor(run, 2, 4)
+  let lazyParts = (a + b).split(0, 2)
+  let sd = @[9.0'f32, 9, 9, 9, 9, 9, 9, 9]
+  eval(lazyParts[0])
+  doAssert lazyParts[0].allClose(sd[0 ..< 4].toTensor(run, 1, 4)), name & ": lazy part0"
+  eval(lazyParts[1])
+  doAssert lazyParts[1].allClose(sd[4 ..< 8].toTensor(run, 1, 4)), name & ": lazy part1"
+
   echo "tensorcery split (", name, "): all checks passed"
