@@ -103,16 +103,17 @@ proc foldMaxMinToBuiltins(m: CirModule) {.nimcall.} =
 #  By-ref parameter lowering
 # ═══════════════════════════════════════════════════════════════════════
 
-proc addrWrapByrefArgs(pre: var seq[CirStmt], tmpCount: var int, e: CirExpr, byref: Table[string, seq[int]]) =
+proc addrWrapByrefArgs(pre: var seq[CirStmt], tmpCount: var int, e: CirExpr, byref: Table[string, seq[int]], pushParams: seq[string]) =
   ## Wraps a call argument in an address when the callee formal expects the struct
   ## as a hidden reference and the argument is still the struct value.
   ##
   ## A non-lvalue argument (a call result, a constructor) copies into a fresh local first, `&` of a temporary is invalid C.
+  ## A kernel parameter is a push-block value with no storage. The copy gives the call an addressable local.
   ## Hoisted declarations insert in front of the statement, nested calls hoist first, so a call node sees its arguments already rewritten.
   if e.isNil():
     return
   for ch in getExprChildren(e):
-    addrWrapByrefArgs(pre, tmpCount, ch, byref)
+    addrWrapByrefArgs(pre, tmpCount, ch, byref, pushParams)
   if e.kind != eCall:
     return
   for i in byref.getOrDefault(e.callee.name):
@@ -121,7 +122,8 @@ proc addrWrapByrefArgs(pre: var seq[CirStmt], tmpCount: var int, e: CirExpr, byr
     let at = getExprType(e.args[i])
     if at != nil and at.kind in {ctStruct, ctArray}:
       let ptrTy = tPtr(caThread, at)
-      if isLvalue(e.args[i]):
+      let argIsPushParam = e.args[i].kind == eSym and e.args[i].name in pushParams
+      if isLvalue(e.args[i]) and not argIsPushParam:
         e.args[i] = addrE(ptrTy, e.args[i])
       else:
         inc tmpCount
@@ -131,46 +133,46 @@ proc addrWrapByrefArgs(pre: var seq[CirStmt], tmpCount: var int, e: CirExpr, byr
         pre.add(asgnS(tmp, e.args[i]))
         e.args[i] = addrE(ptrTy, tmp)
 
-proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int, byref: Table[string, seq[int]])
+proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int, byref: Table[string, seq[int]], pushParams: seq[string])
 
-proc addrWrapByrefStmt(pre: var seq[CirStmt], tmpCount: var int, s: CirStmt, byref: Table[string, seq[int]]) =
+proc addrWrapByrefStmt(pre: var seq[CirStmt], tmpCount: var int, s: CirStmt, byref: Table[string, seq[int]], pushParams: seq[string]) =
   case s.kind
   of sAsgn:
-    addrWrapByrefArgs(pre, tmpCount, s.lhs, byref)
-    addrWrapByrefArgs(pre, tmpCount, s.rhs, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.lhs, byref, pushParams)
+    addrWrapByrefArgs(pre, tmpCount, s.rhs, byref, pushParams)
   of sIte:
-    addrWrapByrefArgs(pre, tmpCount, s.cond, byref)
-    addrWrapByrefStmts(s.thenBody, tmpCount, byref)
-    addrWrapByrefStmts(s.elseBody, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.cond, byref, pushParams)
+    addrWrapByrefStmts(s.thenBody, tmpCount, byref, pushParams)
+    addrWrapByrefStmts(s.elseBody, tmpCount, byref, pushParams)
   of sWhile:
-    addrWrapByrefArgs(pre, tmpCount, s.whileCond, byref)
-    addrWrapByrefStmts(s.whileBody, tmpCount, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.whileCond, byref, pushParams)
+    addrWrapByrefStmts(s.whileBody, tmpCount, byref, pushParams)
     # Loop conditions re-test after every body run: each hoisted argument
     # assignment repeats at the end of the body, its declaration stays in front
     for h in pre:
       if h.kind == sAsgn:
         s.whileBody.add(cloneStmts(@[h])[0])
   of sRet:
-    addrWrapByrefArgs(pre, tmpCount, s.retVal, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.retVal, byref, pushParams)
   of sDiscard:
-    addrWrapByrefArgs(pre, tmpCount, s.discardVal, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.discardVal, byref, pushParams)
   of sCall:
     let callE = CirExpr(kind: eCall)
     callE.callee = s.callCallee
     callE.args = s.callArgs
-    addrWrapByrefArgs(pre, tmpCount, callE, byref)
+    addrWrapByrefArgs(pre, tmpCount, callE, byref, pushParams)
     s.callCallee = callE.callee
     s.callArgs = callE.args
   of sVar:
-    addrWrapByrefArgs(pre, tmpCount, s.init, byref)
+    addrWrapByrefArgs(pre, tmpCount, s.init, byref, pushParams)
   of sAsm, sEmit:
     discard
 
-proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int, byref: Table[string, seq[int]]) =
+proc addrWrapByrefStmts(stmts: var seq[CirStmt], tmpCount: var int, byref: Table[string, seq[int]], pushParams: seq[string]) =
   var i = 0
   while i < stmts.len:
     var pre: seq[CirStmt] = @[]
-    addrWrapByrefStmt(pre, tmpCount, stmts[i], byref)
+    addrWrapByrefStmt(pre, tmpCount, stmts[i], byref, pushParams)
     for h in pre:
       stmts.insert(h, i)
       i.inc
@@ -193,4 +195,8 @@ proc lowerByrefParams(m: CirModule) =
       byref.mgetOrPut(fn.name, @[]).add(i)
   for fn in m.procs:
     var tmpCount = 0
-    addrWrapByrefStmts(fn.body, tmpCount, byref)
+    var pushParams: seq[string]
+    if fn.isGlobalFn:
+      for p in fn.params:
+        pushParams.add p.name
+    addrWrapByrefStmts(fn.body, tmpCount, byref, pushParams)
