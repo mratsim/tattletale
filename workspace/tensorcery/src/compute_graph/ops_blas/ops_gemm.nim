@@ -80,7 +80,7 @@ proc k_gemm(mma: static TiledMma, D: distinct TensorView, alpha: float32,
 
 type
   GemmNode* = ref object
-    r: AnyTensorImpl      # output slot, metadata only until finalization
+    r: AnyTensorImpl
     alpha: float32
     a, b: TensorNode
     beta: float32

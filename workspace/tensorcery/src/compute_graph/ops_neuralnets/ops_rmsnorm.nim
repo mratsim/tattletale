@@ -28,7 +28,7 @@ import workspace/design_by_contract
 
 type
   RmsNormNode* = ref object
-    r: AnyTensorImpl      # output slot, metadata only until finalization
+    r: AnyTensorImpl
     x: TensorNode
     w: TensorNode         # nil when unweighted
     eps: float32

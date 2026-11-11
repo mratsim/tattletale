@@ -51,7 +51,7 @@ proc k_add(D, A, B: distinct TensorView) =
 
 type
   AddNode* = ref object
-    r: AnyTensorImpl      # output slot, metadata only until finalization
+    r: AnyTensorImpl
     a, b: TensorNode
 
 # ═══════════════════════════════════════════════════════════════════════

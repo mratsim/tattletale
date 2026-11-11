@@ -30,7 +30,6 @@ import workspace/design_by_contract
 
 proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias: static bool) =
   ## D = A·B + bias over the last axis
-  # weights store (out, K), already the BLAS B^T (N, K) form
   const tvmA = mma.getThreadValueMap(opA)
   const tvmB = mma.getThreadValueMap(opB)
   const tvmC = mma.getThreadValueMap(opC)
@@ -74,7 +73,7 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias
 
 type
   LinearNode* = ref object
-    r: AnyTensorImpl      # output slot, metadata only until finalization
+    r: AnyTensorImpl
     x, w: TensorNode
     b: TensorNode         # nil when the layer has no bias
 
