@@ -140,9 +140,9 @@ proc enqueueallClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var 
     engine.copyToDeviceFromHost(rImpl.data[], [0.0'f32])
     match(ElemType, ai.dtype(), ARank, ai.shape().p.len):
       let
-        aView = ai.to(engine.getTensorImplType(ElemType, ARank)).bridge
-        bView = bi.to(engine.getTensorImplType(ElemType, ARank)).bridge
-      batch.enqueue<<(ceil_div(asAll.size(), 128), 32)>> k_allClose(rImpl.bridge, aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
+        aView = ai.to(engine.getTensorImplType(ElemType, ARank)).bridge()
+        bView = bi.to(engine.getTensorImplType(ElemType, ARank)).bridge()
+      batch.enqueue<<(ceil_div(asAll.size(), 128), 32)>> k_allClose(rImpl.bridge(), aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
   else:
     raiseAssert("allClose: the output is a rank-1 float32 scalar")
   return true

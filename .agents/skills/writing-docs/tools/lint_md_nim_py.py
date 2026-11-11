@@ -243,6 +243,15 @@ TOTENSOR_PLAIN_CALL_RE = re.compile(r"(?<![.\w])toTensor\s*\(")
 TOTENSOR_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+toTensor\*?\s*[\(\[=,:]")
 
+# The bridge rule. The erased crossing reads on the impl with method
+# call syntax and parens: impl.bridge(). The plain call and the bare
+# postfix hide the crossing, declarations never match, the name
+# boundary is exact.
+BRIDGE_PLAIN_CALL_RE = re.compile(r"(?<![.\w])bridge\s*\(")
+BRIDGE_BARE_RE = re.compile(r"\.\s*bridge(?![\w(])")
+BRIDGE_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+bridge\*?\s*[\(\[=,:]")
+
 INBOUNDS_PLAIN_CALL_RE = re.compile(r"(?<![.\w])inBounds\s*\(")
 INBOUNDS_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+inBounds\*?\s*[\(\[=,:]")
@@ -717,6 +726,8 @@ RULES = {
                               "a bare isNil postfix, use the method call syntax x.isNil()"),
     "totensor-call-syntax": Rule("totensor-call-syntax", True,
                                  "a data-first toTensor call, use the method call syntax data.toTensor(shape)"),
+    "bridge-call-syntax": Rule("bridge-call-syntax", True,
+                               "a plain or bare bridge call, use the method call syntax impl.bridge()"),
     "allclose-call-syntax": Rule("allclose-call-syntax", True,
                                  "a tested-first allClose call, use the method call syntax tested.allClose(reference)"),
     "random-call-syntax": Rule("random-call-syntax", True,
@@ -2175,6 +2186,12 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "totensor-call-syntax",
                         "data-first toTensor call, use the method call "
                         "syntax data.toTensor(shape)"))
+                if (BRIDGE_PLAIN_CALL_RE.search(code) or BRIDGE_BARE_RE.search(code)) \
+                        and not BRIDGE_DECL_RE.match(code):
+                    findings.append(Finding(
+                        path, i + 1, "bridge-call-syntax",
+                        "plain or bare bridge call, use the method call "
+                        "syntax impl.bridge()"))
                 if ALLCLOSE_PLAIN_CALL_RE.search(code) \
                         and not ALLCLOSE_DECL_RE.match(code):
                     findings.append(Finding(
@@ -3516,6 +3533,50 @@ ISNIL_SELFTEST_CASES = (
 )
 
 
+BRIDGE_SELFTEST_CASES = (
+    ("bridge plain and bare convict, parens and declarations stay clean", (
+        ("src/tensorcery/bridge_demo.nim",
+         'let b = bridge(rImpl)\n'
+         'let c = rImpl.bridge\n'
+         'let d = rImpl.bridge()\n'
+         'func bridge*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): lent TensorBridge[DeviceMem, getLayoutType(Rank)] {.inline.} =\n'
+         '  cast[ptr TensorBridge[DeviceMem, getLayoutType(Rank)]](t)[]\n'),
+    ), (
+        ("src/tensorcery/bridge_demo.nim", 1, "bridge-call-syntax", False),
+        ("src/tensorcery/bridge_demo.nim", 2, "bridge-call-syntax", False),
+    )),
+)
+
+
+def bridge_selftest(quiet=False):
+    """Runs the bridge fixtures through check_line, one PASS or FAIL line
+    per case unless quiet. Returns the failed case count, 0 means the
+    plain call and the bare postfix convict and every legal spelling
+    passes.
+    """
+    failed = 0
+    for name, files, expected in BRIDGE_SELFTEST_CASES:
+        got = []
+        for path, text in files:
+            findings = []
+            nim_structure_checks(Path(path), text, [], findings)
+            got += sorted(set((str(f.path), f.line, f.rule, f.warning)
+                          for f in findings if f.rule == "bridge-call-syntax"))
+        want = sorted(expected)
+        if got == want:
+            if not quiet:
+                print("PASS %s" % name)
+        else:
+            failed += 1
+            if not quiet:
+                print("FAIL %s" % name)
+                for row in want:
+                    print("  expected %s" % (row,))
+                for row in got:
+                    print("  got      %s" % (row,))
+    return failed
+
+
 def isnil_selftest(quiet=False):
     """Runs the isNil fixtures through check_line, one PASS or FAIL line
     per case unless quiet. Returns the failed case count, 0 means the
@@ -4721,7 +4782,7 @@ def main(argv):
         args = args[:i] + args[i + 2:]
     base = base or os.environ.get("DOC_LINT_BASE") or None
     if "--selftest-refusal" in args:
-        failed = refusal_selftest() + agent_verb_selftest() + isnil_selftest() + totensor_selftest() + allclose_selftest() + random_selftest()
+        failed = refusal_selftest() + agent_verb_selftest() + bridge_selftest() + isnil_selftest() + totensor_selftest() + allclose_selftest() + random_selftest()
         return 1 if failed else 0
     if "--fix" in args:
         paths = [a for a in args if a != "--fix"]
