@@ -36,12 +36,25 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias
   const cLayout = mma.getMmaLayout(opC)
 
   when rank(A.layout.shape) == 3:
-    let rows = D.layout.shape[0] * D.layout.shape[1]
-    let vD = make_view(D.data, make_layout((rows, D.layout.shape[2]), (D.layout.stride[1], D.layout.stride[2])), D.offset)
-    let vA = make_view(A.data, make_layout((rows, A.layout.shape[2]), (A.layout.stride[1], A.layout.stride[2])), A.offset)
+    # A (B, M, K):(s0, s1, sk) splits into nSlices = B affine rank-2 GEMMs, one launch:
+    #
+    #   mode    B           M           K
+    #   stride  s0          s1          sk
+    #   role    slice idx   rows        reduce
+    #
+    #   A ──▶ slice(b) = (M, K):(s1, sk) @ offset + b·s0     B rides the tile grid
+    #   D ──▶ slice(b) = (M, N):(d1, dn) @ offset + b·d0     W, bias shared
+    #
+    #   element (b, m, k) ──▶ b·s0 + m·s1 + k·sk
+    let
+      nSlices = A.layout.shape[0]
+      vD = make_view(D.data, slice(D.layout, 0, _, _), D.offset)
+      vA = make_view(A.data, slice(A.layout, 0, _, _), A.offset)
   else:
-    let vD = D
-    let vA = A
+    let
+      nSlices = 1
+      vD = D
+      vA = A
 
   let cGeom = vD.tileWith((mma.MT, mma.NT))
   let aGeom = vA.tileWith((mma.MT, mma.KT))
@@ -54,26 +67,36 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias
     let
       cSize = cGrid.size()
       gridStride = getGridSize()
-    for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
-      let (m, n) = idx2crd(cGrid, tileID)
+    for tileID in countup(cGrid.getLocalTileID(), nSlices * cSize - 1, gridStride):
+      let
+        sliceIdx = tileID div cSize
+        (m, n) = idx2crd(cGrid, tileID mod cSize)
+      when rank(A.layout.shape) == 3:
+        let
+          sliceD = make_view(D.data, vD.layout, D.offset + sliceIdx * D.layout.stride[0])
+          sliceA = make_view(A.data, vA.layout, A.offset + sliceIdx * A.layout.stride[0])
+      else:
+        let
+          sliceD = vD
+          sliceA = vA
       var rD: tile(float32, cLayout)
       var rA: tile(A.T, mma.getMmaLayout(opA))
       var rB: tile(B.T, mma.getMmaLayout(opB))
       rD.fillWith(zero(float32))
       for k in 0 ..< kTiles:
-        rA.load(vA, tvmA, thrID, (m, k))
+        rA.load(sliceA, tvmA, thrID, (m, k))
         rB.load(B, tvmB, thrID, (n, k))
         mma.atom.gemm_tile(rD, rA, rB, rD)
 
       when withBias:
         let broadcastedView = make_view(bias.data,
-            make_layout((vD.layout.shape[0], vD.layout.shape[1]), (Int[0](), Int[1]())),
+            make_layout((sliceD.layout.shape[0], sliceD.layout.shape[1]), (Int[0](), Int[1]())),
             bias.offset)
         let rBias = tile(bias.T, cLayout).load(broadcastedView, tvmC, thrID, (m, n))
         for i in 0 ..< cLayout.size():
           rD[i] += rBias[i].to(float32)
 
-      vD.store(rD.downcast(vD.T), tvmC, thrID, (m, n))
+      sliceD.store(rD.downcast(sliceD.T), tvmC, thrID, (m, n))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Defunctionalization
@@ -126,6 +149,24 @@ proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.co
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+# Parallelism exposed to the device is the tile grid:
+#    enqueue<<(tiles, LaneWidth)>>
+# launches `tiles` work items, each owning a (32, 32) output tile
+#
+#   tiles = nSlices * rows.ceil_div(tileM) * cols.ceil_div(tileN)
+#
+#   rank 2 (M, K, N)     tiles  | rank 3 (B, M, K, N)           tiles
+#   -------------------  -----  | ----------------------------  -----
+#   (17, 33, 13)         1      | decode (8, 1, 4096, 4096)     1024
+#   (128, 512, 128)      16     | prefill (4, 1024, 4096, 4096) 16384
+#   (4096, 4096, 4096)   16384  | batch (32, 512, 4096, 4096)   65536
+#   (4096, 4096, 14336)  57344  |
+#
+# Decode launches a 32-entry tile per batch slice for 1 real output entry,
+# 31 of 32 tile entries idle.
+# Tile grids expose nSlices·⌈M/32⌉·⌈N/32⌉ work items. More parallelism needs
+# split-K: partition the K reduction across work items and reduce the partials.
+
 proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asLinear = n.to(LinearNode)
   if asLinear.isNil():
@@ -138,9 +179,10 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
       rImpl = asLinear.r.to(engine.getTensorImplType(T, rank))
       xImpl = asLinear.x.getImpl().to(engine.getTensorImplType(T, rank))
       wImpl = asLinear.w.getImpl().to(engine.getTensorImplType(T, 2))
-      cols = rImpl.shape[rank - 1]
-      rows = rImpl.size() div cols
-      tiles = ceil_div(rows, Fleet.tileM) * ceil_div(cols, Fleet.tileN)
+      cols = rImpl.shape[^1]
+      rowsPerSlice = rImpl.shape[^2]
+      nSlices = rImpl.size() div (rowsPerSlice * cols)
+      tiles = nSlices * rowsPerSlice.ceil_div(Fleet.tileM) * cols.ceil_div(Fleet.tileN)
     engine.materialize(rImpl)
     if asLinear.b.isNil():
       batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),

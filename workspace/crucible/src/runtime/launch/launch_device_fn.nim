@@ -248,7 +248,7 @@ func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
     ident($deviceFn & "_" & base58(int(h))),
     newEmptyNode(), newEmptyNode(),
     params,
-    nnkPragma.newTree(ident"global"),
+    nnkPragma.newTree(bindSym"global"),
     newEmptyNode(),
     nnkStmtList.newTree(deviceFnCall))
   return procdef
@@ -260,7 +260,7 @@ func getWorkgroupPragma(blk: Dim3): NimNode =
   var size = nnkTupleConstr.newTree()
   for d in [blk.x, blk.y, blk.z]:
     size.add newLit(d)
-  nnkExprColonExpr.newTree(ident"workgroup", size)
+  nnkExprColonExpr.newTree(bindSym"workgroup", size)
 
 func getWorkgroupPragma(blkN: NimNode): NimNode =
   ## Workgroup pragma `(X, Y, Z)` for a compile-time literal block size, nil otherwise
@@ -280,7 +280,7 @@ func getWorkgroupPragma(blkN: NimNode): NimNode =
   var size = nnkTupleConstr.newTree()
   for d in dims:
     size.add newLit(d)
-  nnkExprColonExpr.newTree(ident"workgroup", size)
+  nnkExprColonExpr.newTree(bindSym"workgroup", size)
 
 macro launchGlobalFn(engine: HwEngine, deviceFn: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, lang: static string, values: varargs[typed]): untyped =
   ## Builds and launches the `{.global.}` wrapper: the first value is the output.

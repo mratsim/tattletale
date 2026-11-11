@@ -49,7 +49,7 @@ proc runLinearTest*(run: static Runtime, name: string) =
       doAssert o.allClose(expect.toTensor(run, m, n), rtol = 1e-5'f32, atol = 1e-3'f32),
         name & ": linear bias " & $((m, k, n))
 
-    block: # batched: the leading axes fold into the M axis
+    block: # batched: (B, M, K) x (K, N) equals B independent (M, K) x (K, N)
       const batch = 3
       let x3 = rng.randomSeq(float32, batch * m * k)
       let X3 = x3.toTensor(run, batch, m, k)
@@ -75,4 +75,24 @@ proc runLinearTest*(run: static Runtime, name: string) =
       eval(ob)
       doAssert ob.allClose(expect.toTensor(run, batch, m, n), rtol = 1e-5'f32, atol = 1e-3'f32),
         name & ": linear batched bias " & $((batch, m, k, n))
+
+    block: # batched with strides: x laid out (M, B, K), its (B, M, K) view has batch stride K
+      const batch = 3
+      let xs = rng.randomSeq(float32, batch * m * k)
+      let X = xs.toTensor(run, m, batch, k).swapaxes(0, 1)
+
+      var expect = newSeq[float32](batch * m * n)
+      var slice = newSeq[float32](m * n)
+      for b in 0 ..< batch:
+        var xb = newSeq[float32](m * k)
+        for i in 0 ..< m:
+          for p in 0 ..< k:
+            xb[i * k + p] = xs[i * batch * k + b * k + p]
+        slice.refLinear(xb, w, m, k, n)
+        for j in 0 ..< m * n:
+          expect[b * m * n + j] = slice[j]
+      let o = linear(X, W)
+      eval(o)
+      doAssert o.allClose(expect.toTensor(run, batch, m, n), rtol = 1e-5'f32, atol = 1e-3'f32),
+        name & ": linear batched strided " & $((batch, m, k, n))
   echo "tensorcery linear (", name, "): all checks passed"
