@@ -18,6 +18,7 @@ import ./compute_graph/ops_1iNo/ops_split
 import ./compute_graph/ops_metadata/ops_swapaxes
 import ./compute_graph/ops_reductions/ops_allClose
 import ./compute_graph/ops_neuralnets/ops_rmsnorm
+import ./compute_graph/ops_blas/ops_gemm
 import ./compute_graph/eval
 
 export tensors_public_types
@@ -125,6 +126,15 @@ proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equa
 proc rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor {.inline.} =
   let w = if weight.isNil(): NilTensorNode() else: weight.node
   Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w, eps))
+
+proc gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor {.inline.} =
+  ## D = alpha·A·B + beta·C over the last two axes, C nil at beta = 0
+  let cn = if c.isNil(): NilTensorNode() else: c.node
+  Tensor(engine: a.engine, node: tn_gemm(a.engine, alpha, a.node, b.node, beta, cn))
+
+proc matmul*(a, b: Tensor): Tensor {.inline.} =
+  ## A·B over the last two axes
+  gemm(1.0'f32, a, b, 0.0'f32)
 
 proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))

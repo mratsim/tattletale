@@ -31,8 +31,21 @@ macro getVpt*(A: static MmaAtom): untyped =
   ## from their layouts (`valuesPerThread`, below).
   result = bindSym($A & "_vpt")
 
-template threadCount*(atom: static MmaAtom): untyped =
-  Int[atom.getThreadCount()]()
+macro getThreadCount*(A: static MmaAtom): untyped =
+  ## Returns the number of threads one atom invocation cooperates over.
+  result = bindSym($A & "_threadCount")
+
+macro getLayoutA*(A: static MmaAtom): untyped =
+  ## Returns the atom's A fragment layout, (T, V) → col-major offset in (M, K).
+  result = bindSym($A & "_aLayout")
+
+macro getLayoutB*(A: static MmaAtom): untyped =
+  ## Returns the atom's B fragment layout, (T, V) → col-major offset in (N, K).
+  result = bindSym($A & "_bLayout")
+
+macro getLayoutC*(A: static MmaAtom): untyped =
+  ## Returns the atom's C fragment layout, (T, V) → col-major offset in (M, N).
+  result = bindSym($A & "_cLayout")
 
 template valuesPerThread*(atom: static MmaAtom, operand: static MmaOperand): untyped =
   ## Operand values per thread. A, B and C may each differ.
@@ -48,13 +61,10 @@ template valuesPerThread*(atom: static MmaAtom, operand: static MmaOperand): unt
   ## | int8+e4m3 (k32)           | 16/8/4      |
   ## | universal 8x8x8 and Apple | 2/2/2       |
   ## | 1x1x1                     | 1/1/1       |
-  when operand == opA: cosize(atom.getLayoutA()) div atom.threadCount
-  elif operand == opB: cosize(atom.getLayoutB()) div atom.threadCount
-  else:                cosize(atom.getLayoutC()) div atom.threadCount
-
-macro getThreadCount*(A: static MmaAtom): untyped =
-  ## Returns the number of threads one atom invocation cooperates over.
-  result = bindSym($A & "_threadCount")
+  const threadCount = Int[atom.getThreadCount()]()
+  when operand == opA: cosize(atom.getLayoutA()) div threadCount
+  elif operand == opB: cosize(atom.getLayoutB()) div threadCount
+  else:                cosize(atom.getLayoutC()) div threadCount
 
 template getLayout*(atom: static MmaAtom, operand: static MmaOperand): untyped =
   ## The operand's fragment layout, (T, V) → cell-local offset, keyed by operand.
@@ -62,17 +72,6 @@ template getLayout*(atom: static MmaAtom, operand: static MmaOperand): untyped =
   elif operand == opB: atom.getLayoutB()
   else:                atom.getLayoutC()
 
-macro getLayoutA*(A: static MmaAtom): untyped =
-  ## Returns the atom's A fragment layout, (T, V) → col-major offset in (M, K).
-  result = bindSym($A & "_aLayout")
-
-macro getLayoutB*(A: static MmaAtom): untyped =
-  ## Returns the atom's B fragment layout, (T, V) → col-major offset in (N, K).
-  result = bindSym($A & "_bLayout")
-
-macro getLayoutC*(A: static MmaAtom): untyped =
-  ## Returns the atom's C fragment layout, (T, V) → col-major offset in (M, N).
-  result = bindSym($A & "_cLayout")
 
 macro getInstr*(A: static MmaAtom): untyped =
   ## Returns the atom's instruction mnemonic.
