@@ -28,25 +28,45 @@ import workspace/design_by_contract
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_linear(mma: static TiledMma, D, A, B: distinct TensorView) =
-  # weights store (out, K), already the BLAS B^T (N, K) form k_tile_gemm consumes
-  mma.matmul(D, A, B)
+proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias: static bool) =
+  ## D = A·B + bias over the last axis
+  # weights store (out, K), already the BLAS B^T (N, K) form
+  const tvmA = mma.getThreadValueMap(opA)
+  const tvmB = mma.getThreadValueMap(opB)
+  const tvmC = mma.getThreadValueMap(opC)
+  const cLayout = mma.getMmaLayout(opC)
 
-proc k_bias_add(D, B: distinct TensorView) =
-  ## D += B broadcast over the last axis, one rounding into D's element type
+  let cGeom = D.tileWith((mma.MT, mma.NT))
+  let aGeom = A.tileWith((mma.MT, mma.KT))
+
+  let cGrid = cGeom.getTileGrid()
+  let (_, kTiles) = aGeom.getTileGrid()
   let thrID = getLocalThreadID()
-  let
-    n = D.size()
-    W = getLaneWidth()
-    cols = D.layout.shape[1]
-  for i in countup(thrID, n - 1, W):
+
+  if thrID < getLaneWidth():
     let
-      r = i div cols
-      c = i mod cols
-    when typeof(D(r, c)) is (bfloat16 | float16):
-      D(r, c) = (D(r, c).to(float32) + B(c).to(float32)).to(typeof(D(r, c)))
-    else:
-      D(r, c) = D(r, c) + B(c).to(float32)
+      cSize = cGrid.size()
+      gridStride = getGridSize()
+    for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
+      let (m, n) = idx2crd(cGrid, tileID)
+      var rD: tile(float32, cLayout)
+      var rA: tile(A.T, mma.getMmaLayout(opA))
+      var rB: tile(B.T, mma.getMmaLayout(opB))
+      rD.fillWith(zero(float32))
+      for k in 0 ..< kTiles:
+        rA.load(A, tvmA, thrID, (m, k))
+        rB.load(B, tvmB, thrID, (n, k))
+        mma.atom.gemm_tile(rD, rA, rB, rD)
+
+      when withBias:
+        let broadcastedView = make_view(bias.data,
+            make_layout((D.layout.shape[0], D.layout.shape[1]), (Int[0](), Int[1]())),
+            bias.offset)
+        let rBias = tile(bias.T, cLayout).load(broadcastedView, tvmC, thrID, (m, n))
+        for i in 0 ..< cLayout.size():
+          rD[i] += rBias[i].to(float32)
+
+      D.store(rD.downcast(D.T), tvmC, thrID, (m, n))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Defunctionalization
@@ -90,7 +110,7 @@ proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.co
     {.precondition: ib.dtype() == ix.dtype().}
     {.precondition: ib.shape().p[0] == iw.shape().p[0].}
   return LinearNode(x: x, w: weight, b: bias,
-      r: engine.newPlaceholderNode(kFp32, [ix.shape().p[0], iw.shape().p[0]]).getImpl()
+      r: engine.newPlaceholderNode(ix.dtype(), [ix.shape().p[0], iw.shape().p[0]]).getImpl()
     ).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -106,17 +126,19 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
 
   when rank == 2 and T is (float32 | float16 | bfloat16):
     let
-      rImpl = asLinear.r.to(engine.getTensorImplType(float32, rank))
+      rImpl = asLinear.r.to(engine.getTensorImplType(T, rank))
       xImpl = asLinear.x.getImpl().to(engine.getTensorImplType(T, rank))
       wImpl = asLinear.w.getImpl().to(engine.getTensorImplType(T, rank))
       tiles = ceil_div(rImpl.shape[0], 32) * ceil_div(rImpl.shape[1], 32)
     engine.materialize(rImpl)
-    batch.enqueue<<(tiles, 32)>> k_linear(GemmMma(T),
-      rImpl.bridge(), xImpl.bridge(), wImpl.bridge())
-    if not asLinear.b.isNil():
+    if asLinear.b.isNil():
+      batch.enqueue<<(tiles, 32)>> k_linear(GemmMma(T),
+        rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), rImpl.bridge(), false)
+    else:
       engine.enqueueNode(batch, asLinear.b)
       let bImpl = asLinear.b.getImpl().to(engine.getTensorImplType(T, 1))
-      batch.enqueue<<(1, 32)>> k_bias_add(rImpl.bridge(), bImpl.bridge())
+      batch.enqueue<<(tiles, 32)>> k_linear(GemmMma(T),
+        rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), bImpl.bridge(), true)
   else:
     raiseAssert("linear: rank " & $rank & " or dtype unsupported, the op is rank 2, float16, bfloat16 or float32")
   return true

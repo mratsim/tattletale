@@ -34,9 +34,45 @@ template GemmMma*(T: typedesc): untyped =
 
 proc k_gemm(mma: static TiledMma, D: distinct TensorView, alpha: float32,
     A, B: distinct TensorView, beta: float32, C: distinct TensorView) =
-  # k_tile_gemm consumes B in BLAS B^T form (N, K)
+  ## D = alpha·A·B + beta·C
   let bT = B.transpose(1, 0)
-  mma.gemm(D, alpha, A, bT, beta, C)
+  const tvmA = mma.getThreadValueMap(opA)
+  const tvmB = mma.getThreadValueMap(opB)
+  const tvmC = mma.getThreadValueMap(opC)
+  const cLayout = mma.getMmaLayout(opC)
+
+  let cGeom = D.tileWith((mma.MT, mma.NT))
+  let aGeom = A.tileWith((mma.MT, mma.KT))
+
+  let cGrid = cGeom.getTileGrid()
+  let (_, kTiles) = aGeom.getTileGrid()
+  let thrID = getLocalThreadID()
+
+  if thrID < getLaneWidth():
+    let
+      cSize = cGrid.size()
+      gridStride = getGridSize()
+    for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
+      let (m, n) = idx2crd(cGrid, tileID)
+      var rD: tile(float32, cLayout)
+      var rA: tile(A.T, mma.getMmaLayout(opA))
+      var rB: tile(bT.T, mma.getMmaLayout(opB))
+      rD.fillWith(zero(float32))
+      for k in 0 ..< kTiles:
+        rA.load(A, tvmA, thrID, (m, k))
+        rB.load(bT, tvmB, thrID, (n, k))
+        mma.atom.gemm_tile(rD, rA, rB, rD)
+
+      if alpha != 1.0'f32:
+        for i in 0 ..< cLayout.size():
+          rD[i] = alpha * rD[i]
+
+      if beta != 0.0'f32:
+        let rC = tile(C.T, cLayout).load(C, tvmC, thrID, (m, n))
+        for i in 0 ..< cLayout.size():
+          rD[i] += beta * rC[i].to(float32)
+
+      D.store(rD.downcast(D.T), tvmC, thrID, (m, n))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Defunctionalization
@@ -81,11 +117,10 @@ proc tn_gemm*(
   {.precondition: ia.shape().p[1] == ib.shape().p[0].}
   if not c.isNil():
     let ic = c.getImpl()
-    # accumulator staging is f32 in the atom, C in f32
-    {.precondition: ic.dtype() == kFp32.}
+    {.precondition: ic.dtype() == ia.dtype().}
     {.precondition: ic.shape().p == [ia.shape().p[0], ib.shape().p[1]].}
   return GemmNode(alpha: alpha, a: a, b: b, beta: beta, c: c,
-      r: engine.newPlaceholderNode(kFp32, [ia.shape().p[0], ib.shape().p[1]]).getImpl()
+      r: engine.newPlaceholderNode(ia.dtype(), [ia.shape().p[0], ib.shape().p[1]]).getImpl()
     ).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -101,7 +136,7 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
 
   when rank == 2 and T is (float32 | float16 | bfloat16):
     let
-      rImpl = asGemm.r.to(engine.getTensorImplType(float32, rank))
+      rImpl = asGemm.r.to(engine.getTensorImplType(T, rank))
       aImpl = asGemm.a.getImpl().to(engine.getTensorImplType(T, rank))
       bImpl = asGemm.b.getImpl().to(engine.getTensorImplType(T, rank))
       tiles = ceil_div(rImpl.shape[0], 32) * ceil_div(rImpl.shape[1], 32)
@@ -112,7 +147,7 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
         rImpl.bridge(), asGemm.alpha, aImpl.bridge(), bImpl.bridge(), asGemm.beta, rImpl.bridge())
     else:
       engine.enqueueNode(batch, asGemm.c)
-      let cImpl = asGemm.c.getImpl().to(engine.getTensorImplType(float32, rank))
+      let cImpl = asGemm.c.getImpl().to(engine.getTensorImplType(T, rank))
       batch.enqueue<<(tiles, 32)>> k_gemm(GemmMma(T),
         rImpl.bridge(), asGemm.alpha, aImpl.bridge(), bImpl.bridge(), asGemm.beta, cImpl.bridge())
   else:
