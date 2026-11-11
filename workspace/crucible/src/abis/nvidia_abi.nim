@@ -840,10 +840,10 @@ type
     CU_LIMIT_MAX
 
 
-{.pragma: v1, noconv, importc, dynlib: libCuda.}
-{.pragma: v2, noconv, importc: "$1_v2", dynlib: libCuda.}
+{.pragma: v1, noconv, importc, dynlib: libCuda, raises: [].}
+{.pragma: v2, noconv, importc: "$1_v2", dynlib: libCuda, raises: [].}
 
-{.push noconv, importc, dynlib: libCuda.}
+{.push noconv, importc, dynlib: libCuda, raises: [].}
 
 proc cuInit*(flags: uint32): CUresult
 
@@ -857,7 +857,7 @@ proc cuCtxCreate*(pctx: var CUcontext, flags: uint32, dev: CUdevice): CUresult {
 proc cuCtxDestroy*(ctx: CUcontext): CUresult {.v2.}
 proc cuCtxSynchronize*(ctx: CUcontext): CUresult {.v2.}
 
-{.push noconv, importc, dynlib: libCuda.}
+{.push noconv, importc, dynlib: libCuda, raises: [].}
 
 proc cuCtxSynchronize*(): CUresult
 proc cuCtxSetCurrent*(ctx: CUcontext): CUresult
@@ -878,7 +878,7 @@ proc cuLaunchKernel*(
        extra: ptr pointer
      ): CUresult {.used.}
 
-{.pop.} # {.push noconv, importc, dynlib: "libcuda.so"..}
+{.pop.} # {.push noconv, importc, dynlib: "libcuda.so"., raises: [].}
 
 proc cuModuleGetGlobal*(dptr: var CUdeviceptr, bytes: ptr csize_t, hmod: CUmodule, name: cstring): CUresult {.v2.}
 
@@ -932,27 +932,27 @@ type
 proc nvrtcCreateProgram*(prog: var nvrtcProgram; src: cstring; name: cstring;
                         numHeaders: cint; headers: cstringArray;
                         includeNames: cstringArray): nvrtcResult {.discardable, cdecl,
-    importc: "nvrtcCreateProgram", dynlib: libNvrtc.}
+    importc: "nvrtcCreateProgram", dynlib: libNvrtc, raises: [].}
 
-proc nvrtcVersion*(major, minor: var cint): nvrtcResult {.discardable, cdecl, importc: "nvrtcVersion", dynlib: libNvrtc.}
+proc nvrtcVersion*(major, minor: var cint): nvrtcResult {.discardable, cdecl, importc: "nvrtcVersion", dynlib: libNvrtc, raises: [].}
 
 proc nvrtcDestroyProgram*(prog: var nvrtcProgram): nvrtcResult {.discardable, cdecl,
-    importc: "nvrtcDestroyProgram", dynlib: libNvrtc.}
+    importc: "nvrtcDestroyProgram", dynlib: libNvrtc, raises: [].}
 
 proc nvrtcCompileProgram*(prog: nvrtcProgram; numOptions: cint; options: cstringArray): nvrtcResult {.discardable,
-    cdecl, importc: "nvrtcCompileProgram", dynlib: libNvrtc.}
+    cdecl, importc: "nvrtcCompileProgram", dynlib: libNvrtc, raises: [].}
 
 proc nvrtcGetPTXSize*(prog: nvrtcProgram; ptxSizeRet: var csize_t): nvrtcResult {.discardable,
-    cdecl, importc: "nvrtcGetPTXSize", dynlib: libNvrtc.}
+    cdecl, importc: "nvrtcGetPTXSize", dynlib: libNvrtc, raises: [].}
 
 proc nvrtcGetPTX*(prog: nvrtcProgram; ptx: cstring): nvrtcResult {.discardable, cdecl,
-    importc: "nvrtcGetPTX", dynlib: libNvrtc.}
+    importc: "nvrtcGetPTX", dynlib: libNvrtc, raises: [].}
 
 proc nvrtcGetProgramLogSize*(prog: nvrtcProgram; logSizeRet: var csize_t): nvrtcResult {.discardable,
-    cdecl, importc: "nvrtcGetProgramLogSize", dynlib: libNvrtc.}
+    cdecl, importc: "nvrtcGetProgramLogSize", dynlib: libNvrtc, raises: [].}
 
 proc nvrtcGetProgramLog*(prog: nvrtcProgram; log: cstring): nvrtcResult {.discardable, cdecl,
-    importc: "nvrtcGetProgramLog", dynlib: libNvrtc.}
+    importc: "nvrtcGetProgramLog", dynlib: libNvrtc, raises: [].}
 
 
 ######################################################################
@@ -1835,10 +1835,10 @@ type
     cudaMemcpyDefault = 4     ## < Direction of the transfer is inferred from the pointer values. Requires unified virtual addressing
 
 
-proc cudaRuntimeGetVersion*(runtimeVersion: var cint): cudaError_t {.cdecl, importc: "cudaRuntimeGetVersion", dynlib: libCudaRT.}
+proc cudaRuntimeGetVersion*(runtimeVersion: var cint): cudaError_t {.cdecl, importc: "cudaRuntimeGetVersion", dynlib: libCudaRT, raises: [].}
 
 proc cudaGetDeviceProperties*(prop: var cudaDeviceProp; device: cint): cudaError_t {.
-    cdecl, importc: "cudaGetDeviceProperties", dynlib: libCudaRT.}
+    cdecl, importc: "cudaGetDeviceProperties", dynlib: libCudaRT, raises: [].}
 
 ######################################################################
 ################################ Utilities ###########################

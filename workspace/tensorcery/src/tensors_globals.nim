@@ -15,33 +15,23 @@ import ./compute_graph/ops_2i1o/ops_add
 import ./compute_graph/ops_1iNo/ops_split
 
 proc gMetalEngineErased(_: static Runtime = runMetal): AnyEngine =
-  var g {.global.}: MetalEngine
-  if g.isNil():
-    g = newEngine(runMetal)
+  let g {.global.} = newEngine(runMetal)
   g.to(AnyEngine)
 
 proc gOpenCLEngineErased(_: static Runtime = runOpenCL): AnyEngine =
-  var g {.global.}: OpenCLEngine
-  if g.isNil():
-    g = newEngine(runOpenCL)
+  let g {.global.} = newEngine(runOpenCL)
   g.to(AnyEngine)
 
 proc gVulkanEngineErased(_: static Runtime = runVulkan): AnyEngine =
-  var g {.global.}: VulkanEngine
-  if g.isNil():
-    g = newEngine(runVulkan)
+  let g {.global.} = newEngine(runVulkan)
   g.to(AnyEngine)
 
 proc gWebgpuEngineErased(_: static Runtime = runWebGPU): AnyEngine =
-  var g {.global.}: WebgpuEngine
-  if g.isNil():
-    g = newEngine(runWebGPU)
+  let g {.global.} = newEngine(runWebGPU)
   g.to(AnyEngine)
 
 proc gCudaEngineErased(_: static Runtime = runCuda): AnyEngine =
-  var g {.global.}: CudaEngine
-  if g.isNil():
-    g = newEngine(runCuda)
+  let g {.global.} = newEngine(runCuda)
   g.to(AnyEngine)
 
 proc gEngine*(run: static Runtime): AnyEngine =

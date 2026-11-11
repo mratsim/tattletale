@@ -92,7 +92,7 @@ proc getPlatformIDs*(
   num_entries: cl_uint,
   platforms: Pplatform_id,
   num_platforms: ptr cl_uint
-): TClResult {.importc: "clGetPlatformIDs", dynlib: ClLib.}
+): TClResult {.importc: "clGetPlatformIDs", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Device API
@@ -104,7 +104,7 @@ proc getDeviceIDs*(
   num_entries: cl_uint,
   devices: Pdevice_id,
   num_devices: ptr cl_uint
-): TClResult {.importc: "clGetDeviceIDs", dynlib: ClLib.}
+): TClResult {.importc: "clGetDeviceIDs", dynlib: ClLib, raises: [].}
 
 proc getDeviceInfo*(
   device: Pdevice_id,
@@ -112,7 +112,7 @@ proc getDeviceInfo*(
   param_value_size: cl_size_t,
   param_value: pointer,
   param_value_size_ret: ptr cl_size_t
-): TClResult {.importc: "clGetDeviceInfo", dynlib: ClLib.}
+): TClResult {.importc: "clGetDeviceInfo", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Context API
@@ -128,7 +128,7 @@ proc createContext*(
   pfn_notify: PContextCallback,
   user_data: pointer,
   errcode_ret: ptr TClResult
-): Pcontext {.importc: "clCreateContext", dynlib: ClLib.}
+): Pcontext {.importc: "clCreateContext", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Command Queue API
@@ -139,7 +139,7 @@ proc createCommandQueue*(
   device: Pdevice_id,
   properties: cl_ulong,
   errcode_ret: ptr TClResult
-): Pcommand_queue {.importc: "clCreateCommandQueue", dynlib: ClLib.}
+): Pcommand_queue {.importc: "clCreateCommandQueue", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Memory Object API
@@ -151,11 +151,11 @@ proc createBuffer*(
   size: cl_size_t,
   host_ptr: pointer,
   errcode_ret: ptr TClResult
-): Pmem {.importc: "clCreateBuffer", dynlib: ClLib.}
+): Pmem {.importc: "clCreateBuffer", dynlib: ClLib, raises: [].}
 
 proc releaseMemObject*(
   memobj: Pmem
-): TClResult {.importc: "clReleaseMemObject", dynlib: ClLib.}
+): TClResult {.importc: "clReleaseMemObject", dynlib: ClLib, raises: [].}
 
 proc enqueueWriteBuffer*(
   command_queue: Pcommand_queue,
@@ -167,7 +167,7 @@ proc enqueueWriteBuffer*(
   num_events_in_wait_list: cl_uint,
   event_wait_list: pointer,
   event: pointer
-): TClResult {.importc: "clEnqueueWriteBuffer", dynlib: ClLib.}
+): TClResult {.importc: "clEnqueueWriteBuffer", dynlib: ClLib, raises: [].}
 
 proc enqueueReadBuffer*(
   command_queue: Pcommand_queue,
@@ -179,7 +179,7 @@ proc enqueueReadBuffer*(
   num_events_in_wait_list: cl_uint,
   event_wait_list: pointer,
   event: pointer
-): TClResult {.importc: "clEnqueueReadBuffer", dynlib: ClLib.}
+): TClResult {.importc: "clEnqueueReadBuffer", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Program & Kernel API
@@ -191,7 +191,7 @@ proc createProgramWithSource*(
   strings: cstringArray,
   lengths: ptr cl_size_t,
   errcode_ret: ptr TClResult
-): Pprogram {.importc: "clCreateProgramWithSource", dynlib: ClLib.}
+): Pprogram {.importc: "clCreateProgramWithSource", dynlib: ClLib, raises: [].}
 
 proc buildProgram*(
   program: Pprogram,
@@ -200,7 +200,7 @@ proc buildProgram*(
   options: cstring,
   pfn_notify: pointer,
   user_data: pointer
-): TClResult {.importc: "clBuildProgram", dynlib: ClLib.}
+): TClResult {.importc: "clBuildProgram", dynlib: ClLib, raises: [].}
 
 proc getProgramBuildInfo*(
   program: Pprogram,
@@ -209,28 +209,28 @@ proc getProgramBuildInfo*(
   param_value_size: cl_size_t,
   param_value: pointer,
   param_value_size_ret: ptr cl_size_t
-): TClResult {.importc: "clGetProgramBuildInfo", dynlib: ClLib.}
+): TClResult {.importc: "clGetProgramBuildInfo", dynlib: ClLib, raises: [].}
 
 proc releaseProgram*(
   program: Pprogram
-): TClResult {.importc: "clReleaseProgram", dynlib: ClLib.}
+): TClResult {.importc: "clReleaseProgram", dynlib: ClLib, raises: [].}
 
 proc createKernel*(
   program: Pprogram,
   kernel_name: cstring,
   errcode_ret: ptr TClResult
-): Pkernel {.importc: "clCreateKernel", dynlib: ClLib.}
+): Pkernel {.importc: "clCreateKernel", dynlib: ClLib, raises: [].}
 
 proc releaseKernel*(
   kernel: Pkernel
-): TClResult {.importc: "clReleaseKernel", dynlib: ClLib.}
+): TClResult {.importc: "clReleaseKernel", dynlib: ClLib, raises: [].}
 
 proc setKernelArg*(
   kernel: Pkernel,
   arg_index: cl_uint,
   arg_size: cl_size_t,
   arg_value: pointer
-): TClResult {.importc: "clSetKernelArg", dynlib: ClLib.}
+): TClResult {.importc: "clSetKernelArg", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Execution API
@@ -246,7 +246,7 @@ proc enqueueNDRangeKernel*(
   num_events_in_wait_list: cl_uint,
   event_wait_list: pointer,
   event: pointer
-): TClResult {.importc: "clEnqueueNDRangeKernel", dynlib: ClLib.}
+): TClResult {.importc: "clEnqueueNDRangeKernel", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Flush / Finish
@@ -254,11 +254,11 @@ proc enqueueNDRangeKernel*(
 
 proc finish*(
   command_queue: Pcommand_queue
-): TClResult {.importc: "clFinish", dynlib: ClLib.}
+): TClResult {.importc: "clFinish", dynlib: ClLib, raises: [].}
 
 proc flush*(
   command_queue: Pcommand_queue
-): TClResult {.importc: "clFlush", dynlib: ClLib.}
+): TClResult {.importc: "clFlush", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Context & Queue Release
@@ -266,8 +266,8 @@ proc flush*(
 
 proc releaseContext*(
   context: Pcontext
-): TClResult {.importc: "clReleaseContext", dynlib: ClLib.}
+): TClResult {.importc: "clReleaseContext", dynlib: ClLib, raises: [].}
 
 proc releaseCommandQueue*(
   command_queue: Pcommand_queue
-): TClResult {.importc: "clReleaseCommandQueue", dynlib: ClLib.}
+): TClResult {.importc: "clReleaseCommandQueue", dynlib: ClLib, raises: [].}

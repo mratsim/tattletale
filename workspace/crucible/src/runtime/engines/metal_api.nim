@@ -46,11 +46,7 @@ when defined(macosx):
   proc newMetalContext(): MetalContext =
     result = MetalContext()
     result.device = objc.MTLCreateSystemDefaultDevice()
-    if objc.isNil(result.device):
-      raiseAssert("no Metal device")
     result.queue = objc.msgSend(result.device, objc.`$$`("newCommandQueue"))
-    if objc.isNil(result.queue):
-      raiseAssert("newCommandQueue returned nil")
 
   proc `=destroy`(cache: var MetalCache) =
     objc.withMemPool:
