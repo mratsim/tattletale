@@ -26,6 +26,7 @@ iface *AnyTensorImpl:
     func shape(): Span[int] {.inline.}
     func strides(): Span[int] {.inline.}
     func size(): int {.inline.}
+    func offset(): int {.inline.}
     func isMaterialized(): bool {.inline.}
 
 iface *TensorNode:
@@ -81,6 +82,7 @@ func bridge*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): lent 
 iface *AnyEngine:
     proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
     proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
+    proc newViewNode(src: TensorNode, shape: openArray[int], strides: openArray[int], offset: int): TensorNode {.inline.}
     proc upload(node: TensorNode, src: openArray[float32]) {.inline.}
     proc upload(node: TensorNode, src: openArray[bfloat16]) {.inline.}
     proc download1(dst: pointer, node: TensorNode) {.inline.}

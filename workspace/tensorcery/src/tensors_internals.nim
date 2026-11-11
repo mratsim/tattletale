@@ -12,6 +12,7 @@ import workspace/crucible
 import workspace/ceramic
 import workspace/math
 import workspace/iface
+import workspace/design_by_contract
 import ./tensors_internal_types
 
 export tensors_internal_types
@@ -47,6 +48,9 @@ func strides*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): Span
 
 func dtype*[H, T; Rank: static int](t: TensorImpl[DeviceMem[H, T], Rank]): Dtype {.inline.} =
   toDtype(T)
+
+func offset*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {.inline.} =
+  t.offset
 
 func isMaterialized*(t: TensorImpl): bool {.inline.} =
   not t.data.isNil()
@@ -130,6 +134,16 @@ func newPlaceholderImpl[E: HwEngine, T](
   result.shape[0 ..< rank] = shape
   rowMajorStrides(result.stride, result.shape)
 
+func newViewImpl[H, T; Rank: static int](
+      src: TensorImpl[DeviceMem[H, T], Rank],
+      shape, strides: openArray[int],
+      offset: int): TensorImpl[DeviceMem[H, T], Rank] {.inline.} =
+  result = TensorImpl[DeviceMem[H, T], Rank]()
+  result.data = src.data
+  result.offset = offset
+  result.shape[0 ..< Rank] = shape
+  result.stride[0 ..< Rank] = strides
+
 proc newTensorImpl[E: HwEngine, T](
       engine: E,
       _: typedesc[T],
@@ -151,6 +165,14 @@ proc materialize*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   match(ElemType, dtype, Rank, shape.len):
     engine.newPlaceholderImpl(ElemType, Rank, shape).to(TensorNode)
+
+proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int): TensorNode {.contracts.} =
+  ## A view over `src`'s buffer: shared data, `offset` the first element, `strides` the element steps per axis.
+  {.precondition: src.isMaterialized().}
+  let si = src.getImpl()
+  match(ElemType, si.dtype(), Rank, shape.len):
+    let s = si.to(engine.getTensorImplType(ElemType, Rank))
+    newViewImpl(s, shape, strides, offset).to(TensorNode)
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   match(ElemType, dtype, Rank, shape.len):
