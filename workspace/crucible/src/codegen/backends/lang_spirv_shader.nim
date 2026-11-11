@@ -761,8 +761,8 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
       # a pointer-typed local, its value is the pointee variable's address
       return fn.ptrTargets[e.name]
     if fn.addrParams.hasKey(e.name):
-      let t = ctx.resolveExprType(fn, e)
-      return ctx.builder.opLoad(ctx.resolveTyId(ctx.valueTy(t)), fn.addrParams[e.name])
+      # A by-ref parameter is the pointer itself, deref sites load the pointee
+      return fn.addrParams[e.name]
     raiseAssert("unknown symbol " & e.name & " in " & fn.name)
   of eAdd, eSub, eMul, eDiv, eMod, eShl, eShr, eBitAnd, eBitOr, eBitXor:
     let opTy = e.opType
