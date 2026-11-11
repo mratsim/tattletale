@@ -129,7 +129,7 @@ proc `+`*(a, b: Tensor): Tensor {.inline.} =
 # #######################################################################
 
 proc gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor {.inline.} =
-  ## D = alpha·A·B + beta·C over the last two axes, C nil at beta = 0
+  ## D = alpha·A·B + beta·C over the last two axes, C nil requires beta = 0
   let cn = if c.isNil(): NilTensorNode() else: c.node
   Tensor(engine: a.engine, node: tn_gemm(a.engine, alpha, a.node, b.node, beta, cn))
 

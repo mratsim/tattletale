@@ -103,10 +103,11 @@ proc tn_gemm*(
     engine: AnyEngine,
     alpha: float32, a, b: TensorNode,
     beta: float32, c: TensorNode = NilTensorNode()): TensorNode {.contracts.} =
-  ## D = alpha·A·B + beta·C, C nil at beta = 0.
+  ## D = alpha·A·B + beta·C, C nil requires beta = 0.
   let
     ia = a.getImpl()
     ib = b.getImpl()
+  {.precondition: beta == 0.0'f32 or not c.isNil().}
   {.precondition: ia.shape().p.len == 2.}
   {.precondition: ib.shape().p.len == 2.}
   {.precondition: ia.dtype() == ib.dtype().}

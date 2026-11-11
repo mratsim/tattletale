@@ -57,4 +57,22 @@ proc runGemmTest*(run: static Runtime, name: string) =
       eval(d)
       doAssert d.allClose(expect.toTensor(run, m, n), rtol = 1e-5'f32, atol = 1e-3'f32),
         name & ": accumulate " & $((m, k, n))
+
+    block: # C with beta = 0 is accepted, never loaded
+      let
+        garbageC = rng.randomSeq(float32, m * n)
+        C = garbageC.toTensor(run, m, n)
+      var expect = newSeq[float32](m * n)
+      expect.refGemm(a, b, m, k, n, 1.0'f32, 0.0'f32)
+      let d = gemm(1.0'f32, A, B, 0.0'f32, C)
+      eval(d)
+      doAssert d.allClose(expect.toTensor(run, m, n), rtol = 1e-5'f32, atol = 1e-3'f32),
+        name & ": beta-0 ignores C " & $((m, k, n))
+
+    block: # nil C with beta != 0 is a construction error
+      try:
+        discard gemm(1.0'f32, A, B, 2.0'f32)
+        raise newException(CatchableError, name & ": nil C with beta != 0 must be rejected")
+      except AssertionDefect:
+        discard
   echo "tensorcery gemm (", name, "): all checks passed"
