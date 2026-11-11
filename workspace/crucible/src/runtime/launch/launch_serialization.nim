@@ -93,7 +93,10 @@ func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple
   when T is DeviceMem:
     result = (8, 8)  # 8 bytes, one device address slot
   elif T is ref:
-    result = (8, 8)  # one pointer-width slot for the address the packers write
+    when typeof(default(T)[]) is DeviceMem:
+      result = (8, 8)  # one device address slot matching the width the packers write
+    else:
+      raiseAssert("[Tattletale-Crucible] unsupported reference type on GPU \'" & $T & "\'.")
   elif T is object|tuple:
     when isStaticArg(T):
       result = (0, 1)

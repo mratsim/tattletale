@@ -186,12 +186,11 @@ proc store[T](ctx: var SerializationCtx, v: T, _: int) =
           copyMem(blob[off].addr, a.unsafeAddr, 8)
           inc off, 8
         else:
-          blob.packFrom(off, f, cgGlsl)
+          {.error: "[Tattletale-Crucible] unsupported reference type on GPU \'" & $typeof(f) & "\'.".}
       else:
         blob.packFrom(off, f, cgGlsl)
     off = off.round_multiple_up(lay.align)
-    doAssert off == lay.size,
-      "host packing of " & $T & " does not match the device layout"
+    doAssert off == lay.size, "host packing of " & $T & " does not match the device layout"
   else:
     blob.packFrom(off, v, cgGlsl)
   if lay.size > 0:

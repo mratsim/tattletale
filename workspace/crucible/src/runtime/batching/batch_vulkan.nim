@@ -137,7 +137,7 @@ proc store[T](pack: var EntryPack, v: T, _: int) =
           copyMem(blob[off].addr, a.unsafeAddr, 8)
           inc off, 8
         else:
-          blob.packFrom(off, f, cgGlsl)
+          {.error: "[Tattletale-Crucible] unsupported reference type on GPU \'" & $typeof(f) & "\'.".}
       else:
         blob.packFrom(off, f, cgGlsl)
     off = off.round_multiple_up(lay.align)
