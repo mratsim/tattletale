@@ -315,7 +315,7 @@ proc launchKernelImpl*(engine: WebgpuEngine, output: auto, args: tuple, cfg: Lau
     wgpuBindGroupRelease(bg)
 
   if scalarBytes.len > 0:
-    wgpuQueueWriteBuffer(queue, scratch, 0, scalarBytes[0].addr, scalarBytes.len.csize_t)
+    wgpuQueueWriteBuffer(queue, scratch, 0, scalarBytes)
 
   let encoder = wgpuDeviceCreateCommandEncoder(device, nil)
   if encoder == nil:
@@ -365,7 +365,7 @@ proc allocDeviceImpl(engine: WebgpuEngine, n: int): WGPUBuffer =
     raiseAssert("WebGPU: failed to create a " & $n & "-byte device buffer")
 
 proc copyToDeviceFromHostImpl(engine: WebgpuEngine, dst: WGPUBuffer, src: pointer, n: int) {.inline.} =
-  wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, src, n.csize_t)
+  wgpuQueueWriteBuffer(engine.ctx.queue, dst, 0, cast[ptr UncheckedArray[byte]](src).toOpenArray(0, n - 1))
 
 proc copyToHostFromDeviceImpl(engine: WebgpuEngine, dst: pointer, src: WGPUBuffer, n: int) =
   let device = engine.ctx.device

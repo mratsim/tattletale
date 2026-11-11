@@ -190,7 +190,7 @@ proc replay*(batch: OpenCLBatch) =
       of skBuffer:
         check setKernelArg(e.kernel, argIdx, cl_size_t(sizeof(Pmem)), e.borrowedBuffers[slot.buffer].unsafeAddr)
       of skBytes:
-        check setKernelArg(e.kernel, argIdx, cl_size_t(slot.size), e.scalars[slot.off].unsafeAddr)
+        check setKernelArg(e.kernel, argIdx, e.scalars.toOpenArray(slot.off, slot.off + slot.size - 1))
       inc argIdx
     let globalSize = [cl_size_t(e.fleet.x * e.squadron.x),
                       cl_size_t(e.fleet.y * e.squadron.y),

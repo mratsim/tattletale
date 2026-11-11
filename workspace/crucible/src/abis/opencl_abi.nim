@@ -5,6 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 import std/macros
+import workspace/crucible/src/abis/c_abi
 
 # ═══════════════════════════════════════════════════════════════════════
 # Scalar types
@@ -225,12 +226,11 @@ proc releaseKernel*(
   kernel: Pkernel
 ): TClResult {.importc: "clReleaseKernel", dynlib: ClLib, raises: [].}
 
-proc setKernelArg*(
-  kernel: Pkernel,
-  arg_index: cl_uint,
-  arg_size: cl_size_t,
-  arg_value: pointer
-): TClResult {.importc: "clSetKernelArg", dynlib: ClLib, raises: [].}
+proc setKernelArg*(kernel: Pkernel, arg_index: cl_uint, arg: openArray[byte]): TClResult {.
+    wrapLenOpenArrayType: cl_size_t, inline, importc: "clSetKernelArg", dynlib: ClLib, raises: [].}
+
+proc setKernelArg*(kernel: Pkernel, arg_index: cl_uint, arg_size: cl_size_t,
+    arg_value: pointer): TClResult {.importc: "clSetKernelArg", dynlib: ClLib, raises: [].}
 
 # ═══════════════════════════════════════════════════════════════════════
 # Execution API
