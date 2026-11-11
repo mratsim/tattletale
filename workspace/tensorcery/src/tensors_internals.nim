@@ -14,6 +14,7 @@ import workspace/math
 import workspace/iface
 import workspace/design_by_contract
 import ./tensors_internal_types
+import ./compute_graph/batching
 
 export tensors_internal_types
 
@@ -33,9 +34,6 @@ export tensors_internal_types
 # This allows batching compute all-at-once, reducing the CPU<->GPU synchronization overhead.
 # Furthermore, when backprop is added, the graph can be reused for backward propagation.
 
-template getTensorImplType*(engine: HwEngine, T: typedesc, rank: static int): typedesc =
-  TensorImpl[engine.getMemHandleType(T), rank]
-
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
@@ -52,9 +50,6 @@ func dtype*[H, T; Rank: static int](t: TensorImpl[DeviceMem[H, T], Rank]): Dtype
 func offset*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {.inline.} =
   t.offset
 
-func isMaterialized*(t: TensorImpl): bool {.inline.} =
-  cast[ptr uint64](unsafeAddr t.data[])[] != SentinelHandle
-
 func size*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {.inline.} =
   result = 1
   for i in 0 ..< Rank:
@@ -70,12 +65,6 @@ proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
 func opName*(t: TensorImpl): string {.inline.} =
   ## Name in the computation graph
   "Tensor"
-
-proc isMaterialized*(n: TensorNode): bool {.inline.} =
-  n.getImpl().isMaterialized()
-
-proc size*(n: TensorNode): int {.inline.} =
-  n.getImpl().size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Host<->Device copies
@@ -137,18 +126,6 @@ func newPlaceholderImpl[E: HwEngine, T](
   result = (engine.getTensorImplType(T, rank))()
   result.shape[0 ..< rank] = shape
   rowMajorStrides(result.stride, result.shape)
-  result.data.new()
-  cast[ptr uint64](unsafeAddr result.data[])[] = SentinelHandle
-
-func newViewImpl[H, T; Rank: static int](
-      src: TensorImpl[DeviceMem[H, T], Rank],
-      shape, strides: openArray[int],
-      offset: int): TensorImpl[DeviceMem[H, T], Rank] {.inline.} =
-  result = TensorImpl[DeviceMem[H, T], Rank]()
-  result.data = src.data
-  result.offset = offset
-  result.shape[0 ..< Rank] = shape
-  result.stride[0 ..< Rank] = strides
 
 proc newTensorImpl[E: HwEngine, T](
       engine: E,
@@ -172,13 +149,33 @@ proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[
   match(ElemType, dtype, Rank, shape.len):
     engine.newPlaceholderImpl(ElemType, Rank, shape).to(TensorNode)
 
-proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int): TensorNode {.contracts.} =
-  ## A view over `src`'s buffer: shared data, `offset` the first element, `strides` the element steps per axis.
+proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int, srcOpName: string): TensorNode {.contracts.} =
   let si = src.getImpl()
+  {.precondition: si.shape().p.len == shape.len.}
   match(ElemType, si.dtype(), Rank, shape.len):
     let s = si.to(engine.getTensorImplType(ElemType, Rank))
-    newViewImpl(s, shape, strides, offset).to(TensorNode)
+    let r = newViewImpl(s, shape, strides, offset)
+    if s.isMaterialized():
+      r.offset = s.offset + offset
+    ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorNode)
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   match(ElemType, dtype, Rank, shape.len):
     engine.newTensorImpl(ElemType, Rank, shape).to(TensorNode)
+
+proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+  let v = n.to(ViewNode)
+  if v.isNil():
+    return false
+  engine.enqueueNode(batch, v.src)
+  let s = v.src.getImpl().to(engine.getTensorImplType(T, rank))
+  let r = v.r.to(engine.getTensorImplType(T, rank))
+  r.data = s.data
+  r.offset = r.offset + s.offset
+  return true
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+registerOp("View", enqueueView)

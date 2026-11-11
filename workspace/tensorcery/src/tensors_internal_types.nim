@@ -18,10 +18,14 @@ import ./tensors_public_types
 
 export tensors_public_types
 
+# ############################################################
+#
+#              Types and interfaces
+#
+# ############################################################
+
 type Span*[T] = object
   p*: openArray[T]
-
-const SentinelHandle* = 0xFACADE'u64
 
 iface *AnyTensorImpl:
     func dtype(): Dtype {.inline.}
@@ -36,10 +40,14 @@ iface *TensorNode:
     func opName(): string {.inline.}
     proc isNil(): bool {.inline.}
 
-type NilNode = ref object of RootRef
-proc getImpl(n: NilNode): AnyTensorImpl {.inline.} = AnyTensorImpl()
-func opName(n: NilNode): string {.inline.} = "Nil"
-proc NilTensorNode*(): TensorNode {.inline.} = NilNode(nil).to(TensorNode)
+iface *AnyEngine:
+    proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
+    proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
+    proc newViewNode(src: TensorNode, shape: openArray[int], strides: openArray[int], offset: int, srcOpName: string): TensorNode {.inline.}
+    proc upload(node: TensorNode, src: openArray[float32]) {.inline.}
+    proc upload(node: TensorNode, src: openArray[bfloat16]) {.inline.}
+    proc download1(dst: pointer, node: TensorNode) {.inline.}
+    proc eval(roots: var openArray[TensorNode]) {.inline.}
 
 type
   TensorImpl*[DeviceMem; Rank: static int] = ref object
@@ -53,12 +61,22 @@ type
     offset: int
     layout: L
 
-  PosNode*[C] = ref object of RootRef
-    core*: C
-    pos*: int
+  ViewNode* = ref object
+    r*: AnyTensorImpl
+    src*: TensorNode
+    srcOpName*: string
 
-proc allocDataIn*[E: HwEngine, H, T; Rank: static int](engine: E, impl: TensorImpl[DeviceMem[H, T], Rank]) {.inline, nodestroy.} =
-  impl.data[] = engine.allocDevice(T, impl.size())
+  NilNode* = ref object
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Layout
+# ═══════════════════════════════════════════════════════════════════════
+
+func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: array[Rank, int]) {.inline.} =
+  var acc = 1
+  for j in 1 ..< Rank + 1:
+    strides[Rank - j] = acc
+    acc *= shape[Rank - j]
 
 template getLayoutType*(rank: static int): typedesc =
   when rank == 1:
@@ -74,24 +92,53 @@ template getLayoutType*(rank: static int): typedesc =
   else:
     {.error: "getLayoutType: rank " & $rank & " unsupported".}
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Tensor and element types
+# ═══════════════════════════════════════════════════════════════════════
+
+func isMaterialized*(t: TensorImpl): bool {.inline.} =
+  not t.data.isNil()
+
+template getTensorImplType*(engine: HwEngine, T: typedesc, rank: static int): typedesc =
+  TensorImpl[engine.getMemHandleType(T), rank]
+
+proc allocDataIn*[E: HwEngine, H, T; Rank: static int](engine: E, impl: TensorImpl[DeviceMem[H, T], Rank]) {.inline.} =
+  impl.data.new()
+  impl.data[] = engine.allocDevice(T, impl.size())
+
 func bridge*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): lent TensorBridge[DeviceMem, getLayoutType(Rank)] {.inline.} =
   static: doAssert sizeof(t[]) == sizeof(TensorBridge[DeviceMem, getLayoutType(Rank)])
   return cast[ptr TensorBridge[DeviceMem, getLayoutType(Rank)]](t)[]
 
-iface *AnyEngine:
-    proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
-    proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
-    proc newViewNode(src: TensorNode, shape: openArray[int], strides: openArray[int], offset: int): TensorNode {.inline.}
-    proc upload(node: TensorNode, src: openArray[float32]) {.inline.}
-    proc upload(node: TensorNode, src: openArray[bfloat16]) {.inline.}
-    proc download1(dst: pointer, node: TensorNode) {.inline.}
-    proc eval(roots: var openArray[TensorNode]) {.inline.}
+func newViewImpl*[H, T; Rank: static int](
+      src: TensorImpl[DeviceMem[H, T], Rank],
+      shape, strides: openArray[int],
+      offset: int): TensorImpl[DeviceMem[H, T], Rank] {.inline.} =
+  result = TensorImpl[DeviceMem[H, T], Rank]()
+  result.data = src.data
+  result.offset = offset
+  result.shape[0 ..< Rank] = shape
+  result.stride[0 ..< Rank] = strides
 
-func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: array[Rank, int]) {.inline.} =
-  var acc = 1
-  for j in 1 ..< Rank + 1:
-    strides[Rank - j] = acc
-    acc *= shape[Rank - j]
+# ═══════════════════════════════════════════════════════════════════════
+#  Graph
+# ═══════════════════════════════════════════════════════════════════════
+
+proc isMaterialized*(n: TensorNode): bool {.inline.} =
+  n.getImpl().isMaterialized()
+
+proc size*(n: TensorNode): int {.inline.} =
+  n.getImpl().size()
+
+proc getImpl(n: NilNode): AnyTensorImpl {.inline.} = AnyTensorImpl()
+func opName(n: NilNode): string {.inline.} = "Nil"
+proc NilTensorNode*(): TensorNode {.inline.} = NilNode(nil).to(TensorNode)
+
+func getImpl*(n: ViewNode): AnyTensorImpl {.inline.} =
+  n.r
+
+func opName*(n: ViewNode): string {.inline.} =
+  n.srcOpName
 
 # ═══════════════════════════════════════════════════════════════════════
 #  2D dispatch: one body over (element type, rank), registry-driven

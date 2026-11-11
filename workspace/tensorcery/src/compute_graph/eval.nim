@@ -13,8 +13,6 @@ import workspace/iface
 import workspace/math
 import ../tensors_internals
 import ../compute_graph/batching
-import ../compute_graph/ops_2i1o/ops_add
-import ../compute_graph/ops_1iNo/ops_split
 
 proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorNode]) =
   if roots.len == 0:

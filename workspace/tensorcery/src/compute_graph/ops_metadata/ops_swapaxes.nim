@@ -7,13 +7,9 @@
 
 {.experimental: "views".}
 
-import workspace/crucible
-import workspace/ceramic
 import workspace/iface
-import workspace/math
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
 
 # ############################################################
 #
@@ -21,63 +17,14 @@ import ../batching
 #
 # ############################################################
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Defunctionalization
-# ═══════════════════════════════════════════════════════════════════════
-
-type
-  SwapaxesNode* = ref object
-    r: AnyTensorImpl      # view slot over the source storage
-    a: TensorNode
-    axis1, axis2: int
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Interface
-# ═══════════════════════════════════════════════════════════════════════
-
-func getImpl*(n: SwapaxesNode): AnyTensorImpl {.inline.} =
-  n.r
-
-func opName*(n: SwapaxesNode): string {.inline.} =
-  "Swapaxes"
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Public
-# ═══════════════════════════════════════════════════════════════════════
-
 proc tn_swapaxes*(engine: AnyEngine, x: TensorNode, axis1, axis2: int): TensorNode {.contracts.} =
+  ## A view of `x` with `axis1` and `axis2` exchanged, sharing `x`'s buffer.
   let ix = x.getImpl()
   {.precondition: axis1 >= 0 and axis1 < ix.shape().p.len.}
   {.precondition: axis2 >= 0 and axis2 < ix.shape().p.len.}
   {.precondition: axis1 != axis2.}
   var outShape = @(ix.shape().p)
   swap(outShape[axis1], outShape[axis2])
-  return SwapaxesNode(a: x, axis1: axis1, axis2: axis2,
-      r: engine.newPlaceholderNode(ix.dtype(), outShape).getImpl()
-    ).to(TensorNode)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Internal
-# ═══════════════════════════════════════════════════════════════════════
-
-proc enqueueSwapaxes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
-  let asSwap = n.to(SwapaxesNode)
-  if asSwap.isNil():
-    return false
-  engine.enqueueNode(batch, asSwap.a)
-  let src = asSwap.a.getImpl().to(engine.getTensorImplType(T, rank))
-  let r = asSwap.r.to(engine.getTensorImplType(T, rank))
-  # a strided view over the source storage: same data and offset,
-  # shape permuted at construction, strides swapped to match
-  r.data = src.data
-  r.offset = src.offset
-  r.stride = src.stride
-  swap(r.stride[asSwap.axis1], r.stride[asSwap.axis2])
-  return true
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
-
-registerOp("Swapaxes", enqueueSwapaxes)
+  var outStrides = @(ix.strides().p)
+  swap(outStrides[axis1], outStrides[axis2])
+  return engine.newViewNode(x, outShape, outStrides, 0, "Swapaxes")

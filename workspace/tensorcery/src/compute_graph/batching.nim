@@ -10,7 +10,7 @@
 import std/tables
 import std/macros
 import workspace/crucible
-import ../tensors_internals
+import ../tensors_internal_types
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registry

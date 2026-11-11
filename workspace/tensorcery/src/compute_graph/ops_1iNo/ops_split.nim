@@ -25,4 +25,5 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
   partShape[axis] = partShape[axis] div k
   let strides = @(ix.strides().p)
   for i in 0 ..< k:
-    result.add(engine.newViewNode(x, partShape, strides, ix.offset() + i * partShape[axis] * strides[axis]))
+    result.add(engine.newViewNode(x, partShape, strides,
+        i * partShape[axis] * strides[axis], "Split"))
