@@ -995,6 +995,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
     # a pointer-typed local: the access chain runs on the variable directly
     var rootVar = 0'u32
     var memberIdxs: seq[int]
+    var atIdxs: seq[uint32]
     var chainOk = true
     var walk = e.atBase
     while chainOk:
@@ -1029,6 +1030,12 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
           break
         memberIdxs.insert(mi, 0)
         walk = walk.dotBase
+      of eAt:
+        # nested indexing: the index joins the access chain and the walk continues below it
+        let iVal = ctx.emitExpr(fn, walk.atIndex)
+        let iInt = ctx.convertValue(iVal, ctx.resolveExprType(fn, walk.atIndex), cirInt32())
+        atIdxs.insert(iInt, 0)
+        walk = walk.atBase
       else:
         chainOk = false
     let arrTy = ctx.resolveExprType(fn, e.atBase)
@@ -1040,6 +1047,7 @@ proc emitLhsPtr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr):
       var idxs: seq[uint32]
       for mi in memberIdxs:
         idxs.add ctx.builder.constUint(ctx.resolveScalarId(cirUint32()), uint64(mi))
+      idxs.add atIdxs
       idxs.add idxInt
       let ptrId = ctx.builder.opAccessChain(elemPtrTy, rootVar, idxs)
       result = (ptrId, arrTy.aElem, false, false)
