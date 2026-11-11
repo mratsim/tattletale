@@ -69,6 +69,9 @@ func opName*(n: AddNode): string {.inline.} =
 func size*(n: AddNode): int {.inline.} =
   n.r.size()
 
+func isMaterialized*(n: AddNode): bool {.inline.} =
+  n.getImpl().isMaterialized()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════

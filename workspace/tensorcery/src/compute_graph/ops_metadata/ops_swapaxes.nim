@@ -44,6 +44,9 @@ func opName*(n: SwapaxesNode): string {.inline.} =
 func size*(n: SwapaxesNode): int {.inline.} =
   n.r.size()
 
+func isMaterialized*(n: SwapaxesNode): bool {.inline.} =
+  n.getImpl().isMaterialized()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════

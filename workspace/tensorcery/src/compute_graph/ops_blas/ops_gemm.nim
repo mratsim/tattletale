@@ -95,6 +95,9 @@ func opName*(n: GemmNode): string {.inline.} =
 func size*(n: GemmNode): int {.inline.} =
   n.r.size()
 
+func isMaterialized*(n: GemmNode): bool {.inline.} =
+  n.getImpl().isMaterialized()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════

@@ -99,6 +99,9 @@ func opName*(n: allCloseNode): string {.inline.} =
 func size*(n: allCloseNode): int {.inline.} =
   n.r.size()
 
+func isMaterialized*(n: allCloseNode): bool {.inline.} =
+  n.getImpl().isMaterialized()
+
 func sameShape(a, b: openArray[int]): bool {.inline.} =
   if a.len != b.len:
     return false

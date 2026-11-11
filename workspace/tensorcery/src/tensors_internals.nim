@@ -53,7 +53,7 @@ func offset*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {
   t.offset
 
 func isMaterialized*(t: TensorImpl): bool {.inline.} =
-  not t.data.isNil()
+  cast[ptr uint64](unsafeAddr t.data[])[] != SentinelHandle
 
 func size*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {.inline.} =
   result = 1
@@ -69,9 +69,6 @@ proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
 
 func opName*(t: TensorImpl): string {.inline.} =
   ""
-
-proc isMaterialized*(n: TensorNode): bool {.inline.} =
-  n.getImpl().isMaterialized()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Host<->Device copies
@@ -133,6 +130,8 @@ func newPlaceholderImpl[E: HwEngine, T](
   result = (engine.getTensorImplType(T, rank))()
   result.shape[0 ..< rank] = shape
   rowMajorStrides(result.stride, result.shape)
+  result.data.new()
+  cast[ptr uint64](unsafeAddr result.data[])[] = SentinelHandle
 
 func newViewImpl[H, T; Rank: static int](
       src: TensorImpl[DeviceMem[H, T], Rank],
@@ -168,7 +167,6 @@ proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[
 
 proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int): TensorNode {.contracts.} =
   ## A view over `src`'s buffer: shared data, `offset` the first element, `strides` the element steps per axis.
-  {.precondition: src.isMaterialized().}
   let si = src.getImpl()
   match(ElemType, si.dtype(), Rank, shape.len):
     let s = si.to(engine.getTensorImplType(ElemType, Rank))

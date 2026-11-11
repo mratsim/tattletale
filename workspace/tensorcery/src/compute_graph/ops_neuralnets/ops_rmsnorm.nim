@@ -49,6 +49,9 @@ func opName*(n: RmsNormNode): string {.inline.} =
 func size*(n: RmsNormNode): int {.inline.} =
   n.r.size()
 
+func isMaterialized*(n: RmsNormNode): bool {.inline.} =
+  n.getImpl().isMaterialized()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════

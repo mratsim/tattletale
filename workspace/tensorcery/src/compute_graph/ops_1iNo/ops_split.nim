@@ -21,7 +21,6 @@ proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorN
   let ix = x.getImpl()
   {.precondition: axis >= 0 and axis < ix.shape().p.len.}
   {.precondition: ix.shape().p[axis] mod k == 0.}
-  {.precondition: x.isMaterialized().}
   var partShape = @(ix.shape().p)
   partShape[axis] = partShape[axis] div k
   let strides = @(ix.strides().p)

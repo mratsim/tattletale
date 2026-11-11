@@ -21,6 +21,8 @@ export tensors_public_types
 type Span*[T] = object
   p*: openArray[T]
 
+const SentinelHandle* = 0xFACADE'u64
+
 iface *AnyTensorImpl:
     func dtype(): Dtype {.inline.}
     func shape(): Span[int] {.inline.}
@@ -33,12 +35,14 @@ iface *TensorNode:
     proc getImpl(): AnyTensorImpl {.inline.}
     func opName(): string {.inline.}
     func size(): int {.inline.}
+    proc isMaterialized(): bool {.inline.}
     proc isNil(): bool {.inline.}
 
 type NilNode = ref object of RootRef
 proc getImpl(n: NilNode): AnyTensorImpl {.inline.} = AnyTensorImpl()
 func opName(n: NilNode): string {.inline.} = "Nil"
 func size(n: NilNode): int {.inline.} = 0
+func isMaterialized(n: NilNode): bool {.inline.} = false
 proc NilTensorNode*(): TensorNode {.inline.} = NilNode(nil).to(TensorNode)
 
 type
@@ -57,8 +61,7 @@ type
     core*: C
     pos*: int
 
-proc allocDataIn*[E: HwEngine, H, T; Rank: static int](engine: E, impl: TensorImpl[DeviceMem[H, T], Rank]) {.inline.} =
-  impl.data.new()
+proc allocDataIn*[E: HwEngine, H, T; Rank: static int](engine: E, impl: TensorImpl[DeviceMem[H, T], Rank]) {.inline, nodestroy.} =
   impl.data[] = engine.allocDevice(T, impl.size())
 
 template getLayoutType*(rank: static int): typedesc =
