@@ -68,7 +68,8 @@ proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
   t.to(AnyTensorImpl)
 
 func opName*(t: TensorImpl): string {.inline.} =
-  ""
+  ## Name in the computation graph
+  "Tensor"
 
 proc isMaterialized*(n: TensorNode): bool {.inline.} =
   n.getImpl().isMaterialized()
