@@ -117,15 +117,15 @@ when defined(macosx):
   template msgSendUInt*(self: ID, op: SEL): NSUInteger =
     cast[MsgSendUInt0](objc_msgSend)(self, op)
 
-  proc selRegisterName(str: cstring): SEL {.objcimport, importc: "sel_registerName".}
+  proc selRegisterName(str: cstring): SEL {.objcimport, importc: "sel_registerName", raises: [].}
 
   proc `$$`*(str: string): SEL {.inline.} =
     ## Returns the registered selector for `str`, `$$"alloc"` for example.
     selRegisterName(str.cstring)
 
-  proc getClass*(name: cstring): Class {.objcimport, importc: "objc_$1".}
+  proc getClass*(name: cstring): Class {.objcimport, importc: "objc_$1", raises: [].}
 
-  proc lookUpClass*(name: cstring): Class {.objcimport, importc: "objc_$1".}
+  proc lookUpClass*(name: cstring): Class {.objcimport, importc: "objc_$1", raises: [].}
 
   # ═════════════════════════════════════════════════
   # NSString bridge
@@ -182,7 +182,7 @@ when defined(macosx):
 
   import workspace/cpuplatforms/loadtime_functions
 
-  proc dlopen(path: cstring, mode: cint): pointer {.importc, header: "<dlfcn.h>".}
+  proc dlopen(path: cstring, mode: cint): pointer {.importc, header: "<dlfcn.h>", raises: [].}
   const RtlNow = 2  # RTLD_NOW on macOS (and Linux)
 
   proc loadFoundation() {.loadTime.} =
@@ -190,5 +190,5 @@ when defined(macosx):
     ## From here on, NS* classes are visible to `objc.getClass` and `objc.lookUpClass`.
     discard dlopen("/System/Library/Frameworks/Foundation.framework/Foundation", RtlNow)
 
-  proc MTLCreateSystemDefaultDevice*(): ID {.importc: "MTLCreateSystemDefaultDevice", cdecl, dynlib: "/System/Library/Frameworks/Metal.framework/Metal".}
+  proc MTLCreateSystemDefaultDevice*(): ID {.importc: "MTLCreateSystemDefaultDevice", cdecl, dynlib: "/System/Library/Frameworks/Metal.framework/Metal", raises: [].}
 

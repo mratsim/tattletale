@@ -71,7 +71,7 @@ proc `=destroy`(o: var RetainedMetalObject) =
 
 when defined(macosx):
 
-  proc msgSendUseResource(self: objc.ID, op: objc.SEL, resource: objc.ID, usage: objc.NSUInteger): objc.ID {.importc: "objc_msgSend", dynlib: "libobjc.A.dylib".}
+  proc msgSendUseResource(self: objc.ID, op: objc.SEL, resource: objc.ID, usage: objc.NSUInteger): objc.ID {.importc: "objc_msgSend", dynlib: "libobjc.A.dylib", raises: [].}
 
   proc compileIndirectPipelineState(device, library: objc.ID, entrypoint: string): objc.ID =
     let fn = objc.msgSend(library, objc.`$$`("newFunctionWithName:"),
