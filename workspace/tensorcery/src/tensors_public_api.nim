@@ -17,6 +17,11 @@ import ./compute_graph/ops_2i1o/ops_add
 import ./compute_graph/ops_1iNo/ops_split
 import ./compute_graph/ops_metadata/ops_swapaxes
 import ./compute_graph/ops_metadata/ops_views
+import ./compute_graph/ops_0i1o/ops_zeros
+import ./compute_graph/ops_0i1o/ops_ones
+import ./compute_graph/ops_0i1o/ops_full
+import ./compute_graph/ops_0i1o/ops_eye
+import ./compute_graph/ops_0i1o/ops_arange
 import ./compute_graph/ops_reductions/ops_allClose
 import ./compute_graph/ops_neuralnets/ops_rmsnorm
 import ./compute_graph/ops_neuralnets/ops_linear
@@ -69,6 +74,82 @@ proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime
 
 proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]): Tensor {.inline.} =
   data.toTensor(shape, run, T)
+
+# #######################################################################
+#
+#                            Factories
+#
+# #######################################################################
+
+proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+  ## A tensor of `shape` filled with zeros, materialized on eval.
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_zeros(dtype, shape))
+
+proc ones*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+  ## A tensor of `shape` filled with ones, materialized on eval.
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_ones(dtype, shape))
+
+proc full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+  ## A tensor of `shape` filled with the scalar `vals`, materialized on eval.
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_full(vals, dtype, shape))
+
+proc eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline.} =
+  ## n x n matrix with 1 on the k-th diagonal and 0 elsewhere.
+  ## Materialized on eval, a positive k sits above the main diagonal.
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_eye(n, n, k, dtype)).reshape([n, n])
+
+proc eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline.} =
+  ## n x m matrix with 1 on the k-th diagonal, 0 elsewhere,
+  ## materialized on eval.
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_eye(n, m, k, dtype)).reshape([n, m])
+
+proc arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+  ## rank-1 tensor [0, 1, ..., stop - 1], materialized on eval.
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_arange(0.0'f32, stop, 1.0'f32, dtype))
+
+proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor {.inline.} =
+  ## rank-1 tensor start + step*i for i in 0 ..< ceil((stop - start) / step).
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_arange(start, stop, step, dtype))
+
+proc zeros_like*(a: Tensor): Tensor {.inline.} =
+  ## A tensor of a's shape and dtype filled with zeros.
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_zeros(impl.dtype(), impl.shape().p))
+
+proc zeros_like*(a: Tensor, dtype: Dtype): Tensor {.inline.} =
+  ## A tensor of a's shape and `dtype` filled with zeros.
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_zeros(dtype, impl.shape().p))
+
+proc ones_like*(a: Tensor): Tensor {.inline.} =
+  ## A tensor of a's shape and dtype filled with ones.
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_ones(impl.dtype(), impl.shape().p))
+
+proc ones_like*(a: Tensor, dtype: Dtype): Tensor {.inline.} =
+  ## A tensor of a's shape and `dtype` filled with ones.
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_ones(dtype, impl.shape().p))
+
+proc full_like*(a: Tensor, vals: float32): Tensor {.inline.} =
+  ## A tensor of a's shape and dtype filled with the scalar `vals`.
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_full(vals, impl.dtype(), impl.shape().p))
+
+proc full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor {.inline.} =
+  ## A tensor of a's shape and `dtype` filled with the scalar `vals`.
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_full(vals, dtype, impl.shape().p))
 
 # #######################################################################
 #
