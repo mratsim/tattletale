@@ -329,7 +329,7 @@ type
     verifyIR*: bool
     ## Pass-boundary verification, on by default under `-d:CIR_verify`.
 
-proc computeCirSizeBytes(t: CirType): int =
+proc computeCirSizeBytes*(t: CirType): int =
   ## Byte size under the C layout with no alignment padding: a struct sums its fields, an array its elements, a pointer is one machine word.
   case t.kind
   of ctInt, ctUint, ctFloat, ctBf16:
@@ -352,9 +352,6 @@ proc computeCirSizeBytes(t: CirType): int =
   of ctVoid, ctProc, ctSpan:
     result = 0
 
-func isLargeStruct*(t: CirType): bool =
-  ## Its 24-byte threshold matches the C backend's 3-pointer by-value rule.
-  t != nil and t.kind == ctStruct and computeCirSizeBytes(t) > 24
 
 proc withAddressSpace*(t: CirType, addressSpace: AddressSpace): CirType =
   doAssert t != nil and t.kind in {ctPtr, ctAptr}

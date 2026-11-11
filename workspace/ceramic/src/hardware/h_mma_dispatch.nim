@@ -217,8 +217,12 @@ macro gemm_mma*(atom: static MmaAtom, scalars: varargs[typed]): untyped =
     if dV != 1 or aV != 1 or bV != 1:
       error("gemm_mma: universal atoms are the 1x1x1 scalar FMA (vpt 1), got " &
             $(dV) & "/" & $(aV) & "/" & $(bV))
+    let d = scalars[0]
+    let a = scalars[1]
+    let b = scalars[2]
+    let c = scalars[3]
     result = quote do:
-      `scalars[0]` = typeof(`scalars[0]`)(`scalars[1]` * `scalars[2]`) + `scalars[3]`
+      `d` = typeof(`d`)(`a`.to(float32) * `b`.to(float32) + `c`.to(float32))
   else:
     if not instr.startsWith("mma.sync.aligned."):
       error("gemm_mma: unsupported instruction `" & instr & "`")

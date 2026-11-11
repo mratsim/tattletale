@@ -1171,9 +1171,7 @@ func lowerProcBody(ctx: var CirFrontend, params: var seq[CirParam], formals: Nim
     for j in 0 ..< formal.len - 2:
       let pname = ctx.mintUniqueName(formal[j].strVal)
       let psym = sym(pname, typ)
-      params.add(CirParam(name: pname, typ: typ,
-        varParam: ftype.kind == nnkVarTy,
-        passByRef: isLargeStruct(typ)))
+      params.add(CirParam(name: pname, typ: typ, varParam: ftype.kind == nnkVarTy))
       ctx.declareLocal(formal[j].repr, psym)
   let ret = ctx.locals.retType
   if ret.kind != ctVoid:
