@@ -14,39 +14,37 @@ import ./compute_graph/eval
 import ./compute_graph/ops_2i1o/ops_add
 import ./compute_graph/ops_1iNo/ops_split
 
-var
-  gMetalEngineInstance: pointer
-  gOpenCLEngineInstance: pointer
-  gVulkanEngineInstance: pointer
-  gWebgpuEngineInstance: pointer
-  gCudaEngineInstance: pointer
+proc gMetalEngineErased(_: static Runtime = runMetal): AnyEngine =
+  var g {.global.}: MetalEngine
+  if g.isNil():
+    g = newEngine(runMetal)
+  g.to(AnyEngine)
 
-proc gMetalEngineErased(_: static Runtime = runMetal): AnyEngine {.inline.} =
-  if gMetalEngineInstance.isNil():
-    gMetalEngineInstance = cast[pointer](newEngine(runMetal))
-  cast[MetalEngine](gMetalEngineInstance).toAnyEngine()
+proc gOpenCLEngineErased(_: static Runtime = runOpenCL): AnyEngine =
+  var g {.global.}: OpenCLEngine
+  if g.isNil():
+    g = newEngine(runOpenCL)
+  g.to(AnyEngine)
 
-proc gOpenCLEngineErased(_: static Runtime = runOpenCL): AnyEngine {.inline.} =
-  if gOpenCLEngineInstance.isNil():
-    gOpenCLEngineInstance = cast[pointer](newEngine(runOpenCL))
-  cast[OpenCLEngine](gOpenCLEngineInstance).toAnyEngine()
+proc gVulkanEngineErased(_: static Runtime = runVulkan): AnyEngine =
+  var g {.global.}: VulkanEngine
+  if g.isNil():
+    g = newEngine(runVulkan)
+  g.to(AnyEngine)
 
-proc gVulkanEngineErased(_: static Runtime = runVulkan): AnyEngine {.inline.} =
-  if gVulkanEngineInstance.isNil():
-    gVulkanEngineInstance = cast[pointer](newEngine(runVulkan))
-  cast[VulkanEngine](gVulkanEngineInstance).toAnyEngine()
+proc gWebgpuEngineErased(_: static Runtime = runWebGPU): AnyEngine =
+  var g {.global.}: WebgpuEngine
+  if g.isNil():
+    g = newEngine(runWebGPU)
+  g.to(AnyEngine)
 
-proc gWebgpuEngineErased(_: static Runtime = runWebGPU): AnyEngine {.inline.} =
-  if gWebgpuEngineInstance.isNil():
-    gWebgpuEngineInstance = cast[pointer](newEngine(runWebGPU))
-  cast[WebgpuEngine](gWebgpuEngineInstance).toAnyEngine()
+proc gCudaEngineErased(_: static Runtime = runCuda): AnyEngine =
+  var g {.global.}: CudaEngine
+  if g.isNil():
+    g = newEngine(runCuda)
+  g.to(AnyEngine)
 
-proc gCudaEngineErased(_: static Runtime = runCuda): AnyEngine {.inline.} =
-  if gCudaEngineInstance.isNil():
-    gCudaEngineInstance = cast[pointer](newEngine(runCuda))
-  cast[CudaEngine](gCudaEngineInstance).toAnyEngine()
-
-proc gEngine*(run: static Runtime): AnyEngine {.inline.} =
+proc gEngine*(run: static Runtime): AnyEngine =
   when run == runMetal:
     gMetalEngineErased()
   elif run == runOpenCL:
