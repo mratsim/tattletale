@@ -41,4 +41,5 @@ proc runTest() =
       "axpy at " & $i & ": got " & $got[i] & " want " & $(2.5'f32 * (xs[i] + ys[i]))
   echo "[OK] batch launch wrapper instantiated outside crucible's scope"
 
-runTest()
+when isMainModule:
+  runTest()
