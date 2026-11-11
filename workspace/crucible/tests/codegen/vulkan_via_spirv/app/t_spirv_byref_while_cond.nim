@@ -42,6 +42,8 @@ proc runTest() =
   var engine = newEngine(runVulkan)
   engine.ingest(byrefWhileCondSpv)
   let oDev = engine.allocDevice(int32, 8)
+  var zeros: array[8, int32]
+  engine.copyToDeviceFromHost(oDev, zeros)
 
   engine.launchKernel("windowKernel", oDev, ())
   var got: array[8, int32]

@@ -51,6 +51,8 @@ proc runTest() =
   let outDir = "build/tests"
   createDir(outDir)
 
+  var zeros10: array[10, int32]
+
   block order:
     let spvPath = outDir / "t_spirv_byref_arg_order.spv"
     var f = open(spvPath, fmWrite)
@@ -62,6 +64,7 @@ proc runTest() =
     var engine = newEngine(runVulkan)
     engine.ingest(byrefArgOrderSpv)
     let oOrder = engine.allocDevice(int32, 10)
+    engine.copyToDeviceFromHost(oOrder, zeros10)
     engine.launchKernel("orderKernel", oOrder, ())
     var got: array[10, int32]
     engine.copyToHostFromDevice(got.toOpenArray(0, 9), oOrder)
@@ -82,6 +85,7 @@ proc runTest() =
     var engine = newEngine(runVulkan)
     engine.ingest(byrefTernSpv)
     let oTern = engine.allocDevice(int32, 10)
+    engine.copyToDeviceFromHost(oTern, zeros10)
     engine.launchKernel("ternKernel", oTern, ())
     var got2: array[10, int32]
     engine.copyToHostFromDevice(got2.toOpenArray(0, 9), oTern)
