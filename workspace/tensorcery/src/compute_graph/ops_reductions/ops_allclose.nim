@@ -78,7 +78,7 @@ proc k_allClose(D, tested, reference: distinct TensorView, atol, rtol, equalNan:
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  allCloseNode* = ref object
+  AllCloseNode* = ref object
     r: AnyTensorImpl      # rank-1 float32 scalar, 1.0 or 0.0
     tested: TensorNode
     reference: TensorNode
@@ -90,16 +90,16 @@ type
 #  Interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func getImpl*(n: allCloseNode): AnyTensorImpl {.inline.} =
+func getImpl*(n: AllCloseNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: allCloseNode): string {.inline.} =
+func opName*(n: AllCloseNode): string {.inline.} =
   "allClose"
 
-func size*(n: allCloseNode): int {.inline.} =
+func size*(n: AllCloseNode): int {.inline.} =
   n.r.size()
 
-func isMaterialized*(n: allCloseNode): bool {.inline.} =
+func isMaterialized*(n: AllCloseNode): bool {.inline.} =
   n.getImpl().isMaterialized()
 
 func sameShape(a, b: openArray[int]): bool {.inline.} =
@@ -120,7 +120,7 @@ proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: 
     ib = reference.getImpl()
   {.precondition: ia.dtype() == ib.dtype().}
   {.precondition: sameShape(ia.shape().p, ib.shape().p).}
-  return allCloseNode(tested: tested, reference: reference, atol: atol, rtol: rtol,
+  return AllCloseNode(tested: tested, reference: reference, atol: atol, rtol: rtol,
       equalNan: if equalNan: 1.0'f32 else: 0.0'f32,
       r: engine.newPlaceholderNode(kFp32, [1]).getImpl()
     ).to(TensorNode)
@@ -130,7 +130,7 @@ proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: 
 # ═══════════════════════════════════════════════════════════════════════
 
 proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
-  let asAll = n.to(allCloseNode)
+  let asAll = n.to(AllCloseNode)
   if asAll.isNil():
     return false
   engine.enqueueNode(batch, asAll.tested)
