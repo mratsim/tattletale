@@ -10,7 +10,7 @@ import workspace/crucible/src/abis/vulkan_abi as vk
 
 proc deviceAddress(buf: VulkanBuffer, ctx: VulkanContext): uint64 =
   let vkGetBufferDeviceAddress = cast[
-    proc(device: VkDevice, pInfo: ptr VkBufferDeviceAddressInfo): VkDeviceAddress {.cdecl.}
+    proc(device: VkDevice, pInfo: ptr VkBufferDeviceAddressInfo): VkDeviceAddress {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkGetBufferDeviceAddress"))
   var info = VkBufferDeviceAddressInfo(
     sType: VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,

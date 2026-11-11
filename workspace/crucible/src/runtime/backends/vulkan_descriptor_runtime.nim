@@ -18,7 +18,7 @@ proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32, unifor
   let vkCreateDescriptorSetLayout = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkDescriptorSetLayoutCreateInfo,
          pAllocator: pointer,
-         pSetLayout: ptr VkDescriptorSetLayout): VkResult {.cdecl.}
+         pSetLayout: ptr VkDescriptorSetLayout): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCreateDescriptorSetLayout"))
   var bindings = newSeq[VkDescriptorSetLayoutBinding](bindingCount.int + uniformCount.int)
   for i in 0 ..< bindingCount.int:
@@ -47,7 +47,7 @@ proc createDescriptorSetLayout*(ctx: VulkanContext, bindingCount: uint32, unifor
 
 proc destroyDescriptorSetLayout*(ctx: VulkanContext, setLayout: VkDescriptorSetLayout) =
   let vkDestroyDescriptorSetLayout = cast[
-    proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout, pAllocator: pointer) {.cdecl.}
+    proc(device: VkDevice, descriptorSetLayout: VkDescriptorSetLayout, pAllocator: pointer) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorSetLayout"))
   if setLayout != nil:
     vkDestroyDescriptorSetLayout(ctx.device, setLayout, nil)
@@ -57,7 +57,7 @@ proc createDescriptorPool*(ctx: VulkanContext, bindingCount: uint32, uniformCoun
   let vkCreateDescriptorPool = cast[
     proc(device: VkDevice, pCreateInfo: ptr VkDescriptorPoolCreateInfo,
          pAllocator: pointer,
-         pDescriptorPool: ptr VkDescriptorPool): VkResult {.cdecl.}
+         pDescriptorPool: ptr VkDescriptorPool): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkCreateDescriptorPool"))
   var poolSizes = [
     VkDescriptorPoolSize(
@@ -79,14 +79,14 @@ proc createDescriptorPool*(ctx: VulkanContext, bindingCount: uint32, uniformCoun
 
 proc destroyDescriptorPool*(ctx: VulkanContext, pool: VkDescriptorPool) =
   let vkDestroyDescriptorPool = cast[
-    proc(device: VkDevice, descriptorPool: VkDescriptorPool, pAllocator: pointer) {.cdecl.}
+    proc(device: VkDevice, descriptorPool: VkDescriptorPool, pAllocator: pointer) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkDestroyDescriptorPool"))
   if pool != nil:
     vkDestroyDescriptorPool(ctx.device, pool, nil)
 
 proc allocateDescriptorSet*(ctx: VulkanContext, pool: VkDescriptorPool, setLayout: VkDescriptorSetLayout): VkDescriptorSet =
   let vkAllocateDescriptorSets = cast[
-    proc(device: VkDevice, pAllocateInfo: ptr VkDescriptorSetAllocateInfo, pDescriptorSets: ptr VkDescriptorSet): VkResult {.cdecl.}
+    proc(device: VkDevice, pAllocateInfo: ptr VkDescriptorSetAllocateInfo, pDescriptorSets: ptr VkDescriptorSet): VkResult {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkAllocateDescriptorSets"))
   var allocInfo = VkDescriptorSetAllocateInfo(
     sType: VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -118,7 +118,7 @@ proc updateDescriptorSet*(ctx: VulkanContext, setHandle: VkDescriptorSet, buffer
     proc(device: VkDevice, descriptorWriteCount: uint32,
          pDescriptorWrites: ptr VkWriteDescriptorSet,
          descriptorCopyCount: uint32,
-         pDescriptorCopies: ptr VkWriteDescriptorSet) {.cdecl.}
+         pDescriptorCopies: ptr VkWriteDescriptorSet) {.cdecl, raises: [].}
   ](ctx.gpaAddr(ctx.instance, "vkUpdateDescriptorSets"))
   var bufInfos = newSeq[VkDescriptorBufferInfo](buffers.len + uniforms.len)
   var writes = newSeq[VkWriteDescriptorSet](buffers.len + uniforms.len)

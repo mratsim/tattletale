@@ -315,7 +315,7 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: Spir
     let vkCreateShaderModule = cast[
       proc(device: VkDevice, pCreateInfo: ptr VkShaderModuleCreateInfo,
            pAllocator: pointer,
-           pShaderModule: ptr VkShaderModule): VkResult {.cdecl.}
+           pShaderModule: ptr VkShaderModule): VkResult {.cdecl, raises: [].}
     ](engine.ctx.gpaAddr(engine.ctx.instance, "vkCreateShaderModule"))
     var smCI = VkShaderModuleCreateInfo(
       sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -326,7 +326,7 @@ proc launchAddressRoute(engine: VulkanEngine, kernel, entry: string, spirv: Spir
     check vkCreateShaderModule(engine.ctx.device, smCI.addr, nil, shaderModule.addr)
     defer:
       let vkDestroyShaderModule = cast[
-        proc(device: VkDevice, shaderModule: VkShaderModule, pAllocator: pointer) {.cdecl.}
+        proc(device: VkDevice, shaderModule: VkShaderModule, pAllocator: pointer) {.cdecl, raises: [].}
       ](engine.ctx.gpaAddr(engine.ctx.instance, "vkDestroyShaderModule"))
       if shaderModule != nil and vkDestroyShaderModule != nil:
         vkDestroyShaderModule(engine.ctx.device, shaderModule, nil)
