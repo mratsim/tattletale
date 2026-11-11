@@ -35,14 +35,12 @@ iface *TensorNode:
     proc getImpl(): AnyTensorImpl {.inline.}
     func opName(): string {.inline.}
     func size(): int {.inline.}
-    proc isMaterialized(): bool {.inline.}
     proc isNil(): bool {.inline.}
 
 type NilNode = ref object of RootRef
 proc getImpl(n: NilNode): AnyTensorImpl {.inline.} = AnyTensorImpl()
 func opName(n: NilNode): string {.inline.} = "Nil"
 func size(n: NilNode): int {.inline.} = 0
-func isMaterialized(n: NilNode): bool {.inline.} = false
 proc NilTensorNode*(): TensorNode {.inline.} = NilNode(nil).to(TensorNode)
 
 type

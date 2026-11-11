@@ -70,6 +70,9 @@ proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
 func opName*(t: TensorImpl): string {.inline.} =
   ""
 
+proc isMaterialized*(n: TensorNode): bool {.inline.} =
+  n.getImpl().isMaterialized()
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Host<->Device copies
 # ═══════════════════════════════════════════════════════════════════════

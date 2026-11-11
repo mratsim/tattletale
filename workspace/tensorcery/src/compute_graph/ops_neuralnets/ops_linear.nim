@@ -98,9 +98,6 @@ func opName*(n: LinearNode): string {.inline.} =
 func size*(n: LinearNode): int {.inline.} =
   n.r.size()
 
-func isMaterialized*(n: LinearNode): bool {.inline.} =
-  n.getImpl().isMaterialized()
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════

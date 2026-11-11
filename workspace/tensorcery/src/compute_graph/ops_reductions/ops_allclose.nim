@@ -99,9 +99,6 @@ func opName*(n: AllCloseNode): string {.inline.} =
 func size*(n: AllCloseNode): int {.inline.} =
   n.r.size()
 
-func isMaterialized*(n: AllCloseNode): bool {.inline.} =
-  n.getImpl().isMaterialized()
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
