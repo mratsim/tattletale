@@ -70,18 +70,9 @@ proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]):
 
 # #######################################################################
 #
-#                            Evaluation
+#                              Metadata
 #
 # #######################################################################
-
-proc eval*(ts: varargs[Tensor]) =
-  var roots = newSeq[TensorNode](ts.len)
-  for i in 0 ..< ts.len:
-    roots[i] = ts[i].node
-  ts[0].engine.eval(roots)
-  # op nodes come out materialized
-  for i in 0 ..< ts.len:
-    ts[i].node = roots[i]
 
 template shape*(t: Tensor): openArray[int] =
   t.node.getImpl().shape().p
@@ -105,27 +96,36 @@ proc item*[T](t: Tensor, _: typedesc[T]): T {.contracts.} =
 
 # #######################################################################
 #
-#                            Ops
+#                            Evaluation
 #
 # #######################################################################
+
+proc eval*(ts: varargs[Tensor]) =
+  var roots = newSeq[TensorNode](ts.len)
+  for i in 0 ..< ts.len:
+    roots[i] = ts[i].node
+  ts[0].engine.eval(roots)
+  # op nodes come out materialized
+  for i in 0 ..< ts.len:
+    ts[i].node = roots[i]
+
+# #######################################################################
+#
+#                       Arithmetic Operators
+#
+# #######################################################################
+
+# Binary (Tensor + Tensor)
+# ----------------------------------------------------------
 
 proc `+`*(a, b: Tensor): Tensor {.inline.} =
   Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
 
-proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
-  for n in t.engine.tn_split(t.node, axis, k):
-    result.add(Tensor(engine: t.engine, node: n))
-
-proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool {.inline.} =
-  ## True when every element satisfies |tested - reference| <= atol + rtol * |reference|.
-  ## Same-sign infinities are equal, NaN equal only with equal_nan
-  Tensor(engine: tested.engine,
-      node: tn_allClose(tested.engine, tested.node, reference.node, atol, rtol, equal_nan)
-    ).item(float32) == 0.0'f32
-
-proc rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor {.inline.} =
-  let w = if weight.isNil(): NilTensorNode() else: weight.node
-  Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w, eps))
+# #######################################################################
+#
+#                          Linear Algebra
+#
+# #######################################################################
 
 proc gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor {.inline.} =
   ## D = alpha·A·B + beta·C over the last two axes, C nil at beta = 0
@@ -136,5 +136,41 @@ proc matmul*(a, b: Tensor): Tensor {.inline.} =
   ## A·B over the last two axes
   gemm(1.0'f32, a, b, 0.0'f32)
 
+# #######################################################################
+#
+#                         Methods / Shapeshifting
+#
+# #######################################################################
+
 proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))
+
+proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
+  for n in t.engine.tn_split(t.node, axis, k):
+    result.add(Tensor(engine: t.engine, node: n))
+
+# #######################################################################
+#
+#                            Comparison
+#
+# #######################################################################
+
+proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool {.inline.} =
+  ## True when every element satisfies |tested - reference| <= atol + rtol * |reference|.
+  ## Same-sign infinities are equal, NaN equal only with equal_nan
+  Tensor(engine: tested.engine,
+      node: tn_allClose(tested.engine, tested.node, reference.node, atol, rtol, equal_nan)
+    ).item(float32) == 0.0'f32
+
+# #######################################################################
+#
+#                     Neural Network Functional API
+#
+# #######################################################################
+
+# Normalization
+# ----------------------------------------------------------
+
+proc rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor {.inline.} =
+  let w = if weight.isNil(): NilTensorNode() else: weight.node
+  Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w, eps))
