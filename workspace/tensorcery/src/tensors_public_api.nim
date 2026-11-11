@@ -16,6 +16,7 @@ import ./tensors_globals
 import ./compute_graph/ops_2i1o/ops_add
 import ./compute_graph/ops_1iNo/ops_split
 import ./compute_graph/ops_metadata/ops_swapaxes
+import ./compute_graph/ops_metadata/ops_views
 import ./compute_graph/ops_reductions/ops_allClose
 import ./compute_graph/ops_neuralnets/ops_rmsnorm
 import ./compute_graph/ops_neuralnets/ops_linear
@@ -145,6 +146,39 @@ proc matmul*(a, b: Tensor): Tensor {.inline.} =
 
 proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))
+
+proc reshape*(t: Tensor, shape: openArray[int]): Tensor {.inline.} =
+  ## A view of `t` with a new shape, same element order.
+  ##
+  ## Precondition:
+  ## - the source is dense with canonical strides
+  ## - one size may be -1, inferred from the total size like MLX
+  Tensor(engine: t.engine, node: tn_reshape(t.engine, t.node, shape))
+
+proc transpose*(t: Tensor): Tensor {.inline.} =
+  ## A view of `t` with every axis reversed.
+  Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node))
+
+proc transpose*(t: Tensor, axes: openArray[int]): Tensor {.inline.} =
+  ## A view of `t` with the axes reordered: result axis i reads source axis axes[i].
+  Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node, axes))
+
+proc broadcast_to*(t: Tensor, shape: openArray[int]): Tensor {.inline.} =
+  ## A broadcast view of `t`, trailing-aligned: leading axes may be added,
+  ## size-1 axes stretch to any size at stride 0.
+  Tensor(engine: t.engine, node: tn_broadcastTo(t.engine, t.node, shape))
+
+proc squeeze*(t: Tensor, axis: int): Tensor {.inline.} =
+  ## A view of `t` with the size-1 axis `axis` removed.
+  Tensor(engine: t.engine, node: tn_squeeze(t.engine, t.node, axis))
+
+proc expand_dims*(t: Tensor, axis: int): Tensor {.inline.} =
+  ## A view of `t` with a size-1 axis inserted at `axis`.
+  Tensor(engine: t.engine, node: tn_expandDims(t.engine, t.node, axis))
+
+proc narrow*(t: Tensor, axis, start, width: int): Tensor {.inline.} =
+  ## A window view of `t` along `axis`: `width` elements from `start`.
+  Tensor(engine: t.engine, node: tn_narrow(t.engine, t.node, axis, start, width))
 
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
   for n in t.engine.tn_split(t.node, axis, k):

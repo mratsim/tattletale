@@ -8,13 +8,23 @@
 {.experimental: "views".}
 
 ## Tensorcery ops_metadata ops on WebGPU
+##
+## Test that the metadata faces construct, eval and read back correct values
+## for swapaxes and views and that every invalid call refuses.
+##
+## Run:
+##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_ops_metadata_webgpu \
+##     --nimcache:nimcache/t_ops_metadata_webgpu workspace/tensorcery/tests/ops_metadata/t_ops_metadata_webgpu.nim
+
 
 import workspace/crucible
 import workspace/ceramic
 import ./ops_swapaxes_template
+import ./ops_views_template
 
 proc main =
   runSwapaxesTest(runWebGPU, "WebGPU")
+  runViewsTest(runWebGPU, "WebGPU")
 
 when isMainModule:
   main()
