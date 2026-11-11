@@ -7,20 +7,22 @@
 
 {.experimental: "views".}
 
-import workspace/crucible
 import workspace/ceramic
-import workspace/ceramic/src/tile_algebra
+import workspace/crucible
 import workspace/iface
 import workspace/math
 import workspace/design_by_contract
 import ../../tensors_internals
 import ../batching
+import ../env
 
 # ############################################################
 #
 #                   allClose
 #
 # ############################################################
+
+const Fleet = (elemsPerGroup: 4096, maxGroups: 1024)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Device kernel
@@ -124,7 +126,7 @@ proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: 
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueallClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asAll = n.to(allCloseNode)
   if asAll.isNil():
     return false
@@ -142,7 +144,7 @@ proc enqueueallClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var 
       let
         aView = ai.to(engine.getTensorImplType(ElemType, ARank)).bridge()
         bView = bi.to(engine.getTensorImplType(ElemType, ARank)).bridge()
-      batch.enqueue<<(ceil_div(asAll.size(), 128), 32)>> k_allClose(rImpl.bridge(), aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
+      batch.enqueue<<(min(ceil_div(asAll.size(), Fleet.elemsPerGroup), Fleet.maxGroups), LaneWidth)>> k_allClose(rImpl.bridge(), aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
   else:
     raiseAssert("allClose: the output is a rank-1 float32 scalar")
   return true
@@ -151,4 +153,4 @@ proc enqueueallClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var 
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("allClose", enqueueallClose)
+registerOp("allClose", enqueueAllClose)

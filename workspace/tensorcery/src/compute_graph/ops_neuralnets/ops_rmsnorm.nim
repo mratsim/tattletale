@@ -7,20 +7,23 @@
 
 {.experimental: "views".}
 
-import workspace/crucible
 import workspace/ceramic
 import workspace/ceramic/src/kernels/k_tile_rmsnorm
+import workspace/crucible
 import workspace/iface
 import workspace/math
+import workspace/design_by_contract
 import ../../tensors_internals
 import ../batching
-import workspace/design_by_contract
+import ../env
 
 # ############################################################
 #
 #                   RmsNorm
 #
 # ############################################################
+
+const Fleet = (rowsPerGroup: 4, maxGroups: 8192)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Defunctionalization
@@ -79,11 +82,11 @@ proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var T
     let rows = rImpl.size() div rImpl.shape[rank - 1]
     engine.materialize(rImpl)
     if asNorm.w.isNil():
-      batch.enqueue<<(rows, 32)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), asNorm.eps, rank - 1)
+      batch.enqueue<<(min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups), LaneWidth)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), asNorm.eps, rank - 1)
     else:
       engine.enqueueNode(batch, asNorm.w)
       let wImpl = asNorm.w.getImpl().to(engine.getTensorImplType(T, 1))
-      batch.enqueue<<(rows, 32)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), asNorm.eps, rank - 1)
+      batch.enqueue<<(min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups), LaneWidth)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), asNorm.eps, rank - 1)
   else:
     raiseAssert("rmsnorm: rank " & $rank & " or dtype unsupported, the op is rank 2+ float32")
   return true

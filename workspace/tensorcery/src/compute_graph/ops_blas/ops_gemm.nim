@@ -7,16 +7,14 @@
 
 {.experimental: "views".}
 
-import workspace/crucible
 import workspace/ceramic
-import workspace/ceramic/src/tile_algebra
-import workspace/ceramic/src/kernels/k_tile_gemm
-import workspace/ceramic/src/hardware/h_mma_properties
+import workspace/crucible
 import workspace/iface
 import workspace/math
+import workspace/design_by_contract
 import ../../tensors_internals
 import ../batching
-import workspace/design_by_contract
+import ../env
 
 # ############################################################
 #
@@ -24,9 +22,7 @@ import workspace/design_by_contract
 #
 # ############################################################
 
-template GemmMma*(T: typedesc): untyped =
-  ## TODO: the (32, 32, 16) tile schedule is hardcoded
-  tiledMma(float32, T, T, 32, 32, 16)
+const Fleet = (tileM: 32, tileN: 32)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Device kernel
@@ -139,16 +135,16 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
       rImpl = asGemm.r.to(engine.getTensorImplType(T, rank))
       aImpl = asGemm.a.getImpl().to(engine.getTensorImplType(T, rank))
       bImpl = asGemm.b.getImpl().to(engine.getTensorImplType(T, rank))
-      tiles = ceil_div(rImpl.shape[0], 32) * ceil_div(rImpl.shape[1], 32)
+      tiles = ceil_div(rImpl.shape[0], Fleet.tileM) * ceil_div(rImpl.shape[1], Fleet.tileN)
     engine.materialize(rImpl)
     if asGemm.c.isNil():
       # beta = 0, the C view is a dummy, never loaded
-      batch.enqueue<<(tiles, 32)>> k_gemm(GemmMma(T),
+      batch.enqueue<<(tiles, LaneWidth)>> k_gemm(GemmMma(T),
         rImpl.bridge(), asGemm.alpha, aImpl.bridge(), bImpl.bridge(), asGemm.beta, rImpl.bridge())
     else:
       engine.enqueueNode(batch, asGemm.c)
       let cImpl = asGemm.c.getImpl().to(engine.getTensorImplType(T, rank))
-      batch.enqueue<<(tiles, 32)>> k_gemm(GemmMma(T),
+      batch.enqueue<<(tiles, LaneWidth)>> k_gemm(GemmMma(T),
         rImpl.bridge(), asGemm.alpha, aImpl.bridge(), bImpl.bridge(), asGemm.beta, cImpl.bridge())
   else:
     raiseAssert("gemm: rank " & $rank & " or dtype unsupported, the op is rank 2, float16, bfloat16 or float32")

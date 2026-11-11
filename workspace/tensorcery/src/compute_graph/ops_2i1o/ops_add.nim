@@ -7,20 +7,22 @@
 
 {.experimental: "views".}
 
-import workspace/crucible
 import workspace/ceramic
-import workspace/ceramic/src/tile_algebra
+import workspace/crucible
 import workspace/iface
 import workspace/math
 import workspace/design_by_contract
 import ../../tensors_internals
 import ../batching
+import ../env
 
 # ############################################################
 #
 #                   Add
 #
 # ############################################################
+
+const Fleet = (elemsPerGroup: 128)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Device kernel
@@ -96,7 +98,7 @@ proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
     bImpl = asAdd.b.getImpl().to(engine.getTensorImplType(T, rank))
     size = rImpl.size()
   engine.materialize(rImpl)
-  batch.enqueue<<(ceil_div(size, 128), 32)>> k_add(rImpl.bridge(), aImpl.bridge(), bImpl.bridge())
+  batch.enqueue<<(ceil_div(size, Fleet.elemsPerGroup), LaneWidth)>> k_add(rImpl.bridge(), aImpl.bridge(), bImpl.bridge())
   return true
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -48,4 +48,31 @@ proc runLinearTest*(run: static Runtime, name: string) =
       eval(o)
       doAssert o.allClose(expect.toTensor(run, m, n), rtol = 1e-5'f32, atol = 1e-3'f32),
         name & ": linear bias " & $((m, k, n))
+
+    block: # batched: the leading axes fold into the M axis
+      const batch = 3
+      let x3 = rng.randomSeq(float32, batch * m * k)
+      let X3 = x3.toTensor(run, batch, m, k)
+
+      var expect = newSeq[float32](batch * m * n)
+      var slice = newSeq[float32](m * n)
+      for i in 0 ..< batch:
+        slice.refLinear(x3[i * m * k ..< (i + 1) * m * k], w, m, k, n)
+        for j in 0 ..< m * n:
+          expect[i * m * n + j] = slice[j]
+      let o = linear(X3, W)
+      eval(o)
+      doAssert o.allClose(expect.toTensor(run, batch, m, n), rtol = 1e-5'f32, atol = 1e-3'f32),
+        name & ": linear batched " & $((batch, m, k, n))
+
+      let bias = rng.randomSeq(float32, n)
+      let Bt = bias.toTensor(run, n)
+      for i in 0 ..< batch:
+        slice.refLinear(x3[i * m * k ..< (i + 1) * m * k], w, m, k, n, bias)
+        for j in 0 ..< m * n:
+          expect[i * m * n + j] = slice[j]
+      let ob = linear(X3, W, Bt)
+      eval(ob)
+      doAssert ob.allClose(expect.toTensor(run, batch, m, n), rtol = 1e-5'f32, atol = 1e-3'f32),
+        name & ": linear batched bias " & $((batch, m, k, n))
   echo "tensorcery linear (", name, "): all checks passed"
