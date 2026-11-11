@@ -13,8 +13,8 @@ export tensorcery_testutils
 proc runallCloseTest*(run: static Runtime, name: string) =
   var xd = @[1.0'f32, 2.0'f32, 3.0'f32, 4.0'f32]
   var yd = @[1.0'f32, 2.0'f32, 3.0'f32, 4.5'f32]
-  let x = xd.toTensor(2, 2)
-  let y = yd.toTensor(2, 2)
+  let x = xd.toTensor(run, 2, 2)
+  let y = yd.toTensor(run, 2, 2)
 
   doAssert x.allClose(x), name & ": self"
   doAssert not x.allClose(y), name & ": 0.5 off defaults"
@@ -26,34 +26,34 @@ proc runallCloseTest*(run: static Runtime, name: string) =
   # 0.3 off b = 0.1 does not
   var ad = @[1.3'f32, 0.4'f32]
   var bd = @[1.0'f32, 0.1'f32]
-  let a = ad.toTensor(1, 2)
-  let b = bd.toTensor(1, 2)
+  let a = ad.toTensor(run, 1, 2)
+  let b = bd.toTensor(run, 1, 2)
   doAssert not a.allClose(b, rtol = 0.5'f32), name & ": b is the reference side"
 
   # NaN pairs
   var nd = @[1.0'f32, NaN]
   var md = @[1.0'f32, NaN]
-  let n = nd.toTensor(1, 2)
-  let m = md.toTensor(1, 2)
+  let n = nd.toTensor(run, 1, 2)
+  let m = md.toTensor(run, 1, 2)
   doAssert not n.allClose(m), name & ": NaN pair, equal_nan off"
   doAssert n.allClose(m, equal_nan = true), name & ": NaN pair, equal_nan on"
   var pd = @[1.0'f32, 2.0'f32]
-  let p = pd.toTensor(1, 2)
+  let p = pd.toTensor(run, 1, 2)
   doAssert not n.allClose(p, equal_nan = true), name & ": NaN vs number"
 
   # infinities
   var fd = @[Inf.float32, -Inf.float32]
   var gd = @[Inf.float32, -Inf.float32]
-  let f = fd.toTensor(1, 2)
-  let g = gd.toTensor(1, 2)
+  let f = fd.toTensor(run, 1, 2)
+  let g = gd.toTensor(run, 1, 2)
   doAssert f.allClose(g), name & ": same-sign infinities"
   var hd = @[Inf.float32, Inf.float32]
-  let h = hd.toTensor(1, 2)
+  let h = hd.toTensor(run, 1, 2)
   doAssert not f.allClose(h), name & ": +inf vs -inf"
   var idd = @[Inf.float32, 1.0'f32]
   var jd = @[1.0'f32, 1.0'f32]
-  let i = idd.toTensor(1, 2)
-  let j = jd.toTensor(1, 2)
+  let i = idd.toTensor(run, 1, 2)
+  let j = jd.toTensor(run, 1, 2)
   doAssert not i.allClose(j), name & ": inf vs finite"
 
   # low precision inputs upcast on read
@@ -62,8 +62,8 @@ proc runallCloseTest*(run: static Runtime, name: string) =
   for i in 0 ..< 4:
     xb[i] = xd[i].to(bfloat16)
     yb[i] = yd[i].to(bfloat16)
-  let xbq = xb.toTensor(2, 2)
-  let ybq = yb.toTensor(2, 2)
+  let xbq = xb.toTensor(run, 2, 2)
+  let ybq = yb.toTensor(run, 2, 2)
   doAssert not xbq.allClose(ybq), name & ": bf16 0.5 off"
   doAssert xbq.allClose(ybq, atol = 0.6'f32), name & ": bf16 atol covers"
 
