@@ -144,6 +144,11 @@ proc addrWrapByrefStmt(pre: var seq[CirStmt], tmpCount: var int, s: CirStmt, byr
   of sWhile:
     addrWrapByrefArgs(pre, tmpCount, s.whileCond, byref)
     addrWrapByrefStmts(s.whileBody, tmpCount, byref)
+    # Loop conditions re-test after every body run: each hoisted argument
+    # assignment repeats at the end of the body, its declaration stays in front
+    for h in pre:
+      if h.kind == sAsgn:
+        s.whileBody.add(cloneStmts(@[h])[0])
   of sRet:
     addrWrapByrefArgs(pre, tmpCount, s.retVal, byref)
   of sDiscard:
