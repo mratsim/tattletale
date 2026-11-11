@@ -119,7 +119,7 @@ proc addrWrapByrefArgs(pre: var seq[CirStmt], tmpCount: var int, e: CirExpr, byr
     if i >= e.args.len:
       break
     let at = getExprType(e.args[i])
-    if at != nil and at.kind == ctStruct:
+    if at != nil and at.kind in {ctStruct, ctArray}:
       let ptrTy = tPtr(caThread, at)
       if isLvalue(e.args[i]):
         e.args[i] = addrE(ptrTy, e.args[i])
