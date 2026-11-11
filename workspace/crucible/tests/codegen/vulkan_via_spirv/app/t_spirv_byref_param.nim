@@ -34,7 +34,7 @@ proc runTest() =
     var f = open(spvPath, fmWrite)
     defer: f.close()
     discard f.writeBuffer(addr byrefSpv[0], byrefSpv.len * 4)
-  let (valOut, valCode) = execCmdEx(spirvVal & " --target-env vulkan1.4 " & spvPath)
+  let (valOut, valCode) = execCmdEx(quoteShell(spirvVal) & " --target-env vulkan1.4 " & quoteShell(spvPath))
   doAssert valCode == 0, "spirv-val rejected the executed module:\n" & valOut
 
   var engine = newEngine(runVulkan)
