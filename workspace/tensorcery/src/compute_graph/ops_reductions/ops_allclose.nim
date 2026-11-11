@@ -144,7 +144,7 @@ proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var 
       let
         aView = ai.to(engine.getTensorImplType(ElemType, ARank)).bridge()
         bView = bi.to(engine.getTensorImplType(ElemType, ARank)).bridge()
-      batch.enqueue<<(min(ceil_div(asAll.size(), Fleet.elemsPerGroup), Fleet.maxGroups), LaneWidth)>> k_allClose(rImpl.bridge(), aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
+      batch.enqueue<<(min(ceil_div(ai.size(), Fleet.elemsPerGroup), Fleet.maxGroups), LaneWidth)>> k_allClose(rImpl.bridge(), aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
   else:
     raiseAssert("allClose: the output is a rank-1 float32 scalar")
   return true
