@@ -110,16 +110,6 @@ func bridge*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): lent 
   static: doAssert sizeof(t[]) == sizeof(TensorBridge[DeviceMem, getLayoutType(Rank)])
   return cast[ptr TensorBridge[DeviceMem, getLayoutType(Rank)]](t)[]
 
-func newViewImpl*[H, T; Rank: static int](
-      src: TensorImpl[DeviceMem[H, T], Rank],
-      shape, strides: openArray[int],
-      offset: int): TensorImpl[DeviceMem[H, T], Rank] {.inline.} =
-  result = TensorImpl[DeviceMem[H, T], Rank]()
-  result.data = src.data
-  result.offset = offset
-  result.shape[0 ..< Rank] = shape
-  result.stride[0 ..< Rank] = strides
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph
 # ═══════════════════════════════════════════════════════════════════════

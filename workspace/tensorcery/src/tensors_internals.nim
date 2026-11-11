@@ -149,14 +149,19 @@ proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[
   match(ElemType, dtype, Rank, shape.len):
     engine.newPlaceholderImpl(ElemType, Rank, shape).to(TensorNode)
 
-proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int, srcOpName: string): TensorNode {.contracts.} =
+proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int, srcOpName: string): TensorNode =
+  ## View over src's data: the view rank is independent of the source rank,
+  ## shape/strides/offset describe the view, data binds to the source.
   let si = src.getImpl()
-  {.precondition: si.shape().p.len == shape.len.}
   match(ElemType, si.dtype(), Rank, shape.len):
-    let s = si.to(engine.getTensorImplType(ElemType, Rank))
-    let r = newViewImpl(s, shape, strides, offset)
-    if s.isMaterialized():
-      r.offset = s.offset + offset
+    let r = engine.getTensorImplType(ElemType, Rank)()
+    r.shape[0 ..< Rank] = shape
+    r.stride[0 ..< Rank] = strides
+    r.offset = offset
+    engine.withDeviceImpl(si, ElemType, s):
+      r.data = s.data
+      if s.isMaterialized():
+        r.offset = s.offset + offset
     ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorNode)
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
@@ -168,10 +173,10 @@ proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
   if v.isNil():
     return false
   engine.enqueueNode(batch, v.src)
-  let s = v.src.getImpl().to(engine.getTensorImplType(T, rank))
   let r = v.r.to(engine.getTensorImplType(T, rank))
-  r.data = s.data
-  r.offset = r.offset + s.offset
+  engine.withDeviceImpl(v.src.getImpl(), T, s):
+    r.data = s.data
+    r.offset = r.offset + s.offset
   return true
 
 # ═══════════════════════════════════════════════════════════════════════
