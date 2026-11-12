@@ -53,7 +53,7 @@ proc registerFrontendPasses(reg: var PassRegistry) =
   registerValueNormalizations(reg)
   registerReshapingPasses(reg)
 
-proc registerGpuPasses*(reg: var PassRegistry, B: CodegenKind) {.compileTime.} =
+proc registerGpuPasses*(reg: var PassRegistry, B: CodegenKind) =
   ## Registers `B`'s per-target passes on top of the shared passes.
   registerFrontendPasses(reg)
   registerSharedLoweringPasses(reg)

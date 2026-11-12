@@ -21,6 +21,7 @@ import workspace/crucible/src/codegen/passes/pass_datatypes
 import workspace/crucible/src/codegen/backends/backends_api
 import workspace/crucible/src/codegen/backends/spirv_encoder
 import workspace/crucible/src/codegen/frontend/nim_to_crucible
+import workspace/crucible/src/codegen/ir/cirv2_serialization
 import workspace/crucible/src/runtime/engines/engines_api
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
 import workspace/crucible/src/runtime/batching/batch_metal
@@ -76,8 +77,7 @@ var ctgFrontend {.compileTime.}: CirFrontend
 var ctgArtifactKind {.compileTime.}: CodegenKind
 var ctgArtifactPrinted {.compileTime.}: bool
 var ctgArtifactFnCount {.compileTime.}: int
-var ctgTextArtifact {.compileTime.}: string
-var ctgSpirvArtifact {.compileTime.}: SpirvWords
+var ctgPayloadCache {.compileTime.}: string
 
 func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
@@ -105,30 +105,53 @@ macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
   # delayed symbol resolution
   result = newCall(bindSym"ctgAccumulateCirImpl", procdef)
 
-proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
+proc ctgCirPayload*(kind: static CodegenKind): string {.compileTime.} =
+  ## Serializes the accumulated CIR into the batch's const payload.
+  ##
+  ## Returns:
+  ## - the serialized CIR
+  ##
+  ## The pass pipeline and the codegen do not run here.
+  ## `materializeArtifact` runs them once per payload at runtime.
+  ## Compile-time instantiations of `finalize` stay free of the pipeline.
+  ##
+  ## One codegen kind per compilation. Device functions lowered since the last call re-serialize.
   if ctgArtifactPrinted and ctgArtifactKind != kind:
-    raiseAssert("ctgAccumulateArtifact: one codegen kind per compilation, " &
+    raiseAssert("ctgCirPayload: one codegen kind per compilation, " &
       $ctgArtifactKind & " already accumulated, asked for " & $kind)
   ctgArtifactKind = kind
   ctgArtifactPrinted = true
+  if ctgPayloadCache.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
+    ctgPayloadCache = serializeCir(ctgFrontend.finish())
+    ctgArtifactFnCount = ctgFrontend.getProcCount()
+  ctgPayloadCache
+
+var rtMaterializedPayload: string
+  ## Serialized CIR the runtime artifact was last materialized from
+var rtTextArtifact: string
+var rtSpirvArtifact: SpirvWords
+
+proc materializeArtifact*(kind: static CodegenKind, payload: string): auto =
+  ## Deserializes the batch's CIR payload, runs the pass pipeline and codegen,
+  ## once per payload: repeated `finalize` calls reuse the materialized artifact.
   when kind == cgSpirv:
-    if ctgSpirvArtifact.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
+    if rtSpirvArtifact.len == 0 or rtMaterializedPayload != payload:
+      var m = deserializeCir(payload)
       var reg = PassRegistry()
       reg.registerGpuPasses(kind)
-      let m = ctgFrontend.finish()
       reg.runPasses(m)
-      ctgSpirvArtifact = codegenIR(m, kind)
-      ctgArtifactFnCount = ctgFrontend.getProcCount()
-    ctgSpirvArtifact
+      rtSpirvArtifact = codegenIR(m, kind)
+      rtMaterializedPayload = payload
+    rtSpirvArtifact
   else:
-    if ctgTextArtifact.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
+    if rtTextArtifact.len == 0 or rtMaterializedPayload != payload:
+      var m = deserializeCir(payload)
       var reg = PassRegistry()
       reg.registerGpuPasses(kind)
-      let m = ctgFrontend.finish()
       reg.runPasses(m)
-      ctgTextArtifact = codegenSource(m, kind)
-      ctgArtifactFnCount = ctgFrontend.getProcCount()
-    ctgTextArtifact
+      rtTextArtifact = codegenSource(m, kind)
+      rtMaterializedPayload = payload
+    rtTextArtifact
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Enqueue
@@ -323,27 +346,27 @@ macro `>>`*[E](sugar: EnqueueProxy[E], call: untyped): untyped =
 # ═══════════════════════════════════════════════════════════════════════
 
 macro finalize*(batch: BatchCommands): untyped =
-  ## Compiles the batch's device functions into one artifact and ingests it
-  ## into the engine. Does not launch the entries.
+  ## Materializes the batch artifact from the accumulated CIR and ingests it into the engine.
+  ## Does not launch the entries.
   ##
   ## Requires:
   ## - at least one `enqueue` in this compilation
   ##
-  ## Later `finalize` calls reuse the cached artifact.
+  ## Later `finalize` calls reuse the materialized artifact.
   if ctgFrontend.isEmpty():
     error("finalize: the stream holds no device function, enqueue first", batch)
   let engineN = quote do: `batch`.engine
   result = quote do:
     block:
       const batchKind = batchCodegenKind(typeof(`engineN`))
-      const batchArtifact = ctgAccumulateArtifact(batchKind)
-      `batch`.artifact = batchArtifact
+      const batchCirPayload = ctgCirPayload(batchKind)
+      `batch`.artifact = materializeArtifact(batchKind, batchCirPayload)
       when batchKind == cgSpirv:
-        if `engineN`.getSpirV() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
+        if `engineN`.getSpirV() != `batch`.artifact:
+          `engineN`.ingest(`batch`.artifact)
       else:
-        if `engineN`.getArtifact() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
+        if `engineN`.getArtifact() != `batch`.artifact:
+          `engineN`.ingest(`batch`.artifact)
 
 proc replay*[E](batch: BatchCommands[E]) {.inline.} =
   ## Launches the batch entries on the engine in enqueue order, without recompiling.

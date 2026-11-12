@@ -163,7 +163,7 @@ proc getAtomicCallText(ctx: var PrintCtx, callee: CirExpr, argExprs: seq[CirExpr
     elif pointee.kind == ctUint and pointee.bits == 32:
       atomicTy = "atomic_uint"
   if atomicTy.len == 0:
-    error("atomic_fetch_add over a pointee without an MSL atomic type")
+    raiseAssert("atomic_fetch_add over a pointee without an MSL atomic type")
   return "atomic_fetch_add_explicit((volatile device " & atomicTy & "*)" &
     "(" & args[0] & "), " & args[1] & ", memory_order_relaxed)"
 

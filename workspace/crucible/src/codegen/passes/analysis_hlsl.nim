@@ -21,13 +21,15 @@ import ./pass_datatypes
 # ═══════════════════════════════════════════════════════════════════════
 
 proc collectDirectCalls(stmts: seq[CirStmt]): seq[CirExpr] =
+  var calls: seq[CirExpr]
   let onStmt = proc(s: CirStmt) =
     if s.kind == sCall:
-      result.add CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
+      calls.add CirExpr(kind: eCall, callee: s.callCallee, args: s.callArgs)
   let onExpr = proc(e: CirExpr) =
     if e != nil and e.kind == eCall:
-      result.add e
+      calls.add e
   stmts.walkStmts(onStmt, onExpr)
+  calls
 
 proc scanStoredStmts(stored: var HashSet[string], fn: CirProc, ss: seq[CirStmt]) =
   ## Records the parameters `fn` stores through, anywhere in the statement tree:
