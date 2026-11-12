@@ -25,8 +25,6 @@ import ../env
 const FillFleet = (elemsPerGroup: 128)
 
 proc k_arange(D: distinct TensorView, start, step: float32) =
-  ## Writes x[i] = start + step*i over the flat element index i.
-  ##
   ## `D` is a fresh dense allocation, so the flat index is the element index.
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
@@ -70,8 +68,6 @@ func opName*(n: ArangeNode): string {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): TensorNode {.contracts.} =
-  ## A rank-1 tensor of ceil((stop - start) / step) elements,
-  ## element i = start + step*i.
   {.precondition: step != 0.0'f32.}
   {.precondition: (stop - start) * step > 0.0'f32.}
   let n = ceil((stop - start) / step).int

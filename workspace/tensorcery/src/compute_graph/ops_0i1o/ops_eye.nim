@@ -24,11 +24,7 @@ import ../env
 const FillFleet = (elemsPerGroup: 128)
 
 proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
-  ## Writes 1 where j - i == kDiag, 0 elsewhere, over the flat index of the [n, m] output.
-  ## i is the first matrix index, j the second one.
-  ##
-  ## The kernel computes on a rank-1 view of the dense output with float
-  ## arguments and derives i, j by subtraction:
+  ## Rank-1 view of the dense output that derives the matrix indices by subtraction:
   ## - a rank-2 register-tile value loop drops every store but the first
   ## - int32 kernel arguments drop all but the first store of each thread
   ##
@@ -80,9 +76,6 @@ func opName*(n: EyeNode): string {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorNode {.contracts.} =
-  ## A rank-1 tensor of n*m elements holding the eye matrix flattened in
-  ## memory order: 1 where the second index minus the first equals k, 0 elsewhere.
-  ## - the [n, m] shape is a metadata view the caller applies
   return EyeNode(r: engine.newPlaceholderNode(dtype, [n * m]).getImpl(), n: n, m: m, k: k).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -77,7 +77,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssert reshape(e, [2, 4]).allClose(xd.toTensor([2, 4], run, bfloat16)),
         name & ": reshape after expand_dims"
 
-  # Broadcast of a narrow slice: a stretched axis reads at stride 0 on device
+  # Broadcast of a narrow slice: the stretched axis maps to stride 0 on device
   block:
     ## Nim: broadcast_to(narrow(x + x, 1, 1, 2), [3, 2, 2]) + broadcast_to(...)
     ## MLX: mx.broadcast_to((x + x)[:, 1:3], (3, 2, 2))

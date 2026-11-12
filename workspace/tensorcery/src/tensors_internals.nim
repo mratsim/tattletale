@@ -143,10 +143,6 @@ proc newTensorImpl[E: HwEngine, T](
 # ═══════════════════════════════════════════════════════════════════════
 
 proc preAlloc*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
-  ## Allocates the impl's device data at enqueue time, before the kernel enqueue.
-  ##
-  ## Contract:
-  ## - every op handler calls this line: enqueue-time allocation is uniform
   engine.allocDataIn(impl)
 
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
@@ -154,8 +150,6 @@ proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[
     engine.newPlaceholderImpl(ElemType, Rank, shape).to(TensorNode)
 
 proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int, srcOpName: string): TensorNode =
-  ## View over src's data: the view rank is independent of the source rank,
-  ## shape/strides/offset describe the view, data binds to the source.
   let si = src.getImpl()
   match(ElemType, si.dtype(), Rank, shape.len):
     let r = engine.getTensorImplType(ElemType, Rank)()

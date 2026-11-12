@@ -13,7 +13,7 @@ import ../../tensors_internals
 
 # ############################################################
 #
-#                     View faces
+#                     Views
 #
 # ############################################################
 
@@ -29,7 +29,6 @@ func sameAddressing(shape, strides: openArray[int]): bool =
   true
 
 func reachWindow(shape, strides: openArray[int], base: int): tuple[lo, hi: int] =
-  ## Lowest and highest element addresses a layout reaches from `base`.
   result = (base, base)
   for i in 0 ..< shape.len:
     let reach = if shape[i] > 0: strides[i] * (shape[i] - 1) else: 0
@@ -39,14 +38,10 @@ func reachWindow(shape, strides: openArray[int], base: int): tuple[lo, hi: int] 
       result.lo += reach
 
 proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorNode): bool =
-  ## True when the layout's reachable addresses stay inside the root buffer
-  ## of the source.
-  ##
-  ## Contract:
-  ## - the bound is the root impl's size, non-view nodes are dense-allocated
-  ##   at their full size and no capacity field exists
-  ## - with only non-negative strides the window's high end is
-  ##   base + cosize - 1, subsumed by the same window walk
+  ## True when the layout's reachable addresses stay inside the root
+  ## buffer of the source. The offset walk folds every view's offset
+  ## until a non-view node: non-view nodes are dense-allocated at full
+  ## size and no capacity field exists.
   var
     base = relOffset
     cur = src
@@ -75,16 +70,12 @@ func broadcastable(src, target: openArray[int]): bool =
   true
 
 proc tn_view(engine: AnyEngine, x: TensorNode, shape, strides: openArray[int], offset: int): TensorNode {.contracts.} =
-  ## Raw view over `x`'s buffer: any shape, any strides, any offset relative
-  ## to `x`'s origin. The faces below build on it.
   {.precondition: shape.len == strides.len.}
   {.precondition: shape.len in 1 .. 5.}
   {.precondition: viewInBounds(shape, strides, offset, x).}
   engine.newViewNode(x, shape, strides, offset, "View")
 
 proc tn_reshape*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): TensorNode {.contracts.} =
-  ## View of `x` with a new shape, same element order.
-  ## One size may be -1, inferred from the total size with MLX semantics.
   let ix = x.getImpl()
   {.precondition: shape.len in 1 .. 5.}
   var
@@ -114,7 +105,6 @@ proc tn_reshape*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): Tenso
   engine.newViewNode(x, resolved, outStrides, 0, "Reshape")
 
 proc tn_transpose*(engine: AnyEngine, x: TensorNode, axes: openArray[int]): TensorNode {.contracts.} =
-  ## View of `x` with the axes reordered: result axis i reads source axis axes[i].
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)
@@ -131,7 +121,6 @@ proc tn_transpose*(engine: AnyEngine, x: TensorNode, axes: openArray[int]): Tens
   engine.newViewNode(x, outShape, outStrides, 0, "Transpose")
 
 proc tn_transpose*(engine: AnyEngine, x: TensorNode): TensorNode =
-  ## View of `x` with every axis reversed, matching MLX transpose with no axes.
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)
@@ -143,8 +132,6 @@ proc tn_transpose*(engine: AnyEngine, x: TensorNode): TensorNode =
   engine.newViewNode(x, outShape, outStrides, 0, "Transpose")
 
 proc tn_broadcastTo*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): TensorNode {.contracts.} =
-  ## Broadcast view of `x`, trailing-aligned.
-  ## A stretched axis reads at stride 0.
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   {.precondition: shape.len >= s.len and shape.len <= 5.}
@@ -161,7 +148,6 @@ proc tn_broadcastTo*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): T
   engine.newViewNode(x, shape, outStrides, 0, "Broadcast_to")
 
 proc tn_squeeze*(engine: AnyEngine, x: TensorNode, axis: int): TensorNode {.contracts.} =
-  ## View of `x` with the size-1 axis `axis` removed.
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)
@@ -180,7 +166,6 @@ proc tn_squeeze*(engine: AnyEngine, x: TensorNode, axis: int): TensorNode {.cont
   engine.newViewNode(x, outShape, outStrides, 0, "Squeeze")
 
 proc tn_expandDims*(engine: AnyEngine, x: TensorNode, axis: int): TensorNode {.contracts.} =
-  ## View of `x` with a size-1 axis inserted at `axis`.
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)
@@ -202,8 +187,6 @@ proc tn_expandDims*(engine: AnyEngine, x: TensorNode, axis: int): TensorNode {.c
   engine.newViewNode(x, outShape, outStrides, 0, "Expand_dims")
 
 proc tn_narrow*(engine: AnyEngine, x: TensorNode, axis, start, width: int): TensorNode {.contracts.} =
-  ## Window view of `x` along `axis`: `width` elements from `start`,
-  ## other axes unchanged.
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)

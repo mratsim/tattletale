@@ -42,7 +42,6 @@ func opName*(n: FullNode): string {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc tn_full*(engine: AnyEngine, vals: float32, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
-  ## Scalar values only. The array-vals broadcast fill is out of scope.
   {.precondition: shape.len in 1 .. 5.}
   return FullNode(r: engine.newPlaceholderNode(dtype, shape).getImpl(), val: vals).to(TensorNode)
 

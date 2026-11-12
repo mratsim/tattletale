@@ -24,11 +24,7 @@ import ../env
 const FillFleet* = (elemsPerGroup: 128)
 
 proc k_fill*(D: distinct TensorView, val: float32) =
-  ## Writes `val` to every element of `D`.
-  ## One kernel serves zeros, ones and full.
-  ##
-  ## Contract:
-  ## - `D` is a fresh dense allocation, so a flat write order matches its layout
+  ## `D` is a fresh dense allocation, so a flat write order matches its layout.
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())

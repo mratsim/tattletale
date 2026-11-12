@@ -9,10 +9,6 @@
 
 ## Rank-changing and negative-stride views through eval on Metal
 ##
-## Test that rank-changing views (squeeze rank-3->2, reshape rank-2->3)
-## and negative-stride views (shape (4,), stride -1, offset 3) construct,
-## eval and read back correct values.
-##
 ## Run:
 ##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_rank_views_metal \
 ##     --nimcache:nimcache/t_rank_views_metal workspace/tensorcery/tests/t_rank_views_metal.nim
