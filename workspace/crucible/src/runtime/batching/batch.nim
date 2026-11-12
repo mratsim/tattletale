@@ -15,7 +15,7 @@
 ##   batch.finalize()
 ##   batch.replay()  # relaunches without recompiling
 ##   ```
-import std/[macros]
+import std/[macros, macrocache]
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/codegen/passes/pass_datatypes
 import workspace/crucible/src/codegen/backends/backends_api
@@ -75,9 +75,14 @@ proc recordBatch*[E: HwEngine](engine: E): BatchCommands[E] {.inline.} =
 var ctgFrontend {.compileTime.}: CirFrontend
 var ctgArtifactKind {.compileTime.}: CodegenKind
 var ctgArtifactPrinted {.compileTime.}: bool
-var ctgArtifactFnCount {.compileTime.}: int
-var ctgTextArtifact {.compileTime.}: string
-var ctgSpirvArtifact {.compileTime.}: SpirvWords
+
+# Enqueued device functions wait here as typed proc definitions.
+# Lowering into ctgFrontend happens once, at the first artifact request.
+var ctgPendingKernels {.compileTime.}: CacheSeq
+var ctgPendingIndex {.compileTime.}: CacheTable
+# Artifacts per (codegen kind, pending kernel count), smuggled as literals:
+#   string backends store a string literal, SPIR-V stores a seq[uint32] literal
+var ctgArtifactMemo {.compileTime.}: CacheTable
 
 func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
@@ -92,7 +97,12 @@ func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
 macro ctgAccumulateCirImpl(procdef: typed): untyped =
-  let kname = lowerNimAst(ctgFrontend, procdef)
+  # Bridge proc name = callee + compile-time arguments + runtime parameter
+  # types (buildGlobalFn), so N enqueue sites of one kernel store it once.
+  let kname = $procdef[0]
+  if not ctgPendingIndex.hasKey(kname):
+    ctgPendingIndex[kname] = procdef
+    ctgPendingKernels.add(procdef)
   result = newLit(kname)
 
 macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
@@ -105,30 +115,38 @@ macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
   # delayed symbol resolution
   result = newCall(bindSym"ctgAccumulateCirImpl", procdef)
 
+func ctgArtifactWords(n: NimNode): SpirvWords {.compileTime.} =
+  # `newLit` of a seq emits `@[...]`, a prefix over a bracket of integer literals
+  let elems = if n.kind == nnkPrefix: n[1] else: n
+  for c in elems:
+    result.add(uint32(c.intVal))
+
 proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
   if ctgArtifactPrinted and ctgArtifactKind != kind:
     raiseAssert("ctgAccumulateArtifact: one codegen kind per compilation, " &
       $ctgArtifactKind & " already accumulated, asked for " & $kind)
   ctgArtifactKind = kind
   ctgArtifactPrinted = true
+  let memoKey = $int(kind) & ":" & $ctgPendingKernels.len
+  if ctgArtifactMemo.hasKey(memoKey):
+    when kind == cgSpirv:
+      return ctgArtifactWords(ctgArtifactMemo[memoKey])
+    else:
+      return ctgArtifactMemo[memoKey].strVal
+  for i in 0 ..< ctgPendingKernels.len:
+    discard lowerNimAst(ctgFrontend, ctgPendingKernels[i])
+  var reg = PassRegistry()
+  reg.registerGpuPasses(kind)
+  let m = ctgFrontend.finish()
+  reg.runPasses(m)
   when kind == cgSpirv:
-    if ctgSpirvArtifact.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
-      var reg = PassRegistry()
-      reg.registerGpuPasses(kind)
-      let m = ctgFrontend.finish()
-      reg.runPasses(m)
-      ctgSpirvArtifact = codegenIR(m, kind)
-      ctgArtifactFnCount = ctgFrontend.getProcCount()
-    ctgSpirvArtifact
+    let artifact = codegenIR(m, kind)
+    ctgArtifactMemo[memoKey] = newLit(artifact)
+    artifact
   else:
-    if ctgTextArtifact.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
-      var reg = PassRegistry()
-      reg.registerGpuPasses(kind)
-      let m = ctgFrontend.finish()
-      reg.runPasses(m)
-      ctgTextArtifact = codegenSource(m, kind)
-      ctgArtifactFnCount = ctgFrontend.getProcCount()
-    ctgTextArtifact
+    let artifact = codegenSource(m, kind)
+    ctgArtifactMemo[memoKey] = newLit(artifact)
+    artifact
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Enqueue
@@ -330,7 +348,7 @@ macro finalize*(batch: BatchCommands): untyped =
   ## - at least one `enqueue` in this compilation
   ##
   ## Later `finalize` calls reuse the cached artifact.
-  if ctgFrontend.isEmpty():
+  if ctgPendingKernels.len == 0:
     error("finalize: the stream holds no device function, enqueue first", batch)
   let engineN = quote do: `batch`.engine
   result = quote do:
