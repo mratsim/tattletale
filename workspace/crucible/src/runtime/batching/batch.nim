@@ -92,15 +92,16 @@ func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
 func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
-macro ctgAccumulateCirImpl(procdef: typed, backend: static CodegenKind): untyped =
-  # Bridge proc name = callee + compile-time arguments + runtime parameter
-  # types (buildGlobalFn), so N enqueue sites of one kernel store it once.
+macro ctgAccumulateCirImpl(procdef: untyped, backend: static CodegenKind): untyped =
+  # Stores the wrapper procdef untyped, a call description only.
+  # Kernels instantiate at materialization, never at the enqueue site.
+  # Bridge proc name = callee + compile-time arguments + parameter types, so N enqueue sites of one kernel store it once.
   # Backend prefix in the key: the same kernel enqueued for two backends stays two entries.
   let kname = $procdef[0]
   let key = $int(backend) & ":" & kname
   if not ctgPendingIndex.hasKey(key):
     ctgPendingIndex[key] = procdef
-    ctgPendingKernels.add(nnkBracket.newTree(newLit(int(backend)), procdef))
+    ctgPendingKernels.add(nnkBracket.newTree(newLit(int(backend)), procdef, newLit(key)))
     ctgGeneration[backend].inc
   result = newLit(kname)
 
@@ -129,7 +130,7 @@ proc ctgLowerArtifact(kind: static CodegenKind): auto {.compileTime.} =
   for i in 0 ..< ctgPendingKernels.len:
     let entry = ctgPendingKernels[i]
     if entry[0].intVal == int(kind):
-      discard lowerNimAst(fe, entry[1])
+      discard lowerNimAst(fe, ctgPendingIndex[entry[2].strVal & ":typed"])
   var reg = PassRegistry()
   reg.registerGpuPasses(kind)
   let m = fe.finish()
@@ -144,13 +145,41 @@ proc ctgCurrentGeneration*(kind: static CodegenKind): int {.compileTime.} =
   ## of `ctgArtifact` to bind the artifact of their own enqueue prefix.
   ctgGeneration[kind]
 
+macro ctgSemRelay(key: static string, procdef: typed): untyped =
+  # Materialization-site record of a sem-checked wrapper, consumed by artifact lowering.
+  # Stream identity remains the staged untyped node.
+  ctgPendingIndex[key] = procdef
+  result = newEmptyNode()
+
+macro ctgSemStaged(kind: static CodegenKind): untyped =
+  # Sem-checks every staged wrapper of `kind` at the materialization site.
+  # A staged procdef references bound symbols only (callee symbol, parameter types, bindSym'd pragmas).
+  # Kernels type without the enqueue site scope and instantiate exactly once each.
+  # ccGetBackend is read at instantiation. Set crucibleCompileTarget before the relays sem-check.
+  crucibleCompileTarget = case kind
+    of cgMetal: ctMetal
+    of cgSpirv: ctGlsl
+    of cgOpenCL: ctOpenCL
+    of cgWebGPU: ctWebGPU
+    else: ctNone
+  result = nnkStmtList.newTree()
+  for i in 0 ..< ctgPendingKernels.len:
+    let entry = ctgPendingKernels[i]
+    if entry[0].intVal == int(kind) and
+        not ctgPendingIndex.hasKey(entry[2].strVal & ":typed"):
+      result.add nnkCall.newTree(
+        bindSym"ctgSemRelay", newLit(entry[2].strVal & ":typed"), entry[1])
+
 proc ctgArtifact*(kind: static CodegenKind, gen: static int): auto =
   ## Returns the compiled artifact for `kind` at stream generation `gen`,
   ## baked into the binary as a const. One instantiation per (kind, gen):
   ## - sites at the same generation share one lowering
   ## - the artifact covers exactly the kernels enqueued before that generation
   ##
+  ## The instantiation is the staging point: it sem-checks the staged wrappers,
+  ## instantiating each stream kernel once, then lowers the typed nodes.
   ## Enqueueing more kernels and finalizing again compiles a fresh artifact.
+  ctgSemStaged(kind)
   const artifact = static(ctgLowerArtifact(kind))
   artifact
 

@@ -220,7 +220,9 @@ func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
       formalTypes.add(f[^2])
   # identity: the callee, its compile-time values and the runtime parameter types
   var h = hash($deviceFn)
-  var deviceFnCall = ident($deviceFn).newCall()
+  # Bound callee symbol. The wrapper sem-checks at the materialization site,
+  # where the callee identifier is out of scope.
+  var deviceFnCall = deviceFn.newCall()
   var params = nnkFormalParams.newTree(newEmptyNode())
   var si = 0
   var vi = 0
