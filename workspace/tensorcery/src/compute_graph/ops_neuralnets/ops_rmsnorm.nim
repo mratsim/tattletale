@@ -78,7 +78,7 @@ proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var T
     xImpl = asNorm.x.getImpl().to(engine.getTensorImplType(T, rank))
   when rank >= 2 and T is float32:
     let rows = rImpl.size() div rImpl.shape[rank - 1]
-    engine.materialize(rImpl)
+    engine.preAlloc(rImpl)
     if asNorm.w.isNil():
       batch.enqueue<<(min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups), LaneWidth)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), asNorm.eps, rank - 1)
     else:

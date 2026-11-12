@@ -16,6 +16,12 @@ import ./tensors_globals
 import ./compute_graph/ops_2i1o/ops_add
 import ./compute_graph/ops_1iNo/ops_split
 import ./compute_graph/ops_metadata/ops_swapaxes
+import ./compute_graph/ops_metadata/ops_views
+import ./compute_graph/ops_0i1o/ops_zeros
+import ./compute_graph/ops_0i1o/ops_ones
+import ./compute_graph/ops_0i1o/ops_full
+import ./compute_graph/ops_0i1o/ops_eye
+import ./compute_graph/ops_0i1o/ops_arange
 import ./compute_graph/ops_reductions/ops_allClose
 import ./compute_graph/ops_neuralnets/ops_rmsnorm
 import ./compute_graph/ops_neuralnets/ops_linear
@@ -71,6 +77,67 @@ proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]):
 
 # #######################################################################
 #
+#                            Factories
+#
+# #######################################################################
+
+proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_zeros(dtype, shape))
+
+proc ones*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_ones(dtype, shape))
+
+proc full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_full(vals, dtype, shape))
+
+proc eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline.} =
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_eye(n, n, k, dtype)).reshape([n, n])
+
+proc eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline.} =
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_eye(n, m, k, dtype)).reshape([n, m])
+
+proc arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_arange(0.0'f32, stop, 1.0'f32, dtype))
+
+proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor {.inline.} =
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_arange(start, stop, step, dtype))
+
+proc zeros_like*(a: Tensor): Tensor {.inline.} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_zeros(impl.dtype(), impl.shape().p))
+
+proc zeros_like*(a: Tensor, dtype: Dtype): Tensor {.inline.} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_zeros(dtype, impl.shape().p))
+
+proc ones_like*(a: Tensor): Tensor {.inline.} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_ones(impl.dtype(), impl.shape().p))
+
+proc ones_like*(a: Tensor, dtype: Dtype): Tensor {.inline.} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_ones(dtype, impl.shape().p))
+
+proc full_like*(a: Tensor, vals: float32): Tensor {.inline.} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_full(vals, impl.dtype(), impl.shape().p))
+
+proc full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor {.inline.} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_full(vals, dtype, impl.shape().p))
+
+# #######################################################################
+#
 #                              Metadata
 #
 # #######################################################################
@@ -106,7 +173,6 @@ proc eval*(ts: varargs[Tensor]) =
   for i in 0 ..< ts.len:
     roots[i] = ts[i].node
   ts[0].engine.eval(roots)
-  # op nodes come out materialized
   for i in 0 ..< ts.len:
     ts[i].node = roots[i]
 
@@ -145,6 +211,27 @@ proc matmul*(a, b: Tensor): Tensor {.inline.} =
 
 proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))
+
+proc reshape*(t: Tensor, shape: openArray[int]): Tensor {.inline.} =
+  Tensor(engine: t.engine, node: tn_reshape(t.engine, t.node, shape))
+
+proc transpose*(t: Tensor): Tensor {.inline.} =
+  Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node))
+
+proc transpose*(t: Tensor, axes: openArray[int]): Tensor {.inline.} =
+  Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node, axes))
+
+proc broadcast_to*(t: Tensor, shape: openArray[int]): Tensor {.inline.} =
+  Tensor(engine: t.engine, node: tn_broadcastTo(t.engine, t.node, shape))
+
+proc squeeze*(t: Tensor, axis: int): Tensor {.inline.} =
+  Tensor(engine: t.engine, node: tn_squeeze(t.engine, t.node, axis))
+
+proc expand_dims*(t: Tensor, axis: int): Tensor {.inline.} =
+  Tensor(engine: t.engine, node: tn_expandDims(t.engine, t.node, axis))
+
+proc narrow*(t: Tensor, axis, start, width: int): Tensor {.inline.} =
+  Tensor(engine: t.engine, node: tn_narrow(t.engine, t.node, axis, start, width))
 
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
   for n in t.engine.tn_split(t.node, axis, k):

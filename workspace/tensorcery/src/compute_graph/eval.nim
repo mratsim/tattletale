@@ -21,6 +21,5 @@ proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorNode]) =
   for i in 0 ..< roots.len:
     engine.enqueueNode(batch, roots[i])
   if batch.entries.len == 0:
-    # a leaf-only graph, the values are already materialized
     return
   batch.submit()

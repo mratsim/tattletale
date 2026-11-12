@@ -127,7 +127,7 @@ proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var 
       rImpl = asAll.r.to(engine.getTensorImplType(float32, 1))
       ai = asAll.tested.getImpl()
       bi = asAll.reference.getImpl()
-    engine.materialize(rImpl)
+    engine.preAlloc(rImpl)
     engine.copyToDeviceFromHost(rImpl.data[], [0.0'f32])
     match(ElemType, ai.dtype(), ARank, ai.shape().p.len):
       let

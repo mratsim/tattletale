@@ -7,14 +7,18 @@
 
 {.experimental: "views".}
 
-## Tensorcery ops_metadata ops on Metal
+## Run:
+##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_ops_metadata_metal \
+##     --nimcache:nimcache/t_ops_metadata_metal workspace/tensorcery/tests/ops_metadata/t_ops_metadata_metal.nim
 
 import workspace/crucible
 import workspace/ceramic
 import ./ops_swapaxes_template
+import ./ops_views_template
 
 proc main =
   runSwapaxesTest(runMetal, "Metal")
+  runViewsTest(runMetal, "Metal")
 
 when isMainModule:
   main()

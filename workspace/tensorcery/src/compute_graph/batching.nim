@@ -53,7 +53,7 @@ macro dispatchOp(E, T, engine, batch, n, rank: typed): untyped =
   result.add ifStmt
 
 proc enqueueWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int) =
-  if n.isMaterialized():
+  if n.isPreAllocated():
     return
   dispatchOp(E, T, engine, batch, n, rank)
 

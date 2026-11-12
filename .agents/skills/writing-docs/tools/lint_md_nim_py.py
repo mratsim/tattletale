@@ -47,8 +47,8 @@ Rule table (rule | trigger | severity):
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
 | run-command-path     | a comment carries --path:, paths come from config.nims                                            | counted  |
-| test-header-testthat | a test file header with a "Test that" line after the run command                          | counted  |
-| missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)            | advisory |
+| test-header-testthat | a test file header with a "Test that" line, only the title and the run command belong there   | counted  |
+| missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Precondition, Invariant, Examples)        | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
 | stmt-inline          | a statement keyword carries its body on the same line, one statement per line                     | counted  |
 | registration-top     | a register proc defined below the first implementation in a passes or analysis file, registration lives at the top | counted  |
@@ -184,9 +184,10 @@ RUN_CMD_RE = re.compile(
     r"\bnim test_\w+|^\s*(?:\$|nim\s|python3?\s|uv\s|pytest\b)|(?i:run):\s"
     r"|\btest_\w+ task in config\.nims")
 
-# The Test that line states the single behavior the test asserts.
-# Comment markers are already stripped from header content, the phrase
-# anchors at the line start after any indent.
+# The Test that line paraphrases the test body, a test header carries
+# only the title and the run command. Comment markers are already
+# stripped from header content, the phrase anchors at the line start
+# after any indent.
 TEST_THAT_RE = re.compile(r"^\s*Test that\b")
 
 # The test file name shapes differ by language.
@@ -197,10 +198,11 @@ PY_TEST_FILE_RE = re.compile(r"(?:^|/)(?:test_[^/]*|[^/]*_test)\.py$")
 
 # The missing-contract rule checks these contract markers.
 # Labeled sections (Args:, Output:) count through their colon shape.
-# The bare contract words count by themselves.
+# The bare contract words count by themselves. `contract` itself is not
+# a marker: the "Contract:" section header is a banned-vocab entry.
 CONTRACT_MARKER_RE = re.compile(
     r"\b(?:args|returns|raises|usage|examples|parameters)\b|\boutput\s*:|"
-    r"\b(?:contract|precondition|postcondition|invariants?|expected input|"
+    r"\b(?:precondition|postcondition|invariants?|expected input|"
     r"input shapes|output shape|lifetime|data flow)\b", re.IGNORECASE)
 
 # Exported Nim callable declarations the structure rules read (conservative shapes).
@@ -489,9 +491,14 @@ BANNED = [
            "(the schema before X, absent keys, the pre-005 frames)"),
     (r"\brows?\b",
      None, "'row' says nothing, state the section, the entry, the mapping or the line"),
-    (r"\bface\b",
+    (r"\bfaces?\b",
      lambda l: bool(re.search(r"interface|typeface", l)),
      "'face' says nothing, name the surface: the public API, the operator set, the entry point"),
+    (r"^contract\b\s*(:|$)", None,
+     "the Contract section header is banned, state the precondition, the "
+     "returns shape, or the invariant as a labeled section (Args:, Returns:, Precondition:)"),
+    (r"\bsubsum(?:e|es|ed|ing)\b", None,
+     "subsume hides the covering relation, state the check and what it covers"),
     (r"\bpin\b|\bpins\b|\bpinned\b|\bpinning\b",
      None, "use verified against, checked by, locked"),
     (r"\bgate\b|\bgates\b|\bgating\b",
@@ -707,11 +714,11 @@ RULES = {
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
     "test-header-testthat": Rule("test-header-testthat", True,
-                                 "a test file header without the \"Test that\" line before the run command, the shape is title, Test that, blank, run command"),
+                                 "a test file header with a \"Test that\" line, the header shape is title, blank, run command"),
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
-                             "a multi-line function doc with no contract marker (Args, Returns, Contract, Invariant, Examples)"),
+                             "a multi-line function doc with no contract marker (Args, Returns, Precondition, Invariant, Examples)"),
     "sig-wrap": Rule("sig-wrap", True,
                      "a proc or func signature wrapped across lines while the joined form fits a 140-char line"),
     "except-rewrap": Rule("except-rewrap", True,
@@ -1770,15 +1777,14 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
         findings.append(Finding(
             path, first_line, "test-header-command",
             "test file header carries no run command line"))
-    # The header shape is title, then Test that, then the run command.
-    # The run command may wrap, so its first line anchors it.
+    # The header shape is title, blank, run command. The Test that line
+    # paraphrases the test body and is banned, the test names itself.
     test_that = [n for n, c in header_lines if TEST_THAT_RE.search(c)]
-    run_cmd = [n for n, c in header_lines if RUN_CMD_RE.search(c)]
-    if is_test and run_cmd and (not test_that or min(test_that) > min(run_cmd)):
+    if is_test and test_that:
         findings.append(Finding(
-            path, first_line, "test-header-testthat",
-            "test file header carries no \"Test that\" line before the run command, "
-            "the shape is title, Test that, blank, run command"))
+            path, min(test_that), "test-header-testthat",
+            "test file header carries a \"Test that\" line, the header shape is "
+            "title, blank, run command"))
 
 
 def _type_decl_and_field_lines(lines):

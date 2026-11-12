@@ -7,14 +7,18 @@
 
 {.experimental: "views".}
 
-## Tensorcery ops_metadata ops on Vulkan
+## Run:
+##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_ops_metadata_vulkan \
+##     --nimcache:nimcache/t_ops_metadata_vulkan workspace/tensorcery/tests/ops_metadata/t_ops_metadata_vulkan.nim
 
 import workspace/crucible
 import workspace/ceramic
 import ./ops_swapaxes_template
+import ./ops_views_template
 
 proc main =
   runSwapaxesTest(runVulkan, "Vulkan")
+  runViewsTest(runVulkan, "Vulkan")
 
 when isMainModule:
   main()
