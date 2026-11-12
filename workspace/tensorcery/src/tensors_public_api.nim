@@ -83,86 +83,60 @@ proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]):
 #
 # #######################################################################
 
-macro zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor =
-  markOpUsage("Zeros")
-  quote do:
-    Tensor(engine: gEngine(`run`), node: gEngine(`run`).tn_zeros(`dtype`, `shape`))
+proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.hasKernel: "Zeros".} =
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_zeros(dtype, shape))
 
-macro ones*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor =
-  markOpUsage("Ones")
-  quote do:
-    Tensor(engine: gEngine(`run`), node: gEngine(`run`).tn_ones(`dtype`, `shape`))
+proc ones*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.hasKernel: "Ones".} =
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_ones(dtype, shape))
 
-macro full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor =
-  markOpUsage("Full")
-  quote do:
-    Tensor(engine: gEngine(`run`), node: gEngine(`run`).tn_full(`vals`, `dtype`, `shape`))
+proc full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.hasKernel: "Full".} =
+  Tensor(engine: gEngine(run), node: gEngine(run).tn_full(vals, dtype, shape))
 
-macro eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor =
-  markOpUsage("Eye")
-  quote do:
-    let engine = gEngine(`run`)
-    Tensor(engine: engine, node: engine.tn_eye(`n`, `n`, `k`, `dtype`)).reshape([`n`, `n`])
+proc eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.hasKernel: ["Eye", "View"].} =
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_reshape(engine.tn_eye(n, n, k, dtype), [n, n]))
 
-macro eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor =
-  markOpUsage("Eye")
-  quote do:
-    let engine = gEngine(`run`)
-    Tensor(engine: engine, node: engine.tn_eye(`n`, `m`, `k`, `dtype`)).reshape([`n`, `m`])
+proc eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.hasKernel: ["Eye", "View"].} =
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_reshape(engine.tn_eye(n, m, k, dtype), [n, m]))
 
-macro arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor =
-  markOpUsage("Arange")
-  quote do:
-    let engine = gEngine(`run`)
-    Tensor(engine: engine, node: engine.tn_arange(0.0'f32, `stop`, 1.0'f32, `dtype`))
+proc arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.hasKernel: "Arange".} =
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_arange(0.0'f32, stop, 1.0'f32, dtype))
 
-macro arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor =
-  markOpUsage("Arange")
-  quote do:
-    let engine = gEngine(`run`)
-    Tensor(engine: engine, node: engine.tn_arange(`start`, `stop`, `step`, `dtype`))
+proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor {.hasKernel: "Arange".} =
+  let engine = gEngine(run)
+  Tensor(engine: engine, node: engine.tn_arange(start, stop, step, dtype))
 
-macro zeros_like*(a: Tensor): Tensor =
-  markOpUsage("Zeros")
-  quote do:
-    let engine = `a`.engine
-    let impl = `a`.node.getImpl()
-    Tensor(engine: engine, node: engine.tn_zeros(impl.dtype(), impl.shape().p))
+proc zeros_like*(a: Tensor): Tensor {.hasKernel: "Zeros".} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_zeros(impl.dtype(), impl.shape().p))
 
-macro zeros_like*(a: Tensor, dtype: Dtype): Tensor =
-  markOpUsage("Zeros")
-  quote do:
-    let engine = `a`.engine
-    let impl = `a`.node.getImpl()
-    Tensor(engine: engine, node: engine.tn_zeros(`dtype`, impl.shape().p))
+proc zeros_like*(a: Tensor, dtype: Dtype): Tensor {.hasKernel: "Zeros".} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_zeros(dtype, impl.shape().p))
 
-macro ones_like*(a: Tensor): Tensor =
-  markOpUsage("Ones")
-  quote do:
-    let engine = `a`.engine
-    let impl = `a`.node.getImpl()
-    Tensor(engine: engine, node: engine.tn_ones(impl.dtype(), impl.shape().p))
+proc ones_like*(a: Tensor): Tensor {.hasKernel: "Ones".} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_ones(impl.dtype(), impl.shape().p))
 
-macro ones_like*(a: Tensor, dtype: Dtype): Tensor =
-  markOpUsage("Ones")
-  quote do:
-    let engine = `a`.engine
-    let impl = `a`.node.getImpl()
-    Tensor(engine: engine, node: engine.tn_ones(`dtype`, impl.shape().p))
+proc ones_like*(a: Tensor, dtype: Dtype): Tensor {.hasKernel: "Ones".} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_ones(dtype, impl.shape().p))
 
-macro full_like*(a: Tensor, vals: float32): Tensor =
-  markOpUsage("Full")
-  quote do:
-    let engine = `a`.engine
-    let impl = `a`.node.getImpl()
-    Tensor(engine: engine, node: engine.tn_full(`vals`, impl.dtype(), impl.shape().p))
+proc full_like*(a: Tensor, vals: float32): Tensor {.hasKernel: "Full".} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_full(vals, impl.dtype(), impl.shape().p))
 
-macro full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor =
-  markOpUsage("Full")
-  quote do:
-    let engine = `a`.engine
-    let impl = `a`.node.getImpl()
-    Tensor(engine: engine, node: engine.tn_full(`vals`, `dtype`, impl.shape().p))
+proc full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor {.hasKernel: "Full".} =
+  let engine = a.engine
+  let impl = a.node.getImpl()
+  Tensor(engine: engine, node: engine.tn_full(vals, dtype, impl.shape().p))
 
 # #######################################################################
 #
@@ -213,10 +187,8 @@ proc eval*(ts: varargs[Tensor]) =
 # Binary (Tensor + Tensor)
 # ----------------------------------------------------------
 
-macro `+`*(a, b: Tensor): Tensor =
-  markOpUsage("Add")
-  quote do:
-    Tensor(engine: `a`.engine, node: tn_add(`a`.engine, `a`.node, `b`.node))
+proc `+`*(a, b: Tensor): Tensor {.hasKernel: "Add".} =
+  Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
 
 # #######################################################################
 #
@@ -224,18 +196,14 @@ macro `+`*(a, b: Tensor): Tensor =
 #
 # #######################################################################
 
-macro gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor =
+proc gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor {.hasKernel: "Gemm".} =
   ## D = alpha·A·B + beta·C over the last two axes, C nil requires beta = 0
-  markOpUsage("Gemm")
-  quote do:
-    let cn = if `c`.isNil(): NilTensorNode() else: `c`.node
-    Tensor(engine: `a`.engine, node: tn_gemm(`a`.engine, `alpha`, `a`.node, `b`.node, `beta`, cn))
+  let cn = if c.isNil(): NilTensorNode() else: c.node
+  Tensor(engine: a.engine, node: tn_gemm(a.engine, alpha, a.node, b.node, beta, cn))
 
-macro matmul*(a, b: Tensor): Tensor =
+proc matmul*(a, b: Tensor): Tensor {.hasKernel: "Gemm".} =
   ## A·B over the last two axes
-  markOpUsage("Gemm")
-  quote do:
-    gemm(1.0'f32, `a`, `b`, 0.0'f32)
+  gemmImpl(1.0'f32, a, b, 0.0'f32)
 
 # #######################################################################
 #
@@ -243,55 +211,36 @@ macro matmul*(a, b: Tensor): Tensor =
 #
 # #######################################################################
 
-macro swapaxes*(t: Tensor, axis1, axis2: int): Tensor =
-  markOpUsage("View")
-  quote do:
-    Tensor(engine: `t`.engine, node: tn_swapaxes(`t`.engine, `t`.node, `axis1`, `axis2`))
+proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.hasKernel: "View".} =
+  Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))
 
-macro reshape*(t: Tensor, shape: openArray[int]): Tensor =
-  markOpUsage("View")
-  quote do:
-    Tensor(engine: `t`.engine, node: tn_reshape(`t`.engine, `t`.node, `shape`))
+proc reshape*(t: Tensor, shape: openArray[int]): Tensor {.hasKernel: "View".} =
+  Tensor(engine: t.engine, node: tn_reshape(t.engine, t.node, shape))
 
-macro transpose*(t: Tensor): Tensor =
-  markOpUsage("View")
-  quote do:
-    Tensor(engine: `t`.engine, node: tn_transpose(`t`.engine, `t`.node))
+proc transpose*(t: Tensor): Tensor {.hasKernel: "View".} =
+  Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node))
 
-macro transpose*(t: Tensor, axes: openArray[int]): Tensor =
-  markOpUsage("View")
-  quote do:
-    Tensor(engine: `t`.engine, node: tn_transpose(`t`.engine, `t`.node, `axes`))
+proc transpose*(t: Tensor, axes: openArray[int]): Tensor {.hasKernel: "View".} =
+  Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node, axes))
 
-macro broadcast_to*(t: Tensor, shape: openArray[int]): Tensor =
-  markOpUsage("View")
-  quote do:
-    Tensor(engine: `t`.engine, node: tn_broadcastTo(`t`.engine, `t`.node, `shape`))
+proc broadcast_to*(t: Tensor, shape: openArray[int]): Tensor {.hasKernel: "View".} =
+  Tensor(engine: t.engine, node: tn_broadcastTo(t.engine, t.node, shape))
 
-macro squeeze*(t: Tensor, axis: int): Tensor =
-  markOpUsage("View")
-  quote do:
-    Tensor(engine: `t`.engine, node: tn_squeeze(`t`.engine, `t`.node, `axis`))
+proc squeeze*(t: Tensor, axis: int): Tensor {.hasKernel: "View".} =
+  Tensor(engine: t.engine, node: tn_squeeze(t.engine, t.node, axis))
 
-macro expand_dims*(t: Tensor, axis: int): Tensor =
-  markOpUsage("View")
-  quote do:
-    Tensor(engine: `t`.engine, node: tn_expandDims(`t`.engine, `t`.node, `axis`))
+proc expand_dims*(t: Tensor, axis: int): Tensor {.hasKernel: "View".} =
+  Tensor(engine: t.engine, node: tn_expandDims(t.engine, t.node, axis))
 
-macro narrow*(t: Tensor, axis, start, width: int): Tensor =
-  markOpUsage("View")
-  quote do:
-    Tensor(engine: `t`.engine, node: tn_narrow(`t`.engine, `t`.node, `axis`, `start`, `width`))
+proc narrow*(t: Tensor, axis, start, width: int): Tensor {.hasKernel: "View".} =
+  Tensor(engine: t.engine, node: tn_narrow(t.engine, t.node, axis, start, width))
 
-macro split*(t: Tensor, axis: int, k: int): seq[Tensor] =
+proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.hasKernel: "View".} =
   ## Splits `t` along `axis` into `k` equal parts, views into `t`'s buffer.
-  markOpUsage("View")
-  quote do:
-    block:
-      var parts: seq[Tensor]
-      for n in `t`.engine.tn_split(`t`.node, `axis`, `k`):
-        parts.add(Tensor(engine: `t`.engine, node: n))
-      parts
+  var parts: seq[Tensor]
+  for n in t.engine.tn_split(t.node, axis, k):
+    parts.add(Tensor(engine: t.engine, node: n))
+  parts
 
 # #######################################################################
 #
@@ -299,14 +248,12 @@ macro split*(t: Tensor, axis: int, k: int): seq[Tensor] =
 #
 # #######################################################################
 
-macro allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool =
+proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool {.hasKernel: "allClose".} =
   ## True when every element satisfies |tested - reference| <= atol + rtol * |reference|.
   ## Same-sign infinities are equal, NaN equal only with equal_nan
-  markOpUsage("allClose")
-  quote do:
-    Tensor(engine: `tested`.engine,
-        node: tn_allClose(`tested`.engine, `tested`.node, `reference`.node, `atol`, `rtol`, `equal_nan`)
-      ).item(float32) == 0.0'f32
+  Tensor(engine: tested.engine,
+      node: tn_allClose(tested.engine, tested.node, reference.node, atol, rtol, equal_nan)
+    ).item(float32) == 0.0'f32
 
 # #######################################################################
 #
@@ -317,18 +264,14 @@ macro allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equ
 # Normalization
 # ----------------------------------------------------------
 
-macro rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor =
-  markOpUsage("RmsNorm")
-  quote do:
-    let w = if `weight`.isNil(): NilTensorNode() else: `weight`.node
-    Tensor(engine: `x`.engine, node: tn_rmsnorm(`x`.engine, `x`.node, w, `eps`))
+proc rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor {.hasKernel: "RmsNorm".} =
+  let w = if weight.isNil(): NilTensorNode() else: weight.node
+  Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w, eps))
 
 # Layers
 # ----------------------------------------------------------
 
-macro linear*(x, weight: Tensor, bias: Tensor = nil): Tensor =
+proc linear*(x, weight: Tensor, bias: Tensor = nil): Tensor {.hasKernel: "Linear".} =
   ## o = x·Wᵀ + b: (M, K) × (out, K) → (M, out), bias nil when the layer has none
-  markOpUsage("Linear")
-  quote do:
-    let bn = if `bias`.isNil(): NilTensorNode() else: `bias`.node
-    Tensor(engine: `x`.engine, node: tn_linear(`x`.engine, `x`.node, `weight`.node, bn))
+  let bn = if bias.isNil(): NilTensorNode() else: bias.node
+  Tensor(engine: x.engine, node: tn_linear(x.engine, x.node, weight.node, bn))

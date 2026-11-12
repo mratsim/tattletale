@@ -15,8 +15,7 @@ import workspace/tensorcery/src/compute_graph/batching
 
 # Mark ops before the first engine construction: the dispatch reads the marks there.
 static:
-  markOpUsage("Add")
-  markOpUsage("allClose")
+
 
 proc refAdd(dst: var openArray[bfloat16], a, b: openArray[bfloat16]) =
   for i in 0 ..< dst.len:

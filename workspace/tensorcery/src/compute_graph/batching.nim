@@ -7,7 +7,7 @@
 
 {.experimental: "views".}
 
-import std/[macros, sets, tables]
+import std/[macros, macrocache, tables]
 import workspace/crucible
 import ../tensors_internal_types
 
@@ -16,18 +16,87 @@ import ../tensors_internal_types
 # ═══════════════════════════════════════════════════════════════════════
 
 var OpRegistry {.compileTime.}: Table[string, NimNode]
-var opsMarked {.compileTime.}: HashSet[string]
 
 macro registerOp*(op: static string, handler: typed) =
   OpRegistry[op] = handler
 
-proc markOpUsage*(op: static string) {.compileTime.} =
-  ## Records `op` as used by this compilation. Only marked ops get a dispatch
-  ## branch (see dispatchOp). Call it only as a direct statement of a macro
-  ## body (the Tensor sugar macros execute per call site):
-  ## - a `static:` block runs once at definition and marks unused ops
-  ## - a compileTime call from a runtime proc body compiles but does nothing
-  opsMarked.incl(op)
+proc renameDef(name: NimNode, suffix: string): NimNode =
+  ## Renames a procdef name node.
+  ## Quoted operator names are preserved. The export marker is dropped and the Impl is module-private.
+  let inner = if name.kind == nnkPostfix: name[1] else: name
+  case inner.kind
+  of nnkIdent:
+    ident($inner & suffix)
+  of nnkAccQuoted:
+    nnkAccQuoted.newTree(ident($inner[0] & suffix))
+  else:
+    error("hasKernel: unsupported proc name", name)
+
+macro hasKernel*(ops: untyped, p: untyped): untyped =
+  ## Defines `p` as `<name>Impl` plus an untyped forwarding template `<name>`
+  ## with the same signature.
+  ##
+  ## Each template expansion increments the compile-time counter of every op
+  ## in `ops` before forwarding. Calling the op is the mark that the dispatch
+  ## reads (see dispatchOp).
+  ##
+  ## - Pragmas are preserved on the Impl.
+  ## - The doc comment moves to the template.
+  ## - `<name>Impl` is module-private.
+  ## - Calling `<name>Impl` directly skips the mark: forward through the template.
+  ##
+  ## Usage:
+  ##   proc `+`*(a, b: Tensor): Tensor {.hasKernel: "Add".} =
+  ##     Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
+  var keys: seq[string]
+  if ops.kind == nnkStrLit:
+    keys.add($ops)
+  else:
+    for k in ops:
+      keys.add($k)
+
+  let name = p[0]
+  let implName = renameDef(name, "Impl")
+
+  # doc comment moves to the template
+  var doc: NimNode = nil
+  var body = p[6]
+  if body.len > 0 and body[0].kind == nnkCommentStmt:
+    doc = body[0]
+    body = newTree(nnkStmtList, body[1 ..^ 1])
+
+  var impl = p.copyNimTree()
+  impl[0] = implName
+  # strip the hasKernel pragma itself, keep the others
+  var kept = newNimNode(nnkPragma)
+  for pr in impl[4]:
+    let head = if pr.kind in {nnkExprColonExpr, nnkCall}: pr[0] else: pr
+    if $head != "hasKernel":
+      kept.add(pr)
+  impl[4] = kept
+  impl[6] = body
+
+  var params = p[3].copyNimTree()
+  var args: seq[NimNode] = @[implName]
+  for i in 1 ..< params.len:
+    let defs = params[i]
+    for j in 0 ..< defs.len - 2:
+      args.add(defs[j])
+  let forward = newTree(nnkCall, args)
+
+  var tBody = newTree(nnkStmtList)
+  for k in keys:
+    let kNode = newLit(k)
+    tBody.add quote do:
+      static:
+        CacheCounter(`kNode`).inc()
+  tBody.add forward
+
+  var tpl = newTree(nnkTemplateDef, name, newEmptyNode(),
+      p[2].copyNimTree(), params.copyNimTree(), newEmptyNode(), newEmptyNode(), tBody)
+  if not doc.isNil():
+    tpl[6] = newTree(nnkStmtList, doc, tBody)
+  result = newTree(nnkStmtList, impl, tpl)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph batching
@@ -55,7 +124,7 @@ macro dispatchOp(E, T, engine, batch, n, rank: typed): untyped =
   result = nnkStmtList.newTree()
   var ifStmt = newNimNode(nnkIfStmt)
   for name, h in pairs(OpRegistry):
-    if name notin opsMarked:
+    if CacheCounter(name).value == 0:
       continue
     let call = nnkCall.newTree(
       h, engine, batch, n, T, rank)
