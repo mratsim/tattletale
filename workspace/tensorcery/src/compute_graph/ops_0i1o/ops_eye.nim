@@ -24,12 +24,8 @@ import ../env
 const FillFleet = (elemsPerGroup: 128)
 
 proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
-  ## Writes 1 where j - i == kDiag, 0 elsewhere, over the flat index.
-  ## Here i is the first matrix index and j the second one over the flattened [n, m] output.
-  ##
-  ## Args:
-  ## - ncols: the second-axis size, as float
-  ## - kDiag: the diagonal offset, as float
+  ## Writes 1 where j - i == kDiag, 0 elsewhere, over the flat index of the [n, m] output.
+  ## i is the first matrix index, j the second one.
   ##
   ## The kernel computes on a rank-1 view of the dense output with float
   ## arguments and derives i, j by subtraction:

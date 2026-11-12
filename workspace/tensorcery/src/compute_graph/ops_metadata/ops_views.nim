@@ -19,11 +19,7 @@ import ../../tensors_internals
 
 func sameAddressing(shape, strides: openArray[int]): bool =
   ## True when `strides` address memory exactly like the canonical dense
-  ## layout of `shape`:
-  ## - the last axis has stride 1
-  ## - every earlier stride is the product of the later stride and size
-  ##
-  ## Reshaping is order-preserving exactly for such layouts.
+  ## layout of `shape`. Reshaping is order-preserving exactly for such layouts.
   ## A strided source would need a copy op, which tensorcery refuses.
   if strides[shape.len - 1] != 1:
     return false
@@ -34,8 +30,6 @@ func sameAddressing(shape, strides: openArray[int]): bool =
 
 func reachWindow(shape, strides: openArray[int], base: int): tuple[lo, hi: int] =
   ## Lowest and highest element addresses a layout reaches from `base`.
-  ## Axis i reaches strides[i]·(shape[i]-1) elements from the origin,
-  ## upward or downward depending on the stride's sign.
   result = (base, base)
   for i in 0 ..< shape.len:
     let reach = if shape[i] > 0: strides[i] * (shape[i] - 1) else: 0
@@ -51,7 +45,6 @@ proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorNod
   ## Contract:
   ## - the bound is the root impl's size, non-view nodes are dense-allocated
   ##   at their full size and no capacity field exists
-  ## - a negative stride reaches downward, so the window's low end is checked
   ## - with only non-negative strides the window's high end is
   ##   base + cosize - 1, subsumed by the same window walk
   var
@@ -73,9 +66,6 @@ proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorNod
   lo >= 0 and hi < cur.getImpl().size()
 
 func broadcastable(src, target: openArray[int]): bool =
-  ## True when `src` broadcasts to `target`:
-  ## - the target may add leading axes over the whole source
-  ## - each trailing axis keeps its size or stretches a size-1 axis
   if target.len < src.len:
     return false
   let lead = target.len - src.len
@@ -86,9 +76,7 @@ func broadcastable(src, target: openArray[int]): bool =
 
 proc tn_view(engine: AnyEngine, x: TensorNode, shape, strides: openArray[int], offset: int): TensorNode {.contracts.} =
   ## Raw view over `x`'s buffer: any shape, any strides, any offset relative
-  ## to `x`'s origin.
-  ##
-  ## Internal. The faces below build on it.
+  ## to `x`'s origin. The faces below build on it.
   {.precondition: shape.len == strides.len.}
   {.precondition: shape.len in 1 .. 5.}
   {.precondition: viewInBounds(shape, strides, offset, x).}
@@ -96,11 +84,7 @@ proc tn_view(engine: AnyEngine, x: TensorNode, shape, strides: openArray[int], o
 
 proc tn_reshape*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): TensorNode {.contracts.} =
   ## View of `x` with a new shape, same element order.
-  ##
-  ## Precondition:
-  ## - the source is dense with canonical strides, a strided source would
-  ##   need a copy op, which tensorcery refuses
-  ## - one size may be -1, inferred from the total size with MLX semantics
+  ## One size may be -1, inferred from the total size with MLX semantics.
   let ix = x.getImpl()
   {.precondition: shape.len in 1 .. 5.}
   var
@@ -159,10 +143,8 @@ proc tn_transpose*(engine: AnyEngine, x: TensorNode): TensorNode =
   engine.newViewNode(x, outShape, outStrides, 0, "Transpose")
 
 proc tn_broadcastTo*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): TensorNode {.contracts.} =
-  ## Broadcast view of `x`, trailing-aligned:
-  ## - the target may add leading axes over the whole source
-  ## - each trailing axis keeps its size or stretches a size-1 axis
-  ## - a stretched axis reads at stride 0
+  ## Broadcast view of `x`, trailing-aligned.
+  ## A stretched axis reads at stride 0.
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   {.precondition: shape.len >= s.len and shape.len <= 5.}

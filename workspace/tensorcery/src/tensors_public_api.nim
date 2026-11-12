@@ -116,37 +116,31 @@ proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: D
   Tensor(engine: engine, node: engine.tn_arange(start, stop, step, dtype))
 
 proc zeros_like*(a: Tensor): Tensor {.inline.} =
-  ## A tensor of a's shape and dtype filled with zeros.
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_zeros(impl.dtype(), impl.shape().p))
 
 proc zeros_like*(a: Tensor, dtype: Dtype): Tensor {.inline.} =
-  ## A tensor of a's shape and `dtype` filled with zeros.
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_zeros(dtype, impl.shape().p))
 
 proc ones_like*(a: Tensor): Tensor {.inline.} =
-  ## A tensor of a's shape and dtype filled with ones.
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_ones(impl.dtype(), impl.shape().p))
 
 proc ones_like*(a: Tensor, dtype: Dtype): Tensor {.inline.} =
-  ## A tensor of a's shape and `dtype` filled with ones.
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_ones(dtype, impl.shape().p))
 
 proc full_like*(a: Tensor, vals: float32): Tensor {.inline.} =
-  ## A tensor of a's shape and dtype filled with the scalar `vals`.
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_full(vals, impl.dtype(), impl.shape().p))
 
 proc full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor {.inline.} =
-  ## A tensor of a's shape and `dtype` filled with the scalar `vals`.
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_full(vals, dtype, impl.shape().p))

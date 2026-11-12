@@ -17,7 +17,6 @@ import workspace/tensorcery
 proc runFactoriesTest*(run: static Runtime, name: string) =
   privateAccess(Tensor)
 
-  # Zeros fill every element with 0, on device, in every dtype
   block:
     ## Nim: zeros([2, 3], run, kFp32) / zeros([2, 3], run, kBf16)
     ## MLX: mx.zeros((2, 3), mx.float32) / mx.zeros((2, 3), mx.bfloat16)
@@ -29,7 +28,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(zbf)
     doAssert zbf.allClose([0.0'f32, 0, 0, 0, 0, 0].toTensor([2, 3], run, bfloat16)), name & ": zeros bf16"
 
-  # Ones fills every element with 1
   block:
     ## Nim: ones([2, 2], run, kBf16)
     ## MLX: mx.ones((2, 2), mx.bfloat16)
@@ -38,7 +36,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(o)
     doAssert o.allClose([1.0'f32, 1, 1, 1].toTensor([2, 2], run, bfloat16)), name & ": ones"
 
-  # Full fills every element with the scalar value, converting to the dtype
   block:
     ## Nim: full([2, 2], 2.5, run, kBf16) / full([4], -1.5, run, kFp32)
     ## MLX: mx.full((2, 2), 2.5, mx.bfloat16) / mx.full((4,), -1.5)
@@ -50,8 +47,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(f32)
     doAssert f32.allClose([-1.5'f32, -1.5, -1.5, -1.5].toTensor([4], run, float32)), name & ": full fp32"
 
-  # *_like faces inherit shape and dtype from the template arg,
-  # or take an explicit dtype
   block:
     ## Nim: zeros_like(f) / ones_like(f) / full_like(z, 7.0) / full_like(z, 7.0, kFp32)
     ## MLX: mx.zeros_like(f) / mx.ones_like(f) / mx.full_like(z, 7.0) / mx.full_like(z, 7.0, mx.float32)
@@ -73,8 +68,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(fl32)
     doAssert fl32.allClose([7.0'f32, 7, 7, 7, 7, 7].toTensor([2, 3], run, float32)), name & ": full_like dtype"
 
-  # Eye places 1 on the k-th diagonal, k > 0 above the main diagonal,
-  # rectangular shapes keep the rest zero
   block:
     ## Nim: eye(3, run, kFp32) / eye(3, 4, run, kBf16, 1) / eye(2, 3, run, kFp16, -1)
     ## MLX: mx.eye(3) / mx.eye(3, 4, 1, mx.bfloat16) / mx.eye(2, 3, -1)
@@ -89,8 +82,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(em1)
     doAssert em1.allClose([0.0'f32, 0, 0, 1, 0, 0].toTensor([2, 3], run, float32)), name & ": eye k-1"
 
-  # Arange enumerates start + step*i. Negative steps count down.
-  # stop stays exclusive
   block:
     ## Nim: arange(10, run, kFp32) / arange(1, 14, run, 3.0, kFp32)
     ##      arange(10.0, 0.0, run, -1.5, kBf16)
@@ -120,9 +111,7 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard zeros([], run, kBf16)
 
-  # Zero-size case: a size-0 shape constructs but the backend refuses
-  # allocation at eval. Size-0 tensors are out of scope. The backend raise
-  # is the refusal and no size-0 guard exists in the handlers.
+  # Size-0 shapes are out of scope: the node constructs, eval hits the backend allocation raise and no size-0 guard exists
   block:
     let z0 = zeros([0], run, kBf16)
     doAssertRaises AssertionDefect:

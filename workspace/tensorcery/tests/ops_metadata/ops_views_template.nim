@@ -17,7 +17,6 @@ import workspace/tensorcery/src/compute_graph/ops_metadata/ops_views {.all.}
 proc runViewsTest*(run: static Runtime, name: string) =
   privateAccess(Tensor)
 
-  # Reshape of an op output is a rank-changing view binding at eval, same element order
   block:
     ## Nim: reshape(x + x, [2, 2, 2])
     ## MLX: mx.reshape(x + x, (2, 2, 2))
@@ -33,7 +32,6 @@ proc runViewsTest*(run: static Runtime, name: string) =
       expected[i] = (2.0'f32 * xd[i]).to(bfloat16)
     doAssert r.allClose(expected.toTensor([2, 2, 2], run, bfloat16)), name & ": reshape"
 
-  # Transpose with no axes reverses every axis. With axes, result axis i reads source axis axes[i]
   block:
     ## Nim: transpose(x) / transpose(x, [2, 0, 1])
     ## MLX: mx.transpose(x) / mx.transpose(x, (2, 0, 1))
@@ -50,7 +48,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssert p.allClose([xd[0], xd[3], xd[1], xd[4], xd[2], xd[5]].toTensor([3, 1, 2], run, bfloat16)),
         name & ": transpose axes"
 
-  # Squeeze removes a size-1 axis, rank changes survive eval on an op output
+  # Squeeze of an op output: the rank change survives eval
   block:
     ## Nim: squeeze(x + x, 1)
     ## MLX: mx.squeeze(x + x, 1)
@@ -66,8 +64,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
       expected[i] = (2.0'f32 * xd[i]).to(bfloat16)
     doAssert sq.allClose(expected.toTensor([2, 4], run, bfloat16)), name & ": squeeze"
 
-  # Expand_dims inserts a size-1 axis with the canonical dense stride,
-  # so a later reshape stays order-preserving
+  # expand_dims keeps the canonical dense stride on the inserted axis, so a later reshape stays order-preserving
   block:
     ## Nim: expand_dims(x, 1) / reshape(expand_dims(x, 1), [2, 4])
     ## MLX: mx.expand_dims(x, 1) / mx.reshape(mx.expand_dims(x, 1), (2, 4))
@@ -80,8 +77,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssert reshape(e, [2, 4]).allClose(xd.toTensor([2, 4], run, bfloat16)),
         name & ": reshape after expand_dims"
 
-  # Broadcast of a narrow slice evals and reads stride-0 axes on device:
-  # slice (2, 2) at column offset 1 stretches a leading axis of 3, then doubles
+  # Broadcast of a narrow slice: a stretched axis reads at stride 0 on device
   block:
     ## Nim: broadcast_to(narrow(x + x, 1, 1, 2), [3, 2, 2]) + broadcast_to(...)
     ## MLX: mx.broadcast_to((x + x)[:, 1:3], (3, 2, 2))
@@ -99,11 +95,9 @@ proc runViewsTest*(run: static Runtime, name: string) =
     for i0 in 0 ..< 3:
       for i in 0 ..< 2:
         for j in 0 ..< 2:
-          # slice reads 2*xd and the add doubles it again
-          expected[i0 * 4 + i * 2 + j] = (4.0'f32 * xd[i * 4 + 1 + j]).to(bfloat16)
+            expected[i0 * 4 + i * 2 + j] = (4.0'f32 * xd[i * 4 + 1 + j]).to(bfloat16)
     doAssert w.allClose(expected.toTensor([3, 2, 2], run, bfloat16)), name & ": broadcast_to narrow"
 
-  # A negative-stride view is legal: (4,)/[-1] at offset 3 stays inside a 4-element root
   block:
     ## Nim: view(x, [4], [-1], 3), a reversed view of the 4-element root
     ## MLX: x[::-1], axis reversed
@@ -123,9 +117,8 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard x.engine.tn_view(x.node, [2], [-3], 2)
 
-  # Column-major (2,2)/(1,2) has cosize == size == 4, yet a reshape to (4,)
-  # scrambles element order. The source strides are not canonical dense strides
-  # and reshape refuses.
+  # Column-major (2,2)/(1,2) has cosize == size == 4, yet reshape to (4,)
+  # scrambles element order: the source strides are not canonical dense strides
   block:
     var xd = @[1.0'f32, 2, 3, 4]
     var x = xd.toTensor([4], run, bfloat16)
@@ -154,8 +147,8 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard reshape(x3, [4, -1])
 
-  # Narrow never trusts its source: an out-of-window view built on the raw
-  # machinery boundary is refused against the root buffer
+  # Narrow bounds-checks against the root buffer: an out-of-window source
+  # view is refused
   block:
     var x = [1.0'f32, 2, 3, 4].toTensor([4], run, bfloat16)
     let bad = x.engine.newViewNode(x.node, [4], [-1], 0, "bad")

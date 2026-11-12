@@ -9,8 +9,6 @@
 
 ## Tensorcery ops_0i1o factories on Metal
 ##
-## Test that the factory faces construct, eval and read back correct values, that invalid calls refuse and that size-0 shapes raise.
-##
 ## Run:
 ##   nim c -r -d:release --hints:off --warnings:off \
 ##     --nimcache:nimcache/t_ops_0i1o_metal workspace/tensorcery/tests/ops_0i1o/t_ops_0i1o_metal.nim

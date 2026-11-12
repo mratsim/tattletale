@@ -9,9 +9,6 @@
 
 ## Tensorcery ops_metadata ops on Vulkan
 ##
-## Test that the metadata faces construct, eval and read back correct values
-## for swapaxes and views and that every invalid call refuses.
-##
 ## Run:
 ##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_ops_metadata_vulkan \
 ##     --nimcache:nimcache/t_ops_metadata_vulkan workspace/tensorcery/tests/ops_metadata/t_ops_metadata_vulkan.nim
