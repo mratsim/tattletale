@@ -17,8 +17,7 @@ import workspace/tensorcery
 proc runFactoriesTest*(run: static Runtime, name: string) =
   privateAccess(Tensor)
 
-  # Zeros in fp32 and bf16
-  block:
+  block: # Zeros in fp32 and bf16
     let z32 = zeros([2, 3], run, kFp32)
     eval(z32)
     doAssert z32.allClose([0.0'f32, 0, 0, 0, 0, 0].toTensor([2, 3], run, float32)), name & ": zeros fp32"
@@ -26,14 +25,12 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(zbf)
     doAssert zbf.allClose([0.0'f32, 0, 0, 0, 0, 0].toTensor([2, 3], run, bfloat16)), name & ": zeros bf16"
 
-  # Ones
-  block:
+  block: # Ones
     let o = ones([2, 2], run, kBf16)
     eval(o)
     doAssert o.allClose([1.0'f32, 1, 1, 1].toTensor([2, 2], run, bfloat16)), name & ": ones"
 
-  # Full in bf16 and fp32
-  block:
+  block: # Full in bf16 and fp32
     let f = full([2, 2], 2.5'f32, run, kBf16)
     eval(f)
     doAssert f.allClose([2.5'f32, 2.5, 2.5, 2.5].toTensor([2, 2], run, bfloat16)), name & ": full bf16"
@@ -41,8 +38,7 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(f32)
     doAssert f32.allClose([-1.5'f32, -1.5, -1.5, -1.5].toTensor([4], run, float32)), name & ": full fp32"
 
-  # Like variants inherit shape and dtype, the dtype overload overrides
-  block:
+  block: # Like variants inherit shape and dtype, the dtype overload overrides
     let f = full([2, 2], 2.5'f32, run, kBf16)
     eval(f)
     let zl = zeros_like(f)
@@ -60,8 +56,7 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(fl32)
     doAssert fl32.allClose([7.0'f32, 7, 7, 7, 7, 7].toTensor([2, 3], run, float32)), name & ": full_like dtype"
 
-  # Eye: square k=0, rectangular superdiagonal k=1, subdiagonal k=-1
-  block:
+  block: # Eye: square k=0, rectangular superdiagonal k=1, subdiagonal k=-1
     let e0 = eye(3, run, kFp32)
     eval(e0)
     doAssert e0.allClose([1.0'f32, 0, 0, 0, 1, 0, 0, 0, 1].toTensor([3, 3], run, float32)), name & ": eye k0"
@@ -72,8 +67,7 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(em1)
     doAssert em1.allClose([0.0'f32, 0, 0, 1, 0, 0].toTensor([2, 3], run, float32)), name & ": eye k-1"
 
-  # Arange: stop-only, positive step, negative step
-  block:
+  block: # Arange: stop-only, positive step, negative step
     let a0 = arange(10.0'f32, run, kFp32)
     eval(a0)
     doAssert a0.allClose([0.0'f32, 1, 2, 3, 4, 5, 6, 7, 8, 9].toTensor([10], run, float32)), name & ": arange stop"
@@ -87,9 +81,7 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
       a2Expect[i] = (10.0'f32 - 1.5'f32 * i.float32).to(bfloat16)
     doAssert a2.allClose(a2Expect.toTensor([7], run, bfloat16)), name & ": arange negative step"
 
-  # Refusals: arange with a zero step, a step that counts away from stop,
-  # and a rank-0 shape
-  block:
+  block: # Refusals: arange with a zero step, a step that counts away from stop, and a rank-0 shape
     var x = [1.0'f32, 2].toTensor([2], run, bfloat16)
     doAssertRaises AssertionDefect:
       discard arange(0.0'f32, 10.0'f32, run, 0.0'f32, kBf16)
@@ -98,8 +90,7 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard zeros([], run, kBf16)
 
-  # Size-0 shapes are out of scope: the node constructs, eval hits the backend allocation raise and no size-0 guard exists
-  block:
+  block: # Size-0 shapes are out of scope: the node constructs, eval hits the backend allocation raise and no size-0 guard exists
     let z0 = zeros([0], run, kBf16)
     doAssertRaises AssertionDefect:
       eval(z0)
