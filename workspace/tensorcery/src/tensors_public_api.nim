@@ -75,6 +75,11 @@ proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime
 proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]): Tensor {.inline.} =
   data.toTensor(shape, run, T)
 
+# #######################################################################
+#
+#                            Factories
+#
+# #######################################################################
 
 proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
   Tensor(engine: gEngine(run), node: gEngine(run).tn_zeros(dtype, shape))

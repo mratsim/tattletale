@@ -11,6 +11,11 @@ import workspace/iface
 import workspace/design_by_contract
 import ../../tensors_internals
 
+# ############################################################
+#
+#                     Views
+#
+# ############################################################
 
 func sameAddressing(shape, strides: openArray[int]): bool =
   if strides[shape.len - 1] != 1:

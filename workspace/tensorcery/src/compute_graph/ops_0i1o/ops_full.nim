@@ -16,12 +16,20 @@ import ../batching
 import ../env
 import ./ops_zeros
 
+# ############################################################
+#
+#                   Full
+#
+# ############################################################
 
 type
   FullNode* = ref object
     r: AnyTensorImpl
     val: float32
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Interface
+# ═══════════════════════════════════════════════════════════════════════
 
 func getImpl*(n: FullNode): AnyTensorImpl {.inline.} =
   n.r
@@ -29,11 +37,17 @@ func getImpl*(n: FullNode): AnyTensorImpl {.inline.} =
 func opName*(n: FullNode): string {.inline.} =
   "Full"
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Graph - Public
+# ═══════════════════════════════════════════════════════════════════════
 
 proc tn_full*(engine: AnyEngine, vals: float32, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
   {.precondition: shape.len in 1 .. 5.}
   return FullNode(r: engine.newPlaceholderNode(dtype, shape).getImpl(), val: vals).to(TensorNode)
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Graph - Internal
+# ═══════════════════════════════════════════════════════════════════════
 
 proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asFull = n.to(FullNode)
@@ -44,5 +58,8 @@ proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), asFull.val)
   return true
 
+# ═══════════════════════════════════════════════════════════════════════
+#  Registration
+# ═══════════════════════════════════════════════════════════════════════
 
 registerOp("Full", enqueueFull)

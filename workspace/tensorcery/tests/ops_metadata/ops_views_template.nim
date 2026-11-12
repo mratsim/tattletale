@@ -17,6 +17,7 @@ import workspace/tensorcery/src/compute_graph/ops_metadata/ops_views {.all.}
 proc runViewsTest*(run: static Runtime, name: string) =
   privateAccess(Tensor)
 
+  # Reshape of an op output: the rank change survives eval with values intact
   block:
     var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
     var x = xd.toTensor([2, 4], run, bfloat16)
@@ -29,6 +30,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
       expected[i] = (2.0'f32 * xd[i]).to(bfloat16)
     doAssert r.allClose(expected.toTensor([2, 2, 2], run, bfloat16)), name & ": reshape"
 
+  # Transpose: default axis reversal, then an explicit axes permutation
   block:
     var xd = @[1.0'f32, 2, 3, 4, 5, 6]
     var x = xd.toTensor([2, 3], run, bfloat16)
@@ -42,6 +44,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssert p.allClose([xd[0], xd[3], xd[1], xd[4], xd[2], xd[5]].toTensor([3, 1, 2], run, bfloat16)),
         name & ": transpose axes"
 
+  # Squeeze of an op output: the rank change survives eval
   block:
     var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
     var x = xd.toTensor([2, 1, 4], run, bfloat16)
@@ -54,6 +57,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
       expected[i] = (2.0'f32 * xd[i]).to(bfloat16)
     doAssert sq.allClose(expected.toTensor([2, 4], run, bfloat16)), name & ": squeeze"
 
+  # expand_dims keeps the canonical dense stride on the inserted axis, so a later reshape stays order-preserving
   block:
     var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
     var x = xd.toTensor([2, 4], run, bfloat16)
@@ -63,6 +67,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssert reshape(e, [2, 4]).allClose(xd.toTensor([2, 4], run, bfloat16)),
         name & ": reshape after expand_dims"
 
+  # Broadcast of a narrow slice: the stretched axis maps to stride 0 on device
   block:
     var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
     var x = xd.toTensor([2, 4], run, bfloat16)
@@ -80,6 +85,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
             expected[i0 * 4 + i * 2 + j] = (4.0'f32 * xd[i * 4 + 1 + j]).to(bfloat16)
     doAssert w.allClose(expected.toTensor([3, 2, 2], run, bfloat16)), name & ": broadcast_to narrow"
 
+  # A negative-stride raw tn_view walks the buffer in reverse
   block:
     var xd = @[10.0'f32, 20, 30, 40]
     var x = xd.toTensor([4], run, bfloat16)
@@ -90,11 +96,14 @@ proc runViewsTest*(run: static Runtime, name: string) =
       expected[i] = xd[3 - i].to(bfloat16)
     doAssert v.allClose(expected.toTensor([4], run, bfloat16)), name & ": negative stride"
 
+  # (2,)/[-3] at offset 2 reaches element -1, below the root buffer: refused
   block:
     var x = [1.0'f32, 2, 3, 4].toTensor([4], run, bfloat16)
     doAssertRaises AssertionDefect:
       discard x.engine.tn_view(x.node, [2], [-3], 2)
 
+  # Column-major (2,2)/(1,2) has cosize == size == 4, yet reshape to (4,)
+  # scrambles element order: the source strides are not canonical dense strides
   block:
     var xd = @[1.0'f32, 2, 3, 4]
     var x = xd.toTensor([4], run, bfloat16)
@@ -103,7 +112,10 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard reshape(cm, [4])
 
+  # Reshape refusals: a non-dense source, and the three invalid -1 forms
   block:
+    # narrow (1, seq, hidden) axis 0 to width 1: the axis keeps stride
+    # seq*hidden, not the canonical dense stride of (1, 1, hidden)
     var xd: seq[float32]
     for i in 0 ..< 12:
       xd.add i.float32
@@ -120,17 +132,21 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard reshape(x3, [4, -1])
 
+  # Narrow bounds-checks against the root buffer: an out-of-window source
+  # view is refused
   block:
     var x = [1.0'f32, 2, 3, 4].toTensor([4], run, bfloat16)
     let bad = x.engine.newViewNode(x.node, [4], [-1], 0, "bad")
     doAssertRaises AssertionDefect:
       discard x.engine.tn_narrow(bad, 0, 1, 2)
 
+  # Transpose axes must be a bijection of the source axes
   block:
     var x = [1.0'f32, 2, 3, 4, 5, 6, 7, 8].toTensor([2, 2, 2], run, bfloat16)
     doAssertRaises AssertionDefect:
       discard transpose(x, [0, 0, 2])
 
+  # Broadcast refusals: rank decrease, mismatched trailing size, negative dims
   block:
     var x = [1.0'f32, 2, 3, 4, 5, 6].toTensor([2, 3], run, bfloat16)
     doAssertRaises AssertionDefect:
@@ -140,6 +156,8 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard broadcast_to(x, [-3, 3])
 
+  # Squeeze refusals: the axis must be size 1 and the rank stays above 0.
+  # Expand_dims refusal: the axis must be a valid insertion point
   block:
     var x = [1.0'f32, 2, 3, 4, 5, 6].toTensor([2, 3], run, bfloat16)
     doAssertRaises AssertionDefect:

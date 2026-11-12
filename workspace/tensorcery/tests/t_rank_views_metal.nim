@@ -22,6 +22,7 @@ privateAccess(Tensor)
 proc main =
   const run = runMetal
 
+  # Squeeze rank-3 -> rank-2 over a pre-allocated source, read back with item
   block:
     var x = @[7.0'f32].toTensor([1, 1, 1], run, bfloat16)
     let vNode = x.engine.newViewNode(x.node, [1, 1], [1, 1], 0, "squeeze")
@@ -29,6 +30,8 @@ proc main =
     doAssert sx.shape()[0] == 1 and sx.shape()[1] == 1
     doAssert sx.item(bfloat16) == 7.0'f32.to(bfloat16)
 
+  # Squeeze rank-3 -> rank-2 over an op output: the view binds the source
+  # data at eval, through enqueueView
   block:
     var x = @[3.5'f32].toTensor([1, 1, 1], run, bfloat16)
     let y = x + x
@@ -36,6 +39,7 @@ proc main =
     let sy = Tensor(engine: x.engine, node: vNode)
     doAssert sy.item(bfloat16) == 7.0'f32.to(bfloat16)
 
+  # Reshape rank-2 -> rank-3 over an op output, read back with allClose
   block:
     var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
     var x = xd.toTensor([2, 4], run, bfloat16)
@@ -47,6 +51,7 @@ proc main =
       expected[i] = (2.0'f32 * xd[i]).to(bfloat16)
     doAssert r.allClose(expected.toTensor([2, 2, 2], run, bfloat16))
 
+  # Negative-stride view of shape (4,), stride -1, offset 3 over a 4-element source
   block:
     var xd = @[10.0'f32, 20, 30, 40]
     var x = xd.toTensor([4], run, bfloat16)
