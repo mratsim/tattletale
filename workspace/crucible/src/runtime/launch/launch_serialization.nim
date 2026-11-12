@@ -108,13 +108,9 @@ func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple
         result.align = max(result.align, fl.align)
       result.size = result.size.round_multiple_up(result.align)
   elif T is array:
-    when backend == cgGlsl and hasBoolLeaf(T):
-      # one 4-byte std430 word per bool, array elements stride at the device element layout, never Nim's 1-byte bool
-      let el = computeDeviceLayout(typeof(default(T)[0]), backend)
-      result = (default(T).len * el.size, el.align)
-    else:
-      let ea = if default(T).len > 0: getArgWidth(typeof(default(T)[0]), backend) else: 1
-      result = (sizeof(T), ea)
+    # elements stride at the device element layout: scalars narrow to device width (32-bit ints), bools to the backend's bool word
+    let el = if default(T).len > 0: computeDeviceLayout(typeof(default(T)[0]), backend) else: (0, 1)
+    result = (default(T).len * el.size, el.align)
   else:
     result = (getArgWidth(T, backend), getArgWidth(T, backend))
 
@@ -176,17 +172,11 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
         dst.packFrom(off, f, backend)
       off = off.round_multiple_up(a)
   elif T is array:
-    when backend == cgGlsl and hasBoolLeaf(T):
-      # element-wise packing, one 4-byte std430 word per bool, same as the scalar getArgWidth rule
-      let a = computeDeviceLayout(T, backend).align
-      off = off.round_multiple_up(a)
-      for el in v:
-        dst.packFrom(off, el, backend)
-    else:
-      let a = computeDeviceLayout(T, backend).align
-      off = off.round_multiple_up(a)
-      copyMem(dst[off].addr, v.addr, sizeof(v))
-      off += sizeof(v)
+    # element-wise packing at the device element layout: scalars narrow through putBytes and nested values recurse
+    let a = computeDeviceLayout(T, backend).align
+    off = off.round_multiple_up(a)
+    for el in v:
+      dst.packFrom(off, el, backend)
   else:
     const a = getArgWidth(T, backend)
     off = off.round_multiple_up(a)

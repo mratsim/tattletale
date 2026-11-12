@@ -24,7 +24,7 @@ import ../env
 
 const FillFleet = (elemsPerGroup: 128)
 
-proc k_arange(D: distinct TensorView, start, step: float32) =
+proc k_arange(D: distinct TensorBasicView, start, step: float32) =
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -77,11 +77,11 @@ proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): Te
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asArange = n.to(ArangeNode)
   if asArange.isNil():
     return false
-  let rImpl = asArange.r.to(engine.getTensorImplType(T, rank))
+  let rImpl = asArange.r.to(engine.getTensorImplType(T))
   engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_arange(rImpl.bridge(), asArange.start, asArange.step)
   return true

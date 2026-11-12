@@ -116,7 +116,7 @@ template withElemType(engine: HwEngine, ElemType: untyped, dtype: Dtype, body: u
   else:
     raise ValueError.newException("eval: dtype unsupported")
 
-macro dispatchOp(E, T, engine, batch, n, rank: typed): untyped =
+macro dispatchOp(E, T, engine, batch, n: typed): untyped =
   # Expands one branch per marked registry entry. Unmarked handlers never instantiate,
   # and their kernels never accumulate.
   # This macro reads the marks at its expansion, which happens at the first
@@ -127,7 +127,7 @@ macro dispatchOp(E, T, engine, batch, n, rank: typed): untyped =
     if CacheCounter(name).value == 0:
       continue
     let call = nnkCall.newTree(
-      h, engine, batch, n, T, rank)
+      h, engine, batch, n, T)
     ifStmt.add nnkElifBranch.newTree(call, nnkReturnStmt.newTree(newEmptyNode()))
   var noHandler = quote do:
     raiseAssert("Tensorcery internal error: no handlers for node with opName [" & n.opName() & "]")
@@ -140,18 +140,11 @@ macro dispatchOp(E, T, engine, batch, n, rank: typed): untyped =
     ifStmt.add elseBranch
     result.add ifStmt
 
-proc enqueueWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int) =
+proc enqueueWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]) =
   if n.isPreAllocated():
     return
-  dispatchOp(E, T, engine, batch, n, rank)
+  dispatchOp(E, T, engine, batch, n)
 
 proc enqueueNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNode) =
   engine.withElemType(T, n.getImpl().dtype()):
-    case n.getImpl().shape().p.len
-    of 1: engine.enqueueWalk(batch, n, T, 1)
-    of 2: engine.enqueueWalk(batch, n, T, 2)
-    of 3: engine.enqueueWalk(batch, n, T, 3)
-    of 4: engine.enqueueWalk(batch, n, T, 4)
-    of 5: engine.enqueueWalk(batch, n, T, 5)
-    else:
-      raiseAssert("Tensorcery internal error: rank " & $n.getImpl().shape().p.len & " unsupported")
+    engine.enqueueWalk(batch, n, T)

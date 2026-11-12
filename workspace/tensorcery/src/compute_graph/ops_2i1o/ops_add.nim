@@ -28,7 +28,7 @@ const Fleet = (elemsPerGroup: 128)
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_add(D, A, B: distinct TensorView) =
+proc k_add(D, A, B: distinct TensorBasicView) =
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -82,7 +82,7 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil():
     return false
@@ -90,9 +90,9 @@ proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
   engine.enqueueNode(batch, asAdd.b)
 
   let
-    rImpl = asAdd.r.to(engine.getTensorImplType(T, rank))
-    aImpl = asAdd.a.getImpl().to(engine.getTensorImplType(T, rank))
-    bImpl = asAdd.b.getImpl().to(engine.getTensorImplType(T, rank))
+    rImpl = asAdd.r.to(engine.getTensorImplType(T))
+    aImpl = asAdd.a.getImpl().to(engine.getTensorImplType(T))
+    bImpl = asAdd.b.getImpl().to(engine.getTensorImplType(T))
     size = rImpl.size()
   engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(size, Fleet.elemsPerGroup), LaneWidth)>> k_add(rImpl.bridge(), aImpl.bridge(), bImpl.bridge())

@@ -23,7 +23,7 @@ import ../env
 
 const FillFleet* = (elemsPerGroup: 128)
 
-proc k_fill*(D: distinct TensorView, val: float32) =
+proc k_fill*(D: distinct TensorBasicView, val: float32) =
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -67,11 +67,11 @@ proc tn_zeros*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNo
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asZeros = n.to(ZerosNode)
   if asZeros.isNil():
     return false
-  let rImpl = asZeros.r.to(engine.getTensorImplType(T, rank))
+  let rImpl = asZeros.r.to(engine.getTensorImplType(T))
   engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), 0.0'f32)
   return true

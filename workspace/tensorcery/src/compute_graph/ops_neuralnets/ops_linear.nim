@@ -167,33 +167,47 @@ proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.co
 # Tile grids expose nSlices·⌈M/32⌉·⌈N/32⌉ work items. More parallelism needs
 # split-K: partition the K reduction across work items and reduce the partials.
 
-proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asLinear = n.to(LinearNode)
   if asLinear.isNil():
     return false
   engine.enqueueNode(batch, asLinear.x)
   engine.enqueueNode(batch, asLinear.w)
 
-  when T is (float32 | float16 | bfloat16) and rank in {2, 3}:
+  when T is (float32 | float16 | bfloat16):
     let
-      rImpl = asLinear.r.to(engine.getTensorImplType(T, rank))
-      xImpl = asLinear.x.getImpl().to(engine.getTensorImplType(T, rank))
-      wImpl = asLinear.w.getImpl().to(engine.getTensorImplType(T, 2))
-      cols = rImpl.shape[^1]
-      rowsPerSlice = rImpl.shape[^2]
+      rImpl = asLinear.r.to(engine.getTensorImplType(T))
+      xImpl = asLinear.x.getImpl().to(engine.getTensorImplType(T))
+      wImpl = asLinear.w.getImpl().to(engine.getTensorImplType(T))
+      cols = rImpl.layout.shape[rImpl.layout.rank - 1]
+      rowsPerSlice = rImpl.layout.shape[rImpl.layout.rank - 2]
       nSlices = rImpl.size() div (rowsPerSlice * cols)
       tiles = nSlices * rowsPerSlice.ceil_div(Fleet.tileM) * cols.ceil_div(Fleet.tileN)
+    # Ceramic kernel signature: static Layout, one instantiation per
+    # slice rank. Bridges retype from basic metadata and relayoutBridge
+    # checks the rank.
+    template enqueueLinearAt(lay: typedesc) =
+      let
+        rView = rImpl.relayoutBridge(lay)
+        xView = xImpl.relayoutBridge(lay)
+        wView = wImpl.relayoutBridge(Layout[(int, int), (int, int)])
+      if asLinear.b.isNil():
+        batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
+          rView, xView, wView, rView, false)
+      else:
+        engine.enqueueNode(batch, asLinear.b)
+        let bView = asLinear.b.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
+        batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
+          rView, xView, wView, bView, true)
     engine.preAlloc(rImpl)
-    if asLinear.b.isNil():
-      batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
-        rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), rImpl.bridge(), false)
+    if rImpl.layout.rank == 2:
+      enqueueLinearAt(Layout[(int, int), (int, int)])
+    elif rImpl.layout.rank == 3:
+      enqueueLinearAt(Layout[(int, int, int), (int, int, int)])
     else:
-      engine.enqueueNode(batch, asLinear.b)
-      let bImpl = asLinear.b.getImpl().to(engine.getTensorImplType(T, 1))
-      batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
-        rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), bImpl.bridge(), true)
+      raiseAssert("linear: rank " & $rImpl.layout.rank & " unsupported, the op is rank 2 or 3")
   else:
-    raiseAssert("linear: rank " & $rank & " or dtype unsupported, the op is rank 2 or 3, float16, bfloat16 or float32")
+    raiseAssert("linear: dtype unsupported, the op is float16, bfloat16 or float32")
   return true
 
 # ═══════════════════════════════════════════════════════════════════════

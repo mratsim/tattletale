@@ -23,7 +23,7 @@ import ../env
 
 const FillFleet = (elemsPerGroup: 128)
 
-proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
+proc k_eye(D: distinct TensorBasicView, ncols, kDiag: float32) =
   # int32 kernel args lose stores through the enqueue path, so ncols and k are float32 and convert to int32 here
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
@@ -77,11 +77,11 @@ proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorNode {.contra
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asEye = n.to(EyeNode)
   if asEye.isNil():
     return false
-  let rImpl = asEye.r.to(engine.getTensorImplType(T, rank))
+  let rImpl = asEye.r.to(engine.getTensorImplType(T))
   engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_eye(rImpl.bridge(), asEye.m.float32, asEye.k.float32)
   return true

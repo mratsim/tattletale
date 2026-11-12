@@ -67,26 +67,40 @@ proc tn_rmsnorm*(engine: AnyEngine, x: TensorNode, weight: TensorNode, eps: floa
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asNorm = n.to(RmsNormNode)
   if asNorm.isNil():
     return false
   engine.enqueueNode(batch, asNorm.x)
 
-  let
-    rImpl = asNorm.r.to(engine.getTensorImplType(T, rank))
-    xImpl = asNorm.x.getImpl().to(engine.getTensorImplType(T, rank))
-  when rank >= 2 and T is float32:
-    let rows = rImpl.size() div rImpl.shape[rank - 1]
+  when T is float32:
+    let
+      rImpl = asNorm.r.to(engine.getTensorImplType(T))
+      xImpl = asNorm.x.getImpl().to(engine.getTensorImplType(T))
+      rows = rImpl.size() div rImpl.layout.shape[rImpl.layout.rank - 1]
+      grid = min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups)
+    # Ceramic kernel signature: static rank and static reduce axis, one instantiation per rank. relayoutBridge checks the rank match.
+    template enqueueRmsnormAt(lay: typedesc, RK: static int) =
+      const axis = RK - 1
+      let
+        rView = rImpl.relayoutBridge(lay)
+        xView = xImpl.relayoutBridge(lay)
+      if asNorm.w.isNil():
+        batch.enqueue<<(grid, LaneWidth)>> rmsnorm(rView, xView, asNorm.eps, axis)
+      else:
+        engine.enqueueNode(batch, asNorm.w)
+        let wView = asNorm.w.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
+        batch.enqueue<<(grid, LaneWidth)>> rmsnorm(rView, xView, wView, asNorm.eps, axis)
     engine.preAlloc(rImpl)
-    if asNorm.w.isNil():
-      batch.enqueue<<(min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups), LaneWidth)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), asNorm.eps, rank - 1)
+    case rImpl.layout.rank
+    of 2: enqueueRmsnormAt(Layout[(int, int), (int, int)], 2)
+    of 3: enqueueRmsnormAt(Layout[(int, int, int), (int, int, int)], 3)
+    of 4: enqueueRmsnormAt(Layout[(int, int, int, int), (int, int, int, int)], 4)
+    of 5: enqueueRmsnormAt(Layout[(int, int, int, int, int), (int, int, int, int, int)], 5)
     else:
-      engine.enqueueNode(batch, asNorm.w)
-      let wImpl = asNorm.w.getImpl().to(engine.getTensorImplType(T, 1))
-      batch.enqueue<<(min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups), LaneWidth)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), asNorm.eps, rank - 1)
+      raiseAssert("rmsnorm: rank " & $rImpl.layout.rank & " unsupported, the op is rank 2+ float32")
   else:
-    raiseAssert("rmsnorm: rank " & $rank & " or dtype unsupported, the op is rank 2+ float32")
+    raiseAssert("rmsnorm: dtype unsupported, the op is float32")
   return true
 
 # ═══════════════════════════════════════════════════════════════════════

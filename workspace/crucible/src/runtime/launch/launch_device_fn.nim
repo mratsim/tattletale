@@ -174,10 +174,13 @@ func bindFormalGenericArgs(formal, v: NimNode): NimNode =
   let timpl = tsym.getImpl()
   if timpl.kind != nnkTypeDef or timpl[1].kind != nnkGenericParams:
     return formal
-  if vt.len - 1 != timpl[1].len:
+  let nParams = timpl[1].len
+  if vt.len - 1 < nParams:
     return formal
+  # A formal with fewer parameters than the value's type arguments binds leading arguments first.
+  # TensorBasicView[T] takes the element type from the bridge's DeviceMem slot and drops the layout slot.
   var args = nnkBracketExpr.newTree(tsym)
-  for j in 1 ..< vt.len:
+  for j in 1 .. nParams:
     let a = unwrapDeviceMemArg(vt[j])
     if a.kind != nnkEmpty:
       args.add(a[^1])
@@ -288,7 +291,7 @@ macro launchGlobalFn(engine: HwEngine, deviceFn: typed, statics: untyped, gridN,
   ## Builds and launches the `{.global.}` wrapper: the first value is the output.
   let procdef = buildGlobalFn(deviceFn, statics, values)
   let wg = getWorkgroupPragma(blkN)
-  if not wg.isNil:
+  if not wg.isNil():
     procdef[4].add(wg)
   let kname = newLit($procdef.name)
   let bridgeN = bindSym"bridge"
@@ -436,7 +439,7 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   var sharedMemN = newLit(0)
   var lang = "spirv"
-  if not schedule.isNil:
+  if not schedule.isNil():
     for a in schedule:
       doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk", "sharedMem", "lang"],
         "launchDeviceFn: schedule expects grid = ... / blk = ... / sharedMem = ... / lang = ..., got " & a.repr

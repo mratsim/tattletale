@@ -49,11 +49,11 @@ proc tn_full*(engine: AnyEngine, vals: float32, dtype: Dtype, shape: openArray[i
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asFull = n.to(FullNode)
   if asFull.isNil():
     return false
-  let rImpl = asFull.r.to(engine.getTensorImplType(T, rank))
+  let rImpl = asFull.r.to(engine.getTensorImplType(T))
   engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), asFull.val)
   return true
