@@ -211,7 +211,7 @@ template appendEntry[E](batch: BatchCommands[E], fnName: string, artifact: auto,
       leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
   batch.entries.add entry
 
-macro enqueueDeviceFn[E](batch: BatchCommands[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, workgroup: untyped, values: varargs[typed]): untyped =
+macro enqueueDeviceFn[E](batch: BatchCommands[E], deviceFn: typed, statics: typed, cfg: LaunchConfig, workgroup: untyped, values: varargs[typed]): untyped =
   var valuesN = nnkBracket.newTree()
   for v in values:
     valuesN.add(v)
@@ -320,7 +320,9 @@ macro enqueueCall[E](batch: BatchCommands[E], cfg: LaunchConfig, workgroup: unty
     let f = formals[i]
     for j in 0 ..< f.len - 2:
       formalTypes.add(f[^2])
-  var statics = nnkBracket.newTree()
+  # Tuple constr over a typed parameter: each compile-time argument sem-checks
+  # at the enqueue site, where the handler generic parameters are in scope.
+  var statics = nnkTupleConstr.newTree()
   let entry = bindSym"enqueueDeviceFn".newCall(batch, k, statics, cfg, workgroup)
   for i, v in values:
     if isCompileTime(formalTypes[i]):
