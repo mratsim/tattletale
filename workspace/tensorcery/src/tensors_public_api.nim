@@ -83,57 +83,57 @@ proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]):
 #
 # #######################################################################
 
-proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.hasKernel: "Zeros".} =
+proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Zeros".} =
   Tensor(engine: gEngine(run), node: gEngine(run).tn_zeros(dtype, shape))
 
-proc ones*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.hasKernel: "Ones".} =
+proc ones*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Ones".} =
   Tensor(engine: gEngine(run), node: gEngine(run).tn_ones(dtype, shape))
 
-proc full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.hasKernel: "Full".} =
+proc full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Full".} =
   Tensor(engine: gEngine(run), node: gEngine(run).tn_full(vals, dtype, shape))
 
-proc eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.hasKernel: ["Eye", "View"].} =
+proc eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline, hasKernel: ["Eye", "View"].} =
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_reshape(engine.tn_eye(n, n, k, dtype), [n, n]))
 
-proc eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.hasKernel: ["Eye", "View"].} =
+proc eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline, hasKernel: ["Eye", "View"].} =
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_reshape(engine.tn_eye(n, m, k, dtype), [n, m]))
 
-proc arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.hasKernel: "Arange".} =
+proc arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Arange".} =
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_arange(0.0'f32, stop, 1.0'f32, dtype))
 
-proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor {.hasKernel: "Arange".} =
+proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Arange".} =
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_arange(start, stop, step, dtype))
 
-proc zeros_like*(a: Tensor): Tensor {.hasKernel: "Zeros".} =
+proc zeros_like*(a: Tensor): Tensor {.inline, hasKernel: "Zeros".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_zeros(impl.dtype(), impl.shape().p))
 
-proc zeros_like*(a: Tensor, dtype: Dtype): Tensor {.hasKernel: "Zeros".} =
+proc zeros_like*(a: Tensor, dtype: Dtype): Tensor {.inline, hasKernel: "Zeros".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_zeros(dtype, impl.shape().p))
 
-proc ones_like*(a: Tensor): Tensor {.hasKernel: "Ones".} =
+proc ones_like*(a: Tensor): Tensor {.inline, hasKernel: "Ones".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_ones(impl.dtype(), impl.shape().p))
 
-proc ones_like*(a: Tensor, dtype: Dtype): Tensor {.hasKernel: "Ones".} =
+proc ones_like*(a: Tensor, dtype: Dtype): Tensor {.inline, hasKernel: "Ones".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_ones(dtype, impl.shape().p))
 
-proc full_like*(a: Tensor, vals: float32): Tensor {.hasKernel: "Full".} =
+proc full_like*(a: Tensor, vals: float32): Tensor {.inline, hasKernel: "Full".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_full(vals, impl.dtype(), impl.shape().p))
 
-proc full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor {.hasKernel: "Full".} =
+proc full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor {.inline, hasKernel: "Full".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_full(vals, dtype, impl.shape().p))
@@ -187,7 +187,7 @@ proc eval*(ts: varargs[Tensor]) =
 # Binary (Tensor + Tensor)
 # ----------------------------------------------------------
 
-proc `+`*(a, b: Tensor): Tensor {.hasKernel: "Add".} =
+proc `+`*(a, b: Tensor): Tensor {.inline, hasKernel: "Add".} =
   Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
 
 # #######################################################################
@@ -196,12 +196,12 @@ proc `+`*(a, b: Tensor): Tensor {.hasKernel: "Add".} =
 #
 # #######################################################################
 
-proc gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor {.hasKernel: "Gemm".} =
+proc gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor {.inline, hasKernel: "Gemm".} =
   ## D = alpha·A·B + beta·C over the last two axes, C nil requires beta = 0
   let cn = if c.isNil(): NilTensorNode() else: c.node
   Tensor(engine: a.engine, node: tn_gemm(a.engine, alpha, a.node, b.node, beta, cn))
 
-proc matmul*(a, b: Tensor): Tensor {.hasKernel: "Gemm".} =
+proc matmul*(a, b: Tensor): Tensor {.inline, hasKernel: "Gemm".} =
   ## A·B over the last two axes
   gemmImpl(1.0'f32, a, b, 0.0'f32)
 
@@ -211,31 +211,31 @@ proc matmul*(a, b: Tensor): Tensor {.hasKernel: "Gemm".} =
 #
 # #######################################################################
 
-proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.hasKernel: "View".} =
+proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline, hasKernel: "View".} =
   Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))
 
-proc reshape*(t: Tensor, shape: openArray[int]): Tensor {.hasKernel: "View".} =
+proc reshape*(t: Tensor, shape: openArray[int]): Tensor {.inline, hasKernel: "View".} =
   Tensor(engine: t.engine, node: tn_reshape(t.engine, t.node, shape))
 
-proc transpose*(t: Tensor): Tensor {.hasKernel: "View".} =
+proc transpose*(t: Tensor): Tensor {.inline, hasKernel: "View".} =
   Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node))
 
-proc transpose*(t: Tensor, axes: openArray[int]): Tensor {.hasKernel: "View".} =
+proc transpose*(t: Tensor, axes: openArray[int]): Tensor {.inline, hasKernel: "View".} =
   Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node, axes))
 
-proc broadcast_to*(t: Tensor, shape: openArray[int]): Tensor {.hasKernel: "View".} =
+proc broadcast_to*(t: Tensor, shape: openArray[int]): Tensor {.inline, hasKernel: "View".} =
   Tensor(engine: t.engine, node: tn_broadcastTo(t.engine, t.node, shape))
 
-proc squeeze*(t: Tensor, axis: int): Tensor {.hasKernel: "View".} =
+proc squeeze*(t: Tensor, axis: int): Tensor {.inline, hasKernel: "View".} =
   Tensor(engine: t.engine, node: tn_squeeze(t.engine, t.node, axis))
 
-proc expand_dims*(t: Tensor, axis: int): Tensor {.hasKernel: "View".} =
+proc expand_dims*(t: Tensor, axis: int): Tensor {.inline, hasKernel: "View".} =
   Tensor(engine: t.engine, node: tn_expandDims(t.engine, t.node, axis))
 
-proc narrow*(t: Tensor, axis, start, width: int): Tensor {.hasKernel: "View".} =
+proc narrow*(t: Tensor, axis, start, width: int): Tensor {.inline, hasKernel: "View".} =
   Tensor(engine: t.engine, node: tn_narrow(t.engine, t.node, axis, start, width))
 
-proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.hasKernel: "View".} =
+proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline, hasKernel: "View".} =
   ## Splits `t` along `axis` into `k` equal parts, views into `t`'s buffer.
   var parts: seq[Tensor]
   for n in t.engine.tn_split(t.node, axis, k):
