@@ -122,13 +122,21 @@ proc tn_gemm*(
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+proc collectGemm[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asGemm = n.to(GemmNode)
+  if asGemm.isNil():
+    return false
+  engine.preAlloc(asGemm.r.to(engine.getTensorImplType(T)))
+  stack.add WalkFrame(n: asGemm.a, kernelPending: false)
+  stack.add WalkFrame(n: asGemm.b, kernelPending: false)
+  if not asGemm.c.isNil():
+    stack.add WalkFrame(n: asGemm.c, kernelPending: false)
+  return true
+
 proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asGemm = n.to(GemmNode)
   if asGemm.isNil():
     return false
-  engine.enqueueNode(batch, asGemm.a)
-  engine.enqueueNode(batch, asGemm.b)
-
   when T is (float32 | float16 | bfloat16):
     let
       rImpl = asGemm.r.to(engine.getTensorImplType(T))
@@ -137,7 +145,6 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
       tiles = ceil_div(rImpl.layout.shape[0], Fleet.tileM) * ceil_div(rImpl.layout.shape[1], Fleet.tileN)
     # Ceramic kernel signature: rank-2 Layout. Bridges retype from basic metadata
     # (relayoutBridge checks the rank) and copy the data ref, so the output pre-allocates first.
-    engine.preAlloc(rImpl)
     let
       rView = rImpl.relayoutBridge(Layout[(int, int), (int, int)])
       aView = aImpl.relayoutBridge(Layout[(int, int), (int, int)])
@@ -147,7 +154,6 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
       batch.enqueue<<(tiles, LaneWidth)>> k_gemm(GemmMma(T),
         rView, asGemm.alpha, aView, bView, asGemm.beta, rView)
     else:
-      engine.enqueueNode(batch, asGemm.c)
       let cView = asGemm.c.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int, int), (int, int)])
       batch.enqueue<<(tiles, LaneWidth)>> k_gemm(GemmMma(T),
         rView, asGemm.alpha, aView, bView, asGemm.beta, cView)
@@ -160,4 +166,4 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Gemm", enqueueGemm)
+registerOp("Gemm", collectGemm, enqueueGemm)

@@ -67,12 +67,18 @@ proc tn_zeros*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNo
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+proc collectZeros[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asZeros = n.to(ZerosNode)
+  if asZeros.isNil():
+    return false
+  engine.preAlloc(asZeros.r.to(engine.getTensorImplType(T)))
+  return true
+
 proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asZeros = n.to(ZerosNode)
   if asZeros.isNil():
     return false
   let rImpl = asZeros.r.to(engine.getTensorImplType(T))
-  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), 0.0'f32)
   return true
 
@@ -80,4 +86,4 @@ proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Ten
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Zeros", enqueueZeros)
+registerOp("Zeros", collectZeros, enqueueZeros)

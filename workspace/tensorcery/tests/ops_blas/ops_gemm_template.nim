@@ -10,6 +10,7 @@ import ../tensorcery_testutils
 
 export tensorcery_testutils
 
+
 proc refGemm(dst: var openArray[float32], a, b: openArray[float32], m, k, n: int,
     alpha: float32, beta: float32, c: openArray[float32] = []) =
   ## dst = alpha·a·b + beta·c, a (m, k), b (k, n), row-major

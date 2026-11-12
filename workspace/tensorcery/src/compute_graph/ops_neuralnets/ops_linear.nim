@@ -167,13 +167,21 @@ proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.co
 # Tile grids expose nSlices·⌈M/32⌉·⌈N/32⌉ work items. More parallelism needs
 # split-K: partition the K reduction across work items and reduce the partials.
 
+proc collectLinear[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asLinear = n.to(LinearNode)
+  if asLinear.isNil():
+    return false
+  engine.preAlloc(asLinear.r.to(engine.getTensorImplType(T)))
+  stack.add WalkFrame(n: asLinear.x, kernelPending: false)
+  stack.add WalkFrame(n: asLinear.w, kernelPending: false)
+  if not asLinear.b.isNil():
+    stack.add WalkFrame(n: asLinear.b, kernelPending: false)
+  return true
+
 proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asLinear = n.to(LinearNode)
   if asLinear.isNil():
     return false
-  engine.enqueueNode(batch, asLinear.x)
-  engine.enqueueNode(batch, asLinear.w)
-
   when T is (float32 | float16 | bfloat16):
     let
       rImpl = asLinear.r.to(engine.getTensorImplType(T))
@@ -195,11 +203,9 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
         batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
           rView, xView, wView, rView, false)
       else:
-        engine.enqueueNode(batch, asLinear.b)
         let bView = asLinear.b.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
         batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
           rView, xView, wView, bView, true)
-    engine.preAlloc(rImpl)
     if rImpl.layout.rank == 2:
       enqueueLinearAt(Layout[(int, int), (int, int)])
     elif rImpl.layout.rank == 3:
@@ -214,4 +220,4 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Linear", enqueueLinear)
+registerOp("Linear", collectLinear, enqueueLinear)

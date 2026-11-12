@@ -76,6 +76,10 @@ proc recordBatch*[E: HwEngine](engine: E): BatchCommands[E] {.inline.} =
 # one entry per distinct (backend, bridge name).
 var ctgPendingKernels {.compileTime.}: CacheSeq
 var ctgPendingIndex {.compileTime.}: CacheTable
+
+proc ctgHasStagedKernels*(): bool {.compileTime.} =
+  ## True while any stream still has kernels staged for finalize.
+  ctgPendingKernels.len != 0
 # Additions per codegen kind. A kind's generation counts the kernels enqueued
 # for it and keys that kind's artifact materialization.
 var ctgGeneration {.compileTime.}: array[CodegenKind, int]

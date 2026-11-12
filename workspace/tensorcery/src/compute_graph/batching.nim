@@ -15,10 +15,20 @@ import ../tensors_internal_types
 #  Registry
 # ═══════════════════════════════════════════════════════════════════════
 
-var OpRegistry {.compileTime.}: Table[string, NimNode]
+type
+  OpHandlers = tuple[collect, kernel: NimNode]
 
-macro registerOp*(op: static string, handler: typed) =
-  OpRegistry[op] = handler
+  WalkFrame* = object
+    ## One pending visit of the eval walk. The first visit pre-allocates
+    ## the output and pushes the operands. The second visit enqueues the kernel.
+    n*: TensorNode
+    kernelPending*: bool
+
+var OpRegistry {.compileTime.}: Table[string, OpHandlers]
+
+macro registerOp*(op: static string, collect, kernel: typed) =
+  ## Registers the collect and kernel phases of one op.
+  OpRegistry[op] = (collect, kernel)
 
 proc renameDef(name: NimNode, suffix: string): NimNode =
   ## Renames a procdef name node.
@@ -38,7 +48,7 @@ macro hasKernel*(ops: untyped, p: untyped): untyped =
   ##
   ## Each template expansion increments the compile-time counter of every op
   ## in `ops` before forwarding. Calling the op is the mark that the dispatch
-  ## reads (see dispatchOp).
+  ## reads (see dispatchCollect and dispatchKernel).
   ##
   ## - Pragmas are preserved on the Impl.
   ## - The doc comment moves to the template.
@@ -99,52 +109,69 @@ macro hasKernel*(ops: untyped, p: untyped): untyped =
   result = newTree(nnkStmtList, impl, tpl)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Graph batching
+#  Eval-site dispatch
 # ═══════════════════════════════════════════════════════════════════════
 
-template withElemType(engine: HwEngine, ElemType: untyped, dtype: Dtype, body: untyped) =
-  case dtype
-  of kFp16:
-    type ElemType = float16
-    body
-  of kFp32:
-    type ElemType = float32
-    body
-  of kBf16:
-    type ElemType = bfloat16
-    body
-  else:
-    raise ValueError.newException("eval: dtype unsupported")
-
-macro dispatchOp(E, T, engine, batch, n: typed): untyped =
-  # Expands one branch per marked registry entry. Unmarked handlers never instantiate,
-  # and their kernels never accumulate.
-  # This macro reads the marks at its expansion, which happens at the first
-  # enqueueWalk instantiation. Ops marked afterwards are invisible to it.
-  result = nnkStmtList.newTree()
-  var ifStmt = newNimNode(nnkIfStmt)
+proc markedDispatch(collect: bool, engine, batch, n, stack, T: NimNode): NimNode =
+  ## One branch per marked op: unmarked handlers and their kernels
+  ## never instantiate. The dispatch macros expand per eval call site.
+  ## Every expansion re-reads the marks recorded so far.
+  result = newNimNode(nnkIfStmt)
   for name, h in pairs(OpRegistry):
     if CacheCounter(name).value == 0:
       continue
-    let call = nnkCall.newTree(
-      h, engine, batch, n, T)
-    ifStmt.add nnkElifBranch.newTree(call, nnkReturnStmt.newTree(newEmptyNode()))
-  var noHandler = quote do:
-    raiseAssert("Tensorcery internal error: no handlers for node with opName [" & n.opName() & "]")
-  if ifStmt.len == 0:
-    # no op marked in this compilation: nothing can dispatch
-    result.add noHandler
-  else:
-    var elseBranch = newNimNode(nnkElse)
-    elseBranch.add noHandler
-    ifStmt.add elseBranch
-    result.add ifStmt
+    let handler = if collect: h.collect else: h.kernel
+    var call = if collect:
+        nnkCall.newTree(handler, engine, n, stack)
+      else:
+        nnkCall.newTree(handler, engine, batch, n)
+    call.add(T)
+    result.add nnkElifBranch.newTree(call, nnkDiscardStmt.newTree(newEmptyNode()))
+  let noHandler = nnkCall.newTree(
+    bindSym"raiseAssert",
+    nnkInfix.newTree(ident"&",
+      nnkInfix.newTree(ident"&",
+        newLit("Tensorcery internal error: no handlers for node with opName ["),
+        nnkCall.newTree(bindSym"opName", n)),
+      newLit("]")))
+  if result.len == 0:
+    return noHandler
+  result.add nnkElse.newTree(noHandler)
 
-proc enqueueWalk[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]) =
-  if n.isPreAllocated():
-    return
-  dispatchOp(E, T, engine, batch, n)
+macro dispatchMarkedCollect*(T, engine, n, stack: typed): untyped =
+  result = markedDispatch(true, engine, nil, n, stack, T)
 
-proc enqueueNode*[E: HwEngine](engine: E, batch: BatchCommands[E], n: var TensorNode) =
-  engine.withElemType(T, n.getImpl().dtype()):
-    engine.enqueueWalk(batch, n, T)
+macro dispatchMarkedKernel*(T, engine, batch, n: typed): untyped =
+  result = markedDispatch(false, engine, batch, n, nil, T)
+
+macro dispatchCollect*(engine, n, stack: typed): untyped =
+  ## Dispatches one node's collect phase to its marked op's handler.
+  result = quote do:
+    case `n`.getImpl().dtype()
+    of kFp16:
+      type T = float16
+      dispatchMarkedCollect(T, `engine`, `n`, `stack`)
+    of kFp32:
+      type T = float32
+      dispatchMarkedCollect(T, `engine`, `n`, `stack`)
+    of kBf16:
+      type T = bfloat16
+      dispatchMarkedCollect(T, `engine`, `n`, `stack`)
+    else:
+      raise ValueError.newException("eval: dtype unsupported")
+
+macro dispatchKernel*(engine, n, batch: typed): untyped =
+  ## Dispatches one node's kernel phase to its marked op's handler.
+  result = quote do:
+    case `n`.getImpl().dtype()
+    of kFp16:
+      type T = float16
+      dispatchMarkedKernel(T, `engine`, `batch`, `n`)
+    of kFp32:
+      type T = float32
+      dispatchMarkedKernel(T, `engine`, `batch`, `n`)
+    of kBf16:
+      type T = bfloat16
+      dispatchMarkedKernel(T, `engine`, `batch`, `n`)
+    else:
+      raise ValueError.newException("eval: dtype unsupported")

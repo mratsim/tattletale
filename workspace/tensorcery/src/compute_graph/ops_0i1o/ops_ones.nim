@@ -48,12 +48,18 @@ proc tn_ones*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNod
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+proc collectOnes[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asOnes = n.to(OnesNode)
+  if asOnes.isNil():
+    return false
+  engine.preAlloc(asOnes.r.to(engine.getTensorImplType(T)))
+  return true
+
 proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asOnes = n.to(OnesNode)
   if asOnes.isNil():
     return false
   let rImpl = asOnes.r.to(engine.getTensorImplType(T))
-  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), 1.0'f32)
   return true
 
@@ -61,4 +67,4 @@ proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Ones", enqueueOnes)
+registerOp("Ones", collectOnes, enqueueOnes)

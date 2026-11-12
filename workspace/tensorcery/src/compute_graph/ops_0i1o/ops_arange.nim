@@ -77,12 +77,18 @@ proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): Te
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+proc collectArange[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asArange = n.to(ArangeNode)
+  if asArange.isNil():
+    return false
+  engine.preAlloc(asArange.r.to(engine.getTensorImplType(T)))
+  return true
+
 proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asArange = n.to(ArangeNode)
   if asArange.isNil():
     return false
   let rImpl = asArange.r.to(engine.getTensorImplType(T))
-  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_arange(rImpl.bridge(), asArange.start, asArange.step)
   return true
 
@@ -90,4 +96,4 @@ proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Arange", enqueueArange)
+registerOp("Arange", collectArange, enqueueArange)

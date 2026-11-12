@@ -77,12 +77,18 @@ proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorNode {.contra
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+proc collectEye[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asEye = n.to(EyeNode)
+  if asEye.isNil():
+    return false
+  engine.preAlloc(asEye.r.to(engine.getTensorImplType(T)))
+  return true
+
 proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asEye = n.to(EyeNode)
   if asEye.isNil():
     return false
   let rImpl = asEye.r.to(engine.getTensorImplType(T))
-  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_eye(rImpl.bridge(), asEye.m.float32, asEye.k.float32)
   return true
 
@@ -90,4 +96,4 @@ proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Eye", enqueueEye)
+registerOp("Eye", collectEye, enqueueEye)

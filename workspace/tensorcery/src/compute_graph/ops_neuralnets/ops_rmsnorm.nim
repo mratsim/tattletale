@@ -67,12 +67,20 @@ proc tn_rmsnorm*(engine: AnyEngine, x: TensorNode, weight: TensorNode, eps: floa
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+proc collectRmsnorm[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asNorm = n.to(RmsNormNode)
+  if asNorm.isNil():
+    return false
+  engine.preAlloc(asNorm.r.to(engine.getTensorImplType(T)))
+  stack.add WalkFrame(n: asNorm.x, kernelPending: false)
+  if not asNorm.w.isNil():
+    stack.add WalkFrame(n: asNorm.w, kernelPending: false)
+  return true
+
 proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asNorm = n.to(RmsNormNode)
   if asNorm.isNil():
     return false
-  engine.enqueueNode(batch, asNorm.x)
-
   when T is float32:
     let
       rImpl = asNorm.r.to(engine.getTensorImplType(T))
@@ -88,10 +96,8 @@ proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var T
       if asNorm.w.isNil():
         batch.enqueue<<(grid, LaneWidth)>> rmsnorm(rView, xView, asNorm.eps, axis)
       else:
-        engine.enqueueNode(batch, asNorm.w)
         let wView = asNorm.w.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
         batch.enqueue<<(grid, LaneWidth)>> rmsnorm(rView, xView, wView, asNorm.eps, axis)
-    engine.preAlloc(rImpl)
     case rImpl.layout.rank
     of 2: enqueueRmsnormAt(Layout[(int, int), (int, int)], 2)
     of 3: enqueueRmsnormAt(Layout[(int, int, int), (int, int, int)], 3)
@@ -107,4 +113,4 @@ proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var T
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("RmsNorm", enqueueRmsnorm)
+registerOp("RmsNorm", collectRmsnorm, enqueueRmsnorm)

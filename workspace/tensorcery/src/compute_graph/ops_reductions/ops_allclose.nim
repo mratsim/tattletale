@@ -115,19 +115,24 @@ proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: 
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+proc collectAllClose[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asAll = n.to(AllCloseNode)
+  if asAll.isNil():
+    return false
+  engine.preAlloc(asAll.r.to(engine.getTensorImplType(float32)))
+  stack.add WalkFrame(n: asAll.tested, kernelPending: false)
+  stack.add WalkFrame(n: asAll.reference, kernelPending: false)
+  return true
+
 proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asAll = n.to(AllCloseNode)
   if asAll.isNil():
     return false
-  engine.enqueueNode(batch, asAll.tested)
-  engine.enqueueNode(batch, asAll.reference)
-
   when T is float32:
     let
       rImpl = asAll.r.to(engine.getTensorImplType(float32))
       ai = asAll.tested.getImpl()
       bi = asAll.reference.getImpl()
-    engine.preAlloc(rImpl)
     engine.copyToDeviceFromHost(rImpl.data[], [0.0'f32])
     match(ElemType, ai.dtype()):
       let
@@ -142,4 +147,4 @@ proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var 
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("allClose", enqueueAllClose)
+registerOp("allClose", collectAllClose, enqueueAllClose)

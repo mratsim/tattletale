@@ -7,7 +7,7 @@
 
 {.experimental: "views".}
 
-import std/typetraits
+import std/[macros, typetraits]
 import workspace/crucible
 import workspace/ceramic
 import workspace/ceramic/src/macros/static_for
@@ -142,16 +142,43 @@ proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int])
   match(ElemType, dtype):
     engine.newTensorImpl(ElemType, shape).to(TensorNode)
 
-proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc collectView*(n: TensorNode, stack: var seq[WalkFrame]) =
+  ## View collect phase: the source node is the only operand.
   let v = n.to(ViewNode)
-  if v.isNil():
-    return false
-  engine.enqueueNode(batch, v.src)
+  stack.add WalkFrame(n: v.src, kernelPending: false)
+
+proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorNode, _: typedesc[T]) =
+  ## View kernel phase: binds the view's data and offset to its source.
+  let v = n.to(ViewNode)
   let r = v.r.to(engine.getTensorImplType(T))
   engine.withDeviceImpl(v.src.getImpl(), T, s):
     r.data = s.data
     r.offset = r.offset + s.offset
-  return true
+
+macro dispatchViewKernel*(engine, n, batch: typed): untyped =
+  ## Kernel phase of one view node. False when `n` is not a view.
+  ## The walk wires views outside the marked op registry.
+  result = quote do:
+    block:
+      let v = `n`.to(ViewNode)
+      if v.isNil():
+        false
+      else:
+        case `n`.getImpl().dtype()
+        of kFp16:
+          type T = float16
+          enqueueView(`engine`, `batch`, `n`, T)
+          true
+        of kFp32:
+          type T = float32
+          enqueueView(`engine`, `batch`, `n`, T)
+          true
+        of kBf16:
+          type T = bfloat16
+          enqueueView(`engine`, `batch`, `n`, T)
+          true
+        else:
+          raise ValueError.newException("eval: dtype unsupported")
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Basic -> Ranked metadata relayout (M4 groundwork)
@@ -179,11 +206,9 @@ func relayoutBridge*[H, T; Sh: tuple, St: tuple](
   staticFor i, 0, tupleLen(Sh):
     sh[i] = impl.layout.shape[i]
     st[i] = impl.layout.strides[i]
-  TensorBridge[DeviceMem[H, T], Layout[Sh, St]](
-    data: impl.data, offset: impl.offset, layout: make_layout(sh, st))
+  initTensorBridge(impl.data, impl.offset, make_layout(sh, st))
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("View", enqueueView)

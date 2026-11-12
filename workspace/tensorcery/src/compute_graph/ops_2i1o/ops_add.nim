@@ -82,19 +82,24 @@ proc tn_add*(engine: AnyEngine, a, b: TensorNode): TensorNode {.contracts.} =
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
+proc collectAdd[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
+  let asAdd = n.to(AddNode)
+  if asAdd.isNil():
+    return false
+  engine.preAlloc(asAdd.r.to(engine.getTensorImplType(T)))
+  stack.add WalkFrame(n: asAdd.a, kernelPending: false)
+  stack.add WalkFrame(n: asAdd.b, kernelPending: false)
+  return true
+
 proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
   let asAdd = n.to(AddNode)
   if asAdd.isNil():
     return false
-  engine.enqueueNode(batch, asAdd.a)
-  engine.enqueueNode(batch, asAdd.b)
-
   let
     rImpl = asAdd.r.to(engine.getTensorImplType(T))
     aImpl = asAdd.a.getImpl().to(engine.getTensorImplType(T))
     bImpl = asAdd.b.getImpl().to(engine.getTensorImplType(T))
     size = rImpl.size()
-  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(size, Fleet.elemsPerGroup), LaneWidth)>> k_add(rImpl.bridge(), aImpl.bridge(), bImpl.bridge())
   return true
 
@@ -102,4 +107,4 @@ proc enqueueAdd[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Add", enqueueAdd)
+registerOp("Add", collectAdd, enqueueAdd)
