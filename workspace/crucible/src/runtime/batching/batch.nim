@@ -72,17 +72,13 @@ proc recordBatch*[E: HwEngine](engine: E): BatchCommands[E] {.inline.} =
 #   compile-time globals or functions that write to a compile-time global
 #   are prefix with ctg
 
-var ctgFrontend {.compileTime.}: CirFrontend
-var ctgArtifactKind {.compileTime.}: CodegenKind
-var ctgArtifactPrinted {.compileTime.}: bool
-
-# Enqueued device functions wait here as typed proc definitions.
-# Lowering into ctgFrontend happens once, at the first artifact request.
+# Enqueued device functions wait here as tagged proc definitions,
+# one entry per distinct (backend, bridge name).
 var ctgPendingKernels {.compileTime.}: CacheSeq
 var ctgPendingIndex {.compileTime.}: CacheTable
-# Artifacts per (codegen kind, pending kernel count), smuggled as literals:
-#   string backends store a string literal, SPIR-V stores a seq[uint32] literal
-var ctgArtifactMemo {.compileTime.}: CacheTable
+# Additions per codegen kind. A kind's generation counts the kernels enqueued
+# for it and keys that kind's artifact materialization.
+var ctgGeneration {.compileTime.}: array[CodegenKind, int]
 
 func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
@@ -96,16 +92,21 @@ func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
 func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
-macro ctgAccumulateCirImpl(procdef: typed): untyped =
+macro ctgAccumulateCirImpl(procdef: typed, backend: static CodegenKind): untyped =
   # Bridge proc name = callee + compile-time arguments + runtime parameter
   # types (buildGlobalFn), so N enqueue sites of one kernel store it once.
+  # Backend prefix in the key: the same kernel enqueued for two backends stays two entries.
   let kname = $procdef[0]
-  if not ctgPendingIndex.hasKey(kname):
-    ctgPendingIndex[kname] = procdef
-    ctgPendingKernels.add(procdef)
+  let key = $int(backend) & ":" & kname
+  if not ctgPendingIndex.hasKey(key):
+    ctgPendingIndex[key] = procdef
+    ctgPendingKernels.add(nnkBracket.newTree(newLit(int(backend)), procdef))
+    ctgGeneration[backend].inc
   result = newLit(kname)
 
 macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
+  # Enqueue expansion resolves the procdef argument tiles through ccGetBackend,
+  # so crucibleCompileTarget must be set before the expansion.
   crucibleCompileTarget = case backend
     of cgMetal: ctMetal
     of cgSpirv: ctGlsl
@@ -113,40 +114,45 @@ macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
     of cgWebGPU: ctWebGPU
     else: ctNone
   # delayed symbol resolution
-  result = newCall(bindSym"ctgAccumulateCirImpl", procdef)
+  result = newCall(bindSym"ctgAccumulateCirImpl", procdef, newLit(backend))
 
-func ctgArtifactWords(n: NimNode): SpirvWords {.compileTime.} =
-  # `newLit` of a seq emits `@[...]`, a prefix over a bracket of integer literals
-  let elems = if n.kind == nnkPrefix: n[1] else: n
-  for c in elems:
-    result.add(uint32(c.intVal))
-
-proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
-  if ctgArtifactPrinted and ctgArtifactKind != kind:
-    raiseAssert("ctgAccumulateArtifact: one codegen kind per compilation, " &
-      $ctgArtifactKind & " already accumulated, asked for " & $kind)
-  ctgArtifactKind = kind
-  ctgArtifactPrinted = true
-  let memoKey = $int(kind) & ":" & $ctgPendingKernels.len
-  if ctgArtifactMemo.hasKey(memoKey):
-    when kind == cgSpirv:
-      return ctgArtifactWords(ctgArtifactMemo[memoKey])
-    else:
-      return ctgArtifactMemo[memoKey].strVal
+proc ctgLowerArtifact(kind: static CodegenKind): auto {.compileTime.} =
+  # Every materialization lowers into a fresh frontend and passes it once:
+  # passes are not idempotent over a frontend they already processed.
+  crucibleCompileTarget = case kind
+    of cgMetal: ctMetal
+    of cgSpirv: ctGlsl
+    of cgOpenCL: ctOpenCL
+    of cgWebGPU: ctWebGPU
+    else: ctNone
+  var fe: CirFrontend
   for i in 0 ..< ctgPendingKernels.len:
-    discard lowerNimAst(ctgFrontend, ctgPendingKernels[i])
+    let entry = ctgPendingKernels[i]
+    if entry[0].intVal == int(kind):
+      discard lowerNimAst(fe, entry[1])
   var reg = PassRegistry()
   reg.registerGpuPasses(kind)
-  let m = ctgFrontend.finish()
+  let m = fe.finish()
   reg.runPasses(m)
   when kind == cgSpirv:
-    let artifact = codegenIR(m, kind)
-    ctgArtifactMemo[memoKey] = newLit(artifact)
-    artifact
+    codegenIR(m, kind)
   else:
-    let artifact = codegenSource(m, kind)
-    ctgArtifactMemo[memoKey] = newLit(artifact)
-    artifact
+    codegenSource(m, kind)
+
+proc ctgCurrentGeneration*(kind: static CodegenKind): int {.compileTime.} =
+  ## Stream generation of `kind`. Callers pass it as the static `gen` key
+  ## of `ctgArtifact` to bind the artifact of their own enqueue prefix.
+  ctgGeneration[kind]
+
+proc ctgArtifact*(kind: static CodegenKind, gen: static int): auto =
+  ## Returns the compiled artifact for `kind` at stream generation `gen`,
+  ## baked into the binary as a const. One instantiation per (kind, gen):
+  ## - sites at the same generation share one lowering
+  ## - the artifact covers exactly the kernels enqueued before that generation
+  ##
+  ## Enqueueing more kernels and finalizing again compiles a fresh artifact.
+  const artifact = static(ctgLowerArtifact(kind))
+  artifact
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Enqueue
@@ -347,21 +353,23 @@ macro finalize*(batch: BatchCommands): untyped =
   ## Requires:
   ## - at least one `enqueue` in this compilation
   ##
-  ## Later `finalize` calls reuse the cached artifact.
+  ## Finalize calls at the same stream generation share one artifact.
+  ## Enqueueing more kernels and finalizing again compiles a fresh artifact
+  ## over the complete stream.
   if ctgPendingKernels.len == 0:
     error("finalize: the stream holds no device function, enqueue first", batch)
   let engineN = quote do: `batch`.engine
   result = quote do:
     block:
       const batchKind = batchCodegenKind(typeof(`engineN`))
-      const batchArtifact = ctgAccumulateArtifact(batchKind)
-      `batch`.artifact = batchArtifact
+      const batchGen = ctgCurrentGeneration(batchKind)
+      `batch`.artifact = ctgArtifact(batchKind, batchGen)
       when batchKind == cgSpirv:
-        if `engineN`.getSpirV() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
+        if `engineN`.getSpirV() != `batch`.artifact:
+          `engineN`.ingest(`batch`.artifact)
       else:
-        if `engineN`.getArtifact() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
+        if `engineN`.getArtifact() != `batch`.artifact:
+          `engineN`.ingest(`batch`.artifact)
 
 proc replay*[E](batch: BatchCommands[E]) {.inline.} =
   ## Launches the batch entries on the engine in enqueue order, without recompiling.
