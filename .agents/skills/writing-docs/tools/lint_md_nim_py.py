@@ -494,7 +494,7 @@ BANNED = [
     (r"\bfaces?\b",
      lambda l: bool(re.search(r"interface|typeface", l)),
      "'face' says nothing, name the surface: the public API, the operator set, the entry point"),
-    (r"^contract\b\s*:?", None,
+    (r"^contract\b\s*(:|$)", None,
      "the Contract section header is banned, state the precondition, the "
      "returns shape, or the invariant as a labeled section (Args:, Returns:, Precondition:)"),
     (r"\bsubsum(?:e|es|ed|ing)\b", None,
