@@ -7,8 +7,6 @@
 
 {.experimental: "views".}
 
-## Tensorcery ops_0i1o factories on Metal
-##
 ## Run:
 ##   nim c -r -d:release --hints:off --warnings:off \
 ##     --nimcache:nimcache/t_ops_0i1o_metal workspace/tensorcery/tests/ops_0i1o/t_ops_0i1o_metal.nim

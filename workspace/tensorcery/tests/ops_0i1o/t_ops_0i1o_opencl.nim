@@ -7,8 +7,6 @@
 
 {.experimental: "views".}
 
-## Tensorcery ops_0i1o factories on OPENCL
-##
 ## Run:
 ##   nim c -r -d:release --hints:off --warnings:off \
 ##     --nimcache:nimcache/t_ops_0i1o_opencl workspace/tensorcery/tests/ops_0i1o/t_ops_0i1o_opencl.nim

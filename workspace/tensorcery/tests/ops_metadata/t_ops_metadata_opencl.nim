@@ -7,8 +7,6 @@
 
 {.experimental: "views".}
 
-## Tensorcery ops_metadata ops on OpenCL
-##
 ## Run:
 ##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_ops_metadata_opencl \
 ##     --nimcache:nimcache/t_ops_metadata_opencl workspace/tensorcery/tests/ops_metadata/t_ops_metadata_opencl.nim

@@ -15,16 +15,10 @@ import ../../tensors_internals
 import ../batching
 import ../env
 
-# ############################################################
-#
-#                   Zeros (fill kernel)
-#
-# ############################################################
 
 const FillFleet* = (elemsPerGroup: 128)
 
 proc k_fill*(D: distinct TensorView, val: float32) =
-  ## `D` is a fresh dense allocation, so a flat write order matches its layout.
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -38,17 +32,11 @@ proc k_fill*(D: distinct TensorView, val: float32) =
       rD[i] = val.to(D.T)
     D.store(rD, thrID, tileID)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Defunctionalization
-# ═══════════════════════════════════════════════════════════════════════
 
 type
   ZerosNode* = ref object
     r: AnyTensorImpl
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Interface
-# ═══════════════════════════════════════════════════════════════════════
 
 func getImpl*(n: ZerosNode): AnyTensorImpl {.inline.} =
   n.r
@@ -56,17 +44,11 @@ func getImpl*(n: ZerosNode): AnyTensorImpl {.inline.} =
 func opName*(n: ZerosNode): string {.inline.} =
   "Zeros"
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Public
-# ═══════════════════════════════════════════════════════════════════════
 
 proc tn_zeros*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
   {.precondition: shape.len in 1 .. 5.}
   return ZerosNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorNode)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Internal
-# ═══════════════════════════════════════════════════════════════════════
 
 proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asZeros = n.to(ZerosNode)
@@ -77,8 +59,5 @@ proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Ten
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), 0.0'f32)
   return true
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 registerOp("Zeros", enqueueZeros)

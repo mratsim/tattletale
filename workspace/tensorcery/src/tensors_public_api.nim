@@ -75,11 +75,6 @@ proc toTensor*[T](data: openArray[T], shape: openArray[int], run: static Runtime
 proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]): Tensor {.inline.} =
   data.toTensor(shape, run, T)
 
-# #######################################################################
-#
-#                            Factories
-#
-# #######################################################################
 
 proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
   Tensor(engine: gEngine(run), node: gEngine(run).tn_zeros(dtype, shape))
@@ -91,12 +86,10 @@ proc full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dty
   Tensor(engine: gEngine(run), node: gEngine(run).tn_full(vals, dtype, shape))
 
 proc eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline.} =
-  ## 1 on the k-th diagonal, a positive k above the main diagonal, 0 elsewhere.
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_eye(n, n, k, dtype)).reshape([n, n])
 
 proc eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline.} =
-  ## 1 on the k-th diagonal, a positive k above the main diagonal, 0 elsewhere.
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_eye(n, m, k, dtype)).reshape([n, m])
 
@@ -105,7 +98,6 @@ proc arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {
   Tensor(engine: engine, node: engine.tn_arange(0.0'f32, stop, 1.0'f32, dtype))
 
 proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor {.inline.} =
-  ## rank-1 tensor start + step*i for i in 0 ..< ceil((stop - start) / step).
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_arange(start, stop, step, dtype))
 
@@ -176,7 +168,6 @@ proc eval*(ts: varargs[Tensor]) =
   for i in 0 ..< ts.len:
     roots[i] = ts[i].node
   ts[0].engine.eval(roots)
-  # op nodes come out pre-allocated
   for i in 0 ..< ts.len:
     ts[i].node = roots[i]
 
@@ -217,47 +208,24 @@ proc swapaxes*(t: Tensor, axis1, axis2: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_swapaxes(t.engine, t.node, axis1, axis2))
 
 proc reshape*(t: Tensor, shape: openArray[int]): Tensor {.inline.} =
-  ## A view of `t` with a new shape, same element order.
-  ##
-  ## Precondition:
-  ## - the source is dense with canonical strides
-  ## - one size may be -1, inferred from the total size like MLX
   Tensor(engine: t.engine, node: tn_reshape(t.engine, t.node, shape))
 
 proc transpose*(t: Tensor): Tensor {.inline.} =
-  ## - Nim: transpose(x)
-  ## - MLX: mx.transpose(x)
-  ## - PyTorch: x.T (2-D) / x.permute(2, 0, 1)
   Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node))
 
 proc transpose*(t: Tensor, axes: openArray[int]): Tensor {.inline.} =
-  ## - Nim: transpose(x, [2, 0, 1])
-  ## - MLX: mx.transpose(x, (2, 0, 1))
-  ## - PyTorch: x.permute(2, 0, 1)
   Tensor(engine: t.engine, node: tn_transpose(t.engine, t.node, axes))
 
 proc broadcast_to*(t: Tensor, shape: openArray[int]): Tensor {.inline.} =
-  ## A broadcast view of `t`, trailing-aligned: leading axes are added at
-  ## stride 0, size-1 axes map to any size at stride 0.
-  ##
-  ## - Nim: broadcast_to(x, [3, 2, 2])
-  ## - MLX: mx.broadcast_to(x, (3, 2, 2))
-  ## - PyTorch: x.expand(3, 2, 2)
   Tensor(engine: t.engine, node: tn_broadcastTo(t.engine, t.node, shape))
 
 proc squeeze*(t: Tensor, axis: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_squeeze(t.engine, t.node, axis))
 
 proc expand_dims*(t: Tensor, axis: int): Tensor {.inline.} =
-  ## - Nim: expand_dims(x, 1)
-  ## - MLX: mx.expand_dims(x, 1)
-  ## - PyTorch: x.unsqueeze(1)
   Tensor(engine: t.engine, node: tn_expandDims(t.engine, t.node, axis))
 
 proc narrow*(t: Tensor, axis, start, width: int): Tensor {.inline.} =
-  ## - Nim: narrow(x, 1, 1, 2)
-  ## - MLX: mx.slice(x, [1], [3], [1], axis = 1)
-  ## - PyTorch: x.narrow(1, 1, 2)
   Tensor(engine: t.engine, node: tn_narrow(t.engine, t.node, axis, start, width))
 
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =

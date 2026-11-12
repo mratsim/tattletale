@@ -18,9 +18,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
   privateAccess(Tensor)
 
   block:
-    ## Nim: zeros([2, 3], run, kFp32) / zeros([2, 3], run, kBf16)
-    ## MLX: mx.zeros((2, 3), mx.float32) / mx.zeros((2, 3), mx.bfloat16)
-    ## PyTorch: torch.zeros(2, 3) / torch.zeros(2, 3, dtype=torch.bfloat16)
     let z32 = zeros([2, 3], run, kFp32)
     eval(z32)
     doAssert z32.allClose([0.0'f32, 0, 0, 0, 0, 0].toTensor([2, 3], run, float32)), name & ": zeros fp32"
@@ -29,17 +26,11 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     doAssert zbf.allClose([0.0'f32, 0, 0, 0, 0, 0].toTensor([2, 3], run, bfloat16)), name & ": zeros bf16"
 
   block:
-    ## Nim: ones([2, 2], run, kBf16)
-    ## MLX: mx.ones((2, 2), mx.bfloat16)
-    ## PyTorch: torch.ones(2, 2, dtype=torch.bfloat16)
     let o = ones([2, 2], run, kBf16)
     eval(o)
     doAssert o.allClose([1.0'f32, 1, 1, 1].toTensor([2, 2], run, bfloat16)), name & ": ones"
 
   block:
-    ## Nim: full([2, 2], 2.5, run, kBf16) / full([4], -1.5, run, kFp32)
-    ## MLX: mx.full((2, 2), 2.5, mx.bfloat16) / mx.full((4,), -1.5)
-    ## PyTorch: torch.full((2, 2), 2.5, dtype=torch.bfloat16) / torch.full((4,), -1.5)
     let f = full([2, 2], 2.5'f32, run, kBf16)
     eval(f)
     doAssert f.allClose([2.5'f32, 2.5, 2.5, 2.5].toTensor([2, 2], run, bfloat16)), name & ": full bf16"
@@ -48,9 +39,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     doAssert f32.allClose([-1.5'f32, -1.5, -1.5, -1.5].toTensor([4], run, float32)), name & ": full fp32"
 
   block:
-    ## Nim: zeros_like(f) / ones_like(f) / full_like(z, 7.0) / full_like(z, 7.0, kFp32)
-    ## MLX: mx.zeros_like(f) / mx.ones_like(f) / mx.full_like(z, 7.0) / mx.full_like(z, 7.0, mx.float32)
-    ## PyTorch: torch.zeros_like(f) / torch.ones_like(f) / torch.full_like(z, 7.0) / torch.full_like(z, 7.0, dtype=torch.float32)
     let f = full([2, 2], 2.5'f32, run, kBf16)
     eval(f)
     let zl = zeros_like(f)
@@ -69,9 +57,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     doAssert fl32.allClose([7.0'f32, 7, 7, 7, 7, 7].toTensor([2, 3], run, float32)), name & ": full_like dtype"
 
   block:
-    ## Nim: eye(3, run, kFp32) / eye(3, 4, run, kBf16, 1) / eye(2, 3, run, kFp16, -1)
-    ## MLX: mx.eye(3) / mx.eye(3, 4, 1, mx.bfloat16) / mx.eye(2, 3, -1)
-    ## PyTorch: torch.eye(3) / torch.eye(3, 4, dtype=torch.bfloat16)
     let e0 = eye(3, run, kFp32)
     eval(e0)
     doAssert e0.allClose([1.0'f32, 0, 0, 0, 1, 0, 0, 0, 1].toTensor([3, 3], run, float32)), name & ": eye k0"
@@ -83,10 +68,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     doAssert em1.allClose([0.0'f32, 0, 0, 1, 0, 0].toTensor([2, 3], run, float32)), name & ": eye k-1"
 
   block:
-    ## Nim: arange(10, run, kFp32) / arange(1, 14, run, 3.0, kFp32)
-    ##      arange(10.0, 0.0, run, -1.5, kBf16)
-    ## MLX: mx.arange(10) / mx.arange(1, 14, 3) / mx.arange(10, 0, -1.5, mx.bfloat16)
-    ## PyTorch: torch.arange(10) / torch.arange(1, 14, 3) / torch.arange(10, 0, -1.5, dtype=torch.bfloat16)
     let a0 = arange(10.0'f32, run, kFp32)
     eval(a0)
     doAssert a0.allClose([0.0'f32, 1, 2, 3, 4, 5, 6, 7, 8, 9].toTensor([10], run, float32)), name & ": arange stop"
@@ -100,8 +81,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
       a2Expect[i] = (10.0'f32 - 1.5'f32 * i.float32).to(bfloat16)
     doAssert a2.allClose(a2Expect.toTensor([7], run, bfloat16)), name & ": arange negative step"
 
-  # Refusals: arange with a zero step, a step that counts away from stop,
-  # and a rank-0 shape
   block:
     var x = [1.0'f32, 2].toTensor([2], run, bfloat16)
     doAssertRaises AssertionDefect:
@@ -111,7 +90,6 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard zeros([], run, kBf16)
 
-  # Size-0 shapes are out of scope: the node constructs, eval hits the backend allocation raise and no size-0 guard exists
   block:
     let z0 = zeros([0], run, kBf16)
     doAssertRaises AssertionDefect:

@@ -15,20 +15,10 @@ import ../../tensors_internals
 import ../batching
 import ../env
 
-# ############################################################
-#
-#                   Eye
-#
-# ############################################################
 
 const FillFleet = (elemsPerGroup: 128)
 
 proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
-  ## Rank-1 view of the dense output that derives the matrix indices by subtraction:
-  ## - a rank-2 register-tile value loop drops every store but the first
-  ## - int32 kernel arguments drop all but the first store of each thread
-  ##
-  ## The float arithmetic is exact for these small integers.
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -52,18 +42,12 @@ proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
       rD.data[e] = if colF - rowF == kDiag: 1.0'f32.to(D.T) else: zero(D.T)
     D.store(rD, thrID, tileID)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Defunctionalization
-# ═══════════════════════════════════════════════════════════════════════
 
 type
   EyeNode* = ref object
     r: AnyTensorImpl
     n, m, k: int
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Interface
-# ═══════════════════════════════════════════════════════════════════════
 
 func getImpl*(n: EyeNode): AnyTensorImpl {.inline.} =
   n.r
@@ -71,16 +55,10 @@ func getImpl*(n: EyeNode): AnyTensorImpl {.inline.} =
 func opName*(n: EyeNode): string {.inline.} =
   "Eye"
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Public
-# ═══════════════════════════════════════════════════════════════════════
 
 proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorNode {.contracts.} =
   return EyeNode(r: engine.newPlaceholderNode(dtype, [n * m]).getImpl(), n: n, m: m, k: k).to(TensorNode)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Internal
-# ═══════════════════════════════════════════════════════════════════════
 
 proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asEye = n.to(EyeNode)
@@ -91,8 +69,5 @@ proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_eye(rImpl.bridge(), asEye.m.float32, asEye.k.float32)
   return true
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 registerOp("Eye", enqueueEye)

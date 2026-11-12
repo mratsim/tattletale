@@ -11,16 +11,8 @@ import workspace/iface
 import workspace/design_by_contract
 import ../../tensors_internals
 
-# ############################################################
-#
-#                     Views
-#
-# ############################################################
 
 func sameAddressing(shape, strides: openArray[int]): bool =
-  ## True when `strides` address memory exactly like the canonical dense
-  ## layout of `shape`. Reshaping is order-preserving exactly for such layouts.
-  ## A strided source would need a copy op, which tensorcery refuses.
   if strides[shape.len - 1] != 1:
     return false
   for i in 0 ..< shape.len - 1:
@@ -38,10 +30,6 @@ func reachWindow(shape, strides: openArray[int], base: int): tuple[lo, hi: int] 
       result.lo += reach
 
 proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorNode): bool =
-  ## True when the layout's reachable addresses stay inside the root
-  ## buffer of the source. The offset walk folds every view's offset
-  ## until a non-view node: non-view nodes are dense-allocated at full
-  ## size and no capacity field exists.
   var
     base = relOffset
     cur = src
@@ -49,8 +37,6 @@ proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorNod
   while true:
     let impl = cur.getImpl()
     if not offsetsFolded:
-      # a view without pre-allocated data keeps an offset relative to its source,
-      # a pre-allocated impl's offset is absolute in the root buffer
       base += impl.offset()
       offsetsFolded = impl.isPreAllocated()
     let v = cur.to(ViewNode)

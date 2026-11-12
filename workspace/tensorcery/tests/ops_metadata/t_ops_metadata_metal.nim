@@ -7,8 +7,6 @@
 
 {.experimental: "views".}
 
-## Tensorcery ops_metadata ops on Metal
-##
 ## Run:
 ##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_ops_metadata_metal \
 ##     --nimcache:nimcache/t_ops_metadata_metal workspace/tensorcery/tests/ops_metadata/t_ops_metadata_metal.nim

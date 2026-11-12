@@ -7,8 +7,6 @@
 
 {.experimental: "views".}
 
-## Tensorcery ops_metadata ops on Vulkan
-##
 ## Run:
 ##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_ops_metadata_vulkan \
 ##     --nimcache:nimcache/t_ops_metadata_vulkan workspace/tensorcery/tests/ops_metadata/t_ops_metadata_vulkan.nim

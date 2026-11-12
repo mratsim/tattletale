@@ -16,19 +16,11 @@ import ../batching
 import ../env
 import ./ops_zeros
 
-# ############################################################
-#
-#                   Ones
-#
-# ############################################################
 
 type
   OnesNode* = ref object
     r: AnyTensorImpl
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Interface
-# ═══════════════════════════════════════════════════════════════════════
 
 func getImpl*(n: OnesNode): AnyTensorImpl {.inline.} =
   n.r
@@ -36,17 +28,11 @@ func getImpl*(n: OnesNode): AnyTensorImpl {.inline.} =
 func opName*(n: OnesNode): string {.inline.} =
   "Ones"
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Public
-# ═══════════════════════════════════════════════════════════════════════
 
 proc tn_ones*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
   {.precondition: shape.len in 1 .. 5.}
   return OnesNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorNode)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Internal
-# ═══════════════════════════════════════════════════════════════════════
 
 proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asOnes = n.to(OnesNode)
@@ -57,8 +43,5 @@ proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), 1.0'f32)
   return true
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 registerOp("Ones", enqueueOnes)

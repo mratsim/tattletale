@@ -16,16 +16,10 @@ import ../../tensors_internals
 import ../batching
 import ../env
 
-# ############################################################
-#
-#                   Arange
-#
-# ############################################################
 
 const FillFleet = (elemsPerGroup: 128)
 
 proc k_arange(D: distinct TensorView, start, step: float32) =
-  ## `D` is a fresh dense allocation, so the flat index is the element index.
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -44,18 +38,12 @@ proc k_arange(D: distinct TensorView, start, step: float32) =
       rD.data[e] = (start + step * idx.float32).to(D.T)
     D.store(rD, thrID, tileID)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Defunctionalization
-# ═══════════════════════════════════════════════════════════════════════
 
 type
   ArangeNode* = ref object
     r: AnyTensorImpl
     start, step: float32
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Interface
-# ═══════════════════════════════════════════════════════════════════════
 
 func getImpl*(n: ArangeNode): AnyTensorImpl {.inline.} =
   n.r
@@ -63,9 +51,6 @@ func getImpl*(n: ArangeNode): AnyTensorImpl {.inline.} =
 func opName*(n: ArangeNode): string {.inline.} =
   "Arange"
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Public
-# ═══════════════════════════════════════════════════════════════════════
 
 proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): TensorNode {.contracts.} =
   {.precondition: step != 0.0'f32.}
@@ -73,9 +58,6 @@ proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): Te
   let n = ceil((stop - start) / step).int
   return ArangeNode(r: engine.newPlaceholderNode(dtype, [n]).getImpl(), start: start, step: step).to(TensorNode)
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Graph - Internal
-# ═══════════════════════════════════════════════════════════════════════
 
 proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
   let asArange = n.to(ArangeNode)
@@ -86,8 +68,5 @@ proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_arange(rImpl.bridge(), asArange.start, asArange.step)
   return true
 
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
 
 registerOp("Arange", enqueueArange)
