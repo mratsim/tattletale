@@ -84,7 +84,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
     var xd = @[10.0'f32, 20, 30, 40]
     var x = xd.toTensor([4], run, bfloat16)
     let vNode = x.engine.tn_view(x.node, [4], [-1], 3)
-    let v = Tensor(engine: x.engine, node: vNode)
+    let v = Tensor[run](engine: x.engine, node: vNode)
     var expected: array[4, bfloat16]
     for i in 0 ..< 4:
       expected[i] = xd[3 - i].to(bfloat16)
@@ -99,7 +99,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
     var xd = @[1.0'f32, 2, 3, 4]
     var x = xd.toTensor([4], run, bfloat16)
     let cmNode = x.engine.tn_view(x.node, [2, 2], [1, 2], 0)
-    let cm = Tensor(engine: x.engine, node: cmNode)
+    let cm = Tensor[run](engine: x.engine, node: cmNode)
     doAssertRaises AssertionDefect:
       discard reshape(cm, [4])
 

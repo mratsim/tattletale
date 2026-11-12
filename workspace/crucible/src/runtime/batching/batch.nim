@@ -279,7 +279,7 @@ macro enqueueCall[E](batch: BatchCommands[E], cfg: LaunchConfig, workgroup: unty
 macro enqueueCallCt[E](batch: BatchCommands[E], cfg: LaunchConfig, blkCt: static Dim3, deviceFn: typed, values: varargs[untyped]): untyped =
   let wg = getWorkgroupPragma(blkCt)
   result = bindSym"enqueueCall".newCall(batch, cfg,
-    if wg.isNil: newEmptyNode() else: wg, deviceFn)
+    if wg.isNil(): newEmptyNode() else: wg, deviceFn)
   for v in values:
     result.add(v)
 
@@ -322,28 +322,25 @@ macro `>>`*[E](sugar: EnqueueProxy[E], call: untyped): untyped =
 #  Submission
 # ═══════════════════════════════════════════════════════════════════════
 
-macro finalize*(batch: BatchCommands): untyped =
+proc finalize*[E: HwEngine](batch: BatchCommands[E]) {.inline.} =
   ## Compiles the batch's device functions into one artifact and ingests it
   ## into the engine. Does not launch the entries.
   ##
   ## Requires:
-  ## - at least one `enqueue` in this compilation
+  ## - at least one `enqueue` in this compilation, an empty batch has no
+  ##   artifact to finalize and fails at compile time through `submit`
   ##
+  ## The artifact is generated once per engine type per compilation.
   ## Later `finalize` calls reuse the cached artifact.
-  if ctgFrontend.isEmpty():
-    error("finalize: the stream holds no device function, enqueue first", batch)
-  let engineN = quote do: `batch`.engine
-  result = quote do:
-    block:
-      const batchKind = batchCodegenKind(typeof(`engineN`))
-      const batchArtifact = ctgAccumulateArtifact(batchKind)
-      `batch`.artifact = batchArtifact
-      when batchKind == cgSpirv:
-        if `engineN`.getSpirV() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
-      else:
-        if `engineN`.getArtifact() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
+  const batchKind = batchCodegenKind(E)
+  const batchArtifact = ctgAccumulateArtifact(batchKind)
+  batch.artifact = batchArtifact
+  when batchKind == cgSpirv:
+    if batch.engine.getSpirV() != batchArtifact:
+      batch.engine.ingest(batchArtifact)
+  else:
+    if batch.engine.getArtifact() != batchArtifact:
+      batch.engine.ingest(batchArtifact)
 
 proc replay*[E](batch: BatchCommands[E]) {.inline.} =
   ## Launches the batch entries on the engine in enqueue order, without recompiling.
@@ -362,7 +359,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     if batch.engine.getArtifact() != batch.artifact:
       batch.engine.ingest(batch.artifact)
   when E is MetalEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newMetalBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -371,7 +368,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is VulkanEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newVulkanBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -380,7 +377,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is OpenCLEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newOpenCLBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -389,7 +386,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is WebgpuEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newWebgpuBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -417,6 +414,8 @@ macro submit*(batch: BatchCommands): untyped =
   ##   batch.enqueue<<(N div 64, 64)>> saxpy(out, x, y, 3.0'f32)
   ##   batch.submit()
   ##   ```
+  if ctgFrontend.isEmpty():
+    error("submit: the stream holds no device function, enqueue first", batch)
   result = nnkStmtList.newTree(
     bindSym"finalize".newCall(batch),
     bindSym"replay".newCall(batch))

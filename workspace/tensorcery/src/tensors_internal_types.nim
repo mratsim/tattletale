@@ -47,7 +47,9 @@ iface *AnyEngine:
     proc upload(node: TensorNode, src: openArray[float32]) {.inline.}
     proc upload(node: TensorNode, src: openArray[bfloat16]) {.inline.}
     proc download1(dst: pointer, node: TensorNode) {.inline.}
-    proc eval(roots: var openArray[TensorNode]) {.inline.}
+    # `eval` is absent from this interface on purpose: it compiles the op kernels
+    # (see compute_graph/eval.nim), so it must only instantiate
+    # at a genuine call site, never eagerly at vtable creation.
 
 type
   TensorImpl*[DeviceMem; Rank: static int] = ref object

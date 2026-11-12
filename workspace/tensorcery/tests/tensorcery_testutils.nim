@@ -20,8 +20,8 @@ proc randomSeq*[T](rng: var Rand, _: typedesc[T], size: int, bounds: HSlice[floa
     else:
       result[i] = rng.rand(bounds.a .. bounds.b).to(T)
 
-proc randomTensor*[T](rng: var Rand, _: typedesc[T], shape: varargs[int], bounds: HSlice[float32, float32] = 1.0'f32 .. 2.0'f32): Tensor =
+proc randomTensor*[T](rng: var Rand, _: typedesc[T], run: static Runtime, shape: varargs[int], bounds: HSlice[float32, float32] = 1.0'f32 .. 2.0'f32): Tensor[run] =
   var size = 1
   for dim in shape:
     size *= dim
-  rng.randomSeq(T, size, bounds).toTensor(shape)
+  rng.randomSeq(T, size, bounds).toTensor(run, shape)

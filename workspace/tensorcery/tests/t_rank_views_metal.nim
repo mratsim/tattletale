@@ -26,7 +26,7 @@ proc main =
   block:
     var x = @[7.0'f32].toTensor([1, 1, 1], run, bfloat16)
     let vNode = x.engine.newViewNode(x.node, [1, 1], [1, 1], 0, "squeeze")
-    let sx = Tensor(engine: x.engine, node: vNode)
+    let sx = Tensor[run](engine: x.engine, node: vNode)
     doAssert sx.shape()[0] == 1 and sx.shape()[1] == 1
     doAssert sx.item(bfloat16) == 7.0'f32.to(bfloat16)
 
@@ -36,7 +36,7 @@ proc main =
     var x = @[3.5'f32].toTensor([1, 1, 1], run, bfloat16)
     let y = x + x
     let vNode = x.engine.newViewNode(y.node, [1, 1], [1, 1], 0, "squeeze")
-    let sy = Tensor(engine: x.engine, node: vNode)
+    let sy = Tensor[run](engine: x.engine, node: vNode)
     doAssert sy.item(bfloat16) == 7.0'f32.to(bfloat16)
 
   # Reshape rank-2 -> rank-3 over an op output, read back with allClose
@@ -45,7 +45,7 @@ proc main =
     var x = xd.toTensor([2, 4], run, bfloat16)
     let y = x + x
     let vNode = x.engine.newViewNode(y.node, [2, 2, 2], [4, 2, 1], 0, "reshape")
-    let r = Tensor(engine: x.engine, node: vNode)
+    let r = Tensor[run](engine: x.engine, node: vNode)
     var expected: array[8, bfloat16]
     for i in 0 ..< 8:
       expected[i] = (2.0'f32 * xd[i]).to(bfloat16)
@@ -57,7 +57,7 @@ proc main =
     var x = xd.toTensor([4], run, bfloat16)
     let y = x + x
     let vNode = x.engine.newViewNode(y.node, [4], [-1], 3, "negstride")
-    let v = Tensor(engine: x.engine, node: vNode)
+    let v = Tensor[run](engine: x.engine, node: vNode)
     var expected: array[4, bfloat16]
     for i in 0 ..< 4:
       expected[i] = (2.0'f32 * xd[3 - i]).to(bfloat16)
