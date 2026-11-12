@@ -106,8 +106,8 @@ macro ctgAccumulateCirImpl(procdef: untyped, backend: static CodegenKind): untyp
   result = newLit(kname)
 
 macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
-  # Enqueue expansion resolves the procdef argument tiles through ccGetBackend,
-  # so crucibleCompileTarget must be set before the expansion.
+  # Defense in depth: enqueueCall set the target. Tile-typed expressions read
+  # it through ccGetBackend during the enqueue expansion.
   crucibleCompileTarget = case backend
     of cgMetal: ctMetal
     of cgSpirv: ctGlsl
@@ -307,7 +307,19 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
       EnqueueProxy[`E`](batch: `batchN`, config: LaunchConfig(
         grid: `gridRef`, blk: dim3(`blkN`), sharedMem: `smemRef`))
 
+func ctgEngineTarget(engineT: NimNode): CompileTarget {.compileTime.} =
+  ## Codegen target of a batch engine type symbol
+  case $engineT
+  of "MetalEngine": ctMetal
+  of "VulkanEngine": ctGlsl
+  of "WebgpuEngine": ctWebGPU
+  of "OpenCLEngine": ctOpenCL
+  else: ctNone
+
 macro enqueueCall[E](batch: BatchCommands[E], cfg: LaunchConfig, workgroup: untyped, deviceFn: typed, values: varargs[untyped]): untyped =
+  # Compile-time arguments sem-check in this expansion before the accumulate
+  # macro runs: ccGetBackend (MMA atom resolution) reads the target.
+  crucibleCompileTarget = ctgEngineTarget(batch.getTypeInst()[1])
   var callNode = nnkCall.newTree(deviceFn)
   for v in values:
     callNode.add(v)
