@@ -91,12 +91,20 @@ const
   MinStorageBindingSizeMultiple = 4
     ## a storage binding size is a multiple of 4 bytes
 
-proc parseShaderSquadron(wgsl: string): Dim3 =
-  ## Extracts the shader-baked squadron from the WGSL preamble
-  ## `@compute @workgroup_size(64, 8, 1)`, 1..3 literal args, missing default to 1.
+proc parseShaderSquadron(wgsl: string, entryPoint: string): Dim3 =
+  ## Extracts one entrypoint's shader-baked squadron from its attribute line:
+  ## `@compute @workgroup_size(64, 8, 1)` directly above the `fn` head,
+  ## 1..3 literal args, missing args default to 1.
   ## Returns (0, 0, 0) when absent or non-literal, run then fails squadron validation.
+  ##
+  ## One batch artifact is one whole module: every enqueued (kernel, workgroup)
+  ## pair prints its own attribute line. Anchoring on the entrypoint's `fn`
+  ## head picks the attribute printed for it.
   const marker = "@workgroup_size("
-  let i = wgsl.find(marker)
+  let fnHead = wgsl.find("fn " & entryPoint & "(")
+  if fnHead < 0:
+    return
+  let i = wgsl.rfind(marker, fnHead)
   if i < 0:
     return
   let tail = wgsl[i + marker.len .. ^1]
@@ -183,7 +191,7 @@ proc recordGlobalFn*(batch: WebgpuBatch, wgsl: string, entryPoint: string, cfg: 
   if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
     raiseAssert("WebGPU batch: cfg.grid must be >= 1 per axis, got " &
                 $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
-  let baked = parseShaderSquadron(wgsl)
+  let baked = parseShaderSquadron(wgsl, entryPoint)
   let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
               baked
             else:

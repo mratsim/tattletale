@@ -157,26 +157,24 @@ proc recordGlobalFn*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string, c
   if cfg.grid.x < 1 or cfg.grid.y < 1 or cfg.grid.z < 1:
     raiseAssert("Vulkan batch: cfg.grid must be >= 1 per axis, got " &
                 $cfg.grid.x & "x" & $cfg.grid.y & "x" & $cfg.grid.z)
-  let sq = parseSpirvEntryDescriptor(spv)
-  if sq.entryPoints != 1 or sq.name != entrypoint:
-    raiseAssert("Vulkan batch: the module for \"" & entrypoint &
-             "\" must declare exactly one OpEntryPoint named after the device function, got " &
-             $sq.entryPoints & " entrypoints" &
-             (if sq.entryPoints == 1: " (\"" & sq.name & "\")" else: ""))
-  if sq.localSize.x == 0 or sq.localSize.y == 0 or sq.localSize.z == 0:
+  # Every enqueued (kernel, workgroup) pair is its own OpEntryPoint.
+  # Each entrypoint name maps to the LocalSize baked for it.
+  let entrySizes = parseSpirvEntrySizes(spv)
+  if entrypoint notin entrySizes:
+    raiseAssert("Vulkan batch: the module declares no OpEntryPoint \"" & entrypoint & "\"")
+  let baked = entrySizes[entrypoint]
+  if baked.x == 0 or baked.y == 0 or baked.z == 0:
     raiseAssert("Vulkan batch: the module for \"" & entrypoint & "\" bakes no workgroup size")
   # A blk of (1, 1, 1) drops the workgroup pragma from the wrapper.
   # Printed modules then bake the printer's default workgroup size.
   let squadron = if cfg.blk.x == 1 and cfg.blk.y == 1 and cfg.blk.z == 1:
-              sq.localSize
+              baked
             else:
               cfg.blk
-  if squadron.x != sq.localSize.x or squadron.y != sq.localSize.y or
-     squadron.z != sq.localSize.z:
+  if squadron.x != baked.x or squadron.y != baked.y or squadron.z != baked.z:
     raiseAssert("Vulkan batch entry " & entrypoint & ": squadron " &
          $squadron.x & "x" & $squadron.y & "x" & $squadron.z &
-         " != baked squadron " & $sq.localSize.x & "x" & $sq.localSize.y &
-         "x" & $sq.localSize.z &
+         " != baked squadron " & $baked.x & "x" & $baked.y & "x" & $baked.z &
          ": launch config mismatch, squadron is shader-baked on Vulkan")
   var pack = EntryPack(vctx: batch.ctx)
   bindArgs(pack, output, args, store, VulkanBuffer, cgGlsl)
@@ -189,62 +187,6 @@ proc recordGlobalFn*(batch: VulkanBatch, spv: seq[uint32], entrypoint: string, c
     squadron: squadron,
     borrowedBuffers: pack.buffers,
     scalars: pack.scalars)
-
-macro recordGlobalFn*(batch: VulkanBatch, deviceFn: typed, cfg: static LaunchConfig, output: typed, args: typed): untyped =
-  var argNodes = args
-  if argNodes.kind == nnkPar and argNodes.len == 1:
-    argNodes = argNodes[0]
-  doAssert argNodes.kind in {nnkTupleConstr, nnkPar},
-    "batch enqueue: args must be a tuple, got " & args.repr
-  var callN = nnkCall.newTree(deviceFn)
-  callN.add(output)
-  for a in argNodes:
-    callN.add(a)
-  let k = callN.resolveDeviceFnOverload()
-  let impl = k.getImpl()
-  impl.expectKind(nnkProcDef)
-  let formals = impl[3]
-  var formalTypes: seq[NimNode]
-  for i in 1 ..< formals.len:
-    let f = formals[i]
-    for j in 0 ..< f.len - 2:
-      formalTypes.add(f[^2])
-  doAssert argNodes.len + 1 <= formalTypes.len,
-    "batch enqueue: " & $(argNodes.len + 1) & " args for " &
-    $formalTypes.len & " parameters"
-  var statics = nnkBracket.newTree()
-  var valuesN = nnkBracket.newTree()
-  var valuesTuple = nnkTupleConstr.newTree()
-  var allArgs = @[output]
-  for i in 0 ..< argNodes.len:
-    allArgs.add(argNodes[i])
-  for i, a in allArgs:
-    if isCompileTime(formalTypes[i]):
-      statics.add(a)
-    else:
-      valuesN.add(a)
-      if i > 0:
-        valuesTuple.add(a)
-  let procdef = buildGlobalFn(k, statics, valuesN)
-  let wg = getWorkgroupPragma(cfg.blk)
-  if not wg.isNil:
-    procdef[4].add(wg)
-  procdef[6][0][0] = k
-  let kname = newLit($procdef[0])
-  let configCall = nnkObjConstr.newTree(
-    bindSym"LaunchConfig",
-    nnkExprColonExpr.newTree(ident"grid",
-      bindSym"dim3".newCall(newLit(cfg.grid.x), newLit(cfg.grid.y), newLit(cfg.grid.z))),
-    nnkExprColonExpr.newTree(ident"blk",
-      bindSym"dim3".newCall(newLit(cfg.blk.x), newLit(cfg.blk.y), newLit(cfg.blk.z))),
-    nnkExprColonExpr.newTree(ident"sharedMem", newLit(cfg.sharedMem)),
-    nnkExprColonExpr.newTree(ident"stream", newLit(cfg.stream)))
-  let spirvN = bindSym"spirv"
-  let implN = bindSym"recordGlobalFn"
-  result = quote do:
-    block:
-      const batchModule = `spirvN`(`procdef`)
-      `implN`(`batch`, batchModule, `kname`, `configCall`, `output`, `valuesTuple`)
 
 proc newVulkanBatch*(engine: VulkanEngine): VulkanBatch =
   privateAccess(VulkanEngine)

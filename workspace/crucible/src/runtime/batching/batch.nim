@@ -161,24 +161,20 @@ template appendEntry[E](batch: BatchCommands[E], fnName: string, cfg: LaunchConf
   var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
   entry.launch = proc(engine: E) {.closure.} =
     engine.launchKernelImpl(output, args, entry.config, fnName)
+  # Vulkan/OpenCL/WebGPU record closures read `batch.artifact` at replay time.
+  # `finalize` materializes the artifact before `replay` records.
   when E is MetalEngine:
     entry.record = proc(leg: MetalBatch) {.closure.} =
       leg.recordGlobalFn(fnName, entry.config, output, args)
-  batch.entries.add entry
-
-template appendEntry[E](batch: BatchCommands[E], fnName: string, artifact: auto, cfg: LaunchConfig, output: auto, args: tuple) =
-  var entry = BatchEntry[E](entrypoint: fnName, config: cfg)
-  entry.launch = proc(engine: E) {.closure.} =
-    engine.launchKernelImpl(output, args, entry.config, fnName)
-  when E is VulkanEngine:
+  elif E is VulkanEngine:
     entry.record = proc(leg: VulkanBatch) {.closure.} =
-      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
+      leg.recordGlobalFn(batch.artifact, fnName, entry.config, output, args)
   elif E is OpenCLEngine:
     entry.record = proc(leg: OpenCLBatch) {.closure.} =
-      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
+      leg.recordGlobalFn(batch.artifact, fnName, entry.config, output, args)
   elif E is WebgpuEngine:
     entry.record = proc(leg: WebgpuBatch) {.closure.} =
-      leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
+      leg.recordGlobalFn(batch.artifact, fnName, entry.config, output, args)
   batch.entries.add entry
 
 macro enqueueDeviceFn[E](batch: BatchCommands[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, workgroup: untyped, values: varargs[typed]): untyped =
@@ -188,6 +184,15 @@ macro enqueueDeviceFn[E](batch: BatchCommands[E], deviceFn: typed, statics: unty
   let procdef = buildGlobalFn(deviceFn, statics, valuesN)
   if workgroup.kind != nnkEmpty:
     procdef[4].add(workgroup)
+    # Workgroup dims extend the wrapper name: one kernel enqueued at two block
+    # sizes lowers as two distinct entrypoints with separately baked sizes.
+    let sizeN = workgroup[1]
+    var suffix = "_w"
+    for i, d in sizeN:
+      if i > 0:
+        suffix.add "x"
+      suffix.add $d.intVal.int
+    procdef[0] = ident($procdef[0] & suffix)
   procdef[6][0][0] = deviceFn
   let backendN = quote do: batchCodegenKind(typeof(`batch`.engine))
   let fnNameN = quote do: ctgAccumulateCir(`procdef`, `backendN`)
@@ -198,17 +203,7 @@ macro enqueueDeviceFn[E](batch: BatchCommands[E], deviceFn: typed, statics: unty
   result = quote do:
     block:
       const fnName = `fnNameN`
-      when typeof(`batch`.engine) is VulkanEngine:
-        const entryArtifact = spirv(`procdef`)
-        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
-      elif typeof(`batch`.engine) is OpenCLEngine:
-        const entryArtifact = opencl(`procdef`)
-        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
-      elif typeof(`batch`.engine) is WebgpuEngine:
-        const entryArtifact = webgpu(`procdef`)
-        `batch`.appendEntry(fnName, entryArtifact, `cfg`, `outN`, `argsTuple`)
-      else:
-        `batch`.appendEntry(fnName, `cfg`, `outN`, `argsTuple`)
+      `batch`.appendEntry(fnName, `cfg`, `outN`, `argsTuple`)
 
 type
   EnqueueSugar*[E] = object
