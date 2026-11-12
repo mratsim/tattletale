@@ -67,8 +67,9 @@ func opName*(n: ArangeNode): string {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): TensorNode {.contracts.} =
+  # (stop - start) * step underflows to zero in float32, e.g. arange(0, 1e-30, step=1e-30)
   {.precondition: step != 0.0'f32.}
-  {.precondition: (stop - start) * step > 0.0'f32.}
+  {.precondition: (step > 0.0'f32 and start < stop) or (step < 0.0'f32 and start > stop).}
   let n = ceil((stop - start) / step).int
   return ArangeNode(r: engine.newPlaceholderNode(dtype, [n]).getImpl(), start: start, step: step).to(TensorNode)
 

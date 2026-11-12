@@ -77,6 +77,7 @@ proc tn_reshape*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): Tenso
       {.precondition: inferIdx < 0.}
       inferIdx = i
     else:
+      {.precondition: shape[i] >= -1.}
       known *= shape[i]
   var resolved = @shape
   if inferIdx >= 0:

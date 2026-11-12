@@ -67,6 +67,14 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
     eval(em1)
     doAssert em1.allClose([0.0'f32, 0, 0, 1, 0, 0].toTensor([2, 3], run, float32)), name & ": eye k-1"
 
+  block: # Eye: 4098 squared has flat indices over 2^24 and every diagonal entry stays 1
+    let eBig = eye(4098, run, kFp32)
+    eval(eBig)
+    var expectBig = newSeq[float32](4098 * 4098)
+    for i in 0 ..< 4098:
+      expectBig[i * (4098 + 1)] = 1.0'f32
+    doAssert eBig.allClose(expectBig.toTensor([4098, 4098], run, float32)), name & ": eye 4098 diagonal"
+
   block: # Arange: stop-only, positive step, negative step
     let a0 = arange(10.0'f32, run, kFp32)
     eval(a0)
@@ -81,12 +89,19 @@ proc runFactoriesTest*(run: static Runtime, name: string) =
       a2Expect[i] = (10.0'f32 - 1.5'f32 * i.float32).to(bfloat16)
     doAssert a2.allClose(a2Expect.toTensor([7], run, bfloat16)), name & ": arange negative step"
 
-  block: # Refusals: arange with a zero step, a step that counts away from stop, and a rank-0 shape
+  block: # Arange keeps exact sign checks where the product (stop-start)*step underflows to 0
+    let aTiny = arange(0.0'f32, 1e-30'f32, run, 1e-30'f32, kFp32)
+    eval(aTiny)
+    doAssert aTiny.allClose([0.0'f32].toTensor([1], run, float32)), name & ": arange 1e-30"
+
+  block: # Refusals: arange with a zero step, a step that counts away from stop, a rank-0 shape, and eye with a negative size
     var x = [1.0'f32, 2].toTensor([2], run, bfloat16)
     doAssertRaises AssertionDefect:
       discard arange(0.0'f32, 10.0'f32, run, 0.0'f32, kBf16)
     doAssertRaises AssertionDefect:
       discard arange(10.0'f32, 0.0'f32, run, 1.0'f32, kBf16)
+    doAssertRaises AssertionDefect:
+      discard eye(-2, -3, run, kFp32)
     doAssertRaises AssertionDefect:
       discard zeros([], run, kBf16)
 

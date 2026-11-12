@@ -24,6 +24,7 @@ import ../env
 const FillFleet = (elemsPerGroup: 128)
 
 proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
+  # int32 kernel args lose stores through the enqueue path, so ncols and k are float32 and convert to int32 here
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -38,13 +39,10 @@ proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
       box = tiled.slice(sel)
     var rD: tile(D.T)
     for e in 0 ..< box.size():
-      let idxF = (base + box.crd2idx(e)).float32
-      var rowF = 0.0'f32
-      var colF = idxF
-      while colF >= ncols:
-        colF -= ncols
-        rowF += 1.0'f32
-      rD.data[e] = if colF - rowF == kDiag: 1.0'f32.to(D.T) else: zero(D.T)
+      let idx = base + box.crd2idx(e)
+      let row = idx div ncols.int32
+      let col = idx mod ncols.int32
+      rD.data[e] = if col - row == kDiag.int32: 1.0'f32.to(D.T) else: zero(D.T)
     D.store(rD, thrID, tileID)
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -71,6 +69,8 @@ func opName*(n: EyeNode): string {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorNode {.contracts.} =
+  # size 0 is refused at allocation, not here
+  {.precondition: n >= 0 and m >= 0.}
   return EyeNode(r: engine.newPlaceholderNode(dtype, [n * m]).getImpl(), n: n, m: m, k: k).to(TensorNode)
 
 # ═══════════════════════════════════════════════════════════════════════

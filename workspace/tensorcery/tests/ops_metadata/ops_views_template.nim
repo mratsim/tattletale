@@ -103,7 +103,7 @@ proc runViewsTest*(run: static Runtime, name: string) =
     doAssertRaises AssertionDefect:
       discard reshape(cm, [4])
 
-  block: # Reshape refusals: a non-dense source, and the three invalid -1 forms
+  block: # Reshape refusals: a non-dense source, three invalid -1 forms, and a literal dimension below -1
     # narrow (1, seq, hidden) axis 0 to width 1: the axis keeps stride
     # seq*hidden, not the canonical dense stride of (1, 1, hidden)
     var xd: seq[float32]
@@ -121,6 +121,9 @@ proc runViewsTest*(run: static Runtime, name: string) =
     var x3 = xd[0 ..< 6].toTensor([2, 3], run, bfloat16)
     doAssertRaises AssertionDefect:
       discard reshape(x3, [4, -1])
+    var x4 = [1.0'f32, 2, 3, 4, 5, 6].toTensor([6], run, bfloat16)
+    doAssertRaises AssertionDefect:
+      discard reshape(x4, [-2, -3])
 
   block: # Narrow bounds-checks against the root buffer: an out-of-window source view is refused
     var x = [1.0'f32, 2, 3, 4].toTensor([4], run, bfloat16)
