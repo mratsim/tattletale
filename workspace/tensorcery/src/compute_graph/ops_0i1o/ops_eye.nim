@@ -94,7 +94,7 @@ proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
   if asEye.isNil():
     return false
   let rImpl = asEye.r.to(engine.getTensorImplType(T, rank))
-  engine.materialize(rImpl)
+  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_eye(rImpl.bridge(), asEye.m.float32, asEye.k.float32)
   return true
 

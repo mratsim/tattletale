@@ -42,7 +42,6 @@ func opName*(n: FullNode): string {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc tn_full*(engine: AnyEngine, vals: float32, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
-  ## A tensor of `shape` filled with `vals`, materialized on eval.
   ## Scalar values only. The array-vals broadcast fill is out of scope.
   {.precondition: shape.len in 1 .. 5.}
   return FullNode(r: engine.newPlaceholderNode(dtype, shape).getImpl(), val: vals).to(TensorNode)
@@ -56,7 +55,7 @@ proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
   if asFull.isNil():
     return false
   let rImpl = asFull.r.to(engine.getTensorImplType(T, rank))
-  engine.materialize(rImpl)
+  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), asFull.val)
   return true
 

@@ -27,7 +27,7 @@ privateAccess(Tensor)
 proc main =
   const run = runMetal
 
-  # Squeeze rank-3 -> rank-2 over a materialized source, read back with item
+  # Squeeze rank-3 -> rank-2 over a pre-allocated source, read back with item
   block:
     var x = @[7.0'f32].toTensor([1, 1, 1], run, bfloat16)
     let vNode = x.engine.newViewNode(x.node, [1, 1], [1, 1], 0, "squeeze")

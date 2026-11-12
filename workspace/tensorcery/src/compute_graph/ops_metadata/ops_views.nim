@@ -54,10 +54,10 @@ proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorNod
   while true:
     let impl = cur.getImpl()
     if not offsetsFolded:
-      # an unmaterialized view's offset is relative to its source,
-      # a materialized impl's offset is absolute in the root buffer
+      # a view without pre-allocated data keeps an offset relative to its source,
+      # a pre-allocated impl's offset is absolute in the root buffer
       base += impl.offset()
-      offsetsFolded = impl.isMaterialized()
+      offsetsFolded = impl.isPreAllocated()
     let v = cur.to(ViewNode)
     if v.isNil():
       break

@@ -41,7 +41,6 @@ func opName*(n: OnesNode): string {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc tn_ones*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
-  ## A tensor of `shape` filled with ones, materialized on eval.
   {.precondition: shape.len in 1 .. 5.}
   return OnesNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorNode)
 
@@ -54,7 +53,7 @@ proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
   if asOnes.isNil():
     return false
   let rImpl = asOnes.r.to(engine.getTensorImplType(T, rank))
-  engine.materialize(rImpl)
+  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), 1.0'f32)
   return true
 

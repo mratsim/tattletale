@@ -135,7 +135,7 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
       aImpl = asGemm.a.getImpl().to(engine.getTensorImplType(T, rank))
       bImpl = asGemm.b.getImpl().to(engine.getTensorImplType(T, rank))
       tiles = ceil_div(rImpl.shape[0], Fleet.tileM) * ceil_div(rImpl.shape[1], Fleet.tileN)
-    engine.materialize(rImpl)
+    engine.preAlloc(rImpl)
     if asGemm.c.isNil():
       # beta = 0, the C view is a dummy, never loaded
       batch.enqueue<<(tiles, LaneWidth)>> k_gemm(GemmMma(T),

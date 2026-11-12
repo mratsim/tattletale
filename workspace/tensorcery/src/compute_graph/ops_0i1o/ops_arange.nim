@@ -71,7 +71,7 @@ func opName*(n: ArangeNode): string {.inline.} =
 
 proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): TensorNode {.contracts.} =
   ## A rank-1 tensor of ceil((stop - start) / step) elements,
-  ## element i = start + step*i, materialized on eval.
+  ## element i = start + step*i.
   {.precondition: step != 0.0'f32.}
   {.precondition: (stop - start) * step > 0.0'f32.}
   let n = ceil((stop - start) / step).int
@@ -86,7 +86,7 @@ proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
   if asArange.isNil():
     return false
   let rImpl = asArange.r.to(engine.getTensorImplType(T, rank))
-  engine.materialize(rImpl)
+  engine.preAlloc(rImpl)
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_arange(rImpl.bridge(), asArange.start, asArange.step)
   return true
 

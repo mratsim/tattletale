@@ -33,7 +33,7 @@ iface *AnyTensorImpl:
     func strides(): Span[int] {.inline.}
     func size(): int {.inline.}
     func offset(): int {.inline.}
-    func isMaterialized(): bool {.inline.}
+    func isPreAllocated(): bool {.inline.}
 
 iface *TensorNode:
     proc getImpl(): AnyTensorImpl {.inline.}
@@ -96,7 +96,7 @@ template getLayoutType*(rank: static int): typedesc =
 #  Tensor and element types
 # ═══════════════════════════════════════════════════════════════════════
 
-func isMaterialized*(t: TensorImpl): bool {.inline.} =
+func isPreAllocated*(t: TensorImpl): bool {.inline.} =
   not t.data.isNil()
 
 template getTensorImplType*(engine: HwEngine, T: typedesc, rank: static int): typedesc =
@@ -114,8 +114,8 @@ func bridge*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): lent 
 #  Graph
 # ═══════════════════════════════════════════════════════════════════════
 
-proc isMaterialized*(n: TensorNode): bool {.inline.} =
-  n.getImpl().isMaterialized()
+proc isPreAllocated*(n: TensorNode): bool {.inline.} =
+  n.getImpl().isPreAllocated()
 
 proc size*(n: TensorNode): int {.inline.} =
   n.getImpl().size()

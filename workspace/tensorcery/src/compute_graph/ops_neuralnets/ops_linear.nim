@@ -183,7 +183,7 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
       rowsPerSlice = rImpl.shape[^2]
       nSlices = rImpl.size() div (rowsPerSlice * cols)
       tiles = nSlices * rowsPerSlice.ceil_div(Fleet.tileM) * cols.ceil_div(Fleet.tileN)
-    engine.materialize(rImpl)
+    engine.preAlloc(rImpl)
     if asLinear.b.isNil():
       batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
         rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), rImpl.bridge(), false)

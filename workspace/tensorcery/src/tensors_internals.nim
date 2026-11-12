@@ -142,7 +142,11 @@ proc newTensorImpl[E: HwEngine, T](
 #  Graph
 # ═══════════════════════════════════════════════════════════════════════
 
-proc materialize*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
+proc preAlloc*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
+  ## Allocates the impl's device data at enqueue time, before the kernel enqueue.
+  ##
+  ## Contract:
+  ## - every op handler calls this line: enqueue-time allocation is uniform
   engine.allocDataIn(impl)
 
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
@@ -160,7 +164,7 @@ proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openA
     r.offset = offset
     engine.withDeviceImpl(si, ElemType, s):
       r.data = s.data
-      if s.isMaterialized():
+      if s.isPreAllocated():
         r.offset = s.offset + offset
     ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorNode)
 
