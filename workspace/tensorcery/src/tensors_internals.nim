@@ -72,16 +72,6 @@ func opName*(t: TensorImpl): string {.inline.} =
 #  Host<->Device copies
 # ═══════════════════════════════════════════════════════════════════════
 
-template withDeviceImpl*[E: HwEngine](engine: E, impl: AnyTensorImpl, T: typedesc, concreteTensor, body: untyped) =
-  ## Casts the type-erased impl tensor to its concrete TensorImpl type
-  ## and make it available as the symbol passed as "concreteTensor"
-  ##
-  ## Usage:
-  ##   engine.withDeviceImpl(node.getImpl(), float32, t):
-  ##     engine.copyToHostFromDevice(dst, t.data[], t.offset)
-  let concreteTensor = impl.to(engine.getTensorImplType(T))
-  body
-
 proc download1*[E: HwEngine](engine: E, dst: pointer, node: TensorGraph) =
   let impl = node.getImpl()
   match(ElemType, impl.dtype()):
@@ -89,16 +79,16 @@ proc download1*[E: HwEngine](engine: E, dst: pointer, node: TensorGraph) =
     engine.copyToHostFromDevice(cast[ptr ElemType](dst)[], ci.data[], ci.offset)
 
 proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[float32]) =
-  engine.withDeviceImpl(node.getImpl(), float32, t):
-    engine.copyToDeviceFromHost(t.data[], src)
+  let t = node.getImpl().to(engine.getTensorImplType(float32))
+  engine.copyToDeviceFromHost(t.data[], src)
 
 proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[float16]) =
-  engine.withDeviceImpl(node.getImpl(), float16, t):
-    engine.copyToDeviceFromHost(t.data[], src)
+  let t = node.getImpl().to(engine.getTensorImplType(float16))
+  engine.copyToDeviceFromHost(t.data[], src)
 
 proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[bfloat16]) =
-  engine.withDeviceImpl(node.getImpl(), bfloat16, t):
-    engine.copyToDeviceFromHost(t.data[], src)
+  let t = node.getImpl().to(engine.getTensorImplType(bfloat16))
+  engine.copyToDeviceFromHost(t.data[], src)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl
@@ -128,10 +118,10 @@ proc newViewNode*[E: HwEngine](engine: E, src: TensorGraph, shape, strides: open
     let r = engine.getTensorImplType(ElemType)()
     r.layout = toLayoutBasic(shape, strides)
     r.offset = offset
-    engine.withDeviceImpl(si, ElemType, s):
-      r.data = s.data
-      if s.isPreAllocated():
-        r.offset = s.offset + offset
+    let s = si.to(engine.getTensorImplType(ElemType))
+    r.data = s.data
+    if s.isPreAllocated():
+      r.offset = s.offset + offset
     ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorGraph)
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorGraph =
@@ -141,9 +131,9 @@ proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int])
 proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorGraph, _: typedesc[T]) =
   let v = n.to(ViewNode)
   let r = v.r.to(engine.getTensorImplType(T))
-  engine.withDeviceImpl(v.src.getImpl(), T, s):
-    r.data = s.data
-    r.offset = r.offset + s.offset
+  let s = v.src.getImpl().to(engine.getTensorImplType(T))
+  r.data = s.data
+  r.offset = r.offset + s.offset
 
 macro dispatchViewKernel*(engine, n, batch: typed): untyped =
   ## Kernel phase of one view node. False when `n` is not a view.
@@ -172,9 +162,6 @@ macro dispatchViewKernel*(engine, n, batch: typed): untyped =
 # ═══════════════════════════════════════════════════════════════════════
 #  Basic -> Ranked metadata relayout
 # ═══════════════════════════════════════════════════════════════════════
-#
-# Critical op kernels (gemm, linear, rmsnorm) keep static-rank ceramic Layout signatures.
-# Handlers rebuild bridge arguments from basic metadata. Nothing moves and no ranked impl materializes.
 
 func relayoutBridge*[H, T; L: Layout](
     impl: TensorImpl[DeviceMem[H, T], LayoutBasic],
@@ -191,8 +178,3 @@ func relayoutBridge*[H, T; L: Layout](
     lay.shape[i] = impl.layout.shape[i]
     lay.stride[i] = impl.layout.strides[i]
   initTensorBridge(impl.data, impl.offset, lay)
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Registration
-# ═══════════════════════════════════════════════════════════════════════
-
