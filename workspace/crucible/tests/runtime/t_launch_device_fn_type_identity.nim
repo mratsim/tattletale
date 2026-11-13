@@ -7,14 +7,6 @@
 
 ## launchDeviceFn bridge names hash each type's definition site.
 ##
-## The bridge proc name hashes a launch's parameter types, and the batch dedup reuses a wrapper by backend and kernel name.
-## Two modules that define types under one identifier must hash differently, or the second launch reuses the first wrapper.
-##
-## The collision has no runtime observation through the launch surface, so the check runs on the hash input itself:
-## - device fns resolve by arity
-## - the parameter type comes from the device fn declaration
-## - a type symbol is not a value the launch accepts
-##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
@@ -61,7 +53,7 @@ proc runTest() =
   doAssert paramTypeHash(a) == hashA,
     "one parameter must hash stably so legitimate dedup still reuses the wrapper"
 
-  echo "[OK] launchDeviceFn: the bridge-name hash distinguishes types that share an identifier across modules"
+  echo "[OK] launchDeviceFn: the bridge-name hash distinguishes types and literals that would collide"
 
 when isMainModule:
   runTest()
