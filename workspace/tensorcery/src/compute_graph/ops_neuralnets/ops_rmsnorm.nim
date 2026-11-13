@@ -29,12 +29,6 @@ const Fleet = (rowsPerGroup: 4, maxGroups: 8192)
 # ═══════════════════════════════════════════════════════════════════════
 
 proc k_rmsnorm(dst, src, weight: distinct TensorBasicView, eps: float32, axis: int, hasWeight: int) =
-  ## dst = src * rsqrt(mean(src² over axis) + eps) scaled by the per-axis weight
-  ##
-  ## One warp per strip.
-  ## Tile loads pad past-the-end slots with zero, so short strips contribute nothing to the sum of squares.
-  ## Mean accumulation in fp32.
-  ##
   ## Preconditions:
   ## - dst has the same shape as src and the axis size is at least 1
   ## - when `hasWeight` is nonzero, weight is rank 1 with one slot per axis position
