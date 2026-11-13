@@ -49,7 +49,7 @@ iface *AnyEngine:
     proc download1(dst: pointer, node: TensorNode) {.inline.}
     proc eval(roots: var openArray[TensorNode]) {.inline.}
 
-const MaxRank* = 5
+const MaxRank* = 4
 
 type
   LayoutBasic* = object

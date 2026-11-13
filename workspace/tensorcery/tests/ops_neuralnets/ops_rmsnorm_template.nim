@@ -28,7 +28,7 @@ proc refRmsnorm(dst: var openArray[float32], src: openArray[float32], rows, cols
 
 proc runRmsnormTest*(run: static Runtime, name: string) =
   var rng = initRand(0xFACADE)
-  for shape in [ @[3, 8], @[5, 13], @[2, 3, 7], @[2, 3, 5, 7], @[2, 3, 5, 7, 11] ]:
+  for shape in [ @[3, 8], @[5, 13], @[2, 3, 7], @[2, 3, 5, 7] ]:
     let cols = shape[^1]
     var leading = 1
     for i in 0 ..< shape.len - 1:
