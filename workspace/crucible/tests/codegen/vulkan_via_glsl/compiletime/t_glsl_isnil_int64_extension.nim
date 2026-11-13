@@ -26,7 +26,6 @@ proc runTest() =
   doAssert int64Extension notin plainGlsl,
     "a kernel with no isNil and no 64-bit type must not request the int64 extension:\n" & plainGlsl
 
-  # The isnil kernel launches: the extension line is valid GLSL, not just emitted text
   var engine = newEngine(runVulkan)
   engine.ingest(isnilGlsl)
   let oDev = engine.allocDevice(float32, 1)
