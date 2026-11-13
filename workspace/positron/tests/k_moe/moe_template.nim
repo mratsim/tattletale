@@ -468,7 +468,7 @@ proc moeCombineRefF64[LD](dPacked: HostTensor[float32, LD],
 proc launchMoeCombine[LP, LS, LW](engine: MetalEngine, t, topk, n: int,
     dPackedHost: HostTensor[float32, LP], slotOfPairHost: HostTensor[int32, LS],
     weightsHost: HostTensor[float32, LW]): auto =
-  ## Bridges the fixtures, launches `moe_combine` over the (n-block, token) grid
+  ## Bridges the fixtures, launches `gather_add` over the (n-block, token) grid
   ## and returns d as a host tensor, sentinel-filled before the launch.
   var dHost = makeHostTensor(float32, (t, n), (n, 1))
   for i in 0 ..< dHost.len():
@@ -478,7 +478,7 @@ proc launchMoeCombine[LP, LS, LW](engine: MetalEngine, t, topk, n: int,
     slotOfPairDev = engine.bridge(slotOfPairHost)
     weightsDev = engine.bridge(weightsHost)
     dDev = engine.bridge(dHost)
-  engine.launchDeviceFn moe_combine(dDev, dPackedDev, slotOfPairDev, weightsDev, topk) do:
+  engine.launchDeviceFn gather_add(dDev, dPackedDev, slotOfPairDev, weightsDev, topk) do:
     grid = (n.ceil_div(32 * MoECombineOutputs), t)
     blk = (32, 1)
   engine.copyToHostFromDevice(dHost.data.toOpenArray(0, dHost.len() - 1), dDev.data)

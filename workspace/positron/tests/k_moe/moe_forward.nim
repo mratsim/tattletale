@@ -8,7 +8,7 @@
 ## - tier choice: pickGroupedTier over the routed entries per expert, forceTier
 ##   overrides it for measurement (GroupedTier ordinals, -1 auto), the gemv tier
 ##   reads the router's ids and weights directly, the gemm tier packs over
-##   moeCapacityBound(T, topk, E), runs grouped_gemm_via_expertIds and un-permutes with moe_combine
+##   moeCapacityBound(T, topk, E), runs grouped_gemm_via_expertIds and un-permutes with gather_add
 ## - every launch is static-grid from the shapes, no device-to-host read anywhere
 
 import std/[math]
@@ -120,7 +120,7 @@ proc moeForward*[Elem, LD, LX, LS, LBI, LB](engine: MetalEngine,
     engine.launchDeviceFn grouped_gemm_via_expertIds(dPackedView, packedXView, bView, packedIdsView) do:
       grid = (countGroupedGemmTiles(Elem, cap, n), 1)
       blk = (32, 1)
-    engine.launchDeviceFn moe_combine(dView, dPackedView, slotOfPairView, weightsView, topk) do:
+    engine.launchDeviceFn gather_add(dView, dPackedView, slotOfPairView, weightsView, topk) do:
       grid = (n.ceil_div(32 * MoECombineOutputs), t)
       blk = (32, 1)
   engine.copyToHostFromDevice(dHost.data.toOpenArray(0, dHost.len() - 1), dView.data)

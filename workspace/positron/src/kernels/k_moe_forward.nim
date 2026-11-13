@@ -9,7 +9,7 @@
 ## into per-expert slot blocks and the layer output sums them back out.
 ## - moe_dispatch_metadata: histogram, padded prefix, slot scatter, inverse map
 ## - moe_dispatch_gather: activation gather, per-slot expert id resolution
-## - moe_combine: weighted un-permute sum into the layer output
+## - gather_add: weighted un-permute sum into the layer output
 ##
 ## The slot capacity: moeCapacityBound(t, topk, e), the padded blocks tile-align
 ## with the expert contraction's m tiles.
@@ -31,7 +31,19 @@ func moeCapacityBound(t, topk, e: int): int =
 const MoECombineOutputs = 4
 
 proc moe_dispatch_metadata(packedOffsets, sortedPairs, slotOfPair, ids: distinct TensorView, topk: int) =
-  ## Histogram, padded prefix, slot scatter and inverse map, one launch, one token per lane.
+  ## Every (token, expert) pair of `ids` claims one slot in its expert's padded
+  ## block:
+  ##
+  ## ```
+  ## ids (T, topk)        sortedPairs (cap)                packedOffsets (E,)
+  ## t0: [2 0 -]          expert 0: [t0 t1 t2 t3]          [4 8 12]
+  ## t1: [0 1 -]    ──►   expert 1: [t1 t2 - -]      ──►   slotOfPair[t0] = [8 0 -]
+  ## t2: [1 2 0]          expert 2: [t0 t2 - -]            (block start + rank)
+  ## t3: [0 - -]
+  ## ```
+  ##
+  ## - each expert's pair count rounds up to MoEDispatchPadM slots
+  ## - padding slots hold -1 in sortedPairs, invalid pairs hold -1 in slotOfPair
   let
     totalT = ids.shape[0]
     e = packedOffsets.shape[0]
@@ -84,8 +96,16 @@ proc moe_dispatch_metadata(packedOffsets, sortedPairs, slotOfPair, ids: distinct
             sortedPairs[s] = int32(-1)
 
 proc moe_dispatch_gather(packedIds, packedX, x, sortedPairs, packedOffsets: distinct TensorView) =
-  ## Activation gather and per-slot expert id resolution, one launch:
-  ## Scatter and gather the padded slots, one launch, one slot per lane.
+  ## Moves the activations into slot order and resolves each slot's expert:
+  ##
+  ## ```
+  ## x (T, K)             packedX (cap, K)       packedIds (cap,)
+  ## t0 ══╗        slot 0 ─► x[t0, :]      slot 0 ─► 0
+  ## t1 ══╪═════►   slot 4 ─► x[t1, :]      slot 4 ─► 1
+  ## t2 ══╝        slot 5 ─► x[t2, :]      empty slots stay untouched, -1
+  ## ```
+  ##
+  ## - packedIds comes from a binary search over packedOffsets
   let
     k = x.shape[1]
     cap = sortedPairs.shape[0]
@@ -117,9 +137,16 @@ proc moe_dispatch_gather(packedIds, packedX, x, sortedPairs, packedOffsets: dist
         if kk == 0:
           packedIds[slot] = int32(-1)
 
-proc moe_combine(dst, dPacked, slotOfPair, weights: distinct TensorView, topk: int) =
-  ## Weighted un-permute sum, one launch, one threadgroup per (token, n-block),
-  ## dst(t, n) = sum over ascending i of weights(t, i) · dPacked[slotOfPair(t, i), n].
+proc gather_add(dst, dPacked, slotOfPair, weights: distinct TensorView, topk: int) =
+  ## Sums each token's slot lines back into the layer output, weighted by the router:
+  ##
+  ## ```
+  ## dPacked (cap, N)                              dst (T, N)
+  ## slot 8 ── w(t0,0) ─┐
+  ## slot 0 ── w(t0,1) ─┼──► dst[t0, :] = w(t0,0)·dPacked[8] + w(t0,1)·dPacked[0]
+  ## slot 1 ── w(t1,0) ─┼──► dst[t1, :] = w(t1,0)·dPacked[1] + w(t1,1)·dPacked[4]
+  ## slot 4 ── w(t1,1) ─┘   slotOfPair -1 pairs contribute nothing
+  ## ```
   let
     tokens = dst.shape[0]
     n = dst.shape[1]

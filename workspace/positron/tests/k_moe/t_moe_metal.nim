@@ -41,7 +41,7 @@ proc main =
   moeCombineCase(engine, 1, 6, 8, 64, rng, "combine single token")
   moeCombineCase(engine, 8, 6, 64, 48, rng, "combine ragged N")
   moeCombineCase(engine, 4, 3, 5, 130, rng, "combine ragged N edge, one lane partly past")
-  echo "[OK] moe combine"
+  echo "[OK] moe gather_add"
 
   # moeForward end to end: both tier paths against the whole-layer float64 reference
   moeForwardCase(engine, float32, 4, 6, 8, 24, 32, moeSoftmax, 0.0'f32, 1.0'f32, rng,
