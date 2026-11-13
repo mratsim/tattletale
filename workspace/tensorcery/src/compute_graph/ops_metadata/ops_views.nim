@@ -35,21 +35,15 @@ func reachWindow(shape, strides: openArray[int], base: int): tuple[lo, hi: int] 
       result.lo += reach
 
 proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorGraph): bool =
-  var
-    base = relOffset
-    cur = src
-    offsetsFolded = false
+  var cur = src
   while true:
-    let impl = cur.getImpl()
-    if not offsetsFolded:
-      base += impl.offset()
-      offsetsFolded = impl.isPreAllocated()
     let v = cur.to(ViewNode)
     if v.isNil():
       break
     cur = v.src
+  let base = relOffset + getMaterializedOffset(src)
   let (lo, hi) = reachWindow(shape, strides, base)
-  lo >= 0 and hi < cur.getImpl().size()
+  lo >= 0 and hi < max(cur.getImpl().size(), cur.getImpl().getBufferSize())
 
 func broadcastable(src, target: openArray[int]): bool =
   if target.len < src.len:

@@ -52,6 +52,9 @@ func dtype*[H, T](t: TensorImpl[DeviceMem[H, T], LayoutBasic]): Dtype {.inline.}
 func offset*(t: TensorImpl): int {.inline.} =
   t.offset
 
+func getBufferSize*(t: TensorImpl): int {.inline.} =
+  t.bufferSize
+
 func size*(t: TensorImpl): int {.inline.} =
   result = 1
   for i in 0 ..< t.layout.rank:
@@ -66,6 +69,18 @@ proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
 
 func opName*(t: TensorImpl): string {.inline.} =
   "Tensor"
+
+proc getMaterializedOffset*(g: TensorGraph): int =
+  if g.isNil():
+    return 0
+  var cur = g
+  while true:
+    let v = cur.to(ViewNode)
+    if v.isNil():
+      result += cur.getImpl().offset()
+      return
+    result += v.viewOffset
+    cur = v.src
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Backend identity
@@ -93,7 +108,7 @@ proc download1*[E: HwEngine](engine: E, dst: pointer, node: TensorGraph) =
   let impl = node.getImpl()
   match(ElemType, impl.dtype()):
     let ci = impl.to(engine.getTensorImplType(ElemType))
-    engine.copyToHostFromDevice(cast[ptr ElemType](dst)[], ci.data[], ci.offset)
+    engine.copyToHostFromDevice(cast[ptr ElemType](dst)[], ci.data[], getMaterializedOffset(node))
 
 proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[float32]) =
   let t = node.getImpl().to(engine.getTensorImplType(float32))
@@ -120,6 +135,7 @@ proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], shape: openArray[i
   result.layout = makeLayoutBasic(shape)
   result.data.new()
   result.data[] = engine.allocDevice(T, result.size())
+  result.bufferSize = result.size()
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph
@@ -134,12 +150,7 @@ proc newViewNode*[E: HwEngine](engine: E, src: TensorGraph, shape, strides: open
   match(ElemType, si.dtype()):
     let r = engine.getTensorImplType(ElemType)()
     r.layout = makeLayoutBasic(shape, strides)
-    r.offset = offset
-    let s = si.to(engine.getTensorImplType(ElemType))
-    r.data = s.data
-    if s.isPreAllocated():
-      r.offset = s.offset + offset
-    ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorGraph)
+    ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName, viewOffset: offset).to(TensorGraph)
 
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorGraph =
   match(ElemType, dtype):
@@ -150,7 +161,8 @@ proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorGr
   let r = v.r.to(engine.getTensorImplType(T))
   let s = v.src.getImpl().to(engine.getTensorImplType(T))
   r.data = s.data
-  r.offset = r.offset + s.offset
+  r.offset = getMaterializedOffset(n)
+  r.bufferSize = s.bufferSize
 
 macro dispatchViewKernel*(engine, n, batch: typed): untyped =
   result = quote do:

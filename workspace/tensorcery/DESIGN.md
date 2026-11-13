@@ -194,6 +194,43 @@ alive forever, rely on the allocated check to skip). It dedups correctly
 but pins every intermediate until the handle drops — with VRAM as the
 budget, that is the wrong trade.
 
+### View offsets: op-record state, materialized on demand
+
+A view's offset is relative to its source. An impl's `offset` is a position
+inside its backing allocation. Two fields hold the two values:
+
+- the relative offset is op-record state: `ViewNode.viewOffset`, stored at
+  construction, never folded into the impl.
+- the impl's `offset` is alloc-position only: 0 until the walk materializes
+  the view (`enqueueView` assigns the derived value, idempotent, never
+  accumulated), rewritten once when evaluation replaces the root by its
+  computed leaf.
+- materialization is derived on demand by `getMaterializedOffset`: walk the
+  view chain summing relative offsets, add the first non-view impl's offset.
+  The derivation is pure and never cached: an offset becomes *materialized*
+  when fused into the backing allocation, never "absolute".
+
+A view's impl is unallocated until the walk reaches it, so the existing
+dedup skip does the once-only job for free: a pre-visit view has no data
+and is materialized, a post-visit view has data and is skipped. The
+post-order visit materializes a view before any consumer's kernel enqueues,
+which is why kernel writers read plain `impl.offset` and never see a view.
+
+Evaluation replaces an evaluated root by a computed leaf and frees the
+root's ancestors, so the source chain of a view over an already-evaluated
+view is gone. Such a view bounds its window against the backing buffer's
+size, not the logical size: the replacement leaf's logical size is the
+view's window, while its buffer is the original root's. The buffer size is
+recorded on the impl (`bufferSize`) at the allocation sites and travels
+with every data rebind. Bounding materialized coordinates against a logical
+size mixes coordinate spaces.
+
+The op record is the future autodiff tape entry: it carries its own
+parameters (shape, strides, `viewOffset`) and its parent link. Backward of
+a view scatters the child's gradient through the relative window and never
+touches allocation addresses, which is why materialization stays
+derive-on-demand.
+
 ### Memory management
 
 Allocation is engine-owned and centralized: operations never allocate,

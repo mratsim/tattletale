@@ -175,8 +175,8 @@ proc item[T](t: Tensor, _: typedesc[T], snapshottedOps: static string): T =
     raise ValueError.newException("eval: CUDA is not on the batch stream yet")
   of runCpu:
     raise ValueError.newException("eval: unsupported run kind")
-  t.node = node[0] # evalRoots replaced the ref in our local copy. Repoint t or it dangles on the dropped graph
   t.engine.download1(addr result, t.node)
+  t.node = node[0] # evalRoots replaced the ref in our local copy. Repoint t or it dangles on the dropped graph
 
 proc item*[T](t: Tensor, _: typedesc[T]): T {.inline, hasEval.} =
   ## Downloads the single element of `t` as `T`, evaluating its graph.
