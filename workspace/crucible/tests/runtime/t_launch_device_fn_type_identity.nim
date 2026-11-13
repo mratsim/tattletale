@@ -33,6 +33,10 @@ macro paramTypeHash(v: typed): Hash =
   ## Bridge-name hash input for a launch parameter, as buildGlobalFn sees it
   result = newLit(hashTypeIdentity(v.getTypeInst()))
 
+macro literalHash(s: static string): Hash =
+  ## Bridge-name hash input for a string-literal launch parameter
+  result = newLit(hashTypeIdentity(newLit(s)))
+
 proc runTest() =
   var a: cfgA.Config
   var b: cfgB.Config
@@ -47,6 +51,12 @@ proc runTest() =
   var f: float32
   # a builtin has no definition and hashes by the identifier alone
   discard paramTypeHash(f)
+
+  # a string literal has no children, only its content
+  doAssert literalHash("a") != literalHash("b"),
+    "string-literal contents must hash so distinct static string modes get distinct wrappers"
+  doAssert literalHash("a") == literalHash("a"),
+    "one literal must hash stably so legitimate dedup still reuses the wrapper"
 
   doAssert paramTypeHash(a) == hashA,
     "one parameter must hash stably so legitimate dedup still reuses the wrapper"

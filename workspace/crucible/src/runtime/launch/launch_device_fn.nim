@@ -181,6 +181,8 @@ func hashTypeIdentity(n: NimNode): Hash =
     result = result !& hash(n.intVal)
   of nnkFloatLit .. nnkFloat64Lit:
     result = result !& hash(n.floatVal)
+  of nnkStrLit, nnkRStrLit, nnkTripleStrLit:
+    result = result !& hash(n.strVal)
   of nnkEmpty:
     discard
   else:
