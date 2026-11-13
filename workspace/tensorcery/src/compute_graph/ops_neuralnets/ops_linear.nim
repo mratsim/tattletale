@@ -30,8 +30,6 @@ const Fleet = (tileM: 32, tileN: 32)
 
 proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, hasBias: int) =
   ## D = A·B + bias over the last axis
-  ##
-  ## A zero `hasBias` skips the bias add and leaves `bias` unread.
   const tvmA = mma.getThreadValueMap(opA)
   const tvmB = mma.getThreadValueMap(opB)
   const tvmC = mma.getThreadValueMap(opC)
