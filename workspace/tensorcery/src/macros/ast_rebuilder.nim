@@ -57,7 +57,7 @@ proc rebuildUntypedAst*(ast: NimNode, dropRootStmtList = false): NimNode =
           return rTree
       elif node[0].kind == nnkClosedSymChoice:
         if node[0][0].eqIdent"addr":
-          node.expectLen(1)
+          node.expectLen(2)
           return nnkAddr.newTree(rebuild(node[1]))
         else:
           var rTree = node.kind.newTree()
