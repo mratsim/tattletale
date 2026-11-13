@@ -34,8 +34,8 @@ template preCondition*(body: untyped): untyped {.pragma.}
 
 type
   JaggedKvHost* = object
-    ## Test staging of a paged KV cache: owns the metadata arrays a kernel
-    ## test bridges to JaggedKv, the page storage belongs to the PagePool.
+    ## Test staging of a paged KV cache: owns the metadata arrays a kernel test
+    ## bridges to JaggedKv. Page storage belongs to the PagePool.
     ## Allocated once, freed on destruction.
     offsets*: ptr UncheckedArray[int32]
     indices*: ptr UncheckedArray[int32]
@@ -93,10 +93,10 @@ proc append*(o: var JaggedKvHost, pageId: int32) =
 proc addSequence*(o: var JaggedKvHost, tokens: int, pageIds: openArray[int32]) =
   ## Registers a new sequence of `tokens` tokens over `pageIds`.
   {.preCondition: o.batchSize < o.capacity.}
-  {.preCondition: o.offsets[o.batchSize] + int32(pageIds.len) <= o.capacity.}
+  {.preCondition: o.offsets[o.batchSize] + pageIds.len <= o.capacity.}
   let start = o.offsets[o.batchSize]
   o.seqlens[o.batchSize] = int32(tokens)
-  o.offsets[o.batchSize + 1] = o.offsets[o.batchSize] + int32(pageIds.len)
+  o.offsets[o.batchSize + 1] = int32(o.offsets[o.batchSize] + pageIds.len)
   for k in 0 ..< pageIds.len:
     o.indices[start + k] = pageIds[k]
   inc o.batchSize
@@ -114,6 +114,7 @@ type
 
   BridgeTensor*[DevMem; L: Layout] = object
     data*: DevMem
+    offset*: int
     layout*: L
 
 proc `=destroy`*[T, L](ht: var HostTensor[T, L]) =
@@ -137,24 +138,31 @@ macro `[]=`*(ht: HostTensor, args: varargs[untyped]): untyped =
   result = quote do:
     `ht`.data[`ht`.offset + toInt crd2idx(`ht`.layout, `coord`)] = `val`
 
-func originOffset(layout: Layout): int =
+func getOriginOffset(layout: Layout): int =
   ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
   let sh = layout.shape.flatten()
   let st = layout.stride.flatten()
+  var shapes: seq[int]
   var strides: seq[int]
-  for f in fields(st):
-    strides.add(toInt(f))
-  var i = 0
-  for f in fields(sh):
-    if strides[i] < 0:
-      result += (toInt(f) - 1) * (-strides[i])
-    i.inc
+  when sh is tuple:
+    for f in fields(sh):
+      shapes.add(toInt(f))
+  else:
+    shapes.add(toInt(sh))
+  when st is tuple:
+    for f in fields(st):
+      strides.add(toInt(f))
+  else:
+    strides.add(toInt(st))
+  for j in 0 ..< strides.len:
+    if strides[j] < 0:
+      result += (shapes[j] - 1) * (-strides[j])
 
 proc to*[T, L, U](src: HostTensor[T, L], _: typedesc[U]): HostTensor[U, L] =
   let layout = src.layout
   result = HostTensor[U, L](
     data: cast[ptr UncheckedArray[U]](allocShared(toInt(layout.cosize()) * sizeof(U))),
-    offset: originOffset(layout),
+    offset: layout.getOriginOffset(),
     layout: layout)
   for i in 0 ..< toInt(layout.cosize()):
     result.data[i] = src.data[i].to(U)
@@ -163,25 +171,25 @@ proc makeHostTensor*[T](_: typedesc[T], shape: tuple, order: static StrideOrder)
   let layout = make_layout(shape, order)
   HostTensor[T, typeof(layout)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
-    offset: originOffset(layout),
+    offset: layout.getOriginOffset(),
     layout: layout)
 
 proc makeHostTensor*[T](_: typedesc[T], shape, strides: tuple): auto =
   let layout = make_layout(shape, strides)
   HostTensor[T, typeof(layout)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
-    offset: originOffset(layout),
+    offset: layout.getOriginOffset(),
     layout: layout)
 
-template bounds[T](start, stopIncl: untyped): HSlice[T, T] =
-  # Workaround `..` or Slice[T](...) not resolving T as a default value
-  Slice[T](a: T(start), b: T(stopIncl))
+template bounds(start, stopIncl: untyped): HSlice[float32, float32] =
+  # Workaround `..` or Slice[float32](...) not resolving as a default value
+  Slice[float32](a: float32(start), b: float32(stopIncl))
 
-proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds[float32](1, 2)): auto =
+proc randomHostTensor*[T](rng: var Rand, _: typedesc[T], shape, strides: tuple, bounds = bounds(1, 2)): auto =
   let layout = make_layout(shape, strides)
   result = HostTensor[T, typeof(layout)](
     data: cast[ptr UncheckedArray[T]](allocShared(toInt(layout.cosize()) * sizeof(T))),
-    offset: originOffset(layout),
+    offset: layout.getOriginOffset(),
     layout: layout)
   for i in 0 ..< toInt(layout.size()):
     let crd = idx2crd(layout.shape, i)
@@ -197,10 +205,17 @@ func view*[T, L](ht: HostTensor[T, L]): TensorView[T, L] =
   TensorView[T, L](data: ht.data +% ht.offset, layout: ht.layout)
 
 proc bridge*[E: HwEngine, T, L](engine: E, ht: HostTensor[T, L]): auto =
+  ## Stages one host tensor as a device buffer behind a `TensorView`-shaped bridge value.
+  ##
+  ## - the bridge value's field set matches the device-side `TensorView`
+  ##   (`data`, `offset`, `layout`): the launch marshaling struct-explodes
+  ##   the bridge value field by field into the kernel's argument slots
+  ## - the whole host allocation is copied, `offset` locates the logical
+  ##   origin inside the device buffer
   let n = ht.layout.cosize()
   let dev = engine.allocDevice(T, n)
-  engine.copyToDeviceFromHost(dev, ht.data.toOpenArray(ht.offset, ht.offset + n - 1))
-  BridgeTensor[typeof(dev), L](data: dev, layout: ht.layout)
+  engine.copyToDeviceFromHost(dev, ht.data.toOpenArray(0, n - 1))
+  BridgeTensor[typeof(dev), L](data: dev, offset: ht.offset, layout: ht.layout)
 
 func xorHash*[T, L](ht: HostTensor[T, L]): uint32 =
   ## Order-independent checksum over the raw bit patterns of a host tensor
@@ -236,9 +251,7 @@ type AllCloseReport* = object
   worst*, firstGot*, firstWant*: float64
   firstCrd*: string
 
-proc allClose*[T, LA, LB](
-    actual: TensorView[T, LA], expected: TensorView[T, LB],
-    rtol, abstol: float64): AllCloseReport =
+proc allClose*[T, LA, LB](actual: TensorView[T, LA], expected: TensorView[T, LB], rtol, abstol: float64): AllCloseReport =
   ## Element-wise closeness, |a - e| <= abstol + rtol*|e| per element,
   ## compared in float64, same shape required, strides may differ.
   let n = flatSize(actual.getLayout())
@@ -279,7 +292,7 @@ template assertAllClose*(actual, expected: untyped, rtol: float64 = 1e-4, abstol
   block:
     let actualView = actual
     let expectedView = expected
-    let report = allClose(actualView, expectedView, rtol, abstol)
+    let report = actualView.allClose(expectedView, rtol, abstol)
     if report.bad > 0:
       echo "Assertion failed: allClose"
       echo "  '", astToStr(actual), "'"

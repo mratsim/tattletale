@@ -36,7 +36,7 @@ proc k_add(D, A, B: distinct TensorBasicView) =
   let
     cSize = grid.size()
     gridStride = getGridSize()
-  for tileID in countup(grid.getLocalTileID(), cSize - 1, gridStride):
+  for tileID in countup(getLocalTileID(grid), cSize - 1, gridStride):
     let rA = tile(A.T).load(A, thrID, tileID)
     let rB = tile(B.T).load(B, thrID, tileID)
     var rD: tile(D.T)

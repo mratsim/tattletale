@@ -1,0 +1,17 @@
+{
+ "name": "grouped_decode_f32",
+ "dtype": "float32",
+ "T": 1,
+ "topk": 1,
+ "E": 8,
+ "K": 64,
+ "N": 64,
+ "seed": 3247248385,
+ "xorhash_checksums": {
+  "x.bin": 2221271392,
+  "b.bin": 2107422366,
+  "ids.bin": 3,
+  "weights.bin": 1059617329,
+  "d.bin": 65398716
+ }
+}

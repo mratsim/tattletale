@@ -1,0 +1,17 @@
+{
+ "name": "grouped_single_token_f32",
+ "dtype": "float32",
+ "T": 1,
+ "topk": 6,
+ "E": 8,
+ "K": 64,
+ "N": 64,
+ "seed": 3247248389,
+ "xorhash_checksums": {
+  "x.bin": 16162872,
+  "b.bin": 4137729424,
+  "ids.bin": 2,
+  "weights.bin": 10842846,
+  "d.bin": 32064544
+ }
+}

@@ -1,0 +1,17 @@
+{
+ "name": "grouped_sentinel_ragged_f32",
+ "dtype": "float32",
+ "T": 8,
+ "topk": 6,
+ "E": 64,
+ "K": 40,
+ "N": 48,
+ "seed": 3247248386,
+ "xorhash_checksums": {
+  "x.bin": 2062911620,
+  "b.bin": 2315302376,
+  "ids.bin": 4294967279,
+  "weights.bin": 4657010,
+  "d.bin": 64352916
+ }
+}

@@ -67,14 +67,21 @@ func getOriginOffset(layout: Layout): int =
   ## Buffer offset of the logical origin, one (shape-1)*|stride| term per negative-stride leaf
   let sh = layout.shape.flatten()
   let st = layout.stride.flatten()
+  var shapes: seq[int]
   var strides: seq[int]
-  for f in fields(st):
-    strides.add(toInt(f))
-  var i = 0
-  for f in fields(sh):
-    if strides[i] < 0:
-      result += (toInt(f) - 1) * (-strides[i])
-    i.inc
+  when sh is tuple:
+    for f in fields(sh):
+      shapes.add(toInt(f))
+  else:
+    shapes.add(toInt(sh))
+  when st is tuple:
+    for f in fields(st):
+      strides.add(toInt(f))
+  else:
+    strides.add(toInt(st))
+  for j in 0 ..< strides.len:
+    if strides[j] < 0:
+      result += (shapes[j] - 1) * (-strides[j])
 
 proc to*[T, L, U](src: HostTensor[T, L], _: typedesc[U]): HostTensor[U, L] =
   let layout = src.layout

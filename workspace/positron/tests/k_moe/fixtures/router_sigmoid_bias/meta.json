@@ -1,0 +1,15 @@
+{
+ "name": "router_sigmoid_bias",
+ "family": "router",
+ "T": 4,
+ "E": 16,
+ "topk": 6,
+ "variant": 1,
+ "scaling": 1.0,
+ "xorhash_checksums": {
+  "scores.bin": 52400748,
+  "bias.bin": 2195139067,
+  "ids.bin": 7,
+  "weights.bin": 59151608
+ }
+}

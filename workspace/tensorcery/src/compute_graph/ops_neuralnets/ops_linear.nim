@@ -67,7 +67,7 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView) =
     let
       cSize = cGrid.size()
       gridStride = getGridSize()
-    for tileID in countup(cGrid.getLocalTileID(), nSlices * cSize - 1, gridStride):
+    for tileID in countup(getLocalTileID(cGrid), nSlices * cSize - 1, gridStride):
       let
         sliceIdx = tileID div cSize
         (m, n) = idx2crd(cGrid, tileID mod cSize)

@@ -1,0 +1,15 @@
+{
+ "name": "router_softmax_bias_scale",
+ "family": "router",
+ "T": 4,
+ "E": 16,
+ "topk": 6,
+ "variant": 0,
+ "scaling": 2.5,
+ "xorhash_checksums": {
+  "scores.bin": 2249566001,
+  "bias.bin": 2164806502,
+  "ids.bin": 11,
+  "weights.bin": 12849417
+ }
+}

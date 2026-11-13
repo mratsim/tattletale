@@ -57,9 +57,11 @@ Rule table (rule | trigger | severity):
 | try-block            | try/except or try/finally catching as control flow outside the libtorch C++ boundary and tests    | counted  |
 | design-narration     | a doc or maintainer comment justifying the design choice instead of stating the contract (because, X and not Y) | counted  |
 | inbounds-call-syntax | a plain call of inBounds, use the method call coord.inBounds(shape)                               | counted  |
+| get-call-syntax      | a receiver-first get call in plain syntax, use the method call syntax x.getName(...) | counted  |
 | dump-identifier       | an identifier carrying dump in crucible or ceramic Nim code, dump mechanisms are debug-only and never committed, debugEcho inline, write at the call site, a macro can debugEcho result.toStrLit() | counted  |
 | crucible-int-ident   | the downstream type name `Int` in crucible code, gtStatic is the only compile-time value          | counted  |
 | license-driveby      | a license header differing from HEAD, or a new file with a non-canonical Tattletale block          | counted  |
+| license-banned       | a license header in a new test or bench Nim file (workspace/*/tests/, workspace/*/bench/), legal text lives in src | counted  |
 | emitted-text-assert | a string literal containment, scan, or equality in tests/codegen Nim code, an assert-context hit asserts on the emitted shader source (violation), a non-assert hit is an advisory naming the shape, behavioral tests launch kernels and check readbacks | counted  |
 | one-line-refusal    | a refusal message literal spanning more than one physical line or over 110 characters, keep the refusal on one line | counted  |
 | duplicate-refusal-coverage | a refusal message fingerprint refused at 2 or more sites (refusal calls plus genTargets refusal row literals), the human disposes the duplicate | counted  |
@@ -238,6 +240,17 @@ RANDOM_DECL_RE = re.compile(
 ALLCLOSE_PLAIN_CALL_RE = re.compile(r"(?<![.\w])allClose\s*\(")
 ALLCLOSE_DECL_RE = re.compile(
     r"^\s*(?:template|macro|func|proc|iterator)\s+allClose\*?\s*[\(\[=,:]")
+
+# The get-call-syntax rule. A getter takes its subject as the first argument,
+# the method call names the subject first: offs.getOwningGroup(g, m).
+# Zero-argument getters (getGridSize()) and dimension-index builtins
+# (get_num_groups(0)) have no receiver and never match. getLocalTileID maps
+# the launch position, not a property of its argument, plain calls stay.
+# Declarations never match, the name boundary is exact.
+GET_PLAIN_CALL_RE = re.compile(
+    r"(?<![.\w])get[A-Za-z_]\w*\(\s*[A-Za-z_]\w*(?:\[[^\]]*\]|\.[A-Za-z_]\w*)*\s*[,)]")
+GET_DECL_RE = re.compile(
+    r"^\s*(?:template|macro|func|proc|iterator)\s+get[A-Za-z_]\w*\*?\s*[\(\[=,:]")
 
 # The toTensor rule. Construction reads on the data: data.toTensor(shape).
 # The data-first plain call hides the receiver, declarations never match,
@@ -498,6 +511,9 @@ BANNED = [
     (r"^contract\b\s*(:|$)", None,
      "the Contract section header is banned, state the precondition, the "
      "returns shape, or the invariant as a labeled section (Args:, Returns:, Precondition:)"),
+    (r"\bcontracts?\s*:", None,
+     "the 'contract:' label is banned, state the precondition, the returns "
+     "shape or the invariant in plain prose or as a labeled section"),
     (r"\bsubsum(?:e|es|ed|ing)\b", None,
      "subsume hides the covering relation, state the check and what it covers"),
     (r"\bpin\b|\bpins\b|\bpinned\b|\bpinning\b",
@@ -744,6 +760,8 @@ RULES = {
                                "a plain or bare bridge call, use the method call syntax impl.bridge()"),
     "allclose-call-syntax": Rule("allclose-call-syntax", True,
                                  "a tested-first allClose call, use the method call syntax tested.allClose(reference)"),
+    "get-call-syntax": Rule("get-call-syntax", True,
+                            "a receiver-first get call in plain syntax, use the method call syntax x.getName(...)"),
     "random-call-syntax": Rule("random-call-syntax", True,
                                "an rng-first randomSeq or randomTensor call, use the method call syntax rng.randomSeq(...)"),
     "engine-ufcs": Rule("engine-ufcs", True,
@@ -757,6 +775,8 @@ RULES = {
                             "the call site, a macro can debugEcho result.toStrLit()"),
     "license-driveby": Rule("license-driveby", True,
                             "a license header differing from HEAD, or a new file with a non-canonical Tattletale block"),
+    "license-banned": Rule("license-banned", True,
+                            "a license header in a new test or bench Nim file, legal text lives in src"),
     "emitted-text-assert": Rule("emitted-text-assert", True,
                                 "a string literal containment, scan, or equality in tests/codegen Nim code asserts on the emitted shader source, behavioral tests launch kernels and check readbacks"),
     "handbuilt-ir-test": Rule("handbuilt-ir-test", True,
@@ -2222,6 +2242,16 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "allclose-call-syntax",
                         "tested-first allClose call, use the method call "
                         "syntax tested.allClose(reference)"))
+                if GET_PLAIN_CALL_RE.search(code) \
+                        and not GET_DECL_RE.match(code):
+                    for getCall in GET_PLAIN_CALL_RE.finditer(code):
+                        if getCall.group(0).startswith("getLocalTileID("):
+                            continue
+                        findings.append(Finding(
+                            path, i + 1, "get-call-syntax",
+                            "receiver-first get call, use the method call "
+                            "syntax x.getName(...)"))
+                        break
                 if RANDOM_PLAIN_CALL_RE.search(code) \
                         and not RANDOM_DECL_RE.match(code):
                     findings.append(Finding(
@@ -2461,6 +2491,32 @@ def check_license_driveby(path, text, findings):
             path, nos[0], "license-driveby",
             "drive-by license change: the header differs from HEAD, revert "
             "the header or split the change"))
+
+
+def check_license_banned(path, text, findings):
+    """Bans the license header in new test and bench Nim files.
+
+    The session law bans license headers on test files; bench files join the
+    ban. Legal text lives in src files. The rule applies to new files only,
+    tracked files keep their HEAD header (a differing block is already the
+    license-driveby rule's finding)."""
+    repo = _repo_root()
+    if repo is None:
+        return
+    rel = os.path.relpath(path.resolve(), repo)
+    if rel.startswith("..") or not rel.endswith(".nim"):
+        return
+    parts = rel.split(os.sep)
+    # workspace/<layer>/tests/... or workspace/<layer>/bench/...
+    if len(parts) < 3 or parts[0] != "workspace" or parts[2] not in ("tests", "bench"):
+        return
+    if _head_license_block(rel) is not None:
+        return
+    block, nos = _license_block(text)
+    if block:
+        findings.append(Finding(
+            path, nos[0], "license-banned",
+            "test and bench files carry no license header, drop the block"))
 
 
 def _line_scan(raw, in_tq):
@@ -3227,6 +3283,7 @@ def scan(path, text, findings):
             check_doc_above_type(path, text, findings)
             nim_generic_param_checks(path, text, findings)
             check_license_driveby(path, text, findings)
+            check_license_banned(path, text, findings)
         if is_py and meta is not None:
             tree = None
             try:

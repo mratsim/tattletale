@@ -28,7 +28,7 @@ template getLaneWidth*: int =
   ## Pass the tile map explicitly with `tile(T, make_layout(...))` on other devices.
   ## - CUDA: one warp, 32 lanes
   ## - Metal: one simdgroup, 32 lanes
-  ## - OpenCL or Vulkan (GLSL or SPIR-V leg): one subgroup, 32 lanes (NVIDIA warp, AMD wave32)
+  ## - OpenCL or Vulkan (GLSL or SPIR-V variant): one subgroup, 32 lanes (NVIDIA warp, AMD wave32)
   ## - WebGPU: one subgroup, 32 lanes (typical subgroup min size)
   when ccGetBackend() == ctCuda: 32
   elif ccGetBackend() == ctMetal: 32

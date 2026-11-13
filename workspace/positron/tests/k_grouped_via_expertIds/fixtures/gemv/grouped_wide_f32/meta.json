@@ -1,0 +1,17 @@
+{
+ "name": "grouped_wide_f32",
+ "dtype": "float32",
+ "T": 64,
+ "topk": 6,
+ "E": 512,
+ "K": 64,
+ "N": 64,
+ "seed": 3247248387,
+ "xorhash_checksums": {
+  "x.bin": 2082355539,
+  "b.bin": 2073048689,
+  "ids.bin": 314,
+  "weights.bin": 36587963,
+  "d.bin": 2235687990
+ }
+}
