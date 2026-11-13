@@ -14,11 +14,17 @@ const isnilGlsl = glsl:
       return
     outBuf[0] = 1.0'f32
 
+const plainGlsl = glsl:
+  proc plainKernel(outBuf: ptr UncheckedArray[float32]) {.global.} =
+    outBuf[0] = 1.0'f32
+
 proc runTest() =
   const int64Extension =
     "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable"
   doAssert int64Extension in isnilGlsl,
     "isNil prints a uint64_t comparison, the int64 extension line is missing:\n" & isnilGlsl
+  doAssert int64Extension notin plainGlsl,
+    "a kernel with no isNil and no 64-bit type must not request the int64 extension:\n" & plainGlsl
   echo "  OK - t_glsl_isnil_int64_extension"
 
 when isMainModule:
