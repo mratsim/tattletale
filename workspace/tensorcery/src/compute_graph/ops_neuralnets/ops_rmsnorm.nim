@@ -8,7 +8,6 @@
 {.experimental: "views".}
 
 import workspace/ceramic
-import workspace/ceramic/src/kernels/k_tile_rmsnorm
 import workspace/crucible
 import workspace/iface
 import workspace/math
@@ -24,6 +23,59 @@ import ../env
 # ############################################################
 
 const Fleet = (rowsPerGroup: 4, maxGroups: 8192)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Device kernel
+# ═══════════════════════════════════════════════════════════════════════
+
+proc k_rmsnorm(dst, src, weight: distinct TensorBasicView, eps: float32, axis: int, hasWeight: int) =
+  ## dst = src * rsqrt(mean(src² over axis) + eps) scaled by the per-axis weight
+  ##
+  ## One warp per strip: a grid-stride loop covers the strip list from any launch grid size.
+  ## Tile loads pad past-the-end slots with zero, so short strips contribute nothing to the sum of squares.
+  ## Mean accumulation in fp32.
+  ## A zero `hasWeight` selects the unweighted apply.
+  ##
+  ## Preconditions:
+  ## - dst has the same shape as src and the axis size is at least 1
+  ## - when `hasWeight` is nonzero, weight is rank 1 with one slot per axis position
+  ## - the launch threadgroup contains exactly one warp of `getLaneWidth()` threads
+  ## - other threadgroup sizes are undefined behavior
+  var reg: tile(float32)
+  const
+    W = getLaneWidth()
+    owned = reg.size() div W
+  let thrID = getLocalThreadID()
+  var rows = 1
+  for d in 0 ..< src.layout.rank:
+    if d != axis:
+      rows *= src.layout.shape[d]
+  let gridStride = getGridSize()
+  for g in countup(getLocalTileID(rows), rows - 1, gridStride):
+    let
+      srcRow = src.alongAxisAt(axis, g)
+      rowSize = srcRow.size()
+      tiled = make_layout(rowSize).logical_divide(reg.getLayout())
+      stripTiles = tiled.getTileGrid().size()
+    var dstRow = dst.alongAxisAt(axis, g)
+    # pass 1: sum of squares, one register tile at a time
+    var acc = zero(float32)
+    for tileID in 0 ..< stripTiles:
+      reg.load(srcRow, thrID, tileID, padWith = zero(float32))
+      var tileSum = zero(float32)
+      for i in 0 ..< owned:
+        reg.data[i] = reg.data[i].square()
+        tileSum += reg.data[i]
+      acc += reduceAdd(tileSum)
+    let scale = rsqrt(acc / float32(rowSize) + eps)
+    # pass 2: scaled apply with the weight broadcast along the axis
+    if hasWeight == 0:
+      for r in countup(thrID, rowSize - 1, W):
+        dstRow[r] = srcRow[r] * scale
+    else:
+      let weightStrip = weight.alongAxisAt(0, 0)
+      for r in countup(thrID, rowSize - 1, W):
+        dstRow[r] = srcRow[r] * scale * weightStrip[r]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Defunctionalization
@@ -85,26 +137,18 @@ proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var T
     let
       rImpl = asNorm.r.to(engine.getTensorImplType(T))
       xImpl = asNorm.x.getImpl().to(engine.getTensorImplType(T))
-      rows = rImpl.size() div rImpl.layout.shape[rImpl.layout.rank - 1]
+      axis = rImpl.layout.rank - 1
+      rows = rImpl.size() div rImpl.layout.shape[axis]
       grid = min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups)
-    # Ceramic kernel signature: static rank and static reduce axis, one instantiation per rank. relayoutBridge checks the rank match.
-    template enqueueRmsnormAt(lay: typedesc, RK: static int) =
-      const axis = RK - 1
-      let
-        rView = rImpl.relayoutBridge(lay)
-        xView = xImpl.relayoutBridge(lay)
-      if asNorm.w.isNil():
-        batch.enqueue<<(grid, LaneWidth)>> rmsnorm(rView, xView, asNorm.eps, axis)
-      else:
-        let wView = asNorm.w.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
-        batch.enqueue<<(grid, LaneWidth)>> rmsnorm(rView, xView, wView, asNorm.eps, axis)
-    case rImpl.layout.rank
-    of 2: enqueueRmsnormAt(Layout[(int, int), (int, int)], 2)
-    of 3: enqueueRmsnormAt(Layout[(int, int, int), (int, int, int)], 3)
-    of 4: enqueueRmsnormAt(Layout[(int, int, int, int), (int, int, int, int)], 4)
-    of 5: enqueueRmsnormAt(Layout[(int, int, int, int, int), (int, int, int, int, int)], 5)
+    # One kernel instantiation: both call sites pass a LayoutBasic bridge.
+    # Weighted or unweighted apply is picked at runtime by `hasWeight`.
+    # An absent weight passes the source bridge as an unread placeholder.
+    if asNorm.w.isNil():
+      let noWeight = initTensorBridge[typeof(rImpl.data[]), LayoutBasic](xImpl.data, 0, LayoutBasic())
+      batch.enqueue<<(grid, LaneWidth)>> k_rmsnorm(rImpl.bridge(), xImpl.bridge(), noWeight, asNorm.eps, axis, 0)
     else:
-      raiseAssert("rmsnorm: rank " & $rImpl.layout.rank & " unsupported, the op is rank 2+ float32")
+      let wImpl = asNorm.w.getImpl().to(engine.getTensorImplType(T))
+      batch.enqueue<<(grid, LaneWidth)>> k_rmsnorm(rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), asNorm.eps, axis, 1)
   else:
     raiseAssert("rmsnorm: dtype unsupported, the op is float32")
   return true

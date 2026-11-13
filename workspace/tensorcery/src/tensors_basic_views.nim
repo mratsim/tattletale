@@ -56,6 +56,30 @@ func flatIndex(shape, strides: array[5, int], rank: int, pos: int): int {.inline
     result += (p mod shape[d]) * strides[d]
     p = p div shape[d]
 
+func alongAxisAt*[T](v: TensorBasicView[T], axis: int, idx: int): TensorBasicView[T] {.inline.} =
+  ## Rank-1 strip view over the axis `axis`: element r aliases the element
+  ## at the flat position `idx` over the other axes, dimension 0 fastest.
+  ##
+  ## Precondition: axis in 0 ..< v.layout.rank, idx < product of the other dims.
+  result.data = v.data
+  result.offset = v.offset
+  result.layout.rank = 1
+  result.layout.shape[0] = v.layout.shape[axis]
+  result.layout.strides[0] = v.layout.strides[axis]
+  var p = idx
+  for d in 0 ..< v.layout.rank:
+    if d != axis:
+      result.offset += (p mod v.layout.shape[d]) * v.layout.strides[d]
+      p = p div v.layout.shape[d]
+
+func `[]`*[T](v: TensorBasicView[T], pos: int): T {.inline.} =
+  ## Element at the flat element position `pos`.
+  v.data[v.offset + flatIndex(v.layout.shape, v.layout.strides, v.layout.rank, pos)]
+
+func `[]=`*[T](v: var TensorBasicView[T], pos: int, val: T) {.inline.} =
+  ## Stores into the flat element position `pos`.
+  v.data[v.offset + flatIndex(v.layout.shape, v.layout.strides, v.layout.rank, pos)] = val
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Tile load / store over a TensorBasicView
 # ═══════════════════════════════════════════════════════════════════════
