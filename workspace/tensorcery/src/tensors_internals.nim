@@ -118,9 +118,6 @@ proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], shape: openArray[i
 #  Graph
 # ═══════════════════════════════════════════════════════════════════════
 
-proc preAlloc*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
-  engine.allocDataIn(impl)
-
 proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   match(ElemType, dtype):
     engine.newPlaceholderImpl(ElemType, shape).to(TensorNode)

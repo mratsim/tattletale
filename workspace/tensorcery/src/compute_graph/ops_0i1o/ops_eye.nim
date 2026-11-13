@@ -81,7 +81,6 @@ proc collectEye[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[Wal
   let asEye = n.to(EyeNode)
   if asEye.isNil():
     return false
-  engine.preAlloc(asEye.r.to(engine.getTensorImplType(T)))
   return true
 
 proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =

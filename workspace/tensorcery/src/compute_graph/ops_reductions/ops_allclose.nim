@@ -119,7 +119,6 @@ proc collectAllClose[E: HwEngine, T](engine: E, n: var TensorNode, stack: var se
   let asAll = n.to(AllCloseNode)
   if asAll.isNil():
     return false
-  engine.preAlloc(asAll.r.to(engine.getTensorImplType(float32)))
   stack.add WalkFrame(n: asAll.tested, kernelPending: false)
   stack.add WalkFrame(n: asAll.reference, kernelPending: false)
   return true

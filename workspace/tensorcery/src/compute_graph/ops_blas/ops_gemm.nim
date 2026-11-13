@@ -126,7 +126,6 @@ proc collectGemm[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[Wa
   let asGemm = n.to(GemmNode)
   if asGemm.isNil():
     return false
-  engine.preAlloc(asGemm.r.to(engine.getTensorImplType(T)))
   stack.add WalkFrame(n: asGemm.a, kernelPending: false)
   stack.add WalkFrame(n: asGemm.b, kernelPending: false)
   if not asGemm.c.isNil():
@@ -144,7 +143,7 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
       bImpl = asGemm.b.getImpl().to(engine.getTensorImplType(T))
       tiles = ceil_div(rImpl.layout.shape[0], Fleet.tileM) * ceil_div(rImpl.layout.shape[1], Fleet.tileN)
     # Ceramic kernel signature: rank-2 Layout. Bridges retype from basic metadata
-    # (relayoutBridge checks the rank) and copy the data ref, so the output pre-allocates first.
+    # (relayoutBridge checks the rank) and copy the data ref.
     let
       rView = rImpl.relayoutBridge(Layout[(int, int), (int, int)])
       aView = aImpl.relayoutBridge(Layout[(int, int), (int, int)])

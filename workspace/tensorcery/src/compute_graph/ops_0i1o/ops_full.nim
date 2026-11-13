@@ -53,7 +53,6 @@ proc collectFull[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[Wa
   let asFull = n.to(FullNode)
   if asFull.isNil():
     return false
-  engine.preAlloc(asFull.r.to(engine.getTensorImplType(T)))
   return true
 
 proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =

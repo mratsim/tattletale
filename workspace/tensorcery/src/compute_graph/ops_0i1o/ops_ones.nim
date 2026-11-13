@@ -52,7 +52,6 @@ proc collectOnes[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[Wa
   let asOnes = n.to(OnesNode)
   if asOnes.isNil():
     return false
-  engine.preAlloc(asOnes.r.to(engine.getTensorImplType(T)))
   return true
 
 proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =

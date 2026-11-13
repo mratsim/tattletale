@@ -81,7 +81,6 @@ proc collectArange[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[
   let asArange = n.to(ArangeNode)
   if asArange.isNil():
     return false
-  engine.preAlloc(asArange.r.to(engine.getTensorImplType(T)))
   return true
 
 proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =

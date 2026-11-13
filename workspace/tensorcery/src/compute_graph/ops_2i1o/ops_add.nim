@@ -86,7 +86,6 @@ proc collectAdd[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[Wal
   let asAdd = n.to(AddNode)
   if asAdd.isNil():
     return false
-  engine.preAlloc(asAdd.r.to(engine.getTensorImplType(T)))
   stack.add WalkFrame(n: asAdd.a, kernelPending: false)
   stack.add WalkFrame(n: asAdd.b, kernelPending: false)
   return true

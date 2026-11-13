@@ -71,7 +71,6 @@ proc collectZeros[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[W
   let asZeros = n.to(ZerosNode)
   if asZeros.isNil():
     return false
-  engine.preAlloc(asZeros.r.to(engine.getTensorImplType(T)))
   return true
 
 proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =

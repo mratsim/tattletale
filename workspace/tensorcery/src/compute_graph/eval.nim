@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 {.experimental: "views".}
+{.experimental: "codeReordering".}
 
 import std/[macros, macrocache, tables]
 import workspace/crucible
@@ -53,6 +54,8 @@ template evalRoots*(engine: HwEngine, roots: var openArray[TensorNode]) =
           stack.add WalkFrame(n: v.src, kernelPending: false)
       else:
         # Views are metadata, not ops: the walk wires them outside the marked registry.
+        if n.to(ViewNode).isNil():
+          engine.dispatchAlloc(n)
         if not engine.dispatchViewKernel(n, batch):
           incMetric(kernelsEnqueued)
           engine.dispatchKernel(n, batch)
@@ -194,6 +197,20 @@ template dispatchCollect*(engine, n, stack: untyped) =
   of kBf16:
     type T = bfloat16
     engine.dispatchMarked(n, nil, stack, T, true)
+  else:
+    raise ValueError.newException("eval: dtype unsupported")
+
+template dispatchAlloc*(engine, n: untyped) =
+  case n.getImpl().dtype()
+  of kFp16:
+    type T = float16
+    engine.allocDataIn(n.getImpl().to(engine.getTensorImplType(T)))
+  of kFp32:
+    type T = float32
+    engine.allocDataIn(n.getImpl().to(engine.getTensorImplType(T)))
+  of kBf16:
+    type T = bfloat16
+    engine.allocDataIn(n.getImpl().to(engine.getTensorImplType(T)))
   else:
     raise ValueError.newException("eval: dtype unsupported")
 

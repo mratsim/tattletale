@@ -171,7 +171,6 @@ proc collectLinear[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[
   let asLinear = n.to(LinearNode)
   if asLinear.isNil():
     return false
-  engine.preAlloc(asLinear.r.to(engine.getTensorImplType(T)))
   stack.add WalkFrame(n: asLinear.x, kernelPending: false)
   stack.add WalkFrame(n: asLinear.w, kernelPending: false)
   if not asLinear.b.isNil():

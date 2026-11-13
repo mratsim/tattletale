@@ -111,7 +111,6 @@ proc collectRmsnorm[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq
   let asNorm = n.to(RmsNormNode)
   if asNorm.isNil():
     return false
-  engine.preAlloc(asNorm.r.to(engine.getTensorImplType(T)))
   stack.add WalkFrame(n: asNorm.x, kernelPending: false)
   if not asNorm.w.isNil():
     stack.add WalkFrame(n: asNorm.w, kernelPending: false)
