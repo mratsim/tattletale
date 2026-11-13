@@ -38,7 +38,7 @@ template getOwningGroup(offs: untyped, gCount, target: int): int =
     hi = gCount - 1
   while lo < hi:
     let mid = (lo + hi) div 2
-    if offs.data[mid] > target:
+    if offs[mid] > target:
       hi = mid
     else:
       lo = mid + 1
@@ -310,8 +310,8 @@ proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
       var rD = zeros(tile(float32, cLayout))
       for g in gLo .. gHi:
         let
-          gEnd: int = offs.data[g]
-          gStart: int = if g == 0: 0 else: offs.data[g - 1]
+          gEnd: int = offs[g]
+          gStart: int = if g == 0: 0 else: offs[g - 1]
           lineLo = max(m0, gStart)
           lineHi = min(m0 + MT, gEnd)
         if lineLo < lineHi:
@@ -375,13 +375,13 @@ proc grouped_gemm_via_expertIds*(dst, a, b, expertIds: distinct TensorView) =
       var tileHasValidLine = false
       var j = 0
       while j < mLines:
-        let gid: int = expertIds.data[m0 + j]
+        let gid: int = expertIds[m0 + j]
         if gid < 0:
           j = j + 1
         else:
           tileHasValidLine = true
           var jEnd = j + 1
-          while jEnd < mLines and expertIds.data[m0 + jEnd] == gid:
+          while jEnd < mLines and expertIds[m0 + jEnd] == gid:
             jEnd = jEnd + 1
           var mask: tile(bool, aLayout)
           mask.lineGroupMask(m0 + j, m0 + jEnd, m0)
