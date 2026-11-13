@@ -157,12 +157,10 @@ proc size*(t: Tensor): int {.inline.} =
 
 template item*[T](t: Tensor, _: typedesc[T]): T =
   ## Downloads the single element of `t` as `T`, evaluating its graph.
-  ##
-  ## - a template: the dispatch expands per eval call site, so ops marked
-  ##   after an earlier eval still dispatch here
-  ## - `t` is bound once: a template re-evaluates its argument at every use
-  ##   and a temporary argument would read back a never-evaluated node
-  let self = t
+  #
+  # We need to re-evaluate the template at all call site and not just once at the first instantiation (if a proc)
+  # as kernels may be marked afterwards.
+  let self = t # Ensure single-eval if t is an expression
   let impl = self.node.getImpl()
   precondition(impl.dtype() == toDtype(T))
   var node = [self.node]
@@ -268,12 +266,11 @@ template allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, 
   ## True when every element satisfies |tested - reference| <= atol + rtol * |reference|.
   ## Same-sign infinities are equal, NaN equal only with equal_nan
   #
-  # - a template, not an impl proc: the body's item call expands per call site,
-  #   an impl proc sem-checks once, before the ops it dispatches are marked
-  # - `tested` is bound once: a template re-substitutes its argument at every use
+  # We need to re-evaluate the template at all call site and not just once at the first instantiation (if a proc)
+  # as kernels may be marked afterwards.
   static:
     CacheCounter("AllClose").inc()
-  let self = tested
+  let self = tested # Ensure single-eval if tested is an expression
   Tensor(engine: self.engine,
       node: tn_allClose(self.engine, self.node, reference.node, atol, rtol, equal_nan)
     ).item(float32) == 0.0'f32
