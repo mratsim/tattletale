@@ -183,12 +183,16 @@ template eval*(ts: varargs[Tensor]) =
   ##
   ## - backend: read from ctgBackendSelection at the call site, construction
   ##   sites recorded it there
-  var roots = newSeq[TensorGraph](ts.len)
-  for i in 0 ..< ts.len:
-    roots[i] = ts[i].node
+  ## - `ts` is bound once: a template re-substitutes each argument at every use
+  var args: seq[Tensor]
+  for t in ts:
+    args.add t
+  var roots = newSeq[TensorGraph](args.len)
+  for i in 0 ..< args.len:
+    roots[i] = args[i].node
   eval(ctgSoleBackend(), roots)
-  for i in 0 ..< ts.len:
-    ts[i].node = roots[i]
+  for i in 0 ..< args.len:
+    args[i].node = roots[i]
 
 # #######################################################################
 #
