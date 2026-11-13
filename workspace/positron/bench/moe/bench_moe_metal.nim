@@ -130,16 +130,18 @@ proc runCell(engine: MetalEngine, tok, e: int) =
         engine.launchDeviceFn grouped_gemv_via_expertIds(dDev, xDev, bDev, idsDev, weightsDev, Topk) do:
           grid = (n.ceil_div(32 * GroupedGemvOutputs), tok)
           blk = (32, 1)
-    # M3's packed best case: totalM = T·topk valid lines with the landed M4 bench
-    # id pattern (line r -> expert r mod e), every line valid, host pack NOT charged
+    # M3's packed best case: totalM = T·topk valid lines in blocked expert order,
+    # every line valid, host pack staging NOT charged
     let totalM = tok * Topk
     var
       aHost = makeHostTensor(Elem, (totalM, k), (k, 1))
       idsFlatHost = makeHostTensor(int32, (totalM,), (1,))
       dPackedHost = makeHostTensor(Elem, (totalM, n), (n, 1))
     fillPattern(cast[ptr UncheckedArray[Elem]](addr aHost.data[0]), aHost.len, 7, 0.25'f32, 0.5'f32)
+    # blocked id lines: expert (r * e) div totalM, one contiguous run per expert.
+    # Each 32-line tile spans 1-2 runs.
     for r in 0 ..< totalM:
-      idsFlatHost.data[r] = int32(r mod e)
+      idsFlatHost.data[r] = int32(r * e div totalM)
     let
       aDev = engine.bridge(aHost)
       idsFlatDev = engine.bridge(idsFlatHost)

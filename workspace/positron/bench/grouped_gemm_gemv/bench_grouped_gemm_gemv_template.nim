@@ -399,9 +399,10 @@ proc runMatchedGemmCell(engine: MetalEngine, tok, topk, e: int) =
     idsPattern = newSeq[int32](totalM)
   fillPattern(cast[ptr UncheckedArray[Elem]](addr aPattern[0]), aPattern.len, 7, 0.25'f32, 0.5'f32)
   fillPattern(cast[ptr UncheckedArray[Elem]](addr bPattern[0]), bPattern.len, 13, 0.025'f32, 0.15'f32)
-  # expert-major lines: line r belongs to expert r mod e, already ascending in r
+  # blocked id lines: expert (r * e) div totalM, one contiguous run per expert.
+  # Each 32-line tile spans 1-2 runs.
   for r in 0 ..< totalM:
-    idsPattern[r] = int32(r mod e)
+    idsPattern[r] = int32(r * e div totalM)
   let
     aDev = engine.allocDevice(Elem, aPattern.len)
     bDev = engine.allocDevice(Elem, bPattern.len)
