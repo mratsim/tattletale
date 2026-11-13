@@ -393,12 +393,7 @@ macro finalize*(batch: BatchCommands): untyped =
       const batchKind = batchCodegenKind(typeof(`engineN`))
       const batchGen = ctgCurrentGeneration(batchKind)
       `batch`.artifact = ctgArtifact(batchKind, batchGen)
-      when batchKind == cgSpirv:
-        if `engineN`.getSpirV() != `batch`.artifact:
-          `engineN`.ingest(`batch`.artifact)
-      else:
-        if `engineN`.getArtifact() != `batch`.artifact:
-          `engineN`.ingest(`batch`.artifact)
+      `engineN`.ingest(`batch`.artifact)
 
 proc replay*[E](batch: BatchCommands[E]) {.inline.} =
   ## Launches the batch entries on the engine in enqueue order, without recompiling.
@@ -410,12 +405,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
   ## since `finalize`.
   if batch.artifact.len == 0:
     raiseAssert("replay: the batch holds no artifact, call finalize first")
-  when E is VulkanEngine:
-    if batch.engine.getSpirV() != batch.artifact:
-      batch.engine.ingest(batch.artifact)
-  else:
-    if batch.engine.getArtifact() != batch.artifact:
-      batch.engine.ingest(batch.artifact)
+  batch.engine.ingest(batch.artifact)
   when E is MetalEngine:
     if batch.leg.isNil():
       batch.leg = newMetalBatch(batch.engine)

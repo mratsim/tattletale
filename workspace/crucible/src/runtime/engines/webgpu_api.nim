@@ -61,6 +61,8 @@ template check(status: WGPUBufferMapAsyncStatus) =
     raiseAssert("WGPUBufferMapAsyncStatus " & $code)
 
 proc ingest*(engine: WebgpuEngine, source: string) =
+  if engine.source == source:
+    return
   if engine.cache.module != nil:
     wgpuShaderModuleRelease(engine.cache.module)
     engine.cache.module = nil

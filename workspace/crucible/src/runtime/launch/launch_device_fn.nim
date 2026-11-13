@@ -324,15 +324,8 @@ macro launchGlobalFn(engine: HwEngine, deviceFn: typed, statics: untyped, gridN,
   for i in 1 ..< values.len:
     argsN.add(values[i])
   let langLit = newLit(lang)
-  let ingestSpirvWords = sameType(engine.getTypeInst(), bindSym"VulkanEngine") and lang == "spirv"
-  let ingestN = if ingestSpirvWords:
-    quote do:
-      if `engine`.getSpirV() != `bridgeSource`:
-        `engine`.ingest(`bridgeSource`)
-  else:
-    quote do:
-      if `engine`.getArtifact() != `bridgeSource`:
-        `engine`.ingest(`bridgeSource`)
+  let ingestN = quote do:
+    `engine`.ingest(`bridgeSource`)
   result = quote do:
     block:
       const `bridgeSource` = `bridgeN`(`engine`, `langLit`, `procdef`)

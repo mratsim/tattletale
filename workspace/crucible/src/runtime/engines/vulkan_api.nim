@@ -58,6 +58,8 @@ proc resetCaches(engine: VulkanEngine) =
   engine.entrySquadrons.clear()
 
 proc ingest*(engine: VulkanEngine, source: string) =
+  if engine.source == source:
+    return
   resetCaches(engine)
   engine.source = source
   if source.startsWith("#version"):
@@ -104,6 +106,8 @@ proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
 
 proc ingest*(engine: VulkanEngine, spirv: SpirvWords) =
   ## Ingests a ready-made SPIR-V module produced by a `spirv:` block.
+  if engine.spirv == spirv:
+    return
   const spvMagic = 0x07230203'u32
   resetCaches(engine)
   if spirv.len < 5 or spirv[0] != spvMagic:

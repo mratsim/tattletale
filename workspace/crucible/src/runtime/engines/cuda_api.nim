@@ -51,6 +51,8 @@ proc newCudaEngine*(): CudaEngine =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: CudaEngine, source: string) =
+  if engine.source == source:
+    return
   engine.nvrtc.createProgram(source)
   engine.nvrtc.compile()
   engine.nvrtc.extractPtx()
