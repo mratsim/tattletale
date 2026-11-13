@@ -6,7 +6,9 @@ Routing (directory-specific through this script):
 - any staged .md or .nim file, plus everything under .agents/:
   the Nim linter (lint_md_nim_py.py), the doc rules and the kernel-root tile
   rules scoped to the lines the staged diff adds via --base,
-  pre-existing sites stay outside the gate
+  pre-existing sites stay outside the gate. The tensorcery design doc
+  (workspace/tensorcery/DESIGN.md) is exempt: it is linted manually while
+  a draft, not at commit time.
 - any staged C-family file (.c .h .cc .cpp .hpp .cxx): the C-family
   linter (lint_c_family.py), the prose rules over comment text plus the
   parameter-list layout and the block-closer rule
@@ -65,7 +67,9 @@ def route(path):
     """Returns the linter scripts responsible for one staged path."""
     rel = os.path.relpath(path, REPO)
     picked = []
-    if rel.endswith((".md", ".nim")) or rel.startswith(".agents" + os.sep):
+    if rel == os.path.join("workspace", "tensorcery", "DESIGN.md"):
+        pass
+    elif rel.endswith((".md", ".nim")) or rel.startswith(".agents" + os.sep):
         picked.append(NIM_LINT)
     if rel.endswith((".c", ".h", ".cc", ".cpp", ".hpp", ".cxx")):
         picked.append(C_LINT)
