@@ -28,8 +28,10 @@ const Fleet = (tileM: 32, tileN: 32)
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias: static bool) =
+proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, hasBias: int) =
   ## D = A·B + bias over the last axis
+  ##
+  ## A zero `hasBias` skips the bias add and leaves `bias` unread.
   const tvmA = mma.getThreadValueMap(opA)
   const tvmB = mma.getThreadValueMap(opB)
   const tvmC = mma.getThreadValueMap(opC)
@@ -88,7 +90,7 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias
         rB.load(B, tvmB, thrID, (n, k))
         mma.atom.gemm_tile(rD, rA, rB, rD)
 
-      when withBias:
+      if hasBias != 0:
         let broadcastedView = make_view(bias.data,
             make_layout((sliceD.layout.shape[0], sliceD.layout.shape[1]), (Int[0](), Int[1]())),
             bias.offset)
@@ -191,21 +193,23 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
       rowsPerSlice = rImpl.layout.shape[rImpl.layout.rank - 2]
       nSlices = rImpl.size() div (rowsPerSlice * cols)
       tiles = nSlices * rowsPerSlice.ceil_div(Fleet.tileM) * cols.ceil_div(Fleet.tileN)
-    # Ceramic kernel signature: static Layout, one instantiation per
-    # slice rank. Bridges retype from basic metadata and relayoutBridge
-    # checks the rank.
+    # Ceramic kernel signature: static Layout, one instantiation per slice rank.
+    # Bridges retype from basic metadata and relayoutBridge checks the rank.
+    # Bias add is a runtime branch: both call sites pass a rank-1 bridge.
+    # One kernel covers each slice rank and element type. An absent bias passes the weight bridge as an unread placeholder.
     template enqueueLinearAt(lay: typedesc) =
       let
         rView = rImpl.relayoutBridge(lay)
         xView = xImpl.relayoutBridge(lay)
         wView = wImpl.relayoutBridge(Layout[(int, int), (int, int)])
       if asLinear.b.isNil():
+        let noBias = initTensorBridge[typeof(wImpl.data[]), Layout[(int,), (int,)]](wImpl.data, 0, Layout[(int,), (int,)]())
         batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
-          rView, xView, wView, rView, false)
+          rView, xView, wView, noBias, 0)
       else:
         let bView = asLinear.b.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
         batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
-          rView, xView, wView, bView, true)
+          rView, xView, wView, bView, 1)
     if rImpl.layout.rank == 2:
       enqueueLinearAt(Layout[(int, int), (int, int)])
     elif rImpl.layout.rank == 3:
