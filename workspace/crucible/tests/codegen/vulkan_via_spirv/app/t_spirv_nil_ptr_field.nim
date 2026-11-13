@@ -33,11 +33,11 @@ proc runTest() =
   let oDev = engine.allocDevice(int32, 1)
   let oDev2 = engine.allocDevice(int32, 1)
   engine.launchDeviceFn nilSlot(oDev) do:
-    lang = spirv
+    langVulkan = spirv
     grid = (1, 1)
     blk = (1, 1)
   engine.launchDeviceFn filledSlot(oDev2) do:
-    lang = spirv
+    langVulkan = spirv
     grid = (1, 1)
     blk = (1, 1)
   var got: array[1, int32]

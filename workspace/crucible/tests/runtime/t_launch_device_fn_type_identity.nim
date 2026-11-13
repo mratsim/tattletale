@@ -60,11 +60,11 @@ proc runTest() =
   let oa = engine.allocDevice(int32, 1)
   let ob = engine.allocDevice(int32, 1)
   engine.launchDeviceFn cfgA.fill(oa, a) do:
-    lang = spirv
+    langVulkan = spirv
     grid = (1, 1)
     blk = (1, 1)
   engine.launchDeviceFn cfgB.fill(ob, b) do:
-    lang = spirv
+    langVulkan = spirv
     grid = (1, 1)
     blk = (1, 1)
   var got: array[1, int32]

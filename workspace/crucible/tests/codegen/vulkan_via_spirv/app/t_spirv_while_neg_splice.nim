@@ -22,7 +22,7 @@ proc runTest() =
   var engine = newEngine(runVulkan)
   let oDev = engine.allocDevice(int32, 2)
   engine.launchDeviceFn negSplice(oDev) do:
-    lang = spirv
+    langVulkan = spirv
     grid = (1, 1)
     blk = (1, 1)
   var got: array[2, int32]

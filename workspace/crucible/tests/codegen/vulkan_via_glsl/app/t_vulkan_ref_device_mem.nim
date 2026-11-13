@@ -40,7 +40,7 @@ proc runTest() =
 
   engine.launchDeviceFn axpy(AxpyRefs(p: yRef, n: N), 2.5'f32,
                              AxpyRefs(p: xRef, n: N)) do:
-    lang = glsl
+    langVulkan = glsl
     grid = (1, 1)
     blk = (1, 1)
 

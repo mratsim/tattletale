@@ -24,7 +24,7 @@ type
   DeviceFnSugar*[E: HwEngine] = object
     engine: E
 
-  DeviceFnProxy*[E: HwEngine, L: static string = "spirv"] = object
+  DeviceFnProxy*[E: HwEngine, L: static string = ""] = object
     engine: E
     grid: Dim3
     blk: Dim3
@@ -35,9 +35,8 @@ func parseLangName(n: NimNode): string =
   if n.kind == nnkStrLit:
     name = n.strVal
   if name notin ["spirv", "glsl", "hlsl"]:
-    error("launchDeviceFn: lang expects glsl, hlsl or spirv, got " & name)
+    error("launchDeviceFn: langVulkan expects glsl, hlsl or spirv, got " & name)
   name
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # ▸ Bridge construction
@@ -55,7 +54,7 @@ func base58(h: int): string =
     result = alphabet[int(x mod 58)] & result
     x = x div 58
 
-macro bridge(engine: HwEngine, lang: static string, node: untyped): untyped =
+macro bridge(engine: HwEngine, langVulkan: static string, node: untyped): untyped =
   let metalCg = bindSym"metal"
   let cudaCg = bindSym"cuda"
   let openclCg = bindSym"opencl"
@@ -64,30 +63,25 @@ macro bridge(engine: HwEngine, lang: static string, node: untyped): untyped =
   let hlslCg = bindSym"hlsl"
   let webgpuCg = bindSym"webgpu"
   let t = engine.getTypeInst()
-  if sameType(t, bindSym"MetalEngine"):
-    if lang != "spirv":
-      error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
-    result = metalCg.newCall(node)
-  elif sameType(t, bindSym"CudaEngine"):
-    if lang != "spirv":
-      error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
-    result = cudaCg.newCall(node)
-  elif sameType(t, bindSym"OpenCLEngine"):
-    if lang != "spirv":
-      error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
-    result = openclCg.newCall(node)
-  elif sameType(t, bindSym"VulkanEngine"):
-    case lang
-    of "spirv": result = spirvCg.newCall(node)
-    of "glsl": result = glslCg.newCall(node)
-    of "hlsl": result = hlslCg.newCall(node)
-  elif sameType(t, bindSym"WebgpuEngine"):
-    if lang != "spirv":
-      error("launchDeviceFn: lang = " & lang & " is only meaningful on VulkanEngine, got engine " & t.repr)
-    result = webgpuCg.newCall(node)
-  elif sameType(t, bindSym"CpuEngine"):
+  if sameType(t, bindSym"CpuEngine"):
     error("launchDeviceFn: the CpuEngine launches through launchCpuFn," &
       " launchDeviceFn has no cpu backend")
+  if langVulkan != "" and not sameType(t, bindSym"VulkanEngine"):
+    error("launchDeviceFn: langVulkan = " & langVulkan &
+      " is only meaningful on VulkanEngine, got engine " & t.repr)
+  if sameType(t, bindSym"MetalEngine"):
+    result = metalCg.newCall(node)
+  elif sameType(t, bindSym"CudaEngine"):
+    result = cudaCg.newCall(node)
+  elif sameType(t, bindSym"OpenCLEngine"):
+    result = openclCg.newCall(node)
+  elif sameType(t, bindSym"VulkanEngine"):
+    case langVulkan
+    of "", "glsl": result = glslCg.newCall(node)
+    of "spirv": result = spirvCg.newCall(node)
+    of "hlsl": result = hlslCg.newCall(node)
+  elif sameType(t, bindSym"WebgpuEngine"):
+    result = webgpuCg.newCall(node)
   else:
     error("launchDeviceFn: engine type " & t.repr & " has no backend codegen")
 
@@ -309,7 +303,7 @@ func getWorkgroupPragma(blkN: NimNode): NimNode =
     size.add newLit(d)
   nnkExprColonExpr.newTree(bindSym"workgroup", size)
 
-macro launchGlobalFn(engine: HwEngine, deviceFn: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, lang: static string, values: varargs[typed]): untyped =
+macro launchGlobalFn(engine: HwEngine, deviceFn: typed, statics: untyped, gridN, blkN, sharedMemN: untyped, langVulkan: static string, values: varargs[typed]): untyped =
   ## Builds and launches the `{.global.}` wrapper: the first value is the output.
   let procdef = buildGlobalFn(deviceFn, statics, values)
   let wg = getWorkgroupPragma(blkN)
@@ -325,7 +319,7 @@ macro launchGlobalFn(engine: HwEngine, deviceFn: typed, statics: untyped, gridN,
   var argsN = nnkTupleConstr.newTree()
   for i in 1 ..< values.len:
     argsN.add(values[i])
-  let langLit = newLit(lang)
+  let langLit = newLit(langVulkan)
   let ingestN = quote do:
     `engine`.ingest(`bridgeSource`)
   result = quote do:
@@ -362,7 +356,7 @@ proc resolveDeviceFnOverload*(callNode: NimNode): NimNode =
     $argCount & " arguments"
   match
 
-macro resolveDeviceCall(engine: HwEngine, deviceFn: typed, gridN, blkN, sharedMemN: untyped, lang: static string, args: varargs[untyped]): untyped =
+macro resolveDeviceCall(engine: HwEngine, deviceFn: typed, gridN, blkN, sharedMemN: untyped, langVulkan: static string, args: varargs[untyped]): untyped =
   ## This defers arguments so they are inlined in the global function and ccGetBackend resolves properly
   for a in args:
     doAssert a.kind notin {nnkExprEqExpr, nnkExprColonExpr},
@@ -383,7 +377,7 @@ macro resolveDeviceCall(engine: HwEngine, deviceFn: typed, gridN, blkN, sharedMe
     "launchDeviceFn " & $deviceFn & ": " & $args.len & " args for " &
     $formalTypes.len & " parameters"
   var statics = nnkBracket.newTree()
-  let langLit = newLit(lang)
+  let langLit = newLit(langVulkan)
   result = bindSym"launchGlobalFn".newCall(engine, k, statics, gridN, blkN, sharedMemN, langLit)
   for i, a in args:
     if isCompileTime(formalTypes[i]):
@@ -400,12 +394,10 @@ macro launchDeviceFn*[E](engine: E): DeviceFnSugar[E] =
 
 macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
   ## Chevron schedule: `(grid, blk)` or `(grid, blk, sharedMem)`, positional or named
-  ## (`grid: ..., blk: ...`). The `lang = glsl / hlsl / spirv` extra selects
-  ## the SPIR-V ingestion language of a VulkanEngine launch.
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   var sharedMemN = newLit(0)
-  var lang = "spirv"
+  var langVulkan = ""
   var c = cfg
   if c.kind in {nnkPar, nnkTupleConstr, nnkBracket} and c.len == 1:
     c = c[0]
@@ -417,9 +409,9 @@ macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
         of "grid": gridN = f[1]
         of "blk": blkN = f[1]
         of "sharedMem": sharedMemN = f[1]
-        of "lang": lang = parseLangName(f[1])
+        of "langVulkan": langVulkan = parseLangName(f[1])
         else:
-          error("launchDeviceFn: chevron schedule expects grid / blk / sharedMem / lang, got " & f.repr)
+          error("launchDeviceFn: chevron schedule expects grid / blk / sharedMem / langVulkan, got " & f.repr)
       else:
         case pos
         of 0: gridN = f
@@ -431,7 +423,7 @@ macro `<<`*[E: HwEngine](r: DeviceFnSugar[E], cfg: untyped): untyped =
   else:
     error("launchDeviceFn: chevron schedule expects (grid, blk), got " & cfg.repr)
   let E = r.getTypeInst()[1]
-  let langLit = newLit(lang)
+  let langLit = newLit(langVulkan)
   let gridD = bindSym"dim3".newCall(gridN)
   let blkD = bindSym"dim3".newCall(blkN)
   result = quote do:
@@ -453,17 +445,17 @@ macro launchDeviceFn*(engine: HwEngine, call: untyped): untyped =
   var gridN = nnkPar.newTree(newLit(1), newLit(1))
   var blkN = nnkPar.newTree(newLit(1), newLit(1))
   var sharedMemN = newLit(0)
-  var lang = "spirv"
+  var langVulkan = ""
   if not schedule.isNil():
     for a in schedule:
-      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk", "sharedMem", "lang"],
-        "launchDeviceFn: schedule expects grid = ... / blk = ... / sharedMem = ... / lang = ..., got " & a.repr
+      doAssert a.kind == nnkAsgn and $a[0] in ["grid", "blk", "sharedMem", "langVulkan"],
+        "launchDeviceFn: schedule expects grid = ... / blk = ... / sharedMem = ... / langVulkan = ..., got " & a.repr
       case $a[0]
       of "grid": gridN = a[1]
       of "blk": blkN = a[1]
       of "sharedMem": sharedMemN = a[1]
-      else: lang = parseLangName(a[1])
-  let langLit = newLit(lang)
+      else: langVulkan = parseLangName(a[1])
+  let langLit = newLit(langVulkan)
   result = bindSym"resolveDeviceCall".newCall(engine, callNode[0], gridN, blkN, sharedMemN, langLit)
   for i in 1 ..< callNode.len:
     result.add(callNode[i])
@@ -473,12 +465,11 @@ macro `>>`*(proxy: DeviceFnProxy, call: untyped): untyped =
   if callNode.kind == nnkPar and callNode.len == 1:
     callNode = callNode[0]
   doAssert callNode.kind == nnkCall, "launchDeviceFn: expected fn(args...), got " & callNode.repr
-  # lang is a static string on the proxy type, baked in by the `<<` chevron
   let t = proxy.getTypeInst()
-  var lang = "spirv"
+  var langVulkan = ""
   if t.len > 2:
-    lang = t[2].strVal
-  let langLit = newLit(lang)
+    langVulkan = t[2].strVal
+  let langLit = newLit(langVulkan)
   result = bindSym"resolveDeviceCall".newCall(
     proxy.newDotExpr(ident"engine"), callNode[0],
     proxy.newDotExpr(ident"grid"),
