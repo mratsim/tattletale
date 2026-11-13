@@ -41,19 +41,22 @@ export tensors_basic_views
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func shape*[DeviceMem](t: TensorImpl[DeviceMem, LayoutBasic]): Span[int] {.inline.} =
+template elemType*[R: static Runtime, T](_: typedesc[DeviceMem[R, T]]): typedesc[T] =
+  T
+
+func shape*(t: TensorImpl): Span[int] {.inline.} =
   Span[int](p: toOpenArray(t.layout.shape, 0, t.layout.rank - 1))
 
-func strides*[DeviceMem](t: TensorImpl[DeviceMem, LayoutBasic]): Span[int] {.inline.} =
+func strides*(t: TensorImpl): Span[int] {.inline.} =
   Span[int](p: toOpenArray(t.layout.strides, 0, t.layout.rank - 1))
 
-func dtype*[H, T](t: TensorImpl[DeviceMem[H, T], LayoutBasic]): Dtype {.inline.} =
-  toDtype(T)
+func dtype*(t: TensorImpl): Dtype {.inline.} =
+  toDtype(elemType(typeof(t.data[])))
 
-func offset*[DeviceMem](t: TensorImpl[DeviceMem, LayoutBasic]): int {.inline.} =
+func offset*(t: TensorImpl): int {.inline.} =
   t.offset
 
-func size*[DeviceMem](t: TensorImpl[DeviceMem, LayoutBasic]): int {.inline.} =
+func size*(t: TensorImpl): int {.inline.} =
   result = 1
   for i in 0 ..< t.layout.rank:
     result *= t.layout.shape[i]
