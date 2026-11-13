@@ -155,36 +155,32 @@ proc dtype*(t: Tensor): Dtype {.inline.} =
 proc size*(t: Tensor): int {.inline.} =
   t.node.size()
 
-template item*[T](t: Tensor, _: typedesc[T]): T =
-  ## Downloads the single element of `t` as `T`, evaluating its graph.
-  #
-  # We need to re-evaluate the template at all call site and not just once at the first instantiation (if a proc)
-  # as kernels may be marked afterwards.
-  let self = t # Ensure single-eval if t is an expression
-  let impl = self.node.getImpl()
-  precondition(impl.dtype() == toDtype(T))
-  var node = [self.node]
-  case self.engine.kind()
+proc item[T](t: Tensor, _: typedesc[T], snapshottedOps: static string): T =
+  precondition(t.node.getImpl().dtype() == toDtype(T))
+  var node = [t.node]
+  case t.engine.kind()
   of runMetal:
     when runMetal in ctgBackendSelection:
-      evalRoots(gMetalEngine(), node)
+      evalRoots(gMetalEngine(), node, snapshottedOps)
   of runOpenCL:
     when runOpenCL in ctgBackendSelection:
-      evalRoots(gOpenCLEngine(), node)
+      evalRoots(gOpenCLEngine(), node, snapshottedOps)
   of runVulkan:
     when runVulkan in ctgBackendSelection:
-      evalRoots(gVulkanEngine(), node)
+      evalRoots(gVulkanEngine(), node, snapshottedOps)
   of runWebGPU:
     when runWebGPU in ctgBackendSelection:
-      evalRoots(gWebgpuEngine(), node)
+      evalRoots(gWebgpuEngine(), node, snapshottedOps)
   of runCuda:
     raise ValueError.newException("eval: CUDA is not on the batch stream yet")
   of runCpu:
     raise ValueError.newException("eval: unsupported run kind")
-  self.node = node[0]
-  var read: T
-  self.engine.download1(addr read, self.node)
-  read
+  t.node = node[0] # evalRoots replaced the ref in our local copy. Repoint t or it dangles on the dropped graph
+  t.engine.download1(addr result, t.node)
+
+proc item*[T](t: Tensor, _: typedesc[T]): T {.inline, hasEval.} =
+  ## Downloads the single element of `t` as `T`, evaluating its graph.
+  item(t, T, magicSnapshotUsedOps())
 
 # #######################################################################
 #
@@ -207,16 +203,16 @@ template eval*(ts: varargs[Tensor]) =
   case args[0].engine.kind()
   of runMetal:
     when runMetal in ctgBackendSelection:
-      evalRoots(gMetalEngine(), roots)
+      evalRoots(gMetalEngine(), roots, magicSnapshotUsedOps())
   of runOpenCL:
     when runOpenCL in ctgBackendSelection:
-      evalRoots(gOpenCLEngine(), roots)
+      evalRoots(gOpenCLEngine(), roots, magicSnapshotUsedOps())
   of runVulkan:
     when runVulkan in ctgBackendSelection:
-      evalRoots(gVulkanEngine(), roots)
+      evalRoots(gVulkanEngine(), roots, magicSnapshotUsedOps())
   of runWebGPU:
     when runWebGPU in ctgBackendSelection:
-      evalRoots(gWebgpuEngine(), roots)
+      evalRoots(gWebgpuEngine(), roots, magicSnapshotUsedOps())
   of runCuda:
     raise ValueError.newException("eval: CUDA is not on the batch stream yet")
   of runCpu:
@@ -294,18 +290,15 @@ proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
 #
 # #######################################################################
 
-template allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool =
-  ## True when every element satisfies |tested - reference| <= atol + rtol * |reference|.
+proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool {.hasEval: "AllClose".} =
+  ## Returns true when every element satisfies |tested - reference| <= atol + rtol * |reference|.
   ## Same-sign infinities are equal, NaN equal only with equal_nan
-  #
-  # We need to re-evaluate the template at all call site and not just once at the first instantiation (if a proc)
-  # as kernels may be marked afterwards.
-  static:
-    CacheCounter("AllClose").inc()
-  let self = tested # Ensure single-eval if tested is an expression
+  ##
+  ## ⚠ Not lazy: allClose evaluates the graph.
+  let self = tested
   Tensor(engine: self.engine,
       node: tn_allClose(self.engine, self.node, reference.node, atol, rtol, equal_nan)
-    ).item(float32) == 0.0'f32
+    ).item(float32, magicSnapshotUsedOps()) == 0.0'f32
 
 # #######################################################################
 #

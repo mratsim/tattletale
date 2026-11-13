@@ -75,17 +75,19 @@ proc gEngine*(run: static Runtime): AnyEngine =
   else:
     {.error: "gEngine: unsupported run kind".}
 
-template eval*(run: static Runtime, roots: var openArray[TensorGraph]) =
+template eval*(run: static Runtime, roots: var openArray[TensorGraph], snapshottedOps: static string) =
   ## - the erased engine handle must never reach the dispatch: it would
   ##   instantiate the whole walk over the erased vtable type
+  ## - snapshottedOps: the marked-op snapshot of the call position,
+  ##   `magicSnapshotUsedOps()`
   when run == runMetal:
-    evalRoots(gMetalEngine(), roots)
+    evalRoots(gMetalEngine(), roots, snapshottedOps)
   elif run == runOpenCL:
-    evalRoots(gOpenCLEngine(), roots)
+    evalRoots(gOpenCLEngine(), roots, snapshottedOps)
   elif run == runVulkan:
-    evalRoots(gVulkanEngine(), roots)
+    evalRoots(gVulkanEngine(), roots, snapshottedOps)
   elif run == runWebGPU:
-    evalRoots(gWebgpuEngine(), roots)
+    evalRoots(gWebgpuEngine(), roots, snapshottedOps)
   elif run == runCuda:
     {.error: "eval: CUDA is not on the batch stream yet".}
   else:
