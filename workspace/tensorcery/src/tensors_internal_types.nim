@@ -46,7 +46,6 @@ iface *AnyEngine:
     proc upload(node: TensorGraph, src: openArray[float32]) {.inline.}
     proc upload(node: TensorGraph, src: openArray[bfloat16]) {.inline.}
     proc download1(dst: pointer, node: TensorGraph) {.inline.}
-    proc eval(roots: var openArray[TensorGraph]) {.inline.}
 
 const MaxRank* = 4
 

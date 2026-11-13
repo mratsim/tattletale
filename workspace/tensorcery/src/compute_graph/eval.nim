@@ -40,9 +40,6 @@ proc collectNode[N](_: typedesc[N], n: var TensorGraph, stack: var seq[WalkFrame
         stack.add WalkFrame(n: field, kernelPending: false)
   return true
 
-proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorGraph]) =
-  raiseAssert("Tensorcery internal error: eval called on the erased engine handle")
-
 template evalRoots*(engine: HwEngine, roots: var openArray[TensorGraph]) =
   if roots.len != 0:
     incMetric(evals)
