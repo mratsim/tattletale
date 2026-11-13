@@ -136,13 +136,14 @@ proc runCell(engine: MetalEngine, tok, e: int) =
     var
       aHost = makeHostTensor(Elem, (totalM, k), (k, 1))
       idsFlatHost = makeHostTensor(int32, (totalM,), (1,))
+      dPackedHost = makeHostTensor(Elem, (totalM, n), (n, 1))
     fillPattern(cast[ptr UncheckedArray[Elem]](addr aHost.data[0]), aHost.len, 7, 0.25'f32, 0.5'f32)
     for r in 0 ..< totalM:
       idsFlatHost.data[r] = int32(r mod e)
     let
       aDev = engine.bridge(aHost)
       idsFlatDev = engine.bridge(idsFlatHost)
-      dPackedDev = engine.bridge(dHost)
+      dPackedDev = engine.bridge(dPackedHost)
       totalTiles = countGroupedGemmTiles(Elem, totalM, n)
     let gemmKernelUs = timeMedian(engine):
       engine.launchDeviceFn grouped_gemm_via_expertIds(dPackedDev, aDev, bDev, idsFlatDev) do:
