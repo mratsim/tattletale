@@ -43,7 +43,9 @@ proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorGra
     cur = v.src
   let base = relOffset + getMaterializedOffset(src)
   let (lo, hi) = reachWindow(shape, strides, base)
-  lo >= 0 and hi < max(cur.getImpl().size(), cur.getImpl().getBufferSize())
+  let capacity = if cur.getImpl().isPreAllocated(): cur.getImpl().getBufferSize()
+                 else: cur.getImpl().size()
+  lo >= 0 and hi < capacity
 
 func broadcastable(src, target: openArray[int]): bool =
   if target.len < src.len:

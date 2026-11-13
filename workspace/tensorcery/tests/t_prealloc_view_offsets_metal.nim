@@ -130,5 +130,23 @@ proc main =
     doAssertRaises AssertionDefect:
       discard bad.narrow(0, 0, 4)
 
+  block:
+    let x = @[7.0'f32].toTensor([1], run, bfloat16)
+    let b = x.broadcastTo([4])
+    eval(b)
+    # evaluated broadcast leaf: logical size 4 over the 1-element buffer
+    doAssert b.node.getImpl().isPreAllocated(),
+      "broadcast leaf evaluated: got an unallocated impl, want the collapsed replacement"
+    let over = Tensor(engine: x.engine, node: x.engine.newViewNode(b.node, [2], [1], 1, "raw"))
+    doAssertRaises AssertionDefect:
+      discard over.narrow(0, 0, 2)
+    let inBuffer = Tensor(engine: x.engine, node: x.engine.newViewNode(b.node, [4], [0], 0, "raw"))
+    let expected = mapIt(0 ..< 4, 7.0'f32.to(bfloat16)).toTensor([4], run, bfloat16)
+    doAssert inBuffer.allClose(expected),
+      "stride-0 window over the evaluated broadcast leaf reads the broadcast value"
+    let tight = Tensor(engine: x.engine, node: x.engine.newViewNode(b.node, [1], [1], 0, "raw"))
+    doAssert tight.item(bfloat16) == 7.0'f32.to(bfloat16),
+      "single-element window over the evaluated broadcast leaf reads the buffer element"
+
 when isMainModule:
   main()
