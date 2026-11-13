@@ -11,7 +11,6 @@ import ../tensorcery_testutils
 
 export tensorcery_testutils
 
-
 proc refRmsnorm(dst: var openArray[float32], src: openArray[float32], rows, cols: int, eps: float32, weight: openArray[float32] = []) =
   ## dst = src * rsqrt(mean(src^2 over the last axis) + eps)
   ## the weight broadcasts per column when provided

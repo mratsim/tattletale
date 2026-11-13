@@ -19,7 +19,6 @@ import workspace/tensorcery
 
 privateAccess(Tensor)
 
-
 proc main =
   const run = runMetal
 

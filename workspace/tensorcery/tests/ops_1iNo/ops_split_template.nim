@@ -9,7 +9,6 @@ import ../tensorcery_testutils
 
 export tensorcery_testutils
 
-
 proc runSplitTest*(run: static Runtime, name: string) =
   var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
   var xq: array[8, bfloat16]

@@ -10,7 +10,6 @@ import ../tensorcery_testutils
 
 export tensorcery_testutils
 
-
 proc refLinear(dst: var openArray[float32], x, w: openArray[float32], m, k, n: int, bias: openArray[float32] = []) =
   ## dst = x·wᵀ (+ bias), x (m, k), w (n, k), row-major
   for i in 0 ..< m:

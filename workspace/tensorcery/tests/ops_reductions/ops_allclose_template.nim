@@ -10,7 +10,6 @@ import ../tensorcery_testutils
 
 export tensorcery_testutils
 
-
 proc runallCloseTest*(run: static Runtime, name: string) =
   var xd = @[1.0'f32, 2.0'f32, 3.0'f32, 4.0'f32]
   var yd = @[1.0'f32, 2.0'f32, 3.0'f32, 4.5'f32]

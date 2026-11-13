@@ -11,7 +11,6 @@ import ../tensorcery_testutils
 
 export tensorcery_testutils
 
-
 proc refAdd(dst: var openArray[bfloat16], a, b: openArray[bfloat16]) =
   for i in 0 ..< dst.len:
     dst[i] = (a[i].to(float32) + b[i].to(float32)).to(bfloat16)
