@@ -19,30 +19,18 @@ type
   OpHandlers = tuple[collect, kernel: NimNode]
 
   WalkFrame* = object
-    ## One pending visit of the eval walk. The first visit pre-allocates
-    ## the output and pushes the operands. The second visit enqueues the kernel.
+    ## One pending visit of the eval walk.
+    ## The first visit pre-allocates the output and pushes the operands.
+    ## The second visit enqueues the kernel.
     n*: TensorNode
     kernelPending*: bool
 
 var OpRegistry {.compileTime.}: Table[string, OpHandlers]
 
 proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorNode]) =
-  ## Eval slot of the erased AnyEngine handle, vtable-bound at construction.
-  ##
-  ## - the body stays free of the op dispatch: a dispatch expansion here
-  ##   bakes an empty mark set into the binary
-  ## - real dispatch goes through evalRoots on the concrete engine singletons
-  raiseAssert("eval: the erased engine handle does not dispatch, use eval(tensors) or t.item(T)")
+  raiseAssert("Tensorcery internal error: eval called on the erased engine handle")
 
 template evalRoots*(engine: HwEngine, roots: var openArray[TensorNode]) =
-  ## Enqueues and submits the graph rooted at `roots` on `engine`.
-  ##
-  ## - a template: the dispatch macros expand per eval call site and read
-  ##   the marks recorded so far
-  ## - the walk runs over an explicit stack, a compile-time recursive walk
-  ##   through expanded handlers does not terminate
-  ## - kernels enqueue in reverse visit order: every kernel launches after
-  ##   the kernels producing its operands
   if roots.len != 0:
     incMetric(evals)
     var batch = engine.recordBatch()
@@ -92,21 +80,19 @@ proc renameDef(name: NimNode, suffix: string): NimNode =
     error("hasKernel: unsupported proc name", name)
 
 macro hasKernel*(ops: untyped, p: untyped): untyped =
-  ## Defines `p` as `<name>Impl` plus an untyped forwarding template `<name>`
-  ## with the same signature.
-  ##
-  ## Each template expansion increments the compile-time counter of every op
-  ## in `ops` before forwarding. Calling the op is the mark that the dispatch
-  ## reads (see dispatchCollect and dispatchKernel).
-  ##
-  ## - Pragmas are preserved on the Impl.
-  ## - The doc comment moves to the template.
-  ## - `<name>Impl` is module-private.
-  ## - Calling `<name>Impl` directly skips the mark: forward through the template.
+  ## Defines `p` as a forwarding template with the same signature.
+  ## Calling the op marks it for kernel generation and dispatch.
   ##
   ## Usage:
   ##   proc `+`*(a, b: Tensor): Tensor {.hasKernel: "Add".} =
   ##     Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
+  #
+  # Mechanics:
+  # - `p` compiles as the module-private `<name>Impl`, pragmas except
+  #   hasKernel preserved, its doc comment moves to the template
+  # - each template expansion increments the compile-time counter of every
+  #   op in `ops` before forwarding. The dispatch reads those counters
+  # - calling `<name>Impl` directly skips the mark: forward through the template
   var keys: seq[string]
   if ops.kind == nnkStrLit:
     keys.add($ops)
