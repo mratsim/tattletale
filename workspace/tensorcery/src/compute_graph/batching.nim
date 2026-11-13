@@ -107,10 +107,20 @@ macro hasKernel*(ops: untyped, p: untyped): untyped =
 # ═══════════════════════════════════════════════════════════════════════
 #  Eval-site dispatch
 # ═══════════════════════════════════════════════════════════════════════
+#
+# eval(tensors)/item() expand evalRoots. Per node the walk calls:
+#
+#   dispatchCollect (first visit) / dispatchKernel (second visit)
+#     │ template: binds T from the runtime dtype of n
+#     ▼
+#   dispatchMarked ── markedDispatch
+#     │ macro: one elif-branch per op marked at this point in compilation
+#     │ (CacheCounter, incremented by calling the op's public function);
+#     │ unmarked handlers and their kernels never instantiate
+#     ▼
+#   handler(engine, ..., n, T): bool ── first true wins, no match raises
 
 proc markedDispatch(collect: bool, engine, batch, n, stack, T: NimNode): NimNode =
-  ## One branch per marked op: unmarked handlers and their kernels
-  ## never instantiate. Each expansion re-reads the marks recorded so far.
   result = newNimNode(nnkIfStmt)
   for name, h in pairs(OpRegistry):
     if CacheCounter(name).value == 0:
@@ -133,40 +143,33 @@ proc markedDispatch(collect: bool, engine, batch, n, stack, T: NimNode): NimNode
     return noHandler
   result.add nnkElse.newTree(noHandler)
 
-macro dispatchMarkedCollect*(T, engine, n, stack: typed): untyped =
-  result = markedDispatch(true, engine, nil, n, stack, T)
+macro dispatchMarked*(engine, n, batch, stack, T: typed, collect: static bool): untyped =
+  result = markedDispatch(collect, engine, batch, n, stack, T)
 
-macro dispatchMarkedKernel*(T, engine, batch, n: typed): untyped =
-  result = markedDispatch(false, engine, batch, n, nil, T)
+template dispatchCollect*(engine, n, stack: untyped) =
+  case n.getImpl().dtype()
+  of kFp16:
+    type T = float16
+    engine.dispatchMarked(n, nil, stack, T, true)
+  of kFp32:
+    type T = float32
+    engine.dispatchMarked(n, nil, stack, T, true)
+  of kBf16:
+    type T = bfloat16
+    engine.dispatchMarked(n, nil, stack, T, true)
+  else:
+    raise ValueError.newException("eval: dtype unsupported")
 
-macro dispatchCollect*(engine, n, stack: typed): untyped =
-  ## Dispatches one node's collect phase to its marked op's handler.
-  result = quote do:
-    case `n`.getImpl().dtype()
-    of kFp16:
-      type T = float16
-      dispatchMarkedCollect(T, `engine`, `n`, `stack`)
-    of kFp32:
-      type T = float32
-      dispatchMarkedCollect(T, `engine`, `n`, `stack`)
-    of kBf16:
-      type T = bfloat16
-      dispatchMarkedCollect(T, `engine`, `n`, `stack`)
-    else:
-      raise ValueError.newException("eval: dtype unsupported")
-
-macro dispatchKernel*(engine, n, batch: typed): untyped =
-  ## Dispatches one node's kernel phase to its marked op's handler.
-  result = quote do:
-    case `n`.getImpl().dtype()
-    of kFp16:
-      type T = float16
-      dispatchMarkedKernel(T, `engine`, `batch`, `n`)
-    of kFp32:
-      type T = float32
-      dispatchMarkedKernel(T, `engine`, `batch`, `n`)
-    of kBf16:
-      type T = bfloat16
-      dispatchMarkedKernel(T, `engine`, `batch`, `n`)
-    else:
-      raise ValueError.newException("eval: dtype unsupported")
+template dispatchKernel*(engine, n, batch: untyped) =
+  case n.getImpl().dtype()
+  of kFp16:
+    type T = float16
+    engine.dispatchMarked(n, batch, nil, T, false)
+  of kFp32:
+    type T = float32
+    engine.dispatchMarked(n, batch, nil, T, false)
+  of kBf16:
+    type T = bfloat16
+    engine.dispatchMarked(n, batch, nil, T, false)
+  else:
+    raise ValueError.newException("eval: dtype unsupported")
