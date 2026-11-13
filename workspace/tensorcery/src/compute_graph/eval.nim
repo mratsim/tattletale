@@ -29,8 +29,6 @@ type
 var OpRegistry {.compileTime.}: Table[string, OpHandlers]
 
 proc collectNode[N](_: typedesc[N], n: var TensorGraph, stack: var seq[WalkFrame]): bool =
-  ## Collect phase derived from the node type: every non-nil TensorGraph
-  ## field is an operand. The output (an impl field) never traverses.
   var asX = n.to(N)
   if asX.isNil():
     return false
@@ -91,7 +89,6 @@ macro registerOp*(N, kernel: typed, name: static string) =
   OpRegistry[name] = (nodeType: N, kernel: kernel)
 
 proc renameDef(name: NimNode, suffix: string): NimNode =
-  ## Quoted operator names are preserved. The export marker is dropped.
   let inner = if name.kind == nnkPostfix: name[1] else: name
   case inner.kind
   of nnkIdent:
@@ -110,10 +107,6 @@ macro hasKernel*(ops: untyped, p: untyped): untyped =
   ##     Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
   #
   # Mechanics:
-  # - `p` compiles as the module-private `<name>Impl`, pragmas except
-  #   hasKernel preserved, its doc comment moves to the template
-  # - each template expansion increments the compile-time counter of every
-  #   op in `ops` before forwarding. The dispatch reads those counters
   # - calling `<name>Impl` directly skips the mark: forward through the template
   var keys: seq[string]
   if ops.kind == nnkStrLit:

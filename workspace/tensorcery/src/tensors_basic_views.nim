@@ -34,8 +34,6 @@ func size*(v: TensorBasicView): int {.inline.} =
     result *= v.layout.shape[i]
 
 func isContiguous*(v: TensorBasicView): bool =
-  ## True when the active strides are the dense ones.
-  ##
   ## - the device frontend lowers countup loops only
   var acc = 1
   for i in 0 ..< v.layout.rank:
@@ -49,8 +47,6 @@ func isNil*[T](v: TensorBasicView[T]): bool {.inline.} =
   v.data.isNil()
 
 func flatIndex(shape, strides: array[MaxRank, int], rank: int, pos: int): int {.inline.} =
-  ## Memory offset of the flat element position `pos` under the runtime layout.
-  ##
   ## Precondition: pos < product(shape[0 ..< rank]) so every dim divides.
   result = 0
   var p = pos
@@ -60,9 +56,6 @@ func flatIndex(shape, strides: array[MaxRank, int], rank: int, pos: int): int {.
     p = p div shape[d]
 
 func alongAxisAt*[T](v: TensorBasicView[T], axis: int, idx: int): TensorBasicView[T] {.inline.} =
-  ## Rank-1 strip view over the axis `axis`: element r aliases the element
-  ## at the flat position `idx` over the other axes, dimension 0 fastest.
-  ##
   ## Precondition: axis in 0 ..< v.layout.rank, idx < product of the other dims.
   result.data = v.data
   result.offset = v.offset
@@ -76,11 +69,9 @@ func alongAxisAt*[T](v: TensorBasicView[T], axis: int, idx: int): TensorBasicVie
       p = p div v.layout.shape[d]
 
 func `[]`*[T](v: TensorBasicView[T], pos: int): T {.inline.} =
-  ## Element at the flat element position `pos`.
   v.data[v.offset + flatIndex(v.layout.shape, v.layout.strides, v.layout.rank, pos)]
 
 func `[]=`*[T](v: var TensorBasicView[T], pos: int, val: T) {.inline.} =
-  ## Stores into the flat element position `pos`.
   v.data[v.offset + flatIndex(v.layout.shape, v.layout.strides, v.layout.rank, pos)] = val
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -90,14 +81,6 @@ func `[]=`*[T](v: var TensorBasicView[T], pos: int, val: T) {.inline.} =
 # Element-position tile load/store equivalent to the tile algebra over a TensorView.
 
 proc load*[T, L](dst: var Tile[T, L], src: TensorBasicView, threadIdx: int, tileID: int, padWith: T = zero(T)) {.inline.} =
-  ## Tile load over the element positions: each element loads through
-  ## `src`'s runtime layout. Out-of-bounds positions load `padWith`.
-  ##
-  ## Args:
-  ## - dst: the register tile, typed with the thread->element map
-  ## - src: the global tensor
-  ## - threadIdx: the thread index inside the threadgroup
-  ## - tileID: the flat tile number over the tile grid
   let
     n = src.size()
     tiled = make_layout(n).logical_divide(dst.getLayout())
@@ -127,13 +110,6 @@ proc load*[T, L](_: typedesc[Tile[T, L]], src: TensorBasicView, threadIdx: int, 
   load(result, src, threadIdx, tileID, padWith)
 
 proc store*[T, L](dst: TensorBasicView, src: Tile[T, L], threadIdx: int, tileID: int) {.inline.} =
-  ## Tile store over the element positions: out-of-bounds positions drop.
-  ##
-  ## Args:
-  ## - dst: the global tensor stored into
-  ## - src: the register tile, typed with the thread->element map
-  ## - threadIdx: the thread index inside the threadgroup
-  ## - tileID: the flat tile number over the tile grid
   let
     n = dst.size()
     tiled = make_layout(n).logical_divide(src.getLayout())

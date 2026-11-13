@@ -5,7 +5,6 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Deduplication counters for the compute graph walk.
 ## Inert unless compiled with -d:TTT_tensorgraphMetrics.
 
 type
@@ -27,8 +26,6 @@ template incMetric*(name: untyped{ident}, amount = 1) =
     gGraphCounters.name += amount
 
 proc graphCounters*(): GraphCounters {.inline.} =
-  ## Counter snapshot. Raises without -d:TTT_tensorgraphMetrics:
-  ## the counters are not compiled in.
   when defined(TTT_tensorgraphMetrics):
     gGraphCounters
   else:

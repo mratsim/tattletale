@@ -65,7 +65,6 @@ proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
   t.to(AnyTensorImpl)
 
 func opName*(t: TensorImpl): string {.inline.} =
-  ## Name in the computation graph
   "Tensor"
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -136,7 +135,6 @@ proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorGr
   r.offset = r.offset + s.offset
 
 macro dispatchViewKernel*(engine, n, batch: typed): untyped =
-  ## Kernel phase of one view node. False when `n` is not a view.
   result = quote do:
     block:
       let v = `n`.to(ViewNode)
@@ -166,10 +164,6 @@ macro dispatchViewKernel*(engine, n, batch: typed): untyped =
 func relayoutBridge*[H, T; L: Layout](
     impl: TensorImpl[DeviceMem[H, T], LayoutBasic],
     _: typedesc[L]): TensorBridge[DeviceMem[H, T], L] {.inline.} =
-  ## Bridge of `impl` retyped to the static-rank layout `L` whose
-  ## shape and stride leaves carry the impl's runtime values.
-  ##
-  ## Precondition: the impl's runtime rank equals L's rank.
   if impl.isNil():
     return TensorBridge[DeviceMem[H, T], L]()
   precondition((impl.layout.rank == L.rank(), "relayoutBridge: rank " & $impl.layout.rank & " does not match the target layout rank " & $L.rank()))

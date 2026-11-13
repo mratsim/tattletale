@@ -59,8 +59,6 @@ proc gCudaEngineErased(_: static Runtime = runCuda): AnyEngine =
 var ctgBackendSelection {.compileTime.}: HashSet[Runtime]
 
 proc gEngine*(run: static Runtime): AnyEngine =
-  ## Erased engine for `run`, created once per kind, reused after.
-  ##
   ## - construction records `run` in ctgBackendSelection and the eval dispatch reads it back
   static: ctgBackendSelection.incl(run)
   when run == runMetal:
@@ -77,8 +75,6 @@ proc gEngine*(run: static Runtime): AnyEngine =
     {.error: "gEngine: unsupported run kind".}
 
 proc ctgSoleBackend*(): Runtime {.compileTime.} =
-  ## Sole backend of this compilation, read from ctgBackendSelection.
-  ## Raises unless exactly one backend appeared.
   if ctgBackendSelection.len == 0:
     raise ValueError.newException(
       "eval: no device backend appeared in this compilation, construct a tensor first")
@@ -89,9 +85,6 @@ proc ctgSoleBackend*(): Runtime {.compileTime.} =
     return k
 
 template eval*(run: static Runtime, roots: var openArray[TensorGraph]) =
-  ## Enqueues and submits the graph rooted at `roots` on the concrete engine
-  ## for `run`.
-  ##
   ## - the erased engine handle must never reach the dispatch: it would
   ##   instantiate the whole walk over the erased vtable type
   when run == runMetal:

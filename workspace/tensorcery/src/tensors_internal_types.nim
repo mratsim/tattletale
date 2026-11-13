@@ -71,8 +71,6 @@ type
     layout: L
 
   TensorNode* = ref object of RootRef
-    ## Node hierarchy root: `of` checks and erased-handle round trips run
-    ## on real runtime type info, without boxing.
 
   ViewNode* = ref object of TensorNode
     r*: AnyTensorImpl
@@ -106,7 +104,6 @@ func makeLayoutBasic*(shape: openArray[int]): LayoutBasic =
     acc *= shape[shape.len - j]
 
 func makeLayoutBasic*(shape, strides: openArray[int]): LayoutBasic =
-  ## Layout over `shape` and `strides`, entries past rank zero.
   if shape.len > MaxRank:
     raise ValueError.newException("Tensorcery: unsupported rank " & $shape.len)
   result.rank = shape.len
