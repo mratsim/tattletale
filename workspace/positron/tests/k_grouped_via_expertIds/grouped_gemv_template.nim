@@ -116,14 +116,15 @@ proc launchGroupedGemvSplitK[T, LX, LB, LG, LW, LD](
     n = dHost.layout.shape[1].toInt()
     partialsHost = makeHostTensor(float32, (tok, kSplits, n),
                                   (kSplits * n, n, 1))
+  for i in 0 ..< partialsHost.len():
+    partialsHost.data[i] = GroupedGemvSentinel
+  let
     xDev = engine.bridge(xHost)
     bDev = engine.bridge(bHost)
     idsDev = engine.bridge(idsHost)
     weightsDev = engine.bridge(weightsHost)
     dDev = engine.bridge(dHost)
     pDev = engine.bridge(partialsHost)
-  for i in 0 ..< partialsHost.len():
-    partialsHost.data[i] = GroupedGemvSentinel
   engine.launchDeviceFn grouped_gemv_splitk(pDev, xDev, bDev, idsDev, weightsDev, topk, kSplits) do:
     grid = (max(1, (n.ceil_div(32 * GroupedGemvOutputs) * kSplits) div gridDiv), tok)
     blk = (32, 1)
