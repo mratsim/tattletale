@@ -5,7 +5,7 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Grouped contraction kernels: every line contracts against one (K, N) weight matrix per group, b (G, K, N).
+## Grouped GEMV and GEMM kernels: every line contracts against one (K, N) weight matrix per group, b (G, K, N).
 ## The variants are named by their input form.
 ## - The offsets form: the lines of all groups sit concatenated group-major,
 ##   a (G,) int32 tensor of cumulative END offsets marks each group's line range,
@@ -89,7 +89,7 @@ const GroupedGemvOutputs = 4
   ## reads cover getLaneWidth()·GroupedGemvOutputs contiguous b elements per step.
 
 proc grouped_gemv_via_offsets*(dst, a, b, offs: distinct TensorView) =
-  ## Decode grouped contraction for the offsets form: every line contracts
+  ## Decode grouped GEMV for the offsets form: every line contracts
   ## against its group's weight matrix.
   ##
   ## ```
@@ -134,7 +134,7 @@ proc grouped_gemv_via_offsets*(dst, a, b, offs: distinct TensorView) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc grouped_gemv_via_expertIds*(dst, x, b, ids, weights: distinct TensorView, topk: int) =
-  ## MoE decode expert contraction with the routing combine folded in:
+  ## MoE decode expert GEMV with the routing combine folded in:
   ## each token contracts against its top-k experts, the router weights the sums.
   ##
   ## ```
@@ -262,7 +262,7 @@ func countGroupedGemmTiles(T: typedesc, totalM, n: int): int =
   result = totalM.ceil_div(MT) * n.ceil_div(NT)
 
 proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
-  ## Prefill grouped contraction for the offsets form: each group's lines
+  ## Prefill grouped GEMM for the offsets form: each group's lines
   ## contract against the group's weight matrix.
   ##
   ## ```
@@ -328,7 +328,7 @@ proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
       dst.store(rD.downcast(dst.T), tvmC, thrID, (mTile, nTile))
 
 proc grouped_gemm_via_expertIds*(dst, a, b, expertIds: distinct TensorView) =
-  ## MoE prefill expert contraction over per-line expert ids:
+  ## MoE prefill expert GEMM over per-line expert ids:
   ## each packed line contracts against its expert's weight matrix over the shared K and N dimensions.
   ##
   ## ```
