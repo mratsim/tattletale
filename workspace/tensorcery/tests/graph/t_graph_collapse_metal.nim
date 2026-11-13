@@ -24,7 +24,9 @@ proc main =
   block: # Re-evaluating a collapsed root reads the leaf, not the graph
     var x = @[1.0'f32, 2, 3, 4].toTensor([4], runMetal)
     let y = x + x
+    doAssert not y.node.isPreAllocated()
     doAssert y.item(float32) == 2.0'f32
+    doAssert y.node.isPreAllocated(), "eval must replace the root by its computed leaf"
     doAssert y.item(float32) == 2.0'f32
 
   block: # A tensor built after the eval captures the leaf
@@ -39,6 +41,13 @@ proc main =
     let v = x.narrow(1, 0, 2)
     doAssert v.item(float32) == 1.0'f32
     doAssert v.item(float32) == 1.0'f32
+
+  block: # A view over an unevaluated computed root survives the collapse
+    var x = @[1.0'f32, 2, 3, 4, 5, 6].toTensor([2, 3], runMetal)
+    let y = x + x
+    let v = y.narrow(1, 0, 2)
+    doAssert v.item(float32) == 2.0'f32
+    doAssert v.item(float32) == 2.0'f32
 
   block: # Deeper graph, two roots sharing a subtree
     var x = @[1.0'f32, 2].toTensor([2], runMetal)
