@@ -266,10 +266,12 @@ macro allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equ
   ##
   ## - a macro, not a hasKernel forward: the eval inside `item` must expand
   ##   per call site, an impl proc body sem-checks once at definition
+  ## - `tested` is bound once: a quote re-substitutes its argument at every use
   CacheCounter("AllClose").inc()
   quote do:
-    Tensor(engine: `tested`.engine,
-        node: tn_allClose(`tested`.engine, `tested`.node, `reference`.node, `atol`, `rtol`, `equal_nan`)
+    let self = `tested`
+    Tensor(engine: self.engine,
+        node: tn_allClose(self.engine, self.node, `reference`.node, `atol`, `rtol`, `equal_nan`)
       ).item(float32) == 0.0'f32
 
 # #######################################################################

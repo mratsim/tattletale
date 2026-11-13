@@ -33,6 +33,11 @@ proc runAddTest*(run: static Runtime, name: string) =
 
     doAssert (x + y).allClose(dst.toTensor(run, shape)), name & ": add " & $shape
 
+  block: # allClose evaluates its tested argument once: the argument of a quote is re-substituted at every use
+    let x = @[1.0'f32, 2, 3, 4].toTensor(run, @[4])
+    var pending = @[x]
+    doAssert pending.pop().allClose(x), name & ": allClose binds its tested argument once"
+
   when defined(TTT_tensorgraphMetrics):
     block: # Dedup: a second eval of the same graph skips the already-allocated nodes
       let x = @[1.0'f32, 2, 3, 4].toTensor(run, @[4])
