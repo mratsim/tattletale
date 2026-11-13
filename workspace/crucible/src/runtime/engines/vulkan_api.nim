@@ -60,8 +60,6 @@ proc resetCaches(engine: VulkanEngine) =
 proc ingest*(engine: VulkanEngine, source: string) =
   if engine.source == source:
     return
-  resetCaches(engine)
-  engine.source = source
   if source.startsWith("#version"):
     ingestGlsl(engine, source)
   elif "[numthreads(" in source:
@@ -70,6 +68,10 @@ proc ingest*(engine: VulkanEngine, source: string) =
     raiseAssert("Vulkan ingest: unrecognized source language, expected GLSL " &
              "(a `#version` first line) or HLSL (`[numthreads(`), got: " &
              source.splitLines()[0])
+  # Commit after compile: a failed ingest leaves the previous module
+  # live and the dedupe unpoisoned.
+  resetCaches(engine)
+  engine.source = source
 
 proc countKernels(glsl: string): int =
   const marker = "layout(local_size_x"
@@ -79,7 +81,7 @@ proc countKernels(glsl: string): int =
     i = glsl.find(marker, i + marker.len)
 
 proc ingestGlsl(engine: VulkanEngine, glsl: string) =
-  engine.entryPoint = findFirstFunctionName(glsl, "layout(local_size_x", "void ")
+  let entryPoint = findFirstFunctionName(glsl, "layout(local_size_x", "void ")
   if countKernels(glsl) > 1:
     # A member's offset in the deduped push block must be launch-invariant.
     # Only scalar members can violate it, so multi-kernel sources refuse at ingest.
@@ -94,14 +96,20 @@ proc ingestGlsl(engine: VulkanEngine, glsl: string) =
         if t.len > 0 and t.endsWith(";") and not t.startsWith("Ref_"):
           raiseAssert("Vulkan: multi-kernel source with scalar params is unsupported, " &
                    "use one kernel per source when passing by-value scalars")
-  engine.spirv = compileGlslToSpirvViaGlslang(glsl, engine.entryPoint)
-  engine.shaderSquadron = parseShaderSquadron(glsl)
+  let spirv = compileGlslToSpirvViaGlslang(glsl, entryPoint)
+  let squadron = parseShaderSquadron(glsl)
+  engine.entryPoint = entryPoint
+  engine.spirv = spirv
+  engine.shaderSquadron = squadron
   engine.isHlsl = false
 
 proc ingestHlsl(engine: VulkanEngine, hlsl: string) =
-  engine.entryPoint = findFirstFunctionName(hlsl, "[numthreads(", "void ")
-  engine.spirv = compileHlslToSpirvViaDxc(hlsl, engine.entryPoint)
-  engine.shaderSquadron = parseHlslSquadron(hlsl)
+  let entryPoint = findFirstFunctionName(hlsl, "[numthreads(", "void ")
+  let spirv = compileHlslToSpirvViaDxc(hlsl, entryPoint)
+  let squadron = parseHlslSquadron(hlsl)
+  engine.entryPoint = entryPoint
+  engine.spirv = spirv
+  engine.shaderSquadron = squadron
   engine.isHlsl = true
 
 proc ingest*(engine: VulkanEngine, spirv: SpirvWords) =
