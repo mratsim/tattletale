@@ -738,7 +738,16 @@ proc emitExpr(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
   case e.kind
   of eNil:
     let t = ctx.resolveTyId(ctx.valueTy(e.nilType))
-    ctx.builder.freshInst(OpUndef, @[t])
+    if e.nilType.kind == ctPtr:
+      # OpConstantNull yields the zero address, OpUndef yields an arbitrary value and isNil compares the address against zero
+      ctx.builder.cachedTypedInst(OpConstantNull, @[t])
+    elif e.nilType.kind == ctAptr:
+      # PhysicalStorageBuffer pointers have no null constant, a nil address converts from the u64 zero
+      let word = CirType(kind: ctUint, bits: 64)
+      let zero = ctx.resolveConstId(fn, intLit(0, word))
+      ctx.builder.opConvertUToPtr(t, zero)
+    else:
+      ctx.builder.freshInst(OpUndef, @[t])
   of eStrLit:
     raiseAssert("a string literal has no SPIR-V value")
   of eIntLit, eFloatLit, eTrue, eFalse:
