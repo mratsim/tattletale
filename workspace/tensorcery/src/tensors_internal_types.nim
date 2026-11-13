@@ -128,9 +128,12 @@ proc allocDataIn*[E: HwEngine, H, T](engine: E, impl: TensorImpl[DeviceMem[H, T]
   impl.data.new()
   impl.data[] = engine.allocDevice(T, impl.size())
 
-func bridge*[DeviceMem; L: Layout | LayoutBasic](t: TensorImpl[DeviceMem, L]): lent TensorBridge[DeviceMem, L] {.inline.} =
-  static: doAssert sizeof(t[]) == sizeof(TensorBridge[DeviceMem, L])
-  return cast[ptr TensorBridge[DeviceMem, L]](t)[]
+func bridge*[DeviceMem; L: Layout | LayoutBasic](t: TensorImpl[DeviceMem, L]): TensorBridge[DeviceMem, L] {.inline.} =
+  if t.isNil():
+    TensorBridge[DeviceMem, L]()
+  else:
+    static: doAssert sizeof(t[]) == sizeof(TensorBridge[DeviceMem, L])
+    cast[ptr TensorBridge[DeviceMem, L]](t)[]
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph

@@ -28,7 +28,7 @@ const Fleet = (tileM: 32, tileN: 32)
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, hasBias: int) =
+proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView) =
   ## D = A·B + bias over the last axis
   const tvmA = mma.getThreadValueMap(opA)
   const tvmB = mma.getThreadValueMap(opB)
@@ -88,7 +88,7 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, hasBias:
         rB.load(B, tvmB, thrID, (n, k))
         mma.atom.gemm_tile(rD, rA, rB, rD)
 
-      if hasBias != 0:
+      if not bias.isNil():
         let broadcastedView = make_view(bias.data,
             make_layout((sliceD.layout.shape[0], sliceD.layout.shape[1]), (Int[0](), Int[1]())),
             bias.offset)
@@ -196,15 +196,9 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
         rView = rImpl.relayoutBridge(lay)
         xView = xImpl.relayoutBridge(lay)
         wView = wImpl.relayoutBridge(Layout[(int, int), (int, int)])
-      if asLinear.b.isNil():
-        # Absent bias passes the weight bridge as an unread placeholder (nil device buffers are inexpressible on Metal).
-        let noBias = initTensorBridge[typeof(wImpl.data[]), Layout[(int,), (int,)]](wImpl.data, 0, Layout[(int,), (int,)]())
-        batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
-          rView, xView, wView, noBias, 0)
-      else:
-        let bView = asLinear.b.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
-        batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
-          rView, xView, wView, bView, 1)
+      let bias = asLinear.b.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
+      batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
+        rView, xView, wView, bias)
     if rImpl.layout.rank == 2:
       enqueueLinearAt(Layout[(int, int), (int, int)])
     elif rImpl.layout.rank == 3:

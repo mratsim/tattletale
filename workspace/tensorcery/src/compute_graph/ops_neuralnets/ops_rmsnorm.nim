@@ -28,7 +28,7 @@ const Fleet = (rowsPerGroup: 4, maxGroups: 8192)
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_rmsnorm(dst, src, weight: distinct TensorBasicView, eps: float32, axis: int, hasWeight: int) =
+proc k_rmsnorm(dst, src, weight: distinct TensorBasicView, eps: float32, axis: int) =
   var reg: tile(float32)
   const
     W = getLaneWidth()
@@ -57,7 +57,7 @@ proc k_rmsnorm(dst, src, weight: distinct TensorBasicView, eps: float32, axis: i
       acc += reduceAdd(tileSum)
     let scale = rsqrt(acc / float32(rowSize) + eps)
     # pass 2: scaled apply with the weight broadcast along the axis
-    if hasWeight == 0:
+    if weight.isNil():
       for r in countup(thrID, rowSize - 1, W):
         dstRow[r] = srcRow[r] * scale
     else:
@@ -128,13 +128,8 @@ proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var T
       axis = rImpl.layout.rank - 1
       rows = rImpl.size() div rImpl.layout.shape[axis]
       grid = min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups)
-    # Absent weight passes the source bridge as an unread placeholder (nil device buffers are inexpressible on Metal).
-    if asNorm.w.isNil():
-      let noWeight = initTensorBridge[typeof(rImpl.data[]), LayoutBasic](xImpl.data, 0, LayoutBasic())
-      batch.enqueue<<(grid, LaneWidth)>> k_rmsnorm(rImpl.bridge(), xImpl.bridge(), noWeight, asNorm.eps, axis, 0)
-    else:
-      let wImpl = asNorm.w.getImpl().to(engine.getTensorImplType(T))
-      batch.enqueue<<(grid, LaneWidth)>> k_rmsnorm(rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), asNorm.eps, axis, 1)
+    batch.enqueue<<(grid, LaneWidth)>> k_rmsnorm(rImpl.bridge(), xImpl.bridge(),
+      asNorm.w.getImpl().to(engine.getTensorImplType(T)).bridge(), asNorm.eps, axis)
   else:
     raiseAssert("rmsnorm: dtype unsupported, the op is float32")
   return true

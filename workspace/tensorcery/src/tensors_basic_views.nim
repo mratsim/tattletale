@@ -45,6 +45,9 @@ func isContiguous*(v: TensorBasicView): bool =
     acc *= v.layout.shape[d]
   result = true
 
+func isNil*[T](v: TensorBasicView[T]): bool {.inline.} =
+  v.data.isNil()
+
 func flatIndex(shape, strides: array[5, int], rank: int, pos: int): int {.inline.} =
   ## Memory offset of the flat element position `pos` under the runtime layout.
   ##

@@ -191,6 +191,8 @@ func relayoutBridge*[H, T; L: Layout](
   ## shape and stride leaves carry the impl's runtime values.
   ##
   ## Precondition: the impl's runtime rank equals L's rank.
+  if impl.isNil():
+    return TensorBridge[DeviceMem[H, T], L]()
   precondition((impl.layout.rank == L.rank(), "relayoutBridge: rank " & $impl.layout.rank & " does not match the target layout rank " & $L.rank()))
   var lay: L
   staticFor i, 0, L.rank():
