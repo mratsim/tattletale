@@ -89,7 +89,16 @@ const GroupedGemvOutputs = 4
   ## reads cover getLaneWidth()·GroupedGemvOutputs contiguous b elements per step.
 
 proc grouped_gemv_via_offsets*(dst, a, b, offs: distinct TensorView) =
-  ## Per-line contraction `dst[m, :] = a[m, :] · b_g[m]`, one threadgroup per (line, n-block).
+  ## Per-line contraction `dst[m, :] = a[m, :] · b_g[m]`:
+  ##
+  ## ```
+  ## a (6, K) group-major   offs = [2 5 6]              b (3, K, N)
+  ## lines 0..1  group 0    dst[0, :] = a[0, :] · b_0[:]
+  ## lines 2..4  group 1    dst[3, :] = a[3, :] · b_1[:]
+  ## lines 5..5  group 2    the group comes from a binary search over offs
+  ## ```
+  ##
+  ## - one threadgroup per (line, n-block)
   let
     totalM = a.shape[0]
     gCount = b.shape[0]
@@ -122,7 +131,16 @@ proc grouped_gemv_via_offsets*(dst, a, b, offs: distinct TensorView) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc grouped_gemv_via_expertIds*(dst, x, b, ids, weights: distinct TensorView, topk: int) =
-  ## Folded-combine grouped GEMV, one launch, one threadgroup per (line, n-block).
+  ## Decode GEMV with the routing combine folded in:
+  ##
+  ## ```
+  ## x (2, K)   ids        weights      dst (2, N)
+  ## t0: x0     [2 0 -]    [w0 w1 -]    dst[t0, :] = w0·b_2·x0 + w1·b_0·x0
+  ## t1: x1     [0 1 -]    [w0 w1 -]    dst[t1, :] = w0·b_0·x1 + w1·b_1·x1
+  ## ```
+  ##
+  ## - an id below 0 contributes nothing
+  ## - one threadgroup per (token, n-block)
   let
     tokens = x.shape[0]
     k = x.shape[1]
@@ -239,7 +257,18 @@ func countGroupedGemmTiles(T: typedesc, totalM, n: int): int =
   result = totalM.ceil_div(MT) * n.ceil_div(NT)
 
 proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
-  ## Per-group contraction `dst = a_g · b_g`, one simdgroup per (MT, NT) output tile, countGroupedGemmTiles(T, totalM, n) threadgroups.
+  ## Per-group contraction `dst = a_g · b_g`:
+  ##
+  ## ```
+  ## a (6, K) group-major   offs = [2 5 6]
+  ## group 0: lines 0..1  ─►  dst[0:2, :] = a[0:2, :] · b_0
+  ## group 1: lines 2..4  ─►  dst[2:5, :] = a[2:5, :] · b_1
+  ## group 2: lines 5..5  ─►  dst[5:6, :] = a[5:6, :] · b_2
+  ## ```
+  ##
+  ## - one simdgroup per (MT, NT) output tile
+  ## - a tile crossing a group boundary masks each group's lines,
+  ##   accumulating group by group
   const (MT, NT, KT) = groupedGemmTiles(a.T)
   const mma = tiledMma(float32, a.T, b.T, MT, NT, KT)
   static: doAssert mma.atom.getThreadCount() == getLaneWidth(),
@@ -293,7 +322,16 @@ proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
       dst.store(rD.downcast(dst.T), tvmC, thrID, (mTile, nTile))
 
 proc grouped_gemm_via_expertIds*(dst, a, b, expertIds: distinct TensorView) =
-  ## Per-expert contraction `dst = a_g · b_g`, countGroupedGemmTiles(a.T, totalM, n) threadgroups, per-tile run-walk over expertIds.
+  ## Per-expert contraction `dst = a_g · b_g` over per-line ids:
+  ##
+  ## ```
+  ## a (7, K), expertIds (7,)          the tile over lines m0 .. m0+MT
+  ## ids: [g0 g0 g0 -1 g1 g1 -1]  ─►   run-walk: g0's three lines mask in,
+  ##                                    accumulate a·b_0, -1 lines stay zero,
+  ##                                    g1's two lines mask in, accumulate a·b_1
+  ## ```
+  ##
+  ## - one simdgroup per (MT, NT) output tile, runs discovered at runtime
   const (MT, NT, KT) = groupedGemmTiles(a.T)
   const mma = tiledMma(float32, a.T, b.T, MT, NT, KT)
   static: doAssert mma.atom.getThreadCount() == getLaneWidth(),
