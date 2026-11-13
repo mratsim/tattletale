@@ -368,9 +368,8 @@ proc judgeMoeDispatch[LI, LX](engine: MetalEngine, idsHost: HostTensor[int32, LI
   ## exact packedX judgment at the real slots, sentinel judgment of the padding entries,
   ## and a relaunch judged byte-identical.
   ##
-  ## The relaunch runs on the SAME staged device buffers: only the metadata launch
-  ## rewrites its outputs, so byte-identity across launches is the determinism
-  ## contract and applies unconditionally.
+  ## The relaunch stages its own device buffers, and the byte-identity contract
+  ## therefore covers independently staged launches in every case.
   let
     tok = idsHost.layout.shape[0].toInt()
     k = xHost.layout.shape[1].toInt()
@@ -380,21 +379,23 @@ proc judgeMoeDispatch[LI, LX](engine: MetalEngine, idsHost: HostTensor[int32, LI
   let refMeta = moeDispatchRef(idsSeq, tok, topk, e)
   let (offsetsHost, sortedPairsHost, slotOfPairHost, packedIdsHost, packedXHost) =
     launchMoeDispatch(engine, idsHost, xHost, topk, e)
-  proc captureBits(): seq[uint32] =
-    result = newSeq[uint32](offsetsHost.len() + sortedPairsHost.len() +
-      slotOfPairHost.len() + packedIdsHost.len())
+  proc metaBits(offsets, sortedPairs, slotOfPair, packedIds: auto): seq[uint32] =
+    result = newSeq[uint32](offsets.len() + sortedPairs.len() +
+      slotOfPair.len() + packedIds.len())
     var o = 0
-    for i in 0 ..< offsetsHost.len():
-      result[o] = cast[uint32](offsetsHost.data[i]); o += 1
-    for i in 0 ..< sortedPairsHost.len():
-      result[o] = cast[uint32](sortedPairsHost.data[i]); o += 1
-    for i in 0 ..< slotOfPairHost.len():
-      result[o] = cast[uint32](slotOfPairHost.data[i]); o += 1
-    for i in 0 ..< packedIdsHost.len():
-      result[o] = cast[uint32](packedIdsHost.data[i]); o += 1
-  let firstBits = captureBits()
-  discard launchMoeDispatch(engine, idsHost, xHost, topk, e)
-  let secondBits = captureBits()
+    for i in 0 ..< offsets.len():
+      result[o] = cast[uint32](offsets.data[i]); o += 1
+    for i in 0 ..< sortedPairs.len():
+      result[o] = cast[uint32](sortedPairs.data[i]); o += 1
+    for i in 0 ..< slotOfPair.len():
+      result[o] = cast[uint32](slotOfPair.data[i]); o += 1
+    for i in 0 ..< packedIds.len():
+      result[o] = cast[uint32](packedIds.data[i]); o += 1
+  let firstBits = metaBits(offsetsHost, sortedPairsHost, slotOfPairHost, packedIdsHost)
+  let (offsetsRelaunch, sortedPairsRelaunch, slotOfPairRelaunch, packedIdsRelaunch, packedXRelaunch) =
+    launchMoeDispatch(engine, idsHost, xHost, topk, e)
+  let secondBits = metaBits(offsetsRelaunch, sortedPairsRelaunch,
+    slotOfPairRelaunch, packedIdsRelaunch)
   doAssert secondBits == firstBits, msg & ": metadata differs run to run"
 
   let cap = moeCapacityBound(tok, topk, e)
@@ -678,17 +679,18 @@ proc moeRouterReplayCase*(engine: MetalEngine, name: string) =
   doAssert xorHash(expWeights) == meta.xorhashChecksum("weights.bin"), meta.name & ": weights checksum"
   let (gotIds, gotWeights) = launchMoeRouter(engine, scoresHost, biasHost,
     meta.topk, MoERoute(meta.variant), float32(meta.scaling))
-  proc captureBits(): seq[uint32] =
-    result = newSeq[uint32](gotIds.len() + gotWeights.len())
+  proc routeBits(ids, weights: auto): seq[uint32] =
+    result = newSeq[uint32](ids.len() + weights.len())
     var o = 0
-    for i in 0 ..< gotIds.len():
-      result[o] = cast[uint32](gotIds.data[i]); o += 1
-    for i in 0 ..< gotWeights.len():
-      result[o] = cast[uint32](gotWeights.data[i]); o += 1
-  let firstBits = captureBits()
+    for i in 0 ..< ids.len():
+      result[o] = cast[uint32](ids.data[i]); o += 1
+    for i in 0 ..< weights.len():
+      result[o] = cast[uint32](weights.data[i]); o += 1
+  let firstBits = routeBits(gotIds, gotWeights)
   discard launchMoeRouter(engine, scoresHost, biasHost, meta.topk, MoERoute(meta.variant), float32(meta.scaling))
-  discard launchMoeRouter(engine, scoresHost, biasHost, meta.topk, MoERoute(meta.variant), float32(meta.scaling))
-  let secondBits = captureBits()
+  let (relaunchIds, relaunchWeights) = launchMoeRouter(engine, scoresHost, biasHost,
+    meta.topk, MoERoute(meta.variant), float32(meta.scaling))
+  let secondBits = routeBits(relaunchIds, relaunchWeights)
   doAssert secondBits == firstBits, meta.name & ": router outputs differ run to run"
   for i in 0 ..< meta.t * meta.topk:
     doAssert int(gotIds.data[i]) == int(expIds.data[i]),
@@ -734,21 +736,23 @@ proc moeDispatchReplayCase*(engine: MetalEngine, name: string) =
   let cap = moeCapacityBound(meta.t, meta.topk, meta.e)
   let (offsetsHost, sortedPairsHost, slotOfPairHost, packedIdsHost, packedXHost) =
     launchMoeDispatch(engine, idsHost, xHost, meta.topk, meta.e)
-  proc captureBits(): seq[uint32] =
-    result = newSeq[uint32](offsetsHost.len() + sortedPairsHost.len() +
-      slotOfPairHost.len() + packedIdsHost.len())
+  proc metaBits(offsets, sortedPairs, slotOfPair, packedIds: auto): seq[uint32] =
+    result = newSeq[uint32](offsets.len() + sortedPairs.len() +
+      slotOfPair.len() + packedIds.len())
     var o = 0
-    for i in 0 ..< offsetsHost.len():
-      result[o] = cast[uint32](offsetsHost.data[i]); o += 1
-    for i in 0 ..< sortedPairsHost.len():
-      result[o] = cast[uint32](sortedPairsHost.data[i]); o += 1
-    for i in 0 ..< slotOfPairHost.len():
-      result[o] = cast[uint32](slotOfPairHost.data[i]); o += 1
-    for i in 0 ..< packedIdsHost.len():
-      result[o] = cast[uint32](packedIdsHost.data[i]); o += 1
-  let firstBits = captureBits()
-  discard launchMoeDispatch(engine, idsHost, xHost, meta.topk, meta.e)
-  let secondBits = captureBits()
+    for i in 0 ..< offsets.len():
+      result[o] = cast[uint32](offsets.data[i]); o += 1
+    for i in 0 ..< sortedPairs.len():
+      result[o] = cast[uint32](sortedPairs.data[i]); o += 1
+    for i in 0 ..< slotOfPair.len():
+      result[o] = cast[uint32](slotOfPair.data[i]); o += 1
+    for i in 0 ..< packedIds.len():
+      result[o] = cast[uint32](packedIds.data[i]); o += 1
+  let firstBits = metaBits(offsetsHost, sortedPairsHost, slotOfPairHost, packedIdsHost)
+  let (offsetsRelaunch, sortedPairsRelaunch, slotOfPairRelaunch, packedIdsRelaunch, packedXRelaunch) =
+    launchMoeDispatch(engine, idsHost, xHost, meta.topk, meta.e)
+  let secondBits = metaBits(offsetsRelaunch, sortedPairsRelaunch,
+    slotOfPairRelaunch, packedIdsRelaunch)
   doAssert secondBits == firstBits, name & ": metadata differs run to run"
   for g in 0 ..< meta.e:
     doAssert int(offsetsHost[g]) == int(expOffsets[g]),
