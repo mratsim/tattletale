@@ -187,26 +187,20 @@ macro dispatchViewKernel*(engine, n, batch: typed): untyped =
 # Critical op kernels (gemm, linear, rmsnorm) keep static-rank ceramic Layout signatures.
 # Handlers rebuild bridge arguments from basic metadata. Nothing moves and no ranked impl materializes.
 
-func bridgeRank*[H, T; Sh, St: tuple](b: TensorBridge[DeviceMem[H, T], Layout[Sh, St]]): int {.inline.} =
-  ## Static rank of the bridge's layout tuple.
-
-func relayoutBridge*[H, T; Sh: tuple, St: tuple](
+func relayoutBridge*[H, T; L: Layout](
     impl: TensorImpl[DeviceMem[H, T], LayoutBasic],
-    _: typedesc[Layout[Sh, St]]): TensorBridge[DeviceMem[H, T], Layout[Sh, St]] {.inline.} =
-  ## Bridge of `impl` retyped to the static-rank `Layout[Sh, St]` whose
+    _: typedesc[L]): TensorBridge[DeviceMem[H, T], L] {.inline.} =
+  ## Bridge of `impl` retyped to the static-rank layout `L` whose
   ## shape and stride leaves carry the impl's runtime values.
   ##
-  ## Precondition: the impl's runtime rank equals the layout's rank.
-  static:
-    doAssert tupleLen(Sh) == tupleLen(St)
-  doAssert impl.layout.rank == tupleLen(Sh),
-    "relayoutBridge: rank " & $impl.layout.rank & " does not match the target layout rank " & $tupleLen(Sh)
-  var sh: Sh
-  var st: St
-  staticFor i, 0, tupleLen(Sh):
-    sh[i] = impl.layout.shape[i]
-    st[i] = impl.layout.strides[i]
-  initTensorBridge(impl.data, impl.offset, make_layout(sh, st))
+  ## Precondition: the impl's runtime rank equals L's rank.
+  doAssert impl.layout.rank == L.rank(),
+    "relayoutBridge: rank " & $impl.layout.rank & " does not match the target layout rank " & $L.rank()
+  var lay: L
+  staticFor i, 0, L.rank():
+    lay.shape[i] = impl.layout.shape[i]
+    lay.stride[i] = impl.layout.strides[i]
+  initTensorBridge(impl.data, impl.offset, lay)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
