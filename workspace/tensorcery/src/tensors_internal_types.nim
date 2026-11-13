@@ -40,6 +40,7 @@ iface *TensorGraph:
     proc isNil(): bool {.inline.}
 
 iface *AnyEngine:
+    proc kind(): Runtime {.inline.}
     proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorGraph {.inline.}
     proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorGraph {.inline.}
     proc newViewNode(src: TensorGraph, shape: openArray[int], strides: openArray[int], offset: int, srcOpName: string): TensorGraph {.inline.}

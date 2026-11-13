@@ -68,6 +68,24 @@ func opName*(t: TensorImpl): string {.inline.} =
   "Tensor"
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Backend identity
+# ═══════════════════════════════════════════════════════════════════════
+
+proc kind*[E: HwEngine](engine: E): Runtime {.inline.} =
+  when E is CudaEngine:
+    runCuda
+  elif E is MetalEngine:
+    runMetal
+  elif E is OpenCLEngine:
+    runOpenCL
+  elif E is VulkanEngine:
+    runVulkan
+  elif E is WebgpuEngine:
+    runWebGPU
+  else:
+    runCpu
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Host<->Device copies
 # ═══════════════════════════════════════════════════════════════════════
 

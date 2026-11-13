@@ -164,7 +164,23 @@ template item*[T](t: Tensor, _: typedesc[T]): T =
   let impl = self.node.getImpl()
   precondition(impl.dtype() == toDtype(T))
   var node = [self.node]
-  eval(ctgSoleBackend(), node)
+  case self.engine.kind()
+  of runMetal:
+    when runMetal in ctgBackendSelection:
+      evalRoots(gMetalEngine(), node)
+  of runOpenCL:
+    when runOpenCL in ctgBackendSelection:
+      evalRoots(gOpenCLEngine(), node)
+  of runVulkan:
+    when runVulkan in ctgBackendSelection:
+      evalRoots(gVulkanEngine(), node)
+  of runWebGPU:
+    when runWebGPU in ctgBackendSelection:
+      evalRoots(gWebgpuEngine(), node)
+  of runCuda:
+    raise ValueError.newException("eval: CUDA is not on the batch stream yet")
+  of runCpu:
+    raise ValueError.newException("eval: unsupported run kind")
   self.node = node[0]
   var read: T
   self.engine.download1(addr read, self.node)
@@ -179,8 +195,8 @@ template item*[T](t: Tensor, _: typedesc[T]): T =
 template eval*(ts: varargs[Tensor]) =
   ## Enqueues and submits the graph rooted at the tensors' nodes.
   ##
-  ## - backend: read from ctgBackendSelection at the call site, construction
-  ##   sites recorded it there
+  ## - backend: dispatches on the first tensor's engine at runtime
+  ## - all tensors of a call must be built on one backend
   ## - `ts` is bound once: a template re-substitutes each argument at every use
   var args: seq[Tensor]
   for t in ts:
@@ -188,7 +204,23 @@ template eval*(ts: varargs[Tensor]) =
   var roots = newSeq[TensorGraph](args.len)
   for i in 0 ..< args.len:
     roots[i] = args[i].node
-  eval(ctgSoleBackend(), roots)
+  case args[0].engine.kind()
+  of runMetal:
+    when runMetal in ctgBackendSelection:
+      evalRoots(gMetalEngine(), roots)
+  of runOpenCL:
+    when runOpenCL in ctgBackendSelection:
+      evalRoots(gOpenCLEngine(), roots)
+  of runVulkan:
+    when runVulkan in ctgBackendSelection:
+      evalRoots(gVulkanEngine(), roots)
+  of runWebGPU:
+    when runWebGPU in ctgBackendSelection:
+      evalRoots(gWebgpuEngine(), roots)
+  of runCuda:
+    raise ValueError.newException("eval: CUDA is not on the batch stream yet")
+  of runCpu:
+    raise ValueError.newException("eval: unsupported run kind")
   for i in 0 ..< args.len:
     args[i].node = roots[i]
 

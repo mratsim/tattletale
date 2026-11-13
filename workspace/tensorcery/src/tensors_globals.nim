@@ -5,7 +5,8 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/sets
+{.experimental: "views".}
+
 import workspace/crucible
 import workspace/ceramic
 import workspace/iface
@@ -56,10 +57,10 @@ proc gWebgpuEngineErased(_: static Runtime = runWebGPU): AnyEngine =
 proc gCudaEngineErased(_: static Runtime = runCuda): AnyEngine =
   gCudaEngine().to(AnyEngine)
 
-var ctgBackendSelection {.compileTime.}: HashSet[Runtime]
+## Eval dispatch instantiates a backend's walk only when this record contains the backend.
+var ctgBackendSelection* {.compileTime.}: set[Runtime]
 
 proc gEngine*(run: static Runtime): AnyEngine =
-  ## - construction records `run` in ctgBackendSelection and the eval dispatch reads it back
   static: ctgBackendSelection.incl(run)
   when run == runMetal:
     gMetalEngineErased()
@@ -73,16 +74,6 @@ proc gEngine*(run: static Runtime): AnyEngine =
     gCudaEngineErased()
   else:
     {.error: "gEngine: unsupported run kind".}
-
-proc ctgSoleBackend*(): Runtime {.compileTime.} =
-  if ctgBackendSelection.len == 0:
-    raise ValueError.newException(
-      "eval: no device backend appeared in this compilation, construct a tensor first")
-  if ctgBackendSelection.len > 1:
-    raise ValueError.newException(
-      "eval: multiple backends appeared in this compilation, multi-kind binaries are not supported yet")
-  for k in ctgBackendSelection:
-    return k
 
 template eval*(run: static Runtime, roots: var openArray[TensorGraph]) =
   ## - the erased engine handle must never reach the dispatch: it would
