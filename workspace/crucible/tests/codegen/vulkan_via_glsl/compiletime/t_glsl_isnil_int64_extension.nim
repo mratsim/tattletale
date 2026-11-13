@@ -25,6 +25,16 @@ proc runTest() =
     "isNil prints a uint64_t comparison, the int64 extension line is missing:\n" & isnilGlsl
   doAssert int64Extension notin plainGlsl,
     "a kernel with no isNil and no 64-bit type must not request the int64 extension:\n" & plainGlsl
+
+  # The isnil kernel launches: the extension line is valid GLSL, not just emitted text
+  var engine = newEngine(runVulkan)
+  engine.ingest(isnilGlsl)
+  let oDev = engine.allocDevice(float32, 1)
+  engine.launchKernel("isnilKernel", oDev, ())
+  var got: array[1, float32]
+  engine.copyToHostFromDevice(got.toOpenArray(0, 0), oDev)
+  doAssert got[0] == 1.0'f32,
+    "the isnil kernel ran: got " & $got[0] & ", want 1.0"
   echo "  OK - t_glsl_isnil_int64_extension"
 
 when isMainModule:

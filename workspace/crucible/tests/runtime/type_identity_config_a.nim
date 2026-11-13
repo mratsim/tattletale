@@ -11,3 +11,6 @@
 
 type Config* = object
   x: float32
+
+proc fill*(outBuf: ptr UncheckedArray[int32], c: Config) =
+  outBuf[0] = 11

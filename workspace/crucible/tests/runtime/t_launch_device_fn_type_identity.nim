@@ -13,6 +13,7 @@
 ##     workspace/crucible/tests/runtime/t_launch_device_fn_type_identity.nim
 
 import std/[macros, hashes]
+import workspace/crucible
 import workspace/crucible/src/runtime/launch/launch_device_fn {.all.}
 import ./type_identity_config_a as cfgA
 import ./type_identity_config_b as cfgB
@@ -52,6 +53,25 @@ proc runTest() =
 
   doAssert paramTypeHash(a) == hashA,
     "one parameter must hash stably so legitimate dedup still reuses the wrapper"
+
+  # Collision end-to-end: duplicate identifier `fill`, different Config shapes.
+  # One wrapper for both would feed one launch the other's layout.
+  var engine = newEngine(runVulkan)
+  let oa = engine.allocDevice(int32, 1)
+  let ob = engine.allocDevice(int32, 1)
+  engine.launchDeviceFn cfgA.fill(oa, a) do:
+    lang = spirv
+    grid = (1, 1)
+    blk = (1, 1)
+  engine.launchDeviceFn cfgB.fill(ob, b) do:
+    lang = spirv
+    grid = (1, 1)
+    blk = (1, 1)
+  var got: array[1, int32]
+  engine.copyToHostFromDevice(got.toOpenArray(0, 0), oa)
+  doAssert got[0] == 11, "cfgA's fill wrote " & $got[0] & ", want 11"
+  engine.copyToHostFromDevice(got.toOpenArray(0, 0), ob)
+  doAssert got[0] == 22, "cfgB's fill wrote " & $got[0] & ", want 22"
 
   echo "[OK] launchDeviceFn: the bridge-name hash distinguishes types and literals that would collide"
 
