@@ -17,9 +17,12 @@
 ##   nim c -r -d:release --hints:off --warnings:off --outdir:build/tests/t_snapshot_threading_metal \
 ##     --nimcache:nimcache/t_snapshot_threading_metal workspace/tensorcery/tests/graph/t_snapshot_threading_metal.nim
 
+import std/importutils
 import workspace/crucible
 import workspace/ceramic
 import workspace/tensorcery
+
+privateAccess(Tensor)
 
 proc main =
   const run = runMetal
@@ -36,7 +39,7 @@ proc main =
     var x = @[1.0'f32, 2].toTensor([2], run)
     let y = x + x
     doAssert y.allClose(@[2.0'f32, 4].toTensor([2], run))
-    let o = ones([2], run)
+    let o = full([2], 1.0'f32, run)
     let z = y + o
     doAssert z.allClose(@[3.0'f32, 5].toTensor([2], run))
     doAssert not z.allClose(@[4.0'f32, 6].toTensor([2], run))
@@ -45,10 +48,11 @@ proc main =
     var x = @[1.0'f32, 2].toTensor([2], run)
     let y = x + x
     eval(y)
-    let o = ones([2], run)
+    let o = arange(2.0'f32, run)
     let z = y + o
     eval(z)
-    doAssert z.item(float32) == 3.0'f32
+    doAssert z.node.isPreAllocated(), "eval must replace the root by its computed leaf"
+    doAssert z.item(float32) == 2.0'f32
 
   echo "tensorcery snapshot threading (Metal): all checks passed"
 
