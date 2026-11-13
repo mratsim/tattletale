@@ -2,7 +2,7 @@
 """Grouped GEMM fixture generator: numpy float64 reference over the exact
 widened element bits, raw binary.
 
-One directory per fixture under fixtures/ next to this script:
+One directory per fixture under fixtures/gemm/ next to this script:
 
 | file      | contents                                             |
 | --------- | ---------------------------------------------------- |
@@ -131,7 +131,7 @@ def make_fixture(name, dtype, e, k, n, counts, pads, mt, seed):
     dOut = d.astype(np.float32)
 
     idsArr = np.asarray(ids, dtype=np.int32)
-    out = os.path.join(HERE, "fixtures", name)
+    out = os.path.join(HERE, "fixtures", "gemm", name)
     os.makedirs(out, exist_ok=True)
     files = {
         "a.bin": aBits,

@@ -2,7 +2,7 @@
 """Grouped GEMV fixture generator: numpy float64 reference over the exact
 widened element bits, raw binary.
 
-One directory per fixture under fixtures/ next to this script:
+One directory per fixture under fixtures/gemv/ next to this script:
 
 | file        | contents                                            |
 | ----------- | --------------------------------------------------- |
@@ -123,7 +123,7 @@ def make_fixture(name, dtype, t, topk, e, k, n, ids, seed):
     dOut = d.astype(np.float32)
 
     idsArr = ids.astype(np.int32)
-    out = os.path.join(HERE, "fixtures", name)
+    out = os.path.join(HERE, "fixtures", "gemv", name)
     os.makedirs(out, exist_ok=True)
     files = {
         "x.bin": xBits,
