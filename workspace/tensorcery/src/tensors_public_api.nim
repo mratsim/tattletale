@@ -264,19 +264,19 @@ proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
 #
 # #######################################################################
 
-macro allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool =
+template allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool =
   ## True when every element satisfies |tested - reference| <= atol + rtol * |reference|.
   ## Same-sign infinities are equal, NaN equal only with equal_nan
   #
-  # - a macro, not an impl proc: the body's item call expands per call site,
+  # - a template, not an impl proc: the body's item call expands per call site,
   #   an impl proc sem-checks once, before the ops it dispatches are marked
-  # - `tested` is bound once: a quote re-substitutes its argument at every use
-  CacheCounter("AllClose").inc()
-  quote do:
-    let self = `tested`
-    Tensor(engine: self.engine,
-        node: tn_allClose(self.engine, self.node, `reference`.node, `atol`, `rtol`, `equal_nan`)
-      ).item(float32) == 0.0'f32
+  # - `tested` is bound once: a template re-substitutes its argument at every use
+  static:
+    CacheCounter("AllClose").inc()
+  let self = tested
+  Tensor(engine: self.engine,
+      node: tn_allClose(self.engine, self.node, reference.node, atol, rtol, equal_nan)
+    ).item(float32) == 0.0'f32
 
 # #######################################################################
 #
