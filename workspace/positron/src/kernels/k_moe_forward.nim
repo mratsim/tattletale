@@ -33,8 +33,8 @@ const MoECombineOutputs = 4
 proc moe_dispatch_metadata(packedOffsets, sortedPairs, slotOfPair, ids: distinct TensorView, topk: int) =
   ## Histogram, padded prefix, slot scatter and inverse map, one launch, one token per lane.
   let
-    totalT: int = ids.shape[0]
-    e: int = packedOffsets.shape[0]
+    totalT = ids.shape[0]
+    e = packedOffsets.shape[0]
     slots = totalT.ceil_div(getLaneWidth())
   for slotID in countup(getLocalTileID(slots), slots - 1, getGridSize()):
     let t = slotID * getLaneWidth() + getLocalThreadID()
@@ -87,9 +87,9 @@ proc moe_dispatch_gather(packedIds, packedX, x, sortedPairs, packedOffsets: dist
   ## Activation gather and per-slot expert id resolution, one launch:
   ## Scatter and gather the padded slots, one launch, one slot per lane.
   let
-    k: int = x.shape[1]
-    cap: int = sortedPairs.shape[0]
-    e: int = packedOffsets.shape[0]
+    k = x.shape[1]
+    cap = sortedPairs.shape[0]
+    e = packedOffsets.shape[0]
     slots = (cap * k).ceil_div(getLaneWidth())
   for slotID in countup(getLocalTileID(slots), slots - 1, getGridSize()):
     let p = slotID * getLaneWidth() + getLocalThreadID()
@@ -117,12 +117,12 @@ proc moe_dispatch_gather(packedIds, packedX, x, sortedPairs, packedOffsets: dist
         if kk == 0:
           packedIds[slot] = int32(-1)
 
-proc moe_combine(d, dPacked, slotOfPair, weights: distinct TensorView, topk: int) =
+proc moe_combine(dst, dPacked, slotOfPair, weights: distinct TensorView, topk: int) =
   ## Weighted un-permute sum, one launch, one threadgroup per (token, n-block),
-  ## d(t, n) = sum over ascending i of weights(t, i) · dPacked[slotOfPair(t, i), n].
+  ## dst(t, n) = sum over ascending i of weights(t, i) · dPacked[slotOfPair(t, i), n].
   let
-    tokens: int = d.shape[0]
-    n: int = d.shape[1]
+    tokens = dst.shape[0]
+    n = dst.shape[1]
     nBlocks = n.ceil_div(getLaneWidth() * MoECombineOutputs)
     totalTiles = tokens * nBlocks
   for tileID in countup(getLocalTileID(totalTiles), totalTiles - 1, getGridSize()):
@@ -146,4 +146,4 @@ proc moe_combine(d, dPacked, slotOfPair, weights: distinct TensorView, topk: int
               sums[e] += w * to(dPacked[s, n0 + e], float32)
       for e in 0 ..< MoECombineOutputs:
         if n0 + e < n:
-          d[t, n0 + e] = to(sums[e], d.T)
+          dst[t, n0 + e] = to(sums[e], dst.T)

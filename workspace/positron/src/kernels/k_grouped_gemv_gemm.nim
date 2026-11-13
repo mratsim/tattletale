@@ -15,12 +15,12 @@
 ##   an id below 0 pads or skips the line.
 ##
 ## Public kernels:
-## - grouped_gemv_via_offsets: d[m, :] = a[m, :] · b_g[m], one threadgroup per (line, n-block)
-## - grouped_gemm_via_offsets: d = a_g · b_g over (MT, NT) output tiles
-## - grouped_gemv_via_expertIds: d(t, :) = sum over i of w(t, i) · x(t, :) · b_ids(t,i),
+## - grouped_gemv_via_offsets: dst[m, :] = a[m, :] · b_g[m], one threadgroup per (line, n-block)
+## - grouped_gemm_via_offsets: dst = a_g · b_g over (MT, NT) output tiles
+## - grouped_gemv_via_expertIds: dst(t, :) = sum over i of w(t, i) · x(t, :) · b_ids(t,i),
 ##   one launch folds the routing combine, grouped_gemv_splitk + grouped_gemv_reduce
 ##   split K for small t·n
-## - grouped_gemm_via_expertIds: d = a_g · b_g over per-line ids
+## - grouped_gemm_via_expertIds: dst = a_g · b_g over per-line ids
 
 import workspace/crucible/src/crucible_gpu_builtins
 import workspace/ceramic/src/tile_algebra
@@ -84,17 +84,17 @@ proc groupedGemvForm(t, n: int): tuple[form: GroupedGemvForm, kSplits: int] =
 # ═══════════════════════════════════════════════════════════════════════
 
 const GroupedGemvOutputs = 4
-  ## Each grouped_gemv lane owns GroupedGemvOutputs consecutive outputs: d[m, n0 .. n0+3].
+  ## Each grouped_gemv lane owns GroupedGemvOutputs consecutive outputs: dst[m, n0 .. n0+3].
   ## Per k step a lane reads GroupedGemvOutputs consecutive b elements, so the simdgroup's
   ## reads cover getLaneWidth()·GroupedGemvOutputs contiguous b elements per step.
 
-proc grouped_gemv_via_offsets*(d, a, b, offs: distinct TensorView) =
-  ## Per-line contraction `d[m, :] = a[m, :] · b_g[m]`, one threadgroup per (line, n-block).
+proc grouped_gemv_via_offsets*(dst, a, b, offs: distinct TensorView) =
+  ## Per-line contraction `dst[m, :] = a[m, :] · b_g[m]`, one threadgroup per (line, n-block).
   let
-    totalM: int = a.shape[0]
-    gCount: int = b.shape[0]
-    k: int = a.shape[1]
-    n: int = d.shape[1]
+    totalM = a.shape[0]
+    gCount = b.shape[0]
+    k = a.shape[1]
+    n = dst.shape[1]
     nBlocks = n.ceil_div(getLaneWidth() * GroupedGemvOutputs)
     totalTiles = totalM * nBlocks
   for tileID in countup(getLocalTileID(totalTiles), totalTiles - 1, getGridSize()):
@@ -115,18 +115,18 @@ proc grouped_gemv_via_offsets*(d, a, b, offs: distinct TensorView) =
             accs[e] += av * to(b[g, kk, n0 + e], float32)
       for e in 0 ..< GroupedGemvOutputs:
         if n0 + e < n:
-          d[m, n0 + e] = to(accs[e], d.T)
+          dst[m, n0 + e] = to(accs[e], dst.T)
 
 # ═══════════════════════════════════════════════════════════════════════
 # grouped_gemv_via_expertIds
 # ═══════════════════════════════════════════════════════════════════════
 
-proc grouped_gemv_via_expertIds*(d, x, b, ids, weights: distinct TensorView, topk: int) =
+proc grouped_gemv_via_expertIds*(dst, x, b, ids, weights: distinct TensorView, topk: int) =
   ## Folded-combine grouped GEMV, one launch, one threadgroup per (line, n-block).
   let
-    tokens: int = x.shape[0]
-    k: int = x.shape[1]
-    n: int = d.shape[1]
+    tokens = x.shape[0]
+    k = x.shape[1]
+    n = dst.shape[1]
     nBlocks = n.ceil_div(getLaneWidth() * GroupedGemvOutputs)
     totalTiles = tokens * nBlocks
   for tileID in countup(getLocalTileID(totalTiles), totalTiles - 1, getGridSize()):
@@ -155,14 +155,14 @@ proc grouped_gemv_via_expertIds*(d, x, b, ids, weights: distinct TensorView, top
             sums[e] += w * accs[e]
       for e in 0 ..< GroupedGemvOutputs:
         if n0 + e < n:
-          d[t, n0 + e] = to(sums[e], d.T)
+          dst[t, n0 + e] = to(sums[e], dst.T)
 
 proc grouped_gemv_splitk*(dPartials, x, b, ids, weights: distinct TensorView, topk, kSplits: int) =
   ## Split-K stage 1: per-slot partial sums into the (T, kSplits, N) fp32 dPartials, one threadgroup per (line, n-block, k-slice).
   let
-    tokens: int = x.shape[0]
-    k: int = x.shape[1]
-    n: int = dPartials.shape[2]
+    tokens = x.shape[0]
+    k = x.shape[1]
+    n = dPartials.shape[2]
     nBlocks = n.ceil_div(getLaneWidth() * GroupedGemvOutputs)
     kQuot = k div kSplits
     kRem = k mod kSplits
@@ -198,12 +198,12 @@ proc grouped_gemv_splitk*(dPartials, x, b, ids, weights: distinct TensorView, to
         if n0 + e < n:
           dPartials[t, kSlice, n0 + e] = sums[e]
 
-proc grouped_gemv_reduce*(d, dPartials: distinct TensorView, kSplits: int) =
-  ## Split-K stage 2: sums dPartials into d over ascending k slices in fp32,
+proc grouped_gemv_reduce*(dst, dPartials: distinct TensorView, kSplits: int) =
+  ## Split-K stage 2: sums dPartials into dst over ascending k slices in fp32,
   ## one threadgroup per (line, n-block) over stage 1's kSplits.
   let
-    tokens: int = d.shape[0]
-    n: int = d.shape[1]
+    tokens = dst.shape[0]
+    n = dst.shape[1]
     nBlocks = n.ceil_div(getLaneWidth() * GroupedGemvOutputs)
     totalTiles = tokens * nBlocks
   for tileID in countup(getLocalTileID(totalTiles), totalTiles - 1, getGridSize()):
@@ -221,7 +221,7 @@ proc grouped_gemv_reduce*(d, dPartials: distinct TensorView, kSplits: int) =
             sums[e] += dPartials[t, s, n0 + e]
       for e in 0 ..< GroupedGemvOutputs:
         if n0 + e < n:
-          d[t, n0 + e] = to(sums[e], d.T)
+          dst[t, n0 + e] = to(sums[e], dst.T)
 
 # ═══════════════════════════════════════════════════════════════════════
 # grouped_gemm
@@ -238,8 +238,8 @@ func countGroupedGemmTiles(T: typedesc, totalM, n: int): int =
   const (MT, NT, _) = groupedGemmTiles(T)
   result = totalM.ceil_div(MT) * n.ceil_div(NT)
 
-proc grouped_gemm_via_offsets*(d, a, b, offs: distinct TensorView) =
-  ## Per-group contraction `d = a_g · b_g`, one simdgroup per (MT, NT) output tile, countGroupedGemmTiles(T, totalM, n) threadgroups.
+proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
+  ## Per-group contraction `dst = a_g · b_g`, one simdgroup per (MT, NT) output tile, countGroupedGemmTiles(T, totalM, n) threadgroups.
   const (MT, NT, KT) = groupedGemmTiles(a.T)
   const mma = tiledMma(float32, a.T, b.T, MT, NT, KT)
   static: doAssert mma.atom.getThreadCount() == getLaneWidth(),
@@ -255,8 +255,8 @@ proc grouped_gemm_via_offsets*(d, a, b, offs: distinct TensorView) =
   let thrID = getLocalThreadID()
   if thrID < getLaneWidth():
     let
-      totalM: int = a.shape[0]
-      gCount: int = b.shape[0]
+      totalM = a.shape[0]
+      gCount = b.shape[0]
       nTiles = b.shape[2].ceil_div(NT)
       totalTiles = totalM.ceil_div(MT) * nTiles
       (_, kTiles) = a.tileWith((MT, KT)).getTileGrid()
@@ -290,10 +290,10 @@ proc grouped_gemm_via_offsets*(d, a, b, offs: distinct TensorView) =
             var rB: tile(b.T, bLayout)
             rB.load(bT, tvmB, thrID, (nTile, kTile))
             mma.atom.gemm_tile(rD, rAm, rB, rD)
-      d.store(rD.downcast(d.T), tvmC, thrID, (mTile, nTile))
+      dst.store(rD.downcast(dst.T), tvmC, thrID, (mTile, nTile))
 
-proc grouped_gemm_via_expertIds*(d, a, b, expertIds: distinct TensorView) =
-  ## Per-expert contraction `d = a_g · b_g`, countGroupedGemmTiles(a.T, totalM, n) threadgroups, per-tile run-walk over expertIds.
+proc grouped_gemm_via_expertIds*(dst, a, b, expertIds: distinct TensorView) =
+  ## Per-expert contraction `dst = a_g · b_g`, countGroupedGemmTiles(a.T, totalM, n) threadgroups, per-tile run-walk over expertIds.
   const (MT, NT, KT) = groupedGemmTiles(a.T)
   const mma = tiledMma(float32, a.T, b.T, MT, NT, KT)
   static: doAssert mma.atom.getThreadCount() == getLaneWidth(),
@@ -309,7 +309,7 @@ proc grouped_gemm_via_expertIds*(d, a, b, expertIds: distinct TensorView) =
   let thrID = getLocalThreadID()
   if thrID < getLaneWidth():
     let
-      totalM: int = a.shape[0]
+      totalM = a.shape[0]
       nTiles = b.shape[2].ceil_div(NT)
       totalTiles = totalM.ceil_div(MT) * nTiles
       (_, kTiles) = a.tileWith((MT, KT)).getTileGrid()
@@ -347,4 +347,4 @@ proc grouped_gemm_via_expertIds*(d, a, b, expertIds: distinct TensorView) =
             mma.atom.gemm_tile(rD, rAm, rB, rD)
           j = jEnd
       if tileHasValidLine:
-        d.store(rD.downcast(d.T), tvmC, thrID, (mTile, nTile))
+        dst.store(rD.downcast(dst.T), tvmC, thrID, (mTile, nTile))

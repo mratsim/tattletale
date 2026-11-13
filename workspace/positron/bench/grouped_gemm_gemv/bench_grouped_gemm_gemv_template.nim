@@ -77,8 +77,11 @@ proc denseMatmulCombo*(mma: static TiledMma, d, a, b: distinct TensorView) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc runGemvColumn*[T](_: typedesc[T], engine: MetalEngine, e: int, m, k, n: int): float64 =
+  ## GB/s over the traffic model: every line reads its expert's full b matrix
+  ## (m·k·n b bytes dominate), plus a lines and dst writes.
   var (aView, bView, offsView, dView) = stageGroupedSlabs(engine, T, e, m, k, n)
-  let flops = 2.0e0 * float64(e) * float64(m) * float64(k) * float64(n)
+  let elt = sizeof(T).float64
+  let bytes = float64(e * m * (k * n + k + n)) * elt
   engine.launchDeviceFn grouped_gemv_via_offsets(dView, aView, bView, offsView) do:
     grid = (int(n).ceil_div(32 * GroupedGemvOutputs), e * int(m))
     blk = (32, 1)
@@ -91,7 +94,7 @@ proc runGemvColumn*[T](_: typedesc[T], engine: MetalEngine, e: int, m, k, n: int
     let benchStop = getMonoTime()
     timings[rep] = inNanoseconds(benchStop - benchStart)
   sort(timings)
-  result = flops / float64(timings[1])
+  result = bytes / float64(timings[1])
 
 proc runGroupedGemmColumn*[T](_: typedesc[T], engine: MetalEngine, e: int, m, k, n: int): float64 =
   var (aView, bView, offsView, dView) = stageGroupedSlabs(engine, T, e, m, k, n)
@@ -197,7 +200,7 @@ proc mainGroupedGemvViaOffsets* =
   else:
     writeLine(stdout, &"grouped_gemv_via_offsets bench, full sweep, K={Kdim} N={Ndim}, M4 Max")
     for e in [8, 64, 512]:
-      for m in [1, 2, 4, 8, 16, 64]:
+      for m in [1, 4, 16, 64]:
         runGemvCell(engine, e, m, float32)
         runGemvCell(engine, e, m, float16)
 
@@ -220,9 +223,8 @@ proc mainGroupedGemmViaOffsets* =
   else:
     writeLine(stdout, &"grouped_gemm_via_offsets bench, full sweep, K={Kdim} N={Ndim}, M4 Max")
     for e in [8, 64, 512]:
-      for m in [1, 8, 64, 512, 4096]:
+      for m in [1, 8, 64, 512]:
         runGemmCell(engine, e, m, float32)
-        runGemmCell(engine, e, m, float16)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  via_expertIds benches
@@ -307,7 +309,10 @@ proc runDecodeCell(engine: MetalEngine, tok, topk, e: int) =
     idsView = makeDeviceView(idsDev, (tok, topk), (topk, 1))
     weightsView = makeDeviceView(weightsDev, (tok, topk), (topk, 1))
     dView = makeDeviceView(dDev, (tok, ndim), (ndim, 1))
-    flops = 2.0e0 * float64(tok * topk) * float64(Kdim) * float64(Ndim)
+    # traffic: every (token, slot) pair reads its expert's full b matrix
+    # (tok·topk·K·N b bytes dominate), plus x lines, dst writes, ids, weights
+    bytes = float64(tok * topk) * float64(Kdim * Ndim + Kdim + Ndim + 8) +
+      float64(tok) * float64(Kdim + Ndim)
   engine.launchDeviceFn grouped_gemv_via_expertIds(dView, xView, bView, idsView, weightsView, topk) do:
     grid = (ndim.ceil_div(32 * GroupedGemvOutputs), tok)
     blk = (32, 1)
@@ -321,7 +326,7 @@ proc runDecodeCell(engine: MetalEngine, tok, topk, e: int) =
     timings[rep] = inNanoseconds(benchStop - benchStart)
   sort(timings)
   let med = timings[1].float64 / 1e9
-  writeLine(stdout, &"T={tok:>4} topk={topk} E={e:>4}  gemv {flops / med / 1e9:>9.1f} GF/s  {med * 1e6:>10.1f} us")
+  writeLine(stdout, &"T={tok:>4} topk={topk} E={e:>4}  gemv {bytes / med / 1e9:>9.1f} GB/s  {med * 1e6:>10.1f} us")
 
 proc runSplitKCell(engine: MetalEngine, tok, topk, e, kSplits: int) =
   ## One split-K cell: stage 1 + stage 2 back to back, 1 warmup pair, median of 3 timed pairs.
@@ -360,7 +365,9 @@ proc runSplitKCell(engine: MetalEngine, tok, topk, e, kSplits: int) =
     dView = makeDeviceView(dDev, (tok, ndim), (ndim, 1))
     pView = makeDeviceView(pDev, (tok, kSplits, ndim),
                            (kSplits * ndim, ndim, 1))
-    flops = 2.0e0 * float64(tok * topk) * float64(Kdim) * float64(Ndim)
+    # traffic: the b reads of the single-launch form plus the partials round trip
+    bytes = float64(tok * topk) * float64(Kdim * Ndim + Kdim + Ndim + 8) +
+      float64(tok) * float64(Kdim + Ndim + kSplits * Ndim * 8)
   template launchPair: untyped =
     engine.launchDeviceFn grouped_gemv_splitk(pView, xView, bView, idsView, weightsView, topk, kSplits) do:
       grid = (ndim.ceil_div(32 * GroupedGemvOutputs) * kSplits, tok)
@@ -377,7 +384,7 @@ proc runSplitKCell(engine: MetalEngine, tok, topk, e, kSplits: int) =
     timings[rep] = inNanoseconds(benchStop - benchStart)
   sort(timings)
   let med = timings[1].float64 / 1e9
-  writeLine(stdout, &"                                gemv-splitk/{kSplits} {flops / med / 1e9:>9.1f} GF/s  {med * 1e6:>10.1f} us")
+  writeLine(stdout, &"                                gemv-splitk/{kSplits} {bytes / med / 1e9:>9.1f} GB/s  {med * 1e6:>10.1f} us")
 
 proc runMatchedGemmCell(engine: MetalEngine, tok, topk, e: int) =
   ## Matched gemm cell: grouped_gemm_via_expertIds over the packed equivalent.
@@ -437,26 +444,15 @@ proc mainGroupedGemvViaExpertIds* =
   writeLine(stdout, "grouped_gemv_via_expertIds vs packed grouped_gemm_via_expertIds, K=N=512, " &
     dtypeName & " (M4 Max), median of 3 launch-inclusive after 1 warmup")
   var engine = newEngine(runMetal)
-  writeLine(stdout, "kSplits ablation, T=1 topk=6 E=512:")
-  for kSplits in [4, 8, 16, 32]:
+  for kSplits in [4, 8, 16, 32, 64]:
     runSplitKCell(engine, 1, 6, 512, kSplits)
-  writeLine(stdout, "kSplits ablation, T=1 topk=1 E=512:")
-  for kSplits in [8, 16, 32, 64]:
-    runSplitKCell(engine, 1, 1, 512, kSplits)
-  writeLine(stdout, "kSplits ablation, T=8 topk=1 E=512:")
-  for kSplits in [8, 16, 32]:
-    runSplitKCell(engine, 8, 1, 512, kSplits)
-  writeLine(stdout, "kSplits ablation, T=8 topk=6 E=512:")
-  for kSplits in [8, 16, 32]:
-    runSplitKCell(engine, 8, 6, 512, kSplits)
-  for e in [8, 64, 512]:
-    for tok in [1, 8, 64, 512]:
-      for topk in [1, 6]:
-        runDecodeCell(engine, tok, topk, e)
-        let (form, kSplits) = groupedGemvForm(tok, int(Ndim))
-        if form == ggfSplitK:
-          runSplitKCell(engine, tok, topk, e, kSplits)
-        runMatchedGemmCell(engine, tok, topk, e)
+  for tok in [1, 8, 64, 512]:
+    for topk in [1, 6]:
+      runDecodeCell(engine, tok, topk, 512)
+      let (form, kSplits) = groupedGemvForm(tok, int(Ndim))
+      if form == ggfSplitK:
+        runSplitKCell(engine, tok, topk, 512, kSplits)
+      runMatchedGemmCell(engine, tok, topk, 512)
 
 proc runExpandCell(engine: MetalEngine, e: int, m: int, padded: static bool) =
   ## One cell: 1 warmup launch, median of 3 timed launches.
@@ -496,6 +492,7 @@ proc mainGroupedGemmViaExpertIds* =
     dtypeName & " (M4 Max)")
   var engine = newEngine(runMetal)
   for e in [8, 64, 512]:
-    for m in [1, 8, 64, 512, 4096]:
+    for m in [1, 8, 64, 512]:
       runExpandCell(engine, e, m, padded = false)
       runExpandCell(engine, e, m, padded = true)
+  runExpandCell(engine, 512, 4096, padded = false)

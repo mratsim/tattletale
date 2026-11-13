@@ -37,8 +37,8 @@ const MoERouterLog2e = 1.4426950408889634'f32
 proc moe_router_topk*(ids, weights, scores, bias: distinct TensorView, topk, variant: int, scalingFactor: float32) =
   ## Per-token top-k routing, one launch: T threadgroups, (32, 1) lanes, lane 0 runs the serial scan.
   let
-    tCount: int = scores.shape[0]
-    e: int = scores.shape[1]
+    tCount = scores.shape[0]
+    e = scores.shape[1]
   for slotID in countup(getLocalTileID(tCount), tCount - 1, getGridSize()):
     let t = slotID
     if getLocalThreadID() == 0:
