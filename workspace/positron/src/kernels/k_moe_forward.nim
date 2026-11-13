@@ -105,7 +105,7 @@ proc moe_dispatch_gather(packedIds, packedX, x, sortedPairs, packedOffsets: dist
   ## t2 ══╝        slot 5 ─► x[t2, :]      empty slots stay untouched, -1
   ## ```
   ##
-  ## - packedIds comes from a binary search over packedOffsets
+  ## - packedIds (cap,) int32, -1 on the padding slots
   let
     k = x.shape[1]
     cap = sortedPairs.shape[0]
