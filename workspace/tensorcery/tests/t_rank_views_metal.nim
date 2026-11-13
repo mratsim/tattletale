@@ -22,7 +22,7 @@ privateAccess(Tensor)
 proc main =
   const run = runMetal
 
-  # Squeeze rank-3 -> rank-2 over a pre-allocated source, read back with item
+  # Squeeze rank-3 -> rank-2 over a pre-allocated source, check with item
   block:
     var x = @[7.0'f32].toTensor([1, 1, 1], run, bfloat16)
     let vNode = x.engine.newViewNode(x.node, [1, 1], [1, 1], 0, "squeeze")
@@ -39,7 +39,7 @@ proc main =
     let sy = Tensor(engine: x.engine, node: vNode)
     doAssert sy.item(bfloat16) == 7.0'f32.to(bfloat16)
 
-  # Reshape rank-2 -> rank-3 over an op output, read back with allClose
+  # Reshape rank-2 -> rank-3 over an op output, check with allClose
   block:
     var xd = @[1.0'f32, 2, 3, 4, 5, 6, 7, 8]
     var x = xd.toTensor([2, 4], run, bfloat16)

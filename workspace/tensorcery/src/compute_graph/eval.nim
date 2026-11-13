@@ -87,14 +87,21 @@ proc evalRoots*[E: HwEngine](engine: E, roots: var openArray[TensorGraph], snaps
     # This drops ancestors and frees their buffers.
     for i in 0 ..< roots.len:
       if not roots[i].isNil():
+        let matOffset = getMaterializedOffset(roots[i])
         let impl = roots[i].getImpl()
         case impl.dtype()
         of kFp16:
-          roots[i] = impl.to(engine.getTensorImplType(float16)).to(TensorGraph)
+          let ci = impl.to(engine.getTensorImplType(float16))
+          ci.offset = matOffset
+          roots[i] = ci.to(TensorGraph)
         of kFp32:
-          roots[i] = impl.to(engine.getTensorImplType(float32)).to(TensorGraph)
+          let ci = impl.to(engine.getTensorImplType(float32))
+          ci.offset = matOffset
+          roots[i] = ci.to(TensorGraph)
         of kBf16:
-          roots[i] = impl.to(engine.getTensorImplType(bfloat16)).to(TensorGraph)
+          let ci = impl.to(engine.getTensorImplType(bfloat16))
+          ci.offset = matOffset
+          roots[i] = ci.to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registry

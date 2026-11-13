@@ -33,6 +33,7 @@ iface *AnyTensorImpl:
     func strides(): Span[int] {.inline.}
     func size(): int {.inline.}
     func offset(): int {.inline.}
+    func getBufferSize(): int {.inline.}
     func isPreAllocated(): bool {.inline.}
 
 iface *TensorGraph:
@@ -61,6 +62,7 @@ type
   TensorImpl*[DeviceMem; L: Layout | LayoutBasic] = ref object
     data*: ref DeviceMem
     offset*: int
+    bufferSize*: int
     layout*: L
 
   TensorBridge*[DeviceMem; L: Layout | LayoutBasic] = object
@@ -77,6 +79,7 @@ type
     r*: AnyTensorImpl
     src*: TensorGraph
     srcOpName*: string
+    viewOffset*: int
 
   NilNode* = ref object of TensorNode
 
@@ -119,13 +122,13 @@ template getTensorImplType*(engine: HwEngine, T: typedesc): typedesc =
 proc allocDataIn*[E: HwEngine, H, T](engine: E, impl: TensorImpl[DeviceMem[H, T], LayoutBasic]) {.inline.} =
   impl.data.new()
   impl.data[] = engine.allocDevice(T, impl.size())
+  impl.bufferSize = impl.size()
 
 func bridge*[DeviceMem; L: Layout | LayoutBasic](t: TensorImpl[DeviceMem, L]): TensorBridge[DeviceMem, L] {.inline.} =
   if t.isNil():
     TensorBridge[DeviceMem, L]()
   else:
-    static: doAssert sizeof(t[]) == sizeof(TensorBridge[DeviceMem, L])
-    cast[ptr TensorBridge[DeviceMem, L]](t)[]
+    initTensorBridge(t.data, t.offset, t.layout)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph
