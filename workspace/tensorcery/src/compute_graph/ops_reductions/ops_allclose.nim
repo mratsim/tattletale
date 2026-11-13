@@ -13,7 +13,7 @@ import workspace/iface
 import workspace/math
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################

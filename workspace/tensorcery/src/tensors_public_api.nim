@@ -14,7 +14,6 @@ import workspace/design_by_contract
 import ./tensors_internals
 import ./tensors_public_types
 import ./tensors_globals
-import ./compute_graph/batching
 import ./compute_graph/ops_2i1o/ops_add
 import ./compute_graph/ops_1iNo/ops_split
 import ./compute_graph/ops_metadata/ops_swapaxes

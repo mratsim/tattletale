@@ -13,7 +13,7 @@ import workspace/iface
 import workspace/design_by_contract
 from std/math import ceil
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################

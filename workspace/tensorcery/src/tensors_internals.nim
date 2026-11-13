@@ -16,7 +16,6 @@ import workspace/iface
 import workspace/design_by_contract
 import ./tensors_internal_types
 import ./tensors_basic_views
-import ./compute_graph/batching
 
 export tensors_internal_types
 export tensors_basic_views
@@ -141,10 +140,6 @@ proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openA
 proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
   match(ElemType, dtype):
     engine.newTensorImpl(ElemType, shape).to(TensorNode)
-
-proc collectView*(n: TensorNode, stack: var seq[WalkFrame]) =
-  let v = n.to(ViewNode)
-  stack.add WalkFrame(n: v.src, kernelPending: false)
 
 proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorNode, _: typedesc[T]) =
   let v = n.to(ViewNode)
