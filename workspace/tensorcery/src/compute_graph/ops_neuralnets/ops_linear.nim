@@ -191,16 +191,13 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
       rowsPerSlice = rImpl.layout.shape[rImpl.layout.rank - 2]
       nSlices = rImpl.size() div (rowsPerSlice * cols)
       tiles = nSlices * rowsPerSlice.ceil_div(Fleet.tileM) * cols.ceil_div(Fleet.tileN)
-    # Ceramic kernel signature: static Layout, one instantiation per slice rank.
-    # Bridges retype from basic metadata and relayoutBridge checks the rank.
-    # Bias add is a runtime branch: both call sites pass a rank-1 bridge.
-    # One kernel covers each slice rank and element type. An absent bias passes the weight bridge as an unread placeholder.
     template enqueueLinearAt(lay: typedesc) =
       let
         rView = rImpl.relayoutBridge(lay)
         xView = xImpl.relayoutBridge(lay)
         wView = wImpl.relayoutBridge(Layout[(int, int), (int, int)])
       if asLinear.b.isNil():
+        # Absent bias passes the weight bridge as an unread placeholder (nil device buffers are inexpressible on Metal).
         let noBias = initTensorBridge[typeof(wImpl.data[]), Layout[(int,), (int,)]](wImpl.data, 0, Layout[(int,), (int,)]())
         batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
           rView, xView, wView, noBias, 0)

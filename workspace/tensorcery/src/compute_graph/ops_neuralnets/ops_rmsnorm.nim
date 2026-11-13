@@ -128,9 +128,7 @@ proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var T
       axis = rImpl.layout.rank - 1
       rows = rImpl.size() div rImpl.layout.shape[axis]
       grid = min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups)
-    # One kernel instantiation: both call sites pass a LayoutBasic bridge.
-    # Weighted or unweighted apply is picked at runtime by `hasWeight`.
-    # An absent weight passes the source bridge as an unread placeholder.
+    # Absent weight passes the source bridge as an unread placeholder (nil device buffers are inexpressible on Metal).
     if asNorm.w.isNil():
       let noWeight = initTensorBridge[typeof(rImpl.data[]), LayoutBasic](xImpl.data, 0, LayoutBasic())
       batch.enqueue<<(grid, LaneWidth)>> k_rmsnorm(rImpl.bridge(), xImpl.bridge(), noWeight, asNorm.eps, axis, 0)
