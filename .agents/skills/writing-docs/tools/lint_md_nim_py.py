@@ -2242,14 +2242,16 @@ def nim_structure_checks(path, text, header_nos, findings):
                         path, i + 1, "allclose-call-syntax",
                         "tested-first allClose call, use the method call "
                         "syntax tested.allClose(reference)"))
-                getCall = GET_PLAIN_CALL_RE.search(code)
-                if getCall is not None \
-                        and not getCall.group(0).startswith("getLocalTileID(") \
+                if GET_PLAIN_CALL_RE.search(code) \
                         and not GET_DECL_RE.match(code):
-                    findings.append(Finding(
-                        path, i + 1, "get-call-syntax",
-                        "receiver-first get call, use the method call "
-                        "syntax x.getName(...)"))
+                    for getCall in GET_PLAIN_CALL_RE.finditer(code):
+                        if getCall.group(0).startswith("getLocalTileID("):
+                            continue
+                        findings.append(Finding(
+                            path, i + 1, "get-call-syntax",
+                            "receiver-first get call, use the method call "
+                            "syntax x.getName(...)"))
+                        break
                 if RANDOM_PLAIN_CALL_RE.search(code) \
                         and not RANDOM_DECL_RE.match(code):
                     findings.append(Finding(
