@@ -117,7 +117,6 @@ proc ingest*(engine: VulkanEngine, spirv: SpirvWords) =
   if engine.spirv == spirv:
     return
   const spvMagic = 0x07230203'u32
-  resetCaches(engine)
   if spirv.len < 5 or spirv[0] != spvMagic:
     raiseAssert("Vulkan ingest: not a SPIR-V module, expected the 0x07230203 " &
              "magic as word 0 and the 5-word header, got " &
@@ -126,6 +125,9 @@ proc ingest*(engine: VulkanEngine, spirv: SpirvWords) =
   let sq = parseSpirvEntryDescriptor(spirv)
   if sq.entryPoints == 0:
     raiseAssert("Vulkan ingest: the module declares no OpEntryPoint")
+  # Validate before reset: a rejected replacement leaves the live
+  # module's metadata intact for the dedupe re-ingest.
+  resetCaches(engine)
   if sq.entryPoints > 1:
     engine.entrySquadrons = parseSpirvEntrySizes(spirv)
   engine.source = ""
