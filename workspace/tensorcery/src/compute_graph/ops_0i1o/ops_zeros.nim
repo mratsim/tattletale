@@ -42,7 +42,7 @@ proc k_fill*(D: distinct TensorBasicView, val: float32) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  ZerosNode* = ref object
+  ZerosNode* = ref object of TensorNode
     r: AnyTensorImpl
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -52,28 +52,22 @@ type
 func getImpl*(n: ZerosNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: ZerosNode): string {.inline.} =
+func opName*(_: typedesc[ZerosNode]): static string {.inline.} =
   "Zeros"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_zeros*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
+proc tn_zeros*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorGraph {.contracts.} =
   {.precondition: shape.len in 1 .. 5.}
-  return ZerosNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorNode)
+  return ZerosNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectZeros[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
-  let asZeros = n.to(ZerosNode)
-  if asZeros.isNil():
-    return false
-  return true
-
-proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asZeros = n.to(ZerosNode)
   if asZeros.isNil():
     return false
@@ -85,4 +79,4 @@ proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Ten
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Zeros", collectZeros, enqueueZeros)
+registerOp(ZerosNode, enqueueZeros, opName(ZerosNode))

@@ -70,10 +70,10 @@ proc k_rmsnorm(dst, src, weight: distinct TensorBasicView, eps: float32, axis: i
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  RmsNormNode* = ref object
+  RmsNormNode* = ref object of TensorNode
     r: AnyTensorImpl
-    x: TensorNode
-    w: TensorNode         # nil when unweighted
+    x: TensorGraph
+    w: TensorGraph         # nil when unweighted
     eps: float32
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -83,7 +83,7 @@ type
 func getImpl*(n: RmsNormNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: RmsNormNode): string {.inline.} =
+func opName*(_: typedesc[RmsNormNode]): static string {.inline.} =
   "RmsNorm"
 
 
@@ -91,7 +91,7 @@ func opName*(n: RmsNormNode): string {.inline.} =
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_rmsnorm*(engine: AnyEngine, x: TensorNode, weight: TensorNode, eps: float32 = 1e-5): TensorNode {.contracts.} =
+proc tn_rmsnorm*(engine: AnyEngine, x: TensorGraph, weight: TensorGraph, eps: float32 = 1e-5): TensorGraph {.contracts.} =
   let ix = x.getImpl()
   {.precondition: ix.shape().p.len >= 1.}
   if not weight.isNil():
@@ -101,22 +101,13 @@ proc tn_rmsnorm*(engine: AnyEngine, x: TensorNode, weight: TensorNode, eps: floa
     {.precondition: iw.shape().p[0] == ix.shape().p[ix.shape().p.len - 1].}
   return RmsNormNode(x: x, w: weight, eps: eps,
       r: engine.newPlaceholderNode(ix.dtype(), ix.shape().p).getImpl()
-    ).to(TensorNode)
+    ).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectRmsnorm[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
-  let asNorm = n.to(RmsNormNode)
-  if asNorm.isNil():
-    return false
-  stack.add WalkFrame(n: asNorm.x, kernelPending: false)
-  if not asNorm.w.isNil():
-    stack.add WalkFrame(n: asNorm.w, kernelPending: false)
-  return true
-
-proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asNorm = n.to(RmsNormNode)
   if asNorm.isNil():
     return false
@@ -137,4 +128,4 @@ proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var T
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("RmsNorm", collectRmsnorm, enqueueRmsnorm)
+registerOp(RmsNormNode, enqueueRmsnorm, opName(RmsNormNode))

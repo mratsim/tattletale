@@ -78,10 +78,10 @@ proc k_allClose(D, tested, reference: distinct TensorBasicView, atol, rtol, equa
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  AllCloseNode* = ref object
+  AllCloseNode* = ref object of TensorNode
     r: AnyTensorImpl      # rank-1 float32 scalar, 1.0 or 0.0
-    tested: TensorNode
-    reference: TensorNode
+    tested: TensorGraph
+    reference: TensorGraph
     atol: float32
     rtol: float32
     equalNan: float32
@@ -93,14 +93,14 @@ type
 func getImpl*(n: AllCloseNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: AllCloseNode): string {.inline.} =
+func opName*(_: typedesc[AllCloseNode]): static string {.inline.} =
   "AllClose"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: float32, equalNan: bool): TensorNode {.contracts.} =
+proc tn_allClose*(engine: AnyEngine, tested, reference: TensorGraph, atol, rtol: float32, equalNan: bool): TensorGraph {.contracts.} =
   let
     ia = tested.getImpl()
     ib = reference.getImpl()
@@ -109,21 +109,13 @@ proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: 
   return AllCloseNode(tested: tested, reference: reference, atol: atol, rtol: rtol,
       equalNan: if equalNan: 1.0'f32 else: 0.0'f32,
       r: engine.newPlaceholderNode(kFp32, [1]).getImpl()
-    ).to(TensorNode)
+    ).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectAllClose[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
-  let asAll = n.to(AllCloseNode)
-  if asAll.isNil():
-    return false
-  stack.add WalkFrame(n: asAll.tested, kernelPending: false)
-  stack.add WalkFrame(n: asAll.reference, kernelPending: false)
-  return true
-
-proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asAll = n.to(AllCloseNode)
   if asAll.isNil():
     return false
@@ -146,4 +138,4 @@ proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var 
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("allClose", collectAllClose, enqueueAllClose)
+registerOp(AllCloseNode, enqueueAllClose, opName(AllCloseNode))

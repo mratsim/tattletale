@@ -75,12 +75,12 @@ proc k_gemm(mma: static TiledMma, D: distinct TensorView, alpha: float32,
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  GemmNode* = ref object
+  GemmNode* = ref object of TensorNode
     r: AnyTensorImpl
     alpha: float32
-    a, b: TensorNode
+    a, b: TensorGraph
     beta: float32
-    c: TensorNode         # nil when beta = 0
+    c: TensorGraph         # nil when beta = 0
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Interface
@@ -89,7 +89,7 @@ type
 func getImpl*(n: GemmNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: GemmNode): string {.inline.} =
+func opName*(_: typedesc[GemmNode]): static string {.inline.} =
   "Gemm"
 
 
@@ -99,8 +99,8 @@ func opName*(n: GemmNode): string {.inline.} =
 
 proc tn_gemm*(
     engine: AnyEngine,
-    alpha: float32, a, b: TensorNode,
-    beta: float32, c: TensorNode = NilTensorNode()): TensorNode {.contracts.} =
+    alpha: float32, a, b: TensorGraph,
+    beta: float32, c: TensorGraph = NilTensorNode()): TensorGraph {.contracts.} =
   ## D = alpha·A·B + beta·C, C nil requires beta = 0.
   let
     ia = a.getImpl()
@@ -116,23 +116,13 @@ proc tn_gemm*(
     {.precondition: ic.shape().p == [ia.shape().p[0], ib.shape().p[1]].}
   return GemmNode(alpha: alpha, a: a, b: b, beta: beta, c: c,
       r: engine.newPlaceholderNode(ia.dtype(), [ia.shape().p[0], ib.shape().p[1]]).getImpl()
-    ).to(TensorNode)
+    ).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectGemm[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
-  let asGemm = n.to(GemmNode)
-  if asGemm.isNil():
-    return false
-  stack.add WalkFrame(n: asGemm.a, kernelPending: false)
-  stack.add WalkFrame(n: asGemm.b, kernelPending: false)
-  if not asGemm.c.isNil():
-    stack.add WalkFrame(n: asGemm.c, kernelPending: false)
-  return true
-
-proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asGemm = n.to(GemmNode)
   if asGemm.isNil():
     return false
@@ -165,4 +155,4 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Gemm", collectGemm, enqueueGemm)
+registerOp(GemmNode, enqueueGemm, opName(GemmNode))

@@ -48,7 +48,7 @@ proc k_arange(D: distinct TensorBasicView, start, step: float32) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  ArangeNode* = ref object
+  ArangeNode* = ref object of TensorNode
     r: AnyTensorImpl
     start, step: float32
 
@@ -59,31 +59,25 @@ type
 func getImpl*(n: ArangeNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: ArangeNode): string {.inline.} =
+func opName*(_: typedesc[ArangeNode]): static string {.inline.} =
   "Arange"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): TensorNode {.contracts.} =
+proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): TensorGraph {.contracts.} =
   # (stop - start) * step underflows to zero in float32, e.g. arange(0, 1e-30, step=1e-30)
   {.precondition: step != 0.0'f32.}
   {.precondition: (step > 0.0'f32 and start < stop) or (step < 0.0'f32 and start > stop).}
   let n = ceil((stop - start) / step).int
-  return ArangeNode(r: engine.newPlaceholderNode(dtype, [n]).getImpl(), start: start, step: step).to(TensorNode)
+  return ArangeNode(r: engine.newPlaceholderNode(dtype, [n]).getImpl(), start: start, step: step).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectArange[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
-  let asArange = n.to(ArangeNode)
-  if asArange.isNil():
-    return false
-  return true
-
-proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asArange = n.to(ArangeNode)
   if asArange.isNil():
     return false
@@ -95,4 +89,4 @@ proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Arange", collectArange, enqueueArange)
+registerOp(ArangeNode, enqueueArange, opName(ArangeNode))

@@ -58,7 +58,7 @@ func size*(t: TensorImpl): int {.inline.} =
     result *= t.layout.shape[i]
 
 # ═══════════════════════════════════════════════════════════════════════
-#  TensorImpl - TensorNode interface
+#  TensorImpl - TensorGraph interface
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
@@ -82,21 +82,21 @@ template withDeviceImpl*[E: HwEngine](engine: E, impl: AnyTensorImpl, T: typedes
   let concreteTensor = impl.to(engine.getTensorImplType(T))
   body
 
-proc download1*[E: HwEngine](engine: E, dst: pointer, node: TensorNode) =
+proc download1*[E: HwEngine](engine: E, dst: pointer, node: TensorGraph) =
   let impl = node.getImpl()
   match(ElemType, impl.dtype()):
     let ci = impl.to(engine.getTensorImplType(ElemType))
     engine.copyToHostFromDevice(cast[ptr ElemType](dst)[], ci.data[], ci.offset)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) =
+proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[float32]) =
   engine.withDeviceImpl(node.getImpl(), float32, t):
     engine.copyToDeviceFromHost(t.data[], src)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float16]) =
+proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[float16]) =
   engine.withDeviceImpl(node.getImpl(), float16, t):
     engine.copyToDeviceFromHost(t.data[], src)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) =
+proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[bfloat16]) =
   engine.withDeviceImpl(node.getImpl(), bfloat16, t):
     engine.copyToDeviceFromHost(t.data[], src)
 
@@ -118,11 +118,11 @@ proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], shape: openArray[i
 #  Graph
 # ═══════════════════════════════════════════════════════════════════════
 
-proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
+proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorGraph =
   match(ElemType, dtype):
-    engine.newPlaceholderImpl(ElemType, shape).to(TensorNode)
+    engine.newPlaceholderImpl(ElemType, shape).to(TensorGraph)
 
-proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int, srcOpName: string): TensorNode =
+proc newViewNode*[E: HwEngine](engine: E, src: TensorGraph, shape, strides: openArray[int], offset: int, srcOpName: string): TensorGraph =
   let si = src.getImpl()
   match(ElemType, si.dtype()):
     let r = engine.getTensorImplType(ElemType)()
@@ -132,13 +132,13 @@ proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openA
       r.data = s.data
       if s.isPreAllocated():
         r.offset = s.offset + offset
-    ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorNode)
+    ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorGraph)
 
-proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
+proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorGraph =
   match(ElemType, dtype):
-    engine.newTensorImpl(ElemType, shape).to(TensorNode)
+    engine.newTensorImpl(ElemType, shape).to(TensorGraph)
 
-proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorNode, _: typedesc[T]) =
+proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorGraph, _: typedesc[T]) =
   let v = n.to(ViewNode)
   let r = v.r.to(engine.getTensorImplType(T))
   engine.withDeviceImpl(v.src.getImpl(), T, s):

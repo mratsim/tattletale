@@ -23,7 +23,7 @@ import ./ops_zeros
 # ############################################################
 
 type
-  OnesNode* = ref object
+  OnesNode* = ref object of TensorNode
     r: AnyTensorImpl
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -33,28 +33,22 @@ type
 func getImpl*(n: OnesNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: OnesNode): string {.inline.} =
+func opName*(_: typedesc[OnesNode]): static string {.inline.} =
   "Ones"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_ones*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
+proc tn_ones*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorGraph {.contracts.} =
   {.precondition: shape.len in 1 .. 5.}
-  return OnesNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorNode)
+  return OnesNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectOnes[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
-  let asOnes = n.to(OnesNode)
-  if asOnes.isNil():
-    return false
-  return true
-
-proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asOnes = n.to(OnesNode)
   if asOnes.isNil():
     return false
@@ -66,4 +60,4 @@ proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Ones", collectOnes, enqueueOnes)
+registerOp(OnesNode, enqueueOnes, opName(OnesNode))

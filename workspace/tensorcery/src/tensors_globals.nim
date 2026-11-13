@@ -88,7 +88,7 @@ proc ctgSoleBackend*(): Runtime {.compileTime.} =
   for k in ctgBackendSelection:
     return k
 
-template eval*(run: static Runtime, roots: var openArray[TensorNode]) =
+template eval*(run: static Runtime, roots: var openArray[TensorGraph]) =
   ## Enqueues and submits the graph rooted at `roots` on the concrete engine
   ## for `run`.
   ##

@@ -50,7 +50,7 @@ proc k_eye(D: distinct TensorBasicView, ncols, kDiag: float32) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  EyeNode* = ref object
+  EyeNode* = ref object of TensorNode
     r: AnyTensorImpl
     n, m, k: int
 
@@ -61,29 +61,23 @@ type
 func getImpl*(n: EyeNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: EyeNode): string {.inline.} =
+func opName*(_: typedesc[EyeNode]): static string {.inline.} =
   "Eye"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorNode {.contracts.} =
+proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorGraph {.contracts.} =
   # size 0 is refused at allocation, not here
   {.precondition: n >= 0 and m >= 0.}
-  return EyeNode(r: engine.newPlaceholderNode(dtype, [n * m]).getImpl(), n: n, m: m, k: k).to(TensorNode)
+  return EyeNode(r: engine.newPlaceholderNode(dtype, [n * m]).getImpl(), n: n, m: m, k: k).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc collectEye[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
-  let asEye = n.to(EyeNode)
-  if asEye.isNil():
-    return false
-  return true
-
-proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asEye = n.to(EyeNode)
   if asEye.isNil():
     return false
@@ -95,4 +89,4 @@ proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Eye", collectEye, enqueueEye)
+registerOp(EyeNode, enqueueEye, opName(EyeNode))

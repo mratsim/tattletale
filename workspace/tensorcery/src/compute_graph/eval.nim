@@ -17,21 +17,33 @@ import ./metrics
 export metrics
 
 type
-  OpHandlers = tuple[collect, kernel: NimNode]
+  OpHandlers = tuple[nodeType, kernel: NimNode]
 
   WalkFrame* = object
     ## One pending visit of the eval walk.
-    ## The first visit pre-allocates the output and pushes the operands.
-    ## The second visit enqueues the kernel.
-    n*: TensorNode
+    ## The first visit pushes the operands.
+    ## The second visit allocates the output and enqueues the kernel.
+    n*: TensorGraph
     kernelPending*: bool
 
 var OpRegistry {.compileTime.}: Table[string, OpHandlers]
 
-proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorNode]) =
+proc collectNode[N](_: typedesc[N], n: var TensorGraph, stack: var seq[WalkFrame]): bool =
+  ## Collect phase derived from the node type: every non-nil TensorGraph
+  ## field is an operand. The output (an impl field) never traverses.
+  var asX = n.to(N)
+  if asX.isNil():
+    return false
+  for _, field in fieldPairs(asX[]):
+    when field is TensorGraph:
+      if not field.isNil():
+        stack.add WalkFrame(n: field, kernelPending: false)
+  return true
+
+proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorGraph]) =
   raiseAssert("Tensorcery internal error: eval called on the erased engine handle")
 
-template evalRoots*(engine: HwEngine, roots: var openArray[TensorNode]) =
+template evalRoots*(engine: HwEngine, roots: var openArray[TensorGraph]) =
   if roots.len != 0:
     incMetric(evals)
     var batch = engine.recordBatch()
@@ -68,8 +80,8 @@ template evalRoots*(engine: HwEngine, roots: var openArray[TensorNode]) =
 #  Registry
 # ═══════════════════════════════════════════════════════════════════════
 
-macro registerOp*(op: static string, collect, kernel: typed) =
-  OpRegistry[op] = (collect, kernel)
+macro registerOp*(N, kernel: typed, name: static string) =
+  OpRegistry[name] = (nodeType: N, kernel: kernel)
 
 proc renameDef(name: NimNode, suffix: string): NimNode =
   ## Quoted operator names are preserved. The export marker is dropped.
@@ -156,29 +168,26 @@ macro hasKernel*(ops: untyped, p: untyped): untyped =
 #   dispatchMarked ── markedDispatch
 #     │ macro: one elif-branch per op marked at this point in compilation
 #     │ (CacheCounter, incremented by calling the op's public function);
-#     │ unmarked handlers and their kernels never instantiate
+#     │ unmarked collect and their kernels never instantiate
 #     ▼
-#   handler(engine, ..., n, T): bool ── first true wins, no match raises
+#   collect: collectNode[N](n, stack) ── pushes the node's TensorGraph fields
+#   kernel: handler(engine, batch, n, T): bool ── first true wins, no match raises
 
 proc markedDispatch(collect: bool, engine, batch, n, stack, T: NimNode): NimNode =
   result = newNimNode(nnkIfStmt)
   for name, h in pairs(OpRegistry):
     if CacheCounter(name).value == 0:
       continue
-    let handler = if collect: h.collect else: h.kernel
-    var call = if collect:
-        nnkCall.newTree(handler, engine, n, stack)
-      else:
-        nnkCall.newTree(handler, engine, batch, n)
-    call.add(T)
+    var call: NimNode
+    if collect:
+      call = nnkCall.newTree(bindSym"collectNode", h.nodeType, n, stack)
+    else:
+      call = nnkCall.newTree(h.kernel, engine, batch, n)
+      call.add(T)
     result.add nnkElifBranch.newTree(call, nnkDiscardStmt.newTree(newEmptyNode()))
   let noHandler = nnkCall.newTree(
     bindSym"raiseAssert",
-    nnkInfix.newTree(ident"&",
-      nnkInfix.newTree(ident"&",
-        newLit("Tensorcery internal error: no handlers for node with opName ["),
-        nnkCall.newTree(bindSym"opName", n)),
-      newLit("]")))
+    newLit("Tensorcery internal error: no handler for the dispatched node"))
   if result.len == 0:
     return noHandler
   result.add nnkElse.newTree(noHandler)

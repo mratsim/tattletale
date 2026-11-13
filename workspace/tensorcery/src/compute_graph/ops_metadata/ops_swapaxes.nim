@@ -17,7 +17,7 @@ import ../../tensors_internals
 #
 # ############################################################
 
-proc tn_swapaxes*(engine: AnyEngine, x: TensorNode, axis1, axis2: int): TensorNode {.contracts.} =
+proc tn_swapaxes*(engine: AnyEngine, x: TensorGraph, axis1, axis2: int): TensorGraph {.contracts.} =
   ## A view of `x` with `axis1` and `axis2` exchanged, sharing `x`'s buffer.
   let ix = x.getImpl()
   {.precondition: axis1 >= 0 and axis1 < ix.shape().p.len.}

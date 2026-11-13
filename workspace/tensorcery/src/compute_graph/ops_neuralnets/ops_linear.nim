@@ -103,10 +103,10 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  LinearNode* = ref object
+  LinearNode* = ref object of TensorNode
     r: AnyTensorImpl
-    x, w: TensorNode
-    b: TensorNode         # nil when the layer has no bias
+    x, w: TensorGraph
+    b: TensorGraph         # nil when the layer has no bias
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Interface
@@ -115,7 +115,7 @@ type
 func getImpl*(n: LinearNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: LinearNode): string {.inline.} =
+func opName*(_: typedesc[LinearNode]): static string {.inline.} =
   "Linear"
 
 
@@ -123,7 +123,7 @@ func opName*(n: LinearNode): string {.inline.} =
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.contracts.} =
+proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorGraph): TensorGraph {.contracts.} =
   ## o = x·Wᵀ + b: (M, K) × (out, K) → (M, out), bias nil when the layer has none
   let
     ix = x.getImpl()
@@ -143,7 +143,7 @@ proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.co
   outShape.add iw.shape().p[0]
   return LinearNode(x: x, w: weight, b: bias,
       r: engine.newPlaceholderNode(ix.dtype(), outShape).getImpl()
-    ).to(TensorNode)
+    ).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
@@ -167,17 +167,7 @@ proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.co
 # Tile grids expose nSlices·⌈M/32⌉·⌈N/32⌉ work items. More parallelism needs
 # split-K: partition the K reduction across work items and reduce the partials.
 
-proc collectLinear[E: HwEngine, T](engine: E, n: var TensorNode, stack: var seq[WalkFrame], _: typedesc[T]): bool =
-  let asLinear = n.to(LinearNode)
-  if asLinear.isNil():
-    return false
-  stack.add WalkFrame(n: asLinear.x, kernelPending: false)
-  stack.add WalkFrame(n: asLinear.w, kernelPending: false)
-  if not asLinear.b.isNil():
-    stack.add WalkFrame(n: asLinear.b, kernelPending: false)
-  return true
-
-proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T]): bool =
+proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asLinear = n.to(LinearNode)
   if asLinear.isNil():
     return false
@@ -212,4 +202,4 @@ proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Linear", collectLinear, enqueueLinear)
+registerOp(LinearNode, enqueueLinear, opName(LinearNode))

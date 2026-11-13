@@ -16,7 +16,7 @@ import ../../tensors_internals
 #
 # ############################################################
 
-proc tn_split*(engine: AnyEngine, x: TensorNode, axis: int, k: int): seq[TensorNode] {.contracts.} =
+proc tn_split*(engine: AnyEngine, x: TensorGraph, axis: int, k: int): seq[TensorGraph] {.contracts.} =
   ## Splits `x` along `axis` into `k` equal parts, views into `x`'s buffer.
   let ix = x.getImpl()
   {.precondition: axis >= 0 and axis < ix.shape().p.len.}

@@ -35,19 +35,18 @@ iface *AnyTensorImpl:
     func offset(): int {.inline.}
     func isPreAllocated(): bool {.inline.}
 
-iface *TensorNode:
+iface *TensorGraph:
     proc getImpl(): AnyTensorImpl {.inline.}
-    func opName(): string {.inline.}
     proc isNil(): bool {.inline.}
 
 iface *AnyEngine:
-    proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
-    proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorNode {.inline.}
-    proc newViewNode(src: TensorNode, shape: openArray[int], strides: openArray[int], offset: int, srcOpName: string): TensorNode {.inline.}
-    proc upload(node: TensorNode, src: openArray[float32]) {.inline.}
-    proc upload(node: TensorNode, src: openArray[bfloat16]) {.inline.}
-    proc download1(dst: pointer, node: TensorNode) {.inline.}
-    proc eval(roots: var openArray[TensorNode]) {.inline.}
+    proc newTensorNode(dtype: Dtype, shape: openArray[int]): TensorGraph {.inline.}
+    proc newPlaceholderNode(dtype: Dtype, shape: openArray[int]): TensorGraph {.inline.}
+    proc newViewNode(src: TensorGraph, shape: openArray[int], strides: openArray[int], offset: int, srcOpName: string): TensorGraph {.inline.}
+    proc upload(node: TensorGraph, src: openArray[float32]) {.inline.}
+    proc upload(node: TensorGraph, src: openArray[bfloat16]) {.inline.}
+    proc download1(dst: pointer, node: TensorGraph) {.inline.}
+    proc eval(roots: var openArray[TensorGraph]) {.inline.}
 
 const MaxRank* = 4
 
@@ -75,12 +74,16 @@ type
     offset: int
     layout: L
 
-  ViewNode* = ref object
+  TensorNode* = ref object of RootRef
+    ## Node hierarchy root: `of` checks and erased-handle round trips run
+    ## on real runtime type info, without boxing.
+
+  ViewNode* = ref object of TensorNode
     r*: AnyTensorImpl
-    src*: TensorNode
+    src*: TensorGraph
     srcOpName*: string
 
-  NilNode* = ref object
+  NilNode* = ref object of TensorNode
 
 proc initTensorBridge*[DeviceMem, L](data: ref DeviceMem, offset: int, layout: L): TensorBridge[DeviceMem, L] {.inline.} =
   ## Cross-module constructor: the TensorBridge fields are module-private.
@@ -141,21 +144,17 @@ func bridge*[DeviceMem; L: Layout | LayoutBasic](t: TensorImpl[DeviceMem, L]): T
 #  Graph
 # ═══════════════════════════════════════════════════════════════════════
 
-proc isPreAllocated*(n: TensorNode): bool {.inline.} =
+proc isPreAllocated*(n: TensorGraph): bool {.inline.} =
   n.getImpl().isPreAllocated()
 
-proc size*(n: TensorNode): int {.inline.} =
+proc size*(n: TensorGraph): int {.inline.} =
   n.getImpl().size()
 
 proc getImpl(n: NilNode): AnyTensorImpl {.inline.} = AnyTensorImpl()
-func opName(n: NilNode): string {.inline.} = "Nil"
-proc NilTensorNode*(): TensorNode {.inline.} = NilNode(nil).to(TensorNode)
+proc NilTensorNode*(): TensorGraph {.inline.} = NilNode(nil).to(TensorGraph)
 
 func getImpl*(n: ViewNode): AnyTensorImpl {.inline.} =
   n.r
-
-func opName*(n: ViewNode): string {.inline.} =
-  n.srcOpName
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Dispatch: one body over the element type, registry-driven
@@ -188,7 +187,7 @@ macro match*(elemBinding, dtypeValue: untyped, body: untyped) =
   ##
   ## Usage:
   ##   match(ElemType, dtype):
-  ##     engine.newPlaceholderImpl(ElemType, shape).to(TensorNode)
+  ##     engine.newPlaceholderImpl(ElemType, shape).to(TensorGraph)
   var dtypeCase = nnkCaseStmt.newTree(dtypeValue)
   for registered in ElemTypes:
     dtypeCase.add nnkOfBranch.newTree(registered.kind,

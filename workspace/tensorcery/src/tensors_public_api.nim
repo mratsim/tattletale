@@ -45,7 +45,7 @@ export eval
 
 type Tensor* = ref object
   engine: AnyEngine
-  node: TensorNode
+  node: TensorGraph
 
 # #######################################################################
 #
@@ -183,7 +183,7 @@ template eval*(ts: varargs[Tensor]) =
   ##
   ## - backend: read from ctgBackendSelection at the call site, construction
   ##   sites recorded it there
-  var roots = newSeq[TensorNode](ts.len)
+  var roots = newSeq[TensorGraph](ts.len)
   for i in 0 ..< ts.len:
     roots[i] = ts[i].node
   eval(ctgSoleBackend(), roots)
@@ -266,7 +266,7 @@ macro allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equ
   ##
   ## - a macro, not a hasKernel forward: the eval inside `item` must expand
   ##   per call site, an impl proc body sem-checks once at definition
-  CacheCounter("allClose").inc()
+  CacheCounter("AllClose").inc()
   quote do:
     Tensor(engine: `tested`.engine,
         node: tn_allClose(`tested`.engine, `tested`.node, `reference`.node, `atol`, `rtol`, `equal_nan`)
