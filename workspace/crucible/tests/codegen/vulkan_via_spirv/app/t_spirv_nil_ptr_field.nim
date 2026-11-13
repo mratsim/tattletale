@@ -1,9 +1,12 @@
-## SPIR-V nil pointer field: an omitted constructor field reads as nil
+## SPIR-V nil pointer field
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
 ##     --outdir:build/tests --nimcache:nimcache/tests \
 ##     workspace/crucible/tests/codegen/vulkan_via_spirv/app/t_spirv_nil_ptr_field.nim
+
+# An omitted constructor field with pointer type reads as nil through isNil
+# on the device.
 
 import workspace/crucible
 
