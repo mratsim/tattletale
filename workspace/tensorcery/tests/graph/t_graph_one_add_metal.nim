@@ -15,6 +15,7 @@
 ## Dumps the ingested MSL artifact to build/poc/one_add_artifact.msl.
 ## Byte-compare it against the eager enqueue-time lowering on master.
 
+import std/os
 from std/importutils import privateAccess
 import workspace/crucible
 import workspace/ceramic
@@ -28,6 +29,7 @@ proc main =
   let y = x + x
   doAssert y.item(float32) == 2.0'f32
   let engine = x.engine.to(MetalEngine)
+  createDir("build/poc")
   writeFile("build/poc/one_add_artifact.msl", engine.getArtifact())
   echo "tensorcery one-add probe (Metal): passed"
 
