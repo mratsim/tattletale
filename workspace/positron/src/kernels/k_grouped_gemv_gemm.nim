@@ -89,16 +89,19 @@ const GroupedGemvOutputs = 4
   ## reads cover getLaneWidth()·GroupedGemvOutputs contiguous b elements per step.
 
 proc grouped_gemv_via_offsets*(dst, a, b, offs: distinct TensorView) =
-  ## Per-line contraction `dst[m, :] = a[m, :] · b_g[m]`:
+  ## Decode-tier grouped contraction for the offsets form: every line contracts
+  ## against its group's weight matrix.
   ##
   ## ```
   ## a (6, K) group-major   offs = [2 5 6]              b (3, K, N)
   ## lines 0..1  group 0    dst[0, :] = a[0, :] · b_0[:]
   ## lines 2..4  group 1    dst[3, :] = a[3, :] · b_1[:]
-  ## lines 5..5  group 2    the group comes from a binary search over offs
+  ## lines 5..5  group 2
   ## ```
   ##
-  ## - one threadgroup per (line, n-block)
+  ## - a (totalM, K), offs (G,) int32 cumulative END offsets, b (G, K, N),
+  ##   dst (totalM, N)
+  ## - dst[m, :] = a[m, :] · b_g[m], g the group owning line m
   let
     totalM = a.shape[0]
     gCount = b.shape[0]
@@ -131,7 +134,8 @@ proc grouped_gemv_via_offsets*(dst, a, b, offs: distinct TensorView) =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc grouped_gemv_via_expertIds*(dst, x, b, ids, weights: distinct TensorView, topk: int) =
-  ## Decode GEMV with the routing combine folded in:
+  ## MoE decode expert contraction with the routing combine folded in:
+  ## each token contracts against its top-k experts, the router weights the sums.
   ##
   ## ```
   ## x (2, K)   ids        weights      dst (2, N)
@@ -139,8 +143,9 @@ proc grouped_gemv_via_expertIds*(dst, x, b, ids, weights: distinct TensorView, t
   ## t1: x1     [0 1 -]    [w0 w1 -]    dst[t1, :] = w0·b_0·x1 + w1·b_1·x1
   ## ```
   ##
-  ## - an id below 0 contributes nothing
-  ## - one threadgroup per (token, n-block)
+  ## - x (T, K), ids (T, topk) int32, weights (T, topk), b (E, K, N), dst (T, N)
+  ## - dst[t, :] = sum over i of weights[t, i] · x[t, :] · b[ids[t, i]]
+  ## - an id below 0 marks an unused top-k slot and contributes nothing
   let
     tokens = x.shape[0]
     k = x.shape[1]
@@ -175,7 +180,7 @@ proc grouped_gemv_via_expertIds*(dst, x, b, ids, weights: distinct TensorView, t
         if n0 + e < n:
           dst[t, n0 + e] = to(sums[e], dst.T)
 
-proc grouped_gemv_splitk*(dPartials, x, b, ids, weights: distinct TensorView, topk, kSplits: int) =
+proc grouped_gemv_splitk(dPartials, x, b, ids, weights: distinct TensorView, topk, kSplits: int) =
   ## Split-K stage 1: per-slot partial sums into the (T, kSplits, N) fp32 dPartials, one threadgroup per (line, n-block, k-slice).
   let
     tokens = x.shape[0]
@@ -216,7 +221,7 @@ proc grouped_gemv_splitk*(dPartials, x, b, ids, weights: distinct TensorView, to
         if n0 + e < n:
           dPartials[t, kSlice, n0 + e] = sums[e]
 
-proc grouped_gemv_reduce*(dst, dPartials: distinct TensorView, kSplits: int) =
+proc grouped_gemv_reduce(dst, dPartials: distinct TensorView, kSplits: int) =
   ## Split-K stage 2: sums dPartials into dst over ascending k slices in fp32,
   ## one threadgroup per (line, n-block) over stage 1's kSplits.
   let
@@ -257,7 +262,8 @@ func countGroupedGemmTiles(T: typedesc, totalM, n: int): int =
   result = totalM.ceil_div(MT) * n.ceil_div(NT)
 
 proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
-  ## Per-group contraction `dst = a_g · b_g`:
+  ## Expand-tier grouped contraction for the offsets form: each group's lines
+  ## contract against the group's weight matrix.
   ##
   ## ```
   ## a (6, K) group-major   offs = [2 5 6]
@@ -266,9 +272,9 @@ proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
   ## group 2: lines 5..5  ─►  dst[5:6, :] = a[5:6, :] · b_2
   ## ```
   ##
-  ## - one simdgroup per (MT, NT) output tile
-  ## - a tile crossing a group boundary masks each group's lines,
-  ##   accumulating group by group
+  ## - a (totalM, K), offs (G,) int32 cumulative END offsets, b (G, K, N),
+  ##   dst (totalM, N)
+  ## - the tiled (MT, NT, KT) schedule is groupedGemmTiles(a.T)
   const (MT, NT, KT) = groupedGemmTiles(a.T)
   const mma = tiledMma(float32, a.T, b.T, MT, NT, KT)
   static: doAssert mma.atom.getThreadCount() == getLaneWidth(),
@@ -322,16 +328,20 @@ proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
       dst.store(rD.downcast(dst.T), tvmC, thrID, (mTile, nTile))
 
 proc grouped_gemm_via_expertIds*(dst, a, b, expertIds: distinct TensorView) =
-  ## Per-expert contraction `dst = a_g · b_g` over per-line ids:
+  ## MoE expand-tier expert contraction over per-line expert ids:
+  ## each packed line contracts against its expert's weight matrix over the shared K and N dimensions.
   ##
   ## ```
-  ## a (7, K), expertIds (7,)          the tile over lines m0 .. m0+MT
-  ## ids: [g0 g0 g0 -1 g1 g1 -1]  ─►   run-walk: g0's three lines mask in,
-  ##                                    accumulate a·b_0, -1 lines stay zero,
-  ##                                    g1's two lines mask in, accumulate a·b_1
+  ## a (7, K), expertIds (7,)
+  ## ids: [g0 g0 g0 -1 g1 g1 -1]  ─►   dst[m, :] = a[m, :] · b_ids[m]
+  ##                                   for the valid lines of the example:
+  ##                                   lines 0..2 against b_0, lines 4..5
+  ##                                   against b_1
   ## ```
   ##
-  ## - one simdgroup per (MT, NT) output tile, runs discovered at runtime
+  ## - a (totalM, K) expert-major with -1 padding line tails, expertIds
+  ##   (totalM,) int32, b (E, K, N), dst (totalM, N)
+  ## - the tiled (MT, NT, KT) schedule is groupedGemmTiles(a.T)
   const (MT, NT, KT) = groupedGemmTiles(a.T)
   const mma = tiledMma(float32, a.T, b.T, MT, NT, KT)
   static: doAssert mma.atom.getThreadCount() == getLaneWidth(),

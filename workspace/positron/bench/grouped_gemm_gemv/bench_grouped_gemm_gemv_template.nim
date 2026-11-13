@@ -199,10 +199,9 @@ proc mainGroupedGemvViaOffsets* =
       runGemvCell(engine, e, m, float32)
   else:
     writeLine(stdout, &"grouped_gemv_via_offsets bench, full sweep, K={Kdim} N={Ndim}, M4 Max")
-    for e in [8, 64, 512]:
-      for m in [1, 4, 16, 64]:
-        runGemvCell(engine, e, m, float32)
-        runGemvCell(engine, e, m, float16)
+    for m in [1, 8, 64]:
+      runGemvCell(engine, 512, m, float32)
+      runGemvCell(engine, 512, m, float16)
 
 proc mainGroupedGemmViaOffsets* =
   ## grouped_gemm_via_offsets bench:
@@ -222,9 +221,8 @@ proc mainGroupedGemmViaOffsets* =
       runGemmCell(engine, e, m, float32)
   else:
     writeLine(stdout, &"grouped_gemm_via_offsets bench, full sweep, K={Kdim} N={Ndim}, M4 Max")
-    for e in [8, 64, 512]:
-      for m in [1, 8, 64, 512]:
-        runGemmCell(engine, e, m, float32)
+    for m in [1, 8, 64]:
+      runGemmCell(engine, 512, m, float32)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  via_expertIds benches
@@ -444,7 +442,7 @@ proc mainGroupedGemvViaExpertIds* =
   writeLine(stdout, "grouped_gemv_via_expertIds vs packed grouped_gemm_via_expertIds, K=N=512, " &
     dtypeName & " (M4 Max), median of 3 launch-inclusive after 1 warmup")
   var engine = newEngine(runMetal)
-  for kSplits in [4, 8, 16, 32, 64]:
+  for kSplits in [8, 32, 64]:
     runSplitKCell(engine, 1, 6, 512, kSplits)
   for tok in [1, 8, 64, 512]:
     for topk in [1, 6]:
@@ -491,8 +489,9 @@ proc mainGroupedGemmViaExpertIds* =
   writeLine(stdout, "grouped_gemm_via_expertIds Metal bench, K=N=512, one table per dtype, " &
     dtypeName & " (M4 Max)")
   var engine = newEngine(runMetal)
-  for e in [8, 64, 512]:
-    for m in [1, 8, 64, 512]:
+  for e in [64, 512]:
+    for m in [1, 8, 64]:
       runExpandCell(engine, e, m, padded = false)
       runExpandCell(engine, e, m, padded = true)
-  runExpandCell(engine, 512, 4096, padded = false)
+  runExpandCell(engine, 64, 512, padded = false)
+  runExpandCell(engine, 64, 512, padded = true)
