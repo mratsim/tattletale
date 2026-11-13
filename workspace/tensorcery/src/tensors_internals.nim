@@ -41,17 +41,14 @@ export tensors_basic_views
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
-template elemType*[R: static Runtime, T](_: typedesc[DeviceMem[R, T]]): typedesc[T] =
-  T
-
 func shape*(t: TensorImpl): Span[int] {.inline.} =
   Span[int](p: toOpenArray(t.layout.shape, 0, t.layout.rank - 1))
 
 func strides*(t: TensorImpl): Span[int] {.inline.} =
   Span[int](p: toOpenArray(t.layout.strides, 0, t.layout.rank - 1))
 
-func dtype*(t: TensorImpl): Dtype {.inline.} =
-  toDtype(elemType(typeof(t.data[])))
+func dtype*[H, T](t: TensorImpl[DeviceMem[H, T], LayoutBasic]): Dtype {.inline.} =
+  toDtype(T)
 
 func offset*(t: TensorImpl): int {.inline.} =
   t.offset
