@@ -85,7 +85,6 @@ type
   NilNode* = ref object of TensorNode
 
 proc initTensorBridge*[DeviceMem, L](data: ref DeviceMem, offset: int, layout: L): TensorBridge[DeviceMem, L] {.inline.} =
-  ## Cross-module constructor: the TensorBridge fields are module-private.
   TensorBridge[DeviceMem, L](data: data, offset: offset, layout: layout)
 
 # ═══════════════════════════════════════════════════════════════════════
