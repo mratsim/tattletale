@@ -42,6 +42,10 @@ type
     cbkReduceAdd
     cbkReduceMax
 
+  CirNilBuiltinKind* = enum
+    cbkNone
+    cbkIsNil
+
   CirShuffleBuiltinKind* = enum
     cbkNone
     cbkSimdShuffle
@@ -150,3 +154,10 @@ template barrier*(flags: static uint32 = CLK_LOCAL_MEM_FENCE): untyped =
   ## Only CLK_LOCAL_MEM_FENCE is supported: CLK_GLOBAL_MEM_FENCE has no equivalent.
   static: doAssert flags == CLK_LOCAL_MEM_FENCE
   threadgroup_barrier()
+
+# ═══════════════════════════════════════════════════════════════════════
+# 3. Null comparison
+# ═══════════════════════════════════════════════════════════════════════
+
+proc isNil*[T](p: ptr UncheckedArray[T]): bool {.inline, builtin: cbkIsNil.} =
+  p == nil

@@ -35,6 +35,7 @@ type PrintCtx = object of WalkCtx
 # ═══════════════════════════════════════════════════════════════════════
 
 const wgslVocab = BuiltinVocab(
+  nilText: makeTexts([(cbkIsNil, "(arrayLength(&($1)) == 0u)")]),
   reductionText: makeTexts([
     (cbkReduceAdd, "subgroupAdd($1)"),
     (cbkReduceMax, "subgroupMax($1)")]),

@@ -19,6 +19,7 @@ const
 import ../../crucible_codegen
 import std/[algorithm, sets, strutils, tables]
 import ../ir/cirv2_lang
+import ../ir/cirv2_build
 import ../passes/pass_helpers
 import ./spirv_encoder {.all.}
 import ./print_common
@@ -658,7 +659,9 @@ proc resolveExprType(ctx: var SpvLangCtx, fn: SpvFnCtx, e: CirExpr): CirType =
     else:
       raiseAssert("field access on a non-struct operand")
   of eCall:
-    if e.callee.kind == eSym and ctx.fnTypes.hasKey(e.callee.name):
+    if e.callee.kind == eSym and e.callee.nilBuiltin == cbkIsNil:
+      result = CirType(kind: ctBool)
+    elif e.callee.kind == eSym and ctx.fnTypes.hasKey(e.callee.name):
       result = ctx.fnTypes[e.callee.name]
     elif e.callee.kind == eSym and e.callee.atomicsBuiltin == cbkAtomicFetchAdd and
         e.args.len == 2 and e.args[0].kind == eAddr:
@@ -1122,6 +1125,14 @@ proc emitCallValue(ctx: var SpvLangCtx, fn: var SpvFnCtx, e: CirExpr): uint32 =
     let op = if e.callee.shuffleBuiltin == cbkSimdShuffle: OpGroupNonUniformShuffle
              else: OpGroupNonUniformShuffleXor
     return ctx.builder.freshInst(op, @[ctx.resolveTyId(spvScalar(resTy)), scopeSub, v, laneU])
+  if e.callee.nilBuiltin == cbkIsNil:
+    let v = ctx.emitExpr(fn, e.args[0])
+    let word = CirType(kind: ctUint, bits: 64)
+    let addrId = ctx.builder.freshInst(OpConvertPtrToU,
+      @[ctx.resolveTyId(ctx.valueTy(word)), v])
+    let zero = ctx.resolveConstId(fn, intLit(0, word))
+    return ctx.builder.freshInst(OpIEqual,
+      @[ctx.resolveTyId(spvScalar(CirType(kind: ctBool))), addrId, zero])
   if e.callee.atomicsBuiltin == cbkAtomicFetchAdd:
     doAssert e.args.len == 2, "atomicFetchAdd takes a pointer and a value"
     if e.args[0].kind != eAddr or e.args[0].addrOperand.kind != ePat:

@@ -10,6 +10,7 @@ import ../ir/cirv2_lang
 import ../../builtins/builtins_gpu_types
 import ../../crucible_codegen
 import ../../builtins/builtins_decl_helpers
+import ../passes/pass_helpers
 import ./targets_registry
 export targets_registry
 
@@ -36,6 +37,7 @@ type BuiltinVocab* = object
   reductionText*: array[CirReductionBuiltinKind, string]
   shuffleText*: array[CirShuffleBuiltinKind, string]
   atomicsText*: array[CirAtomicsBuiltinKind, string]
+  nilText*: array[CirNilBuiltinKind, string]
   ## Call text in value position, `$1`..`$9` for the printed arguments.
   ## "" when the kind has no text: the printer passes the canonical name through,
   ## the target compiler rejects what it cannot parse.
@@ -391,6 +393,10 @@ proc emitBuiltinCall*(ctx: var auto, callee: CirExpr, args: seq[string]): string
     let txt = ctx.emit.vocab.atomicsText[callee.atomicsBuiltin]
     if txt.len > 0:
       return txt % args
+  elif callee.nilBuiltin != cbkNone:
+    let txt = ctx.emit.vocab.nilText[callee.nilBuiltin]
+    if txt.len > 0:
+      return txt % args
   return ""
 
 proc convBuiltinText*(ctx: var auto, call: CirExpr, args: seq[string]): string =
@@ -478,7 +484,8 @@ proc printTargetExpr*(ctx: var auto, e: CirExpr): string =
   ## - a kind a target routes itself reaches `printExtraExpr`
   mixin coordRef, coordDot, printConv, emitTypeName, printSizeof,
         convBuiltinText,
-        printExtraExpr, getAtomicCallText, getSymbolText, getDotText, getCtorValue,
+        printExtraExpr, getAtomicCallText, getSymbolText,
+        getDotText, getCtorValue,
         printOconstr, printAconstr, printCallArgTexts
   case e.kind
   of eSym:

@@ -32,6 +32,7 @@ type PrintCtx = object of WalkCtx
 # ═══════════════════════════════════════════════════════════════════════
 
 const mslVocab = BuiltinVocab(
+  nilText: makeTexts([(cbkIsNil, "($1 == nullptr)")]),
   synchroText: makeTexts([
     (cbkThreadgroupBarrier, "threadgroup_barrier(mem_flags::mem_threadgroup)"),
     (cbkThreadgroupBarrierDevice, "threadgroup_barrier(mem_flags::mem_device)")]),

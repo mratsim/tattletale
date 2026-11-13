@@ -136,6 +136,7 @@ type
       reductionBuiltin*: CirReductionBuiltinKind
       shuffleBuiltin*: CirShuffleBuiltinKind
       atomicsBuiltin*: CirAtomicsBuiltinKind
+      nilBuiltin*: CirNilBuiltinKind
     of eIntLit:
       value*: int64
       litType*: CirType

@@ -26,12 +26,15 @@ export engines_common.LaunchConfig, engines_common.dim3
 type
   SlotKind = enum
     skBuffer
+    skNil
     skWindow
 
   Slot = object
     case kind: SlotKind
     of skBuffer:
       buffer: int
+    of skNil:
+      discard
     of skWindow:
       off, size: int
 
@@ -66,6 +69,7 @@ type
     pipelines: Table[(WGPUShaderModule, string), WebgpuPipeline]
     entries: seq[BatchEntry]
     scalarBuffer: OwnedBuffer
+    sentinel: OwnedBuffer
 
   WebgpuBatch* = ref WebgpuBatchObj
 
@@ -109,10 +113,23 @@ proc parseShaderSquadron(wgsl: string): Dim3 =
     result = Dim3(x: x, y: if y > 0: y else: 1,
                        z: if z > 0: z else: 1)
 
+proc sentinelBuffer(batch: WebgpuBatch): WGPUBuffer =
+  ## Nil slot: a 0-size buffer, `arrayLength` returns 0.
+  ## Real tensors bind at least one element.
+  if WGPUBuffer(batch.sentinel) == nil:
+    var desc = WGPUBufferDescriptor(usage: wgpuBufferUsageStorage, size: 0)
+    batch.sentinel = OwnedBuffer(wgpuDeviceCreateBuffer(batch.device, addr desc))
+    if WGPUBuffer(batch.sentinel) == nil:
+      raiseAssert("WebGPU batch: failed to create the null-slot sentinel buffer")
+  WGPUBuffer(batch.sentinel)
+
 proc storeEntryArg(entry: var BatchEntry, v: auto, _: int) =
   when typeof(v) is WGPUBuffer:
-    entry.borrowedBuffers.add v
-    entry.slots.add Slot(kind: skBuffer, buffer: entry.borrowedBuffers.high)
+    if v.isNil():
+      entry.slots.add Slot(kind: skNil)
+    else:
+      entry.borrowedBuffers.add v
+      entry.slots.add Slot(kind: skBuffer, buffer: entry.borrowedBuffers.high)
   else:
     when typeof(v) is ptr|pointer:
       static:
@@ -242,6 +259,11 @@ proc finalize*(batch: WebgpuBatch) =
           binding: i.cuint,
           buffer: e.borrowedBuffers[e.slots[i].buffer],
           size: wgpuBufferGetSize(e.borrowedBuffers[e.slots[i].buffer]).csize_t)
+      of skNil:
+        bgEntries[i] = WGPUBindGroupEntry(
+          binding: i.cuint,
+          buffer: batch.sentinelBuffer(),
+          size: 0)
       of skWindow:
         bgEntries[i] = WGPUBindGroupEntry(
           binding: i.cuint,

@@ -196,7 +196,10 @@ macro serialize(ctx: var auto, pos: var int, v: auto, store: untyped, H: typedes
       inc `pos`
     elif typeof(`v`) is ref:
       when typeof(`v`[]) is DeviceMem:
-        `store`(`ctx`, `v`[].mem, `pos`)
+        if `v`.isNil():
+          `store`(`ctx`, default(typeof(`v`[].mem)), `pos`)
+        else:
+          `store`(`ctx`, `v`[].mem, `pos`)
         inc `pos`
       else:
         `store`(`ctx`, `v`, `pos`)

@@ -132,8 +132,10 @@ proc store[T](pack: var EntryPack, v: T, _: int) =
       elif typeof(f) is ref:
         when typeof(f[]) is DeviceMem:
           off = off.round_multiple_up(8)
-          pack.buffers.add f[].mem
-          let a = deviceAddress(f[].mem, pack.vctx)
+          let a = if f.isNil(): 0'u64
+                  else:
+                    pack.buffers.add f[].mem
+                    deviceAddress(f[].mem, pack.vctx)
           copyMem(blob[off].addr, a.unsafeAddr, 8)
           inc off, 8
         else:

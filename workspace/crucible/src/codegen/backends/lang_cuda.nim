@@ -28,12 +28,12 @@ type PrintCtx = object of WalkCtx
   ## the derived type and the overlay procs below resolve per target.
 
 
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Target tables
 # ═══════════════════════════════════════════════════════════════════════
 
 const cudaVocab = BuiltinVocab(
+  nilText: makeTexts([(cbkIsNil, "($1 == nullptr)")]),
   synchroText: makeTexts([
     # __syncthreads() already orders global memory, the device-scope barrier
     # emits no separate instruction

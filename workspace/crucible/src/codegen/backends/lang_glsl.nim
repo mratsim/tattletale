@@ -28,12 +28,12 @@ type PrintCtx = object of WalkCtx
   ## the derived type and the overlay procs below resolve per target.
 
 
-
 # ═══════════════════════════════════════════════════════════════════════
 #  Target tables
 # ═══════════════════════════════════════════════════════════════════════
 
 const glslVocab = BuiltinVocab(
+  nilText: makeTexts([(cbkIsNil, "(uint64_t($1) == uint64_t(0))")]),
   reductionText: makeTexts([
     (cbkReduceAdd, "subgroupAdd($1)"),
     (cbkReduceMax, "subgroupMax($1)")]),

@@ -204,6 +204,7 @@ genSpvOpcodeTable:
   op OpSConvert: 114: [o(spvIdResultType), o(spvIdResult), o(spvIdRef)]
   op OpFConvert: 115: [o(spvIdResultType), o(spvIdResult), o(spvIdRef)]
   op OpConvertUToPtr: 120: [o(spvIdResultType), o(spvIdResult), o(spvIdRef)]
+  op OpConvertPtrToU: 117: [o(spvIdResultType), o(spvIdResult), o(spvIdRef)]
   op OpBitcast: 124: [o(spvIdResultType), o(spvIdResult), o(spvIdRef)]
   # OpLogical* operate on bool operands, OpIEqual / OpINotEqual require int
   op OpLogicalEqual: 164: [o(spvIdResultType), o(spvIdResult), o(spvIdRef), o(spvIdRef)]

@@ -32,6 +32,7 @@ type PrintCtx = object of WalkCtx
 # ═══════════════════════════════════════════════════════════════════════
 
 const openclVocab = BuiltinVocab(
+  nilText: makeTexts([(cbkIsNil, "($1 == 0)")]),
   reductionText: makeTexts([
     (cbkReduceAdd, "sub_group_reduce_add($1)"),
     (cbkReduceMax, "sub_group_reduce_max($1)")]),
