@@ -5,10 +5,9 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-## Two-batch accumulation. Each batch enqueues a kernel and submits.
-## The second artifact must hold both kernels.
+## Two-batch accumulation
 ##
-## Run from the worktree root:
+## Run:
 ##   nim c -r -d:release --hints:off --warnings:off \
 ##     --nimcache:nimcache/t_batch_two_wave_metal --outdir:build/tests/t_batch_two_wave_metal \
 ##     workspace/crucible/tests/batching/t_batch_two_wave_metal.nim
