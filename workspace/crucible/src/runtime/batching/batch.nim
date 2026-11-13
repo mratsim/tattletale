@@ -83,7 +83,7 @@ func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
 
 func batchCodegenKind(E: typedesc[VulkanEngine]): CodegenKind {.compileTime.} =
-  cgSpirv
+  cgGlsl
 
 func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
   cgWebGPU
@@ -105,7 +105,8 @@ macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
   # Tile-typed expressions read the target through ccGetBackend during the enqueue expansion.
   crucibleCompileTarget = case backend
     of cgMetal: ctMetal
-    of cgSpirv: ctGlsl
+    of cgGlsl: ctGlsl
+    of cgSpirv: ctSpirvShader
     of cgOpenCL: ctOpenCL
     of cgWebGPU: ctWebGPU
     else: ctNone
@@ -117,7 +118,8 @@ proc ctgLowerArtifact(kind: static CodegenKind): auto {.compileTime.} =
   # passes are not idempotent over a frontend they already processed.
   crucibleCompileTarget = case kind
     of cgMetal: ctMetal
-    of cgSpirv: ctGlsl
+    of cgGlsl: ctGlsl
+    of cgSpirv: ctSpirvShader
     of cgOpenCL: ctOpenCL
     of cgWebGPU: ctWebGPU
     else: ctNone
@@ -150,7 +152,8 @@ macro ctgSemStaged(kind: static CodegenKind): untyped =
   # Kernels type without the enqueue site scope and instantiate exactly once each.
   crucibleCompileTarget = case kind
     of cgMetal: ctMetal
-    of cgSpirv: ctGlsl
+    of cgGlsl: ctGlsl
+    of cgSpirv: ctSpirvShader
     of cgOpenCL: ctOpenCL
     of cgWebGPU: ctWebGPU
     else: ctNone
