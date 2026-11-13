@@ -21,10 +21,22 @@ proc nilSlot(outBuf: ptr UncheckedArray[int32]) =
   else:
     outBuf[0] = 0
 
+proc filledSlot(outBuf: ptr UncheckedArray[int32]) =
+  let s = Slot(v: 7, buf: outBuf)
+  if s.buf.isNil():
+    outBuf[0] = 1
+  else:
+    outBuf[0] = 0
+
 proc runTest() =
   var engine = newEngine(runVulkan)
   let oDev = engine.allocDevice(int32, 1)
+  let oDev2 = engine.allocDevice(int32, 1)
   engine.launchDeviceFn nilSlot(oDev) do:
+    lang = spirv
+    grid = (1, 1)
+    blk = (1, 1)
+  engine.launchDeviceFn filledSlot(oDev2) do:
     lang = spirv
     grid = (1, 1)
     blk = (1, 1)
@@ -32,7 +44,10 @@ proc runTest() =
   engine.copyToHostFromDevice(got.toOpenArray(0, 0), oDev)
   doAssert got[0] == 1,
     "isNil on the omitted pointer field: got " & $got[0] & ", want 1"
+  engine.copyToHostFromDevice(got.toOpenArray(0, 0), oDev2)
+  doAssert got[0] == 0,
+    "isNil on the pointer field set to the output buffer: got " & $got[0] & ", want 0"
 
 when isMainModule:
   runTest()
-  echo "[OK] SPIR-V: the omitted pointer field reads as nil"
+  echo "[OK] SPIR-V: the omitted pointer field reads as nil and a set field does not"
