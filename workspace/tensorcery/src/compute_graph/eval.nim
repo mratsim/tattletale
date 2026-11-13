@@ -71,10 +71,8 @@ template evalRoots*(engine: HwEngine, roots: var openArray[TensorGraph]) =
         if not engine.dispatchViewKernel(n, batch):
           incMetric(kernelsEnqueued)
           engine.dispatchKernel(n, batch)
-    # A view-only graph stages no kernels.
-    when ctgHasStagedKernels():
-      if batch.entries.len != 0:
-        batch.submit()
+    if batch.entries.len != 0:
+      batch.submit()
     # Graph collapse: roots become leaves over their computed impls,
     # later evals walk nothing upstream.
     for i in 0 ..< roots.len:

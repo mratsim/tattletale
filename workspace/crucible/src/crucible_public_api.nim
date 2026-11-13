@@ -53,7 +53,7 @@ export launch_device_fn.DeviceFnSugar,
        launch_device_fn.`<<`, launch_device_fn.`>>`
 
 export batch.recordBatch, batch.enqueue, batch.`<<`, batch.`>>`, batch.submit,
-       batch.replay, batch.ctgHasStagedKernels
+       batch.replay
 export batch.BatchCommands, batch.BatchEntry, batch.EnqueueSugar, batch.EnqueueProxy, batch.EnqueueProxyCt
 
 

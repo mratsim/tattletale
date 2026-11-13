@@ -77,8 +77,6 @@ proc recordBatch*[E: HwEngine](engine: E): BatchCommands[E] {.inline.} =
 var ctgPendingKernels {.compileTime.}: CacheSeq
 var ctgPendingIndex {.compileTime.}: CacheTable
 
-proc ctgHasStagedKernels*(): bool {.compileTime.} =
-  ctgPendingKernels.len != 0
 var ctgGenerationCount {.compileTime.}: array[CodegenKind, int]
 
 func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
@@ -386,14 +384,9 @@ macro finalize*(batch: BatchCommands): untyped =
   ## Compiles the batch's device functions into one artifact and ingests it
   ## into the engine. Does not launch the entries.
   ##
-  ## Requires:
-  ## - at least one `enqueue` in this compilation
-  ##
   ## Finalize calls at the same stream generation share one artifact.
   ## Enqueueing more kernels and finalizing again compiles a fresh artifact
   ## over the complete stream.
-  if ctgPendingKernels.len == 0:
-    error("finalize: the stream holds no device function, enqueue first", batch)
   let engineN = quote do: `batch`.engine
   result = quote do:
     block:
@@ -468,8 +461,7 @@ macro submit*(batch: BatchCommands): untyped =
   ## on the engine in enqueue order.
   ##
   ## Requires:
-  ## - at least one `enqueue` in this compilation, an empty batch has no
-  ##   artifact to finalize and fails at compile time
+  ## - at least one `enqueue` in this compilation, an empty batch raises
   ##
   ## The compilation compiles its device functions once.
   ## Device functions enqueued later recompile it, every `submit` reuses the module.
