@@ -11,6 +11,8 @@ import workspace/crucible
 import workspace/iface
 import ../tensors_internals
 import ./batching
+import ./metrics
+export metrics
 
 proc eval*[E: HwEngine](engine: E, roots: var openArray[TensorNode]) =
   ## Eval slot of the erased AnyEngine handle, vtable-bound at construction.
@@ -30,6 +32,7 @@ template evalRoots*(engine: HwEngine, roots: var openArray[TensorNode]) =
   ## - kernels enqueue in reverse visit order: every kernel launches after
   ##   the kernels producing its operands
   if roots.len != 0:
+    incMetric(evals)
     var batch = engine.recordBatch()
     var stack: seq[WalkFrame]
     for i in 0 ..< roots.len:
@@ -39,16 +42,19 @@ template evalRoots*(engine: HwEngine, roots: var openArray[TensorNode]) =
       var n = frame.n
       if not frame.kernelPending:
         if n.isPreAllocated():
+          incMetric(nodesSkippedAllocated)
           continue
         stack.add WalkFrame(n: n, kernelPending: true)
         let v = n.to(ViewNode)
         if v.isNil():
+          incMetric(nodesDispatched)
           engine.dispatchCollect(n, stack)
         else:
           stack.add WalkFrame(n: v.src, kernelPending: false)
       else:
         # Views are metadata, not ops: the walk wires them outside the marked registry.
         if not engine.dispatchViewKernel(n, batch):
+          incMetric(kernelsEnqueued)
           engine.dispatchKernel(n, batch)
     # A view-only graph stages no kernels.
     when ctgHasStagedKernels():

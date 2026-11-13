@@ -33,4 +33,17 @@ proc runAddTest*(run: static Runtime, name: string) =
 
     doAssert (x + y).allClose(dst.toTensor(run, shape)), name & ": add " & $shape
 
+  when defined(TTT_tensorgraphMetrics):
+    block: # Dedup: a second eval of the same graph skips the already-allocated nodes
+      let x = @[1.0'f32, 2, 3, 4].toTensor(run, @[4])
+      let y = x + x
+      doAssert y.item(float32) == 2.0'f32
+      let afterFirst = graphCounters()
+      doAssert y.item(float32) == 2.0'f32
+      let afterSecond = graphCounters()
+      doAssert afterSecond.evals - afterFirst.evals == 1
+      doAssert afterSecond.nodesDispatched - afterFirst.nodesDispatched == 0
+      doAssert afterSecond.kernelsEnqueued - afterFirst.kernelsEnqueued == 0
+      doAssert afterSecond.nodesSkippedAllocated - afterFirst.nodesSkippedAllocated == 1
+
   echo "tensorcery add (", name, "): all checks passed"
