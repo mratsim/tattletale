@@ -1,0 +1,17 @@
+{
+ "name": "dispatch_empty_experts",
+ "family": "dispatch",
+ "T": 8,
+ "topk": 6,
+ "E": 16,
+ "K": 24,
+ "xorhash_checksums": {
+  "ids.bin": 3,
+  "x.bin": 18828160,
+  "packedIds.bin": 3,
+  "packedOffsets.bin": 512,
+  "sortedPairs.bin": 7,
+  "slotOfPair.bin": 102,
+  "packedX.bin": 2247747172
+ }
+}

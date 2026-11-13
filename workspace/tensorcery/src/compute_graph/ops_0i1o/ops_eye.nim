@@ -32,7 +32,7 @@ proc k_eye(D: distinct TensorBasicView, ncols, kDiag: float32) =
   let
     cSize = grid.size()
     gridStride = getGridSize()
-  for tileID in countup(grid.getLocalTileID(), cSize - 1, gridStride):
+  for tileID in countup(getLocalTileID(grid), cSize - 1, gridStride):
     let
       sel = ((thrID, _), tileID)
       base = tiled.crd2idx(sel)

@@ -1,0 +1,17 @@
+{
+ "name": "dispatch_topk_over_e",
+ "family": "dispatch",
+ "T": 4,
+ "topk": 6,
+ "E": 3,
+ "K": 12,
+ "xorhash_checksums": {
+  "ids.bin": 0,
+  "x.bin": 44148777,
+  "packedIds.bin": 4294967295,
+  "packedOffsets.bin": 0,
+  "sortedPairs.bin": 4294967295,
+  "slotOfPair.bin": 1,
+  "packedX.bin": 0
+ }
+}

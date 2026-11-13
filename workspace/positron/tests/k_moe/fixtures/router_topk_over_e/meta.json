@@ -1,0 +1,15 @@
+{
+ "name": "router_topk_over_e",
+ "family": "router",
+ "T": 2,
+ "E": 3,
+ "topk": 6,
+ "variant": 0,
+ "scaling": 1.0,
+ "xorhash_checksums": {
+  "scores.bin": 2213422682,
+  "bias.bin": 0,
+  "ids.bin": 0,
+  "weights.bin": 12944001
+ }
+}

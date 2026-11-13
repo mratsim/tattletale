@@ -48,7 +48,7 @@ proc k_gemm(mma: static TiledMma, D: distinct TensorView, alpha: float32,
     let
       cSize = cGrid.size()
       gridStride = getGridSize()
-    for tileID in countup(cGrid.getLocalTileID(), cSize - 1, gridStride):
+    for tileID in countup(getLocalTileID(cGrid), cSize - 1, gridStride):
       let (m, n) = idx2crd(cGrid, tileID)
       var rD: tile(float32, cLayout)
       var rA: tile(A.T, mma.getMmaLayout(opA))

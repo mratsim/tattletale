@@ -1,0 +1,36 @@
+{
+ "name": "grouped_aligned_packed_f32",
+ "dtype": "float32",
+ "E": 8,
+ "K": 64,
+ "N": 64,
+ "total_m": 512,
+ "m_tile": 32,
+ "counts": [
+  64,
+  64,
+  64,
+  64,
+  64,
+  64,
+  64,
+  64
+ ],
+ "pads": [
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0
+ ],
+ "seed": 3247248129,
+ "xorhash_checksums": {
+  "a.bin": 2027329456,
+  "b.bin": 4043229100,
+  "ids.bin": 0,
+  "d.bin": 2358261854
+ }
+}

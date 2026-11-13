@@ -42,6 +42,9 @@ Comment golden rules:
   alone cannot show: a sum identity like `n*(n+1)/2`, a sigmoid derivative
   `s*(1-s)` in a backward pass.
   Math the code shows is narration. Math the code hides is content.
+- No subtitle appositions. A comment ends when its clause ends.
+  A trailing relabel like ", the decode-cell fill point" restates the formula
+  before it and dies. A label is content only when the code branches on it (attention splits decode and prefill on q_len).
 
 
 ## Package guidance

@@ -1,0 +1,17 @@
+{
+ "name": "dispatch_single_token",
+ "family": "dispatch",
+ "T": 1,
+ "topk": 1,
+ "E": 8,
+ "K": 40,
+ "xorhash_checksums": {
+  "ids.bin": 3,
+  "x.bin": 2148757955,
+  "packedIds.bin": 3,
+  "packedOffsets.bin": 32,
+  "sortedPairs.bin": 0,
+  "slotOfPair.bin": 0,
+  "packedX.bin": 2148757955
+ }
+}

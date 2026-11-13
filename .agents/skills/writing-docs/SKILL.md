@@ -59,12 +59,17 @@ kernel docs, Lean comments, test file headers, and commit messages.
 
 6c. **No invented actions.** Objects do not perform actions the domain
    does not have. Banned for buffers, values, types, and kernels:
-   "survives", "serves", "wants", "remembers".
+   "survives", "serves", "wants", "remembers", "discovers".
    Write in the domain's vocabulary:
    - "the kernel loads the buffer"
    - "the buffer is released"
    Bindings, slots, and descriptors never read. Only kernels and threads read.
    "a binding reads X" becomes "`arrayLength` returns 0".
+
+6d. **No subtitles.** A sentence ends at its clause. A trailing relabel
+   (", the decode-cell fill point") is filler, the formula is the content.
+   A tier or phase label is content only when the code branches on it:
+   attention splits decode and prefill on q_len, other tier labels die.
 
 ## Quick start
 
@@ -115,6 +120,8 @@ A CS undergraduate is the comprehension floor.
   ("X takes its token, Y passes through, Z meets the refusal") is unreadable even
   when each verb is defensible alone. Rewrite it in the code's own terms or delete
   it when the branches and refusal messages already say the story.
+  The inverted pile ("Consecutive outputs each lane owns") is the same disease:
+  state the subject first ("Each lane owns four consecutive outputs").
 - Agent-verb rewrites. "float16 refuses" -> "the pass rejects float16 parameters",
   or the capability form ("float16 has no HLSL form, the value emits as its bits").
   "X stays untyped" -> "X is untyped" or "the body does not type X".

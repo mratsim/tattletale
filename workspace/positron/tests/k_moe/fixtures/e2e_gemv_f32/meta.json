@@ -1,0 +1,19 @@
+{
+ "name": "e2e_gemv_f32",
+ "family": "e2e",
+ "dtype": "float32",
+ "T": 4,
+ "topk": 6,
+ "E": 8,
+ "K": 24,
+ "N": 32,
+ "variant": 1,
+ "scaling": 2.5,
+ "xorhash_checksums": {
+  "x.bin": 108716732,
+  "b.bin": 108843439,
+  "scores.bin": 126466383,
+  "bias.bin": 64226257,
+  "d.bin": 4260245294
+ }
+}

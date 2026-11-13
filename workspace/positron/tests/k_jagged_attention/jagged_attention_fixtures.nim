@@ -20,7 +20,7 @@ import ../positron_testutils
 export int_tuples, layout_algebra, tensors
 
 export positron_testutils.HostTensor, positron_testutils.makeHostTensor
-export positron_testutils.len, positron_testutils.bridge
+export positron_testutils.len
 export positron_testutils.loadFixtureTensor, positron_testutils.xorHash
 
 const JaggedAttnFixturesDir* = currentSourcePath().parentDir() / "fixtures"
@@ -76,15 +76,7 @@ proc loadRank1FixtureTensor*(fixtureDir: string, file: string, n: int): auto =
   ## Returns:
   ##   A `HostTensor[int32, ...]` over `n` freshly allocated elements,
   ##   filled from `file`'s raw bytes.
-  ##
-  ## Why not `loadFixtureTensor`: `makeHostTensor` rejects rank-1 shapes,
-  ## `originOffset` dies with a type mismatch on the `(n,)` layout
-  ## (ceramic_testutils.nim stride loop), so the layout is built here.
-  let layout = make_layout((n,))
-  result = HostTensor[int32, typeof(layout)](
-    data: cast[ptr UncheckedArray[int32]](allocShared(n * sizeof(int32))),
-    offset: 0,
-    layout: layout)
+  result = makeHostTensor(int32, (n,), (int32(1),))
   let bytes = readFile(fixtureDir / file)
   doAssert bytes.len == n * sizeof(int32),
     "loadRank1FixtureTensor: " & file & " is " & $bytes.len & " bytes, expected " &

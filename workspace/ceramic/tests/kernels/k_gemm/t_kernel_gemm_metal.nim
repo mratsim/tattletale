@@ -43,7 +43,7 @@ const GemmHighlights = [
   (alpha: 0.5'f32, A: ((48, 40), (40, 1)), B: ((24, 40), (1, 24)), beta: 2.0'f32, C: ((48, 24), (24, 1))),
   (alpha: 1.0'f32, A: ((17, 23), (23, 1)), B: ((19, 23), (19, 1)), beta: 1.0'f32, C: ((17, 19), (19, 1)))]
 
-const GemmFuzzCases = genGemmCases((32, 32, 32), (40, 45, 41))
+const GegemmFuzzCases = genGemmCases((32, 32, 32), (40, 45, 41))
 
 # ═══════════════════════════════════════════════════════════════
 #  The suite, one leg per operand type the backend's atoms cover
@@ -58,8 +58,8 @@ proc main =
   # Metal simdgroup atoms: f16 and f32 operands, both accumulate in f32
   rng.runGemmChecks(engine, float32, float16, 32, 32, 16, GemmHighlights, Iters = 2)
   rng.runGemmChecks(engine, float32, float32, 32, 32, 16, GemmHighlights, Iters = 2)
-  rng.runGemmFuzz(engine, float32, float16, 32, 32, 16, GemmFuzzCases)
-  rng.runGemmFuzz(engine, float32, float32, 32, 32, 16, GemmFuzzCases)
+  rng.runGemmFuzz(engine, float32, float16, 32, 32, 16, GegemmFuzzCases)
+  rng.runGemmFuzz(engine, float32, float32, 32, 32, 16, GegemmFuzzCases)
 
 when isMainModule:
   main()

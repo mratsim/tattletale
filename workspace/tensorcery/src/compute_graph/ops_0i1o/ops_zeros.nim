@@ -31,7 +31,7 @@ proc k_fill*(D: distinct TensorBasicView, val: float32) =
   let
     cSize = grid.size()
     gridStride = getGridSize()
-  for tileID in countup(grid.getLocalTileID(), cSize - 1, gridStride):
+  for tileID in countup(getLocalTileID(grid), cSize - 1, gridStride):
     var rD: tile(D.T)
     for i in 0 ..< rD.size():
       rD[i] = val.to(D.T)

@@ -9,90 +9,30 @@
 #  Jagged multi-head attention forward (Tile API)
 # ═══════════════════════════════════════════════════════════════════════
 
-## Jagged multi-head attention forward on the ceramic Tile API: decode and prefill in one kernel over a ragged page table.
+## Jagged multi-head attention forward on the ceramic Tile API: decode and prefill
+## in one kernel over a ragged page table.
 ##
-## - each segment's KV tokens are stored at the page ids
-##   `indices[offsets[s] ..]`, gathered from the layer-major PagePool
-##   slab `(num_pages, num_layers, page_size, Nkv, D)`
-## - one pool layer per dispatch, selected by the `layer` scalar
-## - sequence metadata is passed as DeviceMem-backed bridged arrays
-##   `(q_offsets, kv)`
+## Buffers, element dtype first then int32 tables:
 ##
-## Dataflow per threadgroup:
+## | buffer    | shape                                      |
+## | --------- | ------------------------------------------ |
+## | o, q      | (num_qo_tokens, H, D)                      |
+## | k_pool    | (num_pages, num_layers, page_size, Nkv, D) |
+## | v_pool    | (num_pages, num_layers, page_size, Nkv, D) |
+## | q_offsets | (num_seqs+1), per-segment q token ranges   |
+## | kv        | JaggedKv: offsets, indices, seqlens        |
 ##
-##   q tile (mt×D) --> Q·Kᵀ --× q_mul--> S tile (mt×nt)
-##   k tile: nt-token block, one page slice <- indices[offsets[s] + t div page_size] <- k_pool slab
-##   S tile --banded causal mask--> exp2 --> P (mt×nt) element dtype
-##   v tile: nt-token block, same page walk <- v_pool slab
-##   P --P·V mma--> O (mt×D) fp32 --÷ token norm--> element-dtype store
-##
-## with mt = mmaQK.MT query tokens and nt = mmaQK.NT KV tokens per tile.
-##
-## Online softmax: each KV block rescales the running O and token sum by exp2(m_prev − m_cur).
-##
-## Regimes, per segment s with q_len = q_offsets[s+1] − q_offsets[s] and kv_len = kv_seqlens[s]:
-##
-## - decode (q_len == 1): causal off with the query attending the KV tokens `[0, kv_len)`
-## - prefill (q_len >= 2): causal on over `[0, kv_len)`, query token j
-##   attends keys `[0, kv_len − q_len + j]`, flash-attn varlen semantics
-## - grouped-query attention (GQA): kv_head = q_head div (H div Nkv)
-##
-## Buffers, element dtype first then int32 tables then scalars:
-##
-## | buffer    | shape                                          |
-## | --------- | ---------------------------------------------- |
-## | o, q      | (num_qo_tokens, H, D)                          |
-## | k_pool    | (num_pages, num_layers, page_size, Nkv, D)     |
-## | v_pool    | (num_pages, num_layers, page_size, Nkv, D)     |
-## | q_offsets | (num_seqs+1), per-segment q token ranges       |
-## | kv        | JaggedKv: offsets, indices, seqlens, batchSize |
-##
-## Pool layout, layer-major:
-##
-## - page stride: num_layers·page_size·Nkv·D
-## - per-layer stride: page_size·Nkv·D
-## - token stride: Nkv·D, head dim contiguous
-## - the 16-bit element type is the DSL's `float16`, a distinct uint16 bit-identical on the host
-##
-## KV fetch, page_size a multiple of nt so each KV tile lies inside one page,
-## for tile t0 of segment s:
-##
-## - page_idx = t0 div page_size, in_page = t0 mod page_size,
-##   page_id = indices[offsets[s] + page_idx] read through the kernel's
-##   JaggedTensorView
-## - slab base = page_id·stride[0] + layer·stride[1] + in_page·stride[2] +
-##   kv_head·stride[3] with the pool view's own strides
-## - the natural layer-major slab gives stride[0] = num_layers·page_size·Nkv·D,
-##   stride[1] = page_size·Nkv·D, stride[2] = Nkv·D, stride[3] = D
-## - the V subview is the transposed (D, nt) view and the K subview is (nt, D)
-##   over the token stride, so the P·V mma consumes Vᵀ from the natural slab
-##
-## Partial last page:
-##
-## - KV tokens are bounded by kv_len per segment, never by page multiples.
-##   The last page may therefore hold garbage beyond the covered length, NaN included
-## - the tile loads bound at the segment's covered tokens, so the garbage tail
-##   zero-pads and never enters the math, a 0·NaN in the P·V mma would poison the output
-## - padded scores sit outside the band and are -inf
-## - the KV loop bounds at min(pageBlocks, lastAttBlock) within the segment's pages and the last attended block
-##
-## Numerics:
-##
-## - online softmax in the exp2 shape, q_mul = scale·log2(e) folded once into the scores,
-##   so exp2(S − m) equals the exp form exp(qk·scale − max) computed by the fixtures'
-##   f64 reference, one log2(e) factor apart
-## - the running max starts at the finite floor, so the rescale alpha is finite
-## - P is downcast to the element dtype (`convert`) before the P·V mma when the elements are fp16
-## - the output store quantizes the fp32 O tile to the element dtype (round-to-nearest-even, RNE) through the `to` chokepoint
-##
-## Production contract:
-##
-## - single addressing path, no toggle: the kernel is the one addressing path
-##   and the Tile API has no `useCeramicLayout` switch
-## - the metadata arrays are DeviceMem-backed bridged args and the kernel
-##   body builds its JaggedTensorView over them, consuming the KV side
-##   strictly through the view's contract
-## - scale is a runtime float32 (the host passes 1/sqrt(D)), no head-dim-dependent constant is compiled into the kernel
+## - each segment's KV tokens live at page ids `indices[offsets[s] ..]`, the layer-major pool slab,
+##   one pool layer per dispatch (the `layer` scalar)
+## - page_size is a multiple of the KV tile's nt, each KV tile lies inside one page,
+##   KV tokens bound at kv_len never at page multiples: the last page's garbage tail
+##   zero-pads through the tile loads and never enters the math, a 0·NaN in the P·V
+##   mma would poison the output
+## - GQA: kv_head = q_head div (H div Nkv), per segment s with q_len = q_offsets[s+1] - q_offsets[s]
+##   and kv_len = kv.seqlens[s]: decode (q_len == 1) attends [0, kv_len) with causal off,
+##   prefill (q_len >= 2) attends causal over [0, kv_len), flash-attn varlen semantics
+## - online softmax in the exp2 shape, q_mul = scale·log2(e), the running max starts
+##   at the finite floor so the rescale alpha is finite
 
 import workspace/crucible
 import workspace/ceramic/src/int_tuples
@@ -119,48 +59,14 @@ proc jagged_attn_fwd*(
     page_size, D: static int,
     windowed: static bool = false, windowSize: int = low(int32),
     mmaQK: static TiledMma) =
-  ## Launch dims: (q token blocks, H, num_seqs), 32 lanes.
+  ## Online softmax: each KV block of the segment's pages rescales the running
+  ## O and token sum by exp2(m_prev - m), a windowed launch masks the KV tokens
+  ## more than windowSize - 1 below each query's band and skips the tiles
+  ## entirely below the window.
   ##
-  ## - x: the segment's mt-token q block
-  ## - y: head
-  ## - z: segment
-  ##
-  ## One grid point computes mt query tokens against the segment's KV
-  ## tokens (its pages), causal-banded per token:
-  ##
-  ##             KV tokens (segment pages)
-  ##              page 0    page 1    …
-  ##   q tok 0    ███████   X         X
-  ##   q tok 1    ███████   ██        X
-  ##   …          ███████   ███████   ██
-  ##   q tok mt−1 ███████   ███████   ██
-  ##
-  ##   █ = attended (kPos <= bandBase + qPos), X = masked
-  ##
-  ## - a windowed launch masks the KV tokens more than windowSize - 1 below
-  ##   each query token's position bandBase + qPos, and the loop start skips
-  ##   the tiles entirely below the window
-  ##
-  ## Dataflow, one threadgroup, per KV block of the online softmax, tensors on edges, ops in boxes:
-  ##
-  ##   q (mt, D) ──┐
-  ##               ▼
-  ##   K (D, nt) ──► [ S = q·Kᵀ (fp32) ]──× q_mul──► [ band mask ]──► [ m ← max(m, S) ]
-  ##                                                                      │        │
-  ##   P̃ = exp2(S − m) ◄──────────────────────────────────────────────────┘        ▼
-  ##         │                                                        rescale = exp2(m_prev − m)
-  ##         │            ┌─────────────────────────────────────────────────────────┐
-  ##         └───────────►│  l ← l·rescale + tokensum(P̃)                            │
-  ##                      │                                                         │
-  ##   V (nt, D) ────────►│  O ← O·rescale + P̃·V (fp32)                             │
-  ##                      └────────────────────────────┬────────────────────────────┘
-  ##                                                   │  per KV block
-  ##                                                   ▼
-  ##                                o (mt, D) = O / l, element-dtype store
-  ##
-  ## Output:
-  ##
-  ## - o is fully written over the segment's q tokens and the banded mask gives masked KV blocks zero attention weight
+  ## - launch dims: (q token blocks, H, num_seqs), 32 lanes
+  ## - the kernel grid-strides the linearized (q block, head, segment) tiles,
+  ##   a wider grid only adds idle threadgroups
   static: doAssert mmaQK.atom.getThreadCount() == getLaneWidth(),
     "jagged attention: one simdgroup per threadgroup, the atom must cover the lanes"
   static: doAssert page_size mod mmaQK.NT == 0,
@@ -182,110 +88,114 @@ proc jagged_attn_fwd*(
 
   let qMul = scale * Log2e                     # exp2 shape of the softmax
 
+  let thrID = getLocalThreadID()
+  # Flat grid-stride over (q slot, head, segment), x-major, the contracted grid's
+  # tiles covered once, a wider grid only adds idle threadgroups
   let
-    qBlock0 = threadgroup_position_in_grid.x
-    (qStride, _, _) = (threadgroups_per_grid.x, threadgroups_per_grid.y, threadgroups_per_grid.z)
-    head = threadgroup_position_in_grid.y
-    segId = threadgroup_position_in_grid.z
-    thrID = getLocalThreadID()
-
-  let
-    q0: int = q_offsets.data[segId]
-    qLen = q_offsets.data[segId + 1] - q0
-    kvLen: int = kv.seqlens[segId]
-    # decode (q_len = 1) attends cached tokens only, prefill (q_len >= 2)
-    # also attends the new tokens, one token more per q token
-    decodeAdj = (if qLen == 1: 1 else: 0)
-    cachedLen = kvLen - qLen + decodeAdj
-    totalK = cachedLen + qLen - decodeAdj
-    bandBase = cachedLen - decodeAdj
-    # KV loop bounds: the segment's pages and the query tiles cap the walk
-    pageBlocks = round_multiple_up(totalK, page_size) div nt
-    kvHead = head div (H div Nkv)
-    qBlocks = qLen.ceil_div(mt)
-  # Per-head q/o tokens:
-  # - [q0, q0 + qLen) of the packed (num_qo_tokens, H, D) tensors.
-  # - Loads/stores past qLen are padded/dropped.
-  let
-    segQ = q(q0 ..< q0 + qLen, head, _)
-    segO = o(q0 ..< q0 + qLen, head, _)
-
-  var
-    qReg: tile(q.T, qkMma.getMmaLayout(opA))    # (mt, D)
-    qk = zeros(tile(float32, qkCLayout))        # S = Q·Kᵀ scores, (mt × nt)
-
-  # Each workgroup starts at its own query tile and steps by the grid width,
-  # so a grid smaller than the tile count still covers every tile
-  for qBlock in countup(qBlock0, qBlocks - 1, qStride):
-    # Per-tile softmax state: a workgroup runs several tiles when the grid
-    # is smaller than the tile count
-    var
-      mI = finiteFloor(tile(float32, rowStatsL))  # running max over keys, (mt × 1)
-        # k_tile_sdpa's finite-floor init: with bandBase >= 0 the first tile always contains the attended kPos 0
-      lI = zeros(tile(float32, rowStatsL))        # running attention-weight sum, (mt × 1)
-      acc = zeros(tile(float32, pvCLayout))       # (mt × D) accumulator
+    qW = get_num_groups(0)
+    hW = get_num_groups(1)
+  for tileID in countup(getLocalTileID(getGridSize()), getGridSize() - 1, getGridSize()):
     let
-      q0Local = qBlock * mt
-      lastKey = (if cachedLen + q0Local + (mt - 1) < totalK - 1:
-                   cachedLen + q0Local + (mt - 1)
-                 else:
-                   totalK - 1)
-      lastAttBlock = lastKey div nt + 1
-      kvBlocks = (if pageBlocks < lastAttBlock: pageBlocks else: lastAttBlock)
-      # kvStart skips the tiles entirely below the window's left edge
-      kvStart = (when windowed:
-                   max(0, (bandBase + q0Local - windowSize + 1) div nt)
-                 else:
-                   0)
-    qReg.load(segQ, qMap, thrID, (qBlock, 0))
+      qSlot = tileID mod qW
+      head = (tileID div qW) mod hW
+      segId = tileID div (qW * hW)
 
-    for kvBlk in kvStart ..< kvBlocks:
+    let
+      q0: int = q_offsets.data[segId]
+      qLen = q_offsets.data[segId + 1] - q0
+      kvLen: int = kv.seqlens[segId]
+      # decode (q_len = 1) attends cached tokens only, prefill (q_len >= 2) also attends the new tokens, one token more per q token
+      decodeAdj = (if qLen == 1: 1 else: 0)
+      cachedLen = kvLen - qLen + decodeAdj
+      totalK = cachedLen + qLen - decodeAdj
+      bandBase = cachedLen - decodeAdj
+      # KV loop bounds: the segment's pages and the query tiles cap the walk
+      pageBlocks = totalK.round_multiple_up(page_size) div nt
+      kvHead = head div (H div Nkv)
+      qBlocks = qLen.ceil_div(mt)
+    # Per-head q/o tokens:
+    # - [q0, q0 + qLen) of the packed (num_qo_tokens, H, D) tensors.
+    # - Loads/stores past qLen are padded/dropped.
+    let
+      segQ = q(q0 ..< q0 + qLen, head, _)
+      segO = o(q0 ..< q0 + qLen, head, _)
+
+    var
+      qReg: tile(q.T, qkMma.getMmaLayout(opA))    # (mt, D)
+      qk = zeros(tile(float32, qkCLayout))        # S = Q·Kᵀ scores, (mt × nt)
+
+    # Each workgroup starts at its own query tile and steps by the grid width,
+    # so a grid smaller than the tile count still covers every tile
+    for qBlock in countup(qSlot, qBlocks - 1, qW):
+      # Per-tile softmax state: a workgroup runs several tiles when the grid
+      # is smaller than the tile count
+      var
+        mI = finiteFloor(tile(float32, rowStatsL))  # running max over keys, (mt × 1)
+          # k_tile_sdpa's finite-floor init: with bandBase >= 0 the first tile always contains the attended kPos 0
+        lI = zeros(tile(float32, rowStatsL))        # running attention-weight sum, (mt × 1)
+        acc = zeros(tile(float32, pvCLayout))       # (mt × D) accumulator
       let
-        kvPos = kvBlk * nt
-        pageIdx = kvPos div page_size
-        inPage = kvPos - pageIdx * page_size
-        pageId: int = kv.indices[kv.offsets[segId] + pageIdx]
-        # Bounds at the covered tokens: a 0·NaN from the garbage tail would poison the P·V mma.
-        covered = min(nt, kvLen - kvPos)
-        # K subview: (covered, D) over the token stride
-        # V subview: the transposed slab view (D, covered) that the P·V mma reads as Vᵀ
-        vK = k_pool(pageId, layer, inPage ..< inPage + covered, kvHead, _)
-        vV = v_pool(pageId, layer, inPage ..< inPage + covered, kvHead, _)
-               .transpose(0, 1)
+        q0Local = qBlock * mt
+        lastKey = (if cachedLen + q0Local + (mt - 1) < totalK - 1:
+                     cachedLen + q0Local + (mt - 1)
+                   else:
+                     totalK - 1)
+        lastAttBlock = lastKey div nt + 1
+        kvBlocks = (if pageBlocks < lastAttBlock: pageBlocks else: lastAttBlock)
+        # kvStart skips the tiles entirely below the window's left edge
+        kvStart = (when windowed:
+                     max(0, (bandBase + q0Local - windowSize + 1) div nt)
+                   else:
+                     0)
+      qReg.load(segQ, qMap, thrID, (qBlock, 0))
 
-      var kReg: tile(k_pool.T, qkMma.getMmaLayout(opB))  # (nt, D)
-      kReg.load(vK, kMap, thrID, (0, 0))
-      qk.fillWith(0'f32)
-      qkMma.atom.gemm_tile(qk, qReg, kReg, qk)   # S = Q·Kᵀ   (MMA 1)
+      for kvBlk in kvStart ..< kvBlocks:
+        let
+          kvPos = kvBlk * nt
+          pageIdx = kvPos div page_size
+          inPage = kvPos - pageIdx * page_size
+          pageId: int = kv.indices[kv.offsets[segId] + pageIdx]
+          # Bounds at the covered tokens: a 0·NaN from the garbage tail would poison the P·V mma.
+          covered = min(nt, kvLen - kvPos)
+          # K subview: (covered, D) over the token stride
+          # V subview: the transposed slab view (D, covered) that the P·V mma reads as Vᵀ
+          vK = k_pool(pageId, layer, inPage ..< inPage + covered, kvHead, _)
+          vV = v_pool(pageId, layer, inPage ..< inPage + covered, kvHead, _)
+                 .transpose(0, 1)
 
-      qk *= qMul                                 # scale, before the band cut
+        var kReg: tile(k_pool.T, qkMma.getMmaLayout(opB))  # (nt, D)
+        kReg.load(vK, kMap, thrID, (0, 0))
+        qk.fillWith(0'f32)
+        qkMma.atom.gemm_tile(qk, qReg, kReg, qk)   # S = Q·Kᵀ   (MMA 1)
 
-      qk.applyAttentionMask(qkCLayout, qkMap, thrID, q0Local, kvPos):
-        kPos > bandBase + qPos or
-        (when windowed:
-           kPos < bandBase + qPos - windowSize + 1
-         else:
-           false)
+        qk *= qMul                                 # scale, before the band cut
 
-      var mIj: tile(float32, rowStatsL)
-      mIj.max(qk, axis = 1, qkMap)
-      mIj = max(mI, mIj)                         # merge into the running max
-      var alpha: tile(float32, rowStatsL)        # rescale factor (mt × 1)
-      alpha = mI - mIj
-      alpha.exp2()
-      mI = mIj
-      qk -.= mIj
-      qk.exp2()
-      lI *= alpha                                # attention-weight-sum rescale
-      var lIj: tile(float32, rowStatsL)          # (mt × 1) attention-weight sum
-      lIj.sum(qk, axis = 1, qkMap)
-      lI += lIj
+        qk.applyAttentionMask(qkCLayout, qkMap, thrID, q0Local, kvPos):
+          kPos > bandBase + qPos or
+          (when windowed:
+             kPos < bandBase + qPos - windowSize + 1
+           else:
+             false)
 
-      let p = qk.downcast(q.T)                   # P.to(q.T), layout preserved
-      acc *.= alpha                              # (mt × D) *.= (mt × 1)
-      var vReg: tile(v_pool.T, pvMma.getMmaLayout(opB))  # (D, nt), B operand of MMA 2
-      vReg.load(vV, vMap, thrID, (0, 0))
-      pvMma.atom.gemm_tile(acc, p, vReg, acc)    # O += P·V   (MMA 2)
+        var mIj: tile(float32, rowStatsL)
+        mIj.max(qk, axis = 1, qkMap)
+        mIj = max(mI, mIj)                         # merge into the running max
+        var alpha: tile(float32, rowStatsL)        # rescale factor (mt × 1)
+        alpha = mI - mIj
+        alpha.exp2()
+        mI = mIj
+        qk -.= mIj
+        qk.exp2()
+        lI *= alpha                                # attention-weight-sum rescale
+        var lIj: tile(float32, rowStatsL)          # (mt × 1) attention-weight sum
+        lIj.sum(qk, axis = 1, qkMap)
+        lI += lIj
 
-    acc /.= lI                                   # (mt × D) /.= (mt × 1)
-    segO.store(acc.downcast(o.T), oMap, thrID, (qBlock, 0))
+        let p = qk.downcast(q.T)                   # P.to(q.T), layout preserved
+        acc *.= alpha                              # (mt × D) *.= (mt × 1)
+        var vReg: tile(v_pool.T, pvMma.getMmaLayout(opB))  # (D, nt), B operand of MMA 2
+        vReg.load(vV, vMap, thrID, (0, 0))
+        pvMma.atom.gemm_tile(acc, p, vReg, acc)    # O += P·V   (MMA 2)
+
+      acc /.= lI                                   # (mt × D) /.= (mt × 1)
+      segO.store(acc.downcast(o.T), oMap, thrID, (qBlock, 0))
