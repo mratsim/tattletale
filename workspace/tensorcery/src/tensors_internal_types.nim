@@ -58,9 +58,6 @@ type
     rank*: int
 
   TensorImpl*[DeviceMem; L: Layout | LayoutBasic] = ref object
-    ## One impl type for every rank. The layout lives in the type slot:
-    ## - a ceramic `Layout` is the static-rank tier
-    ## - `LayoutBasic` is the runtime-rank tier the factories produce
     data*: ref DeviceMem
     offset*: int
     layout*: L
@@ -161,7 +158,6 @@ func getImpl*(n: ViewNode): AnyTensorImpl {.inline.} =
 var ElemTypes {.compileTime.}: seq[tuple[kind, elemType: NimNode]]
 
 macro registerElemType(kind, elemType: untyped) =
-  ## Declares the element type backing a Dtype value for match dispatch.
   ElemTypes.add (kind, elemType)
 
 func replaceNode(ast, toReplace, replaceBy: NimNode): NimNode =
