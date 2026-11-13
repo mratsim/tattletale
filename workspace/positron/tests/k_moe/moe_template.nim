@@ -39,9 +39,9 @@ const MoERouterSentinel = -999.0'f32
 
 proc moeRouterRefF64[T, L](scores: HostTensor[T, L], bias: openArray[float32], topk: int, variant: MoERoute, scalingFactor: float32):
     tuple[ids: seq[int], weights: seq[float64]] =
-  ## float64 reference of the router top-k over the same rounded inputs.
+  ## Reference of the router top-k with fp32 selection like the kernel, float64 weights.
   ##
-  ## - selection on scores + bias, ascending scan, LOWER id wins ties
+  ## - selection on scores + bias in fp32, ascending scan, LOWER id wins ties
   ## - weights from the unbiased scores: softmax over all E (max-shifted) or sigmoid
   ## - renorm over the selected set, w = w / max(sum w, 1e-20), then ·scalingFactor
   ## - topk > E: the excess slots carry id -1 and weight 0
@@ -51,13 +51,14 @@ proc moeRouterRefF64[T, L](scores: HostTensor[T, L], bias: openArray[float32], t
   result.ids = newSeq[int](t * topk)
   result.weights = newSeq[float64](t * topk)
   for ti in 0 ..< t:
-    # selection: scores + bias, strict comparisons keep the lower id
+    # selection adds scores + bias in fp32 like the kernel, and the strict
+    # comparisons keep the lower id
     var
-      selVal = newSeq[float64](topk)
+      selVal = newSeq[float32](topk)
       selIdx = newSeq[int](topk)
       nSel = 0
     for i in 0 ..< e:
-      let s = to(scores[ti, i], float64) + bias[i].float64
+      let s = scores[ti, i] + bias[i]
       var insert = nSel < topk
       if not insert and s > selVal[topk - 1]:
         insert = true

@@ -84,7 +84,8 @@ def widen(bits, dtype):
 
 
 def router_reference(scores, bias, topk, variant, scaling):
-    """float64 router reference over the exact fp32 scores.
+    """Router reference: fp32 selection matching the kernel's rounding, float64
+    weights over the exact fp32 scores.
 
     Shapes: scores (T, E) f64, bias (E,) f64.
 
@@ -95,11 +96,11 @@ def router_reference(scores, bias, topk, variant, scaling):
     ids = np.full((t, topk), -1, dtype=np.int64)
     weights = np.zeros((t, topk), dtype=np.float64)
     for ti in range(t):
-        sel_val = np.zeros(topk, dtype=np.float64)
+        sel_val = np.zeros(topk, dtype=np.float32)
         sel_idx = np.full(topk, -1, dtype=np.int64)
         n_sel = 0
         for i in range(e):
-            s = scores[ti, i] + bias[i]
+            s = np.float32(scores[ti, i]) + np.float32(bias[i])
             insert = n_sel < topk or s > sel_val[topk - 1]
             if insert:
                 pos = min(n_sel, topk - 1)
