@@ -48,7 +48,7 @@ func isContiguous*(v: TensorBasicView): bool =
 func isNil*[T](v: TensorBasicView[T]): bool {.inline.} =
   v.data.isNil()
 
-func flatIndex(shape, strides: array[5, int], rank: int, pos: int): int {.inline.} =
+func flatIndex(shape, strides: array[MaxRank, int], rank: int, pos: int): int {.inline.} =
   ## Memory offset of the flat element position `pos` under the runtime layout.
   ##
   ## Precondition: pos < product(shape[0 ..< rank]) so every dim divides.

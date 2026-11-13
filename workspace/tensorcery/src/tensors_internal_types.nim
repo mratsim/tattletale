@@ -49,12 +49,14 @@ iface *AnyEngine:
     proc download1(dst: pointer, node: TensorNode) {.inline.}
     proc eval(roots: var openArray[TensorNode]) {.inline.}
 
+const MaxRank* = 5
+
 type
   LayoutBasic* = object
     ## Runtime-rank layout: the first `rank` entries of `shape` and `strides`
     ## are active and the array tail pads the rest. Memory-bound op kernels
     ## consume it. Ceramic's layout algebra never sees it.
-    shape*, strides*: array[5, int]
+    shape*, strides*: array[MaxRank, int]
     rank*: int
 
   TensorImpl*[DeviceMem; L: Layout | LayoutBasic] = ref object
@@ -96,7 +98,7 @@ func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: ar
 
 func toLayoutBasic*(shape: openArray[int]): LayoutBasic =
   ## Dense layout over `shape` with ascending strides. Entries beyond the rank are zero.
-  if shape.len > 5:
+  if shape.len > MaxRank:
     raise ValueError.newException("Tensorcery: unsupported rank " & $shape.len)
   result.rank = shape.len
   var acc = 1
@@ -107,7 +109,7 @@ func toLayoutBasic*(shape: openArray[int]): LayoutBasic =
 
 func toLayoutBasic*(shape, strides: openArray[int]): LayoutBasic =
   ## Layout over `shape` and `strides`, entries past rank zero.
-  if shape.len > 5:
+  if shape.len > MaxRank:
     raise ValueError.newException("Tensorcery: unsupported rank " & $shape.len)
   result.rank = shape.len
   for i in 0 ..< shape.len:
