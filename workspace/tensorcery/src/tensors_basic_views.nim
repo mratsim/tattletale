@@ -88,7 +88,8 @@ proc load*[T, L](dst: var Tile[T, L], src: TensorBasicView, threadIdx: int, tile
     box = tiled.slice(sel)
     pos0 = tiled.crd2idx(sel)
   let dense = src.isContiguous()
-  if pos0 + box.size() <= n:
+  # A strided box spans more offsets than it has elements: cosize bounds the largest mapped position, size bounds only the element count.
+  if pos0 + box.cosize() <= n:
     for e in 0 ..< box.size():
       let pos = pos0 + box.crd2idx(e)
       if dense:
@@ -117,7 +118,8 @@ proc store*[T, L](dst: TensorBasicView, src: Tile[T, L], threadIdx: int, tileID:
     box = tiled.slice(sel)
     pos0 = tiled.crd2idx(sel)
   let dense = dst.isContiguous()
-  if pos0 + box.size() <= n:
+  # A strided box spans more offsets than it has elements: cosize bounds the largest mapped position, size bounds only the element count.
+  if pos0 + box.cosize() <= n:
     for e in 0 ..< box.size():
       let pos = pos0 + box.crd2idx(e)
       if dense:
