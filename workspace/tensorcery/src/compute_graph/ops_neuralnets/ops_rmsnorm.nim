@@ -29,11 +29,6 @@ const Fleet = (rowsPerGroup: 4, maxGroups: 8192)
 # ═══════════════════════════════════════════════════════════════════════
 
 proc k_rmsnorm(dst, src, weight: distinct TensorBasicView, eps: float32, axis: int, hasWeight: int) =
-  ## Preconditions:
-  ## - dst has the same shape as src and the axis size is at least 1
-  ## - when `hasWeight` is nonzero, weight is rank 1 with one slot per axis position
-  ## - the launch threadgroup contains exactly one warp of `getLaneWidth()` threads
-  ## - other threadgroup sizes are undefined behavior
   var reg: tile(float32)
   const
     W = getLaneWidth()
