@@ -61,8 +61,7 @@ var ctgBackendSelection {.compileTime.}: HashSet[Runtime]
 proc gEngine*(run: static Runtime): AnyEngine =
   ## Erased engine for `run`, created once per kind, reused after.
   ##
-  ## - construction records `run` in ctgBackendSelection
-  ## - eval dispatch reads that set back
+  ## - construction records `run` in ctgBackendSelection and the eval dispatch reads it back
   static: ctgBackendSelection.incl(run)
   when run == runMetal:
     gMetalEngineErased()
@@ -80,10 +79,6 @@ proc gEngine*(run: static Runtime): AnyEngine =
 proc ctgSoleBackend*(): Runtime {.compileTime.} =
   ## Sole backend of this compilation, read from ctgBackendSelection.
   ## Raises unless exactly one backend appeared.
-  ##
-  ## - mixed-backend dispatch needs per-tensor backend identification
-  ## - no suite exercises a mixed-backend use case
-  ## - the artifact layer already supports per-kind coexistence
   if ctgBackendSelection.len == 0:
     raise ValueError.newException(
       "eval: no device backend appeared in this compilation, construct a tensor first")

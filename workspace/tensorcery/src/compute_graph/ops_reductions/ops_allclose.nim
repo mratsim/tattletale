@@ -79,7 +79,7 @@ proc k_allClose(D, tested, reference: distinct TensorBasicView, atol, rtol, equa
 
 type
   AllCloseNode* = ref object
-    r: AnyTensorImpl      # one-slot float32 scalar, 1.0 or 0.0
+    r: AnyTensorImpl      # rank-1 float32 scalar, 1.0 or 0.0
     tested: TensorNode
     reference: TensorNode
     atol: float32

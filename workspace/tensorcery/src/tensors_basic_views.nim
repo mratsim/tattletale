@@ -36,7 +36,6 @@ func size*(v: TensorBasicView): int {.inline.} =
 func isContiguous*(v: TensorBasicView): bool =
   ## True when the active strides are the dense ones.
   ##
-  ## - axes walk last to first through the reversed index
   ## - the device frontend lowers countup loops only
   var acc = 1
   for i in 0 ..< v.layout.rank:
@@ -48,7 +47,6 @@ func isContiguous*(v: TensorBasicView): bool =
 
 func flatIndex(shape, strides: array[5, int], rank: int, pos: int): int {.inline.} =
   ## Memory offset of the flat element position `pos` under the runtime layout.
-  ## Pos folds through the strides, last axis first.
   ##
   ## Precondition: pos < product(shape[0 ..< rank]) so every dim divides.
   result = 0
@@ -63,12 +61,10 @@ func flatIndex(shape, strides: array[5, int], rank: int, pos: int): int {.inline
 # ═══════════════════════════════════════════════════════════════════════
 #
 # Element-position tile load/store equivalent to the tile algebra over a TensorView.
-# Element reads go through the runtime layout. Contiguous tensors read and store through the flat position.
 
 proc load*[T, L](dst: var Tile[T, L], src: TensorBasicView, threadIdx: int, tileID: int, padWith: T = zero(T)) {.inline.} =
-  ## Tile load over the element positions: the register tile's map
-  ## divides the position list, each position reads the element through
-  ## `src`'s runtime layout. Out-of-bounds positions read `padWith`.
+  ## Tile load over the element positions: each element loads through
+  ## `src`'s runtime layout. Out-of-bounds positions load `padWith`.
   ##
   ## Args:
   ## - dst: the register tile, typed with the thread->element map

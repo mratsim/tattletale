@@ -50,7 +50,7 @@ template evalRoots*(engine: HwEngine, roots: var openArray[TensorNode]) =
         # Views are metadata, not ops: the walk wires them outside the marked registry.
         if not engine.dispatchViewKernel(n, batch):
           engine.dispatchKernel(n, batch)
-    # A view-only graph stages nothing: views are metadata, no kernel exists to compile.
+    # A view-only graph stages no kernels.
     when ctgHasStagedKernels():
       if batch.entries.len != 0:
         batch.submit()

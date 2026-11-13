@@ -97,8 +97,7 @@ func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
 macro ctgAccumulateCirImpl(procdef: untyped, backend: static CodegenKind): untyped =
-  # Stores the wrapper procdef untyped, a call description only.
-  # Kernels instantiate at materialization, never at the enqueue site.
+  # Stores the wrapper procdef untyped, a call description only: kernels instantiate at materialization.
   # Bridge proc name = callee + compile-time arguments + parameter types, so N enqueue sites of one kernel store it once.
   # Backend prefix in the key: the same kernel enqueued for two backends stays two entries.
   let kname = $procdef[0]
@@ -110,8 +109,7 @@ macro ctgAccumulateCirImpl(procdef: untyped, backend: static CodegenKind): untyp
   result = newLit(kname)
 
 macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
-  # Defense in depth: enqueueCall set the target. Tile-typed expressions read
-  # it through ccGetBackend during the enqueue expansion.
+  # Tile-typed expressions read the target through ccGetBackend during the enqueue expansion.
   crucibleCompileTarget = case backend
     of cgMetal: ctMetal
     of cgSpirv: ctGlsl
@@ -151,15 +149,12 @@ proc ctgCurrentGeneration*(kind: static CodegenKind): int {.compileTime.} =
 
 macro ctgSemRelay(key: static string, procdef: typed): untyped =
   # Materialization-site record of a sem-checked wrapper, consumed by artifact lowering.
-  # Stream identity remains the staged untyped node.
   ctgPendingIndex[key] = procdef
   result = newEmptyNode()
 
 macro ctgSemStaged(kind: static CodegenKind): untyped =
-  # Sem-checks every staged wrapper of `kind` at the materialization site.
   # A staged procdef references bound symbols only (callee symbol, parameter types, bindSym'd pragmas).
   # Kernels type without the enqueue site scope and instantiate exactly once each.
-  # ccGetBackend is read at instantiation. Set crucibleCompileTarget before the relays sem-check.
   crucibleCompileTarget = case kind
     of cgMetal: ctMetal
     of cgSpirv: ctGlsl
@@ -312,7 +307,6 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
         grid: `gridRef`, blk: dim3(`blkN`), sharedMem: `smemRef`))
 
 func ctgEngineTarget(engineT: NimNode): CompileTarget {.compileTime.} =
-  ## Codegen target of a batch engine type symbol
   case $engineT
   of "MetalEngine": ctMetal
   of "VulkanEngine": ctGlsl

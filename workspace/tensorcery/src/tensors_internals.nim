@@ -143,12 +143,10 @@ proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int])
     engine.newTensorImpl(ElemType, shape).to(TensorNode)
 
 proc collectView*(n: TensorNode, stack: var seq[WalkFrame]) =
-  ## View collect phase: the source node is the only operand.
   let v = n.to(ViewNode)
   stack.add WalkFrame(n: v.src, kernelPending: false)
 
 proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorNode, _: typedesc[T]) =
-  ## View kernel phase: binds the view's data and offset to its source.
   let v = n.to(ViewNode)
   let r = v.r.to(engine.getTensorImplType(T))
   engine.withDeviceImpl(v.src.getImpl(), T, s):
@@ -157,7 +155,6 @@ proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorNo
 
 macro dispatchViewKernel*(engine, n, batch: typed): untyped =
   ## Kernel phase of one view node. False when `n` is not a view.
-  ## The walk wires views outside the marked op registry.
   result = quote do:
     block:
       let v = `n`.to(ViewNode)
@@ -181,7 +178,7 @@ macro dispatchViewKernel*(engine, n, batch: typed): untyped =
           raise ValueError.newException("eval: dtype unsupported")
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Basic -> Ranked metadata relayout (M4 groundwork)
+#  Basic -> Ranked metadata relayout
 # ═══════════════════════════════════════════════════════════════════════
 #
 # Critical op kernels (gemm, linear, rmsnorm) keep static-rank ceramic Layout signatures.

@@ -52,9 +52,8 @@ iface *AnyEngine:
 type
   LayoutBasic* = object
     ## Runtime-rank layout: the first `rank` entries of `shape` and `strides`
-    ## are active and the array tail pads the rest. Tensorcery owns it:
-    ## memory-bound op kernels consume it and ceramic's layout algebra
-    ## never sees it.
+    ## are active and the array tail pads the rest. Memory-bound op kernels
+    ## consume it. Ceramic's layout algebra never sees it.
     shape*, strides*: array[5, int]
     rank*: int
 
@@ -67,7 +66,7 @@ type
     layout*: L
 
   TensorBridge*[DeviceMem; L: Layout | LayoutBasic] = object
-    ## Host-side device-function argument mirroring TensorImpl fields.
+    ## Host-side device-function argument holding the TensorImpl fields.
     ## - the frontend derives the kernel's view type from it
     ## - DeviceMem fields launch as device buffer addresses
     data: ref DeviceMem
@@ -82,7 +81,7 @@ type
   NilNode* = ref object
 
 proc initTensorBridge*[DeviceMem, L](data: ref DeviceMem, offset: int, layout: L): TensorBridge[DeviceMem, L] {.inline.} =
-  ## Cross-module TensorBridge constructor. The fields are module-private.
+  ## Cross-module constructor: the TensorBridge fields are module-private.
   TensorBridge[DeviceMem, L](data: data, offset: offset, layout: layout)
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -27,12 +27,10 @@ type
 var OpRegistry {.compileTime.}: Table[string, OpHandlers]
 
 macro registerOp*(op: static string, collect, kernel: typed) =
-  ## Registers the collect and kernel phases of one op.
   OpRegistry[op] = (collect, kernel)
 
 proc renameDef(name: NimNode, suffix: string): NimNode =
-  ## Renames a procdef name node.
-  ## Quoted operator names are preserved. The export marker is dropped and the Impl is module-private.
+  ## Quoted operator names are preserved. The export marker is dropped.
   let inner = if name.kind == nnkPostfix: name[1] else: name
   case inner.kind
   of nnkIdent:
@@ -68,7 +66,6 @@ macro hasKernel*(ops: untyped, p: untyped): untyped =
   let name = p[0]
   let implName = renameDef(name, "Impl")
 
-  # doc comment moves to the template
   var doc: NimNode = nil
   var body = p[6]
   if body.len > 0 and body[0].kind == nnkCommentStmt:
@@ -77,7 +74,6 @@ macro hasKernel*(ops: untyped, p: untyped): untyped =
 
   var impl = p.copyNimTree()
   impl[0] = implName
-  # strip the hasKernel pragma itself, keep the others
   var kept = newNimNode(nnkPragma)
   for pr in impl[4]:
     let head = if pr.kind in {nnkExprColonExpr, nnkCall}: pr[0] else: pr
@@ -114,8 +110,7 @@ macro hasKernel*(ops: untyped, p: untyped): untyped =
 
 proc markedDispatch(collect: bool, engine, batch, n, stack, T: NimNode): NimNode =
   ## One branch per marked op: unmarked handlers and their kernels
-  ## never instantiate. The dispatch macros expand per eval call site.
-  ## Every expansion re-reads the marks recorded so far.
+  ## never instantiate. Each expansion re-reads the marks recorded so far.
   result = newNimNode(nnkIfStmt)
   for name, h in pairs(OpRegistry):
     if CacheCounter(name).value == 0:
