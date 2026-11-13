@@ -168,7 +168,7 @@ proc moeRouterCase*(engine: MetalEngine, tok, e, topk: int, variant: MoERoute, b
   ## - scores from `rng` in [-2, 2], fp32, no rounding below fp32
   ## - biasScale 0 stages a zero-filled bias (the no-bias model), otherwise a biased selection whose scale shifts WHICH experts win
   ## - ids judged exactly against the float64 reference, weights within the fp32 band
-  doAssert topk <= MoERouterMaxTopk, "topk above the router's insertion buffer"
+  doAssert topk >= 1 and topk <= MoERouterMaxTopk, "topk outside 1..MoERouterMaxTopk"
   var
     scoresHost = rng.randomHostTensor(float32, (tok, e), (e, 1),
       bounds = Slice[float32](a: -2'f32, b: 2'f32))

@@ -4,7 +4,7 @@
 ##
 ## - x: (T, K), expertB: (E, K, N), d: (T, N), one element dtype per call,
 ##   fp32 router logits (T, E), bias: (E,) fp32 zero-filled for biasless models
-## - topk <= MoERouterMaxTopk, E <= MoEMaxExperts, host-asserted
+## - 1 <= topk <= MoERouterMaxTopk, E <= MoEMaxExperts, host-asserted
 ## - tier choice: pickGroupedTier over the routed entries per expert, forceTier
 ##   overrides it for measurement (GroupedTier ordinals, -1 auto), the gemv tier
 ##   reads the router's ids and weights directly, the gemm tier packs over
@@ -46,7 +46,7 @@ proc moeForward*[Elem, LD, LX, LS, LBI, LB](engine: MetalEngine,
     k = xHost.layout.shape[1].toInt()
     e = bHost.layout.shape[0].toInt()
     n = dHost.layout.shape[1].toInt()
-  doAssert topk <= MoERouterMaxTopk, "topk above the router's insertion buffer"
+  doAssert topk >= 1 and topk <= MoERouterMaxTopk, "topk outside 1..MoERouterMaxTopk"
   doAssert e <= MoEMaxExperts, "E above the dispatch histogram"
   doAssert e >= 1 and t >= 1
   let cap = moeCapacityBound(t, topk, e)
