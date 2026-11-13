@@ -177,8 +177,6 @@ func bindFormalGenericArgs(formal, v: NimNode): NimNode =
   let nParams = timpl[1].len
   if vt.len - 1 < nParams:
     return formal
-  # A formal with fewer parameters than the value's type arguments binds leading arguments first.
-  # TensorBasicView[T] takes the element type from the bridge's DeviceMem slot and drops the layout slot.
   var args = nnkBracketExpr.newTree(tsym)
   for j in 1 .. nParams:
     let a = unwrapDeviceMemArg(vt[j])
@@ -223,8 +221,6 @@ func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
       formalTypes.add(f[^2])
   # identity: the callee, its compile-time values and the runtime parameter types
   var h = hash($deviceFn)
-  # Bound callee symbol. The wrapper sem-checks at the materialization site,
-  # where the callee identifier is out of scope.
   var deviceFnCall = deviceFn.newCall()
   var params = nnkFormalParams.newTree(newEmptyNode())
   var si = 0

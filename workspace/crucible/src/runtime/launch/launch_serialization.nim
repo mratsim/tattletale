@@ -108,7 +108,6 @@ func computeDeviceLayout*[T](_: typedesc[T], backend: static CodegenKind): tuple
         result.align = max(result.align, fl.align)
       result.size = result.size.round_multiple_up(result.align)
   elif T is array:
-    # elements stride at the device element layout: scalars narrow to device width (32-bit ints), bools to the backend's bool word
     let el = if default(T).len > 0: computeDeviceLayout(typeof(default(T)[0]), backend) else: (0, 1)
     result = (default(T).len * el.size, el.align)
   else:
@@ -172,7 +171,6 @@ proc packFrom*[T](dst: var openArray[byte], off: var int, v: T, backend: static 
         dst.packFrom(off, f, backend)
       off = off.round_multiple_up(a)
   elif T is array:
-    # element-wise packing at the device element layout: scalars narrow through putBytes and nested values recurse
     let a = computeDeviceLayout(T, backend).align
     off = off.round_multiple_up(a)
     for el in v:

@@ -78,11 +78,8 @@ var ctgPendingKernels {.compileTime.}: CacheSeq
 var ctgPendingIndex {.compileTime.}: CacheTable
 
 proc ctgHasStagedKernels*(): bool {.compileTime.} =
-  ## True while any stream still has kernels staged for finalize.
   ctgPendingKernels.len != 0
-# Additions per codegen kind. A kind's generation counts the kernels enqueued
-# for it and keys that kind's artifact materialization.
-var ctgGeneration {.compileTime.}: array[CodegenKind, int]
+var ctgGenerationCount {.compileTime.}: array[CodegenKind, int]
 
 func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
@@ -97,15 +94,13 @@ func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
 macro ctgAccumulateCirImpl(procdef: untyped, backend: static CodegenKind): untyped =
-  # Stores the wrapper procdef untyped, a call description only: kernels instantiate at materialization.
-  # Bridge proc name = callee + compile-time arguments + parameter types, so N enqueue sites of one kernel store it once.
-  # Backend prefix in the key: the same kernel enqueued for two backends stays two entries.
+  # A staged procdef stores untyped as a call description: kernels instantiate at materialization.
   let kname = $procdef[0]
   let key = $int(backend) & ":" & kname
   if not ctgPendingIndex.hasKey(key):
     ctgPendingIndex[key] = procdef
     ctgPendingKernels.add(nnkBracket.newTree(newLit(int(backend)), procdef, newLit(key)))
-    ctgGeneration[backend].inc
+    ctgGenerationCount[backend].inc
   result = newLit(kname)
 
 macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
@@ -145,7 +140,7 @@ proc ctgLowerArtifact(kind: static CodegenKind): auto {.compileTime.} =
 proc ctgCurrentGeneration*(kind: static CodegenKind): int {.compileTime.} =
   ## Stream generation of `kind`. Callers pass it as the static `gen` key
   ## of `ctgArtifact` to bind the artifact of their own enqueue prefix.
-  ctgGeneration[kind]
+  ctgGenerationCount[kind]
 
 macro ctgSemRelay(key: static string, procdef: typed): untyped =
   # Materialization-site record of a sem-checked wrapper, consumed by artifact lowering.
@@ -344,7 +339,7 @@ macro enqueueCall[E](batch: BatchCommands[E], cfg: LaunchConfig, workgroup: unty
 macro enqueueCallCt[E](batch: BatchCommands[E], cfg: LaunchConfig, blkCt: static Dim3, deviceFn: typed, values: varargs[untyped]): untyped =
   let wg = getWorkgroupPragma(blkCt)
   result = bindSym"enqueueCall".newCall(batch, cfg,
-    if wg.isNil: newEmptyNode() else: wg, deviceFn)
+    if wg.isNil(): newEmptyNode() else: wg, deviceFn)
   for v in values:
     result.add(v)
 
@@ -429,7 +424,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     if batch.engine.getArtifact() != batch.artifact:
       batch.engine.ingest(batch.artifact)
   when E is MetalEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newMetalBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -438,7 +433,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is VulkanEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newVulkanBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -447,7 +442,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is OpenCLEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newOpenCLBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -456,7 +451,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is WebgpuEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newWebgpuBatch(batch.engine)
     else:
       batch.leg.resetRecording()
