@@ -89,7 +89,7 @@ const GroupedGemvOutputs = 4
   ## reads cover getLaneWidth()·GroupedGemvOutputs contiguous b elements per step.
 
 proc grouped_gemv_via_offsets*(dst, a, b, offs: distinct TensorView) =
-  ## Decode-tier grouped contraction for the offsets form: every line contracts
+  ## Decode grouped contraction for the offsets form: every line contracts
   ## against its group's weight matrix.
   ##
   ## ```
@@ -262,7 +262,7 @@ func countGroupedGemmTiles(T: typedesc, totalM, n: int): int =
   result = totalM.ceil_div(MT) * n.ceil_div(NT)
 
 proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
-  ## Expand-tier grouped contraction for the offsets form: each group's lines
+  ## Prefill grouped contraction for the offsets form: each group's lines
   ## contract against the group's weight matrix.
   ##
   ## ```
@@ -328,7 +328,7 @@ proc grouped_gemm_via_offsets*(dst, a, b, offs: distinct TensorView) =
       dst.store(rD.downcast(dst.T), tvmC, thrID, (mTile, nTile))
 
 proc grouped_gemm_via_expertIds*(dst, a, b, expertIds: distinct TensorView) =
-  ## MoE expand-tier expert contraction over per-line expert ids:
+  ## MoE prefill expert contraction over per-line expert ids:
   ## each packed line contracts against its expert's weight matrix over the shared K and N dimensions.
   ##
   ## ```
