@@ -225,7 +225,7 @@ func xorHash*[T, L](ht: HostTensor[T, L]): uint32 =
     elif sizeof(T) == 2:
       result = result xor uint32(cast[uint16](ht.data[i]))
     else:
-      result = result xor uht.data[i]
+      result = result xor uint32(ht.data[i])
 
 proc loadFixtureTensor*(fixtureDir: string, file: string, shape: tuple, elemType: typedesc): auto =
   result = makeHostTensor(elemType, shape, LayoutRight)
