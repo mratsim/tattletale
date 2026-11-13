@@ -164,6 +164,30 @@ func hashNode(n: NimNode): Hash =
       result = result !& hashNode(child)
   result = !$result
 
+func hashTypeIdentity(n: NimNode): Hash =
+  # hashNode plus each symbol's definition site: two modules may define
+  # types under one identifier and must still hash differently.
+  # Symbols without a definition (builtins, parameters) hash by the identifier alone.
+  result = hash(n.kind)
+  case n.kind
+  of nnkIdent, nnkSym:
+    result = result !& hash(n.strVal)
+    if n.kind == nnkSym:
+      let impl = n.getImpl()
+      if impl != nil:
+        result = result !& hash(impl.repr)
+        result = result !& hash($impl.lineInfo)
+  of nnkIntLit .. nnkUInt64Lit:
+    result = result !& hash(n.intVal)
+  of nnkFloatLit .. nnkFloat64Lit:
+    result = result !& hash(n.floatVal)
+  of nnkEmpty:
+    discard
+  else:
+    for child in n:
+      result = result !& hashTypeIdentity(child)
+  result = !$result
+
 func bindFormalGenericArgs(formal, v: NimNode): NimNode =
   let vt = v.getTypeInst()
   if formal.kind != nnkDistinctTy or vt.kind != nnkBracketExpr:
@@ -233,7 +257,7 @@ func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
       let v = statics[si]
       si.inc
       deviceFnCall.add(v)
-      h = h !& hashNode(v)
+      h = h !& hashTypeIdentity(v)
     else:
       let v = values[vi]
       vi.inc
@@ -241,7 +265,7 @@ func buildGlobalFn(deviceFn: NimNode, statics, values: NimNode): NimNode =
       let ptype = getBridgeParamType(deviceFn, formalNames[i], formalTypes[i], v)
       params.add(nnkIdentDefs.newTree(pname, ptype, newEmptyNode()))
       deviceFnCall.add(pname)
-      h = h !& hashNode(ptype)
+      h = h !& hashTypeIdentity(ptype)
 
   doAssert vi > 0, "launchDeviceFn " & $deviceFn & ": the device function needs a runtime parameter as output"
 
