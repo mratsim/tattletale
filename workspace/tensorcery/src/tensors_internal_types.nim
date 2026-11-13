@@ -87,12 +87,6 @@ proc initTensorBridge*[DeviceMem, L](data: ref DeviceMem, offset: int, layout: L
 #  Layout
 # ═══════════════════════════════════════════════════════════════════════
 
-func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: array[Rank, int]) {.inline.} =
-  var acc = 1
-  for j in 1 ..< Rank + 1:
-    strides[Rank - j] = acc
-    acc *= shape[Rank - j]
-
 func makeLayoutBasic*(shape: openArray[int]): LayoutBasic =
   ## Dense layout over `shape` with ascending strides. Entries beyond the rank are zero.
   if shape.len > MaxRank:
