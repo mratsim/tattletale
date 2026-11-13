@@ -63,14 +63,6 @@ template check(status: WGPUBufferMapAsyncStatus) =
 proc ingest*(engine: WebgpuEngine, source: string) =
   if engine.source == source:
     return
-  if engine.cache.module != nil:
-    wgpuShaderModuleRelease(engine.cache.module)
-    engine.cache.module = nil
-  for c in engine.cache.pipelines.mvalues:
-    wgpuComputePipelineRelease(c.pipeline)
-    wgpuPipelineLayoutRelease(c.pipelineLayout)
-    wgpuBindGroupLayoutRelease(c.bindGroupLayout)
-  engine.cache.pipelines.clear()
   var wgslView = WGPUStringView(data: cstring(source), length: source.len.csize_t)
   var wgslSource = WGPUShaderSourceWGSL(
     chain: WGPUChainedStruct(
@@ -82,9 +74,19 @@ proc ingest*(engine: WebgpuEngine, source: string) =
   var shaderDesc = WGPUShaderModuleDescriptor(
     nextInChain: addr wgslSource
   )
-  engine.cache.module = wgpuDeviceCreateShaderModule(engine.ctx.device, addr shaderDesc)
-  if engine.cache.module == nil:
+  let replacement = wgpuDeviceCreateShaderModule(engine.ctx.device, addr shaderDesc)
+  if replacement == nil:
     raiseAssert("WebGPU: failed to create shader module")
+  # Replacement exists: dropping the live module cannot strand the engine,
+  # a failed create leaves source and pipelines untouched.
+  if engine.cache.module != nil:
+    wgpuShaderModuleRelease(engine.cache.module)
+  for c in engine.cache.pipelines.mvalues:
+    wgpuComputePipelineRelease(c.pipeline)
+    wgpuPipelineLayoutRelease(c.pipelineLayout)
+    wgpuBindGroupLayoutRelease(c.bindGroupLayout)
+  engine.cache.pipelines.clear()
+  engine.cache.module = replacement
   engine.source = source
   engine.shaderSquadron = parseShaderSquadron(source)
 
