@@ -75,6 +75,18 @@ template evalRoots*(engine: HwEngine, roots: var openArray[TensorGraph]) =
     when ctgHasStagedKernels():
       if batch.entries.len != 0:
         batch.submit()
+    # Graph collapse: roots become leaves over their computed impls,
+    # later evals walk nothing upstream.
+    for i in 0 ..< roots.len:
+      if not roots[i].isNil():
+        let impl = roots[i].getImpl()
+        case impl.dtype()
+        of kFp16:
+          roots[i] = impl.to(engine.getTensorImplType(float16)).to(TensorGraph)
+        of kFp32:
+          roots[i] = impl.to(engine.getTensorImplType(float32)).to(TensorGraph)
+        of kBf16:
+          roots[i] = impl.to(engine.getTensorImplType(bfloat16)).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registry
@@ -206,8 +218,6 @@ template dispatchCollect*(engine, n, stack: untyped) =
   of kBf16:
     type T = bfloat16
     engine.dispatchMarked(n, nil, stack, T, true)
-  else:
-    raise ValueError.newException("eval: dtype unsupported")
 
 template dispatchAlloc*(engine, n: untyped) =
   case n.getImpl().dtype()
@@ -220,8 +230,6 @@ template dispatchAlloc*(engine, n: untyped) =
   of kBf16:
     type T = bfloat16
     engine.allocDataIn(n.getImpl().to(engine.getTensorImplType(T)))
-  else:
-    raise ValueError.newException("eval: dtype unsupported")
 
 template dispatchKernel*(engine, n, batch: untyped) =
   case n.getImpl().dtype()
@@ -234,5 +242,3 @@ template dispatchKernel*(engine, n, batch: untyped) =
   of kBf16:
     type T = bfloat16
     engine.dispatchMarked(n, batch, nil, T, false)
-  else:
-    raise ValueError.newException("eval: dtype unsupported")
