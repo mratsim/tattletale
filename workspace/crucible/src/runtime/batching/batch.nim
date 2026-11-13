@@ -49,10 +49,7 @@ type
   BatchCommands*[E] = ref object
     engine*: E
     entries*: seq[BatchEntry[E]]
-    when E is VulkanEngine:
-      artifact*: SpirvWords
-    else:
-      artifact*: string
+    artifact*: string
     when E is MetalEngine:
       leg: MetalBatch
     elif E is VulkanEngine:
