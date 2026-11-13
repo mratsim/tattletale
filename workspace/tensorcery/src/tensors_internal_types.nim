@@ -94,7 +94,7 @@ func rowMajorStrides*[Rank: static int](strides: var array[Rank, int], shape: ar
     strides[Rank - j] = acc
     acc *= shape[Rank - j]
 
-func toLayoutBasic*(shape: openArray[int]): LayoutBasic =
+func makeLayoutBasic*(shape: openArray[int]): LayoutBasic =
   ## Dense layout over `shape` with ascending strides. Entries beyond the rank are zero.
   if shape.len > MaxRank:
     raise ValueError.newException("Tensorcery: unsupported rank " & $shape.len)
@@ -105,7 +105,7 @@ func toLayoutBasic*(shape: openArray[int]): LayoutBasic =
     result.strides[shape.len - j] = acc
     acc *= shape[shape.len - j]
 
-func toLayoutBasic*(shape, strides: openArray[int]): LayoutBasic =
+func makeLayoutBasic*(shape, strides: openArray[int]): LayoutBasic =
   ## Layout over `shape` and `strides`, entries past rank zero.
   if shape.len > MaxRank:
     raise ValueError.newException("Tensorcery: unsupported rank " & $shape.len)

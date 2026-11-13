@@ -96,11 +96,11 @@ proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[bfloat16]
 
 proc newPlaceholderImpl[E: HwEngine, T](engine: E, _: typedesc[T], shape: openArray[int]): engine.getTensorImplType(T) {.inline.} =
   result = (engine.getTensorImplType(T))()
-  result.layout = toLayoutBasic(shape)
+  result.layout = makeLayoutBasic(shape)
 
 proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], shape: openArray[int]): engine.getTensorImplType(T) {.inline.} =
   result = (engine.getTensorImplType(T))()
-  result.layout = toLayoutBasic(shape)
+  result.layout = makeLayoutBasic(shape)
   result.data.new()
   result.data[] = engine.allocDevice(T, result.size())
 
@@ -116,7 +116,7 @@ proc newViewNode*[E: HwEngine](engine: E, src: TensorGraph, shape, strides: open
   let si = src.getImpl()
   match(ElemType, si.dtype()):
     let r = engine.getTensorImplType(ElemType)()
-    r.layout = toLayoutBasic(shape, strides)
+    r.layout = makeLayoutBasic(shape, strides)
     r.offset = offset
     let s = si.to(engine.getTensorImplType(ElemType))
     r.data = s.data
