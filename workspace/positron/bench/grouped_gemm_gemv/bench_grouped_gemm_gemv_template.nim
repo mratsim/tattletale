@@ -500,3 +500,6 @@ proc mainGroupedGemmViaExpertIds* =
       runExpandCell(engine, e, m, padded = true)
   runExpandCell(engine, 64, 512, padded = false)
   runExpandCell(engine, 64, 512, padded = true)
+  # Prefill saturation cell: m per expert where the tiles stop being
+  # boundary-bound and the form reaches the dense baseline
+  runExpandCell(engine, 64, 4096, padded = false)
