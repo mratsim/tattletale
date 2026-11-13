@@ -13,7 +13,7 @@ import workspace/iface
 import workspace/math
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################
@@ -75,12 +75,12 @@ proc k_gemm(mma: static TiledMma, D: distinct TensorView, alpha: float32,
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  GemmNode* = ref object
+  GemmNode* = ref object of TensorNode
     r: AnyTensorImpl
     alpha: float32
-    a, b: TensorNode
+    a, b: TensorGraph
     beta: float32
-    c: TensorNode         # nil when beta = 0
+    c: TensorGraph         # nil when beta = 0
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Interface
@@ -89,7 +89,7 @@ type
 func getImpl*(n: GemmNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: GemmNode): string {.inline.} =
+func opName*(_: typedesc[GemmNode]): static string {.inline.} =
   "Gemm"
 
 
@@ -99,8 +99,8 @@ func opName*(n: GemmNode): string {.inline.} =
 
 proc tn_gemm*(
     engine: AnyEngine,
-    alpha: float32, a, b: TensorNode,
-    beta: float32, c: TensorNode = NilTensorNode()): TensorNode {.contracts.} =
+    alpha: float32, a, b: TensorGraph,
+    beta: float32, c: TensorGraph = NilTensorNode()): TensorGraph {.contracts.} =
   ## D = alpha·A·B + beta·C, C nil requires beta = 0.
   let
     ia = a.getImpl()
@@ -116,37 +116,38 @@ proc tn_gemm*(
     {.precondition: ic.shape().p == [ia.shape().p[0], ib.shape().p[1]].}
   return GemmNode(alpha: alpha, a: a, b: b, beta: beta, c: c,
       r: engine.newPlaceholderNode(ia.dtype(), [ia.shape().p[0], ib.shape().p[1]]).getImpl()
-    ).to(TensorNode)
+    ).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asGemm = n.to(GemmNode)
   if asGemm.isNil():
     return false
-  engine.enqueueNode(batch, asGemm.a)
-  engine.enqueueNode(batch, asGemm.b)
-
-  when rank == 2 and T is (float32 | float16 | bfloat16):
+  when T is (float32 | float16 | bfloat16):
     let
-      rImpl = asGemm.r.to(engine.getTensorImplType(T, rank))
-      aImpl = asGemm.a.getImpl().to(engine.getTensorImplType(T, rank))
-      bImpl = asGemm.b.getImpl().to(engine.getTensorImplType(T, rank))
-      tiles = ceil_div(rImpl.shape[0], Fleet.tileM) * ceil_div(rImpl.shape[1], Fleet.tileN)
-    engine.preAlloc(rImpl)
+      rImpl = asGemm.r.to(engine.getTensorImplType(T))
+      aImpl = asGemm.a.getImpl().to(engine.getTensorImplType(T))
+      bImpl = asGemm.b.getImpl().to(engine.getTensorImplType(T))
+      tiles = ceil_div(rImpl.layout.shape[0], Fleet.tileM) * ceil_div(rImpl.layout.shape[1], Fleet.tileN)
+    # Ceramic kernel signature: rank-2 Layout. Bridges retype from basic metadata
+    # (relayoutBridge checks the rank) and copy the data ref.
+    let
+      rView = rImpl.relayoutBridge(Layout[(int, int), (int, int)])
+      aView = aImpl.relayoutBridge(Layout[(int, int), (int, int)])
+      bView = bImpl.relayoutBridge(Layout[(int, int), (int, int)])
     if asGemm.c.isNil():
       # beta = 0, the C view is a dummy, never loaded
       batch.enqueue<<(tiles, LaneWidth)>> k_gemm(GemmMma(T),
-        rImpl.bridge(), asGemm.alpha, aImpl.bridge(), bImpl.bridge(), asGemm.beta, rImpl.bridge())
+        rView, asGemm.alpha, aView, bView, asGemm.beta, rView)
     else:
-      engine.enqueueNode(batch, asGemm.c)
-      let cImpl = asGemm.c.getImpl().to(engine.getTensorImplType(T, rank))
+      let cView = asGemm.c.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int, int), (int, int)])
       batch.enqueue<<(tiles, LaneWidth)>> k_gemm(GemmMma(T),
-        rImpl.bridge(), asGemm.alpha, aImpl.bridge(), bImpl.bridge(), asGemm.beta, cImpl.bridge())
+        rView, asGemm.alpha, aView, bView, asGemm.beta, cView)
   else:
-    raiseAssert("gemm: rank " & $rank & " or dtype unsupported, the op is rank 2, float16, bfloat16 or float32")
+    raiseAssert("gemm: dtype unsupported, the op is float16, bfloat16 or float32")
 
   return true
 
@@ -154,4 +155,4 @@ proc enqueueGemm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Gemm", enqueueGemm)
+registerOp(GemmNode, enqueueGemm, opName(GemmNode))

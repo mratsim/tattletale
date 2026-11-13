@@ -105,6 +105,10 @@ proc scanCallee(f: var ModuleFeatures, callee: CirExpr, args: seq[CirExpr], prof
       f.subgroup = true
   if profile.shuffleNames and callee.name in ["simd_shuffle", "simd_shuffle_xor"]:
     f.subgroupShuffle = true
+  if callee.nilBuiltin == cbkIsNil:
+    # GLSL prints the check as a `uint64_t` comparison, which needs the int64
+    # extension even when the module declares no 64-bit type.
+    f.int64 = true
   if callee.name == "atomicFetchAdd":
     var pt = getExprType(args[0])
     if profile.atomicFloatViaPattern and not pt.isFloat32Pointee() and

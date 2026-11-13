@@ -15,7 +15,7 @@
 ##   batch.finalize()
 ##   batch.replay()  # relaunches without recompiling
 ##   ```
-import std/[macros]
+import std/[macros, macrocache]
 import workspace/crucible/src/codegen/gpu_compiler
 import workspace/crucible/src/codegen/passes/pass_datatypes
 import workspace/crucible/src/codegen/backends/backends_api
@@ -49,10 +49,7 @@ type
   BatchCommands*[E] = ref object
     engine*: E
     entries*: seq[BatchEntry[E]]
-    when E is VulkanEngine:
-      artifact*: SpirvWords
-    else:
-      artifact*: string
+    artifact*: string
     when E is MetalEngine:
       leg: MetalBatch
     elif E is VulkanEngine:
@@ -72,18 +69,18 @@ proc recordBatch*[E: HwEngine](engine: E): BatchCommands[E] {.inline.} =
 #   compile-time globals or functions that write to a compile-time global
 #   are prefix with ctg
 
-var ctgFrontend {.compileTime.}: CirFrontend
-var ctgArtifactKind {.compileTime.}: CodegenKind
-var ctgArtifactPrinted {.compileTime.}: bool
-var ctgArtifactFnCount {.compileTime.}: int
-var ctgTextArtifact {.compileTime.}: string
-var ctgSpirvArtifact {.compileTime.}: SpirvWords
+# Enqueued device functions wait here as tagged proc definitions,
+# one entry per distinct (backend, bridge name).
+var ctgPendingKernels {.compileTime.}: CacheSeq
+var ctgPendingIndex {.compileTime.}: CacheTable
+
+var ctgGenerationCount {.compileTime.}: array[CodegenKind, int]
 
 func batchCodegenKind(E: typedesc[MetalEngine]): CodegenKind {.compileTime.} =
   cgMetal
 
 func batchCodegenKind(E: typedesc[VulkanEngine]): CodegenKind {.compileTime.} =
-  cgSpirv
+  cgGlsl
 
 func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
   cgWebGPU
@@ -91,44 +88,92 @@ func batchCodegenKind(E: typedesc[WebgpuEngine]): CodegenKind {.compileTime.} =
 func batchCodegenKind(E: typedesc[OpenCLEngine]): CodegenKind {.compileTime.} =
   cgOpenCL
 
-macro ctgAccumulateCirImpl(procdef: typed): untyped =
-  let kname = lowerNimAst(ctgFrontend, procdef)
+macro ctgAccumulateCirImpl(procdef: untyped, backend: static CodegenKind): untyped =
+  # A staged procdef stores untyped as a call description: kernels instantiate at materialization.
+  let kname = $procdef[0]
+  let key = $int(backend) & ":" & kname
+  if not ctgPendingIndex.hasKey(key):
+    ctgPendingIndex[key] = procdef
+    ctgPendingKernels.add(nnkBracket.newTree(newLit(int(backend)), procdef, newLit(key)))
+    ctgGenerationCount[backend].inc
   result = newLit(kname)
 
 macro ctgAccumulateCir(procdef: untyped, backend: static CodegenKind): untyped =
+  # Tile-typed expressions read the target through ccGetBackend during the enqueue expansion.
   crucibleCompileTarget = case backend
     of cgMetal: ctMetal
-    of cgSpirv: ctGlsl
+    of cgGlsl: ctGlsl
+    of cgSpirv: ctSpirvShader
     of cgOpenCL: ctOpenCL
     of cgWebGPU: ctWebGPU
     else: ctNone
   # delayed symbol resolution
-  result = newCall(bindSym"ctgAccumulateCirImpl", procdef)
+  result = newCall(bindSym"ctgAccumulateCirImpl", procdef, newLit(backend))
 
-proc ctgAccumulateArtifact*(kind: static CodegenKind): auto {.compileTime.} =
-  if ctgArtifactPrinted and ctgArtifactKind != kind:
-    raiseAssert("ctgAccumulateArtifact: one codegen kind per compilation, " &
-      $ctgArtifactKind & " already accumulated, asked for " & $kind)
-  ctgArtifactKind = kind
-  ctgArtifactPrinted = true
+proc ctgLowerArtifact(kind: static CodegenKind): auto {.compileTime.} =
+  # Every materialization lowers into a fresh frontend and passes it once:
+  # passes are not idempotent over a frontend they already processed.
+  crucibleCompileTarget = case kind
+    of cgMetal: ctMetal
+    of cgGlsl: ctGlsl
+    of cgSpirv: ctSpirvShader
+    of cgOpenCL: ctOpenCL
+    of cgWebGPU: ctWebGPU
+    else: ctNone
+  var fe: CirFrontend
+  for i in 0 ..< ctgPendingKernels.len:
+    let entry = ctgPendingKernels[i]
+    if entry[0].intVal == int(kind):
+      discard lowerNimAst(fe, ctgPendingIndex[entry[2].strVal & ":typed"])
+  var reg = PassRegistry()
+  reg.registerGpuPasses(kind)
+  let m = fe.finish()
+  reg.runPasses(m)
   when kind == cgSpirv:
-    if ctgSpirvArtifact.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
-      var reg = PassRegistry()
-      reg.registerGpuPasses(kind)
-      let m = ctgFrontend.finish()
-      reg.runPasses(m)
-      ctgSpirvArtifact = codegenIR(m, kind)
-      ctgArtifactFnCount = ctgFrontend.getProcCount()
-    ctgSpirvArtifact
+    codegenIR(m, kind)
   else:
-    if ctgTextArtifact.len == 0 or ctgArtifactFnCount != ctgFrontend.getProcCount():
-      var reg = PassRegistry()
-      reg.registerGpuPasses(kind)
-      let m = ctgFrontend.finish()
-      reg.runPasses(m)
-      ctgTextArtifact = codegenSource(m, kind)
-      ctgArtifactFnCount = ctgFrontend.getProcCount()
-    ctgTextArtifact
+    codegenSource(m, kind)
+
+proc ctgCurrentGeneration*(kind: static CodegenKind): int {.compileTime.} =
+  ## Stream generation of `kind`. Callers pass it as the static `gen` key
+  ## of `ctgArtifact` to bind the artifact of their own enqueue prefix.
+  ctgGenerationCount[kind]
+
+macro ctgSemRelay(key: static string, procdef: typed): untyped =
+  # Materialization-site record of a sem-checked wrapper, consumed by artifact lowering.
+  ctgPendingIndex[key] = procdef
+  result = newEmptyNode()
+
+macro ctgSemStaged(kind: static CodegenKind): untyped =
+  # A staged procdef references bound symbols only (callee symbol, parameter types, bindSym'd pragmas).
+  # Kernels type without the enqueue site scope and instantiate exactly once each.
+  crucibleCompileTarget = case kind
+    of cgMetal: ctMetal
+    of cgGlsl: ctGlsl
+    of cgSpirv: ctSpirvShader
+    of cgOpenCL: ctOpenCL
+    of cgWebGPU: ctWebGPU
+    else: ctNone
+  result = nnkStmtList.newTree()
+  for i in 0 ..< ctgPendingKernels.len:
+    let entry = ctgPendingKernels[i]
+    if entry[0].intVal == int(kind) and
+        not ctgPendingIndex.hasKey(entry[2].strVal & ":typed"):
+      result.add nnkCall.newTree(
+        bindSym"ctgSemRelay", newLit(entry[2].strVal & ":typed"), entry[1])
+
+proc ctgArtifact*(kind: static CodegenKind, gen: static int): auto =
+  ## Returns the compiled artifact for `kind` at stream generation `gen`,
+  ## baked into the binary as a const. One instantiation per (kind, gen):
+  ## - sites at the same generation share one lowering
+  ## - the artifact covers exactly the kernels enqueued before that generation
+  ##
+  ## The instantiation is the staging point: it sem-checks the staged wrappers,
+  ## instantiating each stream kernel once, then lowers the typed nodes.
+  ## Enqueueing more kernels and finalizing again compiles a fresh artifact.
+  ctgSemStaged(kind)
+  const artifact = static(ctgLowerArtifact(kind))
+  artifact
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Enqueue
@@ -158,7 +203,7 @@ template appendEntry[E](batch: BatchCommands[E], fnName: string, artifact: auto,
       leg.recordGlobalFn(artifact, fnName, entry.config, output, args)
   batch.entries.add entry
 
-macro enqueueDeviceFn[E](batch: BatchCommands[E], deviceFn: typed, statics: untyped, cfg: LaunchConfig, workgroup: untyped, values: varargs[typed]): untyped =
+macro enqueueDeviceFn[E](batch: BatchCommands[E], deviceFn: typed, statics: typed, cfg: LaunchConfig, workgroup: untyped, values: varargs[typed]): untyped =
   var valuesN = nnkBracket.newTree()
   for v in values:
     valuesN.add(v)
@@ -254,7 +299,18 @@ macro `<<`*[E](r: EnqueueSugar[E], cfg: untyped): untyped =
       EnqueueProxy[`E`](batch: `batchN`, config: LaunchConfig(
         grid: `gridRef`, blk: dim3(`blkN`), sharedMem: `smemRef`))
 
+func ctgEngineTarget(engineT: NimNode): CompileTarget {.compileTime.} =
+  case $engineT
+  of "MetalEngine": ctMetal
+  of "VulkanEngine": ctGlsl
+  of "WebgpuEngine": ctWebGPU
+  of "OpenCLEngine": ctOpenCL
+  else: ctNone
+
 macro enqueueCall[E](batch: BatchCommands[E], cfg: LaunchConfig, workgroup: untyped, deviceFn: typed, values: varargs[untyped]): untyped =
+  # Compile-time arguments sem-check in this expansion before the accumulate
+  # macro runs: ccGetBackend (MMA atom resolution) reads the target.
+  crucibleCompileTarget = ctgEngineTarget(batch.getTypeInst()[1])
   var callNode = nnkCall.newTree(deviceFn)
   for v in values:
     callNode.add(v)
@@ -267,7 +323,9 @@ macro enqueueCall[E](batch: BatchCommands[E], cfg: LaunchConfig, workgroup: unty
     let f = formals[i]
     for j in 0 ..< f.len - 2:
       formalTypes.add(f[^2])
-  var statics = nnkBracket.newTree()
+  # Tuple constr over a typed parameter: each compile-time argument sem-checks
+  # at the enqueue site, where the handler generic parameters are in scope.
+  var statics = nnkTupleConstr.newTree()
   let entry = bindSym"enqueueDeviceFn".newCall(batch, k, statics, cfg, workgroup)
   for i, v in values:
     if isCompileTime(formalTypes[i]):
@@ -279,7 +337,7 @@ macro enqueueCall[E](batch: BatchCommands[E], cfg: LaunchConfig, workgroup: unty
 macro enqueueCallCt[E](batch: BatchCommands[E], cfg: LaunchConfig, blkCt: static Dim3, deviceFn: typed, values: varargs[untyped]): untyped =
   let wg = getWorkgroupPragma(blkCt)
   result = bindSym"enqueueCall".newCall(batch, cfg,
-    if wg.isNil: newEmptyNode() else: wg, deviceFn)
+    if wg.isNil(): newEmptyNode() else: wg, deviceFn)
   for v in values:
     result.add(v)
 
@@ -326,24 +384,16 @@ macro finalize*(batch: BatchCommands): untyped =
   ## Compiles the batch's device functions into one artifact and ingests it
   ## into the engine. Does not launch the entries.
   ##
-  ## Requires:
-  ## - at least one `enqueue` in this compilation
-  ##
-  ## Later `finalize` calls reuse the cached artifact.
-  if ctgFrontend.isEmpty():
-    error("finalize: the stream holds no device function, enqueue first", batch)
+  ## Finalize calls at the same stream generation share one artifact.
+  ## Enqueueing more kernels and finalizing again compiles a fresh artifact
+  ## over the complete stream.
   let engineN = quote do: `batch`.engine
   result = quote do:
     block:
       const batchKind = batchCodegenKind(typeof(`engineN`))
-      const batchArtifact = ctgAccumulateArtifact(batchKind)
-      `batch`.artifact = batchArtifact
-      when batchKind == cgSpirv:
-        if `engineN`.getSpirV() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
-      else:
-        if `engineN`.getArtifact() != batchArtifact:
-          `engineN`.ingest(batchArtifact)
+      const batchGen = ctgCurrentGeneration(batchKind)
+      `batch`.artifact = ctgArtifact(batchKind, batchGen)
+      `engineN`.ingest(`batch`.artifact)
 
 proc replay*[E](batch: BatchCommands[E]) {.inline.} =
   ## Launches the batch entries on the engine in enqueue order, without recompiling.
@@ -355,14 +405,9 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
   ## since `finalize`.
   if batch.artifact.len == 0:
     raiseAssert("replay: the batch holds no artifact, call finalize first")
-  when E is VulkanEngine:
-    if batch.engine.getSpirV() != batch.artifact:
-      batch.engine.ingest(batch.artifact)
-  else:
-    if batch.engine.getArtifact() != batch.artifact:
-      batch.engine.ingest(batch.artifact)
+  batch.engine.ingest(batch.artifact)
   when E is MetalEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newMetalBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -371,7 +416,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is VulkanEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newVulkanBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -380,7 +425,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is OpenCLEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newOpenCLBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -389,7 +434,7 @@ proc replay*[E](batch: BatchCommands[E]) {.inline.} =
     batch.leg.finalize()
     batch.leg.replay()
   elif E is WebgpuEngine:
-    if batch.leg.isNil:
+    if batch.leg.isNil():
       batch.leg = newWebgpuBatch(batch.engine)
     else:
       batch.leg.resetRecording()
@@ -406,8 +451,7 @@ macro submit*(batch: BatchCommands): untyped =
   ## on the engine in enqueue order.
   ##
   ## Requires:
-  ## - at least one `enqueue` in this compilation, an empty batch has no
-  ##   artifact to finalize and fails at compile time
+  ## - at least one `enqueue` in this compilation, an empty batch raises
   ##
   ## The compilation compiles its device functions once.
   ## Device functions enqueued later recompile it, every `submit` reuses the module.

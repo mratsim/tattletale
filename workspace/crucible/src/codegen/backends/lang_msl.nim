@@ -6,6 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ../ir/cirv2_lang
+import ../ir/cirv2_build
 import ../frontend/nim_to_crucible
 import std/[macros, strutils, sequtils, sets, tables, math]
 import ./print_common
@@ -32,6 +33,7 @@ type PrintCtx = object of WalkCtx
 # ═══════════════════════════════════════════════════════════════════════
 
 const mslVocab = BuiltinVocab(
+  nilText: makeTexts([(cbkIsNil, "($1 == nullptr)")]),
   synchroText: makeTexts([
     (cbkThreadgroupBarrier, "threadgroup_barrier(mem_flags::mem_threadgroup)"),
     (cbkThreadgroupBarrierDevice, "threadgroup_barrier(mem_flags::mem_device)")]),
@@ -91,6 +93,17 @@ proc emitComputeGlobal(ctx: var PrintCtx, s: CirStmt): string
 
 proc emitMslScalar(t: CirType): string =
   getFullTypeName(TargetVocabs[cgMetal].scalarNames, mslVectorRule, t)
+
+proc retypeBoolConstStorage(t: CirType): CirType =
+  ## Copy of `t` with bool leaves retyped to 32-bit int. Metal has no bool
+  ## constant storage and the host packs a bool at the scalar 4-byte width.
+  ## CirType is a ref, a retyped array builds a fresh node and never mutates
+  ## the type tree shared with the frontend.
+  if t.kind == ctBool:
+    return tInt(32)
+  if t.kind == ctArray:
+    return CirType(kind: ctArray, aN: t.aN, aElem: retypeBoolConstStorage(t.aElem))
+  return t
 
 proc emitMslType(t: CirType, ident: string, allowEmptyIdent: bool): string =
   printCDecl(TargetVocabs[cgMetal].scalarNames, mslVectorRule, printerTarget, t, ident, allowEmptyIdent)
@@ -216,7 +229,8 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
   ## - a relocated smem local binds as threadgroup storage, no buffer slot
   ## - the printer assigns the next `[[buffer(n)]]` slot to a device pointer
   ## - a value parameter binds as `constant T&`, bool retypes to `int`
-  ##   (Metal has no bool constant storage)
+  ##   (Metal has no bool constant storage), an array argument retypes
+  ##   its bool elements the same way
   ## - the coordinate builtins that the body references append as attributed parameters, no slot
   ##
   ## Device-function parameters:
@@ -236,7 +250,7 @@ proc emitComputeParams(ctx: var PrintCtx, fn: CirProc): seq[string] =
       of ctArray:
         # an array entrypoint argument binds in constant storage like a scalar one.
         # xcrun metal rejects an unqualified `const T name[N]` entrypoint argument
-        result.add "constant " & emitMslType(p.typ, p.name, false)
+        result.add "constant " & emitMslType(retypeBoolConstStorage(p.typ), p.name, false)
       else:
         var elem = emitMslScalar(p.typ)
         if p.typ.kind == ctBool:

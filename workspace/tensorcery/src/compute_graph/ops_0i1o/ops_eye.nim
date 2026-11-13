@@ -12,7 +12,7 @@ import workspace/crucible
 import workspace/iface
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################
@@ -23,7 +23,7 @@ import ../env
 
 const FillFleet = (elemsPerGroup: 128)
 
-proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
+proc k_eye(D: distinct TensorBasicView, ncols, kDiag: float32) =
   # int32 kernel args lose stores through the enqueue path, so ncols and k are float32 and convert to int32 here
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
@@ -50,7 +50,7 @@ proc k_eye(D: distinct TensorView, ncols, kDiag: float32) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  EyeNode* = ref object
+  EyeNode* = ref object of TensorNode
     r: AnyTensorImpl
     n, m, k: int
 
@@ -61,28 +61,27 @@ type
 func getImpl*(n: EyeNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: EyeNode): string {.inline.} =
+func opName*(_: typedesc[EyeNode]): static string {.inline.} =
   "Eye"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorNode {.contracts.} =
+proc tn_eye*(engine: AnyEngine, n, m, k: int, dtype: Dtype): TensorGraph {.contracts.} =
   # size 0 is refused at allocation, not here
   {.precondition: n >= 0 and m >= 0.}
-  return EyeNode(r: engine.newPlaceholderNode(dtype, [n * m]).getImpl(), n: n, m: m, k: k).to(TensorNode)
+  return EyeNode(r: engine.newPlaceholderNode(dtype, [n * m]).getImpl(), n: n, m: m, k: k).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asEye = n.to(EyeNode)
   if asEye.isNil():
     return false
-  let rImpl = asEye.r.to(engine.getTensorImplType(T, rank))
-  engine.preAlloc(rImpl)
+  let rImpl = asEye.r.to(engine.getTensorImplType(T))
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_eye(rImpl.bridge(), asEye.m.float32, asEye.k.float32)
   return true
 
@@ -90,4 +89,4 @@ proc enqueueEye[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tenso
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Eye", enqueueEye)
+registerOp(EyeNode, enqueueEye, opName(EyeNode))

@@ -13,7 +13,7 @@ import workspace/iface
 import workspace/math
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################
@@ -28,7 +28,7 @@ const Fleet = (tileM: 32, tileN: 32)
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias: static bool) =
+proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView) =
   ## D = A·B + bias over the last axis
   const tvmA = mma.getThreadValueMap(opA)
   const tvmB = mma.getThreadValueMap(opB)
@@ -88,7 +88,7 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias
         rB.load(B, tvmB, thrID, (n, k))
         mma.atom.gemm_tile(rD, rA, rB, rD)
 
-      when withBias:
+      if not bias.isNil():
         let broadcastedView = make_view(bias.data,
             make_layout((sliceD.layout.shape[0], sliceD.layout.shape[1]), (Int[0](), Int[1]())),
             bias.offset)
@@ -103,10 +103,10 @@ proc k_linear(mma: static TiledMma, D, A, B, bias: distinct TensorView, withBias
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  LinearNode* = ref object
+  LinearNode* = ref object of TensorNode
     r: AnyTensorImpl
-    x, w: TensorNode
-    b: TensorNode         # nil when the layer has no bias
+    x, w: TensorGraph
+    b: TensorGraph         # nil when the layer has no bias
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Interface
@@ -115,7 +115,7 @@ type
 func getImpl*(n: LinearNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: LinearNode): string {.inline.} =
+func opName*(_: typedesc[LinearNode]): static string {.inline.} =
   "Linear"
 
 
@@ -123,7 +123,7 @@ func opName*(n: LinearNode): string {.inline.} =
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.contracts.} =
+proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorGraph): TensorGraph {.contracts.} =
   ## o = x·Wᵀ + b: (M, K) × (out, K) → (M, out), bias nil when the layer has none
   let
     ix = x.getImpl()
@@ -143,7 +143,7 @@ proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.co
   outShape.add iw.shape().p[0]
   return LinearNode(x: x, w: weight, b: bias,
       r: engine.newPlaceholderNode(ix.dtype(), outShape).getImpl()
-    ).to(TensorNode)
+    ).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
@@ -167,37 +167,39 @@ proc tn_linear*(engine: AnyEngine, x, weight, bias: TensorNode): TensorNode {.co
 # Tile grids expose nSlices·⌈M/32⌉·⌈N/32⌉ work items. More parallelism needs
 # split-K: partition the K reduction across work items and reduce the partials.
 
-proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueLinear[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asLinear = n.to(LinearNode)
   if asLinear.isNil():
     return false
-  engine.enqueueNode(batch, asLinear.x)
-  engine.enqueueNode(batch, asLinear.w)
-
-  when T is (float32 | float16 | bfloat16) and rank in {2, 3}:
+  when T is (float32 | float16 | bfloat16):
     let
-      rImpl = asLinear.r.to(engine.getTensorImplType(T, rank))
-      xImpl = asLinear.x.getImpl().to(engine.getTensorImplType(T, rank))
-      wImpl = asLinear.w.getImpl().to(engine.getTensorImplType(T, 2))
-      cols = rImpl.shape[^1]
-      rowsPerSlice = rImpl.shape[^2]
+      rImpl = asLinear.r.to(engine.getTensorImplType(T))
+      xImpl = asLinear.x.getImpl().to(engine.getTensorImplType(T))
+      wImpl = asLinear.w.getImpl().to(engine.getTensorImplType(T))
+      cols = rImpl.layout.shape[rImpl.layout.rank - 1]
+      rowsPerSlice = rImpl.layout.shape[rImpl.layout.rank - 2]
       nSlices = rImpl.size() div (rowsPerSlice * cols)
       tiles = nSlices * rowsPerSlice.ceil_div(Fleet.tileM) * cols.ceil_div(Fleet.tileN)
-    engine.preAlloc(rImpl)
-    if asLinear.b.isNil():
+    template enqueueLinearAt(lay: typedesc) =
+      let
+        rView = rImpl.relayoutBridge(lay)
+        xView = xImpl.relayoutBridge(lay)
+        wView = wImpl.relayoutBridge(Layout[(int, int), (int, int)])
+      let bias = asLinear.b.getImpl().to(engine.getTensorImplType(T)).relayoutBridge(Layout[(int,), (int,)])
       batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
-        rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), rImpl.bridge(), false)
+        rView, xView, wView, bias)
+    if rImpl.layout.rank == 2:
+      enqueueLinearAt(Layout[(int, int), (int, int)])
+    elif rImpl.layout.rank == 3:
+      enqueueLinearAt(Layout[(int, int, int), (int, int, int)])
     else:
-      engine.enqueueNode(batch, asLinear.b)
-      let bImpl = asLinear.b.getImpl().to(engine.getTensorImplType(T, 1))
-      batch.enqueue<<(tiles, LaneWidth)>> k_linear(GemmMma(T),
-        rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), bImpl.bridge(), true)
+      raiseAssert("linear: rank " & $rImpl.layout.rank & " unsupported, the op is rank 2 or 3")
   else:
-    raiseAssert("linear: rank " & $rank & " or dtype unsupported, the op is rank 2 or 3, float16, bfloat16 or float32")
+    raiseAssert("linear: dtype unsupported, the op is float16, bfloat16 or float32")
   return true
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Linear", enqueueLinear)
+registerOp(LinearNode, enqueueLinear, opName(LinearNode))

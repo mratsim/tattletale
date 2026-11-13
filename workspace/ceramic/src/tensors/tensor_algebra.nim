@@ -8,6 +8,7 @@
 import workspace/ceramic/src/layout_algebra
 import workspace/ceramic/src/layout_algebra/layout_indexing
 import ./tensor_datatypes
+import workspace/crucible
 import std/macros
 
 export layout_indexing.slice, layout_indexing.dice
@@ -41,6 +42,10 @@ template logical_divide*(t: TensorOwned, tiler: Layout): auto =
   ## A view aliasing the caller's storage, a by-value param would dangle
   ## for small inline arrays.
   make_view(addr t.data[0], t.getLayout().logical_divide(tiler), getOffset(t))
+
+func isNil*[T, L](v: TensorView[T, L]): bool {.inline.} =
+  ## True when the view has no backing buffer.
+  v.data.isNil()
 
 func logical_divide*(t: TensorView, tiler: Layout): auto {.inline.} =
   make_view(addr t.data[0], t.getLayout().logical_divide(tiler), getOffset(t))

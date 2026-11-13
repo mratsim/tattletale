@@ -7,16 +7,18 @@
 
 {.experimental: "views".}
 
-import std/typetraits
+import std/[macros, typetraits]
 import workspace/crucible
 import workspace/ceramic
+import workspace/ceramic/src/macros/static_for
 import workspace/math
 import workspace/iface
 import workspace/design_by_contract
 import ./tensors_internal_types
-import ./compute_graph/batching
+import ./tensors_basic_views
 
 export tensors_internal_types
+export tensors_basic_views
 
 # ############################################################
 #
@@ -38,103 +40,84 @@ export tensors_internal_types
 #  TensorImpl - AnyTensorImpl interface
 # ═══════════════════════════════════════════════════════════════════════
 
-func shape*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): Span[int] {.inline.} =
-  Span[int](p: toOpenArray(t.shape, 0, Rank - 1))
+func shape*(t: TensorImpl): Span[int] {.inline.} =
+  Span[int](p: toOpenArray(t.layout.shape, 0, t.layout.rank - 1))
 
-func strides*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): Span[int] {.inline.} =
-  Span[int](p: toOpenArray(t.stride, 0, Rank - 1))
+func strides*(t: TensorImpl): Span[int] {.inline.} =
+  Span[int](p: toOpenArray(t.layout.strides, 0, t.layout.rank - 1))
 
-func dtype*[H, T; Rank: static int](t: TensorImpl[DeviceMem[H, T], Rank]): Dtype {.inline.} =
+func dtype*[H, T](t: TensorImpl[DeviceMem[H, T], LayoutBasic]): Dtype {.inline.} =
   toDtype(T)
 
-func offset*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {.inline.} =
+func offset*(t: TensorImpl): int {.inline.} =
   t.offset
 
-func size*[DeviceMem; Rank: static int](t: TensorImpl[DeviceMem, Rank]): int {.inline.} =
+func size*(t: TensorImpl): int {.inline.} =
   result = 1
-  for i in 0 ..< Rank:
-    result *= t.shape[i]
+  for i in 0 ..< t.layout.rank:
+    result *= t.layout.shape[i]
 
 # ═══════════════════════════════════════════════════════════════════════
-#  TensorImpl - TensorNode interface
+#  TensorImpl - TensorGraph interface
 # ═══════════════════════════════════════════════════════════════════════
 
 proc getImpl*(t: TensorImpl): AnyTensorImpl {.inline.} =
   t.to(AnyTensorImpl)
 
 func opName*(t: TensorImpl): string {.inline.} =
-  ## Name in the computation graph
   "Tensor"
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Backend identity
+# ═══════════════════════════════════════════════════════════════════════
+
+proc kind*[E: HwEngine](engine: E): Runtime {.inline.} =
+  when E is CudaEngine:
+    runCuda
+  elif E is MetalEngine:
+    runMetal
+  elif E is OpenCLEngine:
+    runOpenCL
+  elif E is VulkanEngine:
+    runVulkan
+  elif E is WebgpuEngine:
+    runWebGPU
+  else:
+    runCpu
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Host<->Device copies
 # ═══════════════════════════════════════════════════════════════════════
 
-template withDeviceImpl*[E: HwEngine](engine: E, impl: AnyTensorImpl, T: typedesc, concreteTensor, body: untyped) =
-  ## Casts the type-erased impl tensor to its concrete TensorImpl[T, Rank] type
-  ## and make it available as the symbol passed as "concreteTensor"
-  ##
-  ## Usage:
-  ##   engine.withDeviceImpl(node.getImpl(), float32, t):
-  ##     engine.copyToHostFromDevice(dst, t.data[], t.offset)
-  case impl.shape().p.len
-  of 1:
-    let concreteTensor = impl.to(engine.getTensorImplType(T, 1))
-    body
-  of 2:
-    let concreteTensor = impl.to(engine.getTensorImplType(T, 2))
-    body
-  of 3:
-    let concreteTensor = impl.to(engine.getTensorImplType(T, 3))
-    body
-  of 4:
-    let concreteTensor = impl.to(engine.getTensorImplType(T, 4))
-    body
-  of 5:
-    let concreteTensor = impl.to(engine.getTensorImplType(T, 5))
-    body
-  else:
-    raiseAssert("Tensorcery internal error: rank out of range")
-
-proc download1*[E: HwEngine](engine: E, dst: pointer, node: TensorNode) =
+proc download1*[E: HwEngine](engine: E, dst: pointer, node: TensorGraph) =
   let impl = node.getImpl()
-  match(ElemType, impl.dtype(), Rank, impl.shape().p.len):
-    let ci = impl.to(engine.getTensorImplType(ElemType, Rank))
+  match(ElemType, impl.dtype()):
+    let ci = impl.to(engine.getTensorImplType(ElemType))
     engine.copyToHostFromDevice(cast[ptr ElemType](dst)[], ci.data[], ci.offset)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float32]) =
-  engine.withDeviceImpl(node.getImpl(), float32, t):
-    engine.copyToDeviceFromHost(t.data[], src)
+proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[float32]) =
+  let t = node.getImpl().to(engine.getTensorImplType(float32))
+  engine.copyToDeviceFromHost(t.data[], src)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[float16]) =
-  engine.withDeviceImpl(node.getImpl(), float16, t):
-    engine.copyToDeviceFromHost(t.data[], src)
+proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[float16]) =
+  let t = node.getImpl().to(engine.getTensorImplType(float16))
+  engine.copyToDeviceFromHost(t.data[], src)
 
-proc upload*[E: HwEngine](engine: E, node: TensorNode, src: openArray[bfloat16]) =
-  engine.withDeviceImpl(node.getImpl(), bfloat16, t):
-    engine.copyToDeviceFromHost(t.data[], src)
+proc upload*[E: HwEngine](engine: E, node: TensorGraph, src: openArray[bfloat16]) =
+  let t = node.getImpl().to(engine.getTensorImplType(bfloat16))
+  engine.copyToDeviceFromHost(t.data[], src)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TensorImpl
 # ═══════════════════════════════════════════════════════════════════════
 
-func newPlaceholderImpl[E: HwEngine, T](
-        engine: E,
-        _: typedesc[T],
-        rank: static int,
-        shape: openArray[int]): engine.getTensorImplType(T, rank) {.inline.} =
-  result = (engine.getTensorImplType(T, rank))()
-  result.shape[0 ..< rank] = shape
-  rowMajorStrides(result.stride, result.shape)
+proc newPlaceholderImpl[E: HwEngine, T](engine: E, _: typedesc[T], shape: openArray[int]): engine.getTensorImplType(T) {.inline.} =
+  result = (engine.getTensorImplType(T))()
+  result.layout = makeLayoutBasic(shape)
 
-proc newTensorImpl[E: HwEngine, T](
-      engine: E,
-      _: typedesc[T],
-      rank: static int,
-      shape: openArray[int]): engine.getTensorImplType(T, rank) {.inline.} =
-  result = (engine.getTensorImplType(T, rank))()
-  result.shape[0 ..< rank] = shape
-  rowMajorStrides(result.stride, result.shape)
+proc newTensorImpl[E: HwEngine, T](engine: E, _: typedesc[T], shape: openArray[int]): engine.getTensorImplType(T) {.inline.} =
+  result = (engine.getTensorImplType(T))()
+  result.layout = makeLayoutBasic(shape)
   result.data.new()
   result.data[] = engine.allocDevice(T, result.size())
 
@@ -142,43 +125,68 @@ proc newTensorImpl[E: HwEngine, T](
 #  Graph
 # ═══════════════════════════════════════════════════════════════════════
 
-proc preAlloc*[E: HwEngine](engine: E, impl: TensorImpl) {.inline.} =
-  engine.allocDataIn(impl)
+proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorGraph =
+  match(ElemType, dtype):
+    engine.newPlaceholderImpl(ElemType, shape).to(TensorGraph)
 
-proc newPlaceholderNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
-  match(ElemType, dtype, Rank, shape.len):
-    engine.newPlaceholderImpl(ElemType, Rank, shape).to(TensorNode)
-
-proc newViewNode*[E: HwEngine](engine: E, src: TensorNode, shape, strides: openArray[int], offset: int, srcOpName: string): TensorNode =
+proc newViewNode*[E: HwEngine](engine: E, src: TensorGraph, shape, strides: openArray[int], offset: int, srcOpName: string): TensorGraph =
   let si = src.getImpl()
-  match(ElemType, si.dtype(), Rank, shape.len):
-    let r = engine.getTensorImplType(ElemType, Rank)()
-    r.shape[0 ..< Rank] = shape
-    r.stride[0 ..< Rank] = strides
+  match(ElemType, si.dtype()):
+    let r = engine.getTensorImplType(ElemType)()
+    r.layout = makeLayoutBasic(shape, strides)
     r.offset = offset
-    engine.withDeviceImpl(si, ElemType, s):
-      r.data = s.data
-      if s.isPreAllocated():
-        r.offset = s.offset + offset
-    ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorNode)
-
-proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorNode =
-  match(ElemType, dtype, Rank, shape.len):
-    engine.newTensorImpl(ElemType, Rank, shape).to(TensorNode)
-
-proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
-  let v = n.to(ViewNode)
-  if v.isNil():
-    return false
-  engine.enqueueNode(batch, v.src)
-  let r = v.r.to(engine.getTensorImplType(T, rank))
-  engine.withDeviceImpl(v.src.getImpl(), T, s):
+    let s = si.to(engine.getTensorImplType(ElemType))
     r.data = s.data
-    r.offset = r.offset + s.offset
-  return true
+    if s.isPreAllocated():
+      r.offset = s.offset + offset
+    ViewNode(r: r.to(AnyTensorImpl), src: src, srcOpName: srcOpName).to(TensorGraph)
+
+proc newTensorNode*[E: HwEngine](engine: E, dtype: Dtype, shape: openArray[int]): TensorGraph =
+  match(ElemType, dtype):
+    engine.newTensorImpl(ElemType, shape).to(TensorGraph)
+
+proc enqueueView[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: TensorGraph, _: typedesc[T]) =
+  let v = n.to(ViewNode)
+  let r = v.r.to(engine.getTensorImplType(T))
+  let s = v.src.getImpl().to(engine.getTensorImplType(T))
+  r.data = s.data
+  r.offset = r.offset + s.offset
+
+macro dispatchViewKernel*(engine, n, batch: typed): untyped =
+  result = quote do:
+    block:
+      let v = `n`.to(ViewNode)
+      if v.isNil():
+        false
+      else:
+        case `n`.getImpl().dtype()
+        of kFp16:
+          type T = float16
+          enqueueView(`engine`, `batch`, `n`, T)
+          true
+        of kFp32:
+          type T = float32
+          enqueueView(`engine`, `batch`, `n`, T)
+          true
+        of kBf16:
+          type T = bfloat16
+          enqueueView(`engine`, `batch`, `n`, T)
+          true
+        else:
+          raise ValueError.newException("eval: dtype unsupported")
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Registration
+#  Basic -> Ranked metadata relayout
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("View", enqueueView)
+func relayoutBridge*[H, T; L: Layout](
+    impl: TensorImpl[DeviceMem[H, T], LayoutBasic],
+    _: typedesc[L]): TensorBridge[DeviceMem[H, T], L] {.inline.} =
+  if impl.isNil():
+    return TensorBridge[DeviceMem[H, T], L]()
+  precondition((impl.layout.rank == L.rank(), "relayoutBridge: rank " & $impl.layout.rank & " does not match the target layout rank " & $L.rank()))
+  var lay: L
+  staticFor i, 0, L.rank():
+    lay.shape[i] = impl.layout.shape[i]
+    lay.stride[i] = impl.layout.strides[i]
+  initTensorBridge(impl.data, impl.offset, lay)

@@ -1,13 +1,8 @@
-## launchDeviceFn lang extra on Vulkan: the glsl text route, both launch forms.
+## launchDeviceFn langVulkan extra on Vulkan: the glsl text route, both launch forms.
 ##
-## Test that the `lang = glsl` launch extra selects the glslangValidator
+## Test that the `langVulkan = glsl` launch extra selects the glslangValidator
 ## ingestion route in both launch forms, with exact readbacks and the text
 ## artifact as the route identity.
-##
-## Notes:
-## - the no-lang words default is gated by the recorded flattenObjectParams
-##   blocker (C11D13 fix op), words-route launches of pointer-output kernels
-##   refuse at the tip with a byte-identical error, before and after this diff
 ##
 ## Run:
 ##   nim c -r --hints:off --warnings:off \
@@ -47,7 +42,6 @@ proc runTest() =
     doAssert got == [16'u32, 27'u32], msg & " got " & $got
 
   block:
-    # do-form, lang = glsl: the printed GLSL ingests through glslangValidator
     let (aDev, bDev, oDev) = freshBufs()
     engine.launchDeviceFn addSlots(
         AddBuf[typeof(oDev)](p: oDev, n: 2), 5'u32,
@@ -55,19 +49,18 @@ proc runTest() =
         AddBuf[typeof(bDev)](p: bDev, n: 2)) do:
       grid = (1, 1)
       blk = (1, 1)
-      lang = glsl
+      langVulkan = glsl
     readback(oDev, "glsl do-form")
-    echo "  [OK] do-form lang = glsl: [16, 27] exact readback"
+    echo "  [OK] do-form langVulkan = glsl: [16, 27] exact readback"
 
   block:
-    # chevron, lang = glsl: same selection through the schedule tuple
     let (aDev, bDev, oDev) = freshBufs()
-    engine.launchDeviceFn<<(1, 1, lang = glsl)>> addSlots(
+    engine.launchDeviceFn<<(1, 1, langVulkan = glsl)>> addSlots(
       AddBuf[typeof(oDev)](p: oDev, n: 2), 5'u32,
       AddBuf[typeof(aDev)](p: aDev, n: 2),
       AddBuf[typeof(bDev)](p: bDev, n: 2))
     readback(oDev, "glsl chevron")
-    echo "  [OK] chevron lang = glsl: [16, 27] exact readback"
+    echo "  [OK] chevron langVulkan = glsl: [16, 27] exact readback"
 
 when isMainModule:
   runTest()

@@ -47,7 +47,7 @@ Rule table (rule | trigger | severity):
 | module-header-length | a module header past 8 tight prose lines                                                          | advisory |
 | test-header-command  | a test file header with no run command line                                                       | counted  |
 | run-command-path     | a comment carries --path:, paths come from config.nims                                            | counted  |
-| test-header-testthat | a test file header with a "Test that" line, only the title and the run command belong there   | counted  |
+| test-header-testthat | test header prose beyond the title opens on neither "Test that" nor the run command   | counted  |
 | missing-contract     | a multi-line function doc with no contract marker (Args, Returns, Precondition, Invariant, Examples)        | advisory |
 | sig-wrap             | a callable signature wrapped across lines while the joined form fits a 140-char line              | counted  |
 | stmt-inline          | a statement keyword carries its body on the same line, one statement per line                     | counted  |
@@ -184,8 +184,9 @@ RUN_CMD_RE = re.compile(
     r"\bnim test_\w+|^\s*(?:\$|nim\s|python3?\s|uv\s|pytest\b)|(?i:run):\s"
     r"|\btest_\w+ task in config\.nims")
 
-# The Test that line paraphrases the test body, a test header carries
-# only the title and the run command. Comment markers are already
+# A test header carries the title, optional `Test that` prose, the run
+# command. Anything beyond the title opens on `Test that`, narrative
+# prose otherwise paraphrases the test body. Comment markers are already
 # stripped from header content, the phrase anchors at the line start
 # after any indent.
 TEST_THAT_RE = re.compile(r"^\s*Test that\b")
@@ -714,7 +715,7 @@ RULES = {
     "test-header-command": Rule("test-header-command", True,
                                 "a test file header with no run command line"),
     "test-header-testthat": Rule("test-header-testthat", True,
-                                 "a test file header with a \"Test that\" line, the header shape is title, blank, run command"),
+                                 "test header prose beyond the title opens on neither \"Test that\" nor the run command"),
     "doc-above-proc": Rule("doc-above-proc", True,
                            "a ## block directly above a proc or func declaration, the house doc comment is the first body line"),
     "missing-contract": Rule("missing-contract", False,
@@ -1777,14 +1778,21 @@ def check_module_header(path, header_lines, is_test, is_self, findings):
         findings.append(Finding(
             path, first_line, "test-header-command",
             "test file header carries no run command line"))
-    # The header shape is title, blank, run command. The Test that line
-    # paraphrases the test body and is banned, the test names itself.
-    test_that = [n for n, c in header_lines if TEST_THAT_RE.search(c)]
-    if is_test and test_that:
-        findings.append(Finding(
-            path, min(test_that), "test-header-testthat",
-            "test file header carries a \"Test that\" line, the header shape is "
-            "title, blank, run command"))
+    # The header shape is title, optional Test that prose, run command.
+    # Prose beyond the title must open on "Test that", the run region
+    # runs to the end of the header.
+    in_run = False
+    for n, c in header_lines:
+        if is_test and (RUN_CMD_RE.search(c) or re.fullmatch(r"(?i:run):", c.strip())):
+            in_run = True
+        if not is_test or in_run or not c or n == first_line:
+            continue
+        if not TEST_THAT_RE.match(c):
+            findings.append(Finding(
+                path, n, "test-header-testthat",
+                "test header prose beyond the title opens on neither "
+                "\"Test that\" nor the run command"))
+            break
 
 
 def _type_decl_and_field_lines(lines):

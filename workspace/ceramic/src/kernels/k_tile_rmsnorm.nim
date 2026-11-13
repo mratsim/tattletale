@@ -57,8 +57,8 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     gridStride = getGridSize()
   for g in countup(getLocalTileID(src.shape), rows - 1, gridStride):
     let
-      srcRow = alongAxisAt(src, axis, g)
-      dstRow = alongAxisAt(dst, axis, g)
+      srcRow = src.alongAxisAt(axis, g)
+      dstRow = dst.alongAxisAt(axis, g)
       rowSize = srcRow.size()
       tiled = make_layout(rowSize).logical_divide(reg.getLayout())
       stripTiles = tiled.getTileGrid().size()
@@ -74,7 +74,7 @@ proc rmsnormImpl(dst, src, weight: distinct TensorView, eps: float32, axis: stat
     let scale = rsqrt(acc / float32(rowSize) + eps)
     # pass 2: scaled apply, the weight broadcast along the axis
     when withWeight:
-      let weightStrip = alongAxisAt(weight, 0, 0)
+      let weightStrip = weight.alongAxisAt(0, 0)
       for r in countup(thrID, rowSize - 1, W):
         dstRow[r] = srcRow[r] * scale * weightStrip[r]
     else:

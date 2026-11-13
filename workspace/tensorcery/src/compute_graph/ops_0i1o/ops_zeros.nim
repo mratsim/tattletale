@@ -12,7 +12,7 @@ import workspace/crucible
 import workspace/iface
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################
@@ -23,7 +23,7 @@ import ../env
 
 const FillFleet* = (elemsPerGroup: 128)
 
-proc k_fill*(D: distinct TensorView, val: float32) =
+proc k_fill*(D: distinct TensorBasicView, val: float32) =
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -42,7 +42,7 @@ proc k_fill*(D: distinct TensorView, val: float32) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  ZerosNode* = ref object
+  ZerosNode* = ref object of TensorNode
     r: AnyTensorImpl
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -52,27 +52,26 @@ type
 func getImpl*(n: ZerosNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: ZerosNode): string {.inline.} =
+func opName*(_: typedesc[ZerosNode]): static string {.inline.} =
   "Zeros"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_zeros*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
+proc tn_zeros*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorGraph {.contracts.} =
   {.precondition: shape.len in 1 .. 5.}
-  return ZerosNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorNode)
+  return ZerosNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asZeros = n.to(ZerosNode)
   if asZeros.isNil():
     return false
-  let rImpl = asZeros.r.to(engine.getTensorImplType(T, rank))
-  engine.preAlloc(rImpl)
+  let rImpl = asZeros.r.to(engine.getTensorImplType(T))
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), 0.0'f32)
   return true
 
@@ -80,4 +79,4 @@ proc enqueueZeros[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Ten
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Zeros", enqueueZeros)
+registerOp(ZerosNode, enqueueZeros, opName(ZerosNode))

@@ -32,4 +32,28 @@ proc runAddTest*(run: static Runtime, name: string) =
 
     doAssert (x + y).allClose(dst.toTensor(run, shape)), name & ": add " & $shape
 
+  block: # allClose evaluates its tested argument once: the argument of a quote is re-substituted at every use
+    let x = @[1.0'f32, 2, 3, 4].toTensor(run, @[4])
+    var pending = @[x]
+    doAssert pending.pop().allClose(x), name & ": allClose binds its tested argument once"
+
+  block: # eval evaluates its argument once: a template re-substitutes each argument at every use
+    let x = @[1.0'f32, 2, 3, 4].toTensor(run, @[4])
+    var pending = @[x]
+    eval(pending.pop())
+    doAssert (x + x).item(float32) == 2.0'f32, name & ": eval binds its argument once"
+
+  when defined(TTT_tensorgraphMetrics):
+    block: # Dedup: a second eval of the same graph skips the already-allocated nodes
+      let x = @[1.0'f32, 2, 3, 4].toTensor(run, @[4])
+      let y = x + x
+      doAssert y.item(float32) == 2.0'f32
+      let afterFirst = graphCounters()
+      doAssert y.item(float32) == 2.0'f32
+      let afterSecond = graphCounters()
+      doAssert afterSecond.evals - afterFirst.evals == 1
+      doAssert afterSecond.nodesDispatched - afterFirst.nodesDispatched == 0
+      doAssert afterSecond.kernelsEnqueued - afterFirst.kernelsEnqueued == 0
+      doAssert afterSecond.nodesSkippedAllocated - afterFirst.nodesSkippedAllocated == 1
+
   echo "tensorcery add (", name, "): all checks passed"

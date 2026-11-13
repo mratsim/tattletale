@@ -146,12 +146,14 @@ Objects do not perform actions the domain does not have:
 
 - "The buffer survives the launch" invents endurance.
 - "The temporary serves a launch" invents service.
+- "A binding reads `arrayLength == 0`" invents perception. A binding never reads.
 
 Write in the domain's own vocabulary:
 
 - the kernel loads the buffer
 - the buffer is released
 - the temporary is readable after the launch
+- `arrayLength` returns 0
 
 A verb is correct when the action exists in the domain.
 The test is existence, not vividness.

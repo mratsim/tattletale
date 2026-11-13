@@ -12,7 +12,7 @@ import workspace/crucible
 import workspace/iface
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 import ./ops_zeros
 
@@ -23,7 +23,7 @@ import ./ops_zeros
 # ############################################################
 
 type
-  FullNode* = ref object
+  FullNode* = ref object of TensorNode
     r: AnyTensorImpl
     val: float32
 
@@ -34,27 +34,26 @@ type
 func getImpl*(n: FullNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: FullNode): string {.inline.} =
+func opName*(_: typedesc[FullNode]): static string {.inline.} =
   "Full"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_full*(engine: AnyEngine, vals: float32, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
+proc tn_full*(engine: AnyEngine, vals: float32, dtype: Dtype, shape: openArray[int]): TensorGraph {.contracts.} =
   {.precondition: shape.len in 1 .. 5.}
-  return FullNode(r: engine.newPlaceholderNode(dtype, shape).getImpl(), val: vals).to(TensorNode)
+  return FullNode(r: engine.newPlaceholderNode(dtype, shape).getImpl(), val: vals).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asFull = n.to(FullNode)
   if asFull.isNil():
     return false
-  let rImpl = asFull.r.to(engine.getTensorImplType(T, rank))
-  engine.preAlloc(rImpl)
+  let rImpl = asFull.r.to(engine.getTensorImplType(T))
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), asFull.val)
   return true
 
@@ -62,4 +61,4 @@ proc enqueueFull[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Full", enqueueFull)
+registerOp(FullNode, enqueueFull, opName(FullNode))

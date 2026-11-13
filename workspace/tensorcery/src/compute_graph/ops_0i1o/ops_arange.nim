@@ -13,7 +13,7 @@ import workspace/iface
 import workspace/design_by_contract
 from std/math import ceil
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################
@@ -24,7 +24,7 @@ import ../env
 
 const FillFleet = (elemsPerGroup: 128)
 
-proc k_arange(D: distinct TensorView, start, step: float32) =
+proc k_arange(D: distinct TensorBasicView, start, step: float32) =
   let thrID = getLocalThreadID()
   var reg: tile(D.T)
   let tiled = make_layout(D.size()).logical_divide(reg.getLayout())
@@ -48,7 +48,7 @@ proc k_arange(D: distinct TensorView, start, step: float32) =
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  ArangeNode* = ref object
+  ArangeNode* = ref object of TensorNode
     r: AnyTensorImpl
     start, step: float32
 
@@ -59,30 +59,29 @@ type
 func getImpl*(n: ArangeNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: ArangeNode): string {.inline.} =
+func opName*(_: typedesc[ArangeNode]): static string {.inline.} =
   "Arange"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): TensorNode {.contracts.} =
+proc tn_arange*(engine: AnyEngine, start, stop, step: float32, dtype: Dtype): TensorGraph {.contracts.} =
   # (stop - start) * step underflows to zero in float32, e.g. arange(0, 1e-30, step=1e-30)
   {.precondition: step != 0.0'f32.}
   {.precondition: (step > 0.0'f32 and start < stop) or (step < 0.0'f32 and start > stop).}
   let n = ceil((stop - start) / step).int
-  return ArangeNode(r: engine.newPlaceholderNode(dtype, [n]).getImpl(), start: start, step: step).to(TensorNode)
+  return ArangeNode(r: engine.newPlaceholderNode(dtype, [n]).getImpl(), start: start, step: step).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asArange = n.to(ArangeNode)
   if asArange.isNil():
     return false
-  let rImpl = asArange.r.to(engine.getTensorImplType(T, rank))
-  engine.preAlloc(rImpl)
+  let rImpl = asArange.r.to(engine.getTensorImplType(T))
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_arange(rImpl.bridge(), asArange.start, asArange.step)
   return true
 
@@ -90,4 +89,4 @@ proc enqueueArange[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Te
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Arange", enqueueArange)
+registerOp(ArangeNode, enqueueArange, opName(ArangeNode))

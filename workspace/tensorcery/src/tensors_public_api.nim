@@ -7,6 +7,7 @@
 
 {.experimental: "views".}
 
+import std/[macros, macrocache]
 import workspace/crucible
 import workspace/iface
 import workspace/design_by_contract
@@ -44,7 +45,7 @@ export eval
 
 type Tensor* = ref object
   engine: AnyEngine
-  node: TensorNode
+  node: TensorGraph
 
 # #######################################################################
 #
@@ -81,57 +82,57 @@ proc toTensor*[T](data: openArray[T], run: static Runtime, shape: varargs[int]):
 #
 # #######################################################################
 
-proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+proc zeros*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Zeros".} =
   Tensor(engine: gEngine(run), node: gEngine(run).tn_zeros(dtype, shape))
 
-proc ones*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+proc ones*(shape: openArray[int], run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Ones".} =
   Tensor(engine: gEngine(run), node: gEngine(run).tn_ones(dtype, shape))
 
-proc full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+proc full*(shape: openArray[int], vals: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Full".} =
   Tensor(engine: gEngine(run), node: gEngine(run).tn_full(vals, dtype, shape))
 
-proc eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline.} =
+proc eye*(n: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline, hasKernel: "Eye".} =
   let engine = gEngine(run)
-  Tensor(engine: engine, node: engine.tn_eye(n, n, k, dtype)).reshape([n, n])
+  Tensor(engine: engine, node: engine.tn_reshape(engine.tn_eye(n, n, k, dtype), [n, n]))
 
-proc eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline.} =
+proc eye*(n, m: int, run: static Runtime, dtype: Dtype = kFp32, k: int = 0): Tensor {.inline, hasKernel: "Eye".} =
   let engine = gEngine(run)
-  Tensor(engine: engine, node: engine.tn_eye(n, m, k, dtype)).reshape([n, m])
+  Tensor(engine: engine, node: engine.tn_reshape(engine.tn_eye(n, m, k, dtype), [n, m]))
 
-proc arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline.} =
+proc arange*(stop: float32, run: static Runtime, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Arange".} =
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_arange(0.0'f32, stop, 1.0'f32, dtype))
 
-proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor {.inline.} =
+proc arange*(start, stop: float32, run: static Runtime, step = 1.0'f32, dtype: Dtype = kFp32): Tensor {.inline, hasKernel: "Arange".} =
   let engine = gEngine(run)
   Tensor(engine: engine, node: engine.tn_arange(start, stop, step, dtype))
 
-proc zeros_like*(a: Tensor): Tensor {.inline.} =
+proc zeros_like*(a: Tensor): Tensor {.inline, hasKernel: "Zeros".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_zeros(impl.dtype(), impl.shape().p))
 
-proc zeros_like*(a: Tensor, dtype: Dtype): Tensor {.inline.} =
+proc zeros_like*(a: Tensor, dtype: Dtype): Tensor {.inline, hasKernel: "Zeros".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_zeros(dtype, impl.shape().p))
 
-proc ones_like*(a: Tensor): Tensor {.inline.} =
+proc ones_like*(a: Tensor): Tensor {.inline, hasKernel: "Ones".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_ones(impl.dtype(), impl.shape().p))
 
-proc ones_like*(a: Tensor, dtype: Dtype): Tensor {.inline.} =
+proc ones_like*(a: Tensor, dtype: Dtype): Tensor {.inline, hasKernel: "Ones".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_ones(dtype, impl.shape().p))
 
-proc full_like*(a: Tensor, vals: float32): Tensor {.inline.} =
+proc full_like*(a: Tensor, vals: float32): Tensor {.inline, hasKernel: "Full".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_full(vals, impl.dtype(), impl.shape().p))
 
-proc full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor {.inline.} =
+proc full_like*(a: Tensor, vals: float32, dtype: Dtype): Tensor {.inline, hasKernel: "Full".} =
   let engine = a.engine
   let impl = a.node.getImpl()
   Tensor(engine: engine, node: engine.tn_full(vals, dtype, impl.shape().p))
@@ -154,13 +155,32 @@ proc dtype*(t: Tensor): Dtype {.inline.} =
 proc size*(t: Tensor): int {.inline.} =
   t.node.size()
 
-proc item*[T](t: Tensor, _: typedesc[T]): T {.contracts.} =
-  let impl = t.node.getImpl()
-  {.precondition: impl.dtype() == toDtype(T).}
+proc item[T](t: Tensor, _: typedesc[T], snapshottedOps: static string): T =
+  precondition(t.node.getImpl().dtype() == toDtype(T))
   var node = [t.node]
-  t.engine.eval(node)
-  t.node = node[0]
+  case t.engine.kind()
+  of runMetal:
+    when runMetal in ctgBackendSelection:
+      evalRoots(gMetalEngine(), node, snapshottedOps)
+  of runOpenCL:
+    when runOpenCL in ctgBackendSelection:
+      evalRoots(gOpenCLEngine(), node, snapshottedOps)
+  of runVulkan:
+    when runVulkan in ctgBackendSelection:
+      evalRoots(gVulkanEngine(), node, snapshottedOps)
+  of runWebGPU:
+    when runWebGPU in ctgBackendSelection:
+      evalRoots(gWebgpuEngine(), node, snapshottedOps)
+  of runCuda:
+    raise ValueError.newException("eval: CUDA is not on the batch stream yet")
+  of runCpu:
+    raise ValueError.newException("eval: unsupported run kind")
+  t.node = node[0] # evalRoots replaced the ref in our local copy. Repoint t or it dangles on the dropped graph
   t.engine.download1(addr result, t.node)
+
+proc item*[T](t: Tensor, _: typedesc[T]): T {.inline, hasEval.} =
+  ## Downloads the single element of `t` as `T`, evaluating its graph.
+  item(t, T, magicSnapshotUsedOps())
 
 # #######################################################################
 #
@@ -168,13 +188,37 @@ proc item*[T](t: Tensor, _: typedesc[T]): T {.contracts.} =
 #
 # #######################################################################
 
-proc eval*(ts: varargs[Tensor]) =
-  var roots = newSeq[TensorNode](ts.len)
-  for i in 0 ..< ts.len:
-    roots[i] = ts[i].node
-  ts[0].engine.eval(roots)
-  for i in 0 ..< ts.len:
-    ts[i].node = roots[i]
+template eval*(ts: varargs[Tensor]) =
+  ## Enqueues and submits the graph rooted at the tensors' nodes.
+  ##
+  ## - backend: dispatches on the first tensor's engine at runtime
+  ## - all tensors of a call must be built on one backend
+  ## - `ts` is bound once: a template re-substitutes each argument at every use
+  var args: seq[Tensor]
+  for t in ts:
+    args.add t
+  var roots = newSeq[TensorGraph](args.len)
+  for i in 0 ..< args.len:
+    roots[i] = args[i].node
+  case args[0].engine.kind()
+  of runMetal:
+    when runMetal in ctgBackendSelection:
+      evalRoots(gMetalEngine(), roots, magicSnapshotUsedOps())
+  of runOpenCL:
+    when runOpenCL in ctgBackendSelection:
+      evalRoots(gOpenCLEngine(), roots, magicSnapshotUsedOps())
+  of runVulkan:
+    when runVulkan in ctgBackendSelection:
+      evalRoots(gVulkanEngine(), roots, magicSnapshotUsedOps())
+  of runWebGPU:
+    when runWebGPU in ctgBackendSelection:
+      evalRoots(gWebgpuEngine(), roots, magicSnapshotUsedOps())
+  of runCuda:
+    raise ValueError.newException("eval: CUDA is not on the batch stream yet")
+  of runCpu:
+    raise ValueError.newException("eval: unsupported run kind")
+  for i in 0 ..< args.len:
+    args[i].node = roots[i]
 
 # #######################################################################
 #
@@ -185,7 +229,7 @@ proc eval*(ts: varargs[Tensor]) =
 # Binary (Tensor + Tensor)
 # ----------------------------------------------------------
 
-proc `+`*(a, b: Tensor): Tensor {.inline.} =
+proc `+`*(a, b: Tensor): Tensor {.inline, hasKernel: "Add".} =
   Tensor(engine: a.engine, node: tn_add(a.engine, a.node, b.node))
 
 # #######################################################################
@@ -194,14 +238,14 @@ proc `+`*(a, b: Tensor): Tensor {.inline.} =
 #
 # #######################################################################
 
-proc gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor {.inline.} =
+proc gemm*(alpha = 1.0'f32, a, b: Tensor, beta = 0.0'f32, c: Tensor = nil): Tensor {.inline, hasKernel: "Gemm".} =
   ## D = alpha·A·B + beta·C over the last two axes, C nil requires beta = 0
   let cn = if c.isNil(): NilTensorNode() else: c.node
   Tensor(engine: a.engine, node: tn_gemm(a.engine, alpha, a.node, b.node, beta, cn))
 
-proc matmul*(a, b: Tensor): Tensor {.inline.} =
+proc matmul*(a, b: Tensor): Tensor {.inline, hasKernel: "Gemm".} =
   ## A·B over the last two axes
-  gemm(1.0'f32, a, b, 0.0'f32)
+  gemmImpl(1.0'f32, a, b, 0.0'f32)
 
 # #######################################################################
 #
@@ -234,8 +278,11 @@ proc narrow*(t: Tensor, axis, start, width: int): Tensor {.inline.} =
   Tensor(engine: t.engine, node: tn_narrow(t.engine, t.node, axis, start, width))
 
 proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
+  ## Splits `t` along `axis` into `k` equal parts, views into `t`'s buffer.
+  var parts: seq[Tensor]
   for n in t.engine.tn_split(t.node, axis, k):
-    result.add(Tensor(engine: t.engine, node: n))
+    parts.add(Tensor(engine: t.engine, node: n))
+  parts
 
 # #######################################################################
 #
@@ -243,12 +290,15 @@ proc split*(t: Tensor, axis: int, k: int): seq[Tensor] {.inline.} =
 #
 # #######################################################################
 
-proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool {.inline.} =
-  ## True when every element satisfies |tested - reference| <= atol + rtol * |reference|.
+proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equal_nan = false): bool {.hasEval: "AllClose".} =
+  ## Returns true when every element satisfies |tested - reference| <= atol + rtol * |reference|.
   ## Same-sign infinities are equal, NaN equal only with equal_nan
-  Tensor(engine: tested.engine,
-      node: tn_allClose(tested.engine, tested.node, reference.node, atol, rtol, equal_nan)
-    ).item(float32) == 0.0'f32
+  ##
+  ## ⚠ Not lazy: allClose evaluates the graph.
+  let self = tested
+  Tensor(engine: self.engine,
+      node: tn_allClose(self.engine, self.node, reference.node, atol, rtol, equal_nan)
+    ).item(float32, magicSnapshotUsedOps()) == 0.0'f32
 
 # #######################################################################
 #
@@ -259,14 +309,14 @@ proc allClose*(tested, reference: Tensor, rtol = 1e-5'f32, atol = 1e-8'f32, equa
 # Normalization
 # ----------------------------------------------------------
 
-proc rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor {.inline.} =
+proc rms_norm*(x: Tensor, weight: Tensor = nil, eps = 1e-5'f32): Tensor {.hasKernel: "RmsNorm".} =
   let w = if weight.isNil(): NilTensorNode() else: weight.node
   Tensor(engine: x.engine, node: tn_rmsnorm(x.engine, x.node, w, eps))
 
 # Layers
 # ----------------------------------------------------------
 
-proc linear*(x, weight: Tensor, bias: Tensor = nil): Tensor {.inline.} =
+proc linear*(x, weight: Tensor, bias: Tensor = nil): Tensor {.hasKernel: "Linear".} =
   ## o = x·Wᵀ + b: (M, K) × (out, K) → (M, out), bias nil when the layer has none
   let bn = if bias.isNil(): NilTensorNode() else: bias.node
   Tensor(engine: x.engine, node: tn_linear(x.engine, x.node, weight.node, bn))

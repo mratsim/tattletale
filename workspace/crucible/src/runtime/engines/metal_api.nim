@@ -66,6 +66,8 @@ when defined(macosx):
   # ▸ PUBLIC API
   # ════════════════════════════════════════════════════════════════════════
   proc ingest*(engine: MetalEngine, source: string) =
+    if engine.source == source:
+      return
     objc.withMemPool:
       let opts = compileOptions()
 

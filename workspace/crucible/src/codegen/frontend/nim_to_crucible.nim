@@ -288,6 +288,7 @@ func harvestedCallee(ctx: var CirFrontend, calleeSym: NimNode): CirExpr =
     result.reductionBuiltin = getBuiltinKind(CirReductionBuiltinKind, payload)
     result.shuffleBuiltin = getBuiltinKind(CirShuffleBuiltinKind, payload)
     result.atomicsBuiltin = getBuiltinKind(CirAtomicsBuiltinKind, payload)
+    result.nilBuiltin = getBuiltinKind(CirNilBuiltinKind, payload)
   return result
 
 func arithExpr(op: string, t: CirType, x, y: CirExpr): CirExpr =

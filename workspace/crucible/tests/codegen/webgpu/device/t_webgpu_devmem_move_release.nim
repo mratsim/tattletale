@@ -26,7 +26,6 @@ proc runTest() =
   engine.launchDeviceFn incKernel(yDev, xDev, 4) do:
     grid = (1, 1)
     blk = (32, 1)
-    lang = "spirv"
   engine.copyToHostFromDevice(y, yDev)
   doAssert y == [2'u32, 3, 4, 5], "y = " & $y
 

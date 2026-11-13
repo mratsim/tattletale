@@ -8,13 +8,12 @@
 {.experimental: "views".}
 
 import workspace/ceramic
-import workspace/ceramic/src/kernels/k_tile_rmsnorm
 import workspace/crucible
 import workspace/iface
 import workspace/math
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################
@@ -26,14 +25,55 @@ import ../env
 const Fleet = (rowsPerGroup: 4, maxGroups: 8192)
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Device kernel
+# ═══════════════════════════════════════════════════════════════════════
+
+proc k_rmsnorm(dst, src, weight: distinct TensorBasicView, eps: float32, axis: int) =
+  var reg: tile(float32)
+  const
+    W = getLaneWidth()
+    owned = reg.size() div W
+  let thrID = getLocalThreadID()
+  var rows = 1
+  for d in 0 ..< src.layout.rank:
+    if d != axis:
+      rows *= src.layout.shape[d]
+  let gridStride = getGridSize()
+  for g in countup(getLocalTileID(rows), rows - 1, gridStride):
+    let
+      srcRow = src.alongAxisAt(axis, g)
+      rowSize = srcRow.size()
+      tiled = make_layout(rowSize).logical_divide(reg.getLayout())
+      stripTiles = tiled.getTileGrid().size()
+    var dstRow = dst.alongAxisAt(axis, g)
+    # pass 1: sum of squares, one register tile at a time
+    var acc = zero(float32)
+    for tileID in 0 ..< stripTiles:
+      reg.load(srcRow, thrID, tileID, padWith = zero(float32))
+      var tileSum = zero(float32)
+      for i in 0 ..< owned:
+        reg.data[i] = reg.data[i].square()
+        tileSum += reg.data[i]
+      acc += reduceAdd(tileSum)
+    let scale = rsqrt(acc / float32(rowSize) + eps)
+    # pass 2: scaled apply with the weight broadcast along the axis
+    if weight.isNil():
+      for r in countup(thrID, rowSize - 1, W):
+        dstRow[r] = srcRow[r] * scale
+    else:
+      let weightStrip = weight.alongAxisAt(0, 0)
+      for r in countup(thrID, rowSize - 1, W):
+        dstRow[r] = srcRow[r] * scale * weightStrip[r]
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Defunctionalization
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  RmsNormNode* = ref object
+  RmsNormNode* = ref object of TensorNode
     r: AnyTensorImpl
-    x: TensorNode
-    w: TensorNode         # nil when unweighted
+    x: TensorGraph
+    w: TensorGraph         # nil when unweighted
     eps: float32
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -43,7 +83,7 @@ type
 func getImpl*(n: RmsNormNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: RmsNormNode): string {.inline.} =
+func opName*(_: typedesc[RmsNormNode]): static string {.inline.} =
   "RmsNorm"
 
 
@@ -51,7 +91,7 @@ func opName*(n: RmsNormNode): string {.inline.} =
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_rmsnorm*(engine: AnyEngine, x: TensorNode, weight: TensorNode, eps: float32 = 1e-5): TensorNode {.contracts.} =
+proc tn_rmsnorm*(engine: AnyEngine, x: TensorGraph, weight: TensorGraph, eps: float32 = 1e-5): TensorGraph {.contracts.} =
   let ix = x.getImpl()
   {.precondition: ix.shape().p.len >= 1.}
   if not weight.isNil():
@@ -61,36 +101,31 @@ proc tn_rmsnorm*(engine: AnyEngine, x: TensorNode, weight: TensorNode, eps: floa
     {.precondition: iw.shape().p[0] == ix.shape().p[ix.shape().p.len - 1].}
   return RmsNormNode(x: x, w: weight, eps: eps,
       r: engine.newPlaceholderNode(ix.dtype(), ix.shape().p).getImpl()
-    ).to(TensorNode)
+    ).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueRmsnorm[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asNorm = n.to(RmsNormNode)
   if asNorm.isNil():
     return false
-  engine.enqueueNode(batch, asNorm.x)
-
-  let
-    rImpl = asNorm.r.to(engine.getTensorImplType(T, rank))
-    xImpl = asNorm.x.getImpl().to(engine.getTensorImplType(T, rank))
-  when rank >= 2 and T is float32:
-    let rows = rImpl.size() div rImpl.shape[rank - 1]
-    engine.preAlloc(rImpl)
-    if asNorm.w.isNil():
-      batch.enqueue<<(min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups), LaneWidth)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), asNorm.eps, rank - 1)
-    else:
-      engine.enqueueNode(batch, asNorm.w)
-      let wImpl = asNorm.w.getImpl().to(engine.getTensorImplType(T, 1))
-      batch.enqueue<<(min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups), LaneWidth)>> rmsnorm(rImpl.bridge(), xImpl.bridge(), wImpl.bridge(), asNorm.eps, rank - 1)
+  when T is float32:
+    let
+      rImpl = asNorm.r.to(engine.getTensorImplType(T))
+      xImpl = asNorm.x.getImpl().to(engine.getTensorImplType(T))
+      axis = rImpl.layout.rank - 1
+      rows = rImpl.size() div rImpl.layout.shape[axis]
+      grid = min(ceil_div(rows, Fleet.rowsPerGroup), Fleet.maxGroups)
+    batch.enqueue<<(grid, LaneWidth)>> k_rmsnorm(rImpl.bridge(), xImpl.bridge(),
+      asNorm.w.getImpl().to(engine.getTensorImplType(T)).bridge(), asNorm.eps, axis)
   else:
-    raiseAssert("rmsnorm: rank " & $rank & " or dtype unsupported, the op is rank 2+ float32")
+    raiseAssert("rmsnorm: dtype unsupported, the op is float32")
   return true
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("RmsNorm", enqueueRmsnorm)
+registerOp(RmsNormNode, enqueueRmsnorm, opName(RmsNormNode))

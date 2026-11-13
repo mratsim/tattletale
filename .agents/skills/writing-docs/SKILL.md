@@ -63,6 +63,8 @@ kernel docs, Lean comments, test file headers, and commit messages.
    Write in the domain's vocabulary:
    - "the kernel loads the buffer"
    - "the buffer is released"
+   Bindings, slots, and descriptors never read. Only kernels and threads read.
+   "a binding reads X" becomes "`arrayLength` returns 0".
 
 ## Quick start
 

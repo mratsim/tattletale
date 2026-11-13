@@ -13,7 +13,7 @@ import workspace/iface
 import workspace/math
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 
 # ############################################################
@@ -28,7 +28,7 @@ const Fleet = (elemsPerGroup: 4096, maxGroups: 1024)
 #  Device kernel
 # ═══════════════════════════════════════════════════════════════════════
 
-proc k_allClose(D, tested, reference: distinct TensorView, atol, rtol, equalNan: float32) =
+proc k_allClose(D, tested, reference: distinct TensorBasicView, atol, rtol, equalNan: float32) =
   ## Accumulates the failure count at D[0], D[0] == 0 when every element
   ## satisfies |tested - reference| <= atol + rtol * |reference|.
   ## Same-sign infinities are equal, NaN counts as equal only with equalNan.
@@ -47,7 +47,7 @@ proc k_allClose(D, tested, reference: distinct TensorView, atol, rtol, equalNan:
   let gridStride = getGridSize()
   const owned = regT.size() div getLaneWidth()
   var bad = 0.0'f32
-  for tileID in countup(getLocalTileID(tested.shape), axisTiles - 1, gridStride):
+  for tileID in countup(getLocalTileID(tested.size()), axisTiles - 1, gridStride):
     regT.load(tested, thrID, tileID, padWith = zero(tested.T))
     regR.load(reference, thrID, tileID, padWith = zero(reference.T))
     for i in 0 ..< owned:
@@ -78,10 +78,10 @@ proc k_allClose(D, tested, reference: distinct TensorView, atol, rtol, equalNan:
 # ═══════════════════════════════════════════════════════════════════════
 
 type
-  AllCloseNode* = ref object
+  AllCloseNode* = ref object of TensorNode
     r: AnyTensorImpl      # rank-1 float32 scalar, 1.0 or 0.0
-    tested: TensorNode
-    reference: TensorNode
+    tested: TensorGraph
+    reference: TensorGraph
     atol: float32
     rtol: float32
     equalNan: float32
@@ -93,14 +93,14 @@ type
 func getImpl*(n: AllCloseNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: AllCloseNode): string {.inline.} =
+func opName*(_: typedesc[AllCloseNode]): static string {.inline.} =
   "AllClose"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: float32, equalNan: bool): TensorNode {.contracts.} =
+proc tn_allClose*(engine: AnyEngine, tested, reference: TensorGraph, atol, rtol: float32, equalNan: bool): TensorGraph {.contracts.} =
   let
     ia = tested.getImpl()
     ib = reference.getImpl()
@@ -109,37 +109,33 @@ proc tn_allClose*(engine: AnyEngine, tested, reference: TensorNode, atol, rtol: 
   return AllCloseNode(tested: tested, reference: reference, atol: atol, rtol: rtol,
       equalNan: if equalNan: 1.0'f32 else: 0.0'f32,
       r: engine.newPlaceholderNode(kFp32, [1]).getImpl()
-    ).to(TensorNode)
+    ).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueAllClose[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asAll = n.to(AllCloseNode)
   if asAll.isNil():
     return false
-  engine.enqueueNode(batch, asAll.tested)
-  engine.enqueueNode(batch, asAll.reference)
-
-  when T is float32 and rank == 1:
+  when T is float32:
     let
-      rImpl = asAll.r.to(engine.getTensorImplType(float32, 1))
+      rImpl = asAll.r.to(engine.getTensorImplType(float32))
       ai = asAll.tested.getImpl()
       bi = asAll.reference.getImpl()
-    engine.preAlloc(rImpl)
     engine.copyToDeviceFromHost(rImpl.data[], [0.0'f32])
-    match(ElemType, ai.dtype(), ARank, ai.shape().p.len):
+    match(ElemType, ai.dtype()):
       let
-        aView = ai.to(engine.getTensorImplType(ElemType, ARank)).bridge()
-        bView = bi.to(engine.getTensorImplType(ElemType, ARank)).bridge()
+        aView = ai.to(engine.getTensorImplType(ElemType)).bridge()
+        bView = bi.to(engine.getTensorImplType(ElemType)).bridge()
       batch.enqueue<<(min(ceil_div(ai.size(), Fleet.elemsPerGroup), Fleet.maxGroups), LaneWidth)>> k_allClose(rImpl.bridge(), aView, bView, asAll.atol, asAll.rtol, asAll.equalNan)
   else:
-    raiseAssert("allClose: the output is a rank-1 float32 scalar")
+    raiseAssert("allClose: the output is a float32 scalar")
   return true
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("allClose", enqueueAllClose)
+registerOp(AllCloseNode, enqueueAllClose, opName(AllCloseNode))

@@ -36,6 +36,8 @@ proc newOpenCLEngine*(): OpenCLEngine {.inline.} =
 # ═══════════════════════════════════════════════════════════════════════
 
 proc ingest*(engine: OpenCLEngine, source: string) =
+  if engine.source == source:
+    return
   if engine.source.len > 0:
     when defined(debug):
       echo "[INFO]: opencl ingest: invalidating previous artifact"

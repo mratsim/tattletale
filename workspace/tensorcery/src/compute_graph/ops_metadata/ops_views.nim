@@ -34,7 +34,7 @@ func reachWindow(shape, strides: openArray[int], base: int): tuple[lo, hi: int] 
     else:
       result.lo += reach
 
-proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorNode): bool =
+proc viewInBounds(shape, strides: openArray[int], relOffset: int, src: TensorGraph): bool =
   var
     base = relOffset
     cur = src
@@ -60,13 +60,13 @@ func broadcastable(src, target: openArray[int]): bool =
       return false
   true
 
-proc tn_view(engine: AnyEngine, x: TensorNode, shape, strides: openArray[int], offset: int): TensorNode {.contracts.} =
+proc tn_view(engine: AnyEngine, x: TensorGraph, shape, strides: openArray[int], offset: int): TensorGraph {.contracts.} =
   {.precondition: shape.len == strides.len.}
   {.precondition: shape.len in 1 .. 5.}
   {.precondition: viewInBounds(shape, strides, offset, x).}
   engine.newViewNode(x, shape, strides, offset, "View")
 
-proc tn_reshape*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): TensorNode {.contracts.} =
+proc tn_reshape*(engine: AnyEngine, x: TensorGraph, shape: openArray[int]): TensorGraph {.contracts.} =
   let ix = x.getImpl()
   {.precondition: shape.len in 1 .. 5.}
   var
@@ -96,7 +96,7 @@ proc tn_reshape*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): Tenso
     acc *= resolved[resolved.len - j]
   engine.newViewNode(x, resolved, outStrides, 0, "Reshape")
 
-proc tn_transpose*(engine: AnyEngine, x: TensorNode, axes: openArray[int]): TensorNode {.contracts.} =
+proc tn_transpose*(engine: AnyEngine, x: TensorGraph, axes: openArray[int]): TensorGraph {.contracts.} =
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)
@@ -112,7 +112,7 @@ proc tn_transpose*(engine: AnyEngine, x: TensorNode, axes: openArray[int]): Tens
     outStrides[i] = st[axes[i]]
   engine.newViewNode(x, outShape, outStrides, 0, "Transpose")
 
-proc tn_transpose*(engine: AnyEngine, x: TensorNode): TensorNode =
+proc tn_transpose*(engine: AnyEngine, x: TensorGraph): TensorGraph =
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)
@@ -123,7 +123,7 @@ proc tn_transpose*(engine: AnyEngine, x: TensorNode): TensorNode =
     outStrides[i] = st[s.len - 1 - i]
   engine.newViewNode(x, outShape, outStrides, 0, "Transpose")
 
-proc tn_broadcastTo*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): TensorNode {.contracts.} =
+proc tn_broadcastTo*(engine: AnyEngine, x: TensorGraph, shape: openArray[int]): TensorGraph {.contracts.} =
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   {.precondition: shape.len >= s.len and shape.len <= 5.}
@@ -139,7 +139,7 @@ proc tn_broadcastTo*(engine: AnyEngine, x: TensorNode, shape: openArray[int]): T
     outStrides[lead + i] = if s[i] == 1: 0 else: st[i]
   engine.newViewNode(x, shape, outStrides, 0, "Broadcast_to")
 
-proc tn_squeeze*(engine: AnyEngine, x: TensorNode, axis: int): TensorNode {.contracts.} =
+proc tn_squeeze*(engine: AnyEngine, x: TensorGraph, axis: int): TensorGraph {.contracts.} =
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)
@@ -157,7 +157,7 @@ proc tn_squeeze*(engine: AnyEngine, x: TensorNode, axis: int): TensorNode {.cont
       outStrides[i - 1] = st[i]
   engine.newViewNode(x, outShape, outStrides, 0, "Squeeze")
 
-proc tn_expandDims*(engine: AnyEngine, x: TensorNode, axis: int): TensorNode {.contracts.} =
+proc tn_expandDims*(engine: AnyEngine, x: TensorGraph, axis: int): TensorGraph {.contracts.} =
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)
@@ -178,7 +178,7 @@ proc tn_expandDims*(engine: AnyEngine, x: TensorNode, axis: int): TensorNode {.c
     outStrides[i + 1] = st[i]
   engine.newViewNode(x, outShape, outStrides, 0, "Expand_dims")
 
-proc tn_narrow*(engine: AnyEngine, x: TensorNode, axis, start, width: int): TensorNode {.contracts.} =
+proc tn_narrow*(engine: AnyEngine, x: TensorGraph, axis, start, width: int): TensorGraph {.contracts.} =
   let ix = x.getImpl()
   let s = @(ix.shape().p)
   let st = @(ix.strides().p)

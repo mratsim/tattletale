@@ -12,7 +12,7 @@ import workspace/crucible
 import workspace/iface
 import workspace/design_by_contract
 import ../../tensors_internals
-import ../batching
+import ../eval
 import ../env
 import ./ops_zeros
 
@@ -23,7 +23,7 @@ import ./ops_zeros
 # ############################################################
 
 type
-  OnesNode* = ref object
+  OnesNode* = ref object of TensorNode
     r: AnyTensorImpl
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -33,27 +33,26 @@ type
 func getImpl*(n: OnesNode): AnyTensorImpl {.inline.} =
   n.r
 
-func opName*(n: OnesNode): string {.inline.} =
+func opName*(_: typedesc[OnesNode]): static string {.inline.} =
   "Ones"
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Public
 # ═══════════════════════════════════════════════════════════════════════
 
-proc tn_ones*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorNode {.contracts.} =
+proc tn_ones*(engine: AnyEngine, dtype: Dtype, shape: openArray[int]): TensorGraph {.contracts.} =
   {.precondition: shape.len in 1 .. 5.}
-  return OnesNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorNode)
+  return OnesNode(r: engine.newPlaceholderNode(dtype, shape).getImpl()).to(TensorGraph)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  Graph - Internal
 # ═══════════════════════════════════════════════════════════════════════
 
-proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorNode, _: typedesc[T], rank: static int): bool =
+proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var TensorGraph, _: typedesc[T]): bool =
   let asOnes = n.to(OnesNode)
   if asOnes.isNil():
     return false
-  let rImpl = asOnes.r.to(engine.getTensorImplType(T, rank))
-  engine.preAlloc(rImpl)
+  let rImpl = asOnes.r.to(engine.getTensorImplType(T))
   batch.enqueue<<(ceil_div(rImpl.size(), FillFleet.elemsPerGroup), LaneWidth)>> k_fill(rImpl.bridge(), 1.0'f32)
   return true
 
@@ -61,4 +60,4 @@ proc enqueueOnes[E: HwEngine, T](engine: E, batch: BatchCommands[E], n: var Tens
 #  Registration
 # ═══════════════════════════════════════════════════════════════════════
 
-registerOp("Ones", enqueueOnes)
+registerOp(OnesNode, enqueueOnes, opName(OnesNode))
