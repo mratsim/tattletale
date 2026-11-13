@@ -266,6 +266,13 @@ definitions.
 
 ## How to add a new operation
 
+The dispatch instantiates one branch per operation that the compilation
+has already used at the expansion point of `eval`/`item`/`allClose`.
+A helper proc wrapping those, defined before any operation is used (or in
+a library module compiled before user code), snapshots an empty op set
+and raises `no handler` at runtime. Define such helpers after the first
+operation use in the same module, or after the imports that use them.
+
 The complete recipe, using add. An operation is one module with five
 pieces, a registration line, and tests; the framework supplies collect,
 dedup, allocation, batching, and dispatch.
