@@ -6,7 +6,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import ./lang_cuda, ./lang_wgsl, ./lang_opencl, ./lang_glsl, ./lang_msl, ./lang_hlsl,
-       ./lang_spirv_shader, ./spirv_encoder
+       ./lang_spirv_shader, ./spirv_encoder, ./lang_lean
 import ../ir/cirv2_lang
 import ../../crucible_codegen
 
@@ -26,6 +26,7 @@ proc codegenSource*(m: CirModule, B: static CodegenKind): string =
   of cgGlsl: lang_glsl.codegen(m)
   of cgMetal: lang_msl.codegen(m)
   of cgHlsl: lang_hlsl.codegen(m)
+  of cgLean: lang_lean.codegen(m)
   of cgSpirv:
     raiseAssert("codegenSource: cgSpirv is SPIR-V words through codegenIR, not text")
   of cgCpu:

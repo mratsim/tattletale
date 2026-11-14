@@ -34,7 +34,7 @@ Rule table (rule | trigger | severity):
 | table-mispadding     | a table row with a different cell count than the header, or a doc table row with an unpadded cell | counted  |
 | table-cell-wall      | a table cell over 30 words                                                                        | counted  |
 | scratch-filename    | a changed file named with tmp, debug, or probe, scratch files are never checked in (base mode only)              | counted  |
-| extensionless-file  | a changed file with no extension, state the format or add one, .githooks/pre-commit exempt (base mode only)        | counted  |
+| extensionless-file  | a changed file with no extension, git hook and elan toolchain pins exempt (base mode only)        | counted  |
 | table-alignment      | a table whose pipe separators do not line up (pad each cell to the column width)                  | counted  |
 | escape-noise         | an escape sequence used as a prose word                                                           | counted  |
 | narration            | temporal or history narration: currently, as of, once X lands                                     | counted  |
@@ -3595,6 +3595,10 @@ def changed_set_hygiene(base):
         # .githooks/pre-commit is a git hook, git requires that exact
         # extensionless path, the rule stays out of it
         if rel == ".githooks/pre-commit":
+            continue
+        # lean-toolchain is elan's toolchain pin, elan requires that exact
+        # extensionless path, the rule stays out of it
+        if rel.endswith("/lean-toolchain"):
             continue
         f = Path(repo) / rel
         name = rel.rsplit("/", 1)[-1].lower()

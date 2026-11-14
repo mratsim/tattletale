@@ -220,3 +220,28 @@ macro hlsl*(flavor: untyped, body: untyped): string =
 macro hlsl*(body: untyped): string =
   crucibleCompileTarget = ctHlsl
   result = newCall(bindSym"hlslImpl", body)
+
+proc registerLeanPasses*(reg: var PassRegistry) {.compileTime.} =
+  ## Registers the Lean verification pipeline:
+  ##
+  ## - the registrations are `registerFrontendPasses` minus `rewriteStmtsExprs`,
+  ##   the renderer's catch-all refusal rejects any statement-expression form
+  ##   it cannot model
+  ## - no GPU lowering: it would rewrite the pre-lowering IR shapes the model
+  ##   recognizes
+  ## - no reserved-identifier rename: the emitter reasons over semantic names
+  reg.registerResolveBoolDomain()
+  reg.registerValueNormalizations()
+  reg.registerReshapingPasses()
+
+macro leanImpl(body: typed): string =
+  ## A refusal in the chain is a compile-time error naming the construct
+  var reg = PassRegistry()
+  reg.registerLeanPasses()
+  let m = lowerCirv2(body)
+  reg.runPasses(m)
+  result = newLit(codegenSource(m, cgLean))
+
+macro lean*(body: untyped): string =
+  crucibleCompileTarget = ctLean
+  result = newCall(bindSym"leanImpl", body)

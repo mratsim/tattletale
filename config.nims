@@ -629,6 +629,11 @@ task test_crucible_cpu, "Test workspace/crucible CPU backend (serial launch + po
     for cmd in getTestCommands("workspace/crucible/tests/codegen/cpu", extraFlags = "--threads:on"):
       runCmd(cmd)
 
+task test_crucible_lean, "Test workspace/crucible Lean verification backend":
+  withDir(ProjectRoot):
+    for cmd in getTestCommands("workspace/crucible/tests/codegen/lean"):
+      runCmd(cmd)
+
 # ---------------------------------------------------
 
 const Pcre2Dir = ProjectRoot/"workspace/pcre2"
