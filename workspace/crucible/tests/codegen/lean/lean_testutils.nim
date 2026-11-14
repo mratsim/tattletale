@@ -1,7 +1,7 @@
 ## Shared helpers for the Lean verification suites: compile-time CIRv2 capture,
-## `lake env lean` elaboration and execution, refusal assertions
+## `lake env lean` elaboration and execution, refusal and manifest checks
 
-import std/[macros, os, osproc, strutils]
+import std/[json, macros, os, osproc, strutils]
 import workspace/crucible/src/builtins/builtins
 import workspace/crucible/src/builtins/builtins_compilermagic
 import workspace/crucible/src/codegen/frontend/nim_to_crucible
@@ -99,14 +99,6 @@ macro leanIrSpec*(body: typed): LeanIrSpec =
           refusal = "lean_lang: pragma '" &
             item[0].strVal & "' payload must be a string literal"
           break
-        var dup = false
-        for existing in specs:
-          if existing.name == item[0].strVal:
-            refusal = "lean_lang: more than one '" &
-              item[0].strVal & "' pragma on the kernel"
-            dup = true
-        if dup:
-          break
         specs.add RawSpec(name: item[0].strVal, payload: item[1].strVal)
       else:
         kept.add item
@@ -160,6 +152,13 @@ proc expectLeanRefusal*(prefix: string, ir: LeanIrSpec) =
     "wrong refusal reason, expected '" & prefix & "', got: " & ir.refusal
   doAssert ir.text.len == 0, "a refused kernel emits no module text"
   doAssert ir.scaffolds.len == 0, "a refused kernel prepares no scaffolds"
+
+proc scaffoldEntry*(manifest: JsonNode, kind: string): JsonNode =
+  ## Manifest scaffold entry of the given kind
+  for e in manifest["scaffolds"].items:
+    if e["kind"].getStr() == kind:
+      return e
+  doAssert false, "no " & kind & " scaffold in the manifest"
 
 proc elaborate*(relPath: string): tuple[output: string, exitCode: int] =
   ## Elaborates one emitted Lean module through the lake environment,

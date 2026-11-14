@@ -235,10 +235,7 @@ proc registerLeanPasses*(reg: var PassRegistry) {.compileTime.} =
   reg.registerReshapingPasses()
 
 macro leanImpl(body: typed): string =
-  ## Compiles a `lean:` block body into a Lean 4 verification module:
-  ## CIRv2 lowering, the Lean passes, then the Lean emitter.
-  ##
-  ## - a refusal in the chain is a compile-time error naming the construct
+  ## A refusal in the chain is a compile-time error naming the construct
   var reg = PassRegistry()
   reg.registerLeanPasses()
   let m = lowerCirv2(body)
@@ -246,8 +243,5 @@ macro leanImpl(body: typed): string =
   result = newLit(codegenSource(m, cgLean))
 
 macro lean*(body: untyped): string =
-  ## Converts the body of this macro into a Lean 4 verification module.
-  # untyped -> typed macro delegation: the outer macro assigns crucibleCompileTarget
-  # before the typed macro runs, so the body resolves with the target already set
   crucibleCompileTarget = ctLean
   result = newCall(bindSym"leanImpl", body)

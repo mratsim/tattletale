@@ -9,9 +9,7 @@
 ##
 ##   post-pass CIRv2 (one `{.global.}` kernel) → this backend → Lean module
 ##
-## Walks the body of one `{.global.}` kernel and emits the body def plus
-## derived spec theorems. Anything outside the supported shape raises a loud
-## `lean_lang: unsupported ...` ValueError:
+## Anything outside the supported shape raises a loud `lean_lang: unsupported ...` ValueError:
 ##
 ## - guarded thread (the `AddKernel.lean` model): buffers `a`, `b` (read) plus `output` (written), all aptr-to-uint32 parameters
 ## - a let-bound `thread_position_in_grid.x` (the Lean `tid`), one `if` with no
@@ -130,13 +128,13 @@ proc checkWriteTarget(lhs: CirExpr): string =
   result = lhs.patBase.name
 
 proc indexedReadBufs(e: CirExpr, bufNames: HashSet[string], found: var HashSet[string]) =
-  ## Collects the kernel buffer parameters the expression reads by indexing
+  ## Collects the kernel buffer parameters that the expression reads by indexing
   case e.kind
   of ePat:
     if e.patBase.kind == eSym and e.patBase.name in bufNames:
       found.incl e.patBase.name
       indexedReadBufs(e.patIndex, bufNames, found)
-  of eAdd, eSub, eMul:
+  of eAdd, eMul:
     indexedReadBufs(e.left, bufNames, found)
     indexedReadBufs(e.right, bufNames, found)
   else:
@@ -314,8 +312,9 @@ proc analyzeKernel(kernel: CirProc): KernelModel =
   indexedReadBufs(valueAst, bufNames, readBufSet)
   if readBufSet != ["a", "b"].toHashSet():
     var readNames: seq[string]
-    for r in readBufSet.items:
-      readNames.add r
+    for name in bufSeq:
+      if name in readBufSet:
+        readNames.add name
     raise leanRefusal("unsupported kernel - the kernel body must read both input" &
       " buffers `a` and `b`, the read binders of the emitted Lean def - got '" &
       (if readNames.len == 0: "none" else: readNames.join(", ")) & "'")
@@ -655,6 +654,8 @@ type
 
 proc tokenizeSpec(payload: string): seq[SpecToken] =
   ## Splits a payload into spec tokens, refusing characters outside the grammar with a `lean_lang: invalid spec payload` ValueError
+  # each token is matched at byte i: an occurrence found at i is a prefix
+  const specOps = [("≠", tkNeq), ("≤", tkLe), ("∧", tkAnd)]
   var i = 0
   while i < payload.len:
     let c = payload[i]
@@ -679,18 +680,17 @@ proc tokenizeSpec(payload: string): seq[SpecToken] =
     elif c == '<':
       result.add SpecToken(kind: tkLt, text: "<")
       inc i
-    elif payload[i ..< min(i + 3, payload.len)] == "≠":
-      result.add SpecToken(kind: tkNeq, text: "≠")
-      inc i, 3
-    elif payload[i ..< min(i + 3, payload.len)] == "≤":
-      result.add SpecToken(kind: tkLe, text: "≤")
-      inc i, 3
-    elif payload[i ..< min(i + 3, payload.len)] == "∧":
-      result.add SpecToken(kind: tkAnd, text: "∧")
-      inc i, 3
     else:
-      raise leanRefusal("invalid spec payload '" & payload &
-        "' - unexpected character '" & $c & "' at byte " & $i)
+      var matched = false
+      for (tok, kind) in specOps:
+        if payload.find(tok, i) == i:
+          result.add SpecToken(kind: kind, text: tok)
+          inc i, tok.len
+          matched = true
+          break
+      if not matched:
+        raise leanRefusal("invalid spec payload '" & payload &
+          "' - unexpected character '" & $c & "' at byte " & $i)
 
 proc peek(toks: seq[SpecToken], i: int): SpecToken =
   ## Token at `i`, or `tkEof` at the end of input
@@ -1059,7 +1059,7 @@ proc settleModule*(baseText: string, scaffolds: seq[ScaffoldData], genDir: strin
         " scaffolds (line " & $line & "): " & excerpt)
     failed[owner] = excerpt
   if exitCode != 0 and positionless.len > 0:
-    # an error line the extractor could not position may refer to the module
+    # an error line that the extractor could not position may refer to the module
     # itself (a duplicate declaration, a stale olean), so the scaffold
     # verdicts below would be recorded over a module that does not elaborate
     raise abortSettling("proof settling failed - " & $positionless.len &

@@ -10,13 +10,6 @@ import lean_testutils
 
 const genDir = leanProjectDir & "/generated"
 
-proc scaffoldEntry(manifest: JsonNode, kind: string): JsonNode =
-  ## Manifest scaffold entry of the given kind
-  for e in manifest["scaffolds"].items:
-    if e["kind"].getStr() == kind:
-      return e
-  doAssert false, "no " & kind & " scaffold in the manifest"
-
 proc runTest() =
   block: # loop-kernel emission + Lean elaboration (warningAsError, sorry-free)
     let ir = leanIr:
