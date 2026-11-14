@@ -34,7 +34,7 @@ proc runTest() =
     let noSorry = "declaration uses 'sorry'" notin negOut
     doAssert noSorry,
       "the negative control must be rejected by a failed proof, not a sorry"
-    echo "  locked project gates (lake build, ToolchainSmoke, Negative.lean): ok"
+    echo "  locked project checks (lake build, ToolchainSmoke, Negative.lean): ok"
 
 when isMainModule:
   runTest()

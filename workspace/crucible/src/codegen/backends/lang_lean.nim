@@ -54,6 +54,9 @@ proc isUint32Buffer(t: CirType): bool =
   t != nil and t.kind == ctAptr and t.pElem != nil and
     t.pElem.kind == ctUint and t.pElem.bits == 32
 
+proc leanUint32Lit(v: int64): string =
+  "(" & $v & " : UInt32)"
+
 proc emitExpr(e: CirExpr, idxName, idxLean: string, mulAllowed: bool): string =
   ## Renders one CIRv2 expression as Lean text:
   ##
@@ -68,7 +71,7 @@ proc emitExpr(e: CirExpr, idxName, idxLean: string, mulAllowed: bool): string =
   of eIntLit:
     # Nim types every literal in a uint32 expression as uint32, so the value
     # renders as a Lean UInt32 literal
-    result = "(" & $e.value & " : UInt32)"
+    result = leanUint32Lit(e.value)
   of eAdd, eMul:
     if e.kind == eMul and not mulAllowed:
       raise leanRefusal("unsupported expression eMul - the multiply is in scope" &
@@ -85,6 +88,17 @@ proc emitExpr(e: CirExpr, idxName, idxLean: string, mulAllowed: bool): string =
         " the index variable (the model covers reads at the thread's own index" &
         " or the loop variable's index only)")
     result = emitExpr(e.patBase, idxName, idxLean, mulAllowed) & " " & idxLean
+  of eConv:
+    # GPU backends render eConv in the shared printer (print_common.nim),
+    # this branch renders the node for the Lean target. Converting an int
+    # literal to the model's uint32 renders in the eIntLit literal form
+    # at the conversion target. Lean has no bfloat16 literal token form,
+    # every other conversion target is outside the model
+    if e.castOperand.kind == eIntLit and e.castType != nil and
+        e.castType.kind == ctUint and e.castType.bits == 32:
+      result = leanUint32Lit(e.castOperand.value)
+    else:
+      raise leanRefusal("unsupported expression " & $e.kind)
   else:
     raise leanRefusal("unsupported expression " & $e.kind)
 
@@ -143,6 +157,27 @@ proc leanLoopName(kernelName: string): string =
   ## `loopAdd` -> `loopAddLoop`, the remaining-count recursion def of the loop shape
   stripKernelSuffix(kernelName) & "Loop"
 
+proc checkScalarNameCollisions(scalarName: string) =
+  ## Refuses a scalar parameter colliding with a binder that the emission
+  ## templates splice verbatim. The emitted module is invalid Lean,
+  ## `lake env lean` rejects it at elaboration, far from the emitter.
+  # binder names come from the templates in emitBodyDef and emitLoopTheorems
+  const binders = [
+    ("k", "the remaining-count binder of the loop def"),
+    ("j", "the update binder of the loop shape's functional update"),
+    ("tid", "the thread-id binder of the guarded body def"),
+    ("n", "the buffer-bound binder of the guarded body def"),
+    ("a", "the first input buffer binder"),
+    ("b", "the second input buffer binder"),
+    ("out", "the output buffer binder"),
+    ("h", "the guard hypothesis of the emitted theorems"),
+    ("i", "the quantified index of the no-collateral-damage theorem"),
+  ]
+  for (binder, role) in binders:
+    if scalarName == binder:
+      raise leanRefusal("unsupported kernel - scalar parameter '" & scalarName &
+        "' collides with the emitted binder '" & binder & "' (" & role & ")")
+
 proc analyzeLoopKernel(decl, start, loop: CirStmt, scalarName: string, model: var KernelModel): CirExpr =
   ## Walks the frontend's `for`-loop lowering: the loop-variable declaration,
   ## the `i = 0` start assignment, and the `sWhile` ending on the increment.
@@ -155,9 +190,7 @@ proc analyzeLoopKernel(decl, start, loop: CirStmt, scalarName: string, model: va
   if loopVar == "j":
     raise leanRefusal("unsupported loop - loop variable 'j' collides with the" &
       " emitted update binder 'j'")
-  if scalarName == "j":
-    raise leanRefusal("unsupported kernel - scalar parameter 'j' collides with" &
-      " the emitted update binder 'j' of the loop shape")
+  checkScalarNameCollisions(scalarName)
   model.loopVar = loopVar
   if start.rhs.kind != eIntLit or start.rhs.value != 0:
     let got = if start.rhs.kind == eIntLit: $start.rhs.value else: $start.rhs.kind

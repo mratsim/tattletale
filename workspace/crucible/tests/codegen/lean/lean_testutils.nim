@@ -22,7 +22,7 @@ type LeanIr* = tuple[text: string, refusal: string]
 macro leanIr*(body: typed): LeanIr =
   ## Lowers the body through the Lean pass pipeline and emits its module text
   ## at compile time. A shape refusal surfaces as the `refusal` field instead
-  ## of a compile error, so the test battery can assert on refusal messages.
+  ## of a compile error, so the test suite can assert on refusal messages.
   ##
   ## Returns `(text, refusal)`: exactly one field is non-empty
   crucibleCompileTarget = ctLean

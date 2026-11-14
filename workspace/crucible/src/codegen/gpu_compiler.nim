@@ -224,8 +224,11 @@ macro hlsl*(body: untyped): string =
 proc registerLeanPasses*(reg: var PassRegistry) {.compileTime.} =
   ## Registers the Lean verification pipeline:
   ##
-  ## - value normalizations, reshaping and bool-domain resolution
-  ## - no GPU lowering
+  ## - the registrations are `registerFrontendPasses` minus `rewriteStmtsExprs`,
+  ##   the renderer's catch-all refusal rejects any statement-expression form
+  ##   it cannot model
+  ## - no GPU lowering: it would rewrite the pre-lowering IR shapes the model
+  ##   recognizes
   ## - no reserved-identifier rename: the emitter reasons over semantic names
   reg.registerResolveBoolDomain()
   reg.registerValueNormalizations()

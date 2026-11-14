@@ -5,7 +5,7 @@
 ## Run:
 ##   cd tattletale && nim test_crucible_lean
 
-import std/[json, os, osproc, strutils, tables]
+import std/[json, os, strutils, tables]
 import lean_testutils
 
 const genDir = leanProjectDir & "/generated"

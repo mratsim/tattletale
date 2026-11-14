@@ -120,7 +120,7 @@ proc runTest() =
       " plus the counter increment", twoWrites)
     echo "  refusals on loop shapes outside the supported shape: ok"
 
-  block: # loud refusals carried over from the guarded-thread shape
+  block: # loud refusal on a loop bound of zero
     let zeroBound = leanIr:
       proc zeroBound(output, a, b: ptr UncheckedArray[uint32]) {.global.} =
         for i in 0 ..< 0:
@@ -128,7 +128,7 @@ proc runTest() =
     expectLeanRefusal("lean_lang: unsupported loop - bound must be positive (got 0)",
       zeroBound)
 
-    echo "  refusal carried over from the guarded-thread shape: ok"
+    echo "  refusal on a loop bound of zero: ok"
 
   block: # right loop-guard invariant: proved, manifest `proven: true`, exit 0
     let k = leanIrSpec:
